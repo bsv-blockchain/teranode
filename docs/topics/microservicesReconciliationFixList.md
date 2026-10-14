@@ -175,8 +175,13 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       — `catchup_fork_depth_boundary_test.go` pins d = maturity-1/maturity/maturity+1
       at validateForkDepth directly; verified mutation-sensitive (flipping the operator
       back to `>=` fails exactly the boundary case and nothing else)
-- [ ] Assert the response to an unauthenticated RPC request when no credentials are
+- [x] Assert the response to an unauthenticated RPC request when no credentials are
       configured — settles F2 permanently (§60, Q37)
+      — `auth_empty_credentials_test.go` pins the fail-closed behaviour at both decision
+      points (credential assembly yields the zero array when either half is empty;
+      `checkAuth` rejects no-header, plausible-header, and the empty-login header),
+      with a positive control so the rejections cannot be harness artifacts. The
+      contradicting longdesc sentence itself is group F's decision (see F2)
 
 ## F. Auth / security posture (decide, then small change)
 

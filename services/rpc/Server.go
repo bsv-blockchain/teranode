@@ -1428,6 +1428,26 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
+// authShaForCredentials computes the stored comparison hash for one
+// user/pass pair, exactly as the request path expects it: the SHA-256 of the
+// "Basic base64(user:pass)" header value. An empty user OR pass yields the
+// all-zero array - no credentials configured does not disable
+// authentication, it locks the door: checkAuth is always called with
+// require=true on the request path, and no real header hashes to the zero
+// array. (The longdesc of rpc_user/rpc_pass once claimed otherwise; the
+// empty-credentials tests in auth_empty_credentials_test.go keep that
+// sentence from coming back wrong.)
+func authShaForCredentials(user, pass string) [sha256.Size]byte {
+	if user == "" || pass == "" {
+		return [sha256.Size]byte{}
+	}
+
+	login := user + ":" + pass
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
+
+	return sha256.Sum256([]byte(auth))
+}
+
 // NewServer creates and configures a new RPC server instance with the given dependencies.
 //
 // This factory function creates a fully configured RPCServer instance, setting up:
@@ -1503,17 +1523,8 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		logger.Warnf("rpc_limit_pass not set in config")
 	}
 
-	if rpcUser != "" && rpcPass != "" {
-		login := rpcUser + ":" + rpcPass
-		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
-		rpc.authsha = sha256.Sum256([]byte(auth))
-	}
-
-	if rpcLimitUser != "" && rpcLimitPass != "" {
-		login := rpcLimitUser + ":" + rpcLimitPass
-		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
-		rpc.limitauthsha = sha256.Sum256([]byte(auth))
-	}
+	rpc.authsha = authShaForCredentials(rpcUser, rpcPass)
+	rpc.limitauthsha = authShaForCredentials(rpcLimitUser, rpcLimitPass)
 	// rpc.cfg.Chain.Subscribe(rpc.handleBlockchainNotification)
 
 	rpc.rpcMaxClients = tSettings.RPC.RPCMaxClients
