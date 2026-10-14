@@ -274,6 +274,12 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       today. Retirement stays the deliberate option if Q59 answers "no second instance"
 - [ ] `ReasonInvalidSubtree`: add an intent comment so nobody "tidies" it into
       `AddBanScore` and starts banning peers for network jitter — gated on H1 (§2, Q1)
+      — PARKED because its own gate is: the comment to write depends on whether
+      reputation-only is policy (H1/Q1, maintainer decision). Facts verified in the mean
+      time: the constant is declared, allowlisted for metric cardinality, penalty-ready on
+      the Blockchain side, and charged by no production path; the allowlist is a
+      cardinality guard, not a usage inventory. Once H1 answers, the comment writes
+      itself — "policy, keep it reputation-only" or "gap, wire it with these numbers"
 
 ## H. Blocked on a maintainer decision (per "Decisions taken", deliberately untouched)
 
