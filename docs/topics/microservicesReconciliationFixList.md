@@ -68,8 +68,9 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Log the coin archive's fixed 100-block lag at start-up (or make it a setting) so the
       coupling is visible before downtime (§43, Q24) — start-up line in `Start()`; turning
       the constant into a setting stays open as the heavier option
-- [ ] Log loudly when the coin store is *unwired*, matching the existing loud log for a
-      *disabled* preservation phase (§53, Q31)
+- [x] Log loudly when the coin store is *unwired*, matching the existing loud log for a
+      *disabled* preservation phase (§52, Q31 — the checklist previously cited §53; the
+      phases are in `services/pruner/worker.go`)
 - [ ] Warn and count the mined-set wait the way the assembly wait already does — today the
       common skip is uncounted debug noise (§54, Q32)
 - [ ] Asset Server: one start-up line naming the active tier mode and allowlist size —
