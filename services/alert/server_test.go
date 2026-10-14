@@ -150,6 +150,17 @@ func TestServer_loadConfig_networkDefaults(t *testing.T) {
 		require.Equal(t, "bitcoin_alert_system", server.appConfig.P2P.TopicName)
 	})
 
+	t.Run("regtest falls back to mainnet keys and protocol", func(t *testing.T) {
+		server := newServer(t, &chaincfg.RegressionNetParams, settings.AlertSettings{})
+
+		require.NoError(t, server.loadConfig(context.Background(), nil, true))
+
+		mainnet := upstreamNetwork(t, "mainnet")
+		require.Equal(t, mainnet.GenesisKeys, server.appConfig.GenesisKeys)
+		require.Equal(t, mainnet.ProtocolID, server.appConfig.P2P.AlertSystemProtocolID)
+		require.Equal(t, "bitcoin_alert_system_regtest", server.appConfig.P2P.TopicName)
+	})
+
 	t.Run("explicit settings override testnet defaults", func(t *testing.T) {
 		server := newServer(t, &chaincfg.TestNetParams, settings.AlertSettings{
 			GenesisKeys: []string{"custom_key"},
@@ -308,9 +319,8 @@ func TestServer_syncGenesisKeys(t *testing.T) {
 	mainnet := upstreamNetwork(t, "mainnet")
 	testnet := upstreamNetwork(t, "testnet")
 
-	// startServer loads the config for chainParams against the sqlite store in
-	// dataFolder and ensures the genesis alert exists, as Start does
-	startServer := func(t *testing.T, dataFolder string, chainParams *chaincfg.Params) *Server {
+	// loadServer loads the config for chainParams against the sqlite store in dataFolder
+	loadServer := func(t *testing.T, dataFolder string, chainParams *chaincfg.Params) *Server {
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.ChainCfgParams = chainParams
 		tSettings.DataFolder = dataFolder
@@ -329,9 +339,27 @@ func TestServer_syncGenesisKeys(t *testing.T) {
 		require.NoError(t, server.loadConfig(context.Background(), models.BaseModels, true))
 		t.Cleanup(func() { server.appConfig.CloseAll(context.Background()) })
 
+		return server
+	}
+
+	// startServer loads the server and ensures the genesis alert exists, without syncing its keys
+	startServer := func(t *testing.T, dataFolder string, chainParams *chaincfg.Params) *Server {
+		server := loadServer(t, dataFolder, chainParams)
 		require.NoError(t, models.CreateGenesisAlert(context.Background(), model.WithAllDependencies(server.appConfig)))
 
 		return server
+	}
+
+	// mainnetStore returns a data folder holding a store seeded with the mainnet genesis keys
+	mainnetStore := func(t *testing.T) string {
+		dataFolder := t.TempDir()
+		startServer(t, dataFolder, &chaincfg.MainNetParams).appConfig.CloseAll(context.Background())
+
+		return dataFolder
+	}
+
+	execSQL := func(t *testing.T, server *Server, query string) {
+		require.NoError(t, server.appConfig.Services.Datastore.Execute(query).Error)
 	}
 
 	activeKeys := func(t *testing.T, server *Server) []string {
@@ -347,13 +375,7 @@ func TestServer_syncGenesisKeys(t *testing.T) {
 	}
 
 	t.Run("store seeded with other genesis keys is reset", func(t *testing.T) {
-		dataFolder := t.TempDir()
-
-		first := startServer(t, dataFolder, &chaincfg.MainNetParams)
-		require.ElementsMatch(t, mainnet.GenesisKeys, activeKeys(t, first))
-		first.appConfig.CloseAll(context.Background())
-
-		server := startServer(t, dataFolder, &chaincfg.TestNetParams)
+		server := startServer(t, mainnetStore(t), &chaincfg.TestNetParams)
 		require.ElementsMatch(t, mainnet.GenesisKeys, activeKeys(t, server), "precondition: genesis alert keeps the first keys")
 
 		active, err := server.syncGenesisKeys(context.Background())
@@ -397,4 +419,52 @@ func TestServer_syncGenesisKeys(t *testing.T) {
 		require.Equal(t, len(mainnet.GenesisKeys), active)
 		require.ElementsMatch(t, mainnet.GenesisKeys, activeKeys(t, server))
 	})
+
+	t.Run("initGenesisKeys creates the genesis alert and resets the keys", func(t *testing.T) {
+		fresh := loadServer(t, t.TempDir(), &chaincfg.TestNetParams)
+		require.NoError(t, fresh.initGenesisKeys(context.Background()))
+		require.ElementsMatch(t, testnet.GenesisKeys, activeKeys(t, fresh))
+
+		server := loadServer(t, mainnetStore(t), &chaincfg.TestNetParams)
+		require.NoError(t, server.initGenesisKeys(context.Background()))
+		require.ElementsMatch(t, testnet.GenesisKeys, activeKeys(t, server))
+	})
+
+	t.Run("initGenesisKeys fails when the genesis alert cannot be created", func(t *testing.T) {
+		server := loadServer(t, t.TempDir(), &chaincfg.TestNetParams)
+		execSQL(t, server, "DROP TABLE alert_alert_messages")
+
+		require.ErrorContains(t, server.initGenesisKeys(context.Background()), "error creating genesis alert")
+	})
+
+	t.Run("initGenesisKeys fails when the keys cannot be synced", func(t *testing.T) {
+		server := startServer(t, t.TempDir(), &chaincfg.TestNetParams)
+		execSQL(t, server, "DROP TABLE alert_public_keys")
+
+		require.ErrorContains(t, server.initGenesisKeys(context.Background()), "error syncing alert genesis keys")
+	})
+
+	t.Run("store without a genesis alert fails", func(t *testing.T) {
+		server := loadServer(t, t.TempDir(), &chaincfg.TestNetParams)
+
+		_, err := server.syncGenesisKeys(context.Background())
+		require.ErrorContains(t, err, "error getting the latest alert")
+	})
+
+	t.Run("deactivating a stored key fails", func(t *testing.T) {
+		server := startServer(t, mainnetStore(t), &chaincfg.TestNetParams)
+		execSQL(t, server, "CREATE TRIGGER no_update BEFORE UPDATE ON alert_public_keys BEGIN SELECT RAISE(ABORT, 'read only'); END")
+
+		_, err := server.syncGenesisKeys(context.Background())
+		require.ErrorContains(t, err, "error deactivating public key")
+	})
+
+	t.Run("activating a genesis key fails", func(t *testing.T) {
+		server := startServer(t, mainnetStore(t), &chaincfg.TestNetParams)
+		execSQL(t, server, "CREATE TRIGGER no_insert BEFORE INSERT ON alert_public_keys BEGIN SELECT RAISE(ABORT, 'read only'); END")
+
+		_, err := server.syncGenesisKeys(context.Background())
+		require.ErrorContains(t, err, "error activating public key")
+	})
+
 }

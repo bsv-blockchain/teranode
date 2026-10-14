@@ -239,20 +239,9 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
-	// Ensure we have the genesis alert in the database
-	if err = models.CreateGenesisAlert(
-		ctx, model.WithAllDependencies(s.appConfig),
-	); err != nil {
-		return errors.NewConfigurationError("error creating genesis alert", err)
+	if err = s.initGenesisKeys(ctx); err != nil {
+		return err
 	}
-
-	// Ensure alerts are verified against the configured genesis keys
-	activeKeys, err := s.syncGenesisKeys(ctx)
-	if err != nil {
-		return errors.NewConfigurationError("error syncing alert genesis keys", err)
-	}
-
-	s.logger.Infof("[Alert] verifying alerts against %d active keys from the alert store", activeKeys)
 
 	// Ensure that RPC connection is valid
 	if !s.appConfig.DisableRPCVerification {
@@ -282,6 +271,27 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 
 	// wait for a shutdown signal
 	<-ctx.Done()
+
+	return nil
+}
+
+// initGenesisKeys ensures the genesis alert is stored and that alerts are verified
+// against the configured genesis keys.
+func (s *Server) initGenesisKeys(ctx context.Context) error {
+	// Ensure we have the genesis alert in the database
+	if err := models.CreateGenesisAlert(
+		ctx, model.WithAllDependencies(s.appConfig),
+	); err != nil {
+		return errors.NewConfigurationError("error creating genesis alert", err)
+	}
+
+	// Ensure alerts are verified against the configured genesis keys
+	activeKeys, err := s.syncGenesisKeys(ctx)
+	if err != nil {
+		return errors.NewConfigurationError("error syncing alert genesis keys", err)
+	}
+
+	s.logger.Infof("[Alert] verifying alerts against %d active keys from the alert store", activeKeys)
 
 	return nil
 }
