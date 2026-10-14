@@ -15,7 +15,7 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
 - [x] Set `pruner_block_trigger = OnBlockMined` in Docker mainnet/testnet stacks — with
       the persister commented out, the default `OnBlockPersisted` waits on a notification
       that never arrives; deletion never starts, retention stops bounding anything (§38, Q20)
-- [ ] Fix `imagePullPolicy: Never` on `alertSystem` in the mainnet example — copy-paste
+- [x] Fix `imagePullPolicy: Never` on `alertSystem` in the mainnet example — copy-paste
       residue from the dev fixture; alerting won't start on a clean node (§25, Q15)
 - [ ] Fix `asset_concurrency_get_legacy_block_reader` comment in `settings.conf`: says
       `0 (unlimited)`, actual default is `-1` (one reader per CPU) (§48, Q28)
