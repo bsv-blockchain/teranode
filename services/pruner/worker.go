@@ -12,6 +12,47 @@ import (
 	"github.com/bsv-blockchain/teranode/util/retry"
 )
 
+// warnCatchupGuardStopped makes the skipDuringCatchup guard's stop-switch case
+// visible. RUNNING is reached only by an explicit RUN event - an operator
+// command or the gRPC convenience method; no service start-up path fires it.
+// A node that was never RUN sits in IDLE forever, and IDLE is a healthy
+// response from every external probe, so with the guard enabled "skipping
+// during catchup" can mean "pruning will never run on this node" - a stop
+// switch with no log line and no failing check. Warn by name when the state
+// changes, then at most once an interval while it persists; genuine transient
+// catchup (CATCHINGBLOCKS) gets the same treatment one level down and rotates
+// out on its own.
+func (s *Server) warnCatchupGuardStopped(state *blockchain.FSMStateType) {
+	name := "unknown(nil)"
+	if state != nil {
+		name = state.String()
+	}
+
+	// IDLE is the surprising state: it is not catching up, it is waiting for
+	// an instruction. Escalate it; keep others at debug unless they linger.
+	if name != "IDLE" {
+		s.logger.Debugf("[pruner] skipDuringCatchup: skipping, FSM state %s", name)
+		// A lingering non-IDLE state still deserves the periodic warning below.
+		if name == s.lastGuardStateName && time.Since(s.lastGuardWarnedAt) < time.Hour {
+			return
+		}
+	}
+
+	if name == s.lastGuardStateName && time.Since(s.lastGuardWarnedAt) < 10*time.Minute {
+		return
+	}
+
+	s.lastGuardStateName = name
+	s.lastGuardWarnedAt = time.Now()
+
+	hint := "if this is not catchup, the node may simply never have received the RUN command - only an operator RUN reaches RUNNING, no start-up path does; pruning stays stopped while the FSM is not RUNNING"
+	if name == "IDLE" {
+		s.logger.Warnf("[pruner] skipDuringCatchup: FSM state is IDLE and pruning is halted - %s", hint)
+	} else {
+		s.logger.Warnf("[pruner] skipDuringCatchup: FSM state is %s and pruning is halted - %s", name, hint)
+	}
+}
+
 // checkBlockAssemblySafeForPruner verifies that block assembly is in "running" state
 // and has caught up to the specified height. Returns true if safe, false otherwise.
 // This function will retry checking the block assembly state until the configured
@@ -235,7 +276,7 @@ func (s *Server) shouldPrune(ctx context.Context, sig pruneSignal) bool {
 		// Only RUNNING proves no catchup is in flight: an operator STOP
 		// parks a catching-up node in IDLE while its batch still runs.
 		if fsmState == nil || *fsmState != blockchain.FSMStateRUNNING {
-			s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
+			s.warnCatchupGuardStopped(fsmState)
 			prunerSkipped.WithLabelValues("catchup_mode").Inc()
 			return false
 		}

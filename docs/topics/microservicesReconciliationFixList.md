@@ -120,8 +120,11 @@ Progress: `for f in microservicesReconciliationFixList.md; do d=$(grep -c '^- \[
       now all say per-request/Connection-close/shed-with-503; refusals carry `Retry-After: 1`.
       Queueing left unchosen deliberately — Q38's "is machine traffic in scope" is a per-deployment
       question and silent queueing trades the door's shed-fast guarantee for latency nobody asked for
-- [ ] `pruner_skipDuringCatchup`: rename to reflect "requires an operator command", or
-      test for actual catch-up (§55, Q33)
+- [x] `pruner_skipDuringCatchup`: rename to reflect "requires an operator command", or
+      test for actual catch-up (§55, Q33 — the notes renumbered; this is section 54's finding)
+      — key kept (renaming a setting key is breaking), name fully disclosed: desc/usage/longdesc
+      now state the operator-RUN requirement and the never-RUN stop-switch, and the guard
+      warns by FSM state name when it halts (IDLE escalated, throttled 10min/1h)
 
 ## D. Single-source-of-truth / consistency
 
