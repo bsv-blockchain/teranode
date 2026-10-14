@@ -32,7 +32,19 @@ func NewSettings(alternativeContext ...string) *Settings {
 
 	globalBlockHeightRetention := getUint32("global_blockHeightRetention", blocksInADayOnAverage*2, alternativeContext...)
 
-	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0, alternativeContext...)
+	// The double-spend window governs two behaviours: the mining hold-back in
+	// queue eligibility and the time bound of the subtree-processor drain
+	// (see BlockAssembly.DoubleSpendWindow longdesc). This key predates the
+	// blockassembly_* naming convention; the prefixed key is canonical now
+	// and the unprefixed one keeps working as a deprecated alias, so an
+	// operator searching the config for the service name finds it.
+	doubleSpendWindowMillis := getInt("blockassembly_doubleSpendWindowMillis", -1, alternativeContext...)
+	if doubleSpendWindowMillis < 0 {
+		doubleSpendWindowMillis = getInt("double_spend_window_millis", 0, alternativeContext...)
+	}
+	if doubleSpendWindowMillis < 0 {
+		doubleSpendWindowMillis = 0 // milliseconds are never negative; treat as 0
+	}
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
 
 	blacklistMap := getMultiStringMap("subtreevalidation_blacklisted_baseurls", "|", []string{}, alternativeContext...)
