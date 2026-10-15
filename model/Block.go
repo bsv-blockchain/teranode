@@ -1758,6 +1758,19 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		}
 	}
 
+	// Every txMap is filled at subIdx*Size()+txIdx of the first subtree (putSubtreeInTxMap), so
+	// a tx's own index is computed rather than looked up. The first subtree must be here to
+	// size it: without it the other workers would compare parents against a wrong index.
+	var txMapSubtreeSize uint64
+
+	if len(subtrees) > 0 {
+		if subtrees[0] == nil {
+			return errors.NewProcessingError("[validateSubtree][%s] subtree %d was released during validation", b.String(), 0)
+		}
+
+		txMapSubtreeSize = uint64(subtrees[0].Size()) // nolint: gosec
+	}
+
 	if len(diskMapDirs) > 0 {
 		diskMap, diskErr := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 			BasePaths:      diskMapDirs,
@@ -1783,6 +1796,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		parentSpendsMap:             psMap,
 		dedup:                       dedup,
 		subtreeBase:                 subtreeBase,
+		txMapSubtreeSize:            txMapSubtreeSize,
 	}
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
@@ -2109,6 +2123,8 @@ type validationContext struct {
 	dedup           inpointDedupper
 	// subtreeBase[s] is the block index of the first transaction of subtree s
 	subtreeBase []uint64
+	// txMapSubtreeSize is the width of a subtree's index space in the txMap
+	txMapSubtreeSize uint64
 }
 
 func (b *Block) buildBlockHeaderHashesMap(currentChain []*BlockHeader) map[chainhash.Hash]struct{} {
@@ -2217,11 +2233,8 @@ type transactionValidationParams struct {
 
 func (b *Block) validateTransaction(ctx context.Context, deps *validationDependencies, validationCtx *validationContext,
 	params *transactionValidationParams) ([]missingParentTx, error) {
-	txIdx, ok := b.txMap.Get(params.subtreeNode.Hash)
-	if !ok {
-		return nil, errors.NewNotFoundError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s is not in the txMap",
-			b.String(), params.subtreeHash.String(), params.sIdx, params.snIdx, params.subtreeNode.Hash.String())
-	}
+	// the index the tx was put in the txMap at; the duplicate check put every tx of the block
+	txIdx := uint64(params.sIdx)*validationCtx.txMapSubtreeSize + uint64(params.snIdx) // nolint: gosec
 
 	parentTxHashes, err := params.subtreeMetaSlice.GetParentTxHashes(params.snIdx)
 	if err != nil {

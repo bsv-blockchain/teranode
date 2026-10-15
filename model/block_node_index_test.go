@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -183,9 +184,29 @@ func TestNodeIndex_PresizedDoesNotGrow(t *testing.T) {
 	require.Equal(t, before, x.slots())
 }
 
+// A bucket is one cache line, so reading one takes one memory access.
+func TestNodeBucket_OneCacheLine(t *testing.T) {
+	require.Equal(t, uintptr(64), unsafe.Sizeof(nodeBucket{}))
+}
+
+// A presized index is at most 60% full once all its entries are in, so a key that is not in it is
+// mostly turned away by its home bucket.
+func TestNodeIndex_PresizedLoad(t *testing.T) {
+	for _, n := range []int{1000, 100000, 1 << 20} {
+		nodes := newTestNodeHashes(n)
+		x := newNodeIndex(n, nodes.hashAt, seededHash(uint64(n)))
+
+		for i := range nodes {
+			require.NoError(t, x.Put(nodes[i], uint32(i))) // nolint: gosec
+		}
+
+		require.LessOrEqual(t, float64(n)/float64(x.slots()), 0.6, "n=%d", n)
+	}
+}
+
 // Sizes around the shard-count and bucket-load thresholds, against a plain Go map.
 func TestNodeIndex_BoundarySizes(t *testing.T) {
-	sizes := []int{0, 1, 2, 6, 7, 8, 9, 14, 15, 16, 17, 55, 56, 57, 2047, 2048, 2049, 4095, 4096, 4097, 8192}
+	sizes := []int{0, 1, 2, 6, 7, 8, 9, 10, 11, 14, 15, 16, 17, 18, 19, 20, 55, 56, 57, 2047, 2048, 2049, 4095, 4096, 4097, 8192}
 
 	for _, hint := range []int{0, 1, 2048, 4097} {
 		for _, n := range sizes {
