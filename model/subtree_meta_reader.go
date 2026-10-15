@@ -184,7 +184,7 @@ func NewSubtreeMetaFromValidatedReader(subtreeHash chainhash.Hash, subtree *subt
 }
 
 const (
-	// metaHashSlab and metaWordSlab are how many parent hashes and vout words the decoded
+	// metaHashSlab and metaWordSlab are the most parent hashes and vout words the decoded
 	// txs of a subtree meta share an allocation of.
 	metaHashSlab = 1 << 16
 	metaWordSlab = 1 << 18
@@ -227,12 +227,16 @@ func decodeSubtreeMetaBody(subtree *subtreepkg.Subtree, count uint32, br *bufio.
 			}
 
 			if parents > 0 {
+				// a new slab holds at most what the rest of the buffer can, so a small meta
+				// allocates about what it holds: a parent takes at least 36 bytes, a word 4
+				rest := len(buf) - pos
+
 				if cap(hashes)-len(hashes) < parents {
-					hashes = make([]chainhash.Hash, 0, max(metaHashSlab, parents))
+					hashes = make([]chainhash.Hash, 0, max(parents, min(metaHashSlab, rest/(chainhash.HashSize+4))))
 				}
 
 				if cap(words)-len(words) < nWords {
-					words = make([]uint32, 0, max(metaWordSlab, nWords))
+					words = make([]uint32, 0, max(nWords, min(metaWordSlab, rest/4)))
 				}
 
 				txHashes := hashes[len(hashes) : len(hashes)+parents : len(hashes)+parents]

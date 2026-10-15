@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math/rand"
+	"runtime"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -240,6 +241,30 @@ func TestDecodeSubtreeMetaBody_AllocationsDoNotGrowWithTxs(t *testing.T) {
 	})
 
 	require.Less(t, allocs, float64(64), "%d txs", n)
+}
+
+// A small meta allocates about what it holds, not a slab sized for a full subtree.
+func TestDecodeSubtreeMetaBody_SmallMetaAllocatesLittle(t *testing.T) {
+	rng := rand.New(rand.NewSource(6))
+	body := encodeMetaBody(randomMetaEntries(rng, 10, 0))
+	st := subtreeOfSize(t, 16)
+	br := bufio.NewReaderSize(nil, 1<<20)
+
+	var before, after runtime.MemStats
+
+	runtime.ReadMemStats(&before)
+
+	for i := 0; i < 10; i++ {
+		br.Reset(bytes.NewReader(body))
+
+		if _, err := decodeSubtreeMetaBody(st, 10, br); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runtime.ReadMemStats(&after)
+
+	require.Less(t, (after.TotalAlloc-before.TotalAlloc)/10, uint64(16<<10), "bytes per decode of a %d-byte body", len(body))
 }
 
 func FuzzDecodeSubtreeMetaBody(f *testing.F) {
