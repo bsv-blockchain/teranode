@@ -110,6 +110,11 @@ service BlockAssemblyAPI {
   // The response contains everything needed to assemble a standard Bitcoin wire format block.
   // Returns NotFound if the candidate ID has expired or is invalid.
   rpc GetCandidateBlock (GetCandidateBlockRequest) returns (GetCandidateBlockResponse) {}
+
+  // PrepareBlock tells block assembly about a block on its current tip that block validation has
+  // started validating, so it can build the block's transaction map before the block is added.
+  // It is a hint: nothing about the block is trusted, and the map is only used for that block.
+  rpc PrepareBlock (PrepareBlockRequest) returns (EmptyMessage) {}
 }
 
 // An empty message used as a placeholder or a request with no data.
@@ -314,6 +319,11 @@ message GetBlockAssemblyTxsResponse {
 }
 
 // Request for retrieving block data for an existing mining candidate.
+// Request to prepare for a block that is being validated.
+message PrepareBlockRequest {
+  bytes block = 1; // the block in model.Block wire format (header, counts, subtree hashes, coinbase)
+}
+
 message GetCandidateBlockRequest {
   bytes id = 1; // the mining candidate ID (from a prior GetMiningCandidate call)
 }

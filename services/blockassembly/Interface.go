@@ -221,6 +221,10 @@ type ClientI interface {
 	//   - []*chainhash.Hash: List of transaction hashes
 	//   - error: Any error encountered during retrieval
 	GetTransactionHashes(ctx context.Context) ([]string, error)
+
+	// PrepareBlock tells block assembly about a block on its tip that is being validated, so it
+	// can build the block's transaction map before the block is added. It is only a hint.
+	PrepareBlock(ctx context.Context, block *model.Block) error
 }
 
 // Store defines the interface for block assembly storage operations.

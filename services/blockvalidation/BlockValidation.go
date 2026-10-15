@@ -33,6 +33,7 @@ import (
 	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
@@ -227,6 +228,11 @@ type BlockValidation struct {
 	// runs without a P2P service; all uses are nil-guarded. Wired through NewBlockValidation's
 	// variadic opts before any goroutine starts, so it is never written post-construction.
 	p2pClient P2PClientI
+
+	// blockAssemblyClient is told about a block from a peer once its header checks passed
+	// (prepareBlockAssembly). Optional and may be nil; wired through NewBlockValidation's
+	// variadic opts like p2pClient.
+	blockAssemblyClient blockassembly.ClientI
 
 	// lastValidatedBlocks caches recently validated blocks for 2 minutes
 	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
@@ -455,6 +461,10 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 	for _, o := range opts {
 		if c, ok := o.(P2PClientI); ok {
 			bv.p2pClient = c
+		}
+
+		if c, ok := o.(blockassembly.ClientI); ok {
+			bv.blockAssemblyClient = c
 		}
 	}
 
@@ -1588,6 +1598,10 @@ const validationResultGrace = 100 * time.Millisecond
 // second independent timeout, so the two cannot drift apart.
 const revalidateFromScratchDelay = 2 * validationResultGrace
 
+// prepareBlockAssemblyTimeout bounds the hint to block assembly in prepareBlockAssembly. Block
+// assembly only starts a goroutine, so this only matters when it is unreachable.
+const prepareBlockAssemblyTimeout = 2 * time.Second
+
 func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *ValidateBlockOptions, validate func(opts *ValidateBlockOptions) error) error {
 	result := &validationResult{
 		done: make(chan struct{}),
@@ -2039,6 +2053,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
+		}
+
+		if !opts.IsCatchupMode && !opts.IsRevalidation {
+			u.prepareBlockAssembly(ctx, block)
 		}
 
 		// Wait for reValidationBlock to do its thing
@@ -2672,6 +2690,23 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 // any future FSM enum addition all return false (treat as not-caught-up => retry,
 // never wrongly invalidate). Only the one state we can prove is caught up
 // authorizes invalidating a floater.
+// prepareBlockAssembly hands a block whose header checks passed (proof of work, expected
+// difficulty bits, parent not invalid) to block assembly, which builds the block's transaction
+// map while the block is validated, so it has less to do once the block is added. It is only a
+// hint: an error is logged and the validation goes on.
+func (u *BlockValidation) prepareBlockAssembly(ctx context.Context, block *model.Block) {
+	if u.blockAssemblyClient == nil || len(block.Subtrees) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, prepareBlockAssemblyTimeout)
+	defer cancel()
+
+	if err := u.blockAssemblyClient.PrepareBlock(ctx, block); err != nil {
+		u.logger.Warnf("[ValidateBlock][%s] failed to prepare block assembly for the block: %v", block.Hash().String(), err)
+	}
+}
+
 func (u *BlockValidation) isCaughtUp(ctx context.Context) bool {
 	st, err := u.blockchainClient.GetFSMCurrentState(ctx)
 	if err != nil || st == nil {
