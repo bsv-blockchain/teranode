@@ -10,7 +10,7 @@ import (
 
 // prunerParentRecordForBench builds one pruner parent-update record the way the
 // pruner's BuildAddDeletedChildrenRecord hook does for a parent with the given
-// children, including the conversion of the child hashes into the op's argument.
+// children, including encoding the child hashes into the op's payload.
 func prunerParentRecordForBench(s *Store, key *aerospike.Key, children []*chainhash.Hash) aerospike.BatchRecordIfc {
 	return s.prunerAddDeletedChildrenRecord(aerospike.NewBatchUDFPolicy(), key, children)
 }
