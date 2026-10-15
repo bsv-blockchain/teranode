@@ -18,6 +18,7 @@ services:
       args:
         BASE_IMG: ghcr.io/bsv-blockchain/teranode-base:build-latest
         RUN_IMG: ghcr.io/bsv-blockchain/teranode-base:run-latest
+        EXTRA_BUILD_TAGS: ${TERANODE_EXTRA_BUILD_TAGS:-}
     entrypoint: ["true"]
 
   postgres:
@@ -118,6 +119,9 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode{{ .Index }}.test"
+      grpc_admin_api_key: docker-e2e-test-admin-key
+      # names of util/failpoint seams to arm (failpoints builds only); empty disarms
+      TERANODE_FAILPOINTS: ${TERANODE{{ .Index }}_FAILPOINTS:-}
       JAEGER_SERVICE_NAME: teranode{{ .Index }}
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
