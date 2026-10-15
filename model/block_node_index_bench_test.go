@@ -16,6 +16,10 @@ import (
 // hashes fit in cache, as on a block of hundreds of millions of txs: a concurrent fill, then
 // frozen lookups of one parent per tx, of which missRate are not in the block.
 func BenchmarkNodeIndexLarge(b *testing.B) {
+	if testing.Short() {
+		b.Skip("holds about 4GB")
+	}
+
 	const n = 32 << 20
 
 	nodes := newTestNodeHashes(n)
@@ -25,21 +29,27 @@ func BenchmarkNodeIndexLarge(b *testing.B) {
 	seed := maphash.MakeSeed()
 	hash := func(h chainhash.Hash) uint64 { return maphash.Comparable(seed, h) }
 
-	var x *nodeIndex
+	fill := func() *nodeIndex {
+		x := newNodeIndex(n, nodes.hashAt, hash)
+		parallelRange(n, workers, func(i int) {
+			if err := x.Put(nodes[i], uint32(i)); err != nil { // nolint: gosec
+				panic(err)
+			}
+		})
+
+		return x
+	}
 
 	b.Run("put", func(b *testing.B) {
 		for it := 0; it < b.N; it++ {
-			x = newNodeIndex(n, nodes.hashAt, hash)
-			parallelRange(n, workers, func(i int) {
-				if err := x.Put(nodes[i], uint32(i)); err != nil { // nolint: gosec
-					panic(err)
-				}
-			})
+			fill()
 		}
 
 		b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/n, "ns/put")
 	})
 
+	// built here, not in put, so the get benchmarks also run on their own (-bench .../get)
+	x := fill()
 	x.Freeze()
 
 	for _, missRate := range []float64{0, 0.1, 1} {
