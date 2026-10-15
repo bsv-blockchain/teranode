@@ -132,7 +132,8 @@ type BlockAssemblyAPIClient interface {
 	GetCandidateBlock(ctx context.Context, in *GetCandidateBlockRequest, opts ...grpc.CallOption) (*GetCandidateBlockResponse, error)
 	// PrepareBlock tells block assembly about a block on its current tip that block validation has
 	// started validating, so it can build the block's transaction map before the block is added.
-	// It is a hint: nothing about the block is trusted, and the map is only used for that block.
+	// It is a hint: block assembly binds the subtree list to the header itself, and the map is only
+	// used for a block with that hash and subtree list.
 	PrepareBlock(ctx context.Context, in *PrepareBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
 
@@ -427,7 +428,8 @@ type BlockAssemblyAPIServer interface {
 	GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error)
 	// PrepareBlock tells block assembly about a block on its current tip that block validation has
 	// started validating, so it can build the block's transaction map before the block is added.
-	// It is a hint: nothing about the block is trusted, and the map is only used for that block.
+	// It is a hint: block assembly binds the subtree list to the header itself, and the map is only
+	// used for a block with that hash and subtree list.
 	PrepareBlock(context.Context, *PrepareBlockRequest) (*EmptyMessage, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }

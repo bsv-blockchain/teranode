@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/mock"
@@ -20,8 +21,9 @@ import (
 )
 
 // newPrepareHarness is newHarnessWithSubtreeResult with a block assembly client passed to the
-// constructor. Subtree validation fails, so a validation stops right after the header checks.
-func newPrepareHarness(ctx context.Context, t *testing.T, ba blockassembly.ClientI) (*BlockValidation, blockchain.ClientI) {
+// constructor. Subtree validation returns subtreeErr. The blocks' subtrees are not in the subtree
+// store, so a validation that gets past subtree validation fails loading them.
+func newPrepareHarness(ctx context.Context, t *testing.T, ba blockassembly.ClientI, subtreeErr error) (*BlockValidation, blockchain.ClientI) {
 	t.Helper()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -38,8 +40,7 @@ func newPrepareHarness(ctx context.Context, t *testing.T, ba blockassembly.Clien
 	require.NoError(t, err)
 
 	subtreeVal := &subtreevalidation.MockSubtreeValidation{}
-	subtreeVal.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(errors.NewServiceError("subtree validation stopped by the test"))
+	subtreeVal.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(subtreeErr)
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, subtreeStore, txStore, utxoStore, nil, subtreeVal, ba)
 
@@ -47,7 +48,7 @@ func newPrepareHarness(ctx context.Context, t *testing.T, ba blockassembly.Clien
 }
 
 // prepareChild returns a block of one subtree on a stored parent, with the difficulty bits the
-// chain expects.
+// chain expects unless bits is set.
 func prepareChild(ctx context.Context, t *testing.T, client blockchain.ClientI, bits *model.NBit) *model.Block {
 	t.Helper()
 
@@ -74,26 +75,62 @@ func prepareChild(ctx context.Context, t *testing.T, client blockchain.ClientI, 
 	return block
 }
 
-// A block from a peer is handed to block assembly once its header checks passed, before the
-// block itself is validated.
-func TestValidateBlock_PreparesBlockAssemblyAfterHeaderChecks(t *testing.T) {
+// requireNotPrepared asserts that block assembly was not told about a block. The hint is sent
+// without waiting, so give a stray one time to arrive.
+func requireNotPrepared(t *testing.T, ba *blockassembly.Mock) {
+	t.Helper()
+
+	time.Sleep(200 * time.Millisecond)
+	ba.AssertNotCalled(t, "PrepareBlock", mock.Anything, mock.Anything)
+}
+
+// A block from a peer is handed to block assembly once its header checks and subtree validation
+// passed, while the block itself is still being validated.
+func TestValidateBlock_PreparesBlockAssemblyAfterSubtreeValidation(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	ba := blockassembly.NewMock()
-	bv, client := newPrepareHarness(ctx, t, ba)
+	bv, client := newPrepareHarness(ctx, t, ba, nil)
 	block := prepareChild(ctx, t, client, nil)
 
-	ba.On("PrepareBlock", mock.Anything, mock.MatchedBy(func(b *model.Block) bool {
-		return b.Hash().IsEqual(block.Hash())
-	})).Return(nil).Once()
+	prepared := make(chan *model.Block, 1)
+	ba.On("PrepareBlock", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		prepared <- args.Get(1).(*model.Block)
+	}).Return(nil).Once()
 
 	err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{DisableOptimisticMining: true})
-	require.Error(t, err, "subtree validation is stopped by the test")
+	require.Error(t, err, "the block's subtree is not in the store")
 
-	ba.AssertExpectations(t)
+	select {
+	case b := <-prepared:
+		require.True(t, b.Hash().IsEqual(block.Hash()))
+		require.Equal(t, block.Subtrees, b.Subtrees)
+		require.NotSame(t, block, b, "block assembly gets a copy, not the block being validated")
+	case <-time.After(5 * time.Second):
+		t.Fatal("block assembly was not told about the block")
+	}
+}
+
+// Block assembly is not told about a block that failed subtree validation.
+func TestValidateBlock_DoesNotPrepareBlockAssemblyWhenSubtreesFail(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ba := blockassembly.NewMock()
+	ba.On("PrepareBlock", mock.Anything, mock.Anything).Return(nil)
+
+	bv, client := newPrepareHarness(ctx, t, ba, errors.NewServiceError("subtree validation stopped by the test"))
+	block := prepareChild(ctx, t, client, nil)
+
+	err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{DisableOptimisticMining: true})
+	require.ErrorContains(t, err, "subtree validation stopped by the test")
+
+	requireNotPrepared(t, ba)
 }
 
 // Block assembly is not told about a block whose difficulty bits are wrong.
@@ -106,7 +143,7 @@ func TestValidateBlock_DoesNotPrepareBlockAssemblyForWrongBits(t *testing.T) {
 	ba := blockassembly.NewMock()
 	ba.On("PrepareBlock", mock.Anything, mock.Anything).Return(nil)
 
-	bv, client := newPrepareHarness(ctx, t, ba)
+	bv, client := newPrepareHarness(ctx, t, ba, nil)
 
 	wrong := nBitsFrom(t, "207ffffe")
 	block := prepareChild(ctx, t, client, &wrong)
@@ -114,10 +151,10 @@ func TestValidateBlock_DoesNotPrepareBlockAssemblyForWrongBits(t *testing.T) {
 	err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{DisableOptimisticMining: true})
 	require.Error(t, err)
 
-	ba.AssertNotCalled(t, "PrepareBlock", mock.Anything, mock.Anything)
+	requireNotPrepared(t, ba)
 }
 
-// Catch-up and revalidation do not prepare block assembly: it is behind or the block is old.
+// Catch-up does not prepare block assembly: it is behind.
 func TestValidateBlock_DoesNotPrepareBlockAssemblyInCatchup(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -127,7 +164,7 @@ func TestValidateBlock_DoesNotPrepareBlockAssemblyInCatchup(t *testing.T) {
 	ba := blockassembly.NewMock()
 	ba.On("PrepareBlock", mock.Anything, mock.Anything).Return(nil)
 
-	bv, client := newPrepareHarness(ctx, t, ba)
+	bv, client := newPrepareHarness(ctx, t, ba, nil)
 	block := prepareChild(ctx, t, client, nil)
 
 	err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
@@ -136,7 +173,32 @@ func TestValidateBlock_DoesNotPrepareBlockAssemblyInCatchup(t *testing.T) {
 	})
 	require.Error(t, err)
 
-	ba.AssertNotCalled(t, "PrepareBlock", mock.Anything, mock.Anything)
+	requireNotPrepared(t, ba)
+}
+
+// Revalidating a block stored as invalid does not prepare block assembly.
+func TestValidateBlock_DoesNotPrepareBlockAssemblyOnRevalidation(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ba := blockassembly.NewMock()
+	ba.On("PrepareBlock", mock.Anything, mock.Anything).Return(nil)
+
+	bv, client := newPrepareHarness(ctx, t, ba, nil)
+	block := prepareChild(ctx, t, client, nil)
+
+	require.NoError(t, client.AddBlock(ctx, block, "test", blockchainoptions.WithInvalid(true)))
+
+	err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{
+		DisableOptimisticMining: true,
+		IsRevalidation:          true,
+	})
+	require.Error(t, err, "the block's subtree is not in the store")
+	require.NotContains(t, err.Error(), "not marked as invalid", "the revalidation must get past its entry check")
+
+	requireNotPrepared(t, ba)
 }
 
 // A failing block assembly does not fail the validation of the block.
@@ -147,13 +209,22 @@ func TestValidateBlock_PrepareBlockAssemblyErrorIsIgnored(t *testing.T) {
 	defer cancel()
 
 	ba := blockassembly.NewMock()
-	ba.On("PrepareBlock", mock.Anything, mock.Anything).Return(errors.NewServiceError("block assembly down"))
 
-	bv, client := newPrepareHarness(ctx, t, ba)
+	called := make(chan struct{}, 1)
+	ba.On("PrepareBlock", mock.Anything, mock.Anything).Run(func(mock.Arguments) {
+		called <- struct{}{}
+	}).Return(errors.NewServiceError("block assembly down"))
+
+	bv, client := newPrepareHarness(ctx, t, ba, nil)
 	block := prepareChild(ctx, t, client, nil)
 
 	err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{DisableOptimisticMining: true})
-	require.ErrorContains(t, err, "subtree validation stopped by the test", "the validation goes on to the subtrees")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "block assembly down")
 
-	ba.AssertExpectations(t)
+	select {
+	case <-called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("block assembly was not told about the block")
+	}
 }

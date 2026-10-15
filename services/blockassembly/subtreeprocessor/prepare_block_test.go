@@ -2,12 +2,12 @@ package subtreeprocessor
 
 import (
 	"context"
-	"encoding/hex"
+	"fmt"
 	"net/url"
-	"os"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
@@ -22,11 +22,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const prepareTestSubtree = "fd61a79793c4fb02ba14b85df98f5f60f727be359089d8fa125c4ce37945106b"
+// prepareFixture is a subtree processor on the genesis block and, in its subtree store, the
+// two full subtrees of a block on top of genesis whose header commits to them, plus a spare
+// subtree that is in no block.
+type prepareFixture struct {
+	stp      *SubtreeProcessor
+	store    blob.Store
+	block    *model.Block
+	subtrees []*subtreepkg.Subtree
+	spare    *subtreepkg.Subtree
+}
 
-// newPrepareTestStp returns a subtree processor on the genesis block, its subtree store holding
-// the testdata subtree, and a block on top of genesis made of that subtree.
-func newPrepareTestStp(t *testing.T) (*SubtreeProcessor, blob.Store, *model.Block) {
+func newPrepareFixture(t *testing.T) *prepareFixture {
 	t.Helper()
 
 	ctx := context.Background()
@@ -37,9 +44,6 @@ func newPrepareTestStp(t *testing.T) (*SubtreeProcessor, blob.Store, *model.Bloc
 
 	utxoStore, err := sql.New(ctx, logger, test.CreateBaseTestSettings(t), utxoStoreURL)
 	require.NoError(t, err)
-
-	subtreeStore := blob_memory.New()
-	putPrepareTestSubtree(t, subtreeStore)
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.BlockAssembly.InitialMerkleItemsPerSubtree = 32
@@ -57,44 +61,79 @@ func newPrepareTestStp(t *testing.T) (*SubtreeProcessor, blob.Store, *model.Bloc
 	}()
 	t.Cleanup(func() { close(newSubtreeChan) })
 
-	stp, err := NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan)
+	f := &prepareFixture{store: blob_memory.New()}
+
+	f.stp, err = NewSubtreeProcessor(ctx, logger, tSettings, f.store, blockchainClient, utxoStore, newSubtreeChan)
 	require.NoError(t, err)
 
-	stp.currentBlockHeader.Store(model.GenesisBlockHeader)
+	f.stp.currentBlockHeader.Store(model.GenesisBlockHeader)
 
-	blockBytes, err := hex.DecodeString("000000206a21d13c3d2656557493b4652f67a763f835b86bf90107a60f412c290000000083ba48026c405d5a4b4d5aa3f10cee9de605a012e9a25f72a19aa9fe123380c689505c67c874461cc6dda18002fde501016b104579e34c5c12fad8899035be27f7605f8ff95db814ba02fbc49397a761fd01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff1903af32190000000000205f7c477c327c437c5f200001000000ffffffff01e50b5402000000001976a9147a112f6a373b80b4ebb2b02acef97f35aef7494488ac00000000feaf321900")
+	coinbase, err := bt.NewTxFromString(model.CoinbaseHex)
 	require.NoError(t, err)
 
-	block, err := model.NewBlockFromBytes(blockBytes)
+	for s := 0; s < 3; s++ {
+		st, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		for i := 0; i < 4; i++ {
+			if s == 0 && i == 0 {
+				require.NoError(t, st.AddCoinbaseNode())
+				continue
+			}
+
+			require.NoError(t, st.AddNode(chainhash.HashH([]byte(fmt.Sprintf("prepare-%d-%d", s, i))), 1, 1))
+		}
+
+		b, err := st.Serialize()
+		require.NoError(t, err)
+		require.NoError(t, f.store.Set(ctx, st.RootHash().CloneBytes(), fileformat.FileTypeSubtree, b))
+
+		if s < 2 {
+			f.subtrees = append(f.subtrees, st)
+		} else {
+			f.spare = st
+		}
+	}
+
+	root0, err := f.subtrees[0].RootHashWithReplaceRootNode(coinbase.TxIDChainHash(), 0, uint64(coinbase.Size()))
 	require.NoError(t, err)
 
-	block.Header.HashPrevBlock = model.GenesisBlockHeader.Hash()
-	block.GetHash() // refresh the cached hash after the header change
+	merkleRoot := chainhash.DoubleHashH(append(root0.CloneBytes(), f.subtrees[1].RootHash().CloneBytes()...))
 
-	return stp, subtreeStore, block
+	f.block, err = model.NewBlock(&model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  model.GenesisBlockHeader.Hash(),
+		HashMerkleRoot: &merkleRoot,
+		Bits:           model.GenesisBlockHeader.Bits,
+	}, coinbase, []*chainhash.Hash{f.subtrees[0].RootHash(), f.subtrees[1].RootHash()}, 8, 1000, 1, 0)
+	require.NoError(t, err)
+
+	return f
 }
 
-func putPrepareTestSubtree(t *testing.T, store blob.Store) {
+// withSubtrees returns a copy of the block with the same header, so the same hash, and the
+// given subtree list.
+func (f *prepareFixture) withSubtrees(t *testing.T, subtrees ...*chainhash.Hash) *model.Block {
 	t.Helper()
 
-	hash, err := chainhash.NewHashFromStr(prepareTestSubtree)
+	b, err := model.NewBlock(f.block.Header, f.block.CoinbaseTx, subtrees, f.block.TransactionCount, f.block.SizeInBytes, 1, 0)
 	require.NoError(t, err)
+	require.True(t, b.Hash().IsEqual(f.block.Hash()))
 
-	b, err := os.ReadFile("./testdata/" + prepareTestSubtree + ".subtree")
-	require.NoError(t, err)
-	require.NoError(t, store.Set(context.Background(), hash.CloneBytes(), fileformat.FileTypeSubtree, b))
+	return b
 }
 
-func delPrepareTestSubtree(t *testing.T, store blob.Store) {
+func (f *prepareFixture) delSubtrees(t *testing.T) {
 	t.Helper()
 
-	hash, err := chainhash.NewHashFromStr(prepareTestSubtree)
-	require.NoError(t, err)
-	require.NoError(t, store.Del(context.Background(), hash.CloneBytes(), fileformat.FileTypeSubtree))
+	for _, st := range append(f.subtrees, f.spare) {
+		require.NoError(t, f.store.Del(context.Background(), st.RootHash().CloneBytes(), fileformat.FileTypeSubtree))
+	}
 }
 
-// waitPrepared waits until the map prepared for hash is built and returns whether one exists.
-func waitPrepared(t *testing.T, stp *SubtreeProcessor, hash *chainhash.Hash) bool {
+// waitPrepared waits until the map being prepared for hash is done and returns it, or nil if
+// none is being prepared for hash.
+func waitPrepared(t *testing.T, stp *SubtreeProcessor, hash *chainhash.Hash) *preparedTxMap {
 	t.Helper()
 
 	stp.preparedMu.Lock()
@@ -102,7 +141,7 @@ func waitPrepared(t *testing.T, stp *SubtreeProcessor, hash *chainhash.Hash) boo
 	stp.preparedMu.Unlock()
 
 	if p == nil || !p.hash.IsEqual(hash) {
-		return false
+		return nil
 	}
 
 	select {
@@ -111,129 +150,188 @@ func waitPrepared(t *testing.T, stp *SubtreeProcessor, hash *chainhash.Hash) boo
 		t.Fatal("prepared transaction map not built in time")
 	}
 
-	return true
+	return p
 }
 
-func otherBlockOnSameParent(t *testing.T, block *model.Block) *model.Block {
+func (f *prepareFixture) takeMap(t *testing.T, block *model.Block) (*SortedHashSet, error) {
 	t.Helper()
 
-	b, err := block.Bytes()
-	require.NoError(t, err)
+	blockSubtreesMap, _ := f.stp.processBlockSubtrees(block)
+	m, _, err := f.stp.createTransactionMapIfNeeded(context.Background(), block, blockSubtreesMap)
 
-	other, err := model.NewBlockFromBytes(b)
-	require.NoError(t, err)
-
-	other.Header.HashPrevBlock = block.Header.HashPrevBlock
-	other.Header.Nonce++
-	other.GetHash()
-	require.False(t, other.Hash().IsEqual(block.Hash()))
-
-	return other
+	return m, err
 }
 
 // A map prepared for a block is the one moveForwardBlock uses for it: once prepared, the block's
 // subtrees are not read again.
 func TestPrepareBlock_MoveForwardUsesPreparedMap(t *testing.T) {
-	ctx := context.Background()
-	stp, store, block := newPrepareTestStp(t)
+	f := newPrepareFixture(t)
 
-	blockSubtreesMap, _ := stp.processBlockSubtrees(block)
-	want, _, err := stp.createTransactionMapIfNeeded(ctx, block, blockSubtreesMap)
+	want, err := f.takeMap(t, f.block)
 	require.NoError(t, err)
-	require.Positive(t, want.Length())
+	require.Equal(t, 8, want.Length())
 
-	stp.PrepareBlock(block)
-	require.True(t, waitPrepared(t, stp, block.Hash()))
+	f.stp.PrepareBlock(f.block)
+	p := waitPrepared(t, f.stp, f.block.Hash())
+	require.NotNil(t, p)
+	require.NoError(t, p.err)
 
-	delPrepareTestSubtree(t, store)
+	f.delSubtrees(t)
 
-	got, _, err := stp.createTransactionMapIfNeeded(ctx, block, blockSubtreesMap)
+	got, err := f.takeMap(t, f.block)
 	require.NoError(t, err)
 	require.Equal(t, want.Length(), got.Length())
 
-	stp.preparedMu.Lock()
-	defer stp.preparedMu.Unlock()
-	require.Nil(t, stp.prepared, "a used map is handed over, not kept")
+	f.stp.preparedMu.Lock()
+	defer f.stp.preparedMu.Unlock()
+	require.Nil(t, f.stp.prepared, "a used map is handed over, not kept")
+}
+
+// The map is sized from the body bound to the header, not from the transaction count the block
+// claims, which is not committed to by the header.
+func TestPrepareBlock_SizedFromBoundBody(t *testing.T) {
+	f := newPrepareFixture(t)
+
+	f.block.TransactionCount = 1 << 40
+
+	f.stp.PrepareBlock(f.block)
+	p := waitPrepared(t, f.stp, f.block.Hash())
+	require.NotNil(t, p)
+	require.NoError(t, p.err)
+	require.Equal(t, uint64(8), p.txCount)
+	require.Equal(t, 8, p.txMap.Length())
+}
+
+// A subtree list the header does not commit to is not prepared, even under the header of a
+// real block, and the real block's list replaces it.
+func TestPrepareBlock_UnboundSubtreeListIsNotPrepared(t *testing.T) {
+	f := newPrepareFixture(t)
+
+	doctored := f.withSubtrees(t, f.subtrees[0].RootHash(), f.spare.RootHash())
+
+	f.stp.PrepareBlock(doctored)
+	p := waitPrepared(t, f.stp, f.block.Hash())
+	require.NotNil(t, p)
+	require.ErrorContains(t, p.err, "merkle root does not match")
+	require.Nil(t, p.txMap)
+
+	f.stp.PrepareBlock(f.block)
+	p = waitPrepared(t, f.stp, f.block.Hash())
+	require.NotNil(t, p)
+	require.NoError(t, p.err, "the bound list replaces the unbound one")
+
+	f.delSubtrees(t)
+
+	got, err := f.takeMap(t, f.block)
+	require.NoError(t, err)
+	require.Equal(t, 8, got.Length())
+}
+
+// A map prepared for a block's subtree list is not used for the same block hash with another
+// list.
+func TestPrepareBlock_NotUsedForAnotherSubtreeList(t *testing.T) {
+	f := newPrepareFixture(t)
+
+	f.stp.PrepareBlock(f.block)
+	p := waitPrepared(t, f.stp, f.block.Hash())
+	require.NotNil(t, p)
+	require.NoError(t, p.err)
+
+	f.delSubtrees(t)
+
+	_, err := f.takeMap(t, f.withSubtrees(t, f.subtrees[0].RootHash(), f.spare.RootHash()))
+	require.Error(t, err, "the other list's subtrees must be read, and they are gone")
+}
+
+// A subtree whose file does not hash to its key does not bind the list.
+func TestPrepareBlock_SubtreeNotMatchingItsKeyIsNotPrepared(t *testing.T) {
+	f := newPrepareFixture(t)
+
+	b, err := f.spare.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, f.store.Del(context.Background(), f.subtrees[1].RootHash().CloneBytes(), fileformat.FileTypeSubtree))
+	require.NoError(t, f.store.Set(context.Background(), f.subtrees[1].RootHash().CloneBytes(), fileformat.FileTypeSubtree, b))
+
+	f.stp.PrepareBlock(f.block)
+	p := waitPrepared(t, f.stp, f.block.Hash())
+	require.NotNil(t, p)
+	require.ErrorContains(t, p.err, "does not hash to its key")
 }
 
 // Only a block on the current tip is prepared.
 func TestPrepareBlock_IgnoresBlockNotOnTip(t *testing.T) {
-	stp, _, block := newPrepareTestStp(t)
+	f := newPrepareFixture(t)
 
-	block.Header.HashPrevBlock = &chainhash.Hash{1}
-	block.GetHash()
-	stp.PrepareBlock(block)
+	f.block.Header.HashPrevBlock = &chainhash.Hash{1}
+	f.block.GetHash()
+	f.stp.PrepareBlock(f.block)
 
-	stp.preparedMu.Lock()
-	defer stp.preparedMu.Unlock()
-	require.Nil(t, stp.prepared)
+	f.stp.preparedMu.Lock()
+	defer f.stp.preparedMu.Unlock()
+	require.Nil(t, f.stp.prepared)
 }
 
 // A map prepared for one block is never used for another, and is dropped when another block
 // moves the tip.
 func TestPrepareBlock_OtherBlockDoesNotUsePreparedMap(t *testing.T) {
-	ctx := context.Background()
-	stp, store, block := newPrepareTestStp(t)
+	f := newPrepareFixture(t)
 
-	stp.PrepareBlock(block)
-	require.True(t, waitPrepared(t, stp, block.Hash()))
+	f.stp.PrepareBlock(f.block)
+	require.NotNil(t, waitPrepared(t, f.stp, f.block.Hash()))
 
-	delPrepareTestSubtree(t, store)
+	f.delSubtrees(t)
 
-	other := otherBlockOnSameParent(t, block)
-	blockSubtreesMap, _ := stp.processBlockSubtrees(other)
+	other, err := model.NewBlock(&model.BlockHeader{
+		Version:        f.block.Header.Version,
+		HashPrevBlock:  f.block.Header.HashPrevBlock,
+		HashMerkleRoot: f.block.Header.HashMerkleRoot,
+		Bits:           f.block.Header.Bits,
+		Nonce:          f.block.Header.Nonce + 1,
+	}, f.block.CoinbaseTx, f.block.Subtrees, 8, 1000, 1, 0)
+	require.NoError(t, err)
+	require.False(t, other.Hash().IsEqual(f.block.Hash()))
 
-	_, _, err := stp.createTransactionMapIfNeeded(ctx, other, blockSubtreesMap)
+	_, err = f.takeMap(t, other)
 	require.Error(t, err, "the other block's subtrees must be read, and they are gone")
 
-	stp.preparedMu.Lock()
-	defer stp.preparedMu.Unlock()
-	require.Nil(t, stp.prepared)
+	f.stp.preparedMu.Lock()
+	defer f.stp.preparedMu.Unlock()
+	require.Nil(t, f.stp.prepared)
 }
 
 // A prepare that failed leaves moveForwardBlock to build the map itself.
 func TestPrepareBlock_FailedPrepareFallsBack(t *testing.T) {
-	ctx := context.Background()
-	stp, store, block := newPrepareTestStp(t)
+	f := newPrepareFixture(t)
 
-	delPrepareTestSubtree(t, store)
+	require.NoError(t, f.store.Del(context.Background(), f.subtrees[1].RootHash().CloneBytes(), fileformat.FileTypeSubtree))
 
-	stp.PrepareBlock(block)
-	require.True(t, waitPrepared(t, stp, block.Hash()))
+	f.stp.PrepareBlock(f.block)
+	p := waitPrepared(t, f.stp, f.block.Hash())
+	require.NotNil(t, p)
+	require.Error(t, p.err)
 
-	putPrepareTestSubtree(t, store)
-
-	blockSubtreesMap, _ := stp.processBlockSubtrees(block)
-	got, _, err := stp.createTransactionMapIfNeeded(ctx, block, blockSubtreesMap)
+	b, err := f.subtrees[1].Serialize()
 	require.NoError(t, err)
-	require.Positive(t, got.Length())
+	require.NoError(t, f.store.Set(context.Background(), f.subtrees[1].RootHash().CloneBytes(), fileformat.FileTypeSubtree, b))
+
+	got, err := f.takeMap(t, f.block)
+	require.NoError(t, err)
+	require.Equal(t, 8, got.Length())
 }
 
 // A map prepared over all of a block's subtrees is not used when some of them are this node's
 // own, which moveForwardBlock leaves out of the map.
 func TestPrepareBlock_NotUsedWhenOwnSubtreesInBlock(t *testing.T) {
-	ctx := context.Background()
-	stp, store, block := newPrepareTestStp(t)
+	f := newPrepareFixture(t)
 
-	// a second subtree in the block, also in the store
-	second, err := subtreepkg.NewTreeByLeafCount(4)
-	require.NoError(t, err)
-	require.NoError(t, second.AddNode(chainhash.HashH([]byte("prepare-second")), 1, 1))
+	f.stp.PrepareBlock(f.block)
+	require.NotNil(t, waitPrepared(t, f.stp, f.block.Hash()))
 
-	secondBytes, err := second.Serialize()
-	require.NoError(t, err)
-	require.NoError(t, store.Set(ctx, second.RootHash().CloneBytes(), fileformat.FileTypeSubtree, secondBytes))
-
-	block.Subtrees = append(block.Subtrees, second.RootHash())
-
-	stp.PrepareBlock(block)
-	require.True(t, waitPrepared(t, stp, block.Hash()))
-
-	delPrepareTestSubtree(t, store)
+	f.delSubtrees(t)
 
 	// as if the second subtree were this node's own: only the first is mapped
-	blockSubtreesMap := map[chainhash.Hash]int{*block.Subtrees[0]: 0}
+	blockSubtreesMap := map[chainhash.Hash]int{*f.block.Subtrees[0]: 0}
 
-	_, _, err = stp.createTransactionMapIfNeeded(ctx, block, blockSubtreesMap)
+	_, _, err := f.stp.createTransactionMapIfNeeded(context.Background(), f.block, blockSubtreesMap)
 	require.Error(t, err, "the first subtree must be read, and it is gone")
 }

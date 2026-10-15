@@ -1598,8 +1598,9 @@ const validationResultGrace = 100 * time.Millisecond
 // second independent timeout, so the two cannot drift apart.
 const revalidateFromScratchDelay = 2 * validationResultGrace
 
-// prepareBlockAssemblyTimeout bounds the hint to block assembly in prepareBlockAssembly. Block
-// assembly only starts a goroutine, so this only matters when it is unreachable.
+// prepareBlockAssemblyTimeout bounds the hint to block assembly in prepareBlockAssembly, which
+// nothing waits on. Block assembly only starts a goroutine, so this only matters when it is
+// unreachable.
 const prepareBlockAssemblyTimeout = 2 * time.Second
 
 func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *ValidateBlockOptions, validate func(opts *ValidateBlockOptions) error) error {
@@ -2055,10 +2056,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] parent block is invalid", block.Hash().String())
 		}
 
-		if !opts.IsCatchupMode && !opts.IsRevalidation {
-			u.prepareBlockAssembly(ctx, block)
-		}
-
 		// Wait for reValidationBlock to do its thing
 		// When waitForPreviousBlocksToBeProcessed is done, all the previous blocks will be processed
 		if err = u.waitForPreviousBlocksToBeProcessed(ctx, block, blockHeaders); err != nil {
@@ -2215,6 +2212,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if !opts.IsCatchupMode {
 				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
 			}
+		}
+
+		// The block's subtrees are in the subtree store now. Under optimistic mining the block is
+		// added straight away, so block assembly has nothing to get ahead of.
+		if !useOptimisticMining && !opts.IsCatchupMode && !opts.IsRevalidation {
+			u.prepareBlockAssembly(block)
 		}
 
 		var optimisticMiningWg sync.WaitGroup
@@ -2690,21 +2693,30 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 // any future FSM enum addition all return false (treat as not-caught-up => retry,
 // never wrongly invalidate). Only the one state we can prove is caught up
 // authorizes invalidating a floater.
-// prepareBlockAssembly hands a block whose header checks passed (proof of work, expected
-// difficulty bits, parent not invalid) to block assembly, which builds the block's transaction
-// map while the block is validated, so it has less to do once the block is added. It is only a
-// hint: an error is logged and the validation goes on.
-func (u *BlockValidation) prepareBlockAssembly(ctx context.Context, block *model.Block) {
+// prepareBlockAssembly hands a block whose header checks passed and whose subtrees are in the
+// subtree store to block assembly, which binds the subtree list to the header itself and builds
+// the block's transaction map while the block is validated, so it has less to do once the block
+// is added. It is only a hint: it does not wait for block assembly, and an error is logged.
+func (u *BlockValidation) prepareBlockAssembly(block *model.Block) {
 	if u.blockAssemblyClient == nil || len(block.Subtrees) == 0 {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, prepareBlockAssemblyTimeout)
-	defer cancel()
-
-	if err := u.blockAssemblyClient.PrepareBlock(ctx, block); err != nil {
-		u.logger.Warnf("[ValidateBlock][%s] failed to prepare block assembly for the block: %v", block.Hash().String(), err)
+	// a copy, so the call does not read the block while validation updates it
+	prepared, err := model.NewBlock(block.Header, block.CoinbaseTx, slices.Clone(block.Subtrees), block.TransactionCount, block.SizeInBytes, block.Height, 0)
+	if err != nil {
+		u.logger.Warnf("[ValidateBlock][%s] failed to copy the block for block assembly: %v", block.Hash().String(), err)
+		return
 	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), prepareBlockAssemblyTimeout)
+		defer cancel()
+
+		if err := u.blockAssemblyClient.PrepareBlock(ctx, prepared); err != nil {
+			u.logger.Warnf("[ValidateBlock][%s] failed to prepare block assembly for the block: %v", prepared.Hash().String(), err)
+		}
+	}()
 }
 
 func (u *BlockValidation) isCaughtUp(ctx context.Context) bool {

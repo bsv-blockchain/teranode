@@ -113,7 +113,8 @@ service BlockAssemblyAPI {
 
   // PrepareBlock tells block assembly about a block on its current tip that block validation has
   // started validating, so it can build the block's transaction map before the block is added.
-  // It is a hint: nothing about the block is trusted, and the map is only used for that block.
+  // It is a hint: block assembly binds the subtree list to the header itself, and the map is only
+  // used for a block with that hash and subtree list.
   rpc PrepareBlock (PrepareBlockRequest) returns (EmptyMessage) {}
 }
 
