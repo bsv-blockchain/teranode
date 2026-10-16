@@ -221,6 +221,10 @@ var settingsConfRemovedKeys = map[string]string{
 	"use_cgo_signer":                        "#1744",
 	"utxostore_dbTimeoutMillis":             "#1744",
 	"utxostore_outpointBatcherConcurrency":  "#1744",
+	// Found by the settings-doc drift review (#1639): a documented feature
+	// that was never implemented, and a setting that never existed.
+	"pruner_jobTimeout":                       "#1639",
+	"utxostore_prunerMaxConcurrentOperations": "#1639",
 }
 
 // TestSettingsConfHasNoDeadKeys fails when a key listed in

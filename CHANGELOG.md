@@ -83,6 +83,16 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Peer-announced subtrees are validated at most 32 at a time.** The new
+  `subtreevalidation_peerSubtreeConcurrency` (default 32) bounds how many peer
+  subtrees a subtree validator works on at once; until now the bound was NumCPU. After a
+  block, a backlog of peer subtrees used to be admitted all at once, each allocating
+  about 1 GiB for 1M transactions. The rest now wait, holding no lock, and
+  `teranode_subtreevalidation_peer_subtree_admission_wait` / `_waiting` show the queue.
+  Raise the setting if subtrees queue while CPU is idle; `0` restores the old
+  behaviour. On the `lockfree` txmeta cache, `teranode_tx_meta_cache_evictions` now
+  also counts an estimate of entries lost to ring wraps, so it is no longer 0 there. (#1967)
+
 - **P2P HTTP endpoints are now rate limited.** (shipped in v0.16.0) `/health` and the websocket upgrade
   path are limited per source address, defaulting to 100 requests per second
   (`p2p_httpRateLimit`); requests over the limit receive HTTP 429. These endpoints

@@ -909,7 +909,7 @@ var checkedRowsPerDoc = map[string]int{
 	"propagation_settings.md":       13,
 	"pruner_settings.md":            26,
 	"rpc_settings.md":               11,
-	"subtreevalidation_settings.md": 23,
+	"subtreevalidation_settings.md": 24,
 	"utxopersister_settings.md":     2,
 	"validator_settings.md":         17,
 	"aerospike_settings.md":         13,
@@ -1106,56 +1106,3 @@ func settingsConfBaseValues(t *testing.T) map[string]string {
 // literal - see e.g. pruner_settings.md's UTXOChunkSize row. Group 1 is X,
 // the value settings.conf is claimed to ship.
 var shipsAnnotationRe = regexp.MustCompile(`\(Go default; settings\.conf ships (.+?)\)\s*$`)
-
-// deadSettingsConfKeyExemption names a settings.conf key that this test
-// asserts does NOT appear in settings.conf - it documents a feature that was
-// removed, or a key that was fabricated in documentation and never existed,
-// so its resolvedness is a permanent invariant rather than a per-file doc
-// exemption. Each entry exists specifically because the doc drift review
-// found it (see ChiR6: the "pruner_jobTimeout" doc row was deleted as
-// describing a feature that was never implemented, but the settings.conf
-// block that set it and described its behaviour in comments was left behind
-// - the wrong half of an inconsistency was removed). Unlike
-// nonSettingsKeyExemptions, which lists real operator-facing keys
-// ExportMetadata() cannot see, every key here is asserted to be genuinely
-// gone.
-type deadSettingsConfKeyExemption struct {
-	key    string
-	reason string
-}
-
-var deadSettingsConfKeyExemptions = []deadSettingsConfKeyExemption{
-	{
-		key: "pruner_jobTimeout",
-		reason: "described a background pruner-job re-queue behaviour no code ever implemented; removed from " +
-			"settings.conf and its doc row together (see ChiR6 in the doc drift review)",
-	},
-	{
-		key:    "utxostore_prunerMaxConcurrentOperations",
-		reason: "nonexistent setting removed from its doc row; never had a settings.conf entry to begin with",
-	},
-}
-
-// TestSettingsConfHasNoDeadKeys guards against the specific inconsistency
-// ChiR6 found: a settings-table doc row deleted because it described a
-// feature that was never implemented, while the settings.conf block that set
-// the same key (with comments describing the same nonexistent behaviour) was
-// left behind. It does not attempt the much larger project of resolving
-// every one of settings.conf's ~400 base keys against ExportMetadata() -
-// most are gocore ${VAR} interpolation targets (DATADIR, clientName, ...) or
-// keys read directly outside the reflection-tagged Settings struct
-// (startPruner and siblings), and distinguishing those from a genuinely dead
-// key needs the kind of per-key investigation this review did for the two
-// keys below, not a blanket assertion. Instead, this test is the narrow,
-// mechanically-checkable half of that follow-up: once a key is confirmed
-// dead, assert it stays dead.
-func TestSettingsConfHasNoDeadKeys(t *testing.T) {
-	present := settingsConfBaseKeys(t)
-
-	for _, e := range deadSettingsConfKeyExemptions {
-		require.False(t, present[e.key],
-			"settings.conf sets %q, which TestSettingsConfHasNoDeadKeys asserts is dead: %s - if it has been "+
-				"reintroduced for a real feature, remove the deadSettingsConfKeyExemptions entry; otherwise delete "+
-				"the settings.conf line", e.key, e.reason)
-	}
-}
