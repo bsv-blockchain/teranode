@@ -18,6 +18,14 @@ var (
 	prunerCurrentHeight    prometheus.Gauge
 	prunerActive           prometheus.Gauge
 
+	// Backlog monitor metrics
+	prunerLagBlocks               prometheus.Gauge
+	prunerLastCompletedHeight     prometheus.Gauge
+	prunerBacklogState            prometheus.Gauge
+	prunerHeadroomRatio           prometheus.Gauge
+	prunerLastRunRecordsPerSecond prometheus.Gauge
+	prunerIncompleteRunsTotal     prometheus.Counter
+
 	// Blob deletion metrics
 	blobDeletionScheduledTotal  *prometheus.CounterVec
 	blobDeletionCancelledTotal  *prometheus.CounterVec
@@ -180,4 +188,31 @@ func _initPrometheusMetrics() {
 			Help:      "Number of pending deletions in queue",
 		},
 	)
+
+	// Backlog monitor metrics. Alert: teranode_pruner_backlog_state == 2 (page),
+	// teranode_pruner_backlog_state == 1 for 30m (ticket).
+	prunerLagBlocks = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode", Subsystem: "pruner", Name: "lag_blocks",
+		Help: "Newest requested prune height minus last height whose phase 2 completed",
+	})
+	prunerLastCompletedHeight = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode", Subsystem: "pruner", Name: "last_completed_height",
+		Help: "Last block height whose phase 2 pruning completed successfully",
+	})
+	prunerBacklogState = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode", Subsystem: "pruner", Name: "backlog_state",
+		Help: "Pruner backlog state: 0 OK, 1 AT_RISK (no headroom), 2 BEHIND",
+	})
+	prunerHeadroomRatio = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode", Subsystem: "pruner", Name: "headroom_ratio",
+		Help: "Mean phase-2 run time divided by mean block-notification interval",
+	})
+	prunerLastRunRecordsPerSecond = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode", Subsystem: "pruner", Name: "last_run_records_per_second",
+		Help: "Records per second of the last successful phase-2 run",
+	})
+	prunerIncompleteRunsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode", Subsystem: "pruner", Name: "incomplete_runs_total",
+		Help: "Phase-2 pruning runs that returned an error",
+	})
 }

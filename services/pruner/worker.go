@@ -156,25 +156,36 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			if s.settings.Pruner.MinBlockHeight > 0 && blockHeight <= s.settings.Pruner.MinBlockHeight {
 				s.logger.Debugf("[pruner][%s:%d] skipping - block height below minimum (%d)", blockHashStr, blockHeight, s.settings.Pruner.MinBlockHeight)
 				prunerSkipped.WithLabelValues("below_min_height").Inc()
+				s.backlog.OnSkipped(blockHeight, "below_min_height")
 				continue
 			}
 
-			// Check FSM state - skip during CATCHINGBLOCKS if configured.
+			// Check FSM state: skip during CATCHINGBLOCKS if configured, and tell the
+			// backlog monitor whether we are catching up (it must not report BEHIND
+			// for catchup lag even when pruning keeps running, the default).
 			// Guard against a nil blockchainClient (e.g. in tests) the same
 			// way the blockAssemblyClient check below does.
-			if s.settings.Pruner.SkipDuringCatchup && s.blockchainClient != nil {
+			if s.blockchainClient != nil && (s.settings.Pruner.SkipDuringCatchup || s.backlog.active()) {
 				fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)
 				if err != nil {
-					s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
-					prunerSkipped.WithLabelValues("fsm_error").Inc()
-					continue
-				}
-				// Only RUNNING proves no catchup is in flight: an operator STOP
-				// parks a catching-up node in IDLE while its batch still runs.
-				if fsmState == nil || *fsmState != blockchain.FSMStateRUNNING {
-					s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
-					prunerSkipped.WithLabelValues("catchup_mode").Inc()
-					continue
+					if s.settings.Pruner.SkipDuringCatchup {
+						s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
+						prunerSkipped.WithLabelValues("fsm_error").Inc()
+						s.backlog.OnSkipped(blockHeight, "fsm_error")
+						continue
+					}
+				} else {
+					// Only RUNNING proves no catchup is in flight: an operator STOP
+					// parks a catching-up node in IDLE while its batch still runs.
+					running := fsmState != nil && *fsmState == blockchain.FSMStateRUNNING
+					s.backlog.OnCatchupState(!running)
+
+					if s.settings.Pruner.SkipDuringCatchup && !running {
+						s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
+						prunerSkipped.WithLabelValues("catchup_mode").Inc()
+						s.backlog.OnSkipped(blockHeight, "catchup_mode")
+						continue
+					}
 				}
 			}
 
@@ -187,6 +198,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			if s.blockAssemblyClient != nil {
 				s.logger.Debugf("[pruner][%s:%d] waiting for mined_set=true", blockHashStr, blockHeight)
 				if !s.waitForBlockMinedStatus(ctx, &sig.blockHash) {
+					s.backlog.OnSkipped(blockHeight, "mined_status_timeout")
 					continue
 				}
 				s.logger.Debugf("[pruner][%s:%d] block has mined_set=true", blockHashStr, blockHeight)
@@ -194,6 +206,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 
 			// Safety check before pruning
 			if !s.checkBlockAssemblySafeForPruner(ctx, "pruner", blockHeight) {
+				s.backlog.OnSkipped(blockHeight, "block_assembly_timeout")
 				continue
 			}
 
@@ -205,6 +218,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			s.blobNotify <- sig
 			s.logger.Debugf("[pruner][%s:%d] notified blob deletion worker", blockHashStr, blockHeight)
 
+			s.backlog.OnRunStarted(blockHeight)
 			prunerActive.Set(1)
 
 			// Phase 1: Preserve parents of old unmined transactions
@@ -252,13 +266,15 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			if s.prunerService != nil {
 				startTime := time.Now()
 				recordsProcessed, err := s.prunerService.Prune(ctx, blockHeight, blockHashStr)
+				elapsed := time.Since(startTime)
 				if err != nil {
 					s.logger.Errorf("[pruner][%s:%d] phase 2: DAH pruner failed: %v", blockHashStr, blockHeight, err)
 					prunerErrors.WithLabelValues("dah_pruner").Inc()
 				} else {
-					prunerDuration.WithLabelValues("dah_pruner").Observe(time.Since(startTime).Seconds())
+					prunerDuration.WithLabelValues("dah_pruner").Observe(elapsed.Seconds())
 					prunerDeletingChildren.Add(float64(recordsProcessed))
 				}
+				s.backlog.OnRunFinished(blockHeight, recordsProcessed, elapsed, err == nil)
 			}
 
 			prunerCurrentHeight.Set(float64(blockHeight))
