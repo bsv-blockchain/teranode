@@ -7221,7 +7221,20 @@ failure aborts startup without falling back to CATCHINGBLOCKS. Choose
 <code>CATCHINGBLOCKS</code> to synchronize a fresh node. Networks without checkpoints allow
 configured RUNNING directly.</p>
 <h3 id="postgresql-connection-pool-postgrespool">PostgreSQL Connection Pool (PostgresPool)<a class="headerlink" href="#postgresql-connection-pool-postgrespool" title="Permanent link">&para;</a></h3>
-<p>When using PostgreSQL as the blockchain store, these nested settings configure connection pooling and resilience. All settings are prefixed with <code>blockchain_postgres_pool_</code>.</p>
+<p>When using PostgreSQL as the blockchain store, these settings override the <a href="../../global_settings/#postgresql-connection-pool">global Postgres pool
+settings</a> for this service only. Each is read directly
+(not through <code>PostgresPool</code>'s own struct tags, which only describe the opaque <code>blockchain_postgres_pool</code>
+field as a whole) via <code>getPostgresPoolSettings("blockchain", ...)</code>, and all default to the zero value.
+The family is six numeric/duration settings plus <code>RetryEnabled</code> and five circuit breaker settings
+(<code>blockchain_postgres_circuitBreakerEnabled</code>, <code>..._circuitBreakerFailureThreshold</code>, <code>..._circuitBreakerHalfOpenMax</code>,
+<code>..._circuitBreakerCooldown</code>, <code>..._circuitBreakerFailureWindow</code>; documented in the
+<a href="../../global_settings/#postgresql-connection-pool">global table</a>). <code>PostgresPool</code> stays <code>nil</code> only when
+none of the twelve is configured: any non-zero numeric/duration value, <code>RetryEnabled=true</code>, or an
+explicit <code>CircuitBreakerEnabled</code> (<code>true</code> or <code>false</code>) creates it, so a lone <code>blockchain_postgres_retryEnabled = true</code>
+does take effect. Once the pool exists, zero numeric/duration values and an unset <code>CircuitBreakerEnabled</code>
+fall back to the global values; an explicit <code>CircuitBreakerEnabled=false</code> is preserved. <code>RetryEnabled</code> has
+no global fallback: the service's value (<code>false</code> included) replaces the global one outright. Note that
+<code>blockchain_postgres_retryEnabled = false</code> alone is indistinguishable from unset and does not create the pool.</p>
 <table>
 <thead>
 <tr>
@@ -7236,86 +7249,51 @@ configured RUNNING directly.</p>
 <tr>
 <td>MaxOpenConns</td>
 <td>int</td>
-<td>50</td>
-<td>blockchain_postgres_pool_postgres_maxOpenConns</td>
+<td>0 (falls back to global if unset)</td>
+<td>blockchain_postgres_maxOpenConns</td>
 <td>Maximum concurrent database connections</td>
 </tr>
 <tr>
 <td>MaxIdleConns</td>
 <td>int</td>
-<td>10</td>
-<td>blockchain_postgres_pool_postgres_maxIdleConns</td>
+<td>0 (falls back to global if unset)</td>
+<td>blockchain_postgres_maxIdleConns</td>
 <td>Maximum idle connections in pool</td>
 </tr>
 <tr>
 <td>ConnMaxLifetime</td>
 <td>time.Duration</td>
-<td>5m</td>
-<td>blockchain_postgres_pool_postgres_connMaxLifetime</td>
+<td>0 (falls back to global if unset)</td>
+<td>blockchain_postgres_connMaxLifetime</td>
 <td>Maximum connection reuse duration</td>
 </tr>
 <tr>
 <td>ConnMaxIdleTime</td>
 <td>time.Duration</td>
-<td>1m</td>
-<td>blockchain_postgres_pool_postgres_connMaxIdleTime</td>
+<td>0 (falls back to global if unset)</td>
+<td>blockchain_postgres_connMaxIdleTime</td>
 <td>Maximum idle time before closing</td>
 </tr>
 <tr>
 <td>RetryEnabled</td>
 <td>bool</td>
-<td>false</td>
-<td>blockchain_postgres_pool_postgres_retryEnabled</td>
+<td>false (no global fallback; see above)</td>
+<td>blockchain_postgres_retryEnabled</td>
 <td>Enable retries for transient errors</td>
 </tr>
 <tr>
 <td>RetryMaxAttempts</td>
 <td>int</td>
-<td>3</td>
-<td>blockchain_postgres_pool_postgres_retryMaxAttempts</td>
+<td>0 (falls back to global if unset)</td>
+<td>blockchain_postgres_retryMaxAttempts</td>
 <td>Maximum retry attempts</td>
 </tr>
 <tr>
 <td>RetryBaseDelay</td>
 <td>time.Duration</td>
-<td>100ms</td>
-<td>blockchain_postgres_pool_postgres_retryBaseDelay</td>
+<td>0 (falls back to global if unset)</td>
+<td>blockchain_postgres_retryBaseDelay</td>
 <td>Base delay for retry backoff</td>
-</tr>
-<tr>
-<td>CircuitBreakerEnabled</td>
-<td>bool</td>
-<td>false</td>
-<td>blockchain_postgres_pool_postgres_circuitBreakerEnabled</td>
-<td>Enable circuit breaker for database operations</td>
-</tr>
-<tr>
-<td>CircuitBreakerFailureThreshold</td>
-<td>int</td>
-<td>5</td>
-<td>blockchain_postgres_pool_postgres_circuitBreakerFailureThreshold</td>
-<td>Consecutive failures before opening circuit</td>
-</tr>
-<tr>
-<td>CircuitBreakerHalfOpenMax</td>
-<td>int</td>
-<td>3</td>
-<td>blockchain_postgres_pool_postgres_circuitBreakerHalfOpenMax</td>
-<td>Successful probes required to close circuit</td>
-</tr>
-<tr>
-<td>CircuitBreakerCooldown</td>
-<td>time.Duration</td>
-<td>30s</td>
-<td>blockchain_postgres_pool_postgres_circuitBreakerCooldown</td>
-<td>Duration circuit stays open before testing</td>
-</tr>
-<tr>
-<td>CircuitBreakerFailureWindow</td>
-<td>time.Duration</td>
-<td>10s</td>
-<td>blockchain_postgres_pool_postgres_circuitBreakerFailureWindow</td>
-<td>Time window for counting consecutive failures</td>
 </tr>
 </tbody>
 </table>

@@ -7559,7 +7559,7 @@
 <li><a href="#232-transaction-format-extension">2.3.2. Transaction Format Extension</a></li>
 </ul>
 </li>
-<li><a href="#24-script-verification">2.4. Script Verification</a></li>
+<li><a href="#24-bdk-transaction-validation">2.4. BDK Transaction Validation</a></li>
 <li><a href="#25-error-handling-and-transaction-rejection">2.5. Error Handling and Transaction Rejection</a></li>
 <li><a href="#26-concurrent-processing">2.6. Concurrent Processing</a></li>
 <li><a href="#27-post-validation-updating-stores-and-propagating-the-transaction">2.7. Post-validation: Updating stores and propagating the transaction</a><ul>
@@ -8072,7 +8072,6 @@ However, the Validator can also be started as a service, allowing to interact wi
 <h3 id="configuration-settings-affecting-validator-behavior">Configuration Settings Affecting Validator Behavior<a class="headerlink" href="#configuration-settings-affecting-validator-behavior" title="Permanent link">&para;</a></h3>
 <p>The Validator service behavior is controlled by several key configuration parameters:</p>
 <ul>
-<li><strong><code>validator_kafkaWorkers</code></strong> (default: 0): Controls the number of concurrent Kafka message processing workers. When set to 0, Kafka consumer processing is disabled.</li>
 <li><strong><code>validator_httpRateLimit</code></strong> (default: 1024): Sets the rate limit for HTTP API requests to prevent service overload.</li>
 <li><strong><code>validator_verbose_debug</code></strong> (default: false): Enables detailed validation logging for troubleshooting.</li>
 <li><strong><code>useLocalValidator</code></strong> (code default: false; <code>settings.conf</code> ships with <code>true</code>): Determines whether to use a local validator instance or connect to a remote validator service via gRPC. Standard deployments using the provided <code>settings.conf</code> will use local validator mode.</li>

@@ -8651,7 +8651,7 @@ requirements, should not rely on network isolation alone.</strong> On top of the
 <li>Raising <code>partitions</code> is therefore the lever for consumer throughput; there is no separate consumer-count parameter.</li>
 </ul>
 <p><strong>There is no <code>consumer_ratio</code> parameter.</strong> It appears in older documentation and example URLs but is not read anywhere in the code — no <code>consumer_ratio</code>, <code>ConsumerRatio</code> or <code>consumerRatio</code> identifier exists, and it is not picked up by the generic URL-parameter helpers (<code>util.GetQueryParam*</code>) that parse every recognised Kafka URL parameter. Unknown query parameters are silently ignored, so leaving it in a URL is inert rather than harmful — but it does not scale consumers.</p>
-<p>Likewise, the service-specific <code>*_kafkaWorkers</code> settings (<code>validator_kafkaWorkers</code>, <code>blockvalidation_kafkaWorkers</code>, <code>block_kafkaWorkers</code>) are loaded into the settings structs but are not read by any consumer code path. They do not currently affect consumer concurrency either.</p>
+<p>Likewise, there are no <code>*_kafkaWorkers</code> settings (<code>validator_kafkaWorkers</code>, <code>blockvalidation_kafkaWorkers</code>, <code>block_kafkaWorkers</code>): they were loaded into the settings structs but never read by any consumer code path, and have been removed. A leftover key in <code>settings_local.conf</code> is silently ignored.</p>
 <h3 id="service-specific-performance-settings">Service-Specific Performance Settings<a class="headerlink" href="#service-specific-performance-settings" title="Permanent link">&para;</a></h3>
 <h4 id="propagation-service-settings">Propagation Service Settings<a class="headerlink" href="#propagation-service-settings" title="Permanent link">&para;</a></h4>
 <ul>
@@ -8663,13 +8663,7 @@ requirements, should not rely on network isolation alone.</strong> On top of the
 </li>
 </ul>
 <h4 id="validator-service-settings">Validator Service Settings<a class="headerlink" href="#validator-service-settings" title="Permanent link">&para;</a></h4>
-<ul>
-<li><strong><code>validator_kafkaWorkers</code></strong>: declared but inert<ul>
-<li><strong>Status</strong>: The setting is defined and loaded (<code>settings/validator_settings.go</code>, <code>settings/settings.go</code>) but no code reads it, so changing it has no effect. The same applies to <code>blockvalidation_kafkaWorkers</code> and <code>block_kafkaWorkers</code>.</li>
-<li><strong>Use instead</strong>: raise the topic's <code>partitions</code> and/or run more service instances in the same consumer group — see <a href="#kafka-consumer-concurrency">Kafka Consumer Concurrency</a></li>
-</ul>
-</li>
-</ul>
+<p>The validator has no Kafka worker-count setting (<code>validator_kafkaWorkers</code> was removed). To raise consumer throughput, raise the topic's <code>partitions</code> and/or run more service instances in the same consumer group - see <a href="#kafka-consumer-concurrency">Kafka Consumer Concurrency</a>.</p>
 <h3 id="configuration-examples-by-service">Configuration Examples by Service<a class="headerlink" href="#configuration-examples-by-service" title="Permanent link">&para;</a></h3>
 <h4 id="high-throughput-service-propagation">High-Throughput Service (Propagation)<a class="headerlink" href="#high-throughput-service-propagation" title="Permanent link">&para;</a></h4>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>kafka_validatortxsConfig=kafka://localhost:9092/validator-txs?partitions=8&amp;flush_frequency=1s

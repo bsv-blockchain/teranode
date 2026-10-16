@@ -6372,6 +6372,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configuration Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#postgresql-connection-pool-postgrespool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Connection Pool (PostgresPool)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -6882,6 +6899,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Configuration Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#postgresql-connection-pool-postgrespool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Connection Pool (PostgresPool)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -7178,21 +7212,21 @@
 <tr>
 <td>BlockHeightRetention</td>
 <td>uint32</td>
-<td>globalBlockHeightRetention</td>
+<td>288 (globalBlockHeightRetention)</td>
 <td>utxostore_blockHeightRetention</td>
 <td>Block height retention period</td>
 </tr>
 <tr>
 <td>UnminedTxRetention</td>
 <td>uint32</td>
-<td>globalBlockHeightRetention/2</td>
+<td>144 (globalBlockHeightRetention/2)</td>
 <td>utxostore_unminedTxRetention</td>
 <td>Unmined transaction retention</td>
 </tr>
 <tr>
 <td>ParentPreservationBlocks</td>
 <td>uint32</td>
-<td>blocksInADayOnAverage*10</td>
+<td>1440 (blocksInADayOnAverage*10)</td>
 <td>utxostore_parentPreservationBlocks</td>
 <td>Parent preservation period</td>
 </tr>
@@ -7441,47 +7475,81 @@
 <td>utxostore_disableDAHCleaner</td>
 <td><strong>CRITICAL</strong> - DAH cleaner process control</td>
 </tr>
+</tbody>
+</table>
+<h3 id="postgresql-connection-pool-postgrespool">PostgreSQL Connection Pool (PostgresPool)<a class="headerlink" href="#postgresql-connection-pool-postgrespool" title="Permanent link">&para;</a></h3>
+<p>These settings override the <a href="../../global_settings/#postgresql-connection-pool">global Postgres pool settings</a>
+for the UTXO store only. Each is read directly (not through <code>PostgresPool</code>'s own struct tags, which only
+describe the opaque <code>utxostore_postgres_pool</code> field as a whole) via <code>getPostgresPoolSettings("utxostore",
+...)</code>, and all default to the zero value. The family is six numeric/duration settings plus <code>RetryEnabled</code> and five circuit breaker settings
+(<code>utxostore_postgres_circuitBreakerEnabled</code>, <code>..._circuitBreakerFailureThreshold</code>, <code>..._circuitBreakerHalfOpenMax</code>,
+<code>..._circuitBreakerCooldown</code>, <code>..._circuitBreakerFailureWindow</code>; documented in the
+<a href="../../global_settings/#postgresql-connection-pool">global table</a>). <code>PostgresPool</code> stays <code>nil</code> only when
+none of the twelve is configured: any non-zero numeric/duration value, <code>RetryEnabled=true</code>, or an
+explicit <code>CircuitBreakerEnabled</code> (<code>true</code> or <code>false</code>) creates it, so a lone <code>utxostore_postgres_retryEnabled = true</code>
+does take effect. Once the pool exists, zero numeric/duration values and an unset <code>CircuitBreakerEnabled</code>
+fall back to the global values; an explicit <code>CircuitBreakerEnabled=false</code> is preserved. <code>RetryEnabled</code> has
+no global fallback: the service's value (<code>false</code> included) replaces the global one outright. Note that
+<code>utxostore_postgres_retryEnabled = false</code> alone is indistinguishable from unset and does not create the pool.</p>
+<table>
+<thead>
 <tr>
-<td>PrunerParentUpdateBatcherSize</td>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MaxOpenConns</td>
 <td>int</td>
-<td>2000</td>
-<td>utxostore_prunerParentUpdateBatcherSize</td>
-<td>Pruner parent update batch size</td>
+<td>0 (falls back to global if unset)</td>
+<td>utxostore_postgres_maxOpenConns</td>
+<td>Maximum concurrent database connections</td>
 </tr>
 <tr>
-<td>PrunerParentUpdateBatcherDurationMillis</td>
+<td>MaxIdleConns</td>
 <td>int</td>
-<td>100</td>
-<td>utxostore_prunerParentUpdateBatcherDurationMillis</td>
-<td>Pruner parent update batch duration</td>
+<td>0 (falls back to global if unset)</td>
+<td>utxostore_postgres_maxIdleConns</td>
+<td>Maximum idle connections in pool</td>
 </tr>
 <tr>
-<td>PrunerDeleteBatcherSize</td>
-<td>int</td>
-<td>5000</td>
-<td>utxostore_prunerDeleteBatcherSize</td>
-<td>Pruner delete batch size</td>
+<td>ConnMaxLifetime</td>
+<td>time.Duration</td>
+<td>0 (falls back to global if unset)</td>
+<td>utxostore_postgres_connMaxLifetime</td>
+<td>Maximum connection reuse duration</td>
 </tr>
 <tr>
-<td><strong>Note</strong>: PostgreSQL connection pool settings (MaxOpenConns, MaxIdleConns, ConnMaxLifetime, ConnMaxIdleTime) are now configured globally via <code>PostgresSettings</code>. See <a href="../../global_settings/">Global Settings</a> for details.</td>
-<td></td>
-<td></td>
-<td></td>
-<td></td>
+<td>ConnMaxIdleTime</td>
+<td>time.Duration</td>
+<td>0 (falls back to global if unset)</td>
+<td>utxostore_postgres_connMaxIdleTime</td>
+<td>Maximum idle time before closing</td>
 </tr>
 <tr>
-<td>PrunerDeleteBatcherDurationMillis</td>
-<td>int</td>
-<td>100</td>
-<td>utxostore_prunerDeleteBatcherDurationMillis</td>
-<td>Pruner delete batch duration</td>
+<td>RetryEnabled</td>
+<td>bool</td>
+<td>false (no global fallback; see above)</td>
+<td>utxostore_postgres_retryEnabled</td>
+<td>Enable retries for transient errors</td>
 </tr>
 <tr>
-<td>PrunerMaxConcurrentOperations</td>
+<td>RetryMaxAttempts</td>
 <td>int</td>
-<td>0</td>
-<td>utxostore_prunerMaxConcurrentOperations</td>
-<td>Pruner max concurrent operations (0=use queue size)</td>
+<td>0 (falls back to global if unset)</td>
+<td>utxostore_postgres_retryMaxAttempts</td>
+<td>Maximum retry attempts</td>
+</tr>
+<tr>
+<td>RetryBaseDelay</td>
+<td>time.Duration</td>
+<td>0 (falls back to global if unset)</td>
+<td>utxostore_postgres_retryBaseDelay</td>
+<td>Base delay for retry backoff</td>
 </tr>
 </tbody>
 </table>
@@ -7629,7 +7697,7 @@
 <h2 id="configuration-examples">Configuration Examples<a class="headerlink" href="#configuration-examples" title="Permanent link">&para;</a></h2>
 <h3 id="postgresql-store">PostgreSQL Store<a class="headerlink" href="#postgresql-store" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>utxostore = "postgres://user:pass@host:5432/db?logging=true"
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>utxostore_dbTimeout = "60s"
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>utxostore_dbTimeoutDuration = "60s"
 </span></code></pre></div>
 <h3 id="aerospike-store">Aerospike Store<a class="headerlink" href="#aerospike-store" title="Permanent link">&para;</a></h3>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>utxostore = "aerospike://host:3000/namespace"

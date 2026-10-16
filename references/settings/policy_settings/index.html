@@ -7432,7 +7432,7 @@
 <tr>
 <td>MaxOrphanTxSize</td>
 <td>int</td>
-<td>1000000 (1MB)</td>
+<td>0 (not wired up; the getInt call is commented out in settings.go)</td>
 <td>maxorphantxsize</td>
 <td>Maximum orphan transaction size</td>
 </tr>
@@ -7530,28 +7530,28 @@
 <tr>
 <td>MaxStdTxValidationDuration</td>
 <td>int</td>
-<td>3</td>
+<td>0 (not wired up; the getInt call is commented out in settings.go)</td>
 <td>maxstdtxvalidationduration</td>
 <td>Maximum validation time for standard transactions (ms)</td>
 </tr>
 <tr>
 <td>MaxNonStdTxValidationDuration</td>
 <td>int</td>
-<td>1000</td>
+<td>0 (not wired up; the getInt call is commented out in settings.go)</td>
 <td>maxnonstdtxvalidationduration</td>
 <td>Maximum validation time for non-standard transactions (ms)</td>
 </tr>
 <tr>
 <td>MaxTxChainValidationBudget</td>
 <td>int</td>
-<td>50</td>
+<td>0 (not wired up; the getInt call is commented out in settings.go)</td>
 <td>maxtxchainvalidationbudget</td>
 <td>Total time budget for chain validation (ms)</td>
 </tr>
 <tr>
 <td>ValidationClockCPU</td>
 <td>bool</td>
-<td>false</td>
+<td>false (not wired up; the getBool call is commented out in settings.go)</td>
 <td>validationclockcpu</td>
 <td>Use CPU time instead of wall-clock for validation timeouts</td>
 </tr>
@@ -7600,14 +7600,14 @@
 <tr>
 <td>LimitAncestorCount</td>
 <td>int</td>
-<td>1000000</td>
+<td>0 (not wired up; the getInt call is commented out in settings.go)</td>
 <td>limitancestorcount</td>
 <td>Maximum unconfirmed ancestor count in mempool</td>
 </tr>
 <tr>
 <td>LimitCPFPGroupMembersCount</td>
 <td>int</td>
-<td>1000000</td>
+<td>0 (not wired up; the getInt call is commented out in settings.go)</td>
 <td>limitcpfpgroupmemberscount</td>
 <td>Maximum CPFP group members</td>
 </tr>

@@ -80,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#pruner-service-settings-reference" class="md-skip">
+        <a href="#pruner-service-settings" class="md-skip">
           Skip to content
         </a>
       
@@ -6100,33 +6100,44 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Configuration Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#service-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Control
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#service-control-settings" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#aerospike-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Service Control Settings
+        Aerospike Index
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Service Control Settings">
-      <ul class="md-nav__list">
+</li>
         
           <li class="md-nav__item">
-  <a href="#startpruner" class="md-nav__link">
+  <a href="#related-settings-from-utxostore-struct" class="md-nav__link">
     <span class="md-ellipsis">
       
-        startPruner
+        Related Settings (from UTXOStore struct)
       
     </span>
   </a>
@@ -6139,22 +6150,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#network-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Network Settings
+        Configuration Dependencies
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Network Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#pruner_grpcport" class="md-nav__link">
+  <a href="#network-addressing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_grpcPort
+        Network Addressing
       
     </span>
   </a>
@@ -6162,10 +6173,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_grpcaddress" class="md-nav__link">
+  <a href="#service-control_1" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_grpcAddress
+        Service Control
       
     </span>
   </a>
@@ -6173,38 +6184,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_grpclistenaddress" class="md-nav__link">
+  <a href="#pruning-triggers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_grpcListenAddress
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#behavior-control-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Behavior Control Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Behavior Control Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_skipduringcatchup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_skipDuringCatchup
+        Pruning Triggers
       
     </span>
   </a>
@@ -6212,10 +6195,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_blockassemblywaittimeout" class="md-nav__link">
+  <a href="#catchup-safety" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_blockAssemblyWaitTimeout
+        Catchup Safety
       
     </span>
   </a>
@@ -6223,10 +6206,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_connectionpoolwarningthreshold" class="md-nav__link">
+  <a href="#block-assembly-coordination" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_connectionPoolWarningThreshold
+        Block Assembly Coordination
       
     </span>
   </a>
@@ -6234,10 +6217,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_block_trigger" class="md-nav__link">
+  <a href="#removal-commit-level" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_block_trigger
+        Removal Commit Level
       
     </span>
   </a>
@@ -6245,10 +6228,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_utxosetttl" class="md-nav__link">
+  <a href="#blob-deletion" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_utxoSetTTL
+        Blob Deletion
       
     </span>
   </a>
@@ -6256,10 +6239,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_relaxremovalcommitlevel" class="md-nav__link">
+  <a href="#parent-preservation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_relaxRemovalCommitLevel
+        Parent Preservation
       
     </span>
   </a>
@@ -6267,10 +6250,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_skipblobdeletion" class="md-nav__link">
+  <a href="#dah-cleaner-phase-2" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_skipBlobDeletion
+        DAH Cleaner (Phase 2)
       
     </span>
   </a>
@@ -6278,10 +6261,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_blobdeletionsafetywindow" class="md-nav__link">
+  <a href="#chunk-processing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_blobDeletionSafetyWindow
+        Chunk Processing
       
     </span>
   </a>
@@ -6289,10 +6272,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_blobdeletionbatchsize" class="md-nav__link">
+  <a href="#pruned-tx-set" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_blobDeletionBatchSize
+        Pruned-TX Set
       
     </span>
   </a>
@@ -6300,260 +6283,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_blobdeletionmaxretries" class="md-nav__link">
+  <a href="#defensive-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_blobDeletionMaxRetries
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_skippreserveparents" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_skipPreserveParents
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_skipprocessexpiredpreservations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_skipProcessExpiredPreservations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_skipdeletions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_skipDeletions
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operation-timeout-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Operation Timeout Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Operation Timeout Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_jobtimeout" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_jobTimeout
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#utxo-store-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UTXO Store Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="UTXO Store Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#utxostore_unminedtxretention" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utxostore_unminedTxRetention
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxostore_parentpreservationblocks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utxostore_parentPreservationBlocks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxostore_prunermaxconcurrentoperations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utxostore_prunerMaxConcurrentOperations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxostore_disabledahcleaner" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utxostore_disableDAHCleaner
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#aerospike-specific-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Aerospike-Specific Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Aerospike-Specific Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_indexname" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_IndexName
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#chunk-processing-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Chunk Processing Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Chunk Processing Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxochunksize" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoChunkSize
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxochunkgrouplimit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoChunkGroupLimit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxoprogressloginterval" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoProgressLogInterval
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxopartitionqueries" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoPartitionQueries
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#defensive-mode-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Defensive Mode Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Defensive Mode Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxodefensiveenabled" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoDefensiveEnabled
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxodefensivebatchreadsize" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoDefensiveBatchReadSize
+        Defensive Mode
       
     </span>
   </a>
@@ -6704,6 +6437,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#aerospike-index-name-override" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aerospike Index Name Override
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -6721,10 +6465,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#monitoring-settings" class="md-nav__link">
+  <a href="#monitoring" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Monitoring Settings
+        Monitoring
       
     </span>
   </a>
@@ -6759,17 +6503,6 @@
     <span class="md-ellipsis">
       
         Port Conflicts
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#frequent-timeouts" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frequent Timeouts
       
     </span>
   </a>
@@ -7412,33 +7145,44 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#overview" class="md-nav__link">
+  <a href="#configuration-settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Overview
+        Configuration Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#service-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Service Control
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#service-control-settings" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#aerospike-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Service Control Settings
+        Aerospike Index
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Service Control Settings">
-      <ul class="md-nav__list">
+</li>
         
           <li class="md-nav__item">
-  <a href="#startpruner" class="md-nav__link">
+  <a href="#related-settings-from-utxostore-struct" class="md-nav__link">
     <span class="md-ellipsis">
       
-        startPruner
+        Related Settings (from UTXOStore struct)
       
     </span>
   </a>
@@ -7451,22 +7195,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#network-settings" class="md-nav__link">
+  <a href="#configuration-dependencies" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Network Settings
+        Configuration Dependencies
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Network Settings">
+    <nav class="md-nav" aria-label="Configuration Dependencies">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#pruner_grpcport" class="md-nav__link">
+  <a href="#network-addressing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_grpcPort
+        Network Addressing
       
     </span>
   </a>
@@ -7474,10 +7218,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_grpcaddress" class="md-nav__link">
+  <a href="#service-control_1" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_grpcAddress
+        Service Control
       
     </span>
   </a>
@@ -7485,38 +7229,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_grpclistenaddress" class="md-nav__link">
+  <a href="#pruning-triggers" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_grpcListenAddress
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#behavior-control-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Behavior Control Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Behavior Control Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_skipduringcatchup" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_skipDuringCatchup
+        Pruning Triggers
       
     </span>
   </a>
@@ -7524,10 +7240,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_blockassemblywaittimeout" class="md-nav__link">
+  <a href="#catchup-safety" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_blockAssemblyWaitTimeout
+        Catchup Safety
       
     </span>
   </a>
@@ -7535,10 +7251,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_connectionpoolwarningthreshold" class="md-nav__link">
+  <a href="#block-assembly-coordination" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_connectionPoolWarningThreshold
+        Block Assembly Coordination
       
     </span>
   </a>
@@ -7546,10 +7262,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_block_trigger" class="md-nav__link">
+  <a href="#removal-commit-level" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_block_trigger
+        Removal Commit Level
       
     </span>
   </a>
@@ -7557,10 +7273,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_utxosetttl" class="md-nav__link">
+  <a href="#blob-deletion" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_utxoSetTTL
+        Blob Deletion
       
     </span>
   </a>
@@ -7568,10 +7284,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_relaxremovalcommitlevel" class="md-nav__link">
+  <a href="#parent-preservation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_relaxRemovalCommitLevel
+        Parent Preservation
       
     </span>
   </a>
@@ -7579,10 +7295,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_skipblobdeletion" class="md-nav__link">
+  <a href="#dah-cleaner-phase-2" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_skipBlobDeletion
+        DAH Cleaner (Phase 2)
       
     </span>
   </a>
@@ -7590,10 +7306,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_blobdeletionsafetywindow" class="md-nav__link">
+  <a href="#chunk-processing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_blobDeletionSafetyWindow
+        Chunk Processing
       
     </span>
   </a>
@@ -7601,10 +7317,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_blobdeletionbatchsize" class="md-nav__link">
+  <a href="#pruned-tx-set" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_blobDeletionBatchSize
+        Pruned-TX Set
       
     </span>
   </a>
@@ -7612,260 +7328,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruner_blobdeletionmaxretries" class="md-nav__link">
+  <a href="#defensive-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
-        pruner_blobDeletionMaxRetries
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_skippreserveparents" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_skipPreserveParents
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_skipprocessexpiredpreservations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_skipProcessExpiredPreservations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_skipdeletions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_skipDeletions
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#operation-timeout-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Operation Timeout Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Operation Timeout Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_jobtimeout" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_jobTimeout
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#utxo-store-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        UTXO Store Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="UTXO Store Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#utxostore_unminedtxretention" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utxostore_unminedTxRetention
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxostore_parentpreservationblocks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utxostore_parentPreservationBlocks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxostore_prunermaxconcurrentoperations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utxostore_prunerMaxConcurrentOperations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#utxostore_disabledahcleaner" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        utxostore_disableDAHCleaner
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#aerospike-specific-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Aerospike-Specific Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Aerospike-Specific Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_indexname" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_IndexName
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#chunk-processing-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Chunk Processing Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Chunk Processing Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxochunksize" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoChunkSize
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxochunkgrouplimit" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoChunkGroupLimit
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxoprogressloginterval" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoProgressLogInterval
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxopartitionqueries" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoPartitionQueries
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#defensive-mode-settings" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Defensive Mode Settings
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Defensive Mode Settings">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxodefensiveenabled" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoDefensiveEnabled
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#pruner_utxodefensivebatchreadsize" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        pruner_utxoDefensiveBatchReadSize
+        Defensive Mode
       
     </span>
   </a>
@@ -8016,6 +7482,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#aerospike-index-name-override" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aerospike Index Name Override
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -8033,10 +7510,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#monitoring-settings" class="md-nav__link">
+  <a href="#monitoring" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Monitoring Settings
+        Monitoring
       
     </span>
   </a>
@@ -8071,17 +7548,6 @@
     <span class="md-ellipsis">
       
         Port Conflicts
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#frequent-timeouts" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Frequent Timeouts
       
     </span>
   </a>
@@ -8230,145 +7696,322 @@
   
 
 
-<h1 id="pruner-service-settings-reference">Pruner Service Settings Reference<a class="headerlink" href="#pruner-service-settings-reference" title="Permanent link">&para;</a></h1>
-<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
-<p>This document provides comprehensive reference for all Pruner service configuration settings in Teranode.</p>
-<h2 id="service-control-settings">Service Control Settings<a class="headerlink" href="#service-control-settings" title="Permanent link">&para;</a></h2>
-<h3 id="startpruner">startPruner<a class="headerlink" href="#startpruner" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>true</code></p>
-<p><strong>Description</strong>: Enable or disable the Pruner service</p>
-<p><strong>Context-Specific Values:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a># Global default
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>startPruner = true
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a># Disable for specific nodes in multi-node docker setup
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>startPruner.docker.host.teranode1.coinbase = false
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>startPruner.docker.host.teranode2.coinbase = false
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>startPruner.docker.host.teranode3.coinbase = false
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a># Development
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>startPruner.dev = true
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a># Operator/Kubernetes
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>startPruner.operator = true
+<h1 id="pruner-service-settings">Pruner Service Settings<a class="headerlink" href="#pruner-service-settings" title="Permanent link">&para;</a></h1>
+<p><strong>Related Topic</strong>: <a href="../../../../topics/services/pruner/">Pruner Service</a></p>
+<h2 id="configuration-settings">Configuration Settings<a class="headerlink" href="#configuration-settings" title="Permanent link">&para;</a></h2>
+<p>Settings are organized under the <code>Pruner</code> struct in <code>settings.Settings</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GRPCListenAddress</td>
+<td>string</td>
+<td>":8096"</td>
+<td>pruner_grpcListenAddress</td>
+<td><strong>CRITICAL</strong> - gRPC server bind address</td>
+</tr>
+<tr>
+<td>GRPCAddress</td>
+<td>string</td>
+<td>"localhost:8096"</td>
+<td>pruner_grpcAddress</td>
+<td>gRPC client address other services dial</td>
+</tr>
+<tr>
+<td>SkipDuringCatchup</td>
+<td>bool</td>
+<td>false</td>
+<td>pruner_skipDuringCatchup</td>
+<td>Skip all pruning while the FSM is catching up</td>
+</tr>
+<tr>
+<td>BlockAssemblyWaitTimeout</td>
+<td>time.Duration</td>
+<td>10m</td>
+<td>pruner_blockAssemblyWaitTimeout</td>
+<td>Maximum wait for Block Assembly to be ready before pruning</td>
+</tr>
+<tr>
+<td>ConnectionPoolWarningThreshold</td>
+<td>float64</td>
+<td>0.7</td>
+<td>pruner_connectionPoolWarningThreshold</td>
+<td>Aerospike connection pool utilization (0.0-1.0) above which the chunk group limit is auto-reduced</td>
+</tr>
+<tr>
+<td>BlockTrigger</td>
+<td>string</td>
+<td>"OnBlockPersisted"</td>
+<td>pruner_block_trigger</td>
+<td>What triggers a pruning cycle ("OnBlockPersisted" or "OnBlockMined")</td>
+</tr>
+<tr>
+<td>UTXODefensiveEnabled</td>
+<td>bool</td>
+<td>false</td>
+<td>pruner_utxoDefensiveEnabled</td>
+<td>Verify every spending child is mined and stable before deleting a parent</td>
+</tr>
+<tr>
+<td>UTXODefensiveBatchReadSize</td>
+<td>int</td>
+<td>10000 (Go default; settings.conf ships 1024)</td>
+<td>pruner_utxoDefensiveBatchReadSize</td>
+<td>Children verified per Aerospike BatchGet in defensive mode</td>
+</tr>
+<tr>
+<td>UTXOChunkSize</td>
+<td>int</td>
+<td>1000 (Go default; settings.conf ships 1024)</td>
+<td>pruner_utxoChunkSize</td>
+<td>Records accumulated per parallel chunk</td>
+</tr>
+<tr>
+<td>UTXOChunkGroupLimit</td>
+<td>int</td>
+<td>10 (Go default; settings.conf ships 1)</td>
+<td>pruner_utxoChunkGroupLimit</td>
+<td>Maximum chunks processed in parallel per worker</td>
+</tr>
+<tr>
+<td>UTXOProgressLogInterval</td>
+<td>time.Duration</td>
+<td>30s</td>
+<td>pruner_utxoProgressLogInterval</td>
+<td>Progress-log interval during long pruning runs (0 disables)</td>
+</tr>
+<tr>
+<td>UTXOPartitionQueries</td>
+<td>int</td>
+<td>0 (auto-detect from CPU cores)</td>
+<td>pruner_utxoPartitionQueries</td>
+<td>Parallel Aerospike partition-scan workers, capped at 4096</td>
+</tr>
+<tr>
+<td>UTXOSetTTL</td>
+<td>bool</td>
+<td>false</td>
+<td>pruner_utxoSetTTL</td>
+<td>Set a 1-second record TTL instead of hard deleting</td>
+</tr>
+<tr>
+<td>RelaxRemovalCommitLevel</td>
+<td>bool</td>
+<td>true</td>
+<td>pruner_relaxRemovalCommitLevel</td>
+<td>COMMIT_MASTER for the pruner's own removals and TTL touches</td>
+</tr>
+<tr>
+<td>SkipBlobDeletion</td>
+<td>bool</td>
+<td>false</td>
+<td>pruner_skipBlobDeletion</td>
+<td>Skip scheduled blob-store deletions</td>
+</tr>
+<tr>
+<td>BlobDeletionSafetyWindow</td>
+<td>uint32</td>
+<td>10</td>
+<td>pruner_blobDeletionSafetyWindow</td>
+<td>Blocks behind the triggering height before a blob may be deleted</td>
+</tr>
+<tr>
+<td>BlobDeletionBatchSize</td>
+<td>int</td>
+<td>1000</td>
+<td>pruner_blobDeletionBatchSize</td>
+<td>Maximum blob deletions per pruning trigger</td>
+</tr>
+<tr>
+<td>BlobDeletionMaxRetries</td>
+<td>int</td>
+<td>3</td>
+<td>pruner_blobDeletionMaxRetries</td>
+<td>Retry attempts for a failed blob deletion</td>
+</tr>
+<tr>
+<td>SkipPreserveParents</td>
+<td>bool</td>
+<td>false</td>
+<td>pruner_skipPreserveParents</td>
+<td>Skip Phase 1 - parent preservation for unmined transactions</td>
+</tr>
+<tr>
+<td>SkipProcessExpiredPreservations</td>
+<td>bool</td>
+<td>false</td>
+<td>pruner_skipProcessExpiredPreservations</td>
+<td>Skip Phase 1b - expiry of old parent preservations</td>
+</tr>
+<tr>
+<td>MinBlockHeight</td>
+<td>uint32</td>
+<td>0</td>
+<td>pruner_min_block_height</td>
+<td>Skip all pruning until block height exceeds this value</td>
+</tr>
+<tr>
+<td>SkipDeletions</td>
+<td>bool</td>
+<td>false</td>
+<td>pruner_skipDeletions</td>
+<td>Skip deletion operations during pruning</td>
+</tr>
+<tr>
+<td>UTXOPrunedSetMaxEntries</td>
+<td>int</td>
+<td>10000000</td>
+<td>pruner_utxoPrunedSetMaxEntries</td>
+<td>Soft cap on the in-memory pruned-TX set (0 = built-in 2B default, not unlimited)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="service-control">Service Control<a class="headerlink" href="#service-control" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>startPruner</td>
+<td>bool</td>
+<td>false (no code default - <code>gocore.Config().GetBool</code> with no fallback; settings.conf ships <code>true</code>, and <code>false</code> for the <code>docker.m</code> and <code>operator</code> contexts)</td>
+<td>startPruner</td>
+<td><strong>CRITICAL</strong> - Enable or disable the Pruner service</td>
+</tr>
+</tbody>
+</table>
+<p><code>startPruner</code> is read directly by <code>daemon.shouldStart()</code>, one per service, and is not part of the
+settings package - it has no struct tag and does not appear in <code>ExportMetadata()</code>.</p>
+<h3 id="aerospike-index">Aerospike Index<a class="headerlink" href="#aerospike-index" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IndexName</td>
+<td>string</td>
+<td>"pruner_dah_index"</td>
+<td>pruner_IndexName</td>
+<td>Aerospike secondary index on <code>DeleteAtHeight</code> used by Phase 2</td>
+</tr>
+</tbody>
+</table>
+<p><code>IndexName</code> is a package-level <code>var</code> in <code>stores/utxo/aerospike/pruner/pruner_service.go</code> read via
+<code>gocore.Config().Get</code>, not a settings-package key.</p>
+<h3 id="related-settings-from-utxostore-struct">Related Settings (from UTXOStore struct)<a class="headerlink" href="#related-settings-from-utxostore-struct" title="Permanent link">&para;</a></h3>
+<p>These control pruning behaviour at the UTXO store level. Full reference:
+<a href="../../stores/utxo_settings/">UTXO Store Settings</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UnminedTxRetention</td>
+<td>uint32</td>
+<td>144 (globalBlockHeightRetention/2, with the default global retention of 288)</td>
+<td>utxostore_unminedTxRetention</td>
+<td>Blocks an unmined transaction is retained before its parents are considered for preservation</td>
+</tr>
+<tr>
+<td>ParentPreservationBlocks</td>
+<td>uint32</td>
+<td>1440 (blocksInADayOnAverage*10)</td>
+<td>utxostore_parentPreservationBlocks</td>
+<td>Blocks a preserved parent of an old unmined transaction is kept</td>
+</tr>
+<tr>
+<td>DisableDAHCleaner</td>
+<td>bool</td>
+<td>false</td>
+<td>utxostore_disableDAHCleaner</td>
+<td><strong>CRITICAL</strong> - Disable Delete-At-Height pruning (Phase 2)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuration-dependencies">Configuration Dependencies<a class="headerlink" href="#configuration-dependencies" title="Permanent link">&para;</a></h2>
+<h3 id="network-addressing">Network Addressing<a class="headerlink" href="#network-addressing" title="Permanent link">&para;</a></h3>
+<p><code>settings.conf</code> builds every pruner address from the <code>${PRUNER_GRPC_PORT}</code> template variable, so a
+port change only needs to happen in one place:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>PRUNER_GRPC_PORT = 8096
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>pruner_grpcAddress              = localhost:${PRUNER_GRPC_PORT}
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>pruner_grpcAddress.docker.m     = pruner:${PRUNER_GRPC_PORT}
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>pruner_grpcAddress.docker       = ${clientName}:${PRUNER_GRPC_PORT}
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>pruner_grpcAddress.operator     = k8s:///pruner.${clientName}.svc.cluster.local:${PRUNER_GRPC_PORT}
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>pruner_grpcListenAddress        = :${PRUNER_GRPC_PORT}
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>pruner_grpcListenAddress.dev    = localhost:${PRUNER_GRPC_PORT}
 </span></code></pre></div>
-<p><strong>Impact:</strong></p>
+<p>That is the complete set of pruner address overrides in <code>settings.conf</code>; every other context falls
+back to the base values.</p>
+<p><code>PRUNER_GRPC_PORT</code> is not a settings-package key - it is an operator-defined gocore config value
+resolved by generic <code>${VAR}</code> substitution, so it can be named anything as long as both address
+settings reference the same variable.</p>
+<p>Bind address forms for <code>pruner_grpcListenAddress</code>:</p>
+<ul>
+<li><code>:8096</code> - all interfaces</li>
+<li><code>localhost:8096</code> - localhost only (more secure)</li>
+<li><code>0.0.0.0:8096</code> - explicitly all IPv4 interfaces</li>
+</ul>
+<h3 id="service-control_1">Service Control<a class="headerlink" href="#service-control_1" title="Permanent link">&para;</a></h3>
 <ul>
 <li><code>true</code>: Pruner service starts and performs UTXO pruning</li>
 <li><code>false</code>: Pruner service disabled, UTXO database will grow unbounded</li>
 </ul>
-<p><strong>When to Disable:</strong></p>
+<p>Disable only temporarily - for testing scenarios requiring full UTXO history, debugging transaction
+issues, or as a workaround for pruning errors.</p>
+<p><strong>Warning</strong>: Disabling pruning will cause the UTXO database to grow continuously.</p>
+<h3 id="pruning-triggers">Pruning Triggers<a class="headerlink" href="#pruning-triggers" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Testing scenarios requiring full UTXO history</li>
-<li>Debugging transaction issues</li>
-<li>Temporary workaround for pruning errors</li>
+<li><code>OnBlockPersisted</code> (default): triggers on BlockPersisted notifications, coordinated with the Block
+  Persister</li>
+<li><code>OnBlockMined</code>: triggers on Block notifications with mined_set=true</li>
 </ul>
-<p><strong>Warning</strong>: Disabling pruning will cause the UTXO database to grow continuously. Only disable temporarily.</p>
-<h2 id="network-settings">Network Settings<a class="headerlink" href="#network-settings" title="Permanent link">&para;</a></h2>
-<h3 id="pruner_grpcport">pruner_grpcPort<a class="headerlink" href="#pruner_grpcport" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Integer</p>
-<p><strong>Default</strong>: <code>8096</code></p>
-<p><strong>Description</strong>: gRPC server port for Pruner service</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>PRUNER_GRPC_PORT = 8096
-</span></code></pre></div>
-<p><strong>Port Conflicts:</strong></p>
-<p>If port 8096 is already in use, change to an available port:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>PRUNER_GRPC_PORT = 8097
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>pruner_grpcAddress = localhost:8097
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>pruner_grpcListenAddress = :8097
-</span></code></pre></div>
-<h3 id="pruner_grpcaddress">pruner_grpcAddress<a class="headerlink" href="#pruner_grpcaddress" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: String</p>
-<p><strong>Default</strong>: <code>localhost:8096</code></p>
-<p><strong>Description</strong>: gRPC client address for connecting to Pruner service</p>
-<p><strong>Context-Specific Values:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a># Development (default)
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>pruner_grpcAddress = localhost:${PRUNER_GRPC_PORT}
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a># Docker multi-node (single machine)
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>pruner_grpcAddress.docker.m = pruner:${PRUNER_GRPC_PORT}
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a># Docker (per-service containers)
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>pruner_grpcAddress.docker = ${clientName}:${PRUNER_GRPC_PORT}
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a># Docker host access
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>pruner_grpcAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_PORT}
-</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>
-</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a># Kubernetes/Operator
-</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>pruner_grpcAddress.operator = k8s:///pruner.${clientName}.svc.cluster.local:${PRUNER_GRPC_PORT}
-</span></code></pre></div>
-<p><strong>Usage</strong>: Other services use this address to connect to Pruner's gRPC API</p>
-<h3 id="pruner_grpclistenaddress">pruner_grpcListenAddress<a class="headerlink" href="#pruner_grpclistenaddress" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: String</p>
-<p><strong>Default</strong>: <code>:8096</code></p>
-<p><strong>Description</strong>: gRPC server listen address (bind address)</p>
-<p><strong>Context-Specific Values:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a># Default (all interfaces)
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>pruner_grpcListenAddress = :${PRUNER_GRPC_PORT}
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a># Development (localhost only)
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>pruner_grpcListenAddress.dev = localhost:${PRUNER_GRPC_PORT}
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a># Docker host (localhost with port prefix)
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>pruner_grpcListenAddress.docker.host = localhost:${PORT_PREFIX}${PRUNER_GRPC_PORT}
-</span></code></pre></div>
-<p><strong>Bind Addresses:</strong></p>
-<ul>
-<li><code>:8096</code> - Listen on all interfaces</li>
-<li><code>localhost:8096</code> - Listen only on localhost (more secure)</li>
-<li><code>0.0.0.0:8096</code> - Explicitly listen on all IPv4 interfaces</li>
-</ul>
-<h2 id="behavior-control-settings">Behavior Control Settings<a class="headerlink" href="#behavior-control-settings" title="Permanent link">&para;</a></h2>
-<h3 id="pruner_skipduringcatchup">pruner_skipDuringCatchup<a class="headerlink" href="#pruner_skipduringcatchup" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_skipDuringCatchup</code></p>
-<p><strong>Description</strong>: Skip pruning during blockchain catchup</p>
-<p>When enabled, the pruner checks FSM state and skips all deletion operations unless the node is RUNNING, which covers catchup and IDLE after an operator STOP mid-catchup. This prevents race conditions where block validation marks transactions as mined faster than the pruner can preserve their parents.</p>
-<p><strong>Values:</strong></p>
-<ul>
-<li><code>false</code> (default): Normal pruning during catchup (safe with retention &gt;= 288 blocks)</li>
-<li><code>true</code>: Skip all pruning during catchup state</li>
-</ul>
-<p>Note: this defers rather than eliminates the prune burst - a node that skips a long catchup hits one much larger DAH sweep on entering the RUNNING state.</p>
-<h3 id="pruner_blockassemblywaittimeout">pruner_blockAssemblyWaitTimeout<a class="headerlink" href="#pruner_blockassemblywaittimeout" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Duration</p>
-<p><strong>Default</strong>: <code>10m</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_blockAssemblyWaitTimeout</code></p>
-<p><strong>Description</strong>: Maximum wait for Block Assembly service to be ready before pruning</p>
-<p>Sets the maximum time to wait for Block Assembly to be ready before proceeding with pruning operations. Prevents pruning data that could be needed for block construction.</p>
-<h3 id="pruner_connectionpoolwarningthreshold">pruner_connectionPoolWarningThreshold<a class="headerlink" href="#pruner_connectionpoolwarningthreshold" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Float64</p>
-<p><strong>Default</strong>: <code>0.7</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_connectionPoolWarningThreshold</code></p>
-<p><strong>Description</strong>: Connection pool utilization warning threshold (0.0-1.0)</p>
-<p>When Aerospike connection pool utilization exceeds this threshold, the pruner auto-reduces chunk group limit to prevent pool exhaustion.</p>
-<h3 id="pruner_block_trigger">pruner_block_trigger<a class="headerlink" href="#pruner_block_trigger" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: String</p>
-<p><strong>Default</strong>: <code>OnBlockPersisted</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_block_trigger</code></p>
-<p><strong>Description</strong>: When to trigger pruning operations</p>
-<p><strong>Values:</strong></p>
-<ul>
-<li><code>OnBlockPersisted</code> (default): Triggers on BlockPersisted notifications (coordinated with Block Persister)</li>
-<li><code>OnBlockMined</code>: Triggers on Block notifications with mined_set=true</li>
-</ul>
-<p>To use Block notifications with mined_set=true instead of BlockPersisted notifications from Block Persister for determining safe prune height, set <code>pruner_block_trigger=OnBlockMined</code>.</p>
-<h3 id="pruner_utxosetttl">pruner_utxoSetTTL<a class="headerlink" href="#pruner_utxosetttl" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_utxoSetTTL</code></p>
-<p><strong>Description</strong>: Use TTL expiration instead of hard delete for UTXO records</p>
-<p>When enabled, sets Aerospike record TTL to 1 second instead of hard deleting. This produces optimized tombstones and reduces write amplification.</p>
-<h3 id="pruner_relaxremovalcommitlevel">pruner_relaxRemovalCommitLevel<a class="headerlink" href="#pruner_relaxremovalcommitlevel" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>true</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_relaxRemovalCommitLevel</code></p>
-<p><strong>Description</strong>: Acknowledge the pruner's own record removals from the master replica only</p>
-<p>Controls the Aerospike commit level for the pruner's record removals — hard deletes, and
-the 1-second TTL touches used when <code>pruner_utxoSetTTL</code> is enabled.</p>
+<p><code>MinBlockHeight</code> gates everything: while the chain height is at or below it, all operations (parent
+preservation, DAH deletion, blob deletion) are skipped. Useful when bootstrapping a fresh
+environment where the initial blocks must stay available for cross-node validation.</p>
+<h3 id="catchup-safety">Catchup Safety<a class="headerlink" href="#catchup-safety" title="Permanent link">&para;</a></h3>
+<p>When <code>SkipDuringCatchup</code> is enabled the pruner checks FSM state and skips all deletion operations
+during catchup. That prevents the race where block validation marks transactions as mined faster
+than the pruner can preserve their parents. Leaving it off is only safe with a retention of at
+least 288 blocks.</p>
+<h3 id="block-assembly-coordination">Block Assembly Coordination<a class="headerlink" href="#block-assembly-coordination" title="Permanent link">&para;</a></h3>
+<p><code>BlockAssemblyWaitTimeout</code> caps how long the pruner waits for Block Assembly to reach the running
+state before proceeding. If Block Assembly is temporarily reorging or resetting, the pruner retries
+the state check until the timeout, which prevents pruning data that could still be needed for block
+construction.</p>
+<h3 id="removal-commit-level">Removal Commit Level<a class="headerlink" href="#removal-commit-level" title="Permanent link">&para;</a></h3>
+<p><code>RelaxRemovalCommitLevel</code> controls the Aerospike commit level for the pruner's record removals -
+hard deletes, and the 1-second TTL touches used when <code>UTXOSetTTL</code> is enabled.</p>
 <table>
 <thead>
 <tr>
@@ -8379,433 +8022,228 @@ the 1-second TTL touches used when <code>pruner_utxoSetTTL</code> is enabled.</p
 <tbody>
 <tr>
 <td><code>true</code> (default)</td>
-<td><code>COMMIT_MASTER</code> — the call returns once the master replica has the removal; replicas catch up asynchronously.</td>
+<td><code>COMMIT_MASTER</code> - the call returns once the master replica has the removal; replicas catch up asynchronously.</td>
 </tr>
 <tr>
 <td><code>false</code></td>
-<td><code>COMMIT_ALL</code> — wait for every replica, the same as every other Teranode write.</td>
+<td><code>COMMIT_ALL</code> - wait for every replica, the same as every other Teranode write.</td>
 </tr>
 </tbody>
 </table>
-<p>Relaxing is safe here because pruning is idempotent and self-healing: the pruner only
-removes records that are already provably safe to drop, and a replica that misses a
-removal is re-found by the <code>delete_at_height</code> partition scan on the next session and
-re-pruned. Waiting for a full-replication ACK buys no correctness, only latency in the
-per-block removal burst.</p>
-<p><strong>Scope</strong> — record removal only:</p>
+<p>Relaxing is safe here because pruning is idempotent and self-healing: the pruner only removes
+records that are already provably safe to drop, and a replica that misses a removal is re-found by
+the <code>delete_at_height</code> partition scan on the next session and re-pruned. Waiting for a
+full-replication ACK buys no correctness, only latency in the per-block removal burst.</p>
+<p><strong>Scope</strong> - record removal only:</p>
 <ul>
-<li>Pruner <strong>parent updates</strong> (the <code>deletedChildren</code> map writes and the <code>addDeletedChildren</code>
-  UDF) mutate records that survive the prune and always use <code>COMMIT_ALL</code>.</li>
-<li>Every write <strong>outside</strong> the pruner always uses <code>COMMIT_ALL</code>. There is no cluster-wide
-  commit-level setting: UTXO record creation, the transaction-creation lock, the conflict
-  WAL, setMined, unspend and the preserve / delete-at-height writes are none of them
-  self-healing, so relaxing them would trade a resync for throughput.</li>
-<li>Only has an effect on namespaces with <code>replication-factor</code> &gt; 1. On a single-copy
-  namespace both values behave identically.</li>
+<li>Pruner <strong>parent updates</strong> (the <code>deletedChildren</code> map writes and the <code>addDeletedChildren</code> UDF)
+  mutate records that survive the prune and always use <code>COMMIT_ALL</code>.</li>
+<li>Every write <strong>outside</strong> the pruner always uses <code>COMMIT_ALL</code>. There is no cluster-wide commit-level
+  setting: UTXO record creation, the transaction-creation lock, the conflict WAL, setMined, unspend
+  and the preserve / delete-at-height writes are none of them self-healing, so relaxing them would
+  trade a resync for throughput.</li>
+<li>Only has an effect on namespaces with <code>replication-factor</code> &gt; 1. On a single-copy namespace both
+  values behave identically.</li>
 </ul>
-<p><strong>When to set <code>false</code></strong>: only to rule the relaxation out while diagnosing missing-record
-or replication issues.</p>
-<h3 id="pruner_skipblobdeletion">pruner_skipBlobDeletion<a class="headerlink" href="#pruner_skipblobdeletion" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_skipBlobDeletion</code></p>
-<p><strong>Description</strong>: Skip blob deletion scheduling</p>
-<p>When enabled, skips scheduled deletion of blob store data (transactions and subtrees) based on Delete-At-Height values.</p>
-<h3 id="pruner_blobdeletionsafetywindow">pruner_blobDeletionSafetyWindow<a class="headerlink" href="#pruner_blobdeletionsafetywindow" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: uint32</p>
-<p><strong>Default</strong>: <code>10</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_blobDeletionSafetyWindow</code></p>
-<p><strong>Description</strong>: Number of blocks behind the triggering block height (mined or persisted, depending on <code>pruner_block_trigger</code>) before deleting blobs</p>
-<p>Provides a safety margin by only deleting blobs whose delete-at-height is at least this many blocks behind the triggering block height. When the triggering height has not yet exceeded the safety window, all blob deletions are skipped. Prevents deletion of data that might be needed during reorg scenarios.</p>
-<h3 id="pruner_blobdeletionbatchsize">pruner_blobDeletionBatchSize<a class="headerlink" href="#pruner_blobdeletionbatchsize" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Integer</p>
-<p><strong>Default</strong>: <code>1000</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_blobDeletionBatchSize</code></p>
-<p><strong>Description</strong>: Maximum number of blob deletions to process per pruning trigger</p>
-<p>Limits deletions per cycle to prevent overwhelming the blob store. Remaining deletions are processed in subsequent triggers.</p>
-<h3 id="pruner_blobdeletionmaxretries">pruner_blobDeletionMaxRetries<a class="headerlink" href="#pruner_blobdeletionmaxretries" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Integer</p>
-<p><strong>Default</strong>: <code>3</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_blobDeletionMaxRetries</code></p>
-<p><strong>Description</strong>: Maximum retry attempts for failed blob deletions. A deletion refused as a configuration error (for example an HTTP blob store answering 401) is not counted against this limit: it stays queued and is logged as an error until the configuration is fixed. Deletions for other store types keep being processed.</p>
-<h3 id="pruner_skippreserveparents">pruner_skipPreserveParents<a class="headerlink" href="#pruner_skippreserveparents" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_skipPreserveParents</code></p>
-<p><strong>Description</strong>: Skip Phase 1 - preserve parents of unmined transactions</p>
-<p>When enabled, parent transactions will not be protected from deletion even if they have unmined children.</p>
-<h3 id="pruner_skipprocessexpiredpreservations">pruner_skipProcessExpiredPreservations<a class="headerlink" href="#pruner_skipprocessexpiredpreservations" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_skipProcessExpiredPreservations</code></p>
-<p><strong>Description</strong>: Skip Phase 1b - expire old parent preservations</p>
-<p>When disabled (default), each pruner cycle clears expired PreserveUntil markers and re-stamps DeleteAtHeight on preserved parents that have become safe to prune (mined, on the longest chain, and fully spent, or conflicting). When enabled, preserved parents keep PreserveUntil set and DeleteAtHeight cleared indefinitely and are never pruned. Intended as an emergency kill-switch only.</p>
-<h3 id="pruner_skipdeletions">pruner_skipDeletions<a class="headerlink" href="#pruner_skipdeletions" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Environment Variable</strong>: <code>pruner_skipDeletions</code></p>
-<p><strong>Description</strong>: Skip deletion operations during pruning</p>
-<h2 id="operation-timeout-settings">Operation Timeout Settings<a class="headerlink" href="#operation-timeout-settings" title="Permanent link">&para;</a></h2>
-<h3 id="pruner_jobtimeout">pruner_jobTimeout<a class="headerlink" href="#pruner_jobtimeout" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Duration</p>
-<p><strong>Default</strong>: <code>10m</code> (10 minutes)</p>
-<p><strong>Description</strong>: Timeout for overall pruning operation completion</p>
-<p><strong>Format</strong>: Duration string (e.g., <code>5m</code>, <code>30s</code>, <code>1h</code>)</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pruner_jobTimeout = 10m
-</span></code></pre></div>
-<p><strong>Behavior:</strong></p>
-<ul>
-<li>Pruning operation runs synchronously up to this timeout</li>
-<li>On timeout: Operation is logged as timed out but continues in background</li>
-</ul>
-<p><strong>Tuning Guidelines:</strong></p>
-<ul>
-<li><strong>Small databases</strong>: <code>5m</code> may be sufficient</li>
-<li><strong>Large databases</strong>: Increase to <code>15m</code> or <code>20m</code></li>
-<li><strong>Slow storage</strong>: Increase timeout accordingly</li>
-<li><strong>High latency networks</strong>: Add buffer for network delays</li>
-</ul>
-<p><strong>Impact:</strong></p>
-<ul>
-<li>Too short: Frequent timeouts logged</li>
-<li>Too long: Blocks other operations unnecessarily</li>
-</ul>
-<p><strong>Metrics</strong>: Monitor <code>teranode_pruner_duration_seconds</code> to determine appropriate timeout</p>
-<h2 id="utxo-store-settings">UTXO Store Settings<a class="headerlink" href="#utxo-store-settings" title="Permanent link">&para;</a></h2>
-<p>These settings control the pruning behavior at the UTXO store level.</p>
-<h3 id="utxostore_unminedtxretention">utxostore_unminedTxRetention<a class="headerlink" href="#utxostore_unminedtxretention" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: <code>uint32</code> (block height)</p>
-<p><strong>Default</strong>: <code>globalBlockHeightRetention / 2</code></p>
-<p><strong>Typical Value</strong>: ~7200 blocks (≈50 days)</p>
-<p><strong>Description</strong>: Number of blocks to retain unmined transactions before considering them for parent preservation</p>
-<p><strong>Calculation:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>globalBlockHeightRetention = 14400  # ~100 days
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>utxostore_unminedTxRetention = 7200  # 50 days
-</span></code></pre></div>
-<p><strong>Purpose:</strong></p>
-<p>Unmined transactions older than this are considered "old" and their parent transactions are marked for preservation during Phase 1 pruning.</p>
-<p><strong>Tuning:</strong></p>
-<ul>
-<li><strong>Increase</strong>: Retain unmined transactions longer, slower pruning</li>
-<li><strong>Decrease</strong>: Prune unmined transactions sooner, faster pruning, higher risk</li>
-</ul>
-<p><strong>Warning</strong>: Setting too low may cause valid resubmitted transactions to fail if their parent UTXOs were already pruned.</p>
-<h3 id="utxostore_parentpreservationblocks">utxostore_parentPreservationBlocks<a class="headerlink" href="#utxostore_parentpreservationblocks" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: <code>uint32</code> (block height)</p>
-<p><strong>Default</strong>: <code>blocksInADayOnAverage * 10</code></p>
-<p><strong>Typical Value</strong>: ~14400 blocks (≈100 days, assuming 144 blocks/day)</p>
-<p><strong>Description</strong>: Number of blocks to preserve parent transactions of old unmined transactions</p>
-<p><strong>Calculation:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>blocksInADayOnAverage = 144  # Typical Bitcoin block time
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>utxostore_parentPreservationBlocks = 1440  # 10 days
-</span></code></pre></div>
-<p><strong>Purpose:</strong></p>
+<p><strong>When to set <code>false</code></strong>: only to rule the relaxation out while diagnosing missing-record or
+replication issues.</p>
+<h3 id="blob-deletion">Blob Deletion<a class="headerlink" href="#blob-deletion" title="Permanent link">&para;</a></h3>
+<p><code>BlobDeletionSafetyWindow</code> provides a safety margin by only deleting blobs whose delete-at-height is
+at least that many blocks behind the triggering block height (mined or persisted, depending on
+<code>BlockTrigger</code>). While the triggering height has not yet exceeded the safety window, all blob
+deletions are skipped. This prevents deletion of data that might be needed during a reorg.</p>
+<p><code>BlobDeletionBatchSize</code> limits deletions per cycle so the blob store is not overwhelmed; the
+remainder is processed on subsequent triggers.</p>
+<h3 id="parent-preservation">Parent Preservation<a class="headerlink" href="#parent-preservation" title="Permanent link">&para;</a></h3>
 <p>When Phase 1 preservation runs, parent transactions get their <code>PreserveUntil</code> flag set to:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nx">PreserveUntil</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">currentHeight</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">parentPreservationBlocks</span>
+<div class="language-go highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nx">PreserveUntil</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">currentHeight</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">parentPreservationBlocks</span>
 </span></code></pre></div>
-<p>This prevents parent UTXOs from being deleted for the specified number of blocks, ensuring resubmitted transactions can validate.</p>
-<p><strong>Tuning:</strong></p>
+<p>This prevents parent UTXOs from being deleted for that many blocks, so resubmitted transactions can
+still validate. <code>blocksInADayOnAverage</code> (144, ~1 day at a 10-minute block target) is a fixed
+constant in settings.go, not a configurable key - the <code>ParentPreservationBlocks</code> default is derived
+from it, not read from settings.conf. Likewise <code>UnminedTxRetention</code> defaults to half of
+<code>global_blockHeightRetention</code>, so raising the global retention raises it too:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>global_blockHeightRetention = 14400
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>utxostore_unminedTxRetention = 7200
+</span></code></pre></div>
+<p>Tuning both: increasing retains transactions and parents longer, which is safer for resubmissions
+but prunes more slowly; decreasing prunes sooner at higher risk. Setting <code>UnminedTxRetention</code> too
+low may cause valid resubmitted transactions to fail because their parent UTXOs were already pruned.</p>
+<p>When <code>SkipProcessExpiredPreservations</code> is off (the default), each pruner cycle clears expired
+<code>PreserveUntil</code> markers and re-stamps <code>DeleteAtHeight</code> on preserved parents that have become safe to
+prune (mined, on the longest chain, and fully spent, or conflicting). When on, preserved parents
+keep <code>PreserveUntil</code> set and <code>DeleteAtHeight</code> cleared indefinitely and are never pruned - an
+emergency kill-switch only.</p>
+<h3 id="dah-cleaner-phase-2">DAH Cleaner (Phase 2)<a class="headerlink" href="#dah-cleaner-phase-2" title="Permanent link">&para;</a></h3>
 <ul>
-<li><strong>Increase</strong>: Preserve parents longer, safer for resubmissions, slower pruning</li>
-<li><strong>Decrease</strong>: Prune parents sooner, faster pruning, higher risk for resubmissions</li>
+<li><code>DisableDAHCleaner</code> false: normal operation, Phase 2 pruning runs</li>
+<li><code>DisableDAHCleaner</code> true: Phase 2 disabled, only Phase 1 (parent preservation) runs</li>
 </ul>
-<p><strong>Recommendation</strong>: Keep default value unless specific use case requires change.</p>
-<h3 id="utxostore_prunermaxconcurrentoperations">utxostore_prunerMaxConcurrentOperations<a class="headerlink" href="#utxostore_prunermaxconcurrentoperations" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Integer</p>
-<p><strong>Default</strong>: UTXO store connection pool size</p>
-<p><strong>Description</strong>: Maximum number of concurrent pruning operations for Aerospike</p>
-<p><strong>Applies To</strong>: Aerospike store only (SQL uses fixed worker count)</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>utxostore_prunerMaxConcurrentOperations = 8
+<p><strong>Warning</strong>: enabling it prevents UTXO record deletion and causes database growth. Testing and
+debugging only.</p>
+<p>Phase 2 queries Aerospike through the <code>IndexName</code> secondary index for efficient record filtering:</p>
+<div class="language-sql highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">utxos</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">deleteAtHeight</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">safeHeight</span>
 </span></code></pre></div>
-<p><strong>Impact:</strong></p>
-<ul>
-<li><strong>Higher values</strong>: Faster pruning, higher load on database</li>
-<li><strong>Lower values</strong>: Slower pruning, lower load on database</li>
-</ul>
-<p><strong>Tuning Guidelines:</strong></p>
-<ul>
-<li><strong>Small databases</strong>: 4-8 workers sufficient</li>
-<li><strong>Large databases</strong>: 8-16 workers for faster pruning</li>
-<li><strong>Limited resources</strong>: Reduce to 2-4 workers</li>
-<li><strong>High throughput nodes</strong>: Increase to 16-32 workers</li>
-</ul>
-<p><strong>Constraint</strong>: Limited by Aerospike connection pool size. Exceeding pool size causes contention.</p>
-<p><strong>Aerospike Worker Count:</strong></p>
-<p>Default: 4 workers (hardcoded in <code>/stores/utxo/aerospike/pruner/pruner_service.go</code>)</p>
-<p>To change, modify code:</p>
-<div class="language-go highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1">// In pruner_service.go</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="nx">workerCount</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="mi">4</span><span class="w">  </span><span class="c1">// Change this value</span>
+<p>The index is created automatically on service start via the index waiter, and the service waits for
+it to be ready before pruning. Manual creation, if needed:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"asinfo -v 'sindex-create:ns=teranode;set=utxos;indexname=pruner_dah_index;indextype=NUMERIC;binname=deleteAtHeight'"</span>
 </span></code></pre></div>
-<h3 id="utxostore_disabledahcleaner">utxostore_disableDAHCleaner<a class="headerlink" href="#utxostore_disabledahcleaner" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Description</strong>: Disable Delete-At-Height (DAH) pruning (Phase 2)</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>utxostore_disableDAHCleaner = true
-</span></code></pre></div>
-<p><strong>Impact:</strong></p>
-<ul>
-<li><code>false</code>: Normal operation, Phase 2 pruning runs</li>
-<li><code>true</code>: Phase 2 disabled, only Phase 1 (parent preservation) runs</li>
-</ul>
-<p><strong>When to Enable:</strong></p>
-<ul>
-<li><strong>Testing</strong>: Debugging pruning issues</li>
-<li><strong>Investigation</strong>: Analyzing DAH pruning behavior</li>
-<li><strong>Temporary workaround</strong>: If Phase 2 causing issues</li>
-</ul>
-<p><strong>Warning</strong>: Enabling this setting prevents UTXO record deletion, causing database growth. Only for testing/debugging.</p>
-<h2 id="aerospike-specific-settings">Aerospike-Specific Settings<a class="headerlink" href="#aerospike-specific-settings" title="Permanent link">&para;</a></h2>
-<h3 id="pruner_indexname">pruner_IndexName<a class="headerlink" href="#pruner_indexname" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: String</p>
-<p><strong>Default</strong>: <code>pruner_dah_index</code></p>
-<p><strong>Description</strong>: Name of the Aerospike secondary index on <code>DeleteAtHeight</code> field</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>pruner_IndexName = pruner_dah_index
-</span></code></pre></div>
-<p><strong>Purpose:</strong></p>
-<p>DAH pruning (Phase 2) queries Aerospike using this secondary index for efficient record filtering:</p>
-<div class="language-sql highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">utxos</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">deleteAtHeight</span><span class="w"> </span><span class="o">&lt;=</span><span class="w"> </span><span class="n">safeHeight</span>
-</span></code></pre></div>
-<p><strong>Index Creation:</strong></p>
-<ul>
-<li><strong>Automatic</strong>: Created on service start via index waiter</li>
-<li><strong>Wait Time</strong>: Service waits for index to be ready before starting pruning</li>
-</ul>
-<p><strong>Manual Index Creation (if needed):</strong></p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"asinfo -v 'sindex-create:ns=teranode;set=utxos;indexname=pruner_dah_index;indextype=NUMERIC;binname=deleteAtHeight'"</span>
-</span></code></pre></div>
-<p><strong>Index Verification:</strong></p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"show indexes"</span>
+<p>Verification:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"show indexes"</span>
 </span></code></pre></div>
 <p>Expected output:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>Namespace   Set     Index Name        Bin Name          Type
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
+<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Namespace   Set     Index Name        Bin Name          Type
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>teranode    utxos   pruner_dah_index  deleteAtHeight    NUMERIC
 </span></code></pre></div>
-<h2 id="chunk-processing-settings">Chunk Processing Settings<a class="headerlink" href="#chunk-processing-settings" title="Permanent link">&para;</a></h2>
-<p>These settings control parallel processing during UTXO pruning operations.</p>
-<h3 id="pruner_utxochunksize">pruner_utxoChunkSize<a class="headerlink" href="#pruner_utxochunksize" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Integer</p>
-<p><strong>Default</strong>: <code>1000</code></p>
-<p><strong>Description</strong>: Number of records to process in each parallel chunk during pruning</p>
-<p>Controls the granularity of parallel processing. Records are accumulated into chunks of this size, then processed in parallel.</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>pruner_utxoChunkSize = 1000
-</span></code></pre></div>
-<p><strong>Tuning:</strong></p>
-<ul>
-<li><strong>Higher values</strong>: Fewer chunks, less parallelism overhead, more memory per chunk</li>
-<li><strong>Lower values</strong>: More chunks, better parallelism, more overhead</li>
-</ul>
-<p><strong>Recommendation</strong>: Default value works well for most deployments.</p>
-<h3 id="pruner_utxochunkgrouplimit">pruner_utxoChunkGroupLimit<a class="headerlink" href="#pruner_utxochunkgrouplimit" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Integer</p>
-<p><strong>Default</strong>: <code>10</code></p>
-<p><strong>Description</strong>: Maximum number of chunks to process in parallel</p>
-<p>Limits concurrent chunk processing to prevent overwhelming Aerospike or exhausting system resources.</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>pruner_utxoChunkGroupLimit = 10
-</span></code></pre></div>
-<p><strong>Tuning:</strong></p>
-<ul>
-<li><strong>Higher values</strong>: More parallelism, faster pruning, higher resource usage</li>
-<li><strong>Lower values</strong>: Less parallelism, slower pruning, lower resource usage</li>
-</ul>
-<p><strong>Constraint</strong>: Limited by Aerospike connection pool size. Setting too high causes connection contention.</p>
-<h3 id="pruner_utxoprogressloginterval">pruner_utxoProgressLogInterval<a class="headerlink" href="#pruner_utxoprogressloginterval" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Duration</p>
-<p><strong>Default</strong>: <code>30s</code></p>
-<p><strong>Description</strong>: Interval for logging progress during long-running pruning operations</p>
-<p>When set, the pruner logs periodic progress updates showing records pruned and elapsed time.</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>pruner_utxoProgressLogInterval = 30s
-</span></code></pre></div>
-<p><strong>Values:</strong></p>
-<ul>
-<li><code>0</code>: Disable progress logging</li>
-<li><code>30s</code>: Log every 30 seconds (default)</li>
-<li><code>1m</code>: Log every minute</li>
-</ul>
-<p><strong>Use Case</strong>: Monitor progress during large pruning operations or troubleshoot slow pruning.</p>
-<h3 id="pruner_utxopartitionqueries">pruner_utxoPartitionQueries<a class="headerlink" href="#pruner_utxopartitionqueries" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Integer</p>
-<p><strong>Default</strong>: <code>0</code> (auto-detect based on CPU cores)</p>
-<p><strong>Environment Variable</strong>: <code>pruner_utxoPartitionQueries</code></p>
-<p><strong>Description</strong>: Number of parallel Aerospike partition queries for scanning prunable records</p>
-<p>Aerospike's keyspace is divided into 4096 partitions. This setting controls how many workers scan partitions in parallel. Each worker processes a range of partitions independently, achieving up to 100x performance improvement over sequential queries.</p>
-<p><strong>Values:</strong></p>
-<ul>
-<li><code>0</code> (default): Auto-detect based on CPU cores and Aerospike query-threads-limit</li>
-<li><code>N &gt; 0</code>: Fixed number of partition workers (capped at 4096)</li>
-</ul>
-<p><strong>Tuning:</strong></p>
-<ul>
-<li><strong>Higher values</strong>: Faster scanning, more Aerospike load and connections</li>
-<li><strong>Lower values</strong>: Reduced cluster pressure, slower pruning</li>
-</ul>
-<p><strong>Recommendation</strong>: Use default (<code>0</code>) for automatic scaling. Set explicitly to match your Aerospike cluster's capacity.</p>
-<h2 id="defensive-mode-settings">Defensive Mode Settings<a class="headerlink" href="#defensive-mode-settings" title="Permanent link">&para;</a></h2>
-<p>These settings control the defensive pruning mode, which adds safety checks before deleting parent transactions.</p>
-<h3 id="pruner_utxodefensiveenabled">pruner_utxoDefensiveEnabled<a class="headerlink" href="#pruner_utxodefensiveenabled" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Boolean</p>
-<p><strong>Default</strong>: <code>false</code></p>
-<p><strong>Description</strong>: Enable defensive child verification before parent deletion</p>
-<p>When enabled, the pruner verifies that ALL spending children of a parent transaction are mined and stable (for at least <code>blockHeightRetention</code> blocks) before deleting the parent. This prevents orphaning children during chain reorganizations.</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>pruner_utxoDefensiveEnabled = true
-</span></code></pre></div>
-<p><strong>Impact:</strong></p>
-<ul>
-<li><code>true</code>: Safer pruning with child verification, slightly slower due to batch verification</li>
-<li><code>false</code>: Faster pruning, relies on retention period alone for safety</li>
-</ul>
-<p><strong>When to Enable:</strong></p>
-<ul>
-<li>Production environments with high transaction resubmission rates</li>
-<li>Environments experiencing frequent chain reorganizations</li>
-<li>When data integrity is critical</li>
-</ul>
-<p><strong>Trade-off</strong>: Enabling adds Aerospike batch read operations to verify children, which increases pruning time but provides stronger safety guarantees.</p>
-<h3 id="pruner_utxodefensivebatchreadsize">pruner_utxoDefensiveBatchReadSize<a class="headerlink" href="#pruner_utxodefensivebatchreadsize" title="Permanent link">&para;</a></h3>
-<p><strong>Type</strong>: Integer</p>
-<p><strong>Default</strong>: <code>10000</code></p>
-<p><strong>Description</strong>: Batch size for defensive child verification queries</p>
-<p>Controls how many child transactions are verified in a single Aerospike BatchGet call when defensive mode is enabled.</p>
-<p><strong>Example:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>pruner_utxoDefensiveBatchReadSize = 10000
-</span></code></pre></div>
-<p><strong>Tuning:</strong></p>
-<ul>
-<li><strong>Higher values</strong>: Fewer Aerospike round trips, more memory per batch</li>
-<li><strong>Lower values</strong>: More round trips, less memory per batch</li>
-</ul>
-<p><strong>Applies To</strong>: Only used when <code>pruner_utxoDefensiveEnabled = true</code></p>
+<h3 id="chunk-processing">Chunk Processing<a class="headerlink" href="#chunk-processing" title="Permanent link">&para;</a></h3>
+<p>Aerospike's keyspace is divided into 4096 partitions. <code>UTXOPartitionQueries</code> controls how many
+workers scan partitions in parallel; each processes a range independently, achieving up to 100x
+improvement over sequential queries. <code>0</code> auto-detects from CPU cores and Aerospike's
+query-threads-limit; a value above 0 fixes the worker count (capped at 4096).</p>
+<p>Records scanned for deletion are accumulated into chunks of <code>UTXOChunkSize</code> and processed in
+parallel, at most <code>UTXOChunkGroupLimit</code> chunks at a time. Higher chunk sizes mean fewer chunks, less
+parallelism overhead and more memory per chunk; higher group limits mean more parallelism, faster
+pruning and higher resource usage.</p>
+<p><code>UTXOChunkGroupLimit</code> is bounded by the Aerospike connection pool. On startup the pruner validates
+<code>(workers × chunkGroupLimit) + workers</code> against <code>ConnectionQueueSize × ConnectionPoolWarningThreshold</code>
+and reduces the group limit if it would exceed the threshold. <code>settings.conf</code> deliberately ships a
+group limit of 1: at scale, parallel chunk processing can starve transaction throughput.</p>
+<h3 id="pruned-tx-set">Pruned-TX Set<a class="headerlink" href="#pruned-tx-set" title="Permanent link">&para;</a></h3>
+<p><code>UTXOPrunedSetMaxEntries</code> caps the in-memory <code>PrunedTxSet</code>, which tracks TXIDs pruned across
+sessions so wasteful Aerospike parent updates can be skipped pre-flight. It is held on the service
+struct and reused across prune sessions within a process, never persisted across restarts. The set
+is a sharded two-generation cuckoo filter: when the current generation fills it rotates into the
+previous slot and a fresh one is allocated, so <code>Add</code> keeps succeeding and old entries age out. A
+high <code>utxo_pruner_pruned_set_rotations</code> rate is the signal that the cap is too small.</p>
+<p>The cap is the total entry budget across both generations of all shards, so memory is roughly one
+byte per entry: 10M ≈ 10 MiB, 100M ≈ 100 MiB, and <code>0</code> selects the built-in 2B default ≈ 2 GiB. The
+optimisation is disabled automatically when <code>UTXODefensiveEnabled</code> is true.</p>
+<h3 id="defensive-mode">Defensive Mode<a class="headerlink" href="#defensive-mode" title="Permanent link">&para;</a></h3>
+<p>When <code>UTXODefensiveEnabled</code> is true the pruner verifies that ALL spending children of a parent are
+mined and stable (for at least <code>blockHeightRetention</code> blocks) before deleting the parent, which
+prevents orphaning children during chain reorganizations. It adds Aerospike batch reads, so pruning
+takes longer in exchange for a stronger safety guarantee. <code>UTXODefensiveBatchReadSize</code> controls how
+many children are verified per BatchGet, and only applies while defensive mode is on.</p>
+<p>Enable it for production environments with high transaction resubmission rates, environments with
+frequent reorgs, or wherever data integrity outweighs pruning speed.</p>
 <h2 id="context-specific-configuration">Context-Specific Configuration<a class="headerlink" href="#context-specific-configuration" title="Permanent link">&para;</a></h2>
+<p>The values below are what <code>settings.conf</code> ships. Note that <code>startPruner</code> is off in <code>docker.m</code> and
+<code>operator</code>.</p>
 <h3 id="development-context">Development Context<a class="headerlink" href="#development-context" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>[dev]
-</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>startPruner = true
-</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>pruner_grpcAddress = localhost:8096
-</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>pruner_grpcListenAddress = localhost:8096
-</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>pruner_jobTimeout = 10m
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>[dev]
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>startPruner = true
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>pruner_grpcAddress = localhost:8096
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>pruner_grpcListenAddress = localhost:8096
 </span></code></pre></div>
 <h3 id="docker-context-single-machine-multi-node">Docker Context (Single Machine, Multi-Node)<a class="headerlink" href="#docker-context-single-machine-multi-node" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>[docker.m]
-</span><span id="__span-23-2"><a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>startPruner = true
-</span><span id="__span-23-3"><a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>pruner_grpcAddress = pruner:8096
-</span><span id="__span-23-4"><a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>pruner_grpcListenAddress = :8096
-</span><span id="__span-23-5"><a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>pruner_jobTimeout = 10m
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>[docker.m]
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>startPruner = false
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>pruner_grpcAddress = pruner:8096
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>pruner_grpcListenAddress = :8096
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>pruner_utxoPartitionQueries = 8
 </span></code></pre></div>
 <h3 id="docker-context-per-service-containers">Docker Context (Per-Service Containers)<a class="headerlink" href="#docker-context-per-service-containers" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>[docker]
-</span><span id="__span-24-2"><a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>startPruner = true
-</span><span id="__span-24-3"><a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>pruner_grpcAddress = ${clientName}:8096
-</span><span id="__span-24-4"><a id="__codelineno-24-4" name="__codelineno-24-4" href="#__codelineno-24-4"></a>pruner_grpcListenAddress = :8096
-</span><span id="__span-24-5"><a id="__codelineno-24-5" name="__codelineno-24-5" href="#__codelineno-24-5"></a>pruner_jobTimeout = 10m
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>[docker]
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>startPruner = true
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>pruner_grpcAddress = ${clientName}:8096
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>pruner_grpcListenAddress = :8096
 </span></code></pre></div>
 <h3 id="docker-host-context-access-from-host">Docker Host Context (Access from Host)<a class="headerlink" href="#docker-host-context-access-from-host" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-25-1"><a id="__codelineno-25-1" name="__codelineno-25-1" href="#__codelineno-25-1"></a>[docker.host]
-</span><span id="__span-25-2"><a id="__codelineno-25-2" name="__codelineno-25-2" href="#__codelineno-25-2"></a>startPruner = true
-</span><span id="__span-25-3"><a id="__codelineno-25-3" name="__codelineno-25-3" href="#__codelineno-25-3"></a>pruner_grpcAddress = localhost:${PORT_PREFIX}8096
-</span><span id="__span-25-4"><a id="__codelineno-25-4" name="__codelineno-25-4" href="#__codelineno-25-4"></a>pruner_grpcListenAddress = localhost:${PORT_PREFIX}8096
-</span><span id="__span-25-5"><a id="__codelineno-25-5" name="__codelineno-25-5" href="#__codelineno-25-5"></a>pruner_jobTimeout = 10m
-</span><span id="__span-25-6"><a id="__codelineno-25-6" name="__codelineno-25-6" href="#__codelineno-25-6"></a>
-</span><span id="__span-25-7"><a id="__codelineno-25-7" name="__codelineno-25-7" href="#__codelineno-25-7"></a># Disable pruner for specific nodes
-</span><span id="__span-25-8"><a id="__codelineno-25-8" name="__codelineno-25-8" href="#__codelineno-25-8"></a>startPruner.teranode1.coinbase = false
-</span><span id="__span-25-9"><a id="__codelineno-25-9" name="__codelineno-25-9" href="#__codelineno-25-9"></a>startPruner.teranode2.coinbase = false
+<p><code>settings.conf</code> ships no pruner overrides for <code>docker.host</code>, so the base values apply. To reach a
+port-prefixed container from the host, and to keep the pruner off specific nodes:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>[docker.host]
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>pruner_grpcAddress = localhost:${PORT_PREFIX}8096
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a># Disable pruner for specific nodes
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>startPruner.teranode1.coinbase = false
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>startPruner.teranode2.coinbase = false
 </span></code></pre></div>
 <h3 id="kubernetesoperator-context">Kubernetes/Operator Context<a class="headerlink" href="#kubernetesoperator-context" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-26-1"><a id="__codelineno-26-1" name="__codelineno-26-1" href="#__codelineno-26-1"></a>[operator]
-</span><span id="__span-26-2"><a id="__codelineno-26-2" name="__codelineno-26-2" href="#__codelineno-26-2"></a>startPruner = true
-</span><span id="__span-26-3"><a id="__codelineno-26-3" name="__codelineno-26-3" href="#__codelineno-26-3"></a>pruner_grpcAddress = k8s:///pruner.${clientName}.svc.cluster.local:8096
-</span><span id="__span-26-4"><a id="__codelineno-26-4" name="__codelineno-26-4" href="#__codelineno-26-4"></a>pruner_grpcListenAddress = :8096
-</span><span id="__span-26-5"><a id="__codelineno-26-5" name="__codelineno-26-5" href="#__codelineno-26-5"></a>pruner_jobTimeout = 15m  # Increase for distributed environments
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>[operator]
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>startPruner = false
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>pruner_grpcAddress = k8s:///pruner.${clientName}.svc.cluster.local:8096
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>pruner_grpcListenAddress = :8096
 </span></code></pre></div>
 <h2 id="configuration-examples">Configuration Examples<a class="headerlink" href="#configuration-examples" title="Permanent link">&para;</a></h2>
 <h3 id="minimal-configuration-defaults">Minimal Configuration (Defaults)<a class="headerlink" href="#minimal-configuration-defaults" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-27-1"><a id="__codelineno-27-1" name="__codelineno-27-1" href="#__codelineno-27-1"></a># settings.conf
-</span><span id="__span-27-2"><a id="__codelineno-27-2" name="__codelineno-27-2" href="#__codelineno-27-2"></a>startPruner = true
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a># settings.conf
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>startPruner = true
 </span></code></pre></div>
 <p>All other settings use defaults.</p>
 <h3 id="high-performance-configuration">High-Performance Configuration<a class="headerlink" href="#high-performance-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-28-1"><a id="__codelineno-28-1" name="__codelineno-28-1" href="#__codelineno-28-1"></a># settings.conf
-</span><span id="__span-28-2"><a id="__codelineno-28-2" name="__codelineno-28-2" href="#__codelineno-28-2"></a>startPruner = true
-</span><span id="__span-28-3"><a id="__codelineno-28-3" name="__codelineno-28-3" href="#__codelineno-28-3"></a>pruner_jobTimeout = 5m  # Shorter timeout
-</span><span id="__span-28-4"><a id="__codelineno-28-4" name="__codelineno-28-4" href="#__codelineno-28-4"></a>pruner_utxoChunkSize = 2000  # Larger chunks
-</span><span id="__span-28-5"><a id="__codelineno-28-5" name="__codelineno-28-5" href="#__codelineno-28-5"></a>pruner_utxoChunkGroupLimit = 20  # More parallel chunks
-</span><span id="__span-28-6"><a id="__codelineno-28-6" name="__codelineno-28-6" href="#__codelineno-28-6"></a>utxostore_unminedTxRetention = 5000  # Prune sooner
-</span><span id="__span-28-7"><a id="__codelineno-28-7" name="__codelineno-28-7" href="#__codelineno-28-7"></a>utxostore_parentPreservationBlocks = 10000  # Shorter preservation
+<div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a># settings.conf
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>startPruner = true
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>pruner_utxoChunkSize = 2000
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>pruner_utxoChunkGroupLimit = 20
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>utxostore_unminedTxRetention = 5000
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a>utxostore_parentPreservationBlocks = 10000
 </span></code></pre></div>
-<p><strong>Use Case</strong>: High-throughput nodes with fast storage</p>
+<p><strong>Use Case</strong>: High-throughput nodes with fast storage. Raising the chunk group limit trades
+transaction throughput for pruning speed - watch tx ingest when you do.</p>
 <h3 id="conservative-configuration">Conservative Configuration<a class="headerlink" href="#conservative-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-29-1"><a id="__codelineno-29-1" name="__codelineno-29-1" href="#__codelineno-29-1"></a># settings.conf
-</span><span id="__span-29-2"><a id="__codelineno-29-2" name="__codelineno-29-2" href="#__codelineno-29-2"></a>startPruner = true
-</span><span id="__span-29-3"><a id="__codelineno-29-3" name="__codelineno-29-3" href="#__codelineno-29-3"></a>pruner_jobTimeout = 20m  # Longer timeout
-</span><span id="__span-29-4"><a id="__codelineno-29-4" name="__codelineno-29-4" href="#__codelineno-29-4"></a>pruner_utxoChunkGroupLimit = 5  # Fewer parallel chunks
-</span><span id="__span-29-5"><a id="__codelineno-29-5" name="__codelineno-29-5" href="#__codelineno-29-5"></a>pruner_utxoDefensiveEnabled = true  # Enable safety checks
-</span><span id="__span-29-6"><a id="__codelineno-29-6" name="__codelineno-29-6" href="#__codelineno-29-6"></a>utxostore_unminedTxRetention = 10000  # Retain longer
-</span><span id="__span-29-7"><a id="__codelineno-29-7" name="__codelineno-29-7" href="#__codelineno-29-7"></a>utxostore_parentPreservationBlocks = 20000  # Longer preservation
+<div class="language-text highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a># settings.conf
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>startPruner = true
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>pruner_utxoChunkGroupLimit = 5
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>pruner_utxoDefensiveEnabled = true
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>utxostore_unminedTxRetention = 10000
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>utxostore_parentPreservationBlocks = 20000
 </span></code></pre></div>
 <p><strong>Use Case</strong>: Production nodes prioritizing data safety over performance</p>
 <h3 id="testing-configuration">Testing Configuration<a class="headerlink" href="#testing-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1" href="#__codelineno-30-1"></a># settings_local.conf
-</span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2" href="#__codelineno-30-2"></a>startPruner = false  # Disable pruning for testing
+<div class="language-text highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a># settings_local.conf
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>startPruner = false
 </span></code></pre></div>
 <p><strong>Use Case</strong>: Local testing requiring full UTXO history</p>
 <h3 id="multi-node-setup-some-nodes-pruning">Multi-Node Setup (Some Nodes Pruning)<a class="headerlink" href="#multi-node-setup-some-nodes-pruning" title="Permanent link">&para;</a></h3>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-31-1"><a id="__codelineno-31-1" name="__codelineno-31-1" href="#__codelineno-31-1"></a># settings.conf
-</span><span id="__span-31-2"><a id="__codelineno-31-2" name="__codelineno-31-2" href="#__codelineno-31-2"></a>startPruner = true
-</span><span id="__span-31-3"><a id="__codelineno-31-3" name="__codelineno-31-3" href="#__codelineno-31-3"></a>
-</span><span id="__span-31-4"><a id="__codelineno-31-4" name="__codelineno-31-4" href="#__codelineno-31-4"></a># Disable for coinbase nodes (they don't need pruning)
-</span><span id="__span-31-5"><a id="__codelineno-31-5" name="__codelineno-31-5" href="#__codelineno-31-5"></a>startPruner.docker.host.teranode1.coinbase = false
-</span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6" href="#__codelineno-31-6"></a>startPruner.docker.host.teranode2.coinbase = false
-</span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7" href="#__codelineno-31-7"></a>
-</span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8" href="#__codelineno-31-8"></a># Enable for main processing node
-</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9" href="#__codelineno-31-9"></a>startPruner.docker.host.teranode3 = true
+<div class="language-text highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a># settings.conf
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>startPruner = true
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a># Disable for coinbase nodes (they don't need pruning)
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>startPruner.docker.host.teranode1.coinbase = false
+</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>startPruner.docker.host.teranode2.coinbase = false
+</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7" href="#__codelineno-16-7"></a>
+</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8" href="#__codelineno-16-8"></a># Enable for main processing node
+</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9" href="#__codelineno-16-9"></a>startPruner.docker.host.teranode3 = true
 </span></code></pre></div>
 <p><strong>Use Case</strong>: Multi-node setup where only certain nodes perform pruning</p>
-<h2 id="environment-variable-overrides">Environment Variable Overrides<a class="headerlink" href="#environment-variable-overrides" title="Permanent link">&para;</a></h2>
-<p>Settings can be overridden via environment variables using uppercase names with underscores:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-32-1"><a id="__codelineno-32-1" name="__codelineno-32-1" href="#__codelineno-32-1"></a><span class="c1"># Override pruner enable/disable</span>
-</span><span id="__span-32-2"><a id="__codelineno-32-2" name="__codelineno-32-2" href="#__codelineno-32-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">STARTPRUNER</span><span class="o">=</span><span class="nb">false</span>
-</span><span id="__span-32-3"><a id="__codelineno-32-3" name="__codelineno-32-3" href="#__codelineno-32-3"></a>
-</span><span id="__span-32-4"><a id="__codelineno-32-4" name="__codelineno-32-4" href="#__codelineno-32-4"></a><span class="c1"># Override gRPC port</span>
-</span><span id="__span-32-5"><a id="__codelineno-32-5" name="__codelineno-32-5" href="#__codelineno-32-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PRUNER_GRPCPORT</span><span class="o">=</span><span class="m">8097</span>
-</span><span id="__span-32-6"><a id="__codelineno-32-6" name="__codelineno-32-6" href="#__codelineno-32-6"></a>
-</span><span id="__span-32-7"><a id="__codelineno-32-7" name="__codelineno-32-7" href="#__codelineno-32-7"></a><span class="c1"># Override job timeout</span>
-</span><span id="__span-32-8"><a id="__codelineno-32-8" name="__codelineno-32-8" href="#__codelineno-32-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PRUNER_JOBTIMEOUT</span><span class="o">=</span>15m
-</span><span id="__span-32-9"><a id="__codelineno-32-9" name="__codelineno-32-9" href="#__codelineno-32-9"></a>
-</span><span id="__span-32-10"><a id="__codelineno-32-10" name="__codelineno-32-10" href="#__codelineno-32-10"></a><span class="c1"># Override UTXO settings</span>
-</span><span id="__span-32-11"><a id="__codelineno-32-11" name="__codelineno-32-11" href="#__codelineno-32-11"></a><span class="nb">export</span><span class="w"> </span><span class="nv">UTXOSTORE_UNMINEDTXRETENTION</span><span class="o">=</span><span class="m">10000</span>
-</span><span id="__span-32-12"><a id="__codelineno-32-12" name="__codelineno-32-12" href="#__codelineno-32-12"></a><span class="nb">export</span><span class="w"> </span><span class="nv">UTXOSTORE_PARENTPRESERVATIONBLOCKS</span><span class="o">=</span><span class="m">20000</span>
+<h3 id="aerospike-index-name-override">Aerospike Index Name Override<a class="headerlink" href="#aerospike-index-name-override" title="Permanent link">&para;</a></h3>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>pruner_IndexName = pruner_dah_index
 </span></code></pre></div>
-<h2 id="monitoring-settings">Monitoring Settings<a class="headerlink" href="#monitoring-settings" title="Permanent link">&para;</a></h2>
+<h2 id="environment-variable-overrides">Environment Variable Overrides<a class="headerlink" href="#environment-variable-overrides" title="Permanent link">&para;</a></h2>
+<p>Settings can be overridden via environment variables using the exact key name (case-sensitive, no
+automatic uppercasing):</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="c1"># Override pruner enable/disable</span>
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">startPruner</span><span class="o">=</span><span class="nb">false</span>
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="c1"># Override gRPC port (via the settings.conf ${PRUNER_GRPC_PORT} template variable used above)</span>
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PRUNER_GRPC_PORT</span><span class="o">=</span><span class="m">8097</span>
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="c1"># Override UTXO settings</span>
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="nb">export</span><span class="w"> </span><span class="nv">utxostore_unminedTxRetention</span><span class="o">=</span><span class="m">10000</span>
+</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a><span class="nb">export</span><span class="w"> </span><span class="nv">utxostore_parentPreservationBlocks</span><span class="o">=</span><span class="m">20000</span>
+</span></code></pre></div>
+<h2 id="monitoring">Monitoring<a class="headerlink" href="#monitoring" title="Permanent link">&para;</a></h2>
 <p>While not configuration settings, these Prometheus metrics should be monitored:</p>
 <ul>
-<li><code>teranode_pruner_duration_seconds</code>: Adjust <code>jobTimeout</code> if consistently near timeout</li>
+<li><code>teranode_pruner_duration_seconds</code>: Watch for a rising trend, which may indicate the chunk and concurrency settings need tuning</li>
 <li><code>teranode_pruner_skipped_total{reason="block_assembly_timeout"}</code>: Indicates Block Assembly issues</li>
 <li><code>teranode_pruner_errors_total</code>: Indicates database or connectivity issues</li>
 <li><code>utxo_cleanup_batch_duration_seconds</code>: Indicates Aerospike performance</li>
+<li><code>utxo_pruner_pruned_set_rotations</code>: high rate means <code>pruner_utxoPrunedSetMaxEntries</code> is too small</li>
 </ul>
 <h2 id="troubleshooting-configuration-issues">Troubleshooting Configuration Issues<a class="headerlink" href="#troubleshooting-configuration-issues" title="Permanent link">&para;</a></h2>
 <h3 id="pruner-not-starting">Pruner Not Starting<a class="headerlink" href="#pruner-not-starting" title="Permanent link">&para;</a></h3>
 <p><strong>Check:</strong></p>
 <ol>
-<li>Verify <code>startPruner = true</code></li>
+<li>Verify <code>startPruner = true</code> for the active settings context</li>
 <li>Check port 8096 availability: <code>lsof -i :8096</code></li>
 <li>Review logs: <code>grep "\[Pruner\]" teranode.log</code></li>
 </ol>
 <h3 id="port-conflicts">Port Conflicts<a class="headerlink" href="#port-conflicts" title="Permanent link">&para;</a></h3>
 <p><strong>Solution:</strong></p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-33-1"><a id="__codelineno-33-1" name="__codelineno-33-1" href="#__codelineno-33-1"></a>PRUNER_GRPC_PORT = 8097
-</span><span id="__span-33-2"><a id="__codelineno-33-2" name="__codelineno-33-2" href="#__codelineno-33-2"></a>pruner_grpcAddress = localhost:8097
-</span><span id="__span-33-3"><a id="__codelineno-33-3" name="__codelineno-33-3" href="#__codelineno-33-3"></a>pruner_grpcListenAddress = :8097
-</span></code></pre></div>
-<h3 id="frequent-timeouts">Frequent Timeouts<a class="headerlink" href="#frequent-timeouts" title="Permanent link">&para;</a></h3>
-<p><strong>Symptoms</strong>: <code>WARN [Pruner] Job timeout reached</code></p>
-<p><strong>Solution</strong>: Increase <code>pruner_jobTimeout</code>:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-34-1"><a id="__codelineno-34-1" name="__codelineno-34-1" href="#__codelineno-34-1"></a>pruner_jobTimeout = 20m  # or higher
+<div class="language-text highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>PRUNER_GRPC_PORT = 8097
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>pruner_grpcAddress = localhost:8097
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>pruner_grpcListenAddress = :8097
 </span></code></pre></div>
 <h3 id="slow-pruning">Slow Pruning<a class="headerlink" href="#slow-pruning" title="Permanent link">&para;</a></h3>
 <p><strong>Symptoms</strong>: High <code>teranode_pruner_duration_seconds</code> values</p>
@@ -8813,13 +8251,13 @@ or replication issues.</p>
 <ol>
 <li>
 <p>Increase parallel chunk processing:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-35-1"><a id="__codelineno-35-1" name="__codelineno-35-1" href="#__codelineno-35-1"></a>pruner_utxoChunkGroupLimit = 20  # Process more chunks in parallel
-</span><span id="__span-35-2"><a id="__codelineno-35-2" name="__codelineno-35-2" href="#__codelineno-35-2"></a>pruner_utxoChunkSize = 2000  # Larger chunks
+<div class="language-text highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>pruner_utxoChunkGroupLimit = 20
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>pruner_utxoChunkSize = 2000
 </span></code></pre></div>
 </li>
 <li>
 <p>Verify Aerospike index exists:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"show indexes"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_dah_index
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>asadm<span class="w"> </span>-e<span class="w"> </span><span class="s2">"show indexes"</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>pruner_dah_index
 </span></code></pre></div>
 </li>
 <li>
@@ -8827,7 +8265,7 @@ or replication issues.</p>
 </li>
 <li>
 <p>If defensive mode is enabled and slowing pruning:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-37-1"><a id="__codelineno-37-1" name="__codelineno-37-1" href="#__codelineno-37-1"></a>pruner_utxoDefensiveEnabled = false  # Disable if safety checks not needed
+<div class="language-text highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>pruner_utxoDefensiveEnabled = false
 </span></code></pre></div>
 </li>
 </ol>
@@ -8837,16 +8275,19 @@ or replication issues.</p>
 <ol>
 <li>
 <p>Verify pruner running:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-38-1"><a id="__codelineno-38-1" name="__codelineno-38-1" href="#__codelineno-38-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>teranode_pruner_active
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-23-1"><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>teranode_pruner_active
 </span></code></pre></div>
 </li>
 <li>
 <p>Check <code>teranode_pruner_skipped_total</code> reasons:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-39-1"><a id="__codelineno-39-1" name="__codelineno-39-1" href="#__codelineno-39-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>teranode_pruner_skipped_total
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-24-1"><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>curl<span class="w"> </span>http://localhost:8096/metrics<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>teranode_pruner_skipped_total
 </span></code></pre></div>
 </li>
 <li>
 <p>Verify Block Assembly in RUNNING state</p>
+</li>
+<li>
+<p>Verify <code>pruner_min_block_height</code> is not still gating the chain height</p>
 </li>
 </ol>
 <h2 id="related-documentation">Related Documentation<a class="headerlink" href="#related-documentation" title="Permanent link">&para;</a></h2>

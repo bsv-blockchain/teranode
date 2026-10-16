@@ -5805,6 +5805,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Database and Storage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#postgresql-connection-pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Connection Pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -7163,6 +7180,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Database and Storage">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#postgresql-connection-pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PostgreSQL Connection Pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -7842,6 +7876,116 @@
 </tr>
 </tbody>
 </table>
+<h4 id="postgresql-connection-pool">PostgreSQL Connection Pool<a class="headerlink" href="#postgresql-connection-pool" title="Permanent link">&para;</a></h4>
+<p>Default connection pool and resilience settings for every service's PostgreSQL store. A service can
+override every one of these with its own <code>&lt;service&gt;_postgres_*</code> setting (the twelve keys in the table
+below, e.g. <code>blockchain_postgres_retryEnabled</code>, <code>utxostore_postgres_circuitBreakerCooldown</code>). A
+per-service pool is only created when at least one of its twelve keys is explicitly configured -
+including <code>RetryEnabled=true</code> or an explicit <code>CircuitBreakerEnabled</code> (<code>true</code> or <code>false</code>) on its own.
+Once it exists, each numeric/duration value left at zero falls back to the global value above, and an
+unset <code>CircuitBreakerEnabled</code> inherits the global one while an explicit <code>false</code> is preserved (so a
+service can opt out of a globally-enabled breaker). <code>RetryEnabled</code> is the exception: it has no
+global fallback, so once a per-service pool exists its value (<code>false</code> included) replaces the global
+<code>RetryEnabled</code> outright. See e.g. <a href="../services/blockchain_settings/">Blockchain Settings</a> and
+<a href="../stores/utxo_settings/">UTXO Store Settings</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Type</th>
+<th>Default</th>
+<th>Environment Variable</th>
+<th>Usage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MaxOpenConns</td>
+<td>int</td>
+<td>50</td>
+<td>postgres_maxOpenConns</td>
+<td>Maximum number of open database connections</td>
+</tr>
+<tr>
+<td>MaxIdleConns</td>
+<td>int</td>
+<td>10</td>
+<td>postgres_maxIdleConns</td>
+<td>Maximum number of idle connections in pool</td>
+</tr>
+<tr>
+<td>ConnMaxLifetime</td>
+<td>time.Duration</td>
+<td>5m</td>
+<td>postgres_connMaxLifetime</td>
+<td>Maximum time a connection can be reused</td>
+</tr>
+<tr>
+<td>ConnMaxIdleTime</td>
+<td>time.Duration</td>
+<td>1m</td>
+<td>postgres_connMaxIdleTime</td>
+<td>Maximum time a connection can remain idle</td>
+</tr>
+<tr>
+<td>RetryMaxAttempts</td>
+<td>int</td>
+<td>3</td>
+<td>postgres_retryMaxAttempts</td>
+<td>Maximum retry attempts for transient errors</td>
+</tr>
+<tr>
+<td>RetryBaseDelay</td>
+<td>time.Duration</td>
+<td>100ms</td>
+<td>postgres_retryBaseDelay</td>
+<td>Base delay for retry backoff</td>
+</tr>
+<tr>
+<td>RetryEnabled</td>
+<td>bool</td>
+<td>false</td>
+<td>postgres_retryEnabled</td>
+<td>Enable retries for transient errors</td>
+</tr>
+<tr>
+<td>CircuitBreakerEnabled</td>
+<td>bool</td>
+<td>false</td>
+<td>postgres_circuitBreakerEnabled</td>
+<td>Enable circuit breaker for database operations</td>
+</tr>
+<tr>
+<td>CircuitBreakerFailureThreshold</td>
+<td>int</td>
+<td>5</td>
+<td>postgres_circuitBreakerFailureThreshold</td>
+<td>Consecutive failures before opening circuit</td>
+</tr>
+<tr>
+<td>CircuitBreakerHalfOpenMax</td>
+<td>int</td>
+<td>3</td>
+<td>postgres_circuitBreakerHalfOpenMax</td>
+<td>Successful probes required to close circuit</td>
+</tr>
+<tr>
+<td>CircuitBreakerCooldown</td>
+<td>time.Duration</td>
+<td>30s</td>
+<td>postgres_circuitBreakerCooldown</td>
+<td>Duration circuit stays open before testing</td>
+</tr>
+<tr>
+<td>CircuitBreakerFailureWindow</td>
+<td>time.Duration</td>
+<td>10s</td>
+<td>postgres_circuitBreakerFailureWindow</td>
+<td>Time window for counting consecutive failures</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Note</strong>: all five circuit breaker settings are loaded by <code>settings.go</code> and applied in <code>util/sql.go</code>, but the breaker only runs when <code>CircuitBreakerEnabled</code> resolves to <code>true</code> - and it requires the threshold, half-open, cooldown and window values to be set (the defaults above satisfy this).</p>
 <h3 id="performance-and-optimization">Performance and Optimization<a class="headerlink" href="#performance-and-optimization" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
