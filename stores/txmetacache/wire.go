@@ -1,5 +1,11 @@
 package txmetacache
 
+import (
+	"encoding/binary"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+)
+
 // This file defines the wire format used by the txmeta Kafka topic. These
 // constants are the protocol contract between the producer (services/validator)
 // and the consumers (services/subtreevalidation, services/legacy/netsync).
@@ -53,3 +59,30 @@ const (
 	// oversized pre-loop allocation.
 	WireV1MinEntrySize = 32 + 1 + 4
 )
+
+// EncodeDeleteBatch serializes a batch of DELETE entries in the v1 wire format:
+// [uint32 LE entry count] then, per hash, [32 hash][WireActionDELETE][uint32 LE 0].
+//
+// v1 is chosen on purpose for producers that are not the validator: receivers
+// detect v1 and v2 per message (see the package comment), and a v1 message needs
+// neither the validator's xxhash bucket routing nor a producer built with manual
+// partitioning, so any producer on the txmeta topic can use it. A count of 767
+// (0x02FF) encodes as FF 02 00 00, the full v2 header signature, and a receiver
+// may then parse the message as v2; callers must not send a batch of that size.
+func EncodeDeleteBatch(hashes []chainhash.Hash) []byte {
+	buf := make([]byte, 4+len(hashes)*WireV1MinEntrySize)
+	binary.LittleEndian.PutUint32(buf, uint32(len(hashes))) //nolint:gosec // callers bound batch size well below MaxUint32
+
+	off := 4
+
+	for i := range hashes {
+		copy(buf[off:], hashes[i][:])
+		off += 32
+		buf[off] = WireActionDELETE
+		off++
+		// content length stays zero for a DELETE
+		off += 4
+	}
+
+	return buf
+}

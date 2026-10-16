@@ -38,6 +38,13 @@ var (
 	// in storage, which is a common optimization operation.
 	prometheusSubtreeValidationCheckSubtree prometheus.Histogram
 
+	// prometheusSubtreeValidationCachedConflictProbes counts transactions whose
+	// conflicting flag was read from the UTXO store while blessing a block's
+	// already-cached subtrees. This is the cost the cached path took on to stop
+	// depending on the ConflictingNodes trailer (issue #1742), and it scales with
+	// transactions per block, so it is worth being able to see rather than infer.
+	prometheusSubtreeValidationCachedConflictProbes prometheus.Counter
+
 	// prometheusSubtreeValidationValidateSubtree tracks the duration of complete subtree validation operations.
 	// This is the primary metric for monitoring the core validation functionality,
 	// measuring end-to-end validation time including all sub-operations.
@@ -117,6 +124,10 @@ var (
 	// based on Kafka messages, which is an important maintenance operation.
 	prometheusSubtreeValidationDelTXMetaCacheKafka prometheus.Histogram
 
+	// prometheusSubtreeValidationTxMetaAddSkippedTombstoned counts txmeta ADDs
+	// dropped because a DELETE for the same tx was consumed first.
+	prometheusSubtreeValidationTxMetaAddSkippedTombstoned prometheus.Counter
+
 	// prometheusSubtreeValidationSetTXMetaCacheKafkaErrors counts errors setting tx meta cache from kafka operations.
 	// This counter tracks how often errors occur when updating the transaction metadata cache
 	// from Kafka messages, which helps identify issues with the cache or Kafka connection.
@@ -161,6 +172,15 @@ func _initPrometheusMetrics() {
 			Name:      "check_subtree",
 			Help:      "Duration of calls to checkSubtree endpoint",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationCachedConflictProbes = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "cached_subtree_conflict_probes_total",
+			Help:      "Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing",
 		},
 	)
 
@@ -306,6 +326,15 @@ func _initPrometheusMetrics() {
 			Name:      "del_tx_meta_cache_kafka",
 			Help:      "Duration of deleting tx meta cache from kafka",
 			Buckets:   util.MetricsBucketsMicroSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationTxMetaAddSkippedTombstoned = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "txmeta_add_skipped_tombstoned_total",
+			Help:      "Txmeta Kafka ADDs dropped, or evicted right after their write, because a DELETE for the same tx was consumed first or concurrently",
 		},
 	)
 

@@ -1136,12 +1136,16 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 						// NOTE: cascaded descendants may still be in the subtree processor's in-memory template
 						// until the next reset/reload — this path has no subtreeProcessor handle to evict them.
 						if !txMetaData.Conflicting {
-							if _, _, setErr := utxo.MarkConflictingRecursively(decoupledCtx, v.utxoStore, []chainhash.Hash{*tx.TxIDChainHash()}); setErr != nil {
+							_, marked, setErr := utxo.MarkConflictingRecursively(decoupledCtx, v.utxoStore, []chainhash.Hash{*tx.TxIDChainHash()})
+							if setErr != nil {
 								err = errors.NewProcessingError("[Validate][%s] failed to mark existing tx as conflicting", txID, setErr)
 								span.RecordError(err)
 
 								return nil, err
 							}
+
+							// subtree validation's txmeta cache holds these as non-conflicting
+							v.sendTxMetaDeletesToKafka(marked)
 						}
 
 						err = errors.NewTxConflictingError("[Validate][%s] tx is conflicting (already exists)", txID, err)
@@ -1845,6 +1849,39 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 	prometheusValidatorSendToBlockValidationKafka.Observe(float64(time.Since(startKafka).Microseconds()) / 1_000_000)
 
 	return nil
+}
+
+// sendTxMetaDeletesToKafka publishes txmeta DELETEs so subtree validation evicts
+// cached entries for txs this validator has just marked conflicting. A no-op when
+// the txmeta topic is not configured.
+func (v *Validator) sendTxMetaDeletesToKafka(hashes []chainhash.Hash) {
+	if v.txmetaKafkaProducerClient == nil || len(hashes) == 0 {
+		return
+	}
+
+	items := make([]*txmetaBatchItem, len(hashes))
+	for i := range hashes {
+		items[i] = &txmetaBatchItem{hash: &hashes[i], isDelete: true}
+	}
+
+	if v.txmetaKafkaBatcher != nil {
+		for _, item := range items {
+			v.txmetaKafkaBatcher.Put(item)
+		}
+
+		return
+	}
+
+	if v.settings.Validator.TxMetaWireFormat == "v2" {
+		v.sendTxMetaBatchV2(items)
+
+		return
+	}
+
+	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+		Key:   hashes[0][:],
+		Value: serializeTxMetaBatch(items),
+	})
 }
 
 // sendTxMetaBatch serializes and publishes a batch of TxMeta items to Kafka.

@@ -352,6 +352,8 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_errors` | Counter   | Number of errors setting tx meta cache from kafka |
 | `teranode_subtreevalidation_kafka_malformed_messages_total` | Counter   | Malformed Kafka subtree messages dropped, labelled by `reason` (`nil_message`, `too_short`, `unmarshal_failure`, `bad_hash`, `bad_url`) |
 | `teranode_subtreevalidation_subtree_already_exists_skipped_total` | Counter | Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead |
+| `teranode_subtreevalidation_cached_subtree_conflict_probes_total` | Counter | Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing. Scales with transactions per block |
+| `teranode_subtreevalidation_txmeta_add_skipped_tombstoned_total` | Counter | Txmeta Kafka ADDs dropped, or evicted right after their write, because a DELETE for the same tx (a demotion to conflicting) was consumed first or concurrently, on another partition. Non-zero means the reordering happened and was absorbed |
 
 ## Validator Service Metrics
 

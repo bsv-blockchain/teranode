@@ -2121,9 +2121,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 
 			// An invalid transaction in the received subtrees. This CANNOT condemn the hash
-			// (bitcoin-sv/teranode#4844): subtree validation runs above block.Valid, so nothing has
-			// reconciled block.Subtrees against Header.HashMerkleRoot and the body is still whatever
-			// the serving peer chose. Relaying a genuine fresh header with a doctored subtree list
+			// (bitcoin-sv/teranode#4844): subtree validation runs above block.Valid, and it binds
+			// block.Subtrees to Header.HashMerkleRoot only when it reuses a cached subtree or takes
+			// the batched catch-up path, so in general the body is still whatever the serving peer
+			// chose. Relaying a genuine fresh header with a doctored subtree list
 			// costs nothing, and persisting on it both stores the peer's coinbase and poisons a real
 			// block hash so the honest body is later refused as already-invalid.
 			//
@@ -2273,7 +2274,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			// honest multi-transaction block is never rejected here. Nothing has been added yet, so
 			// this matches the non-optimistic corrupt branch: strike the serving peer and return
 			// corrupt for re-download, under the corrupt-attempt cap. The residual under the opt-in
-			// is a body carrying subtrees, which cannot be bound until block.Valid is split.
+			// is a body carrying subtrees that subtree validation did not bind (none of them cached),
+			// which cannot be bound here until block.Valid is split.
 			if err = block.CheckCoinbaseOnlyBodyBound(); err != nil {
 				if !opts.IsRevalidation {
 					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, err.Error())

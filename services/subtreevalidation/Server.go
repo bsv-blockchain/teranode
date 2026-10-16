@@ -63,6 +63,10 @@ type Server struct {
 	// logger handles all logging operations for the service
 	logger ulogger.Logger
 
+	// txMetaTombstones drops txmeta ADDs that arrive after a DELETE for the same
+	// tx (see txMetaTombstones).
+	txMetaTombstones *txMetaTombstones
+
 	// settings contains the configuration parameters for the service
 	// including connection details, timeouts, and operational modes
 	settings *settings.Settings
@@ -195,6 +199,7 @@ func New(
 ) (*Server, error) {
 	u := &Server{
 		logger:                            logger,
+		txMetaTombstones:                  newTxMetaTombstones(txMetaTombstoneWindow, time.Now),
 		settings:                          tSettings,
 		subtreeStore:                      subtreeStore,
 		txStore:                           txStore,

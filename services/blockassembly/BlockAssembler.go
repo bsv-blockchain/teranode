@@ -122,6 +122,11 @@ type BlockAssembler struct {
 	// subtreeProcessor handles the processing and organization of transaction subtrees
 	subtreeProcessor subtreeprocessor.Interface
 
+	// txMetaEvictor publishes txmeta DELETEs for txs the conflict-intent replay
+	// marks conflicting, so subtree validation's txmeta cache drops them.
+	// Nil when the txmeta topic is not configured.
+	txMetaEvictor *subtreeprocessor.TxMetaEvictor
+
 	// bestBlock atomically stores the current best block header and height together
 	bestBlock atomic.Pointer[BestBlockInfo]
 
@@ -252,6 +257,20 @@ type blockWithMeta struct {
 	meta  *model.BlockHeaderMeta
 }
 
+// BlockAssemblerOption configures optional NewBlockAssembler dependencies.
+type BlockAssemblerOption func(*blockAssemblerOptions)
+
+type blockAssemblerOptions struct {
+	txMetaEvictor *subtreeprocessor.TxMetaEvictor
+}
+
+// WithTxMetaEvictor makes the assembler (and its subtree processor) publish txmeta
+// DELETEs for every tx a conflict demotion marks conflicting. A nil evictor
+// disables publishing.
+func WithTxMetaEvictor(e *subtreeprocessor.TxMetaEvictor) BlockAssemblerOption {
+	return func(o *blockAssemblerOptions) { o.txMetaEvictor = e }
+}
+
 // NewBlockAssembler creates and initializes a new BlockAssembler instance.
 //
 // Parameters:
@@ -267,7 +286,13 @@ type blockWithMeta struct {
 // Returns:
 //   - *BlockAssembler: New block assembler instance
 func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, stats *gocore.Stat, utxoStore utxo.Store,
-	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest) (*BlockAssembler, error) {
+	subtreeStore blob.Store, blockchainClient blockchain.ClientI, newSubtreeChan chan subtreeprocessor.NewSubtreeRequest,
+	opts ...BlockAssemblerOption) (*BlockAssembler, error) {
+	var options blockAssemblerOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	// The main loop updates metrics (e.g. the disk tx map degraded gauge)
 	// whether or not a Server was built around this assembler.
 	initPrometheusMetrics()
@@ -293,6 +318,10 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		stpOpts = append(stpOpts, subtreeprocessor.WithTxMapDirs(tSettings.BlockAssembly.TxMapDirs))
 	}
 
+	if options.txMetaEvictor != nil {
+		stpOpts = append(stpOpts, subtreeprocessor.WithTxMetaEvictor(options.txMetaEvictor))
+	}
+
 	subtreeProcessor, err := subtreeprocessor.NewSubtreeProcessor(ctx, logger, tSettings, subtreeStore, blockchainClient, utxoStore, newSubtreeChan, stpOpts...)
 	if err != nil {
 		return nil, err
@@ -306,6 +335,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		subtreeStore:        subtreeStore,
 		blockchainClient:    blockchainClient,
 		subtreeProcessor:    subtreeProcessor,
+		txMetaEvictor:       options.txMetaEvictor,
 		currentChainMap:     make(map[chainhash.Hash]uint32, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		currentChainMapIDs:  make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		defaultMiningNBits:  defaultMiningBits,
@@ -1686,17 +1716,43 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 		// says nothing about whether a losing transaction is confirmed on that
 		// block's own ancestry. Without the guard, replaying an intent recorded by
 		// a pre-fix process would re-apply the very corruption this prevents.
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
-			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
-
-		return err
+		return b.processConflictingAndEvict(ctx, intent, seeded)
 	case utxo.ConflictIntentReverse:
-		_, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes)
-
-		return err
+		return b.reverseProcessConflictingAndEvict(ctx, intent)
 	default:
 		return errors.NewProcessingError("[replayConflictIntent] unknown conflict intent kind %q", intent.Kind)
 	}
+}
+
+// processConflictingAndEvict re-runs ProcessConflicting for a WAL intent and, once
+// the store demotion has succeeded, evicts every tx it marked conflicting (losers
+// and their cascaded descendants) from subtree validation's txmeta cache.
+func (b *BlockAssembler) processConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent, seeded map[chainhash.Hash]struct{}) error {
+	_, allMarkedConflicting, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
+		utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
+	if err != nil {
+		return err
+	}
+
+	b.txMetaEvictor.Evict(allMarkedConflicting)
+
+	return nil
+}
+
+// reverseProcessConflictingAndEvict re-runs ReverseProcessConflicting for a WAL
+// intent and evicts every tx the reverse flipped to conflicting (the demoted
+// winners and their descendants). The counter side it flips back to
+// non-conflicting needs no eviction: the txmeta cache never holds conflicting
+// entries, so there is nothing stale, and a miss repopulates from the store.
+func (b *BlockAssembler) reverseProcessConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent) error {
+	cascadedToConflicting, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes)
+	if err != nil {
+		return err
+	}
+
+	b.txMetaEvictor.Evict(cascadedToConflicting)
+
+	return nil
 }
 
 // healStaleConflictIntent converges the UTXO state for an intent whose block has
@@ -1716,7 +1772,7 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 func (b *BlockAssembler) healStaleConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	switch intent.Kind {
 	case utxo.ConflictIntentForward:
-		if _, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes); err != nil {
+		if err := b.reverseProcessConflictingAndEvict(ctx, intent); err != nil {
 			return err
 		}
 
@@ -1732,10 +1788,7 @@ func (b *BlockAssembler) healStaleConflictIntent(ctx context.Context, intent utx
 		// says nothing about whether a losing transaction is confirmed on that
 		// block's own ancestry. Without the guard, replaying an intent recorded by
 		// a pre-fix process would re-apply the very corruption this prevents.
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
-			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
-
-		return err
+		return b.processConflictingAndEvict(ctx, intent, seeded)
 	default:
 		return errors.NewProcessingError("[healStaleConflictIntent] unknown conflict intent kind %q", intent.Kind)
 	}
@@ -2996,9 +3049,10 @@ func (b *BlockAssembler) validateParentChain(
 		for h := range conflictingDescendants {
 			cascadeHashes = append(cascadeHashes, h)
 		}
-		if _, _, mErr := utxo.MarkConflictingRecursively(ctx, b.utxoStore, cascadeHashes); mErr != nil {
+		if _, marked, mErr := utxo.MarkConflictingRecursively(ctx, b.utxoStore, cascadeHashes); mErr != nil {
 			b.logger.Errorf("[BlockAssembler][validateParentChain] failed to mark %d cascaded conflicting txs: %v", len(cascadeHashes), mErr)
 		} else {
+			b.txMetaEvictor.Evict(marked)
 			b.logger.Infof("[BlockAssembler][validateParentChain] marked %d txs conflicting (descendants of conflicting parents)", len(cascadeHashes))
 		}
 	}
@@ -3873,6 +3927,8 @@ func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash
 		b.logger.Errorf("[validateUnminedTxInputs][%s] failed to mark as conflicting: %v", txHash.String(), err)
 		return
 	}
+
+	b.txMetaEvictor.Evict(cascadedHashes)
 
 	// Stash cascade hashes for the post-load DrainQueue call. Safe because
 	// loadUnminedTransactions is serialised by unminedTransactionsLoading.

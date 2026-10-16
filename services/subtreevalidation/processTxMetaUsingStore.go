@@ -326,7 +326,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 						// if the tx is conflicting, we need to check if it is conflicting on the current chain
 						if txMetaSlice[data.Idx].conflicting {
-							if err = u.checkCounterConflictingOnCurrentChain(ctx, data.Hash, blockIds); err != nil {
+							if err = u.checkCounterConflictingOnCurrentChain(gCtx, data.Hash, blockIds); err != nil {
 								return errors.NewProcessingError("[processTxMetaUsingStore][%s] failed to check counter conflicting tx on current chain", data.Hash.String(), err)
 							}
 						}
@@ -395,6 +395,15 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 									creating:    txMeta.Creating,
 									isSet:       true,
 									txInpoints:  txMeta.TxInpoints,
+								}
+
+								// The batched branch above runs this check; without it here,
+								// whether a block's counter-spends are caught depended on which
+								// branch SubtreeValidation.BatchMissingTransactions selected.
+								if txMetaSlice[i+j].conflicting {
+									if err = u.checkCounterConflictingOnCurrentChain(gCtx, txHash, blockIds); err != nil {
+										return errors.NewProcessingError("[processTxMetaUsingStore][%s] failed to check counter conflicting tx on current chain", txHash.String(), err)
+									}
 								}
 
 								continue

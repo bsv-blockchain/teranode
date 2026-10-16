@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"encoding/binary"
 	"net/http"
 	"net/url"
 	"testing"
@@ -12,12 +13,14 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -508,6 +511,92 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing
 	mockStore.AssertExpectations(t)
 }
 
+// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExistsEvictsTxMeta pins
+// that marking an existing tx (and its spending descendants) conflicting also
+// evicts them from subtree validation's txmeta cache, which holds them as
+// non-conflicting from their original validation.
+func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExistsEvictsTxMeta(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	mockStore := &utxo.MockUtxostore{}
+	settings := test.CreateBaseTestSettings(t)
+
+	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+	v := validator.(*Validator)
+	v.settings.Validator.TxMetaWireFormat = "v1"
+
+	txmetaProducer := kafka.NewKafkaAsyncProducerMock()
+	v.txmetaKafkaProducerClient = txmetaProducer
+
+	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
+	coinbaseTx := transactions.Create(t,
+		transactions.WithCoinbaseData(100, "/Test miner/"),
+		transactions.WithP2PKHOutputs(1, 50e8, publicKey),
+	)
+	tx := transactions.Create(t,
+		transactions.WithPrivateKey(privateKey),
+		transactions.WithInput(coinbaseTx, 0),
+		transactions.WithP2PKHOutputs(1, 1000),
+		transactions.WithChangeOutput(),
+	)
+
+	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	spends := []*utxo.Spend{
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent},
+	}
+
+	// The store knows the real parent: the validator re-extends from the
+	// parent's own outputs rather than trusting the supplied ones
+	// (GHSA-v76m-6vc7-g7c7), so a synthetic parent would fail script or value
+	// checks against a genuinely signed child.
+	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentOutputsOf(coinbaseTx, utxo.ParentOutputNotMined), nil)
+	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
+	// The main spend-and-create fails with a spend-phase utxo error (Once so the
+	// conflicting-fallback create below matches the second expectation).
+	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, errors.NewUtxoError("utxo error", errors.ErrUtxoError)).Once()
+
+	// CreateInUtxoStore returns ErrTxExists — tx was already validated via P2P
+	mockStore.On("SpendAndCreate", mock.Anything, tx, uint32(100), mock.Anything).Return(&meta.Data{}, nil, errors.NewTxExistsError("already exists"))
+
+	// GetMeta succeeds — tx exists in store (not yet marked conflicting)
+	mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// SetConflicting is called to mark the existing tx as conflicting
+	child := chainhash.HashH([]byte("spending-child"))
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{*tx.TxIDChainHash()}, true).Return([]*utxo.Spend{}, []chainhash.Hash{child}, nil)
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{child}, true).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
+
+	options := &Options{CreateConflicting: true}
+	_, err = v.validateInternal(ctx, tx, 100, options)
+
+	// Should return ErrTxConflicting, not a ProcessingError
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, errors.ErrTxConflicting), "expected ErrTxConflicting, got: %v", err)
+
+	mockStore.AssertExpectations(t)
+
+	deleted := map[chainhash.Hash]bool{}
+
+	for len(txmetaProducer.PublishChannel()) > 0 {
+		data := (<-txmetaProducer.PublishChannel()).Value
+		offset := 4
+
+		for i := uint32(0); i < binary.LittleEndian.Uint32(data[:4]); i++ {
+			var h chainhash.Hash
+			copy(h[:], data[offset:offset+32])
+
+			if data[offset+32] == txmetacache.WireActionDELETE {
+				deleted[h] = true
+			}
+
+			offset += 32 + 1 + 4 + int(binary.LittleEndian.Uint32(data[offset+33:]))
+		}
+	}
+
+	require.True(t, deleted[*tx.TxIDChainHash()], "the tx marked conflicting must be evicted from the txmeta cache")
+	require.True(t, deleted[child], "its cascaded descendant must be evicted from the txmeta cache")
+}
 func XTestValidator_ValidateInternal_SpendUtxosError_TxNotFound(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
