@@ -210,6 +210,11 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 	return aggErr
 }
 
+var (
+	missingPagesSkipped atomic.Int64
+	lastMissingPageWarn atomic.Int64
+)
+
 // SetDAHForChildRecordsMulti expands childCount per tx and performs a single BatchOperate
 // to set/unset DeleteAtHeight across all child pagination records.
 func (s *Store) SetDAHForChildRecordsMulti(items []struct {
@@ -230,6 +235,8 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	// a page that does not exist must not be created as an empty record holding only a DAH
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	dahBinName := fields.DeleteAtHeight.String()
 	// Pre-create the "unset" operation since it's identical for all unset cases
 	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
@@ -255,13 +262,33 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	}
 
 	var aggErr error
+
+	skippedMissing := 0
+
 	for _, br := range batchRecords {
 		if recErr := br.BatchRec().Err; recErr != nil {
+			if errors.Is(recErr, aerospike.ErrKeyNotFound) {
+				skippedMissing++ // a page that is gone needs no DAH
+
+				continue
+			}
+
 			if aggErr == nil {
 				aggErr = recErr
 			} else {
 				aggErr = errors.Join(aggErr, recErr)
 			}
+		}
+	}
+
+	if skippedMissing > 0 {
+		// a master that claims more pages than exist is odd (pages are pruned with their master)
+		// at most one Warn per minute; the rest are counted into the next line
+		total := missingPagesSkipped.Add(int64(skippedMissing))
+		now := time.Now().UnixNano()
+
+		if last := lastMissingPageWarn.Load(); now-last > int64(time.Minute) && lastMissingPageWarn.CompareAndSwap(last, now) {
+			s.logger.Warnf("[SetDAHForChildRecordsMulti] skipped pagination records that no longer exist: %d in this call, %d in total since start", skippedMissing, total)
 		}
 	}
 
@@ -1767,6 +1794,8 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 	batchRecords := make([]aerospike.BatchRecordIfc, len(batch))
 	handled := make([]bool, len(batch))
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+	// a page that does not exist must not be created as an empty record holding only a DAH
+	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	dahBinName := fields.DeleteAtHeight.String()
 	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
 
@@ -1819,6 +1848,14 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 		}
 
 		if recErr := batchRecord.BatchRec().Err; recErr != nil {
+			if errors.Is(recErr, aerospike.ErrKeyNotFound) {
+				// a page that is gone needs no DAH
+				s.logger.Debugf("[SetDAHBatch][%s] pagination record %d no longer exists, skipped", batch[batchIdx].txID.String(), batch[batchIdx].childIdx)
+				batch[batchIdx].complete(nil)
+
+				continue
+			}
+
 			batch[batchIdx].complete(recErr)
 			continue
 		}
