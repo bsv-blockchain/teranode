@@ -252,6 +252,7 @@ FUZZ_TARGETS = \
 	model:FuzzNewBlockFromBytes \
 	model:FuzzReadBlockFromReader \
 	model:FuzzDiskParentSpendsMap_Parity \
+	model:FuzzDecodeSubtreeMetaBody \
 	pkg/fileformat:FuzzHeaderParsersAgree \
 	pkg/fileformat:FuzzReadHeaderFromBytes \
 	services/utxopersister:FuzzUTXOWrapperFromBytes \

@@ -123,6 +123,11 @@ func requireSameMeta(t *testing.T, want, got *subtreepkg.Meta) {
 		require.Equal(t, w.ParentTxHashes, g.ParentTxHashes, "tx %d", i)
 		require.Equal(t, w.GetTxInpoints(), g.GetTxInpoints(), "tx %d", i)
 
+		ws, werr := w.Serialize()
+		gs, gerr := g.Serialize()
+		require.Equal(t, werr == nil, gerr == nil, "tx %d", i)
+		require.Equal(t, ws, gs, "tx %d", i)
+
 		for p := range w.ParentTxHashes {
 			wv, err := w.GetParentVoutsAtIndex(p)
 			require.NoError(t, err)
