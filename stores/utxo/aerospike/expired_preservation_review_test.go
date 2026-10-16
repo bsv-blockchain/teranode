@@ -151,3 +151,38 @@ func TestRestoreDAHBatch_CountsFailuresInTheCallersCounter(t *testing.T) {
 	require.InDelta(t, shared, testutil.ToFloat64(prometheusTxMetaAerospikeExpiredPreservationRestoreFailed), 0,
 		"another caller's failures must not be counted as expired-preservation failures")
 }
+
+// TestSetDAHForChildRecordsMulti_MissingPageWarnNamesMasters pins that a page missing under a
+// master is not silent: it is lost data, so the (rate limited) Warn names the masters, capped.
+func TestSetDAHForChildRecordsMulti_MissingPageWarnNamesMasters(t *testing.T) {
+	lastMissingPageWarn.Store(0)
+
+	s := newTestStoreForGet(t)
+	logger := &capturingLogger{}
+	s.logger = logger
+	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, r := range records {
+			r.BatchRec().Err = aerospike.ErrKeyNotFound
+		}
+
+		return nil
+	}
+
+	items := make([]childDAHItem, 15)
+	ids := make([]chainhash.Hash, 15)
+
+	for i := range items {
+		ids[i] = chainhash.Hash{byte(i + 1)}
+		items[i] = childDAHItem{TxID: &ids[i], ChildCount: 2, DeleteAtHeight: 10}
+	}
+
+	require.NoError(t, s.SetDAHForChildRecordsMulti(items), "a missing page is benign")
+	require.Len(t, logger.warns, 1)
+
+	line := logger.warns[0]
+	require.Contains(t, line, ids[0].String())
+	require.Contains(t, line, ids[maxLoggedChildDAHTxIDs-1].String())
+	require.NotContains(t, line, ids[maxLoggedChildDAHTxIDs].String(), "the txid list is capped")
+	require.Equal(t, 1, strings.Count(line, ids[0].String()), "one entry per master, not per page")
+	require.NotContains(t, line, "\n")
+}

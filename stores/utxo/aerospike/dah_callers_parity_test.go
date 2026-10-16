@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -635,4 +636,172 @@ func TestExpiredPreservationChildRaiseFailure(t *testing.T) {
 	master, child = h.bins(t)
 	require.Equal(t, int(expiredCurrentHeight)+100, master[fields.DeleteAtHeight.String()])
 	require.Equal(t, int(expiredCurrentHeight)+100, child[fields.DeleteAtHeight.String()], "children must follow the raised master")
+}
+
+// TestPreserveChildDAH covers the pagination records of a preserved external master, on the Lua
+// and the expressions preserve path. The pruner selects pagination records by their own
+// deleteAtHeight, so a page that keeps its DAH under a preserved master is deleted while the
+// master is protected. Preserving must clear the pages' DAH, and re-preserving (the pruner re-runs
+// it every cycle) must heal pages that still carry one.
+func TestPreserveChildDAH(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	for _, useExpressions := range []bool{false, true} {
+		name := "lua"
+		if useExpressions {
+			name = "expressions"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.Aerospike.EnablePreserveFilterExpressions = useExpressions
+			tSettings.UtxoStore.UtxoBatchSize = 4
+
+			client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+			defer cleanup()
+
+			setup := func(t *testing.T, idx int, external bool, masterDAH, pageDAH int) (k0, k1 *aerospike.Key, hash *chainhash.Hash) {
+				cleanDB(t, client)
+
+				hash = dahParityCreatePaginatedTx(ctx, t, store, idx)
+
+				var err error
+
+				k0, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 0))
+				require.NoError(t, err)
+				k1, err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 1))
+				require.NoError(t, err)
+
+				require.NoError(t, client.PutBins(nil, k0,
+					aerospike.NewBin(fields.External.String(), external),
+					aerospike.NewBin(fields.DeleteAtHeight.String(), masterDAH),
+				))
+				require.NoError(t, client.PutBins(nil, k1, aerospike.NewBin(fields.DeleteAtHeight.String(), pageDAH)))
+
+				return k0, k1, hash
+			}
+
+			t.Run("preserving an external master clears its pages' DAH", func(t *testing.T) {
+				k0, k1, hash := setup(t, 0, true, 300, 300)
+
+				require.NoError(t, store.PreserveTransactions(ctx, []chainhash.Hash{*hash}, 999))
+
+				rec0, err := client.Get(nil, k0)
+				require.NoError(t, err)
+				require.Equal(t, 999, rec0.Bins[fields.PreserveUntil.String()])
+				require.Nil(t, rec0.Bins[fields.DeleteAtHeight.String()], "master DAH")
+
+				rec1, err := client.Get(nil, k1)
+				require.NoError(t, err)
+				require.Nil(t, rec1.Bins[fields.DeleteAtHeight.String()], "the pruner selects pages by their own DAH, a preserved master's pages must not carry one")
+			})
+
+			t.Run("renewal heals pages that still carry a DAH under a preserved master", func(t *testing.T) {
+				k0, k1, hash := setup(t, 1, true, 300, 300)
+
+				require.NoError(t, store.PreserveTransactions(ctx, []chainhash.Hash{*hash}, 999))
+				// a page stamped after the master was preserved, or left by a failed first write
+				require.NoError(t, client.PutBins(nil, k1, aerospike.NewBin(fields.DeleteAtHeight.String(), 300)))
+				require.NoError(t, store.PreserveTransactions(ctx, []chainhash.Hash{*hash}, 1000))
+
+				rec0, err := client.Get(nil, k0)
+				require.NoError(t, err)
+				require.Equal(t, 1000, rec0.Bins[fields.PreserveUntil.String()])
+
+				rec1, err := client.Get(nil, k1)
+				require.NoError(t, err)
+				require.Nil(t, rec1.Bins[fields.DeleteAtHeight.String()])
+			})
+
+			t.Run("a non-external master has no page follow-up", func(t *testing.T) {
+				_, k1, hash := setup(t, 2, false, 300, 300)
+
+				require.NoError(t, store.PreserveTransactions(ctx, []chainhash.Hash{*hash}, 999))
+
+				rec1, err := client.Get(nil, k1)
+				require.NoError(t, err)
+				require.NotNil(t, rec1.Bins[fields.DeleteAtHeight.String()], "only external masters are followed up, matching setMined and spend")
+			})
+
+			t.Run("a missing page is skipped and not recreated", func(t *testing.T) {
+				_, k1, hash := setup(t, 3, true, 300, 300)
+				existed, err := client.Delete(nil, k1)
+				require.NoError(t, err)
+				require.True(t, existed)
+
+				require.NoError(t, store.PreserveTransactions(ctx, []chainhash.Hash{*hash}, 999))
+
+				exists, err := client.Exists(nil, k1)
+				require.NoError(t, err)
+				require.False(t, exists, "a child DAH write must never create a record")
+			})
+		})
+	}
+}
+
+// TestExpiredPreservationDoesNotRecreateDeletedPages pins the second half of the gap: a page that
+// was deleted while its master was preserved must not come back as a txid-less stub holding only a
+// deleteAtHeight when the preservation expires, because the pruner skips records without a txid
+// and would never remove it.
+func TestExpiredPreservationDoesNotRecreateDeletedPages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.GlobalBlockHeightRetention = 100
+	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	tSettings.UtxoStore.UtxoBatchSize = 4
+
+	client, store, ctx, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+
+	const currentHeight = uint32(200)
+
+	cleanDB(t, client)
+
+	hash := dahParityCreatePaginatedTx(ctx, t, store, 0)
+	k0, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 0))
+	require.NoError(t, err)
+	k1, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 1))
+	require.NoError(t, err)
+
+	// an eligible external master whose preservation has expired, and whose page is gone
+	require.NoError(t, client.PutBins(nil, k0,
+		aerospike.NewBin(fields.External.String(), true),
+		aerospike.NewBin(fields.PreserveUntil.String(), int(currentHeight-10)),
+		aerospike.NewBin(fields.SpentUtxos.String(), 4),
+		aerospike.NewBin(fields.SpentExtraRecs.String(), 1),
+		aerospike.NewBin(fields.BlockIDs.String(), []int{7}),
+		aerospike.NewBin(fields.UnminedSince.String(), nil),
+	))
+
+	existed, err := client.Delete(nil, k1)
+	require.NoError(t, err)
+	require.True(t, existed)
+
+	require.Eventually(t, func() bool {
+		if !assert.NoError(t, store.ProcessExpiredPreservations(ctx, currentHeight)) {
+			return false
+		}
+
+		rec, getErr := client.Get(nil, k0)
+		if !assert.NoError(t, getErr) {
+			return false
+		}
+
+		return rec.Bins[fields.PreserveUntil.String()] == nil
+	}, 15*time.Second, 250*time.Millisecond)
+
+	rec0, err := client.Get(nil, k0)
+	require.NoError(t, err)
+	require.NotNil(t, rec0.Bins[fields.DeleteAtHeight.String()], "the master was stamped, so the set follow-up ran")
+
+	exists, err := client.Exists(nil, k1)
+	require.NoError(t, err)
+	require.False(t, exists, "the set follow-up recreated a deleted page as a stub the pruner never removes")
 }

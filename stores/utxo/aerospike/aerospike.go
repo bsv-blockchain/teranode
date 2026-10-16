@@ -1198,6 +1198,9 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 	var skippedCount int
 
+	// external masters that were preserved: their pagination records need their DAH cleared too
+	var preservedExternal []chainhash.Hash
+
 	for i, record := range batchRecords {
 		if record == nil {
 			noResponseErrors++
@@ -1249,6 +1252,10 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 			switch res.Status {
 			case LuaStatusOK:
 				preservedCount++
+
+				if res.Signal == LuaSignalPreserve {
+					preservedExternal = append(preservedExternal, recordTxIDs[i])
+				}
 			case LuaStatusError:
 				if res.ErrorCode != LuaErrorCodeTxNotFound {
 					luaErrors++
@@ -1261,6 +1268,8 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		}
 	}
 
+	s.clearPreservedPagesDAH(ctx, preservedExternal)
+
 	if parseErrors > 0 || luaErrors > 0 || noResponseErrors > 0 {
 		s.logger.Errorf("[PreserveTransactions] Errors processing %d transactions: %d parse failures, %d lua errors, %d missing responses", len(txIDs), parseErrors, luaErrors, noResponseErrors)
 	}
@@ -1268,6 +1277,63 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions (%d skipped: not prune-eligible)", preservedCount, len(txIDs), skippedCount)
 
 	return nil
+}
+
+// clearPreservedPagesDAH clears the deleteAtHeight of the pagination records of external masters
+// that PreserveTransactions just preserved, on the Lua path.
+//
+// preserveUntil (teranode.lua, and the native op) clears only the master's DAH and signals PRESERVE
+// without a child count, so the count is read here, in one batch, and only for the external masters.
+// Doing it from Go leaves the Lua module untouched (no LuaPackage bump is needed) and behaves the
+// same under the UDF and native paths. The expressions path reads the count in the preserve write
+// itself. Both then use the shared child follow-up (unset, chunked, retried once).
+//
+// Failures are logged, not returned: PreserveTransactions re-runs every pruner cycle and this is
+// unconditional, so the next run repeats it.
+func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Hash) {
+	if len(txIDs) == 0 {
+		return
+	}
+
+	readPolicy := aerospike.NewBatchReadPolicy()
+	records := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
+	ids := make([]chainhash.Hash, 0, len(txIDs))
+
+	for _, txID := range txIDs {
+		key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
+		if err != nil {
+			s.logger.Errorf("[PreserveTransactions][%s] failed to create key for the pagination records: %v", txID.String(), err)
+			continue
+		}
+
+		records = append(records, aerospike.NewBatchRead(readPolicy, key, []string{fields.External.String(), fields.TotalExtraRecs.String()}))
+		ids = append(ids, txID)
+	}
+
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
+		s.logger.Errorf("[PreserveTransactions] failed to read the pagination record count of %d preserved external txs, their pages keep their DAH until the next run: %v", len(ids), err)
+		return
+	}
+
+	var childDAH childDAHFollowUps
+
+	for i, rec := range records {
+		br := rec.BatchRec()
+		if br.Err != nil || br.Record == nil {
+			// a record deleted since the preserve has no pages to follow up; anything else repeats next run
+			if br.Err != nil && !isKeyNotFound(br.Err) {
+				s.logger.Warnf("[PreserveTransactions][%s] failed to read the pagination record count: %v", ids[i].String(), br.Err)
+			}
+
+			continue
+		}
+
+		if state, err := s.parseSetMinedState(br.Record.Bins); err == nil {
+			childDAH.collectPreserved(&ids[i], state)
+		}
+	}
+
+	s.applyChildDAHFollowUps(ctx, &childDAH)
 }
 
 // ProcessExpiredPreservations handles transactions whose preservation period has expired.
@@ -1521,14 +1587,11 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 			// Only restore a master still in the post-expiry state: preserveUntil absent and the
 			// DAH exactly as the expiry left it. If another writer changed either bin the record
 			// is theirs and is left alone. For a concurrent DAH stamp the writer's own nil -> X
-			// follow-up rewrites the pages. A concurrent PreserveTransactions is a known, pre-existing
-			// gap that this does not close: it clears only the master's DAH (preserveUntil in
-			// teranode.lua and preserve_expressions.go; the PRESERVE signal has no handler), so
-			// pages already stamped keep their own DAH, and the pruner selects pagination records by
-			// that DAH, so it can delete them during the preservation. When the preservation then
-			// expires, the set follow-up writes the DAH to those page keys; unless the write policy
-			// is UPDATE_ONLY that recreates them as stubs without txid, which the pruner skips
-			// (derived from reading the code, not reproduced). Needs its own issue.
+			// follow-up rewrites the pages. A concurrent PreserveTransactions
+			// clears the master's DAH and, since PreserveTransactions follows up the pagination
+			// records too, theirs; this write is filtered out when it lands after, and the
+			// follow-ups never create a page (UPDATE_ONLY), so a page deleted meanwhile is not
+			// recreated as a txid-less stub.
 			items = append(items, dahRestore{
 				ID:   id.String(),
 				Key:  key,

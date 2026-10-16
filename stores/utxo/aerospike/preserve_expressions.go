@@ -21,7 +21,7 @@ import (
 // and needs no protection; gating server-side avoids pointless writes and keeps not-fully-spent
 // txs out of the preservation/expiry path. Filtered records return FILTERED_OUT, which is treated
 // as a benign skip below (mirrors the Lua path's no-op).
-func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+func (s *Store) PreserveTransactionsWithExpressions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
@@ -34,6 +34,9 @@ func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []c
 	ops := []*aerospike.Operation{
 		aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), int(preserveUntilHeight))),
 		aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)),
+		// read back, so an external master's pagination records can be followed up (below)
+		aerospike.GetBinOp(fields.External.String()),
+		aerospike.GetBinOp(fields.TotalExtraRecs.String()),
 	}
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
@@ -69,6 +72,8 @@ func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []c
 
 	preservedCount := 0
 
+	var childDAH childDAHFollowUps
+
 	for j, record := range batchRecords {
 		batchRec := record.BatchRec()
 		if batchRec.Err != nil {
@@ -86,7 +91,16 @@ func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []c
 		}
 
 		preservedCount++
+
+		if state, parseErr := s.parseSetMinedState(batchRec.Record.Bins); parseErr == nil {
+			childDAH.collectPreserved(&txIDs[validIndexes[j]], state)
+		}
 	}
+
+	// A failed child write is logged at Error by applyChildDAHFollowUps. It is not returned: the
+	// pruner re-runs PreserveTransactions every cycle and the follow-up is unconditional, so the
+	// next run repeats it.
+	s.applyChildDAHFollowUps(ctx, &childDAH)
 
 	if otherErrors > 0 {
 		s.logger.Errorf("[PreserveTransactions] %d errors processing %d transactions", otherErrors, len(txIDs))

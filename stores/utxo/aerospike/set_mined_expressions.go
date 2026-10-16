@@ -78,6 +78,20 @@ func (f *childDAHFollowUps) collect(hash *chainhash.Hash, state SetMinedState) {
 	}
 }
 
+// collectPreserved queues the unset follow-up for the pagination records of a preserved
+// external master. Preserving clears only the master's deleteAtHeight, but the pruner selects
+// pagination records by their own, so pages that keep one are deleted under a preserved master.
+//
+// Unlike collect this does not compare the master's DAH before and after: PreserveTransactions
+// re-runs every pruner cycle, and an unconditional unset heals pages whose earlier write failed
+// and pages stamped before this ran. The cost is one idempotent write per page of a preserved
+// external master per cycle.
+func (f *childDAHFollowUps) collectPreserved(hash *chainhash.Hash, state SetMinedState) {
+	if state.External && state.TotalExtraRecs != nil && *state.TotalExtraRecs > 0 {
+		f.addUnset(hash, *state.TotalExtraRecs)
+	}
+}
+
 // sets returns the queued set items in first-seen order (nil if none).
 func (f *childDAHFollowUps) sets() []childDAHItem { return f.filter(true) }
 

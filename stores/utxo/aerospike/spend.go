@@ -58,6 +58,7 @@ package aerospike
 import (
 	"context"
 	"runtime/debug"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -234,6 +235,7 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	}
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, total)
+	recordTxIDs := make([]*chainhash.Hash, 0, total) // recordTxIDs[i] owns batchRecords[i]
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 	// a page that does not exist must not be created as an empty record holding only a DAH
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
@@ -254,6 +256,8 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 			} else {
 				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, unsetOp))
 			}
+
+			recordTxIDs = append(recordTxIDs, it.TxID)
 		}
 	}
 
@@ -265,10 +269,16 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 
 	skippedMissing := 0
 
-	for _, br := range batchRecords {
+	var missingTxIDs []string // txids with a missing page, capped
+
+	for i, br := range batchRecords {
 		if recErr := br.BatchRec().Err; recErr != nil {
 			if errors.Is(recErr, aerospike.ErrKeyNotFound) {
 				skippedMissing++ // a page that is gone needs no DAH
+
+				if id := recordTxIDs[i].String(); len(missingTxIDs) < maxLoggedChildDAHTxIDs && (len(missingTxIDs) == 0 || missingTxIDs[len(missingTxIDs)-1] != id) {
+					missingTxIDs = append(missingTxIDs, id)
+				}
 
 				continue
 			}
@@ -282,13 +292,15 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	}
 
 	if skippedMissing > 0 {
-		// a master that claims more pages than exist is odd (pages are pruned with their master)
-		// at most one Warn per minute; the rest are counted into the next line
+		// a master that claims more pages than exist is lost data: pages are pruned with their master,
+		// so a page missing under a live master was deleted early. The write is UPDATE_ONLY, so it is
+		// skipped, not recreated. At most one Warn per minute, naming up to maxLoggedChildDAHTxIDs
+		// masters; the rest are counted into the next line
 		total := missingPagesSkipped.Add(int64(skippedMissing))
 		now := time.Now().UnixNano()
 
 		if last := lastMissingPageWarn.Load(); now-last > int64(time.Minute) && lastMissingPageWarn.CompareAndSwap(last, now) {
-			s.logger.Warnf("[SetDAHForChildRecordsMulti] skipped pagination records that no longer exist: %d in this call, %d in total since start", skippedMissing, total)
+			s.logger.Warnf("[SetDAHForChildRecordsMulti] skipped pagination records that no longer exist: %d in this call, %d in total since start, masters (first %d): %s", skippedMissing, total, len(missingTxIDs), strings.Join(missingTxIDs, ","))
 		}
 	}
 
