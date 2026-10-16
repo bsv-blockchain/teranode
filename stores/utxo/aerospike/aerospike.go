@@ -1253,9 +1253,9 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 			case LuaStatusOK:
 				preservedCount++
 
-				if res.Signal == LuaSignalPreserve {
-					preservedExternal = append(preservedExternal, recordTxIDs[i])
-				}
+				// Not gated on LuaSignalPreserve: the follow-up reads External itself, so this does
+				// not depend on the native op emitting the same signal as the UDF.
+				preservedExternal = append(preservedExternal, recordTxIDs[i])
 			case LuaStatusError:
 				if res.ErrorCode != LuaErrorCodeTxNotFound {
 					luaErrors++
@@ -1268,7 +1268,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 		}
 	}
 
-	s.clearPreservedPagesDAH(ctx, preservedExternal)
+	pagesErr := s.clearPreservedPagesDAH(ctx, preservedExternal)
 
 	if parseErrors > 0 || luaErrors > 0 || noResponseErrors > 0 {
 		s.logger.Errorf("[PreserveTransactions] Errors processing %d transactions: %d parse failures, %d lua errors, %d missing responses", len(txIDs), parseErrors, luaErrors, noResponseErrors)
@@ -1276,11 +1276,16 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions (%d skipped: not prune-eligible)", preservedCount, len(txIDs), skippedCount)
 
+	if pagesErr != nil {
+		return errors.NewStorageError("[PreserveTransactions] failed to clear the deleteAtHeight of the pagination records of preserved txs", pagesErr)
+	}
+
 	return nil
 }
 
 // clearPreservedPagesDAH clears the deleteAtHeight of the pagination records of external masters
-// that PreserveTransactions just preserved, on the Lua path.
+// that PreserveTransactions just preserved, on the Lua path. txIDs are all the masters preserved;
+// the read of External and TotalExtraRecs picks the external ones.
 //
 // preserveUntil (teranode.lua, and the native op) clears only the master's DAH and signals PRESERVE
 // without a child count, so the count is read here, in one batch, and only for the external masters.
@@ -1288,12 +1293,15 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 // same under the UDF and native paths. The expressions path reads the count in the preserve write
 // itself. Both then use the shared child follow-up (unset, chunked, retried once).
 //
-// Failures are logged, not returned: PreserveTransactions re-runs every pruner cycle and this is
-// unconditional, so the next run repeats it.
-func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Hash) {
+// Failures are returned. The pruner skips its deletion phase when preservation fails, and it
+// selects pages by their own DAH, so a page left with its DAH would otherwise be deleted in the
+// same cycle that preserved its master. The follow-up is unconditional, so the next run heals it.
+func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Hash) error {
 	if len(txIDs) == 0 {
-		return
+		return nil
 	}
+
+	var readErr error
 
 	readPolicy := aerospike.NewBatchReadPolicy()
 	records := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
@@ -1302,7 +1310,7 @@ func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Ha
 	for _, txID := range txIDs {
 		key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
 		if err != nil {
-			s.logger.Errorf("[PreserveTransactions][%s] failed to create key for the pagination records: %v", txID.String(), err)
+			readErr = errors.JoinCapped(10, readErr, errors.NewProcessingError("[PreserveTransactions][%s] failed to create key", txID.String(), err))
 			continue
 		}
 
@@ -1311,8 +1319,7 @@ func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Ha
 	}
 
 	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
-		s.logger.Errorf("[PreserveTransactions] failed to read the pagination record count of %d preserved external txs, their pages keep their DAH until the next run: %v", len(ids), err)
-		return
+		return errors.NewStorageError("[PreserveTransactions] failed to read the pagination record count of %d preserved txs", len(ids), err)
 	}
 
 	var childDAH childDAHFollowUps
@@ -1322,18 +1329,24 @@ func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Ha
 		if br.Err != nil || br.Record == nil {
 			// a record deleted since the preserve has no pages to follow up; anything else repeats next run
 			if br.Err != nil && !isKeyNotFound(br.Err) {
-				s.logger.Warnf("[PreserveTransactions][%s] failed to read the pagination record count: %v", ids[i].String(), br.Err)
+				readErr = errors.JoinCapped(10, readErr, errors.NewStorageError("[PreserveTransactions][%s] failed to read the pagination record count", ids[i].String(), br.Err))
 			}
 
 			continue
 		}
 
-		if state, err := s.parseSetMinedState(br.Record.Bins); err == nil {
-			childDAH.collectPreserved(&ids[i], state)
+		state, err := s.parseSetMinedState(br.Record.Bins)
+		if err != nil {
+			readErr = errors.JoinCapped(10, readErr, errors.NewProcessingError("[PreserveTransactions][%s] failed to parse the pagination record count", ids[i].String(), err))
+			continue
 		}
+
+		childDAH.collectPreserved(&ids[i], state)
 	}
 
-	s.applyChildDAHFollowUps(ctx, &childDAH)
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
+
+	return errors.JoinCapped(10, readErr, applied.unsetErr)
 }
 
 // ProcessExpiredPreservations handles transactions whose preservation period has expired.

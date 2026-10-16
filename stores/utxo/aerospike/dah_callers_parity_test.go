@@ -726,6 +726,30 @@ func TestPreserveChildDAH(t *testing.T) {
 				require.NotNil(t, rec1.Bins[fields.DeleteAtHeight.String()], "only external masters are followed up, matching setMined and spend")
 			})
 
+			// The pruner skips its deletion phase only when preservation returns an error, and it
+			// selects pages by their own DAH. A page unset that fails must therefore be returned, or
+			// the same cycle deletes the pages of a master that was just preserved.
+			t.Run("a failed page unset is returned", func(t *testing.T) {
+				_, k1, hash := setup(t, 4, true, 300, 300)
+
+				store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+					for _, r := range records {
+						if _, isWrite := r.(*aerospike.BatchWrite); isWrite && r.BatchRec().Key.String() == k1.String() {
+							return aerospike.ErrNetwork
+						}
+					}
+
+					return client.BatchOperate(policy, records)
+				})
+				defer store.SetBatchOperateFn(nil)
+
+				require.Error(t, store.PreserveTransactions(ctx, []chainhash.Hash{*hash}, 999))
+
+				rec1, err := client.Get(nil, k1)
+				require.NoError(t, err)
+				require.NotNil(t, rec1.Bins[fields.DeleteAtHeight.String()], "the injected failure must have left the page DAH in place")
+			})
+
 			t.Run("a missing page is skipped and not recreated", func(t *testing.T) {
 				_, k1, hash := setup(t, 3, true, 300, 300)
 				existed, err := client.Delete(nil, k1)

@@ -72,7 +72,10 @@ func (s *Store) PreserveTransactionsWithExpressions(ctx context.Context, txIDs [
 
 	preservedCount := 0
 
-	var childDAH childDAHFollowUps
+	var (
+		childDAH childDAHFollowUps
+		pagesErr error
+	)
 
 	for j, record := range batchRecords {
 		batchRec := record.BatchRec()
@@ -92,21 +95,30 @@ func (s *Store) PreserveTransactionsWithExpressions(ctx context.Context, txIDs [
 
 		preservedCount++
 
-		if state, parseErr := s.parseSetMinedState(batchRec.Record.Bins); parseErr == nil {
-			childDAH.collectPreserved(&txIDs[validIndexes[j]], state)
+		state, parseErr := s.parseSetMinedState(batchRec.Record.Bins)
+		if parseErr != nil {
+			pagesErr = errors.JoinCapped(10, pagesErr, errors.NewProcessingError("[PreserveTransactions][%s] failed to parse the pagination record count", txIDs[validIndexes[j]].String(), parseErr))
+			continue
 		}
+
+		childDAH.collectPreserved(&txIDs[validIndexes[j]], state)
 	}
 
-	// A failed child write is logged at Error by applyChildDAHFollowUps. It is not returned: the
-	// pruner re-runs PreserveTransactions every cycle and the follow-up is unconditional, so the
-	// next run repeats it.
-	s.applyChildDAHFollowUps(ctx, &childDAH)
+	// A failed page write is returned: the pruner skips its deletion phase when preservation
+	// fails and selects pages by their own DAH, so a page left with its DAH would otherwise be
+	// deleted in the same cycle. The follow-up is unconditional, so the next run heals it.
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
+	pagesErr = errors.JoinCapped(10, pagesErr, applied.unsetErr)
 
 	if otherErrors > 0 {
 		s.logger.Errorf("[PreserveTransactions] %d errors processing %d transactions", otherErrors, len(txIDs))
 	}
 
 	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions", preservedCount, len(txIDs))
+
+	if pagesErr != nil {
+		return errors.NewStorageError("[PreserveTransactions] failed to clear the deleteAtHeight of the pagination records of preserved txs", pagesErr)
+	}
 
 	return nil
 }
