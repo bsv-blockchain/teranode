@@ -328,6 +328,23 @@ On the other hand, we can see the process for unspending an UTXO here:
 
 To know more about the Transaction Validator, please check its specific service documentation.
 
+#### When a spend with several inputs fails
+
+A transaction usually spends several parents. If one input fails, for example because its parent is locked, the stores do not leave the same state behind. The difference is deliberate, and the conformance test `PartialSpendRollback` in `stores/utxo/tests/tests.go` holds each store to its own model (`SpendModel`).
+
+**Aerospike and Sql (per-input spends).** Each parent's spend is a separate write. When one input fails, the inputs before it are already spent, so the store must undo them afterwards. A spend records only the spender's txid and input index, not which attempt wrote it. The undo therefore cannot tell its own spend from the spend of a concurrent attempt at the same transaction that is succeeding at the same time. When the failure is temporary (`ErrTxLocked`: the parent is between its create and its block assembly acknowledgement), such an attempt is possible, and undoing its spend can let the node mine a double spend. So these stores keep the spend of the good parent in that case, and accept a parent that names a spender with no record (issue 1214) as the smaller harm. Creating the record before the spend (issue 1355) covers it.
+
+**Utxoset (atomic spends).** For `SpendAndCreate`, all the inputs of one transaction are spent in one PostgreSQL transaction, together with the create: every input is spent, or none is. When one input fails, the spend of the good parent is never committed. No other attempt can see a partial spend, so there is nothing to undo and no parent is left naming a missing spender. The unit is one transaction, not a batch: a batch that carries many transactions rejects only the one that failed and commits the others.
+
+`SpendAndCreateMulti`, the block and subtree path, writes in two steps. Step 1 commits the spends of the list's inputs from outside the list, in chunks. Step 2 then creates the transactions. Each transaction's inputs are still spent all together or not at all, but between the two steps a parent names a spender that has no record yet. When step 2 stops with an error, or the caller's context is cancelled, the store unspends the step-1 spends of every transaction it did not write. A crash between the two steps runs no such undo: the spends stay until the same block is written again. The aerospike and sql stores have the same crash gap, because they too spend before they create, and issue 1976 tracks it for all three.
+
+The two models also answer differently when a transaction that is already stored is validated again after one of its parents was locked or marked conflicting:
+
+- Aerospike and Sql check the parent's flags first, and return `ErrTxLocked` or `ErrTxConflicting`.
+- Utxoset sees that the same transaction already spent each input, and returns success. The spends exist and nothing changed, so success is the accurate answer. Callers read `ErrTxLocked` as "try again later": the validator retries, propagation answers HTTP 409, and legacy sync parks the transaction.
+
+In both models, the parents stay spent by that transaction.
+
 ### 4.7. UTXO Batch Processing and External Storage mode
 
 Aerospike is the primary datastore for the UTXO store. However, to overcome Aerospike's record size limitation, the system implements an external storage mechanism for large transactions.
@@ -462,7 +479,13 @@ The following datastores are supported (either in development / experimental or 
     - Provides a balance of performance and persistence, suitable for medium to large-scale applications.
     - Offers the ability to query and analyze UTXO data using SQL.
 
-4. **Nullstore**:
+4. **Utxoset**:
+
+    - A PostgreSQL store that keeps only the unspent outputs: a spend deletes the output's row, and an undo copy goes to a spend journal for reorgs.
+    - Selected with the `utxoset://` URL scheme.
+    - Spends all the inputs of one transaction atomically. See [When a spend with several inputs fails](#when-a-spend-with-several-inputs-fails) for how that differs from Aerospike and Sql.
+
+5. **Nullstore**:
 
     - A dummy or placeholder implementation, used for testing (when no actual storage is needed).
     - Can be used to mock UTXO store functionality in a development or test environment.

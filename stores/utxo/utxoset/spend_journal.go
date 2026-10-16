@@ -1,0 +1,785 @@
+package utxoset
+
+import (
+	"context"
+	"fmt"
+	"sort"
+
+	subtree "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
+)
+
+// SpendJournalPartitionBlocks is the width of one journal leaf. The pruner drops whole leaves,
+// so retention is granular to this. At MEASURED mainnet rates near height 945,000, about
+// 55,000 transactions a block, a leaf holds on the order of 16 million rows.
+//
+// 288, not the 48 it was. Every statement that has no height to prune on plans and locks
+// every live leaf, and the store re-plans every execution, so the live leaf count is a
+// direct cost on the block path: MEASURED on mainnet 2026-09-16, the spent-parent lookup
+// planned in 59 ms and took 2,023 locks across 850 leaves. At 288 the steady state is six
+// live leaves against 31, the same cadence as the tx_mined partitions, and a conflict note's
+// partition always exists whenever its journal leaf does, exactly as before. The price is that
+// a spend stays undoable for up to 287 blocks longer than retention, INFERRED at about
+// 2.2 GB at tip rates. A wider leaf is also more rows for one autovacuum to clear; the
+// per-leaf autovacuum threshold below was sized for 48 blocks and is a soak-set value.
+const SpendJournalPartitionBlocks = 288
+
+// DefaultSpendJournalRetentionBlocks is how far back a spend stays undoable, unless
+// utxostore_spendJournalRetentionBlocks says otherwise.
+//
+// 288: the journal's jobs are putting coins back on a reorg and letting a block interrupted
+// part-way be applied again, and both need far less than a day. It was 1440, to match
+// ParentPreservationBlocks, on the argument that a transaction resubmitted days later needs
+// the journal to show the coins it finds gone were taken by itself. That job now belongs to
+// the validator, which looks the transaction up by its own txid when a spend finds its coins
+// gone (Validator.knownTxResubmission): an unmined transaction keeps its identity row while it
+// waits, and a mined one keeps its block on its unspent coins. At mainnet heights near 876,000
+// a 288-block partition holds about 36 GB, so the 1440-block journal was 214 GB and filled a
+// disk on 2026-09-27.
+//
+// Steady-state leaf count is retention/SpendJournalPartitionBlocks + 1 = 2 tables.
+const DefaultSpendJournalRetentionBlocks = 288
+
+// MaxSpendJournalRetentionBlocks caps the setting. The create claims' containment probe reads
+// claimReach blocks back and must reach past every undo copy, which lives up to retention plus
+// one partition (see undoMaxLife), so retention plus one partition must stay under claimReach.
+const MaxSpendJournalRetentionBlocks = 1440
+
+// spendJournalSQL deletes the UTXO row AND captures its payload in one statement.
+//
+// One statement, not merely one transaction. A data-modifying CTE guarantees the delete
+// and the journal insert see the same rows and commit together -- there is no ordering,
+// no second round trip, and no window in which a UTXO is gone with nothing recording how
+// to put it back. The outer SELECT still returns satoshis and script, so the spend
+// remains its own decorate fetch.
+//
+// Every parameter is an ARRAY, including the height and the spending transaction, so one
+// statement serves one transaction or a thousand. That is what lets the spend path batch
+// without a second copy of these predicates existing somewhere: the single-transaction path
+// is a batch of one.
+//
+// This is now the ONLY spend statement. There was a journal-free twin of it, used below
+// the checkpoint, whose predicates had to be kept identical by hand; it is deleted rather
+// than flagged off, because two copies of a consensus predicate is a defect waiting for
+// one of them to be edited. The predicates that authorise the delete are the full 32-byte
+// txid recheck (the ukey is a non-unique 96-bit prefix and can only locate, never
+// authorise), the refusing-flag mask, and the maturity test. classifySQL deliberately omits
+// the last two, so an excluded row surfaces as frozen, conflicting, locked or immature rather
+// than as spent.
+//
+// THE FLAG MASK IS PER KEY, not a constant, because two of the three flags it tests are
+// waivable and the waiver belongs to the caller rather than to the UTXO. Conflict resolution
+// spends the promoted winner through the very lock and conflicting mark it set a moment
+// earlier -- that is what WithIgnoreLocked and WithIgnoreConflicting are for -- while an
+// ordinary validator spend of the same UTXO must be refused. The mask used to be the literal 5
+// and neither option had any effect: a locked UTXO was spendable by anybody, which made the
+// lock decorative, and an ignored conflicting flag still refused. Frozen has no waiver in any
+// store and is always in the mask. See spendGuardMask.
+//
+// The flag test is written (flags & 5) < 1 and not (flags & 1) = 0 AND (flags & 4) = 0,
+// which it is equal to for every value a smallint can hold, because the planner can estimate
+// one and not the other. It has no statistics for a bit-mask expression, so an equality on
+// one is given the default selectivity of one row in two hundred, and two of them one in
+// forty thousand. That told the planner almost no UTXO survives the test, and with a batch
+// of keys on the other side it chose to walk the whole UTXO table once PER KEY, since a
+// table of one row is cheap to walk. Measured on a 40,000-row table: a 64-key batch took
+// 3 ms until the table crossed the size where that plan won, then 45 ms, and with
+// materialisation disabled 180 ms. An inequality on an expression without statistics is
+// given one third, which is wrong by three rather than by forty thousand, and it is enough
+// for the planner to reach for the index or hash the batch instead. The single-key form of
+// this statement never showed the problem, because with one key a walk per key is one walk.
+//
+// The outer SELECT carries hash_override out with the payload, and it costs nothing: the
+// DELETE's RETURNING already reads the whole row. It is non-NULL only on a UTXO ReAssignUTXO
+// has moved to a new owner, and on such a UTXO the satoshis and the script beside it are the
+// OLD output's -- the reassign interface has no room for the new ones. claimMismatch reads it
+// to decide which of the two authentications applies, so it has to travel with them rather
+// than be fetched separately, or a UTXO could be reassigned between the delete and the check.
+//
+// The journal row copies the UTXO's mined_height and block_id along with the rest of the
+// payload, and they cost nothing extra: the DELETE already carries the whole row, so this is
+// two more columns on a RETURNING that was already reading them. They are what makes a
+// fully-spent parent older than the membership retention still answerable -- see
+// readSpentParents in lookup.go and the spend_journal comment in schema.go. They add no
+// placeholder, because both values come off the deleted row rather than from the caller.
+// $7 is the per-key flag mask. $8 is the spending input index, which is NOT k.vin: k.vin is the
+// row's position in the batch, used to map RETURNING back to the caller, while $8 is which input
+// of spending_txid took the UTXO, stored so GetSpend can name it.
+const spendJournalSQL = `
+WITH k AS (
+    SELECT * FROM unnest($1::smallint[], $2::uuid[], $3::bytea[], $4::int[],
+                         $5::int[], $6::bytea[], $7::smallint[], $8::int[])
+        AS t(leaf, ukey, txid, vin, spent_height, spending_txid, mask, spending_vin)
+),
+del AS (
+    DELETE FROM utxo u USING k
+     WHERE u.leaf           = k.leaf
+       AND u.ukey           = k.ukey
+       AND u.txid           = k.txid
+       AND (u.flags & k.mask) < 1
+       AND u.spendable_from <= k.spent_height
+    RETURNING k.vin, k.spent_height, k.spending_txid, k.spending_vin, u.satoshis, u.created_height,
+              u.spendable_from, u.flags, u.mined_height, u.block_id, u.ukey, u.txid,
+              u.script, u.hash_override
+),
+journal AS (
+    INSERT INTO spend_journal (spent_height, spending_vin, satoshis, created_height, spendable_from,
+                           flags, mined_height, block_id, ukey, txid, spending_txid,
+                           script, hash_override)
+    SELECT d.spent_height, d.spending_vin, d.satoshis, d.created_height, d.spendable_from, d.flags,
+           d.mined_height, d.block_id, d.ukey, d.txid, d.spending_txid, d.script,
+           d.hash_override
+      FROM del d
+)
+SELECT d.vin, d.satoshis, d.script, d.hash_override FROM del d`
+
+// ensureSpendJournalPartition creates the spend-journal leaf covering height, if absent.
+//
+// Each leaf gets ONE index, the packed-key btree, which is what every restore probes. There
+// was a second, a block-range summary over a block-applied mark, and it existed only for a
+// question the reclaimer asked once per retiring leaf. Nothing asks it now: retiring a
+// transaction's identity is dropping the tx_mined partition it lives in, so the journal is read
+// only by a restore, and only by outpoint.
+//
+// Called on the spend path, so it must be cheap and idempotent. CREATE TABLE IF NOT
+// EXISTS is both, and a leaf covers SpendJournalPartitionBlocks heights so this is a no-op for
+// all but one spend in that many.
+func (s *Store) ensureSpendJournalPartition(ctx context.Context, height uint32) error {
+	leaf := height / SpendJournalPartitionBlocks
+
+	// Only touch the catalog when the leaf actually changes -- once every
+	// SpendJournalPartitionBlocks heights, not once per spend.
+	//
+	// The cache holds leaf+1 so that its zero value means "nothing cached yet" rather
+	// than "leaf 0 is already created". Storing the leaf directly made leaf 0 permanently
+	// unreachable: a fresh store starts at zero, and the first spend below height 48 would
+	// see a hit, skip the DDL, and fail the insert with "no partition found for row" --
+	// precisely the initial-sync case.
+	if s.journalLeaf.Load() == leaf+1 {
+		return nil
+	}
+
+	// One writer per process. CREATE TABLE IF NOT EXISTS is NOT concurrency-safe in
+	// PostgreSQL: simultaneous attempts race on the pg_type row and raise a unique
+	// violation rather than quietly agreeing. With the spend phase running thousands of
+	// goroutines, that race is the common case rather than the rare one.
+	s.journalDDL.Lock()
+	defer s.journalDDL.Unlock()
+
+	// Re-check under the lock: the winner may have created it while we queued.
+	if s.journalLeaf.Load() == leaf+1 {
+		return nil
+	}
+
+	lo := leaf * SpendJournalPartitionBlocks
+	hi := lo + SpendJournalPartitionBlocks
+
+	// The conflict-bookkeeping partition is created in the SAME statement, over the SAME range,
+	// and that is the invariant it rests on: a note lands at the store's current height, which
+	// is the height whose journal leaf the spend path has already ensured, so the partition a
+	// note needs exists whenever its journal leaf does. Two separate ensure calls, or a partition
+	// created on first note, would leave the one case that matters -- a conflict noted at a
+	// height nothing has spent at -- failing with "no partition found for row".
+	//
+	// The unique index is PER PARTITION rather than on the parent. A unique index on a
+	// partitioned table must include the partition key, and (noted_height, parent_txid,
+	// child_txid) would admit the same pair twice at two heights, so it would buy nothing the
+	// reader's DISTINCT does not already have to do. Per partition it makes the repeated note
+	// inside one partition -- the common case, since a losing transaction is re-offered -- an
+	// ON CONFLICT DO NOTHING that writes nothing at all.
+	//
+	// It is also the ONE index, and that is deliberate rather than an omission. Every read of
+	// this table is by parent_txid, which LEADS the pair, so a second index on (parent_txid)
+	// alone can only duplicate work the planner already does here: measured at 500 keys
+	// against 40,000 rows in six partitions, with both indexes present, the read and the removal
+	// both chose the pair index and neither touched the parent-only one. A second index on a
+	// table written on every double-spend is write amplification for nothing.
+	// Both partitions are built standalone and attached, so the spend path never takes either
+	// parent's strongest lock at a leaf boundary. See ensureAttachedPartition.
+	journal := fmt.Sprintf("spend_journal_%d", leaf)
+
+	// A leaf created below the oldest known, or on an empty table, becomes the oldest. Leaves
+	// are created in ascending height order, so on the block path this fires once, for the
+	// first leaf of a fresh store; the drop is what normally moves it. See oldestUndoLeaf.
+	if oldest := s.oldestUndoLeaf.Load(); oldest == 0 || leaf+1 < oldest {
+		defer s.oldestUndoLeaf.CompareAndSwap(oldest, leaf+1)
+	}
+
+	if err := s.ensureAttachedPartition(ctx, partitionSpec{
+		parent: "spend_journal",
+		child:  journal,
+		key:    "spent_height",
+		lo:     lo,
+		hi:     hi,
+		with:   "fillfactor = 100, autovacuum_vacuum_scale_factor = 0, autovacuum_vacuum_threshold = 50000",
+		after:  []string{fmt.Sprintf(`CREATE INDEX %s_ukey ON %s (ukey)`, journal, journal)},
+	}); err != nil {
+		return errors.NewStorageError("[utxoset] create spend-journal partition %d", leaf, err)
+	}
+
+	notes := fmt.Sprintf("conflict_children_%d", leaf)
+	if err := s.ensureAttachedPartition(ctx, partitionSpec{
+		parent: "conflict_children",
+		child:  notes,
+		key:    "noted_height",
+		lo:     lo,
+		hi:     hi,
+		after:  []string{fmt.Sprintf(`CREATE UNIQUE INDEX %s_pair ON %s (parent_txid, child_txid)`, notes, notes)},
+	}); err != nil {
+		return errors.NewStorageError("[utxoset] create conflict-children partition %d", leaf, err)
+	}
+
+	// Only record the leaf once the DDL has actually succeeded. Marking it up front would
+	// make a transient failure permanent -- every later spend would see a cache hit, skip
+	// the retry, and fail on a partition that was never created.
+	s.journalLeaf.Store(leaf + 1)
+
+	// The drop deliberately does NOT happen here, though crossing into a new leaf is
+	// exactly the moment old ones fall out of retention. It used to, and the argument was
+	// sound for a catalog operation: dropping a partition is constant time, and a
+	// background job that falls behind is the failure mode that dominated the previous
+	// store. What it missed is that DETACH CONCURRENTLY waits for every open transaction
+	// on the parent. From a spend, with thousands of goroutines behind it, that stalls the
+	// pipeline; and because a spend must not fail over old history that could not be
+	// discarded, the only available response to an error was to swallow it. It swallowed a
+	// real one for the entire life of the branch.
+	//
+	// The pruner service drives it instead: see GetPrunerService in pruner.go.
+
+	return nil
+}
+
+// partitionLeafSQL lists every leaf of one height-partitioned parent, in whichever state it
+// is in. The parent's name is substituted twice: once as the regclass the state columns are
+// judged against, and once as the name prefix that identifies an orphan.
+//
+// Three states matter, and all three were verified against PostgreSQL 17 rather than
+// assumed:
+//
+//   - ATTACHED. The normal case. relispartition is true and pg_inherits has the row.
+//   - ORPHANED. A crash between DETACH and DROP leaves a fully standalone table:
+//     relispartition goes FALSE and the pg_inherits row is GONE. A listing that joins
+//     pg_inherits can never see it again, so it would leak forever. Found here by name
+//     within the parent's own schema, which is the only thing left that identifies it.
+//   - DETACH PENDING. A crash DURING a concurrent detach leaves inhdetachpending set.
+//     PostgreSQL then refuses any further ATTACH or DETACH on the parent -- "partition
+//     already pending detach", hinting at FINALIZE -- so an unhandled one wedges every
+//     future drop rather than leaking quietly.
+//
+// Scoped to the schema that the parent's regclass resolves to, so this agrees with the
+// unqualified DETACH below about which table it means.
+const partitionLeafSQL = `
+SELECT c.relname,
+       c.relispartition,
+       COALESCE(i.inhdetachpending, false)
+  FROM pg_class c
+  LEFT JOIN pg_inherits i
+         ON i.inhrelid = c.oid AND i.inhparent = '%[1]s'::regclass
+ WHERE c.relnamespace = (SELECT relnamespace FROM pg_class WHERE oid = '%[1]s'::regclass)
+   AND c.relkind  = 'r'
+   AND c.relname ~ '^%[1]s_[0-9]+$'`
+
+// journalLeafParents are the two parents whose leaves retire TOGETHER on the journal's
+// cutoff, oldest first, in one pass.
+//
+// conflict_children is here rather than on a horizon of its own because its retention is not
+// an independent choice. It records which losing transactions contest a parent's UTXO, and
+// what conflict resolution DOES with that answer is restore the losing spends out of the
+// journal. A note whose journal leaf has been dropped names a race that can no longer be
+// undone, so keeping it past the journal would be keeping an answer nothing can act on.
+var journalLeafParents = []string{"spend_journal", "conflict_children"}
+
+// leafState is one partition of one of those parents, and which of the three states it is in.
+type leafState struct {
+	parent        string
+	name          string
+	leaf          uint32
+	attached      bool
+	detachPending bool
+}
+
+// listPartitionLeaves reads the leaves of one partitioned parent.
+func (s *Store) listPartitionLeaves(ctx context.Context, parent string) ([]leafState, error) {
+	rows, err := s.pool.Query(ctx, fmt.Sprintf(partitionLeafSQL, parent))
+	if err != nil {
+		return nil, errors.NewStorageError("[utxoset] list %s leaves", parent, err)
+	}
+
+	var out []leafState
+
+	for rows.Next() {
+		l := leafState{parent: parent}
+		if err := rows.Scan(&l.name, &l.attached, &l.detachPending); err != nil {
+			rows.Close()
+			return nil, errors.NewStorageError("[utxoset] scan %s leaf", parent, err)
+		}
+
+		// A name carrying no leaf number is not one of ours. Parsing here rather than in the
+		// drop loop keeps it in one place, so the ordering below and the cutoff test can never
+		// disagree about which leaf a table is.
+		if _, err := fmt.Sscanf(l.name, parent+"_%d", &l.leaf); err != nil {
+			continue
+		}
+
+		out = append(out, l)
+	}
+
+	rows.Close()
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("[utxoset] list %s leaves", parent, err)
+	}
+
+	return out, nil
+}
+
+// DropSpendJournalPartitionsBelow drops journal leaves entirely below height, and returns how
+// many it dropped.
+//
+// This is the whole story: DROP TABLE, O(1), no scan, no vacuum, no per-row work to fall
+// behind on. It is idempotent, which is what lets the caller treat a crash as nothing worse
+// than a repeat: every leaf below the cutoff is dropped on every call, in whatever state the
+// last attempt left it, so a partial run is simply redone.
+//
+// The journal is undo insurance and nothing else. It used to be the prune engine as well --
+// a retiring leaf was the work list of parents to re-examine -- and the ordering of a pruner
+// session was built around that. Nothing reads a retiring leaf now, so it can be dropped in
+// any order with respect to the rest of the session.
+func (s *Store) DropSpendJournalPartitionsBelow(ctx context.Context, height uint32) (int, error) {
+	return s.dropSpendJournalPartitionsBelow(ctx, height)
+}
+
+// dropSpendJournalPartitionsBelow drops journal leaves, and the conflict-bookkeeping partitions
+// that retire with them, below height.
+//
+// Both parents are listed and merged into ONE ordered pass rather than dropped in two loops.
+// The three-state handling is per table, because a crash between detaching the journal leaf
+// and detaching its conflict-bookkeeping partition leaves the two in different states, and the ordering
+// argument below is about age rather than about which parent a table belongs to.
+//
+// The count returned is the number of tables dropped across both parents, which is what the
+// pruner logs. It is not a leaf count and does not claim to be.
+func (s *Store) dropSpendJournalPartitionsBelow(ctx context.Context, height uint32) (int, error) {
+	var leaves []leafState
+
+	for _, parent := range journalLeafParents {
+		found, err := s.listPartitionLeaves(ctx, parent)
+		if err != nil {
+			return 0, err
+		}
+
+		leaves = append(leaves, found...)
+	}
+
+	// OLDEST FIRST, and the ordering is load-bearing once there is a backlog.
+	//
+	// The listing query has no ORDER BY, so without this the catalog hands leaves back in
+	// whatever order it scanned them, which shifts as tables are created and dropped. With
+	// one leaf retiring every 288 blocks and nothing behind, order is irrelevant. With
+	// thousands outstanding it decides which work gets done before the session ends, and a
+	// session ends when the daemon is restarted rather than when the work runs out.
+	//
+	// Two things follow. Old leaves are the cheap ones, measured at six to thirteen times
+	// less work than leaves near the frontier, so taking them first retires more of them per
+	// session. And the oldest surviving leaf only becomes a usable progress measure if the
+	// oldest is what gets attacked; in catalog order it can sit untouched indefinitely while
+	// newer leaves churn, which is exactly what the mainnet box showed with leaf 4,676 still
+	// present while the session worked on 9,353.
+	//
+	// The parent name breaks the tie so the order is total rather than dependent on the sort
+	// being stable, which sort.Slice is not.
+	sort.Slice(leaves, func(i, j int) bool {
+		if leaves[i].leaf != leaves[j].leaf {
+			return leaves[i].leaf < leaves[j].leaf
+		}
+
+		return leaves[i].parent < leaves[j].parent
+	})
+
+	cutoff := height / SpendJournalPartitionBlocks
+	dropped := 0
+
+	// The spenders to carry are read once for the pass, when the first journal leaf retires,
+	// and not again for each leaf: on a backlog the pass retires many leaves, and each read is
+	// every waiting and recently mined transaction with its inputs. Reading once is safe. A
+	// spend made after the read is journaled at its own height, above every retiring leaf, and
+	// a repeated spend moves its row up to that height (moveRepeatedSpendsSQL).
+	var carry *copyForwardSet
+
+	for _, l := range leaves {
+		if l.leaf >= cutoff {
+			continue
+		}
+
+		// Before the partition goes, carry forward the spends of transactions still waiting to
+		// be mined. The table exists in every state below until the DROP, attached or not.
+		if l.parent == "spend_journal" {
+			keepFrom := cutoff * SpendJournalPartitionBlocks
+
+			if carry == nil {
+				c, err := s.collectCopyForward(ctx, keepFrom)
+				if err != nil {
+					return dropped, err
+				}
+
+				carry = c
+			}
+
+			if _, err := s.copyForwardFrom(ctx, l.leaf, keepFrom, carry); err != nil {
+				return dropped, err
+			}
+		}
+
+		switch {
+		case l.detachPending:
+			// FINALIZE is the only way out of this state, and until it runs no other
+			// partition of this table can be detached either.
+			if _, err := s.pool.Exec(ctx,
+				fmt.Sprintf(`ALTER TABLE %s DETACH PARTITION %s FINALIZE`, l.parent, l.name)); err != nil {
+				return dropped, errors.NewStorageError("[utxoset] finalize detach of leaf %s", l.name, err)
+			}
+
+		case l.attached:
+			// DETACH CONCURRENTLY first, then drop the now-standalone table. A bare DROP
+			// TABLE on an attached partition briefly takes ACCESS EXCLUSIVE on the
+			// PARENT, which would stall every concurrent spend; detaching concurrently
+			// does not. It cannot run inside a transaction block, which is why this is a
+			// single-statement Exec on its own and not folded into one.
+			if _, err := s.pool.Exec(ctx,
+				fmt.Sprintf(`ALTER TABLE %s DETACH PARTITION %s CONCURRENTLY`, l.parent, l.name)); err != nil {
+				return dropped, errors.NewStorageError("[utxoset] detach leaf %s", l.name, err)
+			}
+
+		default:
+			// Already standalone: a previous session was interrupted between its DETACH
+			// and its DROP. Nothing to detach, just finish the job.
+		}
+
+		if _, err := s.pool.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, l.name)); err != nil {
+			return dropped, errors.NewStorageError("[utxoset] drop leaf %s", l.name, err)
+		}
+
+		dropped++
+	}
+
+	// The oldest surviving journal leaf, for the create claims' floor. Recomputed from the
+	// listing this pass started with rather than re-read, so it costs no catalog query; a
+	// leaf created during the pass is newer than every survivor here and cannot be the
+	// oldest. Zero when nothing survives.
+	var oldest uint32
+
+	for _, l := range leaves {
+		if l.parent != "spend_journal" || l.leaf < cutoff {
+			continue
+		}
+
+		if oldest == 0 || l.leaf+1 < oldest {
+			oldest = l.leaf + 1
+		}
+	}
+
+	s.oldestUndoLeaf.Store(oldest)
+
+	return dropped, nil
+}
+
+// loadOldestUndoLeaf seeds oldestUndoLeaf from the catalog when the store opens. It is the one
+// catalog read the floor ever needs; the leaf creation and the leaf drop keep it in step from
+// then on.
+func (s *Store) loadOldestUndoLeaf(ctx context.Context) error {
+	leaves, err := s.listPartitionLeaves(ctx, "spend_journal")
+	if err != nil {
+		return err
+	}
+
+	var oldest uint32
+
+	for _, l := range leaves {
+		if !l.attached {
+			continue
+		}
+
+		if oldest == 0 || l.leaf+1 < oldest {
+			oldest = l.leaf + 1
+		}
+	}
+
+	s.oldestUndoLeaf.Store(oldest)
+
+	return nil
+}
+
+// unminedInpointsSQL reads every transaction still waiting to be mined, with its inputs. The
+// marker's partial index covers exactly these rows, so this reads the waiting population and
+// nothing else: a few thousand at the tip, none during a sync from genesis.
+const unminedInpointsSQL = `
+SELECT txid, tx_inpoints
+  FROM tx_ident
+ WHERE off_chain_since IS NOT NULL`
+
+// recentlyMinedInpointsSQL reads, with its inputs, every transaction contained in a block at or
+// above $1 that was first written below $2, the lowest height the journal keeps.
+//
+// These are the spenders a reorg can still take back: their block is inside the journal's
+// retention, so un-mining it and then giving the spender's coins back needs the journal rows of
+// their spends. Their spends sit below $2, in the partition about to drop. The waiting set's
+// copy does not see them, because mining cleared their marker.
+//
+// The created_height test rests on one assumption: a spend is never journaled in an earlier
+// partition than its spender's created_height. SpendAndCreate takes one height for both, which
+// is the validator's path, and a create-only followed by a spend-only spends at the same or a
+// later tip. The one path that splits them is a repeat: SpendAndCreateMulti commits its spends
+// before its creates, so a crash between the two can leave the spends journaled at one height
+// and the transaction accepted later, in a later partition. The spend path enforces the
+// assumption there: a repeat moves its journal rows up to its own height (moveRepeatedSpendsSQL).
+// Without that, such a spender is not found here, and a reorg of its block within retention
+// could not give its coins back.
+//
+// tx_mined is RANGE partitioned on mined_height, so only the partitions at or above $1 are read: the
+// containment rows of the last retention's worth of blocks, once per journal partition drop.
+// created_height is the identity row's, copied at record-mined, so a transaction seen before its
+// block keeps the height it spent at.
+const recentlyMinedInpointsSQL = `
+SELECT m.txid, m.tx_inpoints
+  FROM tx_mined m
+ WHERE m.mined_height >= $1::int
+   AND m.created_height < $2::int`
+
+// copyForwardSQL moves the named spends out of one retiring partition into the live journal,
+// re-stamped to $4 so they land in a partition that is not about to drop.
+//
+// A MOVE, not a copy: the original is deleted in the same statement that inserts the carried
+// row. The detach and drop of the retiring partition come later and cannot share a transaction
+// with anything (DETACH CONCURRENTLY refuses a transaction block), so a copy left the spend with
+// two attached rows until the detach, both matching every reader's predicates. Every journal
+// reader then answered twice for one input. SpendsMadeBy and SetConflicting, the two reads
+// conflict reversal builds its restore from, each named the input twice, Unspend restored it
+// once and failed its accounting ("restored 1 ... of 2 requested") after the commit, and the
+// reorganisation aborted. Tolerating the duplicate would mean every reader of the journal
+// collapsing it, and the next reader added would miss it; moving the row means no reader ever
+// sees two. Deleting from a partition about to be dropped costs nothing that the drop does not
+// reclaim at once.
+//
+// The retiring partition is addressed by name (%s) and probed on its packed-key index, one
+// descent per waiting input, so the cost follows the waiting population and not the size of
+// the partition, which reached 39 GB at mainnet heights near 876,000. Named directly, the
+// delete works whether the partition is attached, detach-pending or already standalone.
+//
+// A carried row whose parent coin carried no block, (0,0), gets the parent's block filled in from
+// its stamped tx_mined partition. Such a row can only exist because the spend came before the
+// parent's partition was stamped, so the original sits below the partition's stamped_at and the drop
+// rule has kept the partition attached until now; stamped, the partition names only the winner, and a
+// stamped pair is final. Without the fill the carried row would land above stamped_at, where the
+// drop rule does not look, the partition would drop, and Unspend would rebuild the coin with no
+// block. A parent whose partition is not stamped yet keeps (0,0): its partition cannot drop before its
+// stamp, and the stamp's stamped_at lies above the carried row, so the drop rule holds it too.
+//
+// The NOT EXISTS keeps it idempotent, and it does not gate the delete. Every original matched
+// is deleted; one is inserted only if no carried row exists yet, in the partitions from $5 up,
+// the ones the carried rows land in. A journal a build before the move left with both rows
+// (original and copy) is healed by the next pass over the leaf: the original goes and the copy
+// stays. The originals sit below $5, so the NOT EXISTS, which reads the pre-statement snapshot
+// in which they still exist, never mistakes one for a carried row.
+//
+// A concurrent Unspend that takes the original's row lock first consumes it, and the move then
+// finds nothing to carry, which is right. One whose snapshot predates the move's commit but
+// reaches the row after it finds the original gone and the carried row invisible to its
+// snapshot, so it restores nothing, consumes nothing and reports the shortfall; the carried row
+// survives for the retry.
+const copyForwardSQL = `
+WITH moved AS (
+    DELETE FROM %s j
+     USING unnest($1::uuid[], $2::bytea[], $3::bytea[]) AS k(ukey, txid, spender)
+     WHERE j.ukey = k.ukey AND j.txid = k.txid AND j.spending_txid = k.spender
+    RETURNING j.spending_vin, j.satoshis, j.created_height, j.spendable_from, j.flags,
+              j.mined_height, j.block_id, j.ukey, j.txid, j.spending_txid, j.script, j.hash_override
+)
+INSERT INTO spend_journal (spent_height, spending_vin, satoshis, created_height, spendable_from, flags,
+                           mined_height, block_id, ukey, txid, spending_txid, script, hash_override)
+SELECT $4::int, j.spending_vin, j.satoshis, j.created_height, j.spendable_from, j.flags,
+       CASE WHEN j.mined_height = 0 THEN coalesce(w.h, 0) ELSE j.mined_height END,
+       CASE WHEN j.mined_height = 0 THEN coalesce(w.b, 0) ELSE j.block_id END,
+       j.ukey, j.txid, j.spending_txid, j.script, j.hash_override
+  FROM moved j
+  LEFT JOIN LATERAL (
+       SELECT m.mined_height AS h, m.block_id AS b
+         FROM tx_mined m
+        WHERE j.mined_height = 0
+          AND m.txid = j.txid
+          AND m.mined_height < (SELECT stamp_complete_floor FROM tx_mined_floor WHERE id = 0)
+        ORDER BY m.mined_height, m.block_id
+        LIMIT 1) w ON true
+ WHERE NOT EXISTS (
+       SELECT 1 FROM spend_journal x
+        WHERE x.spent_height >= $5::int
+          AND x.ukey = j.ukey AND x.txid = j.txid AND x.spending_txid = j.spending_txid)`
+
+// copyForwardBatch bounds one statement's arrays.
+const copyForwardBatch = 10_000
+
+// copyForwardSet is the (parent output, spender) list the copy-forward probes the retiring
+// partition for, each spender listed once however many of the reads name it.
+type copyForwardSet struct {
+	ukeys, parents, spenders [][]byte
+	seen                     map[string]struct{}
+}
+
+// collectSpenders runs stmt, whose rows are a spender's txid and its packed inputs, and adds
+// every input of every spender not already in c. A spender with no inputs recorded is counted
+// and logged, because its spends cannot be carried.
+func (s *Store) collectSpenders(ctx context.Context, c *copyForwardSet, what, stmt string, args ...any) error {
+	rows, err := s.pool.Query(ctx, stmt, args...)
+	if err != nil {
+		return errors.NewStorageError("[utxoset] list %s transactions for the journal copy-forward", what, err)
+	}
+
+	defer rows.Close()
+
+	noInpoints := 0
+
+	for rows.Next() {
+		var txid, raw []byte
+
+		if err := rows.Scan(&txid, &raw); err != nil {
+			return errors.NewStorageError("[utxoset] scan %s transaction for the journal copy-forward", what, err)
+		}
+
+		if _, dup := c.seen[string(txid)]; dup {
+			continue
+		}
+
+		c.seen[string(txid)] = struct{}{}
+
+		if len(raw) == 0 {
+			noInpoints++
+			continue
+		}
+
+		ip, err := subtree.NewTxInpointsFromBytes(raw)
+		if err != nil {
+			return errors.NewStorageError("[utxoset] decode inputs of %s transaction %x for the journal copy-forward", what, txid, err)
+		}
+
+		for _, in := range ip.GetTxInpoints() {
+			k := Pack(in.Hash[:], in.Index)
+			parent := in.Hash
+
+			c.ukeys = append(c.ukeys, k[:])
+			c.parents = append(c.parents, parent[:])
+			c.spenders = append(c.spenders, txid)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return errors.NewStorageError("[utxoset] list %s transactions for the journal copy-forward", what, err)
+	}
+
+	if noInpoints > 0 {
+		s.logger.Warnf("[utxoset] journal copy-forward: %d %s transactions carry no inputs, so their spends cannot be carried forward", noInpoints, what)
+	}
+
+	return nil
+}
+
+// copyForwardUnminedSpends carries forward, from the journal partition for leaf, every spend
+// whose spending transaction is still waiting to be mined, and returns how many rows it copied.
+// keepFrom is the lowest height the pass keeps; copies are stamped at the store's height, or
+// keepFrom if the store's height is below it, so they never land in a partition the same pass
+// drops.
+//
+// This is the settled design's pruner step 4 (2026-08-26-utxoset-settled-design.md, "Copy
+// forward any journal row whose spending transaction is still unmined"). A waiting
+// transaction's journal rows are the only record of the coins it took, and Unspend rebuilds
+// them from those rows when the transaction loses a double spend to a block. Carried forward,
+// they live as long as the transaction waits, which is what lets journal retention be as short
+// as reorgs need rather than 1440 blocks.
+//
+// Recognising a resubmitted transaction does not need these rows: the validator answers that
+// from the transaction's own txid (Validator.knownTxResubmission).
+//
+// The spends of a transaction mined at or above keepFrom are carried too (see
+// recentlyMinedInpointsSQL). Retention is kept by the height the spender was mined at, not the
+// height it spent at: a spender that waited across the partition's top and was then mined has
+// its block inside the journal's retention, and a shallow reorg that takes the block back and
+// then gives its coins back needs these rows exactly as a waiting spender's loss does. The copy
+// lands at the store's height, so it is kept for another retention's worth of blocks and then
+// goes, once its block is below keepFrom. Below the highest checkpoint no block can be un-mined,
+// so nothing mined there is carried.
+func (s *Store) copyForwardUnminedSpends(ctx context.Context, leaf, keepFrom uint32) (int64, error) {
+	c, err := s.collectCopyForward(ctx, keepFrom)
+	if err != nil {
+		return 0, err
+	}
+
+	return s.copyForwardFrom(ctx, leaf, keepFrom, c)
+}
+
+// copyForwardCollected is a test hook called each time collectCopyForward reads. nil in
+// production.
+var copyForwardCollected func()
+
+// collectCopyForward reads the spends the copy-forward carries: those of every waiting
+// transaction, and of every transaction mined at or above keepFrom.
+func (s *Store) collectCopyForward(ctx context.Context, keepFrom uint32) (*copyForwardSet, error) {
+	if copyForwardCollected != nil {
+		copyForwardCollected()
+	}
+
+	c := &copyForwardSet{seen: make(map[string]struct{})}
+
+	if err := s.collectSpenders(ctx, c, "unmined", unminedInpointsSQL); err != nil {
+		return nil, err
+	}
+
+	// A block at or below the highest checkpoint is never un-mined (unMine refuses it), so the
+	// read starts above it. During a sync below the checkpoint it reads no partition at all.
+	minedFrom := max(keepFrom, model.HighestCheckpointHeight(s.checkpoints)+1)
+
+	if err := s.collectSpenders(ctx, c, "recently mined", recentlyMinedInpointsSQL,
+		int32(minedFrom), int32(keepFrom)); err != nil { //nolint:gosec // heights fit int32
+		return nil, err
+	}
+
+	return c, nil
+}
+
+// copyForwardFrom carries the spends in c out of the journal partition for leaf.
+func (s *Store) copyForwardFrom(ctx context.Context, leaf, keepFrom uint32, c *copyForwardSet) (int64, error) {
+	ukeys, parents, spenders := c.ukeys, c.parents, c.spenders
+
+	if len(ukeys) == 0 {
+		return 0, nil
+	}
+
+	stampAt := s.GetBlockHeight()
+	if stampAt < keepFrom {
+		stampAt = keepFrom
+	}
+
+	if err := s.ensureSpendJournalPartition(ctx, stampAt); err != nil {
+		return 0, err
+	}
+
+	stmt := fmt.Sprintf(copyForwardSQL, fmt.Sprintf("spend_journal_%d", leaf))
+
+	var copied int64
+
+	for lo := 0; lo < len(ukeys); lo += copyForwardBatch {
+		hi := min(lo+copyForwardBatch, len(ukeys))
+
+		tag, err := s.pool.Exec(ctx, stmt, ukeys[lo:hi], parents[lo:hi], spenders[lo:hi],
+			int32(stampAt), int32(keepFrom)) //nolint:gosec // heights fit int32
+		if err != nil {
+			return copied, errors.NewStorageError("[utxoset] copy forward unmined spends from journal leaf %d", leaf, err)
+		}
+
+		copied += tag.RowsAffected()
+	}
+
+	if copied > 0 {
+		s.logger.Infof("[utxoset] carried %d spends of unmined transactions forward from journal leaf %d to height %d", copied, leaf, stampAt)
+	}
+
+	return copied, nil
+}

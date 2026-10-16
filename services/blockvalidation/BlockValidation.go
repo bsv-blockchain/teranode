@@ -319,6 +319,11 @@ type BlockValidation struct {
 	// spendRetryBackoff overrides the pause between quick-validate spend retry
 	// attempts; zero means spendRetryBackoffDefault. Settable in tests.
 	spendRetryBackoff time.Duration
+
+	// netFailures counts, per block hash, the failed UTXO writes of a block a netting store
+	// applies below the checkpoint. Such a block cannot be written any other way, so a fault
+	// that repeats is reported loudly once it passes netFailureLimit. See noteNetFailure.
+	netFailures sync.Map
 }
 
 // subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.

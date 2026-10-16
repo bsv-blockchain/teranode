@@ -737,7 +737,7 @@ func Sanity(t *testing.T, db utxostore.Store) {
 		spentTx := bt.NewTx()
 		require.NoError(t, spentTx.From(stx.TxIDChainHash().String(), 0, stx.Outputs[0].LockingScript.String(), stx.Outputs[0].Satoshis))
 		require.NoError(t, spentTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", i))
-		require.NoError(t, spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", &bt.FeeQuote{}))
+		require.NoError(t, spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", bt.NewFeeQuote()))
 
 		_, _, err = db.SpendAndCreate(ctx, spentTx, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
 		require.NoError(t, err)
@@ -773,7 +773,9 @@ func Benchmark(b *testing.B, db utxostore.Store) {
 	spentTx := bt.NewTx()
 	_ = spentTx.From(Tx.TxIDChainHash().String(), 0, Tx.Outputs[0].LockingScript.String(), Tx.Outputs[0].Satoshis)
 	_ = spentTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1)
-	_ = spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", &bt.FeeQuote{})
+	if err := spentTx.ChangeToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", bt.NewFeeQuote()); err != nil {
+		b.Fatal(err)
+	}
 
 	for i := 0; i < b.N; i++ {
 		_, _, err := db.SpendAndCreate(ctx, Tx, 100, utxostore.WithCreateOnly())
@@ -1554,6 +1556,55 @@ func SpendAndCreate(t *testing.T, db utxostore.Store) {
 	require.Equal(t, spendingTx.TxIDChainHash().String(), created.Tx.TxID())
 }
 
+// CreateReturnsWrittenState proves the record a create hands back says what was written: the
+// Locked and Conflicting state the options asked for, and the parent inpoints.
+//
+// Callers act on that record without reading the row back. The validator unlocks a
+// transaction after delivering it to block assembly only when the returned record says
+// Locked; a store that locked the row but returned Locked=false left it locked, and the next
+// child spending it was refused with ErrTxLocked. Subtree validation reads Conflicting from
+// the same record, and the txmeta cache treats a non-coinbase entry with no parents as a miss.
+//
+// SpendAndCreate with WithCreateOnly is the create entry point of the Store interface. Each case
+// deletes its transaction first so the function also runs against a store shared between
+// subtests.
+func CreateReturnsWrittenState(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	// The parent has to exist: a conflicting create notes itself on its parents, and the sql
+	// store refuses that note for a parent it does not hold.
+	if _, _, err := db.SpendAndCreate(ctx, Tx, 1000, utxostore.WithCreateOnly()); err != nil {
+		require.ErrorIs(t, err, errors.ErrTxExists)
+	}
+
+	for i, tc := range []struct {
+		name        string
+		opts        []utxostore.CreateOption
+		locked      bool
+		conflicting bool
+	}{
+		{"plain", nil, false, false},
+		{"locked", []utxostore.CreateOption{utxostore.WithLocked(true)}, true, false},
+		{"conflicting", []utxostore.CreateOption{utxostore.WithConflicting(true)}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A distinct satoshi amount gives each case its own txid.
+			tx := newSpendAndCreateTx(t, 0, uint64(3000+i)) //nolint:gosec // small test index
+			_ = db.Delete(ctx, tx.TxIDChainHash())
+
+			md, _, err := db.SpendAndCreate(ctx, tx, db.GetBlockHeight()+1,
+				append([]utxostore.CreateOption{utxostore.WithCreateOnly()}, tc.opts...)...)
+			require.NoError(t, err)
+			require.NotNil(t, md)
+
+			require.Equal(t, tc.locked, md.Locked, "returned Locked must match what was written")
+			require.Equal(t, tc.conflicting, md.Conflicting, "returned Conflicting must match what was written")
+			require.Equal(t, []chainhash.Hash{*Tx.TxIDChainHash()}, md.TxInpoints.ParentTxHashes,
+				"returned record must carry the parent inpoints")
+		})
+	}
+}
+
 // SpendAndCreateCreateOnly proves WithCreateOnly skips the spend phase entirely.
 func SpendAndCreateCreateOnly(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
@@ -1683,7 +1734,72 @@ func SpendAndCreateInvalidOptions(t *testing.T, db utxostore.Store) {
 // locked parent and a missing parent. Both are handed to callers that park the
 // tx and never guarantee a retry (legacy netsync's orphan pool is an expiring
 // map), so "the retry will re-apply the spends" does not hold.
+//
+// The sql and aerospike stores run this through PartialSpendRollback, which is
+// PerInputSpends. The utxoset store runs it as AtomicSpends. SpendModel says why
+// the two are held to different assertions in three subtests.
 func PartialSpendRollback(t *testing.T, db utxostore.Store) {
+	PartialSpendRollbackFor(t, db, PerInputSpends)
+}
+
+// SpendModel says how a store applies the spends of ONE transaction's inputs. It
+// decides what PartialSpendRollbackFor asserts in the three subtests where the
+// stores differ. Everywhere else the contract is the same for every store.
+//
+// The difference is real, not a tolerance. Read this before "aligning" one model
+// with the other.
+type SpendModel int
+
+const (
+	// PerInputSpends is the sql and aerospike model. Each parent's spend is its own
+	// write, so when one input fails, the inputs before it are already spent and the
+	// store must undo them afterwards.
+	//
+	// That undo cannot always be done safely. A spend records only {TxID, Vin}, with
+	// no identity for the attempt that wrote it, so the undo cannot tell its own
+	// spend from a concurrent attempt at the same txid that is winning right now.
+	// When the failure is transient (ErrTxLocked: the parent is between its create
+	// and its block-assembly acknowledgement), such a winner is possible, and
+	// clearing its spend lets the node mine a double spend. So these stores keep
+	// the partial spend on a locked parent on purpose, and accept the dangling
+	// spender ref of #1214 as the smaller harm; create-first ordering (#1355)
+	// covers it. The "locked parent" subtest pins that trade.
+	//
+	// These stores also check a parent's flags before they check whether the
+	// same spender already spent it. So a transaction that is validated again
+	// after one of its parents was locked or marked conflicting gets ErrTxLocked or
+	// ErrTxConflicting, although its spends were already made.
+	PerInputSpends SpendModel = iota
+
+	// AtomicSpends is the utxoset model. All the inputs of one transaction are
+	// spent in one PostgreSQL transaction: every input is spent, or none is. The
+	// unit is one transaction, not a batch. A batch that carries many callers'
+	// transactions rejects only the failing transaction and commits the others,
+	// and when a batch as a whole fails, each transaction is run again alone
+	// (stores/utxo/utxoset/spend_and_create_batch.go).
+	//
+	// Two consequences, and they are why this model has its own assertions:
+	//
+	//   - A failed spend leaves nothing behind. When one parent is locked, the
+	//     spend of the good parent is never committed, so there is no dangling
+	//     ref and nothing to undo. The race that stops the per-input stores from
+	//     undoing cannot occur, because no other attempt ever sees the partial
+	//     spend. Asserting the per-input outcome here would require this store to
+	//     commit a partial spend on purpose, which is the #1214 defect.
+	//
+	//   - A transaction validated again after its spends were made is a replay.
+	//     The store sees that this spender already spent each input, and answers
+	//     success without testing the parent's flags again. Success is the
+	//     accurate answer: the spends exist and nothing changed. Callers read
+	//     ErrTxLocked as "try again later" (the validator retries, propagation
+	//     answers HTTP 409, legacy netsync parks the transaction), which is wrong
+	//     for a transaction the store already holds.
+	AtomicSpends
+)
+
+// PartialSpendRollbackFor is PartialSpendRollback for a store with the given
+// SpendModel.
+func PartialSpendRollbackFor(t *testing.T, db utxostore.Store, model SpendModel) {
 	ctx := context.Background()
 
 	// requireUnspent asserts that parent's output 0 carries no spendingData.
@@ -1735,7 +1851,12 @@ func PartialSpendRollback(t *testing.T, db utxostore.Store) {
 	// The consequence, stated plainly: the ErrTxLocked flavour of the #1214
 	// dangling ref survives this rollback. Create-first ordering (#1355) is what
 	// covers it, by making the record exist before any spend.
-	t.Run("locked parent does not roll back, leaving the known uncovered ref", func(t *testing.T) {
+	lockedParentName := "locked parent does not roll back, leaving the known uncovered ref"
+	if model == AtomicSpends {
+		lockedParentName = "locked parent leaves nothing spent, because the spend is atomic"
+	}
+
+	t.Run(lockedParentName, func(t *testing.T) {
 		good := newTestTx(t, 7_100_000)
 		locked := newTestTx(t, 7_200_000)
 
@@ -1769,6 +1890,17 @@ func PartialSpendRollback(t *testing.T, db utxostore.Store) {
 		// worth asserting rather than assuming.
 		require.False(t, errors.Is(spends[1].Err, errors.ErrSpent),
 			"transient-lock-only batch must not carry an unwinnable class, or the rollback gate flips")
+
+		// AtomicSpends: the good parent's spend was in the same database transaction as
+		// the failed one, so it was never committed. No ref, dangling or otherwise.
+		if model == AtomicSpends {
+			requireUnspent(t, good, "an atomic store must not commit any input of a failed spend")
+
+			_, err = db.Get(ctx, child.TxIDChainHash())
+			require.ErrorIs(t, err, errors.ErrTxNotFound, "a spend-only call creates no record")
+
+			return
+		}
 
 		// Still spent by the child, whose record does not exist: this IS the #1214
 		// shape, left in place on purpose. Asserting it keeps the trade explicit.
@@ -1914,10 +2046,19 @@ func PartialSpendRollback(t *testing.T, db utxostore.Store) {
 		require.NoError(t, db.SetLocked(ctx, []chainhash.Hash{*lockedLater.TxIDChainHash()}, true))
 
 		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
-		require.Error(t, err)
 		require.Len(t, spends, 2)
-		require.NoError(t, spends[0].Err, "the unlocked parent's spend is idempotent for the same spender")
-		require.ErrorIs(t, spends[1].Err, errors.ErrTxLocked)
+
+		if model == AtomicSpends {
+			// A replay of spends this spender already made: success, flags not tested
+			// again. See AtomicSpends.
+			require.NoError(t, err, "a replay of spends the same spender already made is not a failure")
+			require.NoError(t, spends[0].Err)
+			require.NoError(t, spends[1].Err)
+		} else {
+			require.Error(t, err)
+			require.NoError(t, spends[0].Err, "the unlocked parent's spend is idempotent for the same spender")
+			require.ErrorIs(t, spends[1].Err, errors.ErrTxLocked)
+		}
 
 		utxoHash, err := util.UTXOHashFromOutput(good.TxIDChainHash(), good.Outputs[0], 0)
 		require.NoError(t, err)
@@ -1994,10 +2135,19 @@ func PartialSpendRollback(t *testing.T, db utxostore.Store) {
 		// spend even though "child" already has a record and the ref is not
 		// dangling.
 		_, spends, err := db.SpendAndCreate(ctx, child, db.GetBlockHeight()+1, utxostore.WithSpendOnly())
-		require.Error(t, err)
 		require.Len(t, spends, 2)
-		require.NoError(t, spends[0].Err, "the unconflicted parent's spend is idempotent for the same spender")
-		require.ErrorIs(t, spends[1].Err, errors.ErrTxConflicting)
+
+		if model == AtomicSpends {
+			// A replay of spends this spender already made: success, flags not tested
+			// again. See AtomicSpends.
+			require.NoError(t, err, "a replay of spends the same spender already made is not a failure")
+			require.NoError(t, spends[0].Err)
+			require.NoError(t, spends[1].Err)
+		} else {
+			require.Error(t, err)
+			require.NoError(t, spends[0].Err, "the unconflicted parent's spend is idempotent for the same spender")
+			require.ErrorIs(t, spends[1].Err, errors.ErrTxConflicting)
+		}
 
 		utxoHash, err := util.UTXOHashFromOutput(good.TxIDChainHash(), good.Outputs[0], 0)
 		require.NoError(t, err)
@@ -2515,4 +2665,62 @@ func AbsentRecordObservables(t *testing.T, db utxostore.Store) {
 	resp, err := db.GetSpend(ctx, &utxostore.Spend{TxID: unspentParent.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
 	require.NoError(t, err)
 	require.Equal(t, int(utxostore.Status_OK), resp.Status, "an output nobody spent must report spendable")
+}
+
+// counterBodyHidingStore answers Get as the wrapped store does, but without the body of one
+// transaction. That is the record a store gives for a transaction whose body has aged out, or
+// was never kept below the checkpoint.
+type counterBodyHidingStore struct {
+	utxostore.Store
+
+	hide chainhash.Hash
+}
+
+func (s *counterBodyHidingStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	data, err := s.Store.Get(ctx, hash, f...)
+	if err != nil || data == nil || hash == nil || !hash.IsEqual(&s.hide) {
+		return data, err
+	}
+
+	stripped := *data
+	stripped.Tx = nil
+
+	return &stripped, nil
+}
+
+// ReverseKeepsTheWinnerWhenTheCounterHasNoBody is icellan's review point on PR 1663. When a
+// block that promoted D over the counter C is moved back, ReverseProcessConflicting demotes D and
+// re-spends C. Re-spending C needs C's body. When C has none, D must not be demoted: demoting it
+// marked D conflicting and freed its input while C stayed conflicting, so a valid transaction
+// left the mempool with no winner in its place. D keeps its input and stays the winner.
+func ReverseKeepsTheWinnerWhenTheCounterHasNoBody(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+	require.NoError(t, db.SetBlockHeight(20))
+
+	parent := crashParentTx(0x51)
+	_, _, err := db.SpendAndCreate(ctx, parent, 1, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	require.NoError(t, db.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+	// C: the counter, conflicting and recorded against the parent.
+	txC := crashSpendTx(t, parent, 80000)
+	_, _, err = db.SpendAndCreate(ctx, txC, db.GetBlockHeight(), utxostore.WithConflicting(true), utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	// D: the winner the block promoted, spending parent[0].
+	txD := crashSpendTx(t, parent, 90000)
+	_, _, err = db.SpendAndCreate(ctx, txD, db.GetBlockHeight(), utxostore.WithCreateOnly())
+	require.NoError(t, err)
+	_, _, err = db.SpendAndCreate(ctx, txD, db.GetBlockHeight()+1, utxostore.WithSpendOnly(), utxostore.WithIgnoreLocked(true))
+	require.NoError(t, err)
+
+	hiding := &counterBodyHidingStore{Store: db, hide: *txC.TxIDChainHash()}
+
+	_, _, err = utxostore.ReverseProcessConflicting(ctx, hiding, 20, chainhash.Hash{}, []chainhash.Hash{*txD.TxIDChainHash()})
+	require.NoError(t, err)
+
+	require.False(t, crashConflicting(t, ctx, db, txD.TxIDChainHash()), "D was demoted although C could not be promoted")
+	require.NotNil(t, crashSpender(t, ctx, db, parent), "parent[0] was freed and nothing spends it")
+	require.Equal(t, txD.TxIDChainHash().String(), crashSpender(t, ctx, db, parent).String())
+	require.True(t, crashConflicting(t, ctx, db, txC.TxIDChainHash()), "C stays the loser")
 }

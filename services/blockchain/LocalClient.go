@@ -225,12 +225,20 @@ func (c *LocalClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeade
 	return c.store.GetBestBlockHeader(ctx)
 }
 
+func (c *LocalClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return c.store.GetBestBlockHeaderUncached(ctx)
+}
+
 func (c *LocalClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeader(ctx, blockHash)
 }
 
 func (c *LocalClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return c.store.GetBlockHeaders(ctx, blockHash, numberOfHeaders)
+}
+
+func (c *LocalClient) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return c.store.GetBlockHeadersByParentLinks(ctx, blockHash, numberOfHeaders)
 }
 
 func (c *LocalClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {

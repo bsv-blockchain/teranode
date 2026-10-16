@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/cespare/xxhash/v2"
@@ -1059,6 +1060,11 @@ func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 	return t.utxoStore.SupportsOutpointOnlySpend()
 }
 
+// NetsBelowCheckpoint forwards the wrapped store's answer.
+func (t *TxMetaCache) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(t.utxoStore)
+}
+
 // Close delegates to the wrapped UTXO store so its in-flight batched writes
 // are drained on shutdown. The cache itself holds only in-memory state; no
 // extra teardown is required here beyond letting it be garbage-collected
@@ -1410,6 +1416,11 @@ func (t *TxMetaCache) GetBlockState() utxo.BlockState {
 	return t.utxoStore.GetBlockState()
 }
 
+// Stamper forwards to the underlying UTXO store, whose stamp it is.
+func (t *TxMetaCache) Stamper() pruner.Stamper {
+	return t.utxoStore.Stamper()
+}
+
 // QueryOldUnminedTransactions forwards the query request to the underlying UTXO store.
 // The cache doesn't directly manage unmined transactions, so this is a pass-through operation.
 func (t *TxMetaCache) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
@@ -1426,4 +1437,11 @@ func (t *TxMetaCache) PreserveTransactions(ctx context.Context, txIDs []chainhas
 // The cache doesn't directly manage preservation expiry, so this is a pass-through operation.
 func (t *TxMetaCache) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	return t.utxoStore.ProcessExpiredPreservations(ctx, currentHeight)
+}
+
+// SpendsMadeBy passes through. There is nothing to cache: it is asked only when undoing a
+// conflict resolution, which is a reorg or a crash replay, and the answer describes coins whose
+// state the same operation is about to change.
+func (t *TxMetaCache) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return t.utxoStore.SpendsMadeBy(ctx, txHash)
 }

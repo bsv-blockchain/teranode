@@ -41,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
@@ -192,6 +193,14 @@ type IgnoreFlags struct {
 	// Set ONLY on the gated below-checkpoint outpoint-only path (spec §3.2 Seam 1). Default
 	// false — above-checkpoint and steady-state spends always enforce the hash.
 	SkipUTXOHashCheck bool
+	// RequireParentOutputs makes a spend whose parent output is not found fail, even when the
+	// spending transaction already has a record. Without it the store reads that record as
+	// proof the spends were made in an earlier attempt and the parent has since been pruned
+	// ("already blessed"), which holds only when records are created after their spends. Set
+	// ONLY by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
+	// whose records the first wave created before any of those spends, so the record proves
+	// nothing. Its first-wave combined calls spend before they create and leave it unset.
+	RequireParentOutputs bool
 }
 
 // ConflictingChildRemoval identifies one (parent, child) pair that should be
@@ -244,6 +253,8 @@ type CreateOptions struct {
 	MinedBlockInfos    []MinedBlockInfo
 	TxID               *chainhash.Hash
 	TxIDs              []chainhash.Hash // SpendAndCreateMulti only: one txid per transaction of the list
+	SubtreeIdxs        []int            // SpendAndCreateMulti only: one subtree index per transaction of the list
+	BelowCheckpoint    bool             // SpendAndCreateMulti only: the list is from a block the caller already knows is valid
 	IsCoinbase         *bool
 	Frozen             bool
 	Conflicting        bool
@@ -275,11 +286,65 @@ func WithTXID(txID *chainhash.Hash) CreateOption {
 	}
 }
 
+// WithSubtreeIdxs supplies the subtree index of each transaction of a SpendAndCreateMulti list,
+// in the same order, so a list that spans several subtrees of one block records each
+// transaction where it is. Each index replaces SubtreeIdx on the list's mined-block info for that
+// transaction only. It needs WithMinedBlockInfo and has no effect on SpendAndCreate.
+func WithSubtreeIdxs(idxs []int) CreateOption {
+	return func(o *CreateOptions) {
+		o.SubtreeIdxs = idxs
+	}
+}
+
+// WithBelowCheckpoint tells SpendAndCreateMulti that the list comes from a block at or below a
+// checkpoint the caller trusts, so the block is already known valid and the list may be written in
+// any order. DefaultSpendAndCreateMulti then writes it in two waves instead of one dependency
+// level at a time: a first wave that creates every record, spending in the same call the inputs
+// of each transaction with no parent in the list, and a second that spends the rest. A chain of
+// N transactions costs two rounds of store calls rather than N. A store that nets the list may ignore it. Never
+// set it above the checkpoint: there a transaction's inputs must be spent before its outputs
+// exist, or a transaction that fails its spends leaves outputs behind. It has no effect on
+// SpendAndCreate.
+func WithBelowCheckpoint() CreateOption {
+	return func(o *CreateOptions) {
+		o.BelowCheckpoint = true
+	}
+}
+
+// ItemOptions returns the options transaction i of a SpendAndCreateMulti list is written with: a
+// copy carrying its own subtree index on the mined-block info, with the list-only fields, which
+// describe the whole list, cleared.
+func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
+	c := *o
+	c.TxIDs = nil
+	c.SubtreeIdxs = nil
+	c.BelowCheckpoint = false
+
+	if o.SubtreeIdxs != nil && i < len(o.SubtreeIdxs) && len(o.MinedBlockInfos) > 0 {
+		c.MinedBlockInfos = make([]MinedBlockInfo, len(o.MinedBlockInfos))
+		copy(c.MinedBlockInfos, o.MinedBlockInfos)
+
+		for k := range c.MinedBlockInfos {
+			c.MinedBlockInfos[k].SubtreeIdx = o.SubtreeIdxs[i]
+		}
+	}
+
+	return &c
+}
+
+// withRequireParentOutputs sets IgnoreFlags.RequireParentOutputs, for the spend wave of a
+// list written create-then-spend.
+func withRequireParentOutputs() CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.RequireParentOutputs = true
+	}
+}
+
 // The boolean CreateOptions below return one of two package-level closures
 // rather than closing over their argument. A closure that captures anything is
 // heap-allocated the moment it escapes, and these escape on every call: they go
-// straight into SpendAndCreate's variadic list, which applyOneWave builds once
-// per TRANSACTION.
+// straight into SpendAndCreate's variadic list, which the quick-validation write
+// path built once per TRANSACTION when this was measured.
 //
 // That is one allocation per option per transaction, and on a node whose heap
 // sits at GOMEMLIMIT an allocation is not cheap. A CPU profile taken on Hetzner
@@ -581,6 +646,25 @@ type Store interface {
 	// as the same spend, and SpendAndCreate spends before it creates, so a
 	// record that exists has made its spends.
 	//
+	// A caller may repeat only the transactions that were not Created or
+	// Existed, with their parents in the list, in list order; quick validation
+	// does. The parents keep each transaction written the way it was the first
+	// time, which the store's reading of an existing record relies on. So a
+	// store that reports
+	// per-transaction failures must leave the store such that the shorter list
+	// finishes the write, with every parent that went through outside it. A
+	// store whose write depends on the whole list, one that leaves out the
+	// coins a later transaction of the list spends for instance, cannot: it
+	// returns an error for the whole call instead, and the caller repeats the
+	// whole list.
+	//
+	// WithBelowCheckpoint lets the store write the list in any order, because
+	// the caller already knows the block is valid. In that order a record can
+	// exist before its spends are made, after a crash for instance, so finding
+	// a record no longer proves its spends: the store makes the spends of a
+	// MultiTxExisted transaction itself before reporting it. See
+	// DefaultSpendAndCreateMulti for how the option changes the results.
+	//
 	// A list that breaks the caller's guarantees (a transaction spending a later
 	// one or an outpoint spent twice, an output index past the end of a parent
 	// in the list, a coinbase) is refused with nothing written; see
@@ -591,6 +675,26 @@ type Store interface {
 	// Unspend reverses a previous spend operation, marking UTXOs as unspent.
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
+
+	// SpendsMadeBy returns the coins this transaction consumed, as records its own
+	// Unspend can restore. Undoing a conflict resolution uses it to put those coins
+	// back.
+	//
+	// The store answers rather than the caller working it out from the transaction,
+	// because a coin's identity is computed from the amount and locking script of the
+	// output being spent, and a transaction only records those when it is stored in
+	// extended form. A store that keeps transactions in the plain form cannot answer
+	// the question that way and has to answer it from what it does keep.
+	//
+	// Only what the store can still speak for is returned. An input whose coin was
+	// never actually spent, or whose record has passed out of retention, is omitted
+	// rather than guessed at, because a record that cannot be restored fails the whole
+	// restore on a store that checks.
+	//
+	// Called only when undoing a conflict resolution, which happens during a chain
+	// reorganisation or when replaying an operation a crash interrupted. It is never on
+	// the path an ordinary transaction takes, so it may be as expensive as it needs to be.
+	SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*Spend, error)
 
 	// SetMinedMulti marks transactions as mined in the block described by minedBlockInfo.
 	//
@@ -796,4 +900,11 @@ type Store interface {
 	// its writer — SetBlockState publishes both fields from one tip
 	// atomically, while the individual setters update one field at a time.
 	GetBlockState() BlockState
+
+	// Stamper returns the store's stamp: the deep pass that writes each UTXO's block onto it
+	// once its tx_mined partition is deep enough. Every store answers, so no caller has to test
+	// the store's type to find it, and a wrapper forwards it like any other method. A store
+	// whose UTXOs carry their block from the moment they are mined has nothing to stamp and
+	// returns pruner.NoStamp, whose WindowBlocks is zero.
+	Stamper() pruner.Stamper
 }

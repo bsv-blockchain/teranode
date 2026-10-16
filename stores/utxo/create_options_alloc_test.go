@@ -11,7 +11,7 @@ import (
 //
 // Why this is worth a test rather than a comment. Each of these used to return
 // a fresh closure over its argument, which is one heap allocation per call, and
-// applyOneWave builds the list once per TRANSACTION. A CPU profile taken on
+// the quick-validation write builds the list once per TRANSACTION. A CPU profile taken on
 // Hetzner mainnet during block 760431 charged 14.77 core-seconds to
 // runtime.newobject underneath WithIgnoreLocked alone, in a 25-second window.
 // That is not the cost of an allocation; it is the cost of allocating while the

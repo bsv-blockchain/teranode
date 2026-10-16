@@ -29,6 +29,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jellydator/ttlcache/v3"
@@ -698,6 +699,12 @@ func (m *MockBlockchainClient) GetBlockHeader(ctx context.Context, blockHash *ch
 func (m *MockBlockchainClient) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
+func (m *MockBlockchainClient) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return m.GetBestBlockHeader(ctx)
+}
+func (m *MockBlockchainClient) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return nil, nil, nil
+}
 func (m *MockBlockchainClient) GetBlockHeadersToCommonAncestor(ctx context.Context, hashTarget *chainhash.Hash, blockLocatorHashes []*chainhash.Hash, maxHeaders uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
@@ -1086,6 +1093,8 @@ func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 		MedianTime: m.GetMedianBlockTime(),
 	}
 }
+
+func (m *MockUTXOStore) Stamper() pruner.Stamper { return pruner.NoStamp }
 
 // Comprehensive tests for Start method
 
@@ -1869,6 +1878,11 @@ func TestHealthConcurrency(t *testing.T) {
 	}
 
 	assert.Equal(t, 0, errorCount)
+}
+
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockUTXOStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
 }
 
 // shutdownLogger records when the processing loop logs that it is shutting down.
