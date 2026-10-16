@@ -929,7 +929,10 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] adding %d nodes to subtree instance", v.SubtreeHash.String(), len(txHashes))
 
-	seen := make(map[chainhash.Hash]struct{}, len(txHashes))
+	seenSet := getSeenSet(len(txHashes))
+	defer putSeenSet(seenSet)
+
+	seen := seenSet.m
 
 	for idx, txHash := range txHashes {
 		// if placeholder just add it and continue

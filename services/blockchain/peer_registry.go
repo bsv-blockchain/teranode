@@ -82,6 +82,7 @@ type PeerInfo struct {
 	TransportTypeSet          bool // When true, TransportType was explicitly set by the caller
 	ClientName                string
 	Height                    uint32
+	AdvertisedHeight          uint32
 	DataHubURL                string
 	NetworkAddress            string
 	IsBanned                  bool
@@ -346,6 +347,16 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 	}
 	if info.Height > 0 {
 		existing.Height = info.Height
+	}
+	// Carried separately from Height: Height is capped against local progress
+	// for sync decisions, AdvertisedHeight is what the peer actually claimed
+	// and is reported to operators unchanged. Newest-wins, like Height: the
+	// p2p batcher keeps the highest claim within one flush window, but across
+	// windows a lower claim may replace a higher one. That is intended — a
+	// peer that reorgs to a lower tip must not keep showing its old height —
+	// and a display that dips heals on the peer's next announcement.
+	if info.AdvertisedHeight > 0 {
+		existing.AdvertisedHeight = info.AdvertisedHeight
 	}
 	if info.DataHubURL != "" {
 		existing.DataHubURL = info.DataHubURL

@@ -71,7 +71,7 @@ When `PeerAuthAllowlist` is empty (the default), signatures are still verified (
 | ServerCertFile | string | "" | server_certFile | TLS certificate file (required for HTTPS) |
 | ServerKeyFile | string | "" | server_keyFile | TLS key file (required for HTTPS) |
 | StatsPrefix | string | "gocore" | stats_prefix | URL prefix for gocore stats endpoints |
-| Dashboard.Enabled | bool | false | N/A | Enables dashboard UI and authentication |
+| Dashboard.Enabled | bool | false | dashboard_enabled | Enables dashboard UI and authentication |
 | P2P.PrivateKey | string | "" | p2p_private_key | Hex-encoded Ed25519 key for response signing |
 
 ## Configuration Dependencies

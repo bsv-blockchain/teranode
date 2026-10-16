@@ -81,3 +81,68 @@ func TestLaneCache_ResetRefreshesSnapshots(t *testing.T) {
 		require.Equal(t, c.lanes[i].tail.Load(), c.lanes[i].snap.Load(), "lane %d", i)
 	}
 }
+
+// TestLaneCache_LappedEntriesCountAsEvictions checks that entries a ring wrap
+// overwrites are reported as evictions, so the evictions metric shows cache
+// pressure and not only explicit deletes, and that the count never goes down
+// (the metric is a gauge read with rate()).
+func TestLaneCache_LappedEntriesCountAsEvictions(t *testing.T) {
+	c, err := NewLaneCache(1024 * 1024)
+	require.NoError(t, err)
+
+	for i := uint64(0); i < 100; i++ {
+		k := mixedKey(i)
+		require.NoError(t, c.Set(k[:], lfValue(i)))
+	}
+
+	var s Stats
+	c.UpdateStats(&s)
+	require.Zero(t, s.Evictions, "nothing has been lapped yet")
+
+	var last uint64
+
+	for round := uint64(1); round <= 5; round++ {
+		for i := uint64(0); i < 50_000; i++ {
+			k := mixedKey(round*1_000_000 + i)
+			require.NoError(t, c.Set(k[:], lfValue(i)))
+		}
+
+		s = Stats{}
+		c.UpdateStats(&s)
+
+		require.Positive(t, s.Evictions, "round %d: a lapped ring must report evictions", round)
+		require.GreaterOrEqual(t, s.Evictions, last, "round %d: evictions must not decrease", round)
+		require.Equal(t, s.TotalElementsAdded, s.Evictions+s.ValidEntriesCount, "round %d: every insert is live or evicted", round)
+
+		last = s.Evictions
+	}
+}
+
+// Reset drops every entry: they all count as evicted, the count still never
+// goes down, and entries inserted after the Reset are live.
+func TestLaneCache_ResetCountsEverythingAsEvicted(t *testing.T) {
+	c, err := NewLaneCache(1024 * 1024)
+	require.NoError(t, err)
+
+	for i := uint64(0); i < 50_000; i++ {
+		k := mixedKey(i)
+		require.NoError(t, c.Set(k[:], lfValue(i)))
+	}
+
+	var before Stats
+	c.UpdateStats(&before)
+
+	c.Reset()
+
+	for i := uint64(0); i < 100; i++ {
+		k := mixedKey(1_000_000 + i)
+		require.NoError(t, c.Set(k[:], lfValue(i)))
+	}
+
+	var after Stats
+	c.UpdateStats(&after)
+
+	require.Equal(t, uint64(50_000), after.Evictions, "every entry from before the Reset is evicted")
+	require.GreaterOrEqual(t, after.Evictions, before.Evictions)
+	require.Equal(t, uint64(100), after.ValidEntriesCount, "entries inserted after the Reset are live")
+}
