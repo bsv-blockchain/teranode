@@ -128,7 +128,7 @@ func (u *Server) processTransactionsBatched(ctx context.Context, checker validat
 	start := time.Now()
 	txMetaSlice := make([]metaSliceItem, len(txHashes))
 
-	missed, err := u.processTxMetaUsingCache(ctx, txHashes, txMetaSlice, false)
+	missed, err := u.processBlockTxMetaUsingCache(ctx, txHashes, txMetaSlice)
 	if err != nil {
 		return errors.NewProcessingError("[processTransactionsBatched] Failed to check txMeta cache", err)
 	}

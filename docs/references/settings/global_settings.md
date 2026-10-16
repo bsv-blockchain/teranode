@@ -118,6 +118,37 @@ This hierarchy exists because file-level operations are the foundation of blob s
 | PostgresCheckAddress | string | "localhost:5432" | postgres_check_address | PostgreSQL connection check address |
 | GlobalBlockHeightRetention | uint32 | 288 | global_blockHeightRetention | **CRITICAL** - Block height retention (2 days default) |
 
+#### PostgreSQL Connection Pool
+
+Default connection pool and resilience settings for every service's PostgreSQL store. A service can
+override every one of these with its own `<service>_postgres_*` setting (the twelve keys in the table
+below, e.g. `blockchain_postgres_retryEnabled`, `utxostore_postgres_circuitBreakerCooldown`). A
+per-service pool is only created when at least one of its twelve keys is explicitly configured -
+including `RetryEnabled=true` or an explicit `CircuitBreakerEnabled` (`true` or `false`) on its own.
+Once it exists, each numeric/duration value left at zero falls back to the global value above, and an
+unset `CircuitBreakerEnabled` inherits the global one while an explicit `false` is preserved (so a
+service can opt out of a globally-enabled breaker). `RetryEnabled` is the exception: it has no
+global fallback, so once a per-service pool exists its value (`false` included) replaces the global
+`RetryEnabled` outright. See e.g. [Blockchain Settings](services/blockchain_settings.md) and
+[UTXO Store Settings](stores/utxo_settings.md).
+
+| Setting | Type | Default | Environment Variable | Usage |
+|---------|------|---------|---------------------|-------|
+| MaxOpenConns | int | 50 | postgres_maxOpenConns | Maximum number of open database connections |
+| MaxIdleConns | int | 10 | postgres_maxIdleConns | Maximum number of idle connections in pool |
+| ConnMaxLifetime | time.Duration | 5m | postgres_connMaxLifetime | Maximum time a connection can be reused |
+| ConnMaxIdleTime | time.Duration | 1m | postgres_connMaxIdleTime | Maximum time a connection can remain idle |
+| RetryMaxAttempts | int | 3 | postgres_retryMaxAttempts | Maximum retry attempts for transient errors |
+| RetryBaseDelay | time.Duration | 100ms | postgres_retryBaseDelay | Base delay for retry backoff |
+| RetryEnabled | bool | false | postgres_retryEnabled | Enable retries for transient errors |
+| CircuitBreakerEnabled | bool | false | postgres_circuitBreakerEnabled | Enable circuit breaker for database operations |
+| CircuitBreakerFailureThreshold | int | 5 | postgres_circuitBreakerFailureThreshold | Consecutive failures before opening circuit |
+| CircuitBreakerHalfOpenMax | int | 3 | postgres_circuitBreakerHalfOpenMax | Successful probes required to close circuit |
+| CircuitBreakerCooldown | time.Duration | 30s | postgres_circuitBreakerCooldown | Duration circuit stays open before testing |
+| CircuitBreakerFailureWindow | time.Duration | 10s | postgres_circuitBreakerFailureWindow | Time window for counting consecutive failures |
+
+**Note**: all five circuit breaker settings are loaded by `settings.go` and applied in `util/sql.go`, but the breaker only runs when `CircuitBreakerEnabled` resolves to `true` - and it requires the threshold, half-open, cooldown and window values to be set (the defaults above satisfy this).
+
 ### Performance and Optimization
 
 | Setting | Type | Default | Environment Variable | Usage |

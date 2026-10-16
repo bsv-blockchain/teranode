@@ -445,7 +445,7 @@ The Asset Service uses the following configuration values from the settings syst
 
 ### Security
 
-- `http_sign_response`: Whether to sign HTTP responses (default: false)
+- `asset_sign_http_responses`: Whether to sign HTTP responses (default: false)
 - `p2p_private_key`: Private key for signing responses
 
 ### Dashboard Configuration

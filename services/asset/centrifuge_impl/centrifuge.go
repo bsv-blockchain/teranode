@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/asset/httpimpl"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -154,7 +155,11 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	}
 
 	if _, err := url.Parse(assetHTTPAddress); err != nil {
-		return nil, errors.NewConfigurationError("asset_httpAddress is not a valid URL", err)
+		// url.Parse embeds the string it was given verbatim in its error, and
+		// asset_httpAddress is operator-supplied. It is a public address rather
+		// than a store URL, so nothing is expected to carry userinfo here, but
+		// the shape is the one this sweep is closing everywhere else.
+		return nil, errors.NewConfigurationError("asset_httpAddress is not a valid URL", urlutil.ParseErrorReason(err))
 	}
 
 	c := &Centrifuge{

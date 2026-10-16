@@ -646,7 +646,11 @@ func (c *Client) processBatchResponse(batch []*batchItem, resp *validator_api.Va
 
 	for i, item := range batch {
 		if !resp.Errors[i].IsNil() {
-			item.complete(validateBatchResponse{metaData: nil, err: resp.Errors[i]})
+			// Converted here, like UnwrapGRPC converts the unary path's status, so a
+			// batched verdict reaches the caller as the same type an unbatched one
+			// does. Passed through raw, the protobuf form defeated every errors.As
+			// on *errors.Error downstream.
+			item.complete(validateBatchResponse{metaData: nil, err: errors.UnwrapTError(resp.Errors[i])})
 		} else {
 			item.complete(validateBatchResponse{metaData: resp.Metadata[i], err: nil})
 		}

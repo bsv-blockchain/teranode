@@ -51,6 +51,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// errServiceNotReadyUnminedLoading is the refusal every method below answers while
+// unmined transactions are loading. It is SERVICE_NOT_READY in a gRPC status, so a
+// client gets the class back, not just the text: the state clears on its own, and
+// RPC answers it as warm-up.
 const errServiceNotReadyUnminedLoading = "service not ready - unmined transactions are still being loaded"
 
 var (
@@ -1714,7 +1718,7 @@ func (ba *BlockAssembly) SubmitMiningSolution(ctx context.Context, req *blockass
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[SubmitMiningSolution] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
+		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
 	var responseChan chan error
@@ -1798,8 +1802,14 @@ func validateCoinbaseForSubmission(jobID string, coinbaseTx *bt.Tx) error {
 	// pool branch: bitcoin-sv's generateBlocks carries the identical guard on the
 	// generate/generatetoaddress path (rpc/mining.cpp:199), so guarding here keeps
 	// GenerateBlocks in parity with upstream rather than making Teranode stricter.
+	//
+	// Classed as a local policy refusal, which is what it is, rather than PROCESSING,
+	// which reads as this node's own fault: the RPC boundary shows a policy refusal's
+	// reason to the submitter at any depth, and on generatetoaddress this arrives
+	// under two of GenerateBlocks' wrappers. Nothing branches on the class of a
+	// submission error, and both classes map to the same gRPC status.
 	if coinbaseHasP2SHOutput(coinbaseTx) {
-		return errors.NewProcessingError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", jobID)
+		return errors.NewBlockPolicyDeclinedError("[BlockAssembly][%s] bad-txns-vout-p2sh: coinbase pays to a P2SH output", jobID)
 	}
 
 	return nil
@@ -2360,7 +2370,7 @@ func (ba *BlockAssembly) ResetBlockAssembly(ctx context.Context, _ *blockassembl
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[ResetBlockAssembly] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
+		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
 	ba.blockAssembler.Reset(false)
@@ -2378,7 +2388,7 @@ func (ba *BlockAssembly) ResetBlockAssemblyFully(ctx context.Context, _ *blockas
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[ResetBlockAssemblyFully] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
+		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
 	ba.blockAssembler.Reset(true)
@@ -2400,7 +2410,7 @@ func (ba *BlockAssembly) ResetBlockAssemblyValidateInputs(ctx context.Context, _
 
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[ResetBlockAssemblyValidateInputs] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
+		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
 	ba.blockAssembler.ResetWithInputValidation()
@@ -2421,7 +2431,7 @@ func (ba *BlockAssembly) CheckBlockAssemblyValidateInputs(ctx context.Context, _
 
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[CheckBlockAssemblyValidateInputs] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
+		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
 	invalidCount, err := ba.blockAssembler.CheckInputValidation(ctx)
@@ -2640,7 +2650,7 @@ func (ba *BlockAssembly) GenerateBlocks(ctx context.Context, req *blockassembly_
 	// Check if unmined transactions are still being loaded
 	if ba.blockAssembler.unminedTransactionsLoading.Load() {
 		ba.logger.Warnf("[GenerateBlocks] service not ready - unmined transactions are still being loaded")
-		return nil, errors.NewServiceError(errServiceNotReadyUnminedLoading)
+		return nil, errors.WrapGRPC(errors.NewServiceNotReadyError(errServiceNotReadyUnminedLoading))
 	}
 
 	if !ba.blockAssembler.settings.ChainCfgParams.GenerateSupported {

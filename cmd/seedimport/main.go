@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/cmd/seedimport/seedimport"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -84,7 +85,15 @@ func run(ctx context.Context, logger ulogger.Logger, s *settings.Settings, block
 
 	seedURL, err := url.Parse(seedURLStr)
 	if err != nil {
-		return errors.NewConfigurationError("invalid --seed-url %q", seedURLStr, err)
+		// Neither the raw flag value nor url.Parse's error may be echoed: the
+		// value can carry userinfo credentials, and url.Parse embeds the string
+		// it was given verbatim in its error. Even its bare reason can quote part of
+		// a password, so report a fixed reason.
+		// No format verb: errors.New* strips a trailing error parameter as
+		// the wrapped error and only calls fmt.Errorf when parameters
+		// remain, so a "%v" here would survive into the message unrendered.
+		// The wrapped reason renders after " -> " on its own.
+		return errors.NewConfigurationError("invalid --seed-url", urlutil.ParseErrorReason(err))
 	}
 
 	hashPrefix := -2

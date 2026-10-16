@@ -121,7 +121,7 @@ These catch subtle problems where services silently fall out of sync:
 | Check | Description |
 |-------|-------------|
 | **BA/Chain Sync** | Compares block assembly height vs blockchain height. FAIL if drift > 2 blocks and FSM is RUNNING. During catchup, drift is expected and noted as OK. |
-| **Chain vs Peers** | Compares our chain height vs best peer height. FAIL if > 10 blocks behind and FSM is RUNNING. During catchup, being behind is expected. |
+| **Chain vs Peers** | Compares our chain height with the highest peer-advertised height. Informational only: peer heights are unvalidated, so this check never FAILs. The message reports how many blocks behind the node is. |
 
 ### Example Output
 
@@ -151,7 +151,7 @@ Block Assembly State     -                      OK      -        state=running, 
 Mining Candidate         -                      OK      -        height=50001, txs=872, size=2.4 MB
 P2P Peers                -                      OK      -        3 connected, 5 total, max_peer_height=50000
 BA/Chain Sync            -                      OK      -        ba_height=50000, chain_height=50000
-Chain vs Peers           -                      OK      -        our_height=50000, best_peer=50000, in sync
+Chain vs Peers           -                      OK      -        our_height=50000, best_peer=50000 (peer-reported, unvalidated), in sync
 
   22 OK, 0 FAIL, 0 SKIP
 ```
@@ -308,7 +308,7 @@ The JSON structure:
 | Kafka FAIL | Kafka/Redpanda not running | Start Kafka broker |
 | Chain Tip stale (RUNNING) | Node stuck, blockchain service issue | Check blockchain and block validation logs |
 | BA/Chain Sync drift | Block assembly lost connection to blockchain | Restart block assembly, check gRPC connectivity |
-| Chain vs Peers behind | Node falling behind network | Check catchup status, peer connectivity |
+| Chain vs Peers behind (informational, never FAIL) | Node falling behind network, or a peer advertising a height it has not proven | Check catchup status and peer connectivity; compare with the Chain Tip check |
 | P2P Peers = 0 | No peers discovered | Check P2P listen addresses, bootstrap/static peers, firewall |
 | Port conflict | Two services on same port | Change one service's listen address |
 

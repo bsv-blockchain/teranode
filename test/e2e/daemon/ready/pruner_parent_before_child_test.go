@@ -191,7 +191,7 @@ func TestPrunerParentNotDeletedBeforeChildren(t *testing.T) {
 	numBlocksToMine := blockHeightRetention + 5 // exceed child1's DAH with margin
 	for i := 0; i < numBlocksToMine; i++ {
 		_, newBlock := node.CreateTestBlock(t, prevBlock, uint32(9000+i))
-		err = node.BlockValidationClient.ProcessBlock(ctx, newBlock, newBlock.Height, "", "legacy", 0)
+		err = node.BlockValidationClient.ProcessBlock(ctx, newBlock, newBlock.Height, "", "legacy", 0, false)
 		require.NoError(t, err)
 		t.Logf("Processed empty block at height %d", newBlock.Height)
 		prevBlock = newBlock

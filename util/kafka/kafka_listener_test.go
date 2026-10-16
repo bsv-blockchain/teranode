@@ -201,11 +201,15 @@ func TestStartKafkaListenerInvalidURL(t *testing.T) {
 		return nil
 	}
 
-	// Test with nil URL - this currently panics, which is a limitation of the current implementation
-	// The function should check for nil URL but currently doesn't
-	assert.Panics(t, func() {
+	// A nil URL used to take the process down: the error path formatted it with
+	// kafkaURL.String(), which dereferences a nil receiver. It now renders as
+	// "<nil>" through urlutil.Redact, so the listener logs the failure and
+	// returns.
+	assert.NotPanics(t, func() {
 		StartKafkaListener(ctx, logger, nil, "test-group", true, consumerFn, nil)
 	})
+
+	assert.Greater(t, logger.getErrorCount(), 0, "the nil URL should have been reported")
 }
 
 func TestStartKafkaListenerWithKafkaSettings(t *testing.T) {

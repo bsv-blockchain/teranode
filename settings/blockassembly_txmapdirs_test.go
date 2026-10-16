@@ -192,7 +192,9 @@ func collectKeyTags(typ reflect.Type, seen map[reflect.Type]bool) []string {
 	for i := 0; i < typ.NumField(); i++ {
 		field := typ.Field(i)
 
-		if key, ok := field.Tag.Lookup("key"); ok && key != "" {
+		// key:"-" marks a field as deliberately not a setting (same marker
+		// export.go honours), so it is not a key that anything should read.
+		if key, ok := field.Tag.Lookup("key"); ok && key != "" && key != keyTagExempt {
 			keys = append(keys, key)
 		}
 

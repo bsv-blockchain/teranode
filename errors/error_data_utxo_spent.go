@@ -72,7 +72,12 @@ func NewUtxoSpentError(txID chainhash.Hash, vOut uint32, utxoHash chainhash.Hash
 		SpendingData: spendingData,
 	}
 
-	utxoSpentError := New(ERR_UTXO_SPENT, "%s (%d): %s:%d utxo already spent by tx %v", ERR_UTXO_SPENT.Enum(), ERR_UTXO_SPENT, txID.String(), vOut, spendingData)
+	// No code prefix here. Error() and UserMessage already prepend errCodeMsgFmt,
+	// so rendering it into the message too produced "UTXO_SPENT (70): UTXO_SPENT
+	// (70): ..." and, worse, made the code part of Message() rather than around
+	// it - which put an internal enum on the JSON-RPC wire, where the boundary
+	// reads Message() precisely because it never renders codes.
+	utxoSpentError := New(ERR_UTXO_SPENT, "%s:%d utxo already spent by tx %v", txID.String(), vOut, spendingData)
 	utxoSpentError.data = utxoSpentErrStruct
 
 	return utxoSpentError

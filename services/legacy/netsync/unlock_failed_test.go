@@ -61,10 +61,9 @@ func newUnlockSyncManager(t *testing.T, validationClient *validator.MockValidato
 	}
 
 	sm.peerStates.Set(peer, &peerSyncState{
-		syncCandidate:   true,
-		requestQueue:    txmap.NewSyncedSlice[wire.InvVect](10),
-		requestedTxns:   expiringmap.New[chainhash.Hash, struct{}](time.Minute),
-		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute),
+		syncCandidate: true,
+		requestQueue:  txmap.NewSyncedSlice[wire.InvVect](10),
+		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
 	})
 
 	return sm, peer
@@ -201,24 +200,4 @@ func TestProcessOrphanTransactions_UnlockFailureIsAccepted(t *testing.T) {
 
 	require.Len(t, accepted, 1, "an accepted orphan whose unlock failed must be announced")
 	require.Equal(t, *orphan.TxIDChainHash(), accepted[0].TxHash)
-}
-
-func TestPreValidateTransactions_UnlockFailureDoesNotFailBlock(t *testing.T) {
-	initPrometheusMetrics()
-
-	cv := &countingValidator{failFirst: 5, failErr: unlockFailedErr()}
-
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.Legacy.SpendBatcherSize = 1
-	tSettings.Legacy.SpendBatcherConcurrency = 1
-
-	sm := &SyncManager{
-		settings:         tSettings,
-		logger:           ulogger.TestLogger{},
-		validationClient: cv,
-	}
-
-	err := sm.PreValidateTransactions(context.Background(), makeTxMap(t, 5), chainhash.Hash{}, 100, 0, 0, false, false)
-	require.NoError(t, err, "accepted transactions whose unlock failed must not abort legacy block sync")
-	require.Equal(t, int64(5), cv.callCount.Load(), "every transaction is validated once and none is retried")
 }

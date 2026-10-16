@@ -1,6 +1,7 @@
 package pruner
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -80,6 +81,21 @@ func (e *TimeoutError) Unwrap() error {
 	return e.cause
 }
 
+// prometheusUtxoRecordsSkippedUnmined counts records the pruner kept because they are currently unmined.
+// It is registered at package init, outside the metrics Once, so it is never nil in tests that
+// initialise the other collectors themselves. Distinct from the defensive-mode skip count.
+var prometheusUtxoRecordsSkippedUnmined = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "utxo_pruner_records_skipped_unmined_total",
+	Help: "Total number of records kept by the pruner because they are currently unmined and not conflicting",
+})
+
+// prometheusUtxoDAHClearedUnmined counts records whose deleteAtHeight the pruner cleared because they
+// are unmined. Package-level for the same reason as prometheusUtxoRecordsSkippedUnmined.
+var prometheusUtxoDAHClearedUnmined = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "utxo_pruner_dah_cleared_unmined_total",
+	Help: "Total number of records whose deleteAtHeight was cleared because they are unmined",
+})
+
 var (
 	prometheusMetricsInitOnce                 sync.Once
 	prometheusUtxoCleanupBatch                prometheus.Histogram
@@ -138,9 +154,11 @@ type Options struct {
 	// The UDF branch honours the policy in full. The native-op branch synthesises
 	// its own write policy but still carries over the policy's FilterExpression
 	// when one is set, so a server-side eligibility gate applies identically on
-	// both paths (the pruner sets no filter today). Pass childHashes as the same
-	// []interface{} payload the legacy path would have wrapped in
-	// aerospike.NewValue (one Lua argument: a list of hex hash strings).
+	// both paths (the pruner sets no filter today). childHashes are the deleted
+	// children's txids. The implementation encodes them as the op's single
+	// argument, a list of hex hash strings, which is what the legacy path wraps
+	// in aerospike.NewValue; taking the hashes lets the native path write the
+	// payload without building those strings.
 	//
 	// The implementation must not create the parent record when it is absent —
 	// a missing parent is routine here and the Lua function it replaces returns
@@ -150,7 +168,7 @@ type Options struct {
 	//
 	// When nil, the pruner builds NewBatchUDF directly using LuaPackage
 	// (existing pre-PR-828 behaviour).
-	BuildAddDeletedChildrenRecord func(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []interface{}) aerospike.BatchRecordIfc
+	BuildAddDeletedChildrenRecord func(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []*chainhash.Hash) aerospike.BatchRecordIfc
 
 	// ObserveNativeOpError, when non-nil, is handed every error the parent-update
 	// batch surfaces — per-record and whole-batch alike — for records built by
@@ -220,7 +238,7 @@ type Service struct {
 
 	// Optional native-op-aware builder for the addDeletedChildren batch record.
 	// See Options.BuildAddDeletedChildrenRecord for the contract.
-	buildAddDeletedChildrenRecord func(*aerospike.BatchUDFPolicy, *aerospike.Key, []interface{}) aerospike.BatchRecordIfc
+	buildAddDeletedChildrenRecord func(*aerospike.BatchUDFPolicy, *aerospike.Key, []*chainhash.Hash) aerospike.BatchRecordIfc
 
 	// Optional sink for parent-update errors, letting the store demote itself off
 	// the native path. See Options.ObserveNativeOpError for the contract.
@@ -229,6 +247,13 @@ type Service struct {
 	// Cached field names (avoid repeated String() allocations in hot paths)
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
 	fieldDeleteAtHeight, fieldTotalExtraRecs, fieldUnminedSince, fieldBlockHeights string
+	fieldConflicting                                                               string
+
+	// batchOperateFn overrides the batch calls of the unmined guard; tests only.
+	batchOperateFn func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error
+
+	// readMastersFn overrides readMasters; tests only.
+	readMastersFn func(keys []*aerospike.Key) ([]masterRead, error)
 
 	// Internally reused variables
 	queryPolicy *aerospike.QueryPolicy
@@ -395,6 +420,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		fieldTotalExtraRecs:            fields.TotalExtraRecs.String(),
 		fieldUnminedSince:              fields.UnminedSince.String(),
 		fieldBlockHeights:              fields.BlockHeights.String(),
+		fieldConflicting:               fields.Conflicting.String(),
 	}
 
 	// Do not construct PrunedTxSet. It is a cuckoo filter used to skip
@@ -581,7 +607,8 @@ func (s *Service) partitionWorker(
 
 	// Fetch bins based on defensive mode
 	// Note: DeleteAtHeight is only used in query filter (server-side), not in processing logic
-	binNames := []string{s.fieldTxID, s.fieldExternal, s.fieldTotalExtraRecs, s.fieldInputs}
+	// UnminedSince and Conflicting are needed to protect currently-unmined records (see dropUnminedRecords).
+	binNames := []string{s.fieldTxID, s.fieldExternal, s.fieldTotalExtraRecs, s.fieldInputs, s.fieldUnminedSince, s.fieldConflicting}
 	if s.defensiveEnabled {
 		binNames = append(binNames, s.fieldUtxos, s.fieldDeletedChildren)
 	}
@@ -963,6 +990,15 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		return 0, 0, nil
 	}
 
+	// Do not delete a record that is currently unmined, unless it is conflicting. Counted separately
+	// from the defensive skip count.
+	chunk, _, clears := s.dropUnminedRecords(chunk)
+	s.clearUnminedDAH(ctx, clears)
+
+	if len(chunk) == 0 {
+		return 0, 0, nil
+	}
+
 	// Defensive child verification is conditional on the UTXODefensiveEnabled setting
 	// When disabled, parents are deleted without verifying children are stable
 	var safetyMap map[string]bool
@@ -1114,8 +1150,16 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		}
 
 		// Check if children are safe (defensive mode only)
-		parentKey := rec.Record.Key.String()
-		childrenHashes, hasChildren := parentToChildren[parentKey]
+		// parentToChildren is only filled in defensive mode. Key.String formats the
+		// key with fmt.Sprintf, ~6% of the pruner's CPU when done for every record,
+		// so skip it when there is nothing to look up.
+		var childrenHashes []string
+
+		var hasChildren bool
+
+		if len(parentToChildren) > 0 {
+			childrenHashes, hasChildren = parentToChildren[rec.Record.Key.String()]
+		}
 
 		if hasChildren && len(childrenHashes) > 0 {
 			allSafe := true
@@ -1214,6 +1258,386 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	}
 
 	return processedCount, skippedCount, nil
+}
+
+// masterRead is the result of reading one master record's unminedSince and conflicting bins.
+type masterRead struct {
+	record *aerospike.Record
+	err    error
+}
+
+// readMasters reads the unminedSince and conflicting bins of the given master keys in one batch.
+// A returned error means the whole batch failed.
+func (s *Service) readMasters(keys []*aerospike.Key) ([]masterRead, error) {
+	if s.readMastersFn != nil {
+		return s.readMastersFn(keys)
+	}
+
+	readPolicy := aerospike.NewBatchReadPolicy()
+	readPolicy.ReadModeSC = aerospike.ReadModeSCSession
+
+	batchRecords := make([]aerospike.BatchRecordIfc, len(keys))
+	for i, key := range keys {
+		batchRecords[i] = aerospike.NewBatchRead(readPolicy, key, []string{s.fieldUnminedSince, s.fieldConflicting})
+	}
+
+	if err := s.batchOperate(batchRecords); err != nil {
+		return nil, err
+	}
+
+	reads := make([]masterRead, len(keys))
+	for i := range batchRecords {
+		br := batchRecords[i].BatchRec()
+		reads[i] = masterRead{record: br.Record, err: br.Err}
+	}
+
+	return reads, nil
+}
+
+// dropUnminedRecords removes from the chunk every record that is currently unmined (unminedSince set)
+// and not conflicting, and returns the remaining records plus the number dropped.
+//
+// This is defence in depth, not a guarantee. A transaction marked unmined by
+// MarkTransactionsOnLongestChain(false) keeps its deleteAtHeight, so the DAH query can return it.
+// Deleting it would lose a transaction that may be mined again. Conflicting transactions get a DAH
+// while unmined and must stay prunable. The state is read from the query stream and the deletes are
+// unconditional, so a transaction that becomes unmined between the query and the delete can still be
+// deleted. TTL-based deletion (utxoSetTTL) is likewise not covered once a record has been touched.
+//
+// A record protected on positive evidence (not on an uncertain read) is returned in clears so that
+// its deleteAtHeight, and that of its pagination records, can be cleared with clearUnminedDAH. That
+// matches the store invariant (Lua setDeleteAtHeight clears the DAH of an unmined record) and takes
+// the record out of the DAH index. Records kept because a read failed keep their DAH and are retried
+// next cycle.
+//
+// Masters are identified by the totalExtraRecs bin. A master written without that bin is also handled:
+// it is the record stored under the bare txid, found by comparing key digests.
+//
+// Pagination records of large transactions carry their own deleteAtHeight but have no unminedSince bin,
+// so they are judged by their master record, which is read in one batch. Otherwise the pagination
+// records would be deleted from under a protected master. The page is kept whenever the answer is
+// uncertain (batch failure, per-record error other than key-not-found, empty result, key build error);
+// the next prune cycle retries it. A page whose master does not exist (orphan) is deleted.
+func (s *Service) dropUnminedRecords(chunk []*aerospike.Result) ([]*aerospike.Result, int, []*dahClear) {
+	isProtected := func(bins aerospike.BinMap) bool {
+		if v, ok := bins[s.fieldUnminedSince]; !ok || v == nil {
+			return false
+		}
+
+		conflicting, _ := bins[s.fieldConflicting].(bool)
+
+		return !conflicting
+	}
+
+	type pagination struct {
+		idx       int
+		masterKey *aerospike.Key
+	}
+
+	var pages []pagination
+
+	protected := make([]bool, len(chunk))
+	dropped := 0
+
+	protect := func(i int) {
+		protected[i] = true
+		dropped++
+	}
+
+	clearsByMaster := make(map[string]*dahClear)
+
+	addClear := func(masterKey *aerospike.Key, pageKeys ...*aerospike.Key) {
+		c, ok := clearsByMaster[string(masterKey.Digest())]
+		if !ok {
+			c = &dahClear{masterKey: masterKey}
+			clearsByMaster[string(masterKey.Digest())] = c
+		}
+
+		for _, pk := range pageKeys {
+			d := string(pk.Digest())
+			if _, dup := c.seen[d]; dup {
+				continue
+			}
+
+			if c.seen == nil {
+				c.seen = make(map[string]struct{}, len(pageKeys))
+			}
+
+			c.seen[d] = struct{}{}
+			c.pageKeys = append(c.pageKeys, pk)
+		}
+	}
+
+	for i, rec := range chunk {
+		if rec.Err != nil || rec.Record == nil || rec.Record.Bins == nil {
+			continue
+		}
+
+		bins := rec.Record.Bins
+
+		if extraRecs, isMaster := bins[s.fieldTotalExtraRecs]; isMaster {
+			if isProtected(bins) {
+				protect(i)
+
+				var pageKeys []*aerospike.Key
+
+				if n, _ := extraRecs.(int); n > 0 {
+					if h, herr := chainhash.NewHash(bytesBin(bins[s.fieldTxID])); herr == nil {
+						for num := 1; num <= n; num++ {
+							if k, kerr := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(h, uint32(num))); kerr == nil { //nolint:gosec
+								pageKeys = append(pageKeys, k)
+							}
+						}
+					}
+				}
+
+				addClear(rec.Record.Key, pageKeys...)
+			}
+
+			continue
+		}
+
+		// No totalExtraRecs bin: either a master from a writer that does not set it, or a pagination
+		// record. Only the master record is stored under the bare txid.
+		txIDBytes, ok := bins[s.fieldTxID].([]byte)
+		if !ok || len(txIDBytes) != chainhash.HashSize {
+			continue
+		}
+
+		txHash, err := chainhash.NewHash(txIDBytes)
+		if err != nil {
+			continue
+		}
+
+		masterKey, err := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(txHash, 0))
+		if err != nil {
+			// cannot tell whether this is the master or a page, so keep it
+			protect(i)
+
+			continue
+		}
+
+		if isProtected(bins) {
+			protect(i)
+
+			if bytes.Equal(masterKey.Digest(), rec.Record.Key.Digest()) {
+				addClear(rec.Record.Key) // legacy master
+			}
+
+			continue
+		}
+
+		if bytes.Equal(masterKey.Digest(), rec.Record.Key.Digest()) {
+			continue // this record is the master and is not protected
+		}
+
+		pages = append(pages, pagination{idx: i, masterKey: masterKey})
+	}
+
+	if len(pages) > 0 {
+		keys := make([]*aerospike.Key, len(pages))
+		for i, p := range pages {
+			keys[i] = p.masterKey
+		}
+
+		reads, batchErr := s.readMasters(keys)
+		if batchErr != nil {
+			s.logger.Errorf("[pruner] failed to read master records of %d pagination records, keeping them: %v", len(pages), batchErr)
+		}
+
+		for i, p := range pages {
+			keep := batchErr != nil || len(reads) != len(pages)
+			if !keep {
+				r := reads[i]
+
+				switch {
+				case r.err != nil:
+					var asErr aerospike.Error
+					// only a missing master (orphan page) may be deleted
+					keep = !(errors.As(r.err, &asErr) && asErr.Matches(types.KEY_NOT_FOUND_ERROR))
+				case r.record == nil || r.record.Bins == nil:
+					keep = true // neither an error nor a record: ambiguous
+				default:
+					keep = isProtected(r.record.Bins)
+					if keep {
+						// positively unmined: the master and this page lose their DAH
+						addClear(p.masterKey, chunk[p.idx].Record.Key)
+					}
+				}
+			}
+
+			if keep {
+				protect(p.idx)
+			}
+		}
+	}
+
+	if dropped == 0 {
+		return chunk, 0, nil
+	}
+
+	prometheusUtxoRecordsSkippedUnmined.Add(float64(dropped))
+
+	kept := make([]*aerospike.Result, 0, len(chunk)-dropped)
+	for i, rec := range chunk {
+		if !protected[i] {
+			kept = append(kept, rec)
+		}
+	}
+
+	clears := make([]*dahClear, 0, len(clearsByMaster))
+	for _, c := range clearsByMaster {
+		clears = append(clears, c)
+	}
+
+	return kept, dropped, clears
+}
+
+// dahClear names a protected master whose deleteAtHeight, and that of the listed pagination
+// records, is to be cleared.
+type dahClear struct {
+	masterKey *aerospike.Key
+	pageKeys  []*aerospike.Key
+	seen      map[string]struct{} // digests of pageKeys, to dedupe in O(1)
+}
+
+func bytesBin(v interface{}) []byte {
+	b, _ := v.([]byte)
+	return b
+}
+
+// batchOperate runs a batch; batchOperateFn overrides it in tests.
+func (s *Service) batchOperate(records []aerospike.BatchRecordIfc) error {
+	if s.batchOperateFn != nil {
+		return s.batchOperateFn(s.batchPolicy, records)
+	}
+
+	return s.client.BatchOperate(s.batchPolicy, records)
+}
+
+// hadDAH reports whether a clear write found a deleteAtHeight to clear. The write reads the bin
+// before clearing it, so the result is the old value, either bare or as the first operation result.
+func (s *Service) hadDAH(br *aerospike.BatchRecord) bool {
+	if br.Record == nil || br.Record.Bins == nil {
+		return false
+	}
+
+	switch v := br.Record.Bins[s.fieldDeleteAtHeight].(type) {
+	case int:
+		return true
+	case aerospike.OpResults:
+		return len(v) > 0 && v[0] != nil
+	case []interface{}:
+		return len(v) > 0 && v[0] != nil
+	}
+
+	return false
+}
+
+// clearUnminedDAH clears deleteAtHeight on protected unmined masters and then on their pagination
+// records, one batch each, and returns how many records actually had a DAH cleared. The master write
+// only applies while the record is still unmined, not conflicting and not preserved, so a concurrent
+// re-mine is not undone; when it is filtered out the pages are left alone too. The pages are written
+// only after their master succeeded.
+//
+// A master that has no DAH itself (it was reached through a page, or an earlier cycle cleared it)
+// is not counted, but its pages are still cleared: otherwise a page that kept its DAH would be returned
+// by the DAH query every cycle.
+//
+// If the master is re-mined between the master clear and the page clear, a page can end up without a
+// DAH while the master has one. That does not leak: the pages are deleted by computed key together
+// with their master when the master is pruned.
+//
+// A failure is only logged: nothing is deleted on its account and the records are returned by the DAH
+// query again next cycle. Nothing is written when deletions are skipped (dry run) or ctx is done.
+func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
+	if len(clears) == 0 || s.settings.Pruner.SkipDeletions || ctx.Err() != nil {
+		return 0
+	}
+
+	// read the old DAH first so only records that had one are counted
+	clearOps := []*aerospike.Operation{
+		aerospike.GetBinOp(s.fieldDeleteAtHeight),
+		aerospike.PutOp(aerospike.NewBin(s.fieldDeleteAtHeight, nil)),
+	}
+
+	masterPolicy := aerospike.NewBatchWritePolicy()
+	masterPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	masterPolicy.FilterExpression = aerospike.ExpAnd(
+		aerospike.ExpBinExists(s.fieldUnminedSince),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.PreserveUntil.String())),
+		aerospike.ExpOr(
+			aerospike.ExpNot(aerospike.ExpBinExists(s.fieldConflicting)),
+			aerospike.ExpNot(aerospike.ExpBoolBin(s.fieldConflicting)),
+		),
+	)
+
+	masterBatch := make([]aerospike.BatchRecordIfc, len(clears))
+	for i, c := range clears {
+		masterBatch[i] = aerospike.NewBatchWrite(masterPolicy, c.masterKey, clearOps...)
+	}
+
+	if err := s.batchOperate(masterBatch); err != nil {
+		s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d unmined records, retrying next cycle: %v", len(clears), err)
+		return 0
+	}
+
+	pagePolicy := aerospike.NewBatchWritePolicy()
+	pagePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	var pageBatch []aerospike.BatchRecordIfc
+
+	masters, pages, failed := 0, 0, 0
+
+	for i, c := range clears {
+		br := masterBatch[i].BatchRec()
+		if br.Err != nil {
+			var asErr aerospike.Error
+			if errors.As(br.Err, &asErr) && asErr.Matches(types.FILTERED_OUT, types.KEY_NOT_FOUND_ERROR) {
+				continue // re-mined, conflicting, preserved or gone: leave it alone
+			}
+
+			failed++
+
+			continue
+		}
+
+		if s.hadDAH(br) {
+			masters++
+		}
+
+		for _, pk := range c.pageKeys {
+			pageBatch = append(pageBatch, aerospike.NewBatchWrite(pagePolicy, pk, clearOps...))
+		}
+	}
+
+	if len(pageBatch) > 0 && ctx.Err() == nil {
+		if err := s.batchOperate(pageBatch); err != nil {
+			s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d pagination records, retrying next cycle: %v", len(pageBatch), err)
+		} else {
+			for _, r := range pageBatch {
+				br := r.BatchRec()
+
+				switch {
+				case br.Err != nil:
+					failed++
+				case s.hadDAH(br):
+					pages++
+				}
+			}
+		}
+	}
+
+	if failed > 0 {
+		s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d unmined records, retrying next cycle", failed)
+	}
+
+	if cleared := masters + pages; cleared > 0 {
+		prometheusUtxoDAHClearedUnmined.Add(float64(cleared))
+		s.logger.Infof("[pruner] cleared deleteAtHeight of %d unmined records (%d masters, %d pagination records)", cleared, masters, pages)
+	}
+
+	return masters + pages
 }
 
 // batchVerifyChildrenSafety checks multiple child transactions at once to determine if their parents
@@ -1622,14 +2046,14 @@ func (s *Service) buildParentUpdateRecords(updates map[string]*parentUpdateInfo)
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
 
 	for _, info := range updates {
-		childHashList := make([]interface{}, 0, len(info.childHashes))
-		for _, childHash := range info.childHashes {
-			childHashList = append(childHashList, childHash.String())
-		}
-
 		if s.buildAddDeletedChildrenRecord != nil {
-			batchRecords = append(batchRecords, s.buildAddDeletedChildrenRecord(batchUDFPolicy, info.key, childHashList))
+			batchRecords = append(batchRecords, s.buildAddDeletedChildrenRecord(batchUDFPolicy, info.key, info.childHashes))
 		} else {
+			childHashList := make([]interface{}, 0, len(info.childHashes))
+			for _, childHash := range info.childHashes {
+				childHashList = append(childHashList, childHash.String())
+			}
+
 			batchRecords = append(batchRecords, aerospike.NewBatchUDF(
 				batchUDFPolicy,
 				info.key,
@@ -1858,26 +2282,27 @@ func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[
 // the same response encoding by anything in this repo, so an unreadable response
 // means the parent update's outcome is unknown. See classifyParentUpdateResult.
 func addDeletedChildrenStatus(resp interface{}) (status, errorCode, errorMessage string, ok bool) {
-	lookup, recognised := addDeletedChildrenFieldLookup(resp)
+	status, ok, recognised := addDeletedChildrenField(resp, fieldStatus)
 	if !recognised {
 		return "", "", "", false
 	}
 
-	status, ok = lookup(fieldStatus)
-	errorCode, _ = lookup(fieldErrorCode)
+	errorCode, _, _ = addDeletedChildrenField(resp, fieldErrorCode)
 
 	// Producers emit "message"; fall back to the "errorMessage" alias only when
 	// "message" is absent or empty.
-	if errorMessage, _ = lookup(fieldMessage); errorMessage == "" {
-		errorMessage, _ = lookup(fieldErrorMessage)
+	if errorMessage, _, _ = addDeletedChildrenField(resp, fieldMessage); errorMessage == "" {
+		errorMessage, _, _ = addDeletedChildrenField(resp, fieldErrorMessage)
 	}
 
 	return status, errorCode, errorMessage, ok
 }
 
-// addDeletedChildrenFieldLookup returns a string-field accessor over whichever
-// map encoding the response arrived in, or recognised == false when resp is not a
-// map at all.
+// addDeletedChildrenField reads one string field from whichever map encoding the
+// response arrived in. ok reports the field was present as a string; recognised
+// is false when resp is not a map at all. It is a plain function rather than a
+// returned accessor because a closure over the map allocated once per parent
+// update on the cleanup hot path.
 //
 // Three shapes are handled. The UDF path yields map[interface{}]interface{}
 // (the aerospike client's unpackMapNormal). map[string]interface{} is accepted
@@ -1886,34 +2311,28 @@ func addDeletedChildrenStatus(resp interface{}) (status, errorCode, errorMessage
 // ordered-map ext header) — no producer is known to emit it for this op, but
 // accepting it costs a case and rejecting it would, post-fail-closed, turn a
 // working native deployment into a hard error.
-func addDeletedChildrenFieldLookup(resp interface{}) (lookup func(string) (string, bool), recognised bool) {
+func addDeletedChildrenField(resp interface{}, field string) (value string, ok, recognised bool) {
 	switch m := resp.(type) {
 	case map[interface{}]interface{}:
-		return func(field string) (string, bool) {
-			v, ok := m[field].(string)
-			return v, ok
-		}, true
+		value, ok = m[field].(string)
+		return value, ok, true
 
 	case map[string]interface{}:
-		return func(field string) (string, bool) {
-			v, ok := m[field].(string)
-			return v, ok
-		}, true
+		value, ok = m[field].(string)
+		return value, ok, true
 
 	case []aerospike.MapPair:
-		return func(field string) (string, bool) {
-			for _, pair := range m {
-				if key, isString := pair.Key.(string); isString && key == field {
-					v, ok := pair.Value.(string)
-					return v, ok
-				}
+		for _, pair := range m {
+			if key, isString := pair.Key.(string); isString && key == field {
+				value, ok = pair.Value.(string)
+				return value, ok, true
 			}
+		}
 
-			return "", false
-		}, true
+		return "", false, true
 
 	default:
-		return nil, false
+		return "", false, false
 	}
 }
 
@@ -1982,6 +2401,25 @@ func tallyParentUpdateResults(batchRecords []aerospike.BatchRecordIfc, usesModTe
 	return tally
 }
 
+// isKeyNotFound reports whether a per-record batch error is KEY_NOT_FOUND, the
+// routine result for a parent or child the pruner already deleted. The client
+// sets these as a bare *AerospikeError with nothing wrapped, which is answered
+// from the ResultCode field; Matches, kept for anything else, boxes its variadic
+// argument and so allocated once per not-found result on the cleanup hot path.
+func isKeyNotFound(err aerospike.Error) bool {
+	if bare, ok := err.(*aerospike.AerospikeError); ok { //nolint:errorlint // exact-type fast path; anything wrapped takes Matches below
+		if bare == nil {
+			return false
+		}
+
+		if bare.Unwrap() == nil {
+			return bare.ResultCode == types.KEY_NOT_FOUND_ERROR
+		}
+	}
+
+	return err.Matches(types.KEY_NOT_FOUND_ERROR)
+}
+
 // tallyChildDeletionResults counts failed child-record deletions. KEY_NOT_FOUND
 // is idempotent success here — the child is already gone, which is the outcome
 // the deletion was asking for.
@@ -1989,7 +2427,7 @@ func tallyChildDeletionResults(batchRecords []aerospike.BatchRecordIfc) (deleteE
 	for _, rec := range batchRecords {
 		batchRec := rec.BatchRec()
 
-		if batchRec.Err == nil || batchRec.Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
+		if batchRec.Err == nil || isKeyNotFound(batchRec.Err) {
 			continue
 		}
 
@@ -2037,7 +2475,7 @@ const (
 // has no response map at all and a nil Err is the whole of its success signal.
 func classifyParentUpdateResult(batchRec *aerospike.BatchRecord, usesModTeranode bool) (parentUpdateOutcome, error) {
 	if batchRec.Err != nil {
-		if batchRec.Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
+		if isKeyNotFound(batchRec.Err) {
 			return parentUpdateNotFound, nil
 		}
 
@@ -2057,15 +2495,18 @@ func classifyParentUpdateResult(batchRec *aerospike.BatchRecord, usesModTeranode
 		return parentUpdateFailed, errors.NewProcessingError("parent update returned no %q bin", luaSuccessBin)
 	}
 
+	// Most responses are OK, which needs only the status field; the error fields
+	// are read on the failure branches alone.
+	if status, _, _ := addDeletedChildrenField(resp, fieldStatus); status == statusOK {
+		return parentUpdateOK, nil
+	}
+
 	status, errCode, errMsg, ok := addDeletedChildrenStatus(resp)
 	if !ok {
 		return parentUpdateFailed, errors.NewProcessingError("unreadable parent update response (%T)", resp)
 	}
 
 	switch status {
-	case statusOK:
-		return parentUpdateOK, nil
-
 	case statusError:
 		if errCode == errorCodeTxNotFound {
 			return parentUpdateNotFound, nil

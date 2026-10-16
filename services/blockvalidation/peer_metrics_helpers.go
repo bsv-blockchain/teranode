@@ -56,10 +56,15 @@ const (
 // the real p2p announcer of the same hash. It would also add a gRPC round-trip and double-charge
 // the peer for one corrupt body.
 //
-// Legacy misbehaviour is attributed where it IS enforceable: strikeIfCorruptBlockBody's transient
-// ban score on the serving connection (services/legacy/peer_server.go) and sync-peer rotation via
-// shouldDisconnectOnBlockErr. The three sites implementing the policy are penalizeCorruptBlockPeer,
-// isPeerMalicious and kafkaNotifyBlockInvalid's peerID clearing.
+// Legacy misbehaviour is attributed where it IS enforceable, in the legacy peer server: a body the
+// pipeline sink refuses as the peer's fault is rejected and its association dropped at the read
+// loop, and the host is to be banned when the refusal is one of the three ErrBlockBodyMismatch
+// sites and the wire checksum was verified, which the streaming path cannot do yet, so today no
+// ban is raised (serverPeer.OnBlockBodyRejected, services/legacy/peer_server.go); a legacy block judged invalid
+// at commit drops the delivering association through the park table (netsync
+// applyParkDisposition). So the legacy: prefix only has to keep these IDs out of the p2p ban
+// machinery. The three sites implementing that are penalizeCorruptBlockPeer, isPeerMalicious and
+// kafkaNotifyBlockInvalid's peerID clearing.
 func isLegacyPeerID(peerID string) bool {
 	return strings.HasPrefix(peerID, LegacyPeerIDPrefix)
 }

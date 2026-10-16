@@ -3,7 +3,6 @@ package aerospike
 import (
 	"sync"
 
-	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
@@ -63,24 +62,15 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 	// never reclaim and extractTxHash would fail on. The miss therefore reaches
 	// the pruner as KEY_NOT_FOUND, which it counts as a skipped parent.
 	opts := aeropruner.Options{
-		Logger:        s.logger,
-		Ctx:           s.ctx,
-		Client:        s.client,
-		ExternalStore: s.externalStore,
-		Namespace:     s.namespace,
-		Set:           s.setName,
-		IndexWaiter:   s,
-		LuaPackage:    LuaPackage,
-		BuildAddDeletedChildrenRecord: func(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []interface{}) aerospike.BatchRecordIfc {
-			return s.teranodeBatchRecord(
-				policy,
-				LuaPackage,
-				key,
-				subOpAddDeletedChildren,
-				"addDeletedChildren",
-				childHashes,
-			)
-		},
+		Logger:                        s.logger,
+		Ctx:                           s.ctx,
+		Client:                        s.client,
+		ExternalStore:                 s.externalStore,
+		Namespace:                     s.namespace,
+		Set:                           s.setName,
+		IndexWaiter:                   s,
+		LuaPackage:                    LuaPackage,
+		BuildAddDeletedChildrenRecord: s.prunerAddDeletedChildrenRecord,
 
 		// Give the pruner the same runtime demotion every other native call site
 		// has. The startup probe samples one partition master, so a mixed-version

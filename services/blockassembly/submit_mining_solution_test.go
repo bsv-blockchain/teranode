@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
@@ -296,6 +297,12 @@ func TestValidateCoinbaseForSubmission(t *testing.T) {
 		err := validateCoinbaseForSubmission("job", mkCoinbase(p2sh))
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "bad-txns-vout-p2sh")
+
+		// A local policy refusal of what the submitter asked for, classed as one so
+		// the reason reaches them: the RPC boundary surfaces this class at any depth,
+		// which generatetoaddress needs because GenerateBlocks wraps it twice. A
+		// PROCESSING error there reads as the node's own fault.
+		require.ErrorIs(t, err, errors.ErrBlockPolicyDeclined)
 	})
 
 	t.Run("P2PKH output accepted", func(t *testing.T) {

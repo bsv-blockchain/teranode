@@ -619,7 +619,7 @@ func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights [
 		}
 	}
 
-	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, minHeight, maxHeight)
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, readFromForMTP(minHeight), maxHeight)
 	if err != nil {
 		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastForHeights] failed to get block headers from %d to %d", minHeight, maxHeight, err)
 	}
@@ -627,6 +627,14 @@ func (c *LocalClient) GetMedianTimePastForHeights(ctx context.Context, heights [
 	mtpByHeight := make(map[uint32]uint32, len(metas))
 	for _, meta := range metas {
 		mtpByHeight[meta.Height] = meta.MedianTimePast
+	}
+
+	if _, ok := mtpByHeight[maxHeight]; !ok {
+		computed, err := computeMTPForMissingHeight(metas, maxHeight)
+		if err != nil {
+			return nil, err
+		}
+		mtpByHeight[maxHeight] = computed
 	}
 
 	mtps := make([]uint32, len(heights))
@@ -652,14 +660,16 @@ func (c *LocalClient) GetMedianTimePastRange(ctx context.Context, fromHeight, to
 		return []uint32{}, nil
 	}
 
-	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, fromHeight, toHeight)
+	_, metas, err := c.store.GetBlockHeadersByHeight(ctx, readFromForMTP(fromHeight), toHeight)
 	if err != nil {
 		return nil, errors.NewProcessingError("[LocalClient][GetMedianTimePastRange] failed to get block headers from %d to %d", fromHeight, toHeight, err)
 	}
 
 	result := make([]uint32, toHeight-fromHeight+1)
 	for _, meta := range metas {
-		result[meta.Height-fromHeight] = meta.MedianTimePast
+		if meta.Height >= fromHeight && meta.Height <= toHeight {
+			result[meta.Height-fromHeight] = meta.MedianTimePast
+		}
 	}
 
 	// If the top height is not in the database (block not yet persisted), compute its MTP

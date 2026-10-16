@@ -553,7 +553,12 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 				// unlockFailed is carried through, not reset: these checks run after acceptance,
 				// so the record is spent, created and delivered even though the bless is rejected
 				// here, and the caller still has to retry its unlock.
-				return nil, unlockFailed, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain, in block %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockID)
+				// The block id is the store's key, not a public identifier, and this
+				// verdict's class is on the shared allowlist, so any boundary that
+				// sees it shows its message: the id is logged, not returned.
+				u.logger.Warnf("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain, in block ID %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockID)
+
+				return nil, unlockFailed, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction is already mined on our chain", blockHash.String(), subtreeHash.String(), tx.TxID())
 			}
 		}
 	}
@@ -671,6 +676,11 @@ type ValidateSubtree struct {
 	// When true, validation stops at the first error for quick failure detection.
 	// When false, validation attempts to process all transactions to collect comprehensive error information.
 	AllowFailFast bool
+
+	// FromBlock marks a subtree validated for a block (CheckBlockSubtrees,
+	// CheckSubtreeFromBlock). Its cache probe uses the block probe pool, so a burst
+	// of peer-announced subtrees cannot delay it.
+	FromBlock bool
 }
 
 type metaSliceItem struct {
@@ -824,7 +834,12 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 		// unlike many other lists, this needs to be a pointer list, because a lot of values could be empty = nil
 
 		// 1. First attempt to load the txMeta from the cache...
-		missed, err := u.processTxMetaUsingCache(ctx, txHashes, txMetaSlice, failFast)
+		probePool := &u.peerProbePool
+		if v.FromBlock {
+			probePool = &u.blockProbePool
+		}
+
+		missed, err := u.probeTxMetaCache(ctx, probePool, txHashes, txMetaSlice, failFast)
 		if err != nil {
 			if errors.Is(err, errors.ErrThresholdExceeded) {
 				u.logger.Warnf("[ValidateSubtreeInternal][%s] [attempt #%d] too many missing txmeta entries in cache (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
@@ -850,6 +865,17 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 			// 2. ...then attempt to load the txMeta from the store (i.e - aerospike in production)
 			missed, err = u.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, blockIds, batched, failFast, false)
 			if err != nil {
+				// Only fail fast can exceed the threshold, and fail fast is off on the final attempt, so
+				// retrying here ends in the network fetch below instead of dropping the subtree.
+				if errors.Is(err, errors.ErrThresholdExceeded) {
+					u.logger.Warnf("[ValidateSubtreeInternal][%s] [attempt #%d] too many txs missing from the store (fail fast check only, will retry)", v.SubtreeHash.String(), attempt)
+					if waitErr := u.waitForRetryOrPriority(ctx, v.SubtreeHash.String(), retrySleepDuration); waitErr != nil {
+						return nil, waitErr
+					}
+
+					continue
+				}
+
 				// Don't wrap the error again, processTxMetaUsingStore returns the correctly formatted error.
 				return nil, err
 			}
@@ -903,7 +929,10 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 
 	u.logger.Debugf("[ValidateSubtreeInternal][%s] adding %d nodes to subtree instance", v.SubtreeHash.String(), len(txHashes))
 
-	seen := make(map[chainhash.Hash]struct{}, len(txHashes))
+	seenSet := getSeenSet(len(txHashes))
+	defer putSeenSet(seenSet)
+
+	seen := seenSet.m
 
 	for idx, txHash := range txHashes {
 		// if placeholder just add it and continue
@@ -963,8 +992,9 @@ func (u *Server) ValidateSubtreeInternal(ctx context.Context, v ValidateSubtree,
 	// only set this on no errors
 	prometheusSubtreeValidationValidateSubtreeDuration.Observe(float64(time.Since(startTotal).Microseconds()) / 1_000_000)
 
-	// Increase peer's reputation for providing a valid subtree
-	if u.p2pClient != nil && v.PeerID != "" {
+	// Increase peer's reputation for providing a valid subtree, never a legacy peer's: see
+	// reportsValidSubtreeTo.
+	if u.p2pClient != nil && reportsValidSubtreeTo(v.PeerID) {
 		if err := u.p2pClient.ReportValidSubtree(ctx, v.PeerID, v.SubtreeHash.String()); err != nil {
 			u.logger.Warnf("[ValidateSubtreeInternal][%s] failed to report valid subtree to peer %s: %v", v.SubtreeHash.String(), v.PeerID, err)
 		}
@@ -1592,7 +1622,16 @@ func (u *Server) getSubtreeMissingTxs(ctx context.Context, subtreeHash chainhash
 									fileformat.FileTypeSubtreeData,
 									subtreeDataBytes,
 									options.WithDeleteAt(dah),
-								); subtreeDataErr != nil {
+								); subtreeDataErr != nil && errors.Is(subtreeDataErr, errors.ErrBlobAlreadyExists) {
+									// Between the Exists check above and this Set a whole subtree_data fetch
+									// went by, and another writer of this key (processSubtreeDataStream for a
+									// sibling block, the block persister, the asset service's on-demand
+									// writer) published first, so the store refused this Set. Their file
+									// holds this subtree's transactions, so it is read below like a file
+									// found at the Exists check; the per-transaction fallback is not taken.
+									u.logger.Infof("[validateSubtree][%s] subtree data from %s was published by another writer first; reading theirs", subtreeHash.String(), url)
+									subtreeDataExists = true
+								} else if subtreeDataErr != nil {
 									u.logger.Errorf("[validateSubtree][%s] failed to store subtree data: %v", subtreeHash.String(), subtreeDataErr)
 								} else {
 									u.logger.Infof("[validateSubtree][%s] stored subtree data from %s", subtreeHash.String(), url)

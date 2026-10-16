@@ -3928,9 +3928,14 @@ type PeerRegistryInfo struct {
 	CatchupSuccesses int64 `protobuf:"varint,44,opt,name=catchup_successes,json=catchupSuccesses,proto3" json:"catchup_successes,omitempty"`
 	CatchupFailures  int64 `protobuf:"varint,45,opt,name=catchup_failures,json=catchupFailures,proto3" json:"catchup_failures,omitempty"`
 	// Wire-protocol-only fields. Absent (nil) for libp2p peers.
-	Legacy        *LegacyPeerInfo `protobuf:"bytes,46,opt,name=legacy,proto3" json:"legacy,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Legacy *LegacyPeerInfo `protobuf:"bytes,46,opt,name=legacy,proto3" json:"legacy,omitempty"`
+	// Raw height the peer advertised, before the unvalidated-lead cap that
+	// produces `height`. Telemetry only: `height` remains the value sync
+	// decisions read. While this node catches up the two differ, and reporting
+	// only the capped one makes every peer appear to sit at local+max_lead.
+	AdvertisedHeight uint32 `protobuf:"varint,47,opt,name=advertised_height,json=advertisedHeight,proto3" json:"advertised_height,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PeerRegistryInfo) Reset() {
@@ -4283,6 +4288,13 @@ func (x *PeerRegistryInfo) GetLegacy() *LegacyPeerInfo {
 		return x.Legacy
 	}
 	return nil
+}
+
+func (x *PeerRegistryInfo) GetAdvertisedHeight() uint32 {
+	if x != nil {
+		return x.AdvertisedHeight
+	}
+	return 0
 }
 
 // RegisterPeerRequest registers or updates a peer in the centralized registry.
@@ -7619,7 +7631,7 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x13GetFSMStateResponse\x122\n" +
 	"\x05state\x18\x01 \x01(\x0e2\x1c.blockchain_api.FSMStateTypeR\x05state\"I\n" +
 	"\x13SendFSMEventRequest\x122\n" +
-	"\x05event\x18\x01 \x01(\x0e2\x1c.blockchain_api.FSMEventTypeR\x05event\"\xd1\x12\n" +
+	"\x05event\x18\x01 \x01(\x0e2\x1c.blockchain_api.FSMEventTypeR\x05event\"\xfe\x12\n" +
 	"\x10PeerRegistryInfo\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\x12D\n" +
 	"\x0etransport_type\x18\x02 \x01(\x0e2\x1d.blockchain_api.TransportTypeR\rtransportType\x12\x1f\n" +
@@ -7671,7 +7683,8 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x10catchup_attempts\x18+ \x01(\x03R\x0fcatchupAttempts\x12+\n" +
 	"\x11catchup_successes\x18, \x01(\x03R\x10catchupSuccesses\x12)\n" +
 	"\x10catchup_failures\x18- \x01(\x03R\x0fcatchupFailures\x126\n" +
-	"\x06legacy\x18. \x01(\v2\x1e.blockchain_api.LegacyPeerInfoR\x06legacy\"K\n" +
+	"\x06legacy\x18. \x01(\v2\x1e.blockchain_api.LegacyPeerInfoR\x06legacy\x12+\n" +
+	"\x11advertised_height\x18/ \x01(\rR\x10advertisedHeight\"K\n" +
 	"\x13RegisterPeerRequest\x124\n" +
 	"\x04peer\x18\x01 \x01(\v2 .blockchain_api.PeerRegistryInfoR\x04peer\"\x93\x01\n" +
 	"\"RecordValidatedPeerProgressRequest\x12\x17\n" +

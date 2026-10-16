@@ -18,7 +18,7 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 | Setting | Type | Default | Environment Variable | Usage |
 | --------- | ------ | --------- | --------------------- | ------- |
 | MaxTxSizePolicy | int | 10485760 (10MB) | maxtxsizepolicy | **CRITICAL** - Maximum transaction size policy |
-| MaxOrphanTxSize | int | 1000000 (1MB) | maxorphantxsize | Maximum orphan transaction size |
+| MaxOrphanTxSize | int | 0 (not wired up; the getInt call is commented out in settings.go) | maxorphantxsize | Maximum orphan transaction size |
 | MaxScriptSizePolicy | int | 100000000 (100MB) | maxscriptsizepolicy | **CRITICAL** - Maximum script size policy |
 | MaxScriptNumLengthPolicy | int | 10000 | maxscriptnumlengthpolicy | Maximum script number length |
 | MaxOpsPerScriptPolicy | int64 | 1000000 | maxopsperscriptpolicy | Maximum operations per script |
@@ -41,10 +41,10 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 
 | Setting | Type | Default | Environment Variable | Usage |
 | --------- | ------ | --------- | --------------------- | ------- |
-| MaxStdTxValidationDuration | int | 3 | maxstdtxvalidationduration | Maximum validation time for standard transactions (ms) |
-| MaxNonStdTxValidationDuration | int | 1000 | maxnonstdtxvalidationduration | Maximum validation time for non-standard transactions (ms) |
-| MaxTxChainValidationBudget | int | 50 | maxtxchainvalidationbudget | Total time budget for chain validation (ms) |
-| ValidationClockCPU | bool | false | validationclockcpu | Use CPU time instead of wall-clock for validation timeouts |
+| MaxStdTxValidationDuration | int | 0 (not wired up; the getInt call is commented out in settings.go) | maxstdtxvalidationduration | Maximum validation time for standard transactions (ms) |
+| MaxNonStdTxValidationDuration | int | 0 (not wired up; the getInt call is commented out in settings.go) | maxnonstdtxvalidationduration | Maximum validation time for non-standard transactions (ms) |
+| MaxTxChainValidationBudget | int | 0 (not wired up; the getInt call is commented out in settings.go) | maxtxchainvalidationbudget | Total time budget for chain validation (ms) |
+| ValidationClockCPU | bool | false (not wired up; the getBool call is commented out in settings.go) | validationclockcpu | Use CPU time instead of wall-clock for validation timeouts |
 
 ### Data Carrier Settings
 
@@ -57,8 +57,8 @@ Policy settings control BSV Blockchain consensus rules and transaction validatio
 
 | Setting | Type | Default | Environment Variable | Usage |
 | --------- | ------ | --------- | --------------------- | ------- |
-| LimitAncestorCount | int | 1000000 | limitancestorcount | Maximum unconfirmed ancestor count in mempool |
-| LimitCPFPGroupMembersCount | int | 1000000 | limitcpfpgroupmemberscount | Maximum CPFP group members |
+| LimitAncestorCount | int | 0 (not wired up; the getInt call is commented out in settings.go) | limitancestorcount | Maximum unconfirmed ancestor count in mempool |
+| LimitCPFPGroupMembersCount | int | 0 (not wired up; the getInt call is commented out in settings.go) | limitcpfpgroupmemberscount | Maximum CPFP group members |
 
 ### Mining and Fee Settings
 

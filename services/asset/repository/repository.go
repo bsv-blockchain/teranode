@@ -338,7 +338,21 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 		return txMeta.Tx.ExtendedBytes(), nil
 	}
 
+	// A UTXO store failure that is not a miss has to survive the fallback below.
+	// Otherwise an outage on a transaction held only in the UTXO store - any
+	// transaction seen inside a block rather than submitted here - comes back as
+	// the tx store's "not found", and callers deny a transaction this node holds.
+	var utxoFault error
+
 	if err != nil {
+		// The store's own fault class first. A not-found anywhere in the chain is not
+		// a miss when the store has called it a storage failure: aerospike reports an
+		// external transaction whose blobs are gone as a STORAGE_ERROR wrapping the
+		// blob store's not-found.
+		if errors.Is(err, errors.ErrStorageError) || (!errors.Is(err, errors.ErrTxNotFound) && !errors.Is(err, errors.ErrNotFound)) {
+			utxoFault = err
+		}
+
 		repo.logger.Warnf("[Repository] GetTransaction: %s not found in txmeta store: %v", hash.String(), err)
 	} else {
 		// The record exists but does not carry the transaction we were asked for
@@ -354,6 +368,15 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 
 	tx, err := repo.TxStore.Get(ctx, hash.CloneBytes(), fileformat.FileTypeTx)
 	if err != nil {
+		if utxoFault != nil && (errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlobNotFound)) {
+			// The fault itself is logged above and deliberately not wrapped here:
+			// the HTTP layer answers 404 for any error with a not-found in its chain,
+			// and the fault can carry one without being a miss - aerospike reports an
+			// external transaction whose blobs are gone as a STORAGE_ERROR wrapping
+			// the blob store's not-found.
+			return nil, errors.NewServiceError("[Repository] GetTransaction: %s: the utxo store failed and the tx store has no copy", hash.String())
+		}
+
 		return nil, err
 	}
 

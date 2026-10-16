@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
@@ -405,8 +407,10 @@ func TestHandleGetRawTransactionEdgeCases(t *testing.T) {
 	})
 
 	t.Run("HTTP server returns 404", func(t *testing.T) {
-		// Create test server that returns 404
+		// A 404 the asset handler marks as its verdict on the transaction, as the
+		// real one does; an unmarked 404 is a routing failure and not this case.
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set(util.AssetNotFoundHeader, util.AssetNotFoundTx)
 			w.WriteHeader(http.StatusNotFound)
 		}))
 		defer server.Close()
@@ -420,13 +424,28 @@ func TestHandleGetRawTransactionEdgeCases(t *testing.T) {
 
 		verboseLevel := 0
 		cmd := &bsvjson.GetRawTransactionCmd{
-			Txid:    "nonexistenttx",
+			Txid:    strings.Repeat("ab", 32),
 			Verbose: &verboseLevel,
 		}
 
 		_, err := handleGetRawTransaction(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "404")
+
+		// Assert on what a caller actually receives, not on the handler's bare
+		// error. The previous version checked err.Error() for "404" and passed
+		// while the reply on the wire was -32603 "internal error", because the
+		// handler is called directly here and never reaches createMarshalledReply,
+		// which is where the trimming happens.
+		reply, mErr := s.createMarshalledReply(1, nil, err)
+		require.NoError(t, mErr)
+
+		var parsed bsvjson.Response
+		require.NoError(t, json.Unmarshal(reply, &parsed))
+		require.NotNil(t, parsed.Error)
+
+		require.Equal(t, bsvjson.ErrRPCInvalidAddressOrKey, parsed.Error.Code,
+			"an unknown txid is -5, matching bitcoind, not an internal error")
+		require.Equal(t, txNotFoundMessage, parsed.Error.Message)
 	})
 }
 
@@ -1273,7 +1292,14 @@ func TestHandleGetBlockComprehensive(t *testing.T) {
 
 		_, err := handleGetBlock(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "blockchain error")
+
+		// getblock names a block, so it goes through rpcLookupError. This
+		// failure is not a not-found, so it keeps the internal code - and the
+		// internal text stays in the log rather than on the wire.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "blockchain error")
 	})
 
 	t.Run("block not on main chain should return -1 confirmations", func(t *testing.T) {
@@ -1458,7 +1484,11 @@ func TestHandleGetBlockByHeightComprehensive(t *testing.T) {
 
 		_, err := handleGetBlockByHeight(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "block not found at height")
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "block not found at height")
 	})
 }
 
@@ -1581,7 +1611,11 @@ func TestHandleGetBlockHeaderComprehensive(t *testing.T) {
 
 		_, err := handleGetBlockHeader(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "header not found")
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "header not found")
 	})
 
 	t.Run("successful block header retrieval with verbose=false", func(t *testing.T) {
@@ -2488,7 +2522,9 @@ func TestHandleGetRawMempoolComprehensive(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Error retrieving raw mempool")
-		assert.Contains(t, rpcErr.Message, "failed to get tx hashes")
+		// The site's context stays; the internal cause does not. It could be a
+		// gRPC dial target or the storage layer's own text. See rpc_errors.go.
+		assert.NotContains(t, rpcErr.Message, "failed to get tx hashes")
 	})
 
 	t.Run("verbose mode - get mining candidate error", func(t *testing.T) {
@@ -2523,7 +2559,7 @@ func TestHandleGetRawMempoolComprehensive(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
 		assert.Contains(t, rpcErr.Message, "Error retrieving mining candidate")
-		assert.Contains(t, rpcErr.Message, "failed to get mining candidate")
+		assert.NotContains(t, rpcErr.Message, "failed to get mining candidate")
 	})
 
 	t.Run("requires block assembly client", func(t *testing.T) {
@@ -2719,7 +2755,14 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		assert.Equal(t, expectedError, err)
+
+		// invalidateblock names a block, so it goes through rpcLookupError:
+		// the caller gets a typed RPC error, and an internal failure that is
+		// not a not-found keeps the internal code without the internal text.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		assert.NotContains(t, rpcErr.Message, "blockchain service unavailable")
 	})
 
 	t.Run("nil blockchain client", func(t *testing.T) {
@@ -2768,7 +2811,14 @@ func TestHandleInvalidateBlockComprehensive(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, result)
-		assert.Equal(t, context.Canceled, err)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		// A plain error fails closed: the boundary cannot tell a context error
+		// from a driver's. The real blockchain client never returns one bare - it
+		// unwraps every gRPC status into a Teranode error first.
+		assert.Equal(t, genericErrorMessage, rpcErr.Message)
 	})
 
 	t.Run("zero block hash", func(t *testing.T) {
@@ -2822,6 +2872,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 		expectedHash, _ := chainhash.NewHashFromStr("00000000000000000007878ec04bb2b2e12317804810f4c26033585b3f81ffaa")
 
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -2853,6 +2904,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 	t.Run("invalid block hash format", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		s := &RPCServer{
@@ -2882,6 +2934,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 		expectedError := errors.New(errors.ERR_ERROR, "validation failed")
 
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -2916,6 +2969,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 	t.Run("nil validation client", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		s := &RPCServer{
@@ -2944,6 +2998,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 	t.Run("context cancellation", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -2995,6 +3050,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 				HashPrevBlock: &chainhash.Hash{},
 			},
 		}, nil)
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -3033,6 +3089,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 				HashPrevBlock: &chainhash.Hash{},
 			},
 		}, nil)
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		mockBlockValidationClient := &mockBlockValidationClient{
@@ -3063,6 +3120,7 @@ func TestHandleReconsiderBlockComprehensive(t *testing.T) {
 
 	t.Run("malformed command type", func(t *testing.T) {
 		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil)
 		mockClient.On("GetLastNInvalidBlocks", mock.Anything, mock.Anything).Return([]*model.BlockInfo{}, nil)
 
 		s := &RPCServer{
@@ -5056,7 +5114,7 @@ func (m *mockBlockValidationClient) BlockFound(ctx context.Context, blockHash *c
 	return nil
 }
 
-func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
+func (m *mockBlockValidationClient) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32, headerProven bool) error {
 	if m.processBlockFunc != nil {
 		return m.processBlockFunc(ctx, block, blockHeight)
 	}
@@ -5098,7 +5156,12 @@ func TestHandleFreezeComprehensive(t *testing.T) {
 
 		_, err := handleFreeze(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires utxo store", func(t *testing.T) {
@@ -5137,7 +5200,12 @@ func TestHandleUnfreezeComprehensive(t *testing.T) {
 
 		_, err := handleUnfreeze(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires utxo store", func(t *testing.T) {
@@ -5178,7 +5246,12 @@ func TestHandleReassignComprehensive(t *testing.T) {
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires valid old UTXO hash", func(t *testing.T) {
@@ -5196,7 +5269,12 @@ func TestHandleReassignComprehensive(t *testing.T) {
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires valid new UTXO hash", func(t *testing.T) {
@@ -5214,7 +5292,12 @@ func TestHandleReassignComprehensive(t *testing.T) {
 
 		_, err := handleReassign(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid byte")
+		// The parser's own text is not the contract; the code and the caller's
+		// input are. A malformed hash answers as getblock does.
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		assert.Equal(t, bsvjson.ErrRPCDecodeHexString, rpcErr.Code)
+		assert.Contains(t, rpcErr.Message, "invalid-")
 	})
 
 	t.Run("requires utxo store", func(t *testing.T) {
@@ -5971,9 +6054,15 @@ func TestHandleSubmitMiningSolutionComprehensive(t *testing.T) {
 			},
 		}
 
+		// The site classifies the failure itself (rpcMiningSubmissionError): a
+		// service error is the node's, so its text stays off the wire.
 		_, err := handleSubmitMiningSolution(context.Background(), s, cmd, nil)
 		require.Error(t, err)
-		assert.Equal(t, expectedError, err)
+
+		rpcErr, ok := err.(*bsvjson.RPCError)
+		require.True(t, ok)
+		require.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
+		require.Equal(t, genericErrorMessage, rpcErr.Message)
 	})
 
 	t.Run("nil block assembly client", func(t *testing.T) {
@@ -6641,7 +6730,9 @@ func TestHandleGenerateToAddressComprehensive(t *testing.T) {
 		rpcErr, ok := err.(*bsvjson.RPCError)
 		require.True(t, ok)
 		assert.Equal(t, bsvjson.ErrRPCInternal.Code, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "block assembly generation failed")
+		// A node fault: its text goes to the log, not the wire.
+		assert.Equal(t, genericErrorMessage, rpcErr.Message)
+		assert.NotContains(t, rpcErr.Message, "block assembly generation failed")
 	})
 
 	t.Run("nil block assembly client", func(t *testing.T) {

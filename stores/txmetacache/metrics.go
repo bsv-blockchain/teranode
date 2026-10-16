@@ -30,7 +30,8 @@ var (
 	// Count of items evicted from the cache due to memory constraints; indicates pressure
 	prometheusBlockValidationTxMetaCacheEvictions prometheus.Gauge
 	// Count of trim operations performed on the cache; tracks memory management activity
-	prometheusBlockValidationTxMetaCacheTrims prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheTrims     prometheus.Gauge
+	prometheusBlockValidationTxMetaCacheLaneWaits prometheus.Gauge
 	// Total size of all map buckets in the cache; monitors memory consumption
 	prometheusBlockValidationTxMetaCacheMapSize prometheus.Gauge
 	// Cumulative count of all elements ever added to the cache; tracks total throughput
@@ -132,6 +133,7 @@ func updateTxMetaCachePrometheusMetrics() {
 		validEntriesCount  uint64
 		currentGenEntries  uint64
 		previousGenEntries uint64
+		laneWaits          uint64
 	)
 
 	for _, cache := range caches {
@@ -148,6 +150,8 @@ func updateTxMetaCachePrometheusMetrics() {
 		validEntriesCount += cacheStats.ValidEntriesCount
 		currentGenEntries += cacheStats.CurrentGenEntries
 		previousGenEntries += cacheStats.PreviousGenEntries
+		laneWaits += cacheStats.LaneWaits
+		evictions += cacheStats.Evictions
 	}
 
 	prometheusBlockValidationTxMetaCacheInsertions.Set(float64(insertions))
@@ -161,6 +165,7 @@ func updateTxMetaCachePrometheusMetrics() {
 	prometheusBlockValidationTxMetaCacheValidEntriesCount.Set(float64(validEntriesCount))
 	prometheusBlockValidationTxMetaCacheCurrentGenEntries.Set(float64(currentGenEntries))
 	prometheusBlockValidationTxMetaCachePreviousGenEntries.Set(float64(previousGenEntries))
+	prometheusBlockValidationTxMetaCacheLaneWaits.Set(float64(laneWaits))
 }
 
 // initPrometheusMetrics initializes all Prometheus metrics for the txmetacache package.
@@ -190,7 +195,7 @@ func initPrometheusMetrics() {
 //   - total_elements_added: Cumulative count of all elements ever added to the cache
 //
 // 4. Memory management metrics:
-//   - evictions: Number of entries removed from the cache due to memory constraints
+//   - evictions: Number of entries removed from the cache: deletes, plus an estimate of ring-wrap evictions on the lockfree cache
 //   - trims: Number of cache cleanup operations performed
 func _initPrometheusMetrics() {
 	// // Size metric tracks the current number of entries in the transaction metadata cache.
@@ -253,15 +258,27 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	// Evictions metric tracks the number of entries that were removed from the cache due to memory constraints
-	// High eviction rates may indicate cache pressure and potential performance degradation,
-	// as frequently used entries might be prematurely removed
+	// Evictions metric tracks the number of entries removed from the cache: explicit deletes
+	// (mined or removed transactions) on every backend, plus, on the lockfree cache, entries
+	// overwritten when a ring wraps (an estimate, which also counts superseded and deleted records). High eviction rates may indicate cache pressure.
 	prometheusBlockValidationTxMetaCacheEvictions = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
 			Subsystem: "tx_meta_cache",
 			Name:      "evictions",
-			Help:      "Number of evictions in the tx meta cache",
+			Help:      "Number of entries removed from the tx meta cache (deletes, plus an estimate of ring-wrap evictions on the lockfree cache)",
+		},
+	)
+
+	// LaneWaits counts the times a lockfree-cache writer found every lane busy
+	// and had to wait. It should stay at 0; a rising value means more writers
+	// run at once than the cache has lanes, which costs CPU in the wait loop.
+	prometheusBlockValidationTxMetaCacheLaneWaits = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "lane_waits",
+			Help:      "Number of times a lockfree txmeta cache writer found every lane busy",
 		},
 	)
 

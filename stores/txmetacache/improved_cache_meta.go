@@ -123,6 +123,71 @@ func (b *improvedCacheBackend) Get(hash chainhash.Hash) (*meta.Data, bool) {
 	return data, true
 }
 
+// getMultiValueSizeHint presizes the value buffer of a batched lookup; a
+// cached txmeta entry is typically 100-200 bytes.
+const getMultiValueSizeHint = 192
+
+// GetMulti looks up many hashes, taking each bucket's read lock once (see
+// ImprovedCache.GetMulti) and decoding outside the locks. out[i] is nil on a
+// miss. Undecodable entries are evicted and count as misses, as in Get.
+func (b *improvedCacheBackend) GetMulti(hashes []chainhash.Hash, keyHashes []uint64, out []*meta.Data) {
+	keys := make([][]byte, len(hashes))
+	for i := range hashes {
+		keys[i] = hashes[i][:]
+	}
+
+	values := make([]byte, 0, len(hashes)*getMultiValueSizeHint)
+
+	spans := make([][2]int, len(hashes))
+	b.cache.GetMulti(keys, keyHashes, &values, spans)
+
+	for i, sp := range spans {
+		if sp[0] < 0 {
+			out[i] = nil
+			continue
+		}
+
+		data := &meta.Data{}
+		if err := meta.NewMetaDataFromBytes(values[sp[0]:sp[1]], data); err != nil {
+			b.unmarshalErrors.Add(1)
+			b.cache.Del(keys[i])
+			out[i] = nil
+
+			continue
+		}
+
+		out[i] = data
+	}
+}
+
+// GetRawMulti copies the found entries out under each bucket's read lock (see
+// ImprovedCache.GetMulti) without decoding them.
+func (b *improvedCacheBackend) GetRawMulti(hashes []chainhash.Hash, keyHashes []uint64, dst *[]byte, spans [][2]int) {
+	kp := rawKeysPool.Get().(*[][]byte)
+
+	keys := (*kp)[:0]
+	for i := range hashes {
+		keys = append(keys, hashes[i][:])
+	}
+
+	b.cache.GetMulti(keys, keyHashes, dst, spans)
+
+	// Drop the references to the caller's hashes before pooling.
+	clear(keys)
+	*kp = keys[:0]
+	rawKeysPool.Put(kp)
+}
+
+// rawKeysPool recycles GetRawMulti's key slices: a probe task covers thousands
+// of keys, and allocating the slice per call would take the heap's global lock
+// for every task.
+var rawKeysPool = sync.Pool{
+	New: func() any {
+		k := make([][]byte, 0, 4096)
+		return &k
+	},
+}
+
 func (b *improvedCacheBackend) Del(key []byte) {
 	b.cache.Del(key)
 }

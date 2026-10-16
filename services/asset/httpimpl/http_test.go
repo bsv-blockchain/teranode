@@ -512,7 +512,7 @@ func (l *captureLogger) Errorf(format string, args ...interface{}) {
 // the values you don't want in logs (auth tokens in URLs, search terms, etc.).
 func TestCustomHTTPErrorHandler_DoesNotLogQueryString(t *testing.T) {
 	logger := &captureLogger{}
-	handler := customHTTPErrorHandler(logger)
+	handler := customHTTPErrorHandler(logger, &settings.Settings{})
 
 	e := echo.New()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=SECRET_QUERY_STRING&token=DEADBEEF", nil)

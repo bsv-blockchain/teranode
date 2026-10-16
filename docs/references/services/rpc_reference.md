@@ -1817,14 +1817,15 @@ The RPC service uses a standardized error handling system based on the Bitcoin C
 Standard error codes include:
 
 - -1: General error during command handling
-- -3: Wallet error (wallet functionality not implemented)
-- -5: Invalid address or key
-- -8: Out of memory or other resource exhaustion
+- -3: Unexpected type passed as a parameter
+- -5: Invalid address or key, or the named block or transaction does not exist
+- -8: Invalid, missing or out-of-range parameter
 - -20: Database inconsistency or corruption
 - -22: Error parsing or validating a block or transaction
 - -25: Transaction or block validation error
 - -26: Transaction rejected by policy rules
 - -27: Transaction already in chain
+- -28: Node still warming up - retry shortly
 - -30: RPC timeout - request exceeded configured timeout limit
 - -32600: Invalid JSON-RPC request
 - -32601: Method not found
@@ -1857,11 +1858,28 @@ Common error codes that may be returned:
 | -3        | RPC_TYPE_ERROR             | Unexpected type was passed as parameter            |
 | -5        | RPC_INVALID_ADDRESS        | Invalid address or key                             |
 | -8        | RPC_INVALID_PARAMETER      | Invalid, missing or duplicate parameter            |
+| -22       | RPC_DESERIALIZATION_ERROR  | Error parsing a block or transaction               |
+| -25       | RPC_VERIFY_ERROR           | Transaction or block failed validation             |
+| -28       | RPC_IN_WARMUP              | Node is still warming up; retry shortly            |
 | -32600    | RPC_INVALID_REQUEST        | JSON request format error                          |
 | -32601    | RPC_METHOD_NOT_FOUND       | Method not found                                   |
 | -32602    | RPC_INVALID_PARAMS         | Invalid method parameters                          |
 | -32603    | RPC_INTERNAL_ERROR         | Internal RPC error                                 |
 | -32700    | RPC_PARSE_ERROR            | Error parsing JSON request                         |
+
+Conditions that return a bitcoind-compatible code and message:
+
+| Code | Message                                     | Returned by                                                        | When                                                                                              |
+| ---- | ------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| -5   | `Block not found`                           | `getblock`, `getblockheader`, `invalidateblock`, `reconsiderblock` | The named block does not exist                                                                    |
+| -5   | `No such mempool or blockchain transaction` | `getrawtransaction`                                                | The asset service reports it does not hold the transaction                                        |
+| -8   | `Block height out of range`                 | `getblockbyheight`                                                 | No block exists at the requested height                                                           |
+| -25  | `TX rejected: Missing inputs`               | `sendrawtransaction`                                               | A parent of the submitted transaction is not known yet                                            |
+| -28  | `Still loading, try again shortly`          | `submitminingsolution`, `generate`, `generatetoaddress`            | Block assembly is (re)loading unmined transactions: on startup, after a reset, during a reconcile |
+
+-28 is transient and clears on its own: retry the same request after a short delay rather than treating it as a failure. On these commands a store or service fault never returns -5, -8 or -28; it returns the command's fallback code (usually -32603) with a generic message, and the detail goes to the node's log.
+
+`getblockhash` does not follow this table yet: it answers a height with no block with -5 `Block not found`, where bitcoind and `getblockbyheight` answer -8 `Block height out of range`.
 
 ## Connection Limiting
 

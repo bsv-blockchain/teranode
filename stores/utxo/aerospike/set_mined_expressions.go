@@ -494,7 +494,36 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 // child keeps the old value until something else touches the master. The Lua path has the same
 // property.
 func (s *Store) buildDeleteAtHeightOps(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) []*aerospike.Operation {
-	setExp, clearExp := s.buildDeleteAtHeightExpressions(currentBlockHeight, blockHeightRetention, onLongestChain)
+	return s.buildDeleteAtHeightOpsFor(aerospike.ExpIntVal(int64(currentBlockHeight)+int64(blockHeightRetention)), onLongestChain)
+}
+
+// buildDeleteAtHeightOpsFromRecordHeight is buildDeleteAtHeightOps for callers that have no mined
+// block height (MarkTransactionsOnLongestChain). The DAH is stamped from
+// max(currentBlockHeight, the record's highest blockHeights entry) + retention, evaluated on the
+// server, so it is the value setMined would have stamped or later. A record without block heights
+// uses currentBlockHeight.
+func (s *Store) buildDeleteAtHeightOpsFromRecordHeight(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) []*aerospike.Operation {
+	heights := aerospike.ExpListBin(fields.BlockHeights.String())
+
+	// nested conditions: the list is only read once it is known to exist and to be non-empty, without
+	// relying on ExpAnd short-circuiting
+	highestMined := aerospike.ExpCond(
+		aerospike.ExpBinExists(fields.BlockHeights.String()), aerospike.ExpCond(
+			aerospike.ExpGreater(aerospike.ExpListSize(heights), aerospike.ExpIntVal(0)),
+			aerospike.ExpListGetByRank(aerospike.ListReturnTypeValue, aerospike.ExpTypeINT, aerospike.ExpIntVal(-1), heights),
+			aerospike.ExpIntVal(0),
+		),
+		aerospike.ExpIntVal(0),
+	)
+
+	return s.buildDeleteAtHeightOpsFor(aerospike.ExpNumAdd(
+		aerospike.ExpMax(aerospike.ExpIntVal(int64(currentBlockHeight)), highestMined),
+		aerospike.ExpIntVal(int64(blockHeightRetention)),
+	), onLongestChain)
+}
+
+func (s *Store) buildDeleteAtHeightOpsFor(newDAH *aerospike.Expression, onLongestChain bool) []*aerospike.Operation {
+	setExp, clearExp := s.buildDeleteAtHeightExpressionsFor(newDAH, onLongestChain)
 	flags := aerospike.ExpWriteFlagAllowDelete | aerospike.ExpWriteFlagEvalNoFail
 
 	return []*aerospike.Operation{
@@ -504,10 +533,10 @@ func (s *Store) buildDeleteAtHeightOps(currentBlockHeight uint32, blockHeightRet
 	}
 }
 
-// buildDeleteAtHeightExpressions builds the set/raise expression and the clear expression
-// from the same branch conditions so the two can never disagree.
-func (s *Store) buildDeleteAtHeightExpressions(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) (*aerospike.Expression, *aerospike.Expression) {
-	newDeleteHeight := int64(currentBlockHeight + blockHeightRetention)
+// buildDeleteAtHeightExpressionsFor builds the set/raise expression and the clear expression from
+// the same branch conditions so the two can never disagree. The new DAH is given as an expression,
+// so it can be computed from the record.
+func (s *Store) buildDeleteAtHeightExpressionsFor(newDAH *aerospike.Expression, onLongestChain bool) (*aerospike.Expression, *aerospike.Expression) {
 
 	// Helper expressions for readability
 	conflictingBin := aerospike.ExpBoolBin(fields.Conflicting.String())
@@ -583,8 +612,6 @@ func (s *Store) buildDeleteAtHeightExpressions(currentBlockHeight uint32, blockH
 		hasBlocks,
 		isOnLongestChainExp,
 	)
-
-	newDAH := aerospike.ExpIntVal(newDeleteHeight)
 
 	// Build the main conditional expression, in the same order as Lua setDeleteAtHeight.
 	// ExpCond evaluates its conditions lazily and in order, so bins are only read once the

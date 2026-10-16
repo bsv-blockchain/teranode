@@ -259,6 +259,15 @@ func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRec
 		usePackage = LuaPackageMined
 	}
 
+	// setMined uses currentBlockHeight only to stamp unmined_since. When a block is invalidated
+	// (UnsetMined) the stamp is backdated like MarkTransactionsOnLongestChain(false) does (issue
+	// 1768): the parent's deleteAtHeight keeps counting from the original spend, so the pruner's
+	// parent-preservation scan must see this tx on its next cycle.
+	currentBlockHeight := thisBlockHeight
+	if minedBlockInfo.UnsetMined {
+		currentBlockHeight = utxo.BackdatedUnminedSince(s.GetBlockHeight(), s.settings.UtxoStore.UnminedTxRetention)
+	}
+
 	for idx, hash := range hashes {
 		key := batchKeys[idx]
 		if key == nil {
@@ -282,7 +291,7 @@ func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRec
 			minedBlockInfo.BlockID,
 			minedBlockInfo.BlockHeight,
 			minedBlockInfo.SubtreeIdx,
-			thisBlockHeight,
+			currentBlockHeight,
 			s.settings.GetUtxoStoreBlockHeightRetention(),
 			minedBlockInfo.OnLongestChain,
 			minedBlockInfo.UnsetMined,

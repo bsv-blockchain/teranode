@@ -92,7 +92,7 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 	t.Helper()
 	InitPrometheusMetrics()
 
-	ctx := context.Background()
+	ctx := newCancelCtx(t)
 	logger := ulogger.TestLogger{}
 
 	tSettings := test.CreateBaseTestSettings(t)

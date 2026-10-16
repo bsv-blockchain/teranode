@@ -12,6 +12,7 @@ var (
 	ErrBlobError                  = New(ERR_BLOB_ERROR, "blob error")
 	ErrBlobNotFound               = New(ERR_BLOB_NOT_FOUND, "blob not found")
 	ErrBlockAssemblyReset         = New(ERR_BLOCK_ASSEMBLY_RESET, "block assembly reset")
+	ErrBlockBodyMismatch          = New(ERR_BLOCK_BODY_MISMATCH, "the body is not the body its header commits to")
 	ErrBlockCoinbaseMissingHeight = New(ERR_BLOCK_COINBASE_MISSING_HEIGHT, "the coinbase signature script doesn't have the block height")
 	ErrBlockCorrupt               = New(ERR_BLOCK_CORRUPT, "block corrupt")
 	ErrBlockPolicyDeclined        = New(ERR_BLOCK_POLICY_DECLINED, "block declined by local policy")
@@ -38,6 +39,7 @@ var (
 	ErrServiceNotStarted          = New(ERR_SERVICE_NOT_STARTED, "service not started")
 	ErrServiceUnavailable         = New(ERR_SERVICE_UNAVAILABLE, "service unavailable")
 	ErrServiceRateLimited         = New(ERR_SERVICE_RATE_LIMITED, "service rate limited")
+	ErrServiceNotReady            = New(ERR_SERVICE_NOT_READY, "service not ready")
 	ErrFrozen                     = New(ERR_UTXO_FROZEN, "tx is frozen")
 	ErrNonFinal                   = New(ERR_UTXO_NON_FINAL, "tx is non-final")
 	ErrSpent                      = New(ERR_UTXO_SPENT, "utxo already spent")
@@ -287,6 +289,29 @@ func NewBlockPolicyDeclinedError(message string, params ...interface{}) *Error {
 	return New(ERR_BLOCK_POLICY_DECLINED, message, params...)
 }
 
+// IsBlockBodyMismatch reports whether err carries ERR_BLOCK_BODY_MISMATCH anywhere
+// in its chain: a block body that was read to its declared end and cannot be the
+// block its header names (wrong merkle root, duplicate transaction, no coinbase).
+//
+// The code is a marker, not a verdict of its own. The sites that raise it (the
+// legacy pipeline sink and its stream builder and transaction stream,
+// services/legacy/netsync) wrap ErrBlockBodyMismatch inside their
+// NewBlockInvalidError, so the outermost code stays ERR_BLOCK_INVALID and every
+// reader of that verdict is unchanged; this marker is what lets the legacy peer
+// server tell those three refusals, which SV Node scores DoS(100), from every
+// other invalid verdict, which it does not ban for. A delivery that ended early
+// never carries it: those sites judge only a body that parsed to its end. The
+// marker alone is not grounds for a ban: SV Node scores those three only after
+// the message checksum passed, and the legacy streaming path cannot check that
+// checksum yet (peer.BlockBodyRejectedError.ProvenBad).
+func IsBlockBodyMismatch(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return Is(err, ErrBlockBodyMismatch)
+}
+
 // IsBlockCorrupt reports whether err (or anything it wraps, including across a gRPC
 // boundary) is a block-corrupt error. Callers gate the re-download / peer-strike path
 // on this and must check it BEFORE any generic ErrBlockInvalid handling so a corrupt
@@ -405,6 +430,17 @@ func NewServiceUnavailableError(message string, params ...interface{}) *Error {
 // not the peer's fault; retry with backoff.
 func NewServiceRateLimitedError(message string, params ...interface{}) *Error {
 	return New(ERR_SERVICE_RATE_LIMITED, message, params...)
+}
+
+// NewServiceNotReadyError creates a new error with the service not ready error code.
+//
+// The service is up but still loading state it needs, and refuses work it will
+// accept shortly; nothing is broken. It is distinct from ERR_SERVICE_NOT_STARTED,
+// whose producers report a service that failed to start, and from
+// ERR_SERVICE_UNAVAILABLE, which callers treat as a fault. It carries no gRPC
+// status of its own (codes.Internal), so it does not wake the client retry gate.
+func NewServiceNotReadyError(message string, params ...interface{}) *Error {
+	return New(ERR_SERVICE_NOT_READY, message, params...)
 }
 
 // NewServiceNotStartedError creates a new error with the service not started error code.

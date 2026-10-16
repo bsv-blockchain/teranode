@@ -5,6 +5,7 @@ import (
 	"net/url"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
@@ -110,7 +111,7 @@ func getKafkaConsumerGroup(logger ulogger.Logger, url *url.URL, consumerGroupID 
 	autoCommit bool, kafkaSettings *settings.KafkaSettings) (*kafka.KafkaConsumerGroup, error) {
 	consumer, err := kafka.NewKafkaConsumerGroupFromURL(logger, url, consumerGroupID, autoCommit, kafkaSettings)
 	if err != nil {
-		return nil, errors.NewConfigurationError("missing Kafka URL for "+url.String(), err)
+		return nil, errors.NewConfigurationError("missing Kafka URL for "+urlutil.Redact(url), err)
 	}
 
 	return consumer, nil

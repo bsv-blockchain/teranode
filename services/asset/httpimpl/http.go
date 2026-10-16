@@ -16,6 +16,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/internal/banlist"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -97,7 +98,7 @@ type HTTP struct {
 //
 // Configuration:
 //   - ECHO_DEBUG: Enable debug logging
-//   - http_sign_response: Enable response signing
+//   - asset_sign_http_responses: Enable response signing
 //   - p2p_private_key: Private key for response signing
 //   - securityLevelHTTP: 0 for HTTP, non-zero for HTTPS
 //   - server_certFile: TLS certificate file (HTTPS only)
@@ -181,7 +182,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 		e.IPExtractor = echo.ExtractIPFromXFFHeader()
 	}
 
-	e.HTTPErrorHandler = customHTTPErrorHandler(logger)
+	e.HTTPErrorHandler = customHTTPErrorHandler(logger, tSettings)
 
 	e.Use(middleware.Recover())
 
@@ -378,12 +379,20 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	e.GET("/health", func(c echo.Context) error {
 		logger.Debugf("[Asset_http] Health check")
 
-		_, details, err := repo.Health(c.Request().Context(), false)
+		readiness, details, err := repo.Health(c.Request().Context(), false)
 		if err != nil {
-			return c.String(http.StatusInternalServerError, details)
+			// The check itself failed, which is not dependency degradation, so
+			// this keeps its 500 regardless of the strict-status switch.
+			logger.Errorf("[Asset_http] Health check failed: %v", err)
+
+			_, body := healthResponse(tSettings, http.StatusInternalServerError, details)
+
+			return c.String(http.StatusInternalServerError, body)
 		}
 
-		return c.String(http.StatusOK, details)
+		status, body := healthResponse(tSettings, readiness, details)
+
+		return c.String(status, body)
 	})
 
 	apiRestGroup := e.Group("/rest")
@@ -399,7 +408,10 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, repo *repository.R
 	if tSettings.Asset.PropagationProxyEnabled && tSettings.Asset.PropagationProxyAddress != "" {
 		proxyTarget, err := url.Parse(tSettings.Asset.PropagationProxyAddress)
 		if err != nil {
-			logger.Errorf("[Asset] failed to parse propagation proxy address %q: %v", tSettings.Asset.PropagationProxyAddress, err)
+			// url.Parse embeds the value it was given in its error, and even its
+			// bare reason can quote part of a password, so log a fixed reason
+			// and never the configured address itself.
+			logger.Errorf("[Asset] failed to parse asset_propagation_proxy_address: %v", urlutil.ParseErrorReason(err))
 		} else {
 			apiGroup.POST("/tx", h.ProxyPropagationTx(proxyTarget, "/tx"))
 			apiGroup.POST("/txs", h.ProxyPropagationTx(proxyTarget, "/txs"))
@@ -992,7 +1004,7 @@ func postAuthMiddleware(apiPrefix string, check echo.MiddlewareFunc) echo.Middle
 }
 
 // customHTTPErrorHandler creates a custom error handler that logs all errors before returning them to the client
-func customHTTPErrorHandler(logger ulogger.Logger) echo.HTTPErrorHandler {
+func customHTTPErrorHandler(logger ulogger.Logger, tSettings *settings.Settings) echo.HTTPErrorHandler {
 	return func(err error, c echo.Context) {
 		var (
 			message = ""
@@ -1010,19 +1022,33 @@ func customHTTPErrorHandler(logger ulogger.Logger) echo.HTTPErrorHandler {
 			}
 		}
 
+		// Handlers build this message from err.Error(), which splices in the
+		// whole wrapped backend chain. Project it onto what a caller may see;
+		// the full error still reaches the log line below, keyed by the same
+		// correlation id the caller is handed.
+		correlationID := ""
+		if !tSettings.Asset.PublicErrorDetail {
+			message, correlationID = publicErrorMessage(code, message)
+		}
+
 		// Log the error with the route pattern (c.Path()) rather than the
 		// raw RequestURI. Error paths are precisely where query-string values
 		// (tokens, search terms, etc.) should not leak into logs.
-		logger.Errorf("[Asset HTTP] Error handling request [%s %s]: status=%d, error=%v", c.Request().Method, c.Path(), code, err)
+		logger.Errorf("[Asset HTTP] Error handling request [%s %s]: status=%d, correlation_id=%s, error=%v", c.Request().Method, c.Path(), code, correlationID, err)
 
 		// Send JSON response if not already sent
 		if !c.Response().Committed {
 			if c.Request().Method == http.MethodHead {
 				err = c.NoContent(code)
 			} else {
-				err = c.JSON(code, map[string]interface{}{
+				body := map[string]interface{}{
 					"message": message,
-				})
+				}
+				if correlationID != "" {
+					body["correlation_id"] = correlationID
+				}
+
+				err = c.JSON(code, body)
 			}
 			if err != nil {
 				logger.Errorf("[Asset HTTP] Failed to send error response: %v", err)
@@ -1170,4 +1196,37 @@ func securityHeadersMiddleware() echo.MiddlewareFunc {
 			return next(c)
 		}
 	}
+}
+
+// healthStatusOK and healthStatusUnavailable are the bodies /health returns
+// when the dependency inventory is withheld.
+const (
+	healthStatusOK          = "OK"
+	healthStatusUnavailable = "UNAVAILABLE"
+)
+
+// healthResponse projects the repository readiness result onto what the public
+// /health route returns.
+//
+// The detail switch controls the body: the full inventory names every backing
+// store and, when one is degraded, quotes its raw error, which hands an
+// anonymous caller a map of the deployment exactly when it is weakest. The
+// strict switch controls the status code: /health has always answered 200 and
+// existing monitoring reads only that, so propagating the computed 503 is
+// opt-in.
+func healthResponse(tSettings *settings.Settings, readiness int, details string) (int, string) {
+	status := http.StatusOK
+	if tSettings.Asset.HealthStrictStatus {
+		status = readiness
+	}
+
+	if tSettings.Asset.PublicHealthDetail {
+		return status, details
+	}
+
+	if readiness == http.StatusOK {
+		return status, healthStatusOK
+	}
+
+	return status, healthStatusUnavailable
 }

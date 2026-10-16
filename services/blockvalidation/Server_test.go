@@ -481,7 +481,7 @@ func Test_Server_processBlockFound(t *testing.T) {
 
 	s, _, block := newProcessBlockFoundHarness(ctx, t)
 
-	err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+	err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", false, block)
 	require.NoError(t, err)
 }
 
@@ -526,7 +526,7 @@ func Test_Server_processBlockFound_BoundsPeerFetchDeadline(t *testing.T) {
 
 	// No useBlock argument here, unlike every other processBlockFound test in this file: this
 	// is the one exercising the actual fetchSingleBlock HTTP path rather than bypassing it.
-	err := s.processBlockFound(context.Background(), block.Hash(), "peerA", "http://test-peer")
+	err := s.processBlockFound(context.Background(), block.Hash(), "peerA", "http://test-peer", false)
 	require.NoError(t, err)
 
 	require.True(t, sawDeadline, "peer block fetch must run under a bounded context deadline, not an unbounded one")
@@ -556,7 +556,7 @@ func Test_Server_processBlockFound_SettlesPeerSuppliedHeight(t *testing.T) {
 		// checkpoint ever matches.
 		block.Height = 0
 
-		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", false, block)
 		require.NoError(t, err)
 		require.Equal(t, honestHeight, block.Height, "settled height must be written back onto the block")
 	})
@@ -569,7 +569,7 @@ func Test_Server_processBlockFound_SettlesPeerSuppliedHeight(t *testing.T) {
 		// difficulty skip claiming a height it does not hold.
 		block.Height = 11111
 
-		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", block)
+		err := s.processBlockFound(context.Background(), block.Hash(), "", "legacy", false, block)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 		require.Contains(t, err.Error(), "peer-inconsistent height")

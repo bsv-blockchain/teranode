@@ -1,6 +1,6 @@
 # Configuring Kubernetes Operator Teranode
 
-Last modified: 6-March-2025
+Last modified: 15-July-2025
 
 ## Index
 

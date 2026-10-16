@@ -130,6 +130,12 @@ npm test && npm run lint && npm run check && npm run build
   instead of burying them.
 - Self-review before reporting (logic, edge cases, races, security, side effects),
   and report concretely: what changed, what was run and its result, residual risk.
+- Every breaking change gets a `CHANGELOG.md` entry in the same PR, under
+  `## [Unreleased]`: anything a deployment, operator, client, peer or dashboard can
+  notice after upgrading without changing its own config (a new default or limit, a
+  changed status code, response, metric, wire format or proto, a removed or renamed
+  setting, a new required setting, a startup failure on previously valid config). Say
+  what changed, who is affected and what to do, and reference the PR.
 
 ## Security Rules
 

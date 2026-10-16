@@ -27,6 +27,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// writerTestWindow admits every batch the single-goroutine writer tests below write ahead of
+// nextIndex. A smaller window would make those calls wait for a batch only they could send.
+const writerTestWindow = 3
+
 func TestSubtreeDataWriter_OrderedWrites(t *testing.T) {
 	logger := ulogger.NewVerboseTestLogger(t)
 	settings := test.CreateBaseTestSettings(t)
@@ -39,7 +43,7 @@ func TestSubtreeDataWriter_OrderedWrites(t *testing.T) {
 	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, fileType)
 	require.NoError(t, err)
 
-	writer := NewSubtreeDataWriter(storer)
+	writer := NewSubtreeDataWriter(ctx, storer, writerTestWindow)
 
 	tx1 := []byte("tx1data")
 	tx2 := []byte("tx2data")
@@ -76,7 +80,7 @@ func TestSubtreeDataWriter_ConcurrentWrites(t *testing.T) {
 	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, fileType)
 	require.NoError(t, err)
 
-	writer := NewSubtreeDataWriter(storer)
+	writer := NewSubtreeDataWriter(ctx, storer, writerTestWindow)
 
 	batchCount := 10
 	done := make(chan error, batchCount)
@@ -119,7 +123,7 @@ func TestSubtreeDataWriter_ClosedWriter(t *testing.T) {
 	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, fileType)
 	require.NoError(t, err)
 
-	writer := NewSubtreeDataWriter(storer)
+	writer := NewSubtreeDataWriter(ctx, storer, writerTestWindow)
 
 	err = writer.Close(ctx)
 	require.NoError(t, err)
@@ -141,7 +145,7 @@ func TestSubtreeDataWriter_IncompleteSequence(t *testing.T) {
 	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, fileType)
 	require.NoError(t, err)
 
-	writer := NewSubtreeDataWriter(storer)
+	writer := NewSubtreeDataWriter(ctx, storer, writerTestWindow)
 
 	err = writer.WriteBatch(0, [][]byte{[]byte("tx0")})
 	require.NoError(t, err)
@@ -166,7 +170,7 @@ func TestSubtreeDataWriter_AbortDoesNotSaveFile(t *testing.T) {
 	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, fileType)
 	require.NoError(t, err)
 
-	writer := NewSubtreeDataWriter(storer)
+	writer := NewSubtreeDataWriter(ctx, storer, writerTestWindow)
 
 	// Write some data
 	err = writer.WriteBatch(0, [][]byte{[]byte("tx0data")})
@@ -196,7 +200,7 @@ func TestSubtreeDataWriter_CloseWithPendingBatchesAbortsFile(t *testing.T) {
 	storer, err := filestorer.NewFileStorer(ctx, logger, settings, blockStore, key, fileType)
 	require.NoError(t, err)
 
-	writer := NewSubtreeDataWriter(storer)
+	writer := NewSubtreeDataWriter(ctx, storer, writerTestWindow)
 
 	// Write batch 0 and 2, but NOT batch 1 - creating a gap
 	err = writer.WriteBatch(0, [][]byte{[]byte("tx0data")})
@@ -1147,9 +1151,9 @@ func TestPersistBlock_ClearsUtxoFilesLeftWithoutABlockFile(t *testing.T) {
 	require.Equal(t, wantAdditions, gotAdditions)
 }
 
-// TestPersistBlock_ReportsABlockAlreadyPersisted checks that a block whose block file exists is
+// TestPersistBlock_ReportsABlockAlreadyPersisted checks that a block whose files all exist is
 // reported as BLOB_EXISTS before any work is done, and that the Server reads BLOB_EXISTS as
-// "already persisted" only when the block file is there.
+// "already persisted" only when they do.
 func TestPersistBlock_ReportsABlockAlreadyPersisted(t *testing.T) {
 	block, blockBytes, _, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
 	ctx := t.Context()
@@ -1158,19 +1162,190 @@ func TestPersistBlock_ReportsABlockAlreadyPersisted(t *testing.T) {
 	persister := New(ctx, ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
 
 	blobExists := errors.NewStorageError("error creating additions file", errors.NewBlobAlreadyExistsError("utxo-additions already exists"))
-	require.False(t, persister.blockAlreadyPersisted(ctx, hash, blobExists), "BLOB_EXISTS without a block file")
+	require.False(t, persister.blockAlreadyPersisted(ctx, hash, blobExists), "BLOB_EXISTS without any files")
 
 	require.NoError(t, blockStore.Set(ctx, hash[:], fileformat.FileTypeBlock, blockBytes))
+	require.False(t, persister.blockAlreadyPersisted(ctx, hash, blobExists), "BLOB_EXISTS with a block file but no utxo files")
+	require.NoError(t, blockStore.Del(ctx, hash[:], fileformat.FileTypeBlock))
+
+	require.NoError(t, persister.persistBlock(ctx, hash, blockBytes))
+
+	persisted := make(map[fileformat.FileType][]byte)
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions, fileformat.FileTypeBlock} {
+		b, err := blockStore.Get(ctx, hash[:], fileType)
+		require.NoError(t, err)
+
+		persisted[fileType] = b
+	}
+
+	// Subtree data that fails to read shows whether the second call does any work.
+	failing := &failingReadStore{Memory: subtreeStore, after: 0, err: io.ErrClosedPipe}
+	again := New(ctx, ulogger.TestLogger{}, tSettings, blockStore, failing, mockUTXOStore, blockchainClient)
+
+	err := again.persistBlock(ctx, hash, blockBytes)
+	require.True(t, errors.Is(err, errors.ErrBlobAlreadyExists), "persistBlock: %v", err)
+	require.True(t, again.blockAlreadyPersisted(ctx, hash, err))
+	require.False(t, again.blockAlreadyPersisted(ctx, hash, errors.NewProcessingError("some other failure")))
+
+	for fileType, want := range persisted {
+		got, err := blockStore.Get(ctx, hash[:], fileType)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "%s changed for a block already persisted", fileType)
+	}
+}
+
+// TestPersistBlock_BlockFileAloneIsPersistedWithoutUtxoFiles checks that with utxo files turned
+// off, the block file alone marks the block as persisted.
+func TestPersistBlock_BlockFileAloneIsPersistedWithoutUtxoFiles(t *testing.T) {
+	block, blockBytes, _, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
+	ctx := t.Context()
+	hash := block.Header.Hash()
+
+	tSettings.BlockPersister.ProcessUTXOFiles = false
+
+	require.NoError(t, blockStore.Set(ctx, hash[:], fileformat.FileTypeBlock, blockBytes))
+
+	persister := New(ctx, ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
 
 	err := persister.persistBlock(ctx, hash, blockBytes)
 	require.True(t, errors.Is(err, errors.ErrBlobAlreadyExists), "persistBlock: %v", err)
 	require.True(t, persister.blockAlreadyPersisted(ctx, hash, err))
-	require.False(t, persister.blockAlreadyPersisted(ctx, hash, errors.NewProcessingError("some other failure")))
+}
 
-	for _, fileType := range []fileformat.FileType{fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
-		exists, err := blockStore.Exists(ctx, hash[:], fileType)
-		require.NoError(t, err)
-		require.False(t, exists, "%s written for a block already persisted", fileType)
+// TestPersistBlock_RebuildsABlockFileLeftWithoutItsUtxoFiles checks the retry after a crash on a
+// version that finalised the block file before the utxo files. That left a block file without
+// them, which the old retry repaired by rewriting the utxo files before it stopped on the block
+// file. The block is rebuilt rather than reported as persisted, which would leave utxopersister
+// without its utxo files.
+func TestPersistBlock_RebuildsABlockFileLeftWithoutItsUtxoFiles(t *testing.T) {
+	tests := []struct {
+		name     string
+		leftOver []fileformat.FileType
+	}{
+		{name: "no utxo files", leftOver: []fileformat.FileType{fileformat.FileTypeBlock}},
+		{name: "no utxo-deletions", leftOver: []fileformat.FileType{fileformat.FileTypeBlock, fileformat.FileTypeUtxoAdditions}},
+		{name: "no utxo-additions", leftOver: []fileformat.FileType{fileformat.FileTypeBlock, fileformat.FileTypeUtxoDeletions}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block, blockBytes, extendedTxs, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
+			ctx := t.Context()
+			hash := block.Header.Hash()
+
+			for _, fileType := range tt.leftOver {
+				require.NoError(t, blockStore.Set(ctx, hash[:], fileType, []byte("left over from an earlier version")))
+			}
+
+			persister := New(ctx, ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
+			require.NoError(t, persister.persistBlock(ctx, hash, blockBytes))
+			requirePersistedFiles(t, blockStore, hash, true)
+
+			wantAdditions, wantDeletions := wantSetupBlockUtxoFiles(t, block, extendedTxs)
+
+			for fileType, want := range map[fileformat.FileType][]byte{
+				fileformat.FileTypeUtxoAdditions: wantAdditions,
+				fileformat.FileTypeUtxoDeletions: wantDeletions,
+				fileformat.FileTypeBlock:         blockBytes,
+			} {
+				got, err := blockStore.Get(ctx, hash[:], fileType)
+				require.NoError(t, err)
+				require.Equal(t, want, got, "%s", fileType)
+			}
+		})
+	}
+}
+
+// TestPersistBlock_KeepsABlockFileWhenItsUtxoFilesCannotBeRebuilt checks that a block file left
+// without its utxo files stays where it was when the rebuild fails, for example because the subtree
+// data cannot be read. It is removed only once the utxo files are finalised.
+func TestPersistBlock_KeepsABlockFileWhenItsUtxoFilesCannotBeRebuilt(t *testing.T) {
+	tests := []struct {
+		name     string
+		leftOver []fileformat.FileType
+	}{
+		{name: "no utxo files", leftOver: []fileformat.FileType{fileformat.FileTypeBlock}},
+		{name: "no utxo-deletions", leftOver: []fileformat.FileType{fileformat.FileTypeBlock, fileformat.FileTypeUtxoAdditions}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block, blockBytes, _, mockUTXOStore, subtreeStore, blockStore, blockchainClient, tSettings := setup(t)
+			ctx := t.Context()
+			hash := block.Header.Hash()
+
+			for _, fileType := range tt.leftOver {
+				require.NoError(t, blockStore.Set(ctx, hash[:], fileType, blockBytes))
+			}
+
+			failing := &failingReadStore{Memory: subtreeStore, after: 0, err: io.ErrClosedPipe}
+			persister := New(ctx, ulogger.TestLogger{}, tSettings, blockStore, failing, mockUTXOStore, blockchainClient)
+			require.Error(t, persister.persistBlock(ctx, hash, blockBytes))
+
+			got, err := blockStore.Get(ctx, hash[:], fileformat.FileTypeBlock)
+			require.NoError(t, err, "the block file was removed by an attempt that could not rebuild the utxo files")
+			require.Equal(t, blockBytes, got)
+
+			for _, fileType := range []fileformat.FileType{fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
+				exists, err := blockStore.Exists(ctx, hash[:], fileType)
+				require.NoError(t, err)
+				require.False(t, exists, "%s exists after a failed rebuild", fileType)
+			}
+		})
+	}
+}
+
+// existsFailingStore cannot check for one file type, as a store does when it cannot be reached.
+type existsFailingStore struct {
+	*memory.Memory
+	fileType fileformat.FileType
+}
+
+func (s *existsFailingStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (bool, error) {
+	if fileType == s.fileType {
+		return false, errors.NewStorageError("checking for %s failed", fileType)
+	}
+
+	return s.Memory.Exists(ctx, key, fileType, opts...)
+}
+
+// TestPersistBlock_StopsWhenItCannotCheckForAFile checks that an error checking for the block's
+// files fails the block before anything is removed or written, and that the Server does not read
+// BLOB_EXISTS as "already persisted" when it cannot check.
+func TestPersistBlock_StopsWhenItCannotCheckForAFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		failing  fileformat.FileType
+		leftOver fileformat.FileType
+	}{
+		{name: "block file check fails", failing: fileformat.FileTypeBlock, leftOver: fileformat.FileTypeUtxoDeletions},
+		{name: "utxo-additions check fails", failing: fileformat.FileTypeUtxoAdditions, leftOver: fileformat.FileTypeUtxoDeletions},
+		{name: "utxo-deletions check fails after the block file is found", failing: fileformat.FileTypeUtxoDeletions, leftOver: fileformat.FileTypeBlock},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block, blockBytes, _, mockUTXOStore, subtreeStore, _, blockchainClient, tSettings := setup(t)
+			ctx := t.Context()
+			hash := block.Header.Hash()
+
+			blockStore := &existsFailingStore{Memory: memory.New(), fileType: tt.failing}
+			require.NoError(t, blockStore.Set(ctx, hash[:], tt.leftOver, []byte("left over from an earlier attempt")))
+
+			persister := New(ctx, ulogger.TestLogger{}, tSettings, blockStore, subtreeStore, mockUTXOStore, blockchainClient)
+
+			err := persister.persistBlock(ctx, hash, blockBytes)
+			require.True(t, errors.Is(err, errors.ErrStorageError), "persistBlock: %v", err)
+
+			for _, fileType := range []fileformat.FileType{fileformat.FileTypeBlock, fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
+				exists, err := blockStore.Memory.Exists(ctx, hash[:], fileType)
+				require.NoError(t, err)
+				require.Equal(t, fileType == tt.leftOver, exists, "%s exists after a failed check", fileType)
+			}
+
+			require.False(t, persister.blockAlreadyPersisted(ctx, hash, errors.NewBlobAlreadyExistsError("block already persisted")))
+		})
 	}
 }
 

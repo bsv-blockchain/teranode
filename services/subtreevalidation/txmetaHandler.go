@@ -19,29 +19,16 @@ import (
 // shared between the producer (services/validator) and all consumers.
 
 // txmetaParseBuffers is the per-Kafka-message scratch space the handler
-// reuses across invocations via txmetaParseBuffersPool. Each parse fills the
-// slices straight from the wire format and hands them to the cache; the
-// cache copies values internally (chunk-append on bucket.Set + the height
-// suffix in appendHeightToValue), so the buffers are safe to recycle as soon
-// as the cache call returns.
-//
-// Layout of the two raw-byte arenas:
-//
-//   - keysBuf:    one contiguous arena holding all 32-byte tx hashes back to
-//     back. keys[i] is a sub-slice into this arena, never a separate alloc.
-//   - contentBuf: one contiguous arena holding all entries' content bytes.
-//     values[i] is a sub-slice into this arena.
-//
-// Both arenas are sized BEFORE the parse loop to upper bounds known from the
-// Kafka message header, so append never grows them mid-loop and existing
-// sub-slices never dangle.
+// reuses across invocations via txmetaParseBuffersPool. keys[i] and values[i]
+// are sub-slices of msg.Value itself: every cache backend copies keys and
+// values before its Set call returns, so nothing references msg.Value once the
+// cache call is done, and the bytes are copied once (wire to cache) instead of
+// twice.
 type txmetaParseBuffers struct {
-	keys       [][]byte
-	values     [][]byte
-	hashes     []uint64
-	deletes    []chainhash.Hash
-	keysBuf    []byte
-	contentBuf []byte
+	keys    [][]byte
+	values  [][]byte
+	hashes  []uint64
+	deletes []chainhash.Hash
 }
 
 var txmetaParseBuffersPool = sync.Pool{
@@ -50,13 +37,20 @@ var txmetaParseBuffersPool = sync.Pool{
 
 // reset clears length without dropping the backing arrays — the pool keeps
 // the capacity alive for the next caller.
+// release drops the references keys and values hold into msg.Value before the
+// buffers go back to the pool, so a pooled entry does not keep the last Kafka
+// message's buffer reachable.
+func (b *txmetaParseBuffers) release() {
+	clear(b.keys)
+	clear(b.values)
+	b.reset()
+}
+
 func (b *txmetaParseBuffers) reset() {
 	b.keys = b.keys[:0]
 	b.values = b.values[:0]
 	b.hashes = b.hashes[:0]
 	b.deletes = b.deletes[:0]
-	b.keysBuf = b.keysBuf[:0]
-	b.contentBuf = b.contentBuf[:0]
 }
 
 // txmetaMessageHandler returns a Kafka message handler for transaction metadata operations.
@@ -89,9 +83,10 @@ func (u *Server) txmetaMessageHandler(ctx context.Context) func(msg *kafka.Kafka
 // bucket ranges, concurrent per-partition handler invocations touch disjoint
 // buckets and run lock-free relative to each other.
 //
-// Memory: ADD content is COPIED out of msg.Value (Kafka may recycle the
-// underlying buffer after the handler returns). v2 saves the xxhash on
-// receive; v1 must xxhash each key.
+// Memory: keys and ADD content are handed to the cache as sub-slices of
+// msg.Value. Kafka may recycle that buffer after the handler returns, which is
+// safe because the cache copies them before its Set call returns. v2 saves the
+// xxhash on receive; v1 must xxhash each key.
 //
 // Truncated messages are logged and acked (returning nil) so a corrupt input
 // doesn't cause infinite redelivery.
@@ -141,9 +136,8 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 	}
 
 	// Reject implausibly large entry counts before sizing the pool buffers.
-	// The pool pre-allocates `entries * 32` bytes for keysBuf plus `entries`
-	// slice slots, so an unbounded count read straight from the wire is a
-	// DoS surface. The plausibility bound is the same shape as the v2
+	// The pool pre-allocates `entries` slice slots, so an unbounded count
+	// read straight from the wire is a DoS surface. The plausibility bound is the same shape as the v2
 	// detection check: each entry needs at least `entryHeaderSize` bytes
 	// excluding content, so a count larger than the remaining buffer can
 	// fit is malformed. The v2 path is already guarded by the detection-
@@ -156,14 +150,13 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 		return nil
 	}
 
-	// Pool-backed scratch. Sized to upper bounds derived from the wire:
-	//   - up to `entries` slice slots
-	//   - up to `entries * 32` bytes of hashes (each is 32 B)
-	//   - up to `len(data)` bytes of content (the remainder of the buffer
-	//     after the header is a strict upper bound on total content size)
+	// Pool-backed scratch: up to `entries` slice slots.
 	bufs := txmetaParseBuffersPool.Get().(*txmetaParseBuffers)
 	bufs.reset()
-	defer txmetaParseBuffersPool.Put(bufs)
+	defer func() {
+		bufs.release()
+		txmetaParseBuffersPool.Put(bufs)
+	}()
 
 	entriesInt := int(entries)
 	if cap(bufs.keys) < entriesInt {
@@ -174,14 +167,6 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 	}
 	if isV2 && cap(bufs.hashes) < entriesInt {
 		bufs.hashes = make([]uint64, 0, entriesInt)
-	}
-	keysBufNeeded := entriesInt * 32
-	if cap(bufs.keysBuf) < keysBufNeeded {
-		bufs.keysBuf = make([]byte, 0, keysBufNeeded)
-	}
-	contentMax := len(data) - offset
-	if cap(bufs.contentBuf) < contentMax {
-		bufs.contentBuf = make([]byte, 0, contentMax)
 	}
 
 	for i := uint32(0); i < entries; i++ {
@@ -196,12 +181,9 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 			offset += 8
 		}
 
-		// Append the 32-byte hash into keysBuf at its current tail; the
-		// sub-slice handed to keys[i] points into the same backing array.
-		// Pre-sizing keysBuf above guarantees append never grows it, so
-		// earlier entries' sub-slices stay valid for the whole loop.
-		hashStart := len(bufs.keysBuf)
-		bufs.keysBuf = append(bufs.keysBuf, data[offset:offset+32]...)
+		// Sub-slices of msg.Value, capped so an append can never write into
+		// the next entry (see txmetaParseBuffers).
+		key := data[offset : offset+32 : offset+32]
 		offset += 32
 
 		action := data[offset]
@@ -217,19 +199,17 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 
 		switch action {
 		case txmetacache.WireActionADD:
-			contentStart := len(bufs.contentBuf)
-			bufs.contentBuf = append(bufs.contentBuf, data[offset:offset+int(contentLen)]...)
-			bufs.keys = append(bufs.keys, bufs.keysBuf[hashStart:hashStart+32])
-			bufs.values = append(bufs.values, bufs.contentBuf[contentStart:contentStart+int(contentLen)])
+			end := offset + int(contentLen)
+			bufs.keys = append(bufs.keys, key)
+			bufs.values = append(bufs.values, data[offset:end:end])
 			if isV2 {
 				bufs.hashes = append(bufs.hashes, entryHash)
 			}
 		case txmetacache.WireActionDELETE:
-			// chainhash.Hash is a value type — copying into deletes[]
-			// captures by value, so the keysBuf arena can be recycled
-			// without worry.
+			// chainhash.Hash is a value type: the copy does not reference
+			// msg.Value.
 			var h chainhash.Hash
-			copy(h[:], bufs.keysBuf[hashStart:hashStart+32])
+			copy(h[:], key)
 			bufs.deletes = append(bufs.deletes, h)
 		default:
 			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()

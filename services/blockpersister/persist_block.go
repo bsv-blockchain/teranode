@@ -57,30 +57,48 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 
 	u.logger.Infof("[persistBlock][%s] Processing block (%d subtrees)...", block.String(), len(block.Subtrees))
 
-	// The block file is written last, after the utxo files are finalised, so it alone marks the
-	// block as persisted. Utxo files without it were left by an attempt that stopped before the end,
-	// and are replaced rather than trusted.
-	blockExists, err := u.blockStore.Exists(ctx, hash[:], fileformat.FileTypeBlock)
+	persisted, err := u.blockPersisted(ctx, hash)
 	if err != nil {
-		return errors.NewStorageError("[persistBlock][%s] error checking for the block file", block.String(), err)
+		return errors.NewStorageError("[persistBlock][%s] error checking for the block's files", block.String(), err)
 	}
 
-	if blockExists {
-		return errors.NewBlobAlreadyExistsError("[persistBlock][%s] block file already exists", block.String())
+	if persisted {
+		return errors.NewBlobAlreadyExistsError("[persistBlock][%s] block already persisted", block.String())
 	}
 
-	for _, fileType := range []fileformat.FileType{fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
-		exists, err := u.blockStore.Exists(ctx, block.Header.Hash()[:], fileType)
+	// Any of the block's files that exist were left by an attempt that stopped before the end, and
+	// are replaced rather than trusted: utxo files without the block file, or a block file without
+	// its utxo files, which versions that finalised the block file first left on a crash. All of them
+	// are checked before any is removed, so a failed check removes nothing. A block file is removed
+	// only once the utxo files are finalised, just before it is rewritten, so an attempt that cannot
+	// rebuild them leaves it where it was.
+	var (
+		leftOverUtxoFiles []fileformat.FileType
+		blockFileLeftOver bool
+	)
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeBlock, fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
+		exists, err := u.blockStore.Exists(ctx, hash[:], fileType)
 		if err != nil {
 			return errors.NewStorageError("[persistBlock][%s] error checking for %s", block.String(), fileType, err)
 		}
 
-		if exists {
-			u.logger.Warnf("[persistBlock][%s] removing %s left by an attempt that did not write the block file", block.String(), fileType)
+		if !exists {
+			continue
+		}
 
-			if err = u.blockStore.Del(ctx, block.Header.Hash()[:], fileType); err != nil {
-				return errors.NewStorageError("[persistBlock][%s] error removing %s", block.String(), fileType, err)
-			}
+		if fileType == fileformat.FileTypeBlock {
+			blockFileLeftOver = true
+		} else {
+			leftOverUtxoFiles = append(leftOverUtxoFiles, fileType)
+		}
+	}
+
+	for _, fileType := range leftOverUtxoFiles {
+		u.logger.Warnf("[persistBlock][%s] removing %s left by an attempt that did not finish", block.String(), fileType)
+
+		if err = u.blockStore.Del(ctx, hash[:], fileType); err != nil {
+			return errors.NewStorageError("[persistBlock][%s] error removing %s", block.String(), fileType, err)
 		}
 	}
 
@@ -177,6 +195,14 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 		utxoDiffClosed = true
 	}
 
+	if blockFileLeftOver {
+		u.logger.Warnf("[persistBlock][%s] replacing %s left by an attempt that did not finish", block.String(), fileformat.FileTypeBlock)
+
+		if err = u.blockStore.Del(ctx, hash[:], fileformat.FileTypeBlock); err != nil {
+			return errors.NewStorageError("[persistBlock][%s] error removing %s", block.String(), fileformat.FileTypeBlock, err)
+		}
+	}
+
 	// Now, write the block file
 	u.logger.Infof("[persistBlock][%s] Writing block to disk", block.String())
 
@@ -206,4 +232,28 @@ func (u *Server) persistBlock(ctx context.Context, hash *chainhash.Hash, blockBy
 	blockFileClosed = true
 
 	return nil
+}
+
+// blockPersisted reports whether every file persistBlock writes for the block exists: the block
+// file and, when utxo files are processed, both utxo files. persistBlock finalises the utxo files
+// before it writes the block file, but versions before it did the reverse, so a block file alone
+// does not prove the utxo files were finalised.
+func (u *Server) blockPersisted(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	fileTypes := []fileformat.FileType{fileformat.FileTypeBlock}
+	if u.settings.BlockPersister.ProcessUTXOFiles {
+		fileTypes = append(fileTypes, fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions)
+	}
+
+	for _, fileType := range fileTypes {
+		exists, err := u.blockStore.Exists(ctx, hash[:], fileType)
+		if err != nil {
+			return false, errors.NewStorageError("error checking for %s", fileType, err)
+		}
+
+		if !exists {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }

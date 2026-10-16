@@ -2402,6 +2402,41 @@ func Test_checkOldBlockIDs(t *testing.T) {
 	})
 }
 
+// Test_checkOldBlockIDs_ParentBlockIDsStayOutOfTheVerdict: the ids are this node's
+// own store keys, not block hashes or heights. The verdict crosses to RPC and is
+// stored as the invalid block's reason, so they go to the log and the verdict
+// names the transaction.
+func Test_checkOldBlockIDs_ParentBlockIDsStayOutOfTheVerdict(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &warnCaptureLogger{Logger: ulogger.TestLogger{}}
+
+	prevHash := chainhash.HashH([]byte("prev"))
+	merkleRoot := chainhash.HashH([]byte("merkle"))
+	block := &model.Block{Header: &model.BlockHeader{HashPrevBlock: &prevHash, HashMerkleRoot: &merkleRoot}}
+
+	blockchainMock := &blockchain.Mock{}
+	blockValidation := &BlockValidation{
+		logger:           logger,
+		blockchainClient: blockchainMock,
+	}
+
+	oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
+	oldBlockIDsMap.Set(chainhash.HashH([]byte("child")), []uint32{77123, 88445})
+
+	blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil).Once()
+	blockchainMock.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{}, nil).Once()
+
+	err := blockValidation.checkOldBlockIDs(t.Context(), oldBlockIDsMap, block)
+	require.ErrorIs(t, err, errors.ErrBlockInvalid)
+	require.Contains(t, err.Error(), "are not from current chain")
+	require.NotContains(t, err.Error(), "77123")
+	require.NotContains(t, err.Error(), "88445")
+
+	require.Contains(t, fmt.Sprint(logger.warned()), "77123", "the ids are still recorded")
+	require.Contains(t, fmt.Sprint(logger.warned()), "88445")
+}
+
 // Test_checkOldBlockIDs_inMemoryChainCheckRoute exercises the in-memory-chain-check
 // route (blockchain_use_in_memory_chain_check=true). Post-#1055 the route holds no
 // local set: it resolves every tx by deferring to the authoritative
