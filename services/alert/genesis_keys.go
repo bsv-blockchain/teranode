@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-alert-system/app/models"
 	"github.com/bsv-blockchain/go-alert-system/app/models/model"
+	"github.com/bsv-blockchain/go-alert-system/utils"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/mrz1836/go-datastore"
 )
@@ -29,12 +30,12 @@ func (s *Server) syncGenesisKeys(ctx context.Context) (int, error) {
 		return 0, errors.NewStorageError("error getting the latest alert", err)
 	}
 
-	active, err := models.GetActivePublicKey(ctx, nil, opts)
+	active, err := allActivePublicKeys(ctx, opts)
 	if err != nil {
 		return 0, errors.NewStorageError("error getting the active public keys", err)
 	}
 
-	genesisKeys := uniqueKeys(s.appConfig.GenesisKeys)
+	genesisKeys := s.appConfig.GenesisKeys // trimmed, deduplicated and validated by loadConfig
 
 	if latest.SequenceNumber != 0 || sameKeys(active, genesisKeys) {
 		return len(active), nil
@@ -70,22 +71,29 @@ func (s *Server) syncGenesisKeys(ctx context.Context) (int, error) {
 	return len(genesisKeys), nil
 }
 
-// uniqueKeys returns keys without blank or repeated entries, in their original order.
-func uniqueKeys(keys []string) []string {
-	seen := make(map[string]struct{}, len(keys))
-	unique := make([]string, 0, len(keys))
-
-	for _, key := range keys {
-		key = strings.TrimSpace(key)
-		if _, ok := seen[key]; ok || key == "" {
-			continue
-		}
-
-		seen[key] = struct{}{}
-		unique = append(unique, key)
+// allActivePublicKeys returns every active public key in the store. models.GetActivePublicKey
+// returns at most 10, which would leave further active keys in place on a reset and make
+// a store holding more than 10 never match the genesis keys.
+func allActivePublicKeys(ctx context.Context, opts model.Options) ([]*models.PublicKey, error) {
+	conditions := map[string]interface{}{
+		utils.FieldActive: true,
+		utils.FieldDeletedAt: map[string]interface{}{ // IS NULL
+			utils.ExistsCondition: false,
+		},
 	}
 
-	return unique
+	// no page or page size: no LIMIT
+	queryParams := &datastore.QueryParams{
+		OrderByField:  utils.FieldID,
+		SortDirection: utils.SortAscending,
+	}
+
+	keys := make([]*models.PublicKey, 0)
+	if err := model.GetModelsByConditions(ctx, model.NamePublicKey, &keys, nil, &conditions, queryParams, opts); err != nil {
+		return nil, err
+	}
+
+	return keys, nil
 }
 
 // sameKeys reports whether active holds exactly the keys in keys, ignoring order and case.

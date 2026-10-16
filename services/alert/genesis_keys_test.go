@@ -8,7 +8,7 @@ import (
 )
 
 func TestUniqueKeys(t *testing.T) {
-	require.Equal(t, []string{"a", "b"}, uniqueKeys([]string{" a ", "", "b", "a", "  "}))
+	require.Equal(t, []string{"a", "B"}, uniqueKeys([]string{" a ", "", "B", "A", "b", "  "}))
 	require.Empty(t, uniqueKeys(nil))
 }
 

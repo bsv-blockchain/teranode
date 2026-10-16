@@ -3,6 +3,7 @@ package alert
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-alert-system/app/models"
 	"github.com/bsv-blockchain/go-alert-system/app/models/model"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -89,7 +91,7 @@ func TestServer_Init_basic(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set up required alert settings
-	tSettings.Alert.GenesisKeys = []string{"test_key_1", "test_key_2"}
+	tSettings.Alert.GenesisKeys = upstreamNetwork(t, "mainnet").GenesisKeys[:2]
 	tSettings.Alert.P2PPort = 8080
 	tSettings.Alert.ProtocolID = "/alert/test/1.0.0"
 	tSettings.Alert.P2PPrivateKey = "test_private_key"
@@ -162,17 +164,28 @@ func TestServer_loadConfig_networkDefaults(t *testing.T) {
 	})
 
 	t.Run("explicit settings override testnet defaults", func(t *testing.T) {
+		customKeys := upstreamNetwork(t, "mainnet").GenesisKeys[:3]
 		server := newServer(t, &chaincfg.TestNetParams, settings.AlertSettings{
-			GenesisKeys: []string{"custom_key"},
+			GenesisKeys: append(append([]string{}, customKeys...), ""), // trailing separator
 			ProtocolID:  "/custom/alert-system/1.0.0",
 			TopicName:   "custom_topic",
 		})
 
 		require.NoError(t, server.loadConfig(context.Background(), nil, true))
 
-		require.Equal(t, []string{"custom_key"}, server.appConfig.GenesisKeys)
+		require.Equal(t, customKeys, server.appConfig.GenesisKeys)
 		require.Equal(t, "/custom/alert-system/1.0.0", server.appConfig.P2P.AlertSystemProtocolID)
 		require.Equal(t, "custom_topic", server.appConfig.P2P.TopicName)
+	})
+
+	t.Run("an invalid genesis key is a configuration error", func(t *testing.T) {
+		server := newServer(t, &chaincfg.TestNetParams, settings.AlertSettings{
+			GenesisKeys: []string{"custom_key"},
+		})
+
+		err := server.loadConfig(context.Background(), nil, true)
+		require.True(t, errors.Is(err, errors.ErrConfiguration), "got %v", err)
+		require.ErrorContains(t, err, "alert_genesis_keys[0]")
 	})
 }
 
@@ -290,7 +303,7 @@ func TestServer_basic_functionality(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set up alert settings
-	tSettings.Alert.GenesisKeys = []string{"test_key_1"}
+	tSettings.Alert.GenesisKeys = upstreamNetwork(t, "mainnet").GenesisKeys[:1]
 	tSettings.Alert.P2PPort = 8080
 	tSettings.Alert.ProtocolID = "/alert/test/1.0.0"
 	tSettings.Alert.P2PPrivateKey = "test_private_key"
@@ -363,7 +376,7 @@ func TestServer_syncGenesisKeys(t *testing.T) {
 	}
 
 	activeKeys := func(t *testing.T, server *Server) []string {
-		keys, err := models.GetActivePublicKey(context.Background(), nil, model.WithAllDependencies(server.appConfig))
+		keys, err := allActivePublicKeys(context.Background(), model.WithAllDependencies(server.appConfig))
 		require.NoError(t, err)
 
 		active := make([]string, 0, len(keys))
@@ -385,6 +398,25 @@ func TestServer_syncGenesisKeys(t *testing.T) {
 
 		// a second start is a no-op
 		active, err = server.syncGenesisKeys(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, len(testnet.GenesisKeys), active)
+		require.ElementsMatch(t, testnet.GenesisKeys, activeKeys(t, server))
+	})
+
+	t.Run("store with more active keys than a page is fully reset", func(t *testing.T) {
+		server := startServer(t, mainnetStore(t), &chaincfg.TestNetParams)
+
+		opts := model.WithAllDependencies(server.appConfig)
+		for i := 0; i < 8; i++ {
+			k := models.NewPublicKey(opts, model.New())
+			k.Key = fmt.Sprintf("extra_key_%d", i)
+			k.Active = true
+			require.NoError(t, k.Save(context.Background()))
+		}
+
+		require.Len(t, activeKeys(t, server), len(mainnet.GenesisKeys)+8, "precondition: more than 10 active keys")
+
+		active, err := server.syncGenesisKeys(context.Background())
 		require.NoError(t, err)
 		require.Equal(t, len(testnet.GenesisKeys), active)
 		require.ElementsMatch(t, testnet.GenesisKeys, activeKeys(t, server))
