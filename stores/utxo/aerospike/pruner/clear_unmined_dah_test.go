@@ -2,6 +2,7 @@ package pruner
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -164,6 +165,27 @@ func TestClearUnminedDAH(t *testing.T) {
 
 		require.Equal(t, 1, svc.clearUnminedDAH(context.Background(), clears(t)))
 		require.Positive(t, logger.errors, "a page error other than KEY_NOT_FOUND must be reported")
+	})
+
+	// The store side writes pages in chunks so one worker never holds sum(totalExtraRecs)
+	// writes at once; the pruner's page clear must be bounded the same way, or a chunk with a
+	// few large unmined external txs times out every cycle.
+	t.Run("page writes are sent in bounded chunks", func(t *testing.T) {
+		var sizes []int
+
+		svc, _ := newSvc(t, func(records []aerospike.BatchRecordIfc, _ int) error {
+			sizes = append(sizes, len(records))
+			return nil
+		})
+
+		pages := make([]*aerospike.Key, 2*maxPageClearBatch+1)
+		for i := range pages {
+			pages[i] = key(t, fmt.Sprintf("p%d", i))
+		}
+
+		svc.clearUnminedDAH(context.Background(), []*dahClear{{masterKey: key(t, "m1"), pageKeys: pages}})
+
+		require.Equal(t, []int{1, maxPageClearBatch, maxPageClearBatch, 1}, sizes, "one master write, then the pages in chunks")
 	})
 
 	t.Run("SkipDeletions writes nothing", func(t *testing.T) {

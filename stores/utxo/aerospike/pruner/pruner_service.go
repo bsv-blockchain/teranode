@@ -1534,6 +1534,10 @@ func (s *Service) hadDAH(br *aerospike.BatchRecord) bool {
 	return false
 }
 
+// maxPageClearBatch bounds one pagination-record write in clearUnminedDAH. It matches the store's
+// maxChildDAHPagesPerBatch (stores/utxo/aerospike), which bounds the same kind of write.
+const maxPageClearBatch = 4096
+
 // clearUnminedDAH clears deleteAtHeight on protected unmined masters and then on their pagination
 // records, one batch each, and returns how many records actually had a DAH cleared. The master write
 // only applies while the record is still unmined, not conflicting and not preserved, so a concurrent
@@ -1616,30 +1620,35 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 		missingPages []string
 	)
 
-	if len(pageBatch) > 0 && ctx.Err() == nil {
-		if err := s.batchOperate(pageBatch); err != nil {
-			s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d pagination records, retrying next cycle: %v", len(pageBatch), err)
-		} else {
-			for _, r := range pageBatch {
-				br := r.BatchRec()
+	// Sent in chunks, as the store side does for child DAH writes: a chunk holding a few large
+	// unmined external txs would otherwise be one write too big to finish before its timeout.
+	for start := 0; start < len(pageBatch) && ctx.Err() == nil; start += maxPageClearBatch {
+		chunk := pageBatch[start:min(start+maxPageClearBatch, len(pageBatch))]
 
-				switch {
-				case br.Err != nil:
-					// a page that is already gone has nothing left to clear and nothing to retry,
-					// but under a still-protected master it is lost data: leave a trace
-					var asErr aerospike.Error
-					if !errors.As(br.Err, &asErr) || !asErr.Matches(types.KEY_NOT_FOUND_ERROR) {
-						failed++
-					} else {
-						if len(missingPages) < 10 {
-							missingPages = append(missingPages, fmt.Sprintf("%x", br.Key.Digest()))
-						}
+		if err := s.batchOperate(chunk); err != nil {
+			s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d pagination records, retrying next cycle: %v", len(chunk), err)
+			continue
+		}
 
-						missing++
+		for _, r := range chunk {
+			br := r.BatchRec()
+
+			switch {
+			case br.Err != nil:
+				// a page that is already gone has nothing left to clear and nothing to retry,
+				// but under a still-protected master it is lost data: leave a trace
+				var asErr aerospike.Error
+				if !errors.As(br.Err, &asErr) || !asErr.Matches(types.KEY_NOT_FOUND_ERROR) {
+					failed++
+				} else {
+					if len(missingPages) < 10 {
+						missingPages = append(missingPages, fmt.Sprintf("%x", br.Key.Digest()))
 					}
-				case s.hadDAH(br):
-					pages++
+
+					missing++
 				}
+			case s.hadDAH(br):
+				pages++
 			}
 		}
 	}
