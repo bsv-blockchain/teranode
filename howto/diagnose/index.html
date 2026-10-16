@@ -7214,7 +7214,7 @@
 </tr>
 <tr>
 <td><strong>Chain vs Peers</strong></td>
-<td>Compares our chain height vs best peer height. FAIL if &gt; 10 blocks behind and FSM is RUNNING. During catchup, being behind is expected.</td>
+<td>Compares our chain height with the highest peer-advertised height. Informational only: peer heights are unvalidated, so this check never FAILs. The message reports how many blocks behind the node is.</td>
 </tr>
 </tbody>
 </table>
@@ -7244,7 +7244,7 @@
 </span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>Mining Candidate         -                      OK      -        height=50001, txs=872, size=2.4 MB
 </span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a>P2P Peers                -                      OK      -        3 connected, 5 total, max_peer_height=50000
 </span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25" href="#__codelineno-4-25"></a>BA/Chain Sync            -                      OK      -        ba_height=50000, chain_height=50000
-</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>Chain vs Peers           -                      OK      -        our_height=50000, best_peer=50000, in sync
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26" href="#__codelineno-4-26"></a>Chain vs Peers           -                      OK      -        our_height=50000, best_peer=50000 (peer-reported, unvalidated), in sync
 </span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27" href="#__codelineno-4-27"></a>
 </span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28" href="#__codelineno-4-28"></a>  22 OK, 0 FAIL, 0 SKIP
 </span></code></pre></div>
@@ -7477,9 +7477,9 @@
 <td>Restart block assembly, check gRPC connectivity</td>
 </tr>
 <tr>
-<td>Chain vs Peers behind</td>
-<td>Node falling behind network</td>
-<td>Check catchup status, peer connectivity</td>
+<td>Chain vs Peers behind (informational, never FAIL)</td>
+<td>Node falling behind network, or a peer advertising a height it has not proven</td>
+<td>Check catchup status and peer connectivity; compare with the Chain Tip check</td>
 </tr>
 <tr>
 <td>P2P Peers = 0</td>
