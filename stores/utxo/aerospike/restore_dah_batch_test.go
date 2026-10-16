@@ -47,7 +47,7 @@ func TestRestoreDAHBatch(t *testing.T) {
 			return nil
 		}
 
-		require.NoError(t, s.restoreDAHBatch(context.Background(), restoreItems(t, 5)))
+		require.NoError(t, s.restoreDAHBatch(context.Background(), restoreItems(t, 5), prometheusTxMetaAerospikeExpiredPreservationRestoreFailed))
 		require.Equal(t, []int{5}, sizes, "a healthy restore must be a single BatchOperate for all items")
 	})
 
@@ -65,7 +65,7 @@ func TestRestoreDAHBatch(t *testing.T) {
 			return nil
 		}
 
-		require.NoError(t, s.restoreDAHBatch(context.Background(), restoreItems(t, 5)))
+		require.NoError(t, s.restoreDAHBatch(context.Background(), restoreItems(t, 5), prometheusTxMetaAerospikeExpiredPreservationRestoreFailed))
 		require.Equal(t, []int{5, 2}, sizes)
 	})
 
@@ -81,7 +81,7 @@ func TestRestoreDAHBatch(t *testing.T) {
 			return nil
 		}
 
-		require.NoError(t, s.restoreDAHBatch(context.Background(), restoreItems(t, 3)))
+		require.NoError(t, s.restoreDAHBatch(context.Background(), restoreItems(t, 3), prometheusTxMetaAerospikeExpiredPreservationRestoreFailed))
 		require.Equal(t, 1, calls)
 	})
 
@@ -94,7 +94,7 @@ func TestRestoreDAHBatch(t *testing.T) {
 			return aerospike.ErrNetwork
 		}
 
-		err := s.restoreDAHBatch(context.Background(), restoreItems(t, 3))
+		err := s.restoreDAHBatch(context.Background(), restoreItems(t, 3), prometheusTxMetaAerospikeExpiredPreservationRestoreFailed)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "restore failed")
 		require.Equal(t, 2, calls)
@@ -118,7 +118,9 @@ func TestRestoreDAHBatch(t *testing.T) {
 		}
 
 		done := make(chan error, 1)
-		go func() { done <- s.restoreDAHBatch(ctx, restoreItems(t, 2)) }()
+		go func() {
+			done <- s.restoreDAHBatch(ctx, restoreItems(t, 2), prometheusTxMetaAerospikeExpiredPreservationRestoreFailed)
+		}()
 
 		select {
 		case err := <-done:

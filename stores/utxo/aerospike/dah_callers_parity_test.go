@@ -413,6 +413,12 @@ func (h *expiredFailureHarness) failFirst(t *testing.T, n int, onCall func(call 
 
 	h.calls.Store(0)
 	h.store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		// The expiry write on the master also goes through the seam; it is not one of the writes
+		// these tests fail or count, so let it through.
+		if h.isMasterExpiryWrite(records) {
+			return h.client.BatchOperate(policy, records)
+		}
+
 		call := int(h.calls.Add(1))
 		if onCall != nil {
 			onCall(call)
@@ -425,6 +431,21 @@ func (h *expiredFailureHarness) failFirst(t *testing.T, n int, onCall func(call 
 		return h.client.BatchOperate(policy, records)
 	})
 	t.Cleanup(func() { h.store.SetBatchOperateFn(nil) })
+}
+
+// isMasterExpiryWrite is true for the single-record write on the master while its preservation
+// is still the seeded one, i.e. the expiry write itself rather than a child write or a restore.
+func (h *expiredFailureHarness) isMasterExpiryWrite(records []aerospike.BatchRecordIfc) bool {
+	if len(records) != 1 || records[0].BatchRec().Key.String() != h.k0.String() {
+		return false
+	}
+
+	rec, err := h.client.Get(nil, h.k0)
+	if err != nil {
+		return false
+	}
+
+	return rec.Bins[fields.PreserveUntil.String()] == int(expiredCurrentHeight-10)
 }
 
 // run calls ProcessExpiredPreservations until the expired record has been picked up (the

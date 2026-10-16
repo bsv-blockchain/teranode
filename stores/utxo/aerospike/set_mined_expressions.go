@@ -3,6 +3,7 @@ package aerospike
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -12,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // childDAHItem is one master record whose pagination records need their deleteAtHeight set
@@ -130,6 +132,21 @@ func chunkChildDAHItems(items []childDAHItem, maxPages int) [][]childDAHItem {
 	return chunks
 }
 
+// maxLoggedChildDAHTxIDs caps how many txids a failed child-DAH chunk puts on its Error line.
+const maxLoggedChildDAHTxIDs = 10
+
+// childDAHItemIDs lists the txids of a chunk, capped, for the Error line an operator repairs from.
+func childDAHItemIDs(chunk []childDAHItem) string {
+	n := min(len(chunk), maxLoggedChildDAHTxIDs)
+	ids := make([]string, n)
+
+	for i := 0; i < n; i++ {
+		ids[i] = chunk[i].TxID.String()
+	}
+
+	return strings.Join(ids, ",")
+}
+
 // childDAHApplyResult reports what applyChildDAHFollowUps could not write.
 type childDAHApplyResult struct {
 	unsetErr, setErr         error
@@ -175,7 +192,7 @@ func (s *Store) applyChildDAHFollowUps(ctx context.Context, f *childDAHFollowUps
 	run := func(items []childDAHItem, kind string, failed *[]childDAHItem, errOut *error) {
 		for _, chunk := range chunkChildDAHItems(items, maxChildDAHPagesPerBatch) {
 			if err := s.writeChildDAHChunk(ctx, chunk); err != nil {
-				s.logger.Errorf("[childDAHFollowUps] failed to %s child DAH for %d txs: %v", kind, len(chunk), err)
+				s.logger.Errorf("[childDAHFollowUps] failed to %s child DAH for %d txs (first %d: %s): %v", kind, len(chunk), min(len(chunk), maxLoggedChildDAHTxIDs), childDAHItemIDs(chunk), err)
 				*failed = append(*failed, chunk...)
 				*errOut = errors.JoinCapped(10, *errOut, err)
 			}
@@ -221,12 +238,13 @@ func dahUnchangedExpression(newDAH *uint32) *aerospike.Expression {
 // attempt (not one per record), retrying once for only the records that failed, after a backoff
 // that honours ctx. Each record is independently filtered: FILTERED_OUT or KEY_NOT_FOUND means
 // another writer owns it (or it is gone) and is logged and skipped. Records that still fail are
-// counted in the restore-failed metric and returned in a distinct "restore failed" error: such a
-// master is left in its post-write state and nothing revisits it.
+// counted in failedCounter (the caller's own metric, so counts stay attributable) and returned in a
+// distinct "restore failed" error: such a master is left in its post-write state and nothing
+// revisits it.
 //
 // Shared by every caller whose master write is not retry-safe (expired preservation here; the
-// longest-chain path on the pruner branch).
-func (s *Store) restoreDAHBatch(ctx context.Context, items []dahRestore) error {
+// longest-chain path in PR #1951 will be the second).
+func (s *Store) restoreDAHBatch(ctx context.Context, items []dahRestore, failedCounter prometheus.Counter) error {
 	pending := items
 
 	for attempt := 0; attempt < 2 && len(pending) > 0; attempt++ {
@@ -281,8 +299,8 @@ func (s *Store) restoreDAHBatch(ctx context.Context, items []dahRestore) error {
 		return nil
 	}
 
-	if prometheusTxMetaAerospikeExpiredPreservationRestoreFailed != nil {
-		prometheusTxMetaAerospikeExpiredPreservationRestoreFailed.Add(float64(len(pending)))
+	if failedCounter != nil {
+		failedCounter.Add(float64(len(pending)))
 	}
 
 	ids := make([]string, len(pending))
@@ -453,8 +471,8 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 // master write is not retry-safe: a retry sees old == new (or FILTERED_OUT) and queues nothing.
 // Callers differ in what they do when a child write still fails:
 //   - expired preservation (ProcessExpiredPreservations): RESTORES the master through
-//     restoreDAHBatch, so the next run redoes the transition. The longest-chain path on the
-//     pruner branch does the same with the same helper.
+//     restoreDAHBatch, so the next run redoes the transition. The longest-chain path in
+//     PR #1951 does the same with the same helper.
 //   - setMined (Lua and expressions) and spend (expressions): only LOG at Error, COUNT and RETURN
 //     the error (setMined returns it, spend increments prometheusUtxoMapErrors as its spends are
 //     already completed). They do NOT restore, so a failed unset or raise leaves the pages stale

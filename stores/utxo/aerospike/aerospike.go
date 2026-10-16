@@ -1383,7 +1383,17 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 
 		txIDs = append(txIDs, txHash)
 
-		preserveUntil, _ := record.Bins[fields.PreserveUntil.String()].(int)
+		// A non-int preserveUntil cannot be restored faithfully (restoring would write 0, which the
+		// expiry query's range filter, starting at 1, never matches again, while the expressions'
+		// preserve guard would see the bin and never stamp a DAH). Record 0 so the restore step
+		// leaves the record out; the write itself and its child follow-ups still run.
+		preserveUntil, ok := record.Bins[fields.PreserveUntil.String()].(int)
+		if !ok {
+			s.logger.Warnf("[ProcessExpiredPreservations] tx %s has a non-int preserveUntil (%T), it will not be restored on failure", txHash.String(), record.Bins[fields.PreserveUntil.String()])
+
+			preserveUntil = 0
+		}
+
 		preserveUntils = append(preserveUntils, preserveUntil)
 
 		// Process batch when full
@@ -1430,9 +1440,12 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []aerospike.BatchRecordIfc, txIDs []chainhash.Hash, preserveUntils []int) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	err := s.client.BatchOperate(batchPolicy, batch)
-	if err != nil {
-		return err
+	// A top-level error (for example one node timing out) does not mean nothing was written: records
+	// with no per-record error and a result were applied, with preserveUntil already cleared, so they
+	// still need their follow-ups. The error is returned at the end.
+	var batchErr error
+	if err := s.batchOperate(batchPolicy, batch); err != nil {
+		batchErr = err
 	}
 
 	// Log any failures, and collect the pagination-record DAH follow-ups for external masters
@@ -1456,12 +1469,16 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 			continue
 		}
 
-		if state, parseErr := s.parseSetMinedState(br.Record.Bins); parseErr == nil {
-			childDAH.collect(&txIDs[i], state)
-			oldDAH[txIDs[i]] = state.OldDeleteAtHeight
-			newDAH[txIDs[i]] = state.NewDeleteAtHeight
-			preserved[txIDs[i]] = preserveUntils[i]
+		state, parseErr := s.parseSetMinedState(br.Record.Bins)
+		if parseErr != nil {
+			s.logger.Warnf("[ProcessExpiredPreservations] tx %s: could not parse the write result, no child follow-up or restore: %v", txIDs[i].String(), parseErr)
+			continue
 		}
+
+		childDAH.collect(&txIDs[i], state)
+		oldDAH[txIDs[i]] = state.OldDeleteAtHeight
+		newDAH[txIDs[i]] = state.NewDeleteAtHeight
+		preserved[txIDs[i]] = preserveUntils[i]
 	}
 
 	// Unsets run before sets, in bounded chunks, each retried once (applyChildDAHFollowUps).
@@ -1491,6 +1508,10 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 		for _, item := range restore {
 			id := *item.TxID
 
+			if preserved[id] <= 0 {
+				continue
+			}
+
 			key, keyErr := aerospike.NewKey(s.namespace, s.setName, id[:])
 			if keyErr != nil {
 				restoreErr = errors.JoinCapped(10, restoreErr, keyErr)
@@ -1500,9 +1521,14 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 			// Only restore a master still in the post-expiry state: preserveUntil absent and the
 			// DAH exactly as the expiry left it. If another writer changed either bin the record
 			// is theirs and is left alone. For a concurrent DAH stamp the writer's own nil -> X
-			// follow-up rewrites the pages; for a concurrent PreserveTransactions the pages keep
-			// the lower DAH until that preservation expires (PreserveTransactions never touches
-			// the pages; a pre-existing gap, not introduced here).
+			// follow-up rewrites the pages. A concurrent PreserveTransactions is a known, pre-existing
+			// gap that this does not close: it clears only the master's DAH (preserveUntil in
+			// teranode.lua and preserve_expressions.go; the PRESERVE signal has no handler), so
+			// pages already stamped keep their own DAH, and the pruner selects pagination records by
+			// that DAH, so it can delete them during the preservation. When the preservation then
+			// expires, the set follow-up writes the DAH to those page keys; unless the write policy
+			// is UPDATE_ONLY that recreates them as stubs without txid, which the pruner skips
+			// (derived from reading the code, not reproduced). Needs its own issue.
 			items = append(items, dahRestore{
 				ID:   id.String(),
 				Key:  key,
@@ -1514,10 +1540,10 @@ func (s *Store) processBatchExpiredPreservations(ctx context.Context, batch []ae
 			})
 		}
 
-		restoreErr = errors.JoinCapped(10, restoreErr, s.restoreDAHBatch(ctx, items))
+		restoreErr = errors.JoinCapped(10, restoreErr, s.restoreDAHBatch(ctx, items, prometheusTxMetaAerospikeExpiredPreservationRestoreFailed))
 	}
 
-	if followUpErr := errors.JoinCapped(10, applied.unsetErr, applied.setErr, restoreErr); followUpErr != nil {
+	if followUpErr := errors.JoinCapped(10, batchErr, applied.unsetErr, applied.setErr, restoreErr); followUpErr != nil {
 		s.logger.Warnf("[ProcessExpiredPreservations] child DAH follow-up failed: %v", followUpErr)
 		return followUpErr
 	}
