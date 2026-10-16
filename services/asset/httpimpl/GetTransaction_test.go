@@ -277,11 +277,13 @@ func TestGetTransaction_MarksItsOwnNotFound(t *testing.T) {
 		"the transaction is not held": {errors.NewNotFoundError("transaction not found"), http.StatusNotFound, true},
 		"the repository failed":       {errors.NewProcessingError("error getting transaction"), http.StatusInternalServerError, false},
 		// A store fault can say "not found" without being a miss: a misconfigured
-		// aerospike namespace does. The text still earns a 404 for callers that read
-		// the status alone, but only the class marks it as a verdict, so
-		// getrawtransaction does not answer -5 for a transaction it may hold.
+		// aerospike namespace does. The class decides the 404, never the text, so
+		// it is a fault for every caller, not only for getrawtransaction.
 		"a store fault whose text says not found": {
-			errors.NewServiceError("aerospike get failed: Namespace not found"), http.StatusNotFound, false,
+			errors.NewServiceError("aerospike get failed: Namespace not found"), http.StatusInternalServerError, false,
+		},
+		"a processing error whose text says not found": {
+			errors.NewProcessingError("record not found in the index"), http.StatusInternalServerError, false,
 		},
 		// The repository counts a tx store's blob not-found as a miss, as it does
 		// ErrNotFound, so it is the same verdict.
@@ -289,13 +291,16 @@ func TestGetTransaction_MarksItsOwnNotFound(t *testing.T) {
 		// The class decides the 404, not the wording.
 		"a blob miss whose text does not say so": {errors.NewBlobNotFoundError("no tx blob for this hash"), http.StatusNotFound, true},
 		// A store that calls its not-found a storage failure has failed while it
-		// looked; that is a fault, not an answer about the transaction.
+		// looked; that is a fault, not an answer about the transaction. Its class
+		// keeps the 404 for callers that read the status alone, unmarked.
 		"a storage error over a not-found": {
 			errors.NewStorageError("tx store read failed", errors.NewNotFoundError("not found")), http.StatusNotFound, false,
 		},
-		// The repository hands this class back raw even when the UTXO store failed,
-		// so marking it would deny a transaction the node may hold.
-		"a tx not-found the repository does not vet": {errors.NewTxNotFoundError("tx not found"), http.StatusNotFound, false},
+		// Outside the tx-store miss set, the only set the repository vets against a
+		// UTXO fault, so it cannot be told from a fault. Only its text earned it a
+		// 404. The repository never returns it: it drops the UTXO store's error and
+		// no tx store reports a miss with this class.
+		"a tx not-found the repository does not vet": {errors.NewTxNotFoundError("tx not found"), http.StatusInternalServerError, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			httpServer, mockRepo, echoContext, responseRecorder := GetMockHTTP(t, nil)
@@ -321,48 +326,88 @@ func TestGetTransaction_MarksItsOwnNotFound(t *testing.T) {
 }
 
 // TestGetTransaction_MarksAMissBehindAnHTTPTxStore drives the handler over a real
-// repository: a UTXO store that does not hold the transaction and an http:// tx store
-// that answers 404. That is a miss in both, so the 404 is marked. The tx store's error
-// reaches isTransactionMiss as the repository returns it, so an HTTP store that wrapped
-// its 404 in a storage error left the miss unmarked and getrawtransaction answered it
-// as a node fault.
+// repository: a UTXO store that does not hold the transaction and an http:// tx store.
+// When the blob server answers that it does not hold the blob either, that is a miss in
+// both, so the 404 is marked; the tx store's error reaches isTransactionMiss as the
+// repository returns it. Anything else answering on the tx store's address, or a blob
+// server that fails, is a fault and must not deny the transaction.
 func TestGetTransaction_MarksAMissBehindAnHTTPTxStore(t *testing.T) {
 	initPrometheusMetrics()
 
-	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	tSettings := test.CreateBaseTestSettings(t)
 
-	blobServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer blobServer.Close()
+	for name, tc := range map[string]struct {
+		txStore func(t *testing.T) http.Handler
+		status  int
+		marked  bool
+	}{
+		"the blob server does not hold it": {
+			txStore: func(t *testing.T) http.Handler {
+				memoryURL, err := url.Parse("memory://")
+				require.NoError(t, err)
 
-	txStoreURL, err := url.Parse(blobServer.URL)
-	require.NoError(t, err)
+				blobServer, err := blob.NewHTTPBlobServer(logger, memoryURL, "")
+				require.NoError(t, err)
 
-	txStore, err := blob.NewStore(logger, txStoreURL)
-	require.NoError(t, err)
+				return blobServer
+			},
+			status: http.StatusNotFound,
+			marked: true,
+		},
+		// A wrong base URL or a proxy: a 404 that is not the blob server's verdict.
+		"something else answers 404": {
+			txStore: func(*testing.T) http.Handler { return http.NotFoundHandler() },
+			status:  http.StatusInternalServerError,
+		},
+		"the blob server fails": {
+			txStore: func(*testing.T) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, "disk read failed", http.StatusInternalServerError)
+				})
+			},
+			status: http.StatusInternalServerError,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			tSettings := test.CreateBaseTestSettings(t)
 
-	utxoStoreURL, err := url.Parse("sqlitememory:///get_transaction_http_tx_store")
-	require.NoError(t, err)
+			blobServer := httptest.NewServer(tc.txStore(t))
+			t.Cleanup(blobServer.Close)
 
-	utxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
-	require.NoError(t, err)
+			txStoreURL, err := url.Parse(blobServer.URL)
+			require.NoError(t, err)
 
-	repo, err := repository.NewRepository(logger, tSettings, utxoStore, txStore, nil, nil, nil, nil, nil, nil)
-	require.NoError(t, err)
+			txStore, err := blob.NewStore(logger, txStoreURL)
+			require.NoError(t, err)
 
-	httpServer, _, echoContext, responseRecorder := GetMockHTTP(t, nil)
-	httpServer.repository = repo
+			utxoStoreURL, err := url.Parse("sqlitememory:///" + t.Name())
+			require.NoError(t, err)
 
-	echoContext.SetPath("/tx/:hash/hex")
-	echoContext.SetParamNames("hash")
-	echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+			utxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = utxoStore.Close(ctx) })
 
-	err = httpServer.GetTransaction(HEX)(echoContext)
-	echoErr := &echo.HTTPError{}
-	require.True(t, errors.As(err, &echoErr))
-	require.Equal(t, http.StatusNotFound, echoErr.Code)
-	require.Equal(t, util.AssetNotFoundTx, responseRecorder.Header().Get(util.AssetNotFoundHeader))
+			repo, err := repository.NewRepository(logger, tSettings, utxoStore, txStore, nil, nil, nil, nil, nil, nil)
+			require.NoError(t, err)
+
+			httpServer, _, echoContext, responseRecorder := GetMockHTTP(t, nil)
+			httpServer.repository = repo
+
+			echoContext.SetPath("/tx/:hash/hex")
+			echoContext.SetParamNames("hash")
+			echoContext.SetParamValues("9d45ad79ad3c6baecae872c0e35022d60c3bbbd024ccce06690321ece15ea995")
+
+			err = httpServer.GetTransaction(HEX)(echoContext)
+			echoErr := &echo.HTTPError{}
+			require.True(t, errors.As(err, &echoErr))
+			require.Equal(t, tc.status, echoErr.Code)
+
+			if tc.marked {
+				require.Equal(t, util.AssetNotFoundTx, responseRecorder.Header().Get(util.AssetNotFoundHeader))
+			} else {
+				require.Empty(t, responseRecorder.Header().Get(util.AssetNotFoundHeader))
+			}
+		})
+	}
 }
