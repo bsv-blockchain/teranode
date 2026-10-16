@@ -291,7 +291,11 @@ func (s *Server) initGenesisKeys(ctx context.Context) error {
 		return errors.NewConfigurationError("error syncing alert genesis keys", err)
 	}
 
-	s.logger.Infof("[Alert] verifying alerts against %d active keys from the alert store", activeKeys)
+	if activeKeys > maxGenesisKeys {
+		s.logger.Warnf("[Alert] alert store has %d active keys but alerts are verified against only the first %d", activeKeys, maxGenesisKeys)
+	} else {
+		s.logger.Infof("[Alert] verifying alerts against %d active keys from the alert store", activeKeys)
+	}
 
 	return nil
 }

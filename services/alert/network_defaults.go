@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/bsv-blockchain/go-alert-system/app/config"
+	"github.com/bsv-blockchain/go-alert-system/app/models"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 )
@@ -102,10 +103,15 @@ func uniqueKeys(keys []string) []string {
 	return unique
 }
 
-// validateGenesisKeys checks that keys holds at most maxGenesisKeys keys and that each is a
+// validateGenesisKeys checks that keys holds between models.RequiredSignatures and
+// maxGenesisKeys keys, since an alert needs that many distinct signers, and that each is a
 // hex-encoded compressed public key, mirroring the check go-alert-system runs on the
 // genesis keys of a config it loads itself.
 func validateGenesisKeys(keys []string) error {
+	if len(keys) < models.RequiredSignatures {
+		return errors.NewConfigurationError("alert_genesis_keys has %d keys, alerts need %d distinct signers", len(keys), models.RequiredSignatures)
+	}
+
 	if len(keys) > maxGenesisKeys {
 		return errors.NewConfigurationError("alert_genesis_keys has %d keys, at most %d are supported", len(keys), maxGenesisKeys)
 	}

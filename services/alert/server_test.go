@@ -91,7 +91,7 @@ func TestServer_Init_basic(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set up required alert settings
-	tSettings.Alert.GenesisKeys = upstreamNetwork(t, "mainnet").GenesisKeys[:2]
+	tSettings.Alert.GenesisKeys = upstreamNetwork(t, "mainnet").GenesisKeys[:3]
 	tSettings.Alert.P2PPort = 8080
 	tSettings.Alert.ProtocolID = "/alert/test/1.0.0"
 	tSettings.Alert.P2PPrivateKey = "test_private_key"
@@ -179,8 +179,9 @@ func TestServer_loadConfig_networkDefaults(t *testing.T) {
 	})
 
 	t.Run("an invalid genesis key is a configuration error", func(t *testing.T) {
+		mainnetKeys := upstreamNetwork(t, "mainnet").GenesisKeys
 		server := newServer(t, &chaincfg.TestNetParams, settings.AlertSettings{
-			GenesisKeys: []string{"custom_key"},
+			GenesisKeys: []string{"custom_key", mainnetKeys[0], mainnetKeys[1]},
 		})
 
 		err := server.loadConfig(context.Background(), nil, true)
@@ -303,7 +304,7 @@ func TestServer_basic_functionality(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	// Set up alert settings
-	tSettings.Alert.GenesisKeys = upstreamNetwork(t, "mainnet").GenesisKeys[:1]
+	tSettings.Alert.GenesisKeys = upstreamNetwork(t, "mainnet").GenesisKeys[:3]
 	tSettings.Alert.P2PPort = 8080
 	tSettings.Alert.ProtocolID = "/alert/test/1.0.0"
 	tSettings.Alert.P2PPrivateKey = "test_private_key"
@@ -420,6 +421,23 @@ func TestServer_syncGenesisKeys(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, len(testnet.GenesisKeys), active)
 		require.ElementsMatch(t, testnet.GenesisKeys, activeKeys(t, server))
+	})
+
+	t.Run("keys that were deactivated are reactivated", func(t *testing.T) {
+		dataFolder := mainnetStore(t)
+
+		testnetServer := startServer(t, dataFolder, &chaincfg.TestNetParams)
+		_, err := testnetServer.syncGenesisKeys(context.Background())
+		require.NoError(t, err)
+		testnetServer.appConfig.CloseAll(context.Background())
+
+		// the mainnet key rows exist but are inactive, so they are found and reactivated
+		server := startServer(t, dataFolder, &chaincfg.MainNetParams)
+
+		active, err := server.syncGenesisKeys(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, len(mainnet.GenesisKeys), active)
+		require.ElementsMatch(t, mainnet.GenesisKeys, activeKeys(t, server))
 	})
 
 	t.Run("matching store is left alone", func(t *testing.T) {
