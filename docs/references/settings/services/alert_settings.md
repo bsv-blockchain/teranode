@@ -6,11 +6,11 @@
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| GenesisKeys | []string | per network (see below) | alert_genesis_keys | Public keys allowed to sign alerts (pipe-delimited). Empty uses the network default |
+| GenesisKeys | []string | [] (empty: per-network default, see below) | alert_genesis_keys | Public keys allowed to sign alerts (pipe-delimited). Empty uses the network default |
 | P2PPrivateKey | string | "" | alert_p2p_private_key | Hex-encoded Ed25519 private key (64-byte seed‖pubkey). Auto-generates if empty |
-| ProtocolID | string | per network (see below) | alert_protocol_id | libp2p protocol identifier. Empty uses the network default |
+| ProtocolID | string | "" (empty: per-network default, see below) | alert_protocol_id | libp2p protocol identifier. Empty uses the network default |
 | StoreURL | *url.URL | "sqlite:///alert" | alert_store | Database connection URL |
-| TopicName | string | per network (see below) | alert_topic_name | P2P pubsub topic. Empty uses the network default |
+| TopicName | string | "" (empty: per-network default, see below) | alert_topic_name | P2P pubsub topic. Empty uses the network default |
 | P2PPort | int | 9908 | ALERT_P2P_PORT | P2P listening port (string length >= 2 after PORT_PREFIX applied) |
 | P2PBootstrapPeer | string | "" | alert_p2p_bootstrap_peer | Extra libp2p bootstrap multiaddr for private alert networks (public IPFS peers are still tried) |
 | P2PAllowPrivateIPs | bool | false | alert_p2p_allow_private_ips | Allow dialing/accepting/advertising RFC1918 addresses on the alert network |
