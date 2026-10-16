@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"slices"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
@@ -25,20 +26,39 @@ type preparedTxMap struct {
 	err         error
 }
 
+// failed reports whether the prepare has ended with an error.
+func (p *preparedTxMap) failed() bool {
+	select {
+	case <-p.done:
+		return p.err != nil
+	default:
+		return false
+	}
+}
+
 // PrepareBlock starts building the transaction map of a block on the current tip that is
 // still being validated. The block comes from a peer and is not trusted: its subtree list is
 // first bound to the header's merkle root, and the map is sized from the bound body, never
 // from the claimed transaction count. moveForwardBlock only takes the map for a block with
 // the same hash and subtree list, once that block has been validated and added. A block that
 // is not on the current tip, or that has no subtrees, is ignored. One block is prepared at a
-// time; a new one replaces it.
+// time; a new one replaces it. A prepare that failed is replaced by the next hint for the
+// block, so block validation's retry gets another attempt.
+//
+// The same block hash with another subtree list does not replace a prepare until its list is
+// bound to the header: a peer can relay the honest header with a list of its own valid
+// subtrees, and that must not cancel the honest prepare.
+//
+// A map that is not taken is dropped as soon as the tip is seen to have moved past its block,
+// when it is built, or by the next PrepareBlock or moveForwardBlock. A block that fails
+// validation, so never moves the tip, holds its map until then, which is at most one block
+// interval.
 func (stp *SubtreeProcessor) PrepareBlock(block *model.Block) {
 	if block == nil || len(block.Subtrees) == 0 {
 		return
 	}
 
-	currentBlockHeader := stp.currentBlockHeader.Load()
-	if currentBlockHeader == nil || !block.Header.HashPrevBlock.IsEqual(currentBlockHeader.Hash()) {
+	if stp.tipMovedPast(block) {
 		return
 	}
 
@@ -49,15 +69,23 @@ func (stp *SubtreeProcessor) PrepareBlock(block *model.Block) {
 		subtrees[i] = *subtree
 	}
 
+	// install is false when the prepare must bind its list before it replaces the current one
+	install := true
+
 	stp.preparedMu.Lock()
 
-	if stp.prepared != nil {
-		if stp.prepared.hash.IsEqual(&hash) && sameSubtrees(stp.prepared.subtrees, block.Subtrees) {
+	if existing := stp.prepared; existing != nil {
+		switch {
+		case !existing.hash.IsEqual(&hash):
+			existing.cancel()
+		case existing.failed():
+			existing.cancel()
+		case sameSubtrees(existing.subtrees, block.Subtrees):
 			stp.preparedMu.Unlock()
 			return
+		default:
+			install = false
 		}
-
-		stp.prepared.cancel()
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -68,33 +96,105 @@ func (stp *SubtreeProcessor) PrepareBlock(block *model.Block) {
 		cancel:   cancel,
 		done:     make(chan struct{}),
 	}
-	stp.prepared = p
+
+	if install {
+		stp.prepared = p
+	}
 
 	stp.preparedMu.Unlock()
 
-	go func() {
-		defer close(p.done)
+	go stp.runPrepare(ctx, p, block, install)
+}
 
-		p.txCount, p.err = stp.bindPreparedBlock(ctx, block)
-		if p.err != nil {
-			stp.logger.Warnf("[PrepareBlock][%s] not preparing the block: %v", block.String(), p.err)
-			return
+// runPrepare binds the block, builds its transaction map, and sets the result on p.
+func (stp *SubtreeProcessor) runPrepare(ctx context.Context, p *preparedTxMap, block *model.Block, installed bool) {
+	defer close(p.done)
+
+	p.txCount, p.err = stp.bindPreparedBlock(ctx, block)
+	if p.err != nil {
+		stp.logger.Warnf("[PrepareBlock][%s] not preparing the block: %v", block.String(), p.err)
+		return
+	}
+
+	if !installed && !stp.installPrepared(p) {
+		p.cancel()
+		p.err = errors.NewProcessingError("prepared block is not the one being prepared")
+
+		return
+	}
+
+	if stp.dropIfTipMovedPast(p, block) {
+		return
+	}
+
+	blockSubtreesMap := make(map[chainhash.Hash]int, len(p.subtrees))
+	for idx, subtree := range p.subtrees {
+		blockSubtreesMap[subtree] = idx
+	}
+
+	stp.logger.Infof("[PrepareBlock][%s] building transaction map of %d subtrees before the block is added", block.String(), len(p.subtrees))
+
+	p.txMap, p.conflicting, p.err = stp.CreateTransactionMap(ctx, blockSubtreesMap, len(p.subtrees), p.txCount)
+	if p.err != nil {
+		stp.logger.Warnf("[PrepareBlock][%s] building transaction map failed, it is built when the block is added: %v", block.String(), p.err)
+		return
+	}
+
+	if stp.dropIfTipMovedPast(p, block) {
+		return
+	}
+
+	stp.logger.Infof("[PrepareBlock][%s] building transaction map DONE", block.String())
+}
+
+// installPrepared makes p, whose list is bound to its header, the prepared block, replacing
+// a prepare for the same block hash. It does not replace one for another block, or one with
+// the same list that is already installed.
+func (stp *SubtreeProcessor) installPrepared(p *preparedTxMap) bool {
+	stp.preparedMu.Lock()
+	defer stp.preparedMu.Unlock()
+
+	if existing := stp.prepared; existing != nil {
+		if !existing.hash.IsEqual(&p.hash) || slices.Equal(existing.subtrees, p.subtrees) {
+			return false
 		}
 
-		blockSubtreesMap := make(map[chainhash.Hash]int, len(subtrees))
-		for idx, subtree := range subtrees {
-			blockSubtreesMap[subtree] = idx
-		}
+		existing.cancel()
+	}
 
-		stp.logger.Infof("[PrepareBlock][%s] building transaction map of %d subtrees before the block is added", block.String(), len(subtrees))
+	stp.prepared = p
 
-		p.txMap, p.conflicting, p.err = stp.CreateTransactionMap(ctx, blockSubtreesMap, len(subtrees), p.txCount)
-		if p.err != nil {
-			stp.logger.Warnf("[PrepareBlock][%s] building transaction map failed, it is built when the block is added: %v", block.String(), p.err)
-		} else {
-			stp.logger.Infof("[PrepareBlock][%s] building transaction map DONE", block.String())
-		}
-	}()
+	return true
+}
+
+// tipMovedPast reports whether block is no longer on top of the current tip.
+func (stp *SubtreeProcessor) tipMovedPast(block *model.Block) bool {
+	currentBlockHeader := stp.currentBlockHeader.Load()
+
+	return currentBlockHeader == nil || !block.Header.HashPrevBlock.IsEqual(currentBlockHeader.Hash())
+}
+
+// dropIfTipMovedPast drops p and its map when the tip has moved past its block: a hint that
+// arrived after the block was added, or a map finished after another block took its place.
+// Nothing takes such a map, and it can be several GB.
+func (stp *SubtreeProcessor) dropIfTipMovedPast(p *preparedTxMap, block *model.Block) bool {
+	if !stp.tipMovedPast(block) {
+		return false
+	}
+
+	stp.preparedMu.Lock()
+	if stp.prepared == p {
+		stp.prepared = nil
+	}
+	stp.preparedMu.Unlock()
+
+	p.cancel()
+
+	p.txMap = nil
+	p.conflicting = nil
+	p.err = errors.NewProcessingError("tip moved past the prepared block")
+
+	return true
 }
 
 // bindPreparedBlock binds the block's subtree list to its header, as block validation does
