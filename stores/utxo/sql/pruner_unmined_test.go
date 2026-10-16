@@ -134,7 +134,7 @@ func TestPrunerClearedDAHIsRestampedOnLongestChain(t *testing.T) {
 
 	got := dah()
 	require.True(t, got.Valid, "marking on the longest chain must re-stamp the DAH")
-	require.Equal(t, int64(1000)+int64(retention), got.Int64)
+	require.Equal(t, int64(1001)+int64(retention), got.Int64)
 
 	deleted, err := prunerSvc.Prune(ctx, uint32(got.Int64), "test")
 	require.NoError(t, err)
@@ -163,16 +163,16 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 		want        *int64
 	}{
 		{name: "mined above the store height uses the mined height", minedHeight: 1100, want: ptr(1100 + retention)},
-		{name: "mined below the store height uses the store height", minedHeight: 900, want: ptr(1000 + retention)},
+		{name: "mined below the store height uses the store height plus one", minedHeight: 900, want: ptr(1001 + retention)},
 		{name: "existing higher DAH is never lowered", minedHeight: 900, existingDAH: ptr(5000), want: ptr(5000)},
-		{name: "existing lower DAH is raised", minedHeight: 900, existingDAH: ptr(1002), want: ptr(1000 + retention)},
+		{name: "existing lower DAH is raised", minedHeight: 900, existingDAH: ptr(1002), want: ptr(1001 + retention)},
 		{name: "unspent output gets no DAH", minedHeight: 900, unspent: true},
 		{name: "preserved gets no DAH", minedHeight: 900, preserve: true},
 		{name: "no block_ids gets no DAH"},
 		{name: "unspent output loses a stale DAH", minedHeight: 900, unspent: true, existingDAH: ptr(1002)},
 		{name: "no block_ids loses a stale DAH", existingDAH: ptr(1002)},
 		{name: "preserved keeps its DAH", minedHeight: 900, preserve: true, existingDAH: ptr(1002), want: ptr(1002)},
-		{name: "conflicting without a DAH is stamped", conflicting: true, want: ptr(1000 + retention)},
+		{name: "conflicting without a DAH is stamped", conflicting: true, want: ptr(1001 + retention)},
 		{name: "conflicting keeps an existing DAH", conflicting: true, existingDAH: ptr(1002), want: ptr(1002)},
 	}
 

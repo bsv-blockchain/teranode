@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -113,6 +114,57 @@ func TestClearUnminedDAH(t *testing.T) {
 		require.Equal(t, 2, *calls)
 	})
 
+	// the master clear succeeded, so a page that is already gone leaves nothing to retry: it must not
+	// be logged as a failure
+	t.Run("page key not found is benign", func(t *testing.T) {
+		var svc *Service
+
+		svc, calls := newSvc(t, func(records []aerospike.BatchRecordIfc, call int) error {
+			for _, r := range records {
+				if call == 2 {
+					r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
+
+					continue
+				}
+
+				markHad(svc, r)
+			}
+
+			return nil
+		})
+
+		logger := &errorCountLogger{Logger: svc.logger}
+		svc.logger = logger
+
+		require.Equal(t, 1, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Equal(t, 2, *calls)
+		require.Zero(t, logger.errors, "a page that is already gone is not a failure")
+	})
+
+	t.Run("page per-record error is still a failure", func(t *testing.T) {
+		var svc *Service
+
+		svc, _ = newSvc(t, func(records []aerospike.BatchRecordIfc, call int) error {
+			for _, r := range records {
+				if call == 2 {
+					r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+
+					continue
+				}
+
+				markHad(svc, r)
+			}
+
+			return nil
+		})
+
+		logger := &errorCountLogger{Logger: svc.logger}
+		svc.logger = logger
+
+		require.Equal(t, 1, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Positive(t, logger.errors, "a page error other than KEY_NOT_FOUND must be reported")
+	})
+
 	t.Run("SkipDeletions writes nothing", func(t *testing.T) {
 		svc, calls := newSvc(t, func([]aerospike.BatchRecordIfc, int) error { return nil })
 		svc.settings.Pruner.SkipDeletions = true
@@ -131,6 +183,14 @@ func TestClearUnminedDAH(t *testing.T) {
 		require.Zero(t, *calls)
 	})
 }
+
+// errorCountLogger counts Errorf calls; the error logger of the tests only logs them.
+type errorCountLogger struct {
+	ulogger.Logger
+	errors int
+}
+
+func (l *errorCountLogger) Errorf(string, ...interface{}) { l.errors++ }
 
 func TestDropUnminedRecords_DedupesPageKeys(t *testing.T) {
 	svc := newTestService(t)

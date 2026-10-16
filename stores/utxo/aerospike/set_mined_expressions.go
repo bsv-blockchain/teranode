@@ -501,7 +501,8 @@ func (s *Store) buildDeleteAtHeightOps(currentBlockHeight uint32, blockHeightRet
 // block height (MarkTransactionsOnLongestChain). The DAH is stamped from
 // max(currentBlockHeight, the record's highest blockHeights entry) + retention, evaluated on the
 // server, so it is the value setMined would have stamped or later. A record without block heights
-// uses currentBlockHeight.
+// uses currentBlockHeight. The caller passes the store height + 1, the lag allowance the spend path
+// makes (the store height trails the block being validated).
 func (s *Store) buildDeleteAtHeightOpsFromRecordHeight(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) []*aerospike.Operation {
 	heights := aerospike.ExpListBin(fields.BlockHeights.String())
 

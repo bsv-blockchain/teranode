@@ -5191,9 +5191,11 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				// forward), not only the BlockAssembler repair path.
 				//
 				// There is no mined block in this call, so the DAH is stamped from
-				// max(the store's current height, the tx's highest block height) + retention. The store
-				// height lags the block being validated, and the block heights are what setMined would
-				// have stamped from, so the DAH is the setMined value or later.
+				// max(the store's current height + 1, the tx's highest block height) + retention. The
+				// +1 is the same lag allowance setDAH makes (the store height trails the block being
+				// validated), so a tx re-stamped here is pruned no sooner than a spend would have
+				// allowed. The block heights are what setMined would have stamped from, so the DAH is
+				// the setMined value or later.
 				//
 				// Same rules as Lua setDeleteAtHeight and the Aerospike path: a preserved tx is left
 				// alone; a conflicting tx gets a DAH if it has none and keeps an existing one; any other
@@ -5218,7 +5220,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					    END
 					WHERE hash IN %[2]s
 				`, newDAH, inClause, eligible)
-				args = append([]interface{}{int64(currentBlockHeight), int64(retention)}, inArgs...)
+				args = append([]interface{}{int64(currentBlockHeight) + 1, int64(retention)}, inArgs...)
 			} else {
 				// hashes start at $1
 				inClause, inArgs := buildINClause(chunk, 1)

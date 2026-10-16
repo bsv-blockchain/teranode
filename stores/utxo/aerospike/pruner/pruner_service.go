@@ -1620,7 +1620,11 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 
 				switch {
 				case br.Err != nil:
-					failed++
+					// a page that is already gone has nothing left to clear and nothing to retry
+					var asErr aerospike.Error
+					if !errors.As(br.Err, &asErr) || !asErr.Matches(types.KEY_NOT_FOUND_ERROR) {
+						failed++
+					}
 				case s.hadDAH(br):
 					pages++
 				}
