@@ -8768,6 +8768,16 @@
 <td>Counter</td>
 <td>Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead</td>
 </tr>
+<tr>
+<td><code>teranode_subtreevalidation_peer_subtree_admission_wait</code></td>
+<td>Histogram</td>
+<td>Seconds a peer subtree waited for a <code>subtreevalidation_peerSubtreeConcurrency</code> slot</td>
+</tr>
+<tr>
+<td><code>teranode_subtreevalidation_peer_subtree_admission_waiting</code></td>
+<td>Gauge</td>
+<td>Peer subtrees waiting for a <code>subtreevalidation_peerSubtreeConcurrency</code> slot</td>
+</tr>
 </tbody>
 </table>
 <h2 id="validator-service-metrics">Validator Service Metrics<a class="headerlink" href="#validator-service-metrics" title="Permanent link">&para;</a></h2>
@@ -8995,7 +9005,7 @@
 <tr>
 <td><code>teranode_tx_meta_cache_evictions</code></td>
 <td>Gauge</td>
-<td>Number of evictions in the tx meta cache</td>
+<td>Number of entries removed from the tx meta cache: deletes on every backend, plus an estimate of entries overwritten by ring wraps on the <code>lockfree</code> cache</td>
 </tr>
 <tr>
 <td><code>teranode_tx_meta_cache_trims</code></td>

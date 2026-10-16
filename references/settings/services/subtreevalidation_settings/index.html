@@ -7174,6 +7174,13 @@
 <td><strong>CRITICAL</strong> - Cache-probe workers shared by all subtrees being validated (server-wide, not per subtree; peer subtrees and block validation each get a pool of this size)</td>
 </tr>
 <tr>
+<td>PeerSubtreeConcurrency</td>
+<td>int</td>
+<td>32</td>
+<td>subtreevalidation_peerSubtreeConcurrency</td>
+<td>Peer-announced subtrees validated at once (each holds ~1 GiB per 1M txs); taken before the quorum lock, so block validation never waits behind the queue. Block subtrees do not use it. 0 or less disables the limit</td>
+</tr>
+<tr>
 <td>ProcessTxMetaUsingCacheMissingTxThreshold</td>
 <td>int</td>
 <td>1</td>
