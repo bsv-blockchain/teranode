@@ -3,7 +3,6 @@ package httpimpl
 import (
 	"encoding/hex"
 	"net/http"
-	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -159,12 +158,15 @@ func (h *HTTP) getTransaction(c echo.Context, mode ReadMode) error {
 
 	b, err := h.repository.GetTransaction(ctx, hash)
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlobNotFound) || strings.Contains(err.Error(), "not found") {
+		// The class decides the 404, never the text: a store fault can say "not
+		// found" without being a miss ("Namespace not found" from a misconfigured
+		// aerospike), and answers 500.
+		if errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlobNotFound) {
 			// Marks this 404 as the handler's verdict on the transaction, as opposed
 			// to a route that failed to match; see util.AssetNotFoundHeader. Only a
-			// miss marks it: a store fault can say "not found" without being one,
-			// and the text alone keeps its 404 for callers that read the status, but
-			// unmarked, so getrawtransaction does not deny a transaction it may hold.
+			// miss marks it: a storage error over a not-found keeps its 404 for
+			// callers that read the status, but unmarked, so getrawtransaction does
+			// not deny a transaction it may hold.
 			if isTransactionMiss(err) {
 				c.Response().Header().Set(util.AssetNotFoundHeader, util.AssetNotFoundTx)
 			}

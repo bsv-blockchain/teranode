@@ -140,6 +140,13 @@ type Blockchain struct {
 	mtpCache *mtpCache
 }
 
+// Compile-time assertion that *Blockchain satisfies the generated gRPC server
+// interface. Without this, a method whose name drifts from the interface (e.g. an
+// accidental "Request" suffix) still compiles silently via the embedded
+// UnimplementedBlockchainAPIServer, and the real RPC returns codes.Unimplemented
+// to every caller instead of failing the build.
+var _ blockchain_api.BlockchainAPIServer = (*Blockchain)(nil)
+
 // blobDeletionBatchToken represents an acquired batch of deletions with a lock.
 type blobDeletionBatchToken struct {
 	token         string
@@ -1773,8 +1780,8 @@ func (b *Blockchain) GetHashOfAncestorBlock(ctx context.Context, request *blockc
 	}, nil
 }
 
-func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Context, request *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLatestBlockHeaderFromBlockLocatorRequest",
+func (b *Blockchain) GetLatestBlockHeaderFromBlockLocator(ctx context.Context, request *blockchain_api.GetLatestBlockHeaderFromBlockLocatorRequest) (*blockchain_api.GetBlockHeaderResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetLatestBlockHeaderFromBlockLocator",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetLatestBlockHeaderFromBlockLocator),
 	)
@@ -1782,14 +1789,14 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 
 	bestBlockHash, err := chainhash.NewHash(request.BestBlockHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocatorRequest] request's best block hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocator] request's best block hash is not valid", err))
 	}
 
 	locatorHashes := make([]chainhash.Hash, len(request.BlockLocatorHashes))
 	for i, hashBytes := range request.BlockLocatorHashes {
 		hash, err := chainhash.NewHash(hashBytes)
 		if err != nil {
-			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocatorRequest] request's block locator hash is not valid", err))
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetLatestBlockHeaderFromBlockLocator] request's block locator hash is not valid", err))
 		}
 
 		locatorHashes[i] = *hash
@@ -1813,8 +1820,8 @@ func (b *Blockchain) GetLatestBlockHeaderFromBlockLocatorRequest(ctx context.Con
 	}, nil
 }
 
-func (b *Blockchain) GetBlockHeadersFromOldestRequest(ctx context.Context, request *blockchain_api.GetBlockHeadersFromOldestRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
-	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromOldestRequest",
+func (b *Blockchain) GetBlockHeadersFromOldest(ctx context.Context, request *blockchain_api.GetBlockHeadersFromOldestRequest) (*blockchain_api.GetBlockHeadersResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersFromOldest",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockchainGetBlockHeadersFromOldest),
 	)
@@ -1822,12 +1829,12 @@ func (b *Blockchain) GetBlockHeadersFromOldestRequest(ctx context.Context, reque
 
 	chainTipHash, err := chainhash.NewHash(request.ChainTipHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldestRequest] request's start hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] request's start hash is not valid", err))
 	}
 
 	targetHash, err := chainhash.NewHash(request.TargetHash)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldestRequest] request's target hash is not valid", err))
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][GetBlockHeadersFromOldest] request's target hash is not valid", err))
 	}
 
 	if uint64(request.NumberOfHeaders) > b.maxBlockHeadersPerRequest() {
@@ -2885,7 +2892,7 @@ func (b *Blockchain) SendNotification(ctx context.Context, req *blockchain_api.N
 	// per subscriber, so one oversized payload costs N times its own size. The
 	// gRPC receive limit is a gigabyte, which is no bound at all here.
 	if len(req.GetBase_URL()) > maxNotificationBaseURLLen {
-		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][SendNotification] base_URL must be at most %d bytes, got %d", maxNotificationBaseURLLen, len(req.GetBase_URL())))
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][SendNotification] base_URL must be at most %d bytes, got %d", maxNotificationBaseURLLen, len(req.GetBase_URL()))) // urlsafe: an int byte limit and a length, no URL value
 	}
 
 	if md := req.GetMetadata().GetMetadata(); len(md) > 0 {

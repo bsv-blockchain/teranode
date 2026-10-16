@@ -31,6 +31,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/ordishs/gocore"
 )
 
@@ -40,6 +41,15 @@ const (
 
 	// bearerScheme prefixes the shared secret in the Authorization header of every mutating request.
 	bearerScheme = "Bearer "
+
+	// NotFoundMsg is the body the blob server answers a miss with, through http.Error, so it
+	// arrives with a trailing newline. Every version of the server has sent it. A 404 with any
+	// other body comes from something else answering on that address.
+	NotFoundMsg = "Not found"
+
+	// notFoundBodyLimit bounds how much of a 404 body is read to compare it with NotFoundMsg.
+	// It is longer than the body it looks for, so a longer body cannot be cut down to a match.
+	notFoundBodyLimit = 64
 )
 
 // HTTPStore implements the blob.Store interface by making HTTP requests to a remote
@@ -48,6 +58,10 @@ const (
 type HTTPStore struct {
 	// baseURL is the base URL of the remote blob server (e.g., "http://localhost:8080")
 	baseURL string
+	// redactedBaseURL is baseURL with any password masked, for the Warn line logged with a
+	// fault. Error text never names the server: the asset service answers a transaction request
+	// with it, a 404 for a miss and a 500 for a fault.
+	redactedBaseURL string
 	// authToken is the shared secret presented on mutating requests. Empty means none is sent.
 	authToken string
 	// httpClient is the HTTP client used for making requests with configurable timeout
@@ -63,6 +77,18 @@ type HTTPStore struct {
 // token and, for writes, a body. Neither should be handed to a destination we did not choose.
 func refuseBlobRedirect(req *http.Request, _ []*http.Request) error {
 	return errors.NewInvalidArgumentError("blob http store: refusing to follow a redirect to %s", req.URL.Redacted())
+}
+
+// isBlobServerMiss reports whether a 404 came from the blob server answering a miss, which it
+// does with NotFoundMsg. Anything else answering 404 on that address - a wrong base URL, a proxy -
+// is not a verdict on the blob. It reads from the body, so the caller closes it afterwards.
+func isBlobServerMiss(resp *http.Response) bool {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, notFoundBodyLimit))
+	if err != nil {
+		return false
+	}
+
+	return strings.TrimSuffix(string(body), "\n") == NotFoundMsg
 }
 
 // errUnauthorized reports a 401 from the blob server. It sends one only when this client and
@@ -126,8 +152,9 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 	base.RawFragment = ""
 
 	return &HTTPStore{
-		baseURL:   strings.TrimSuffix(base.String(), "/"),
-		authToken: authToken,
+		baseURL:         strings.TrimSuffix(base.String(), "/"),
+		redactedBaseURL: strings.TrimSuffix(base.Redacted(), "/"),
+		authToken:       authToken,
 		httpClient: &http.Client{
 			Timeout:       30 * time.Second,
 			CheckRedirect: refuseBlobRedirect,
@@ -150,7 +177,12 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 //   - string: Description of the health status
 //   - error: Any error that occurred during the health check
 func (s *HTTPStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
-	resp, err := s.httpClient.Get(fmt.Sprintf("%s/health", s.baseURL)) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/health", s.baseURL), nil) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
+	if err != nil {
+		return http.StatusServiceUnavailable, "HTTP Store: Service Unavailable", errors.NewStorageError("[HTTPStore] Health check failed to create request", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return http.StatusServiceUnavailable, "HTTP Store: Service Unavailable", errors.NewStorageError("[HTTPStore] Health check failed", err)
 	}
@@ -161,7 +193,9 @@ func (s *HTTPStore) Health(ctx context.Context, checkLiveness bool) (int, string
 
 // Exists checks if a blob exists in the remote blob store.
 // It makes an HTTP HEAD request to the blob endpoint with the specified key and file type.
-// The existence is determined by the HTTP status code of the response.
+// The existence is determined by the HTTP status code of the response: 200 is held, 404 is not
+// held, and any other status is a storage error. A HEAD response carries no body, so unlike a
+// read, a 404 here cannot be checked against NotFoundMsg.
 //
 // Parameters:
 //   - ctx: Context for the operation
@@ -178,13 +212,26 @@ func (s *HTTPStore) Exists(ctx context.Context, key []byte, fileType fileformat.
 	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode()) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
 
-	resp, err := s.httpClient.Head(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
+	if err != nil {
+		return false, errors.NewStorageError("[HTTPStore] Exists failed to create request", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return false, errors.NewStorageError("[HTTPStore] Exists check failed", err)
 	}
 	defer resp.Body.Close()
 
-	return resp.StatusCode == http.StatusOK, nil
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusNotFound:
+		return false, nil
+	default:
+		s.logger.Warnf("[HTTPStore] Exists %s %s: %s answered status code %d", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL, resp.StatusCode) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
+		return false, errors.NewStorageError("[HTTPStore] Exists failed with status code %d", resp.StatusCode)
+	}
 }
 
 // Get retrieves a blob from the remote blob store.
@@ -199,7 +246,7 @@ func (s *HTTPStore) Exists(ctx context.Context, key []byte, fileType fileformat.
 //
 // Returns:
 //   - []byte: The blob data
-//   - error: ErrNotFound if the server has no such blob, a storage error for any other failure
+//   - error: a not-found if the blob server has no such blob, a storage error for any other failure
 func (s *HTTPStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
 	rc, err := s.GetIoReader(ctx, key, fileType, opts...)
 	if err != nil {
@@ -207,14 +254,20 @@ func (s *HTTPStore) Get(ctx context.Context, key []byte, fileType fileformat.Fil
 		// it. Wrapped in a storage error it reads as the store failing to look, and
 		// callers that tell the two apart by ErrStorageError treat it as a fault.
 		if errors.Is(err, errors.ErrNotFound) {
-			return nil, errors.ErrNotFound
+			return nil, err
 		}
 
 		return nil, errors.NewStorageError("[HTTPStore] Get failed", err)
 	}
 	defer rc.Close()
 
-	return io.ReadAll(rc)
+	value, err := io.ReadAll(rc)
+	if err != nil {
+		s.logger.Warnf("[HTTPStore] Get %s %s: reading the body from %s failed: %v", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL, err) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
+		return nil, errors.NewStorageError("[HTTPStore] Get failed to read %s %s", fileType, util.ReverseAndHexEncodeSlice(key), err)
+	}
+
+	return value, nil
 }
 
 // GetIoReader retrieves a blob from the remote blob store as a streaming reader.
@@ -228,31 +281,50 @@ func (s *HTTPStore) Get(ctx context.Context, key []byte, fileType fileformat.Fil
 //   - fileType: The type of the file
 //   - opts: Optional file options
 //
+// Only a 404 carrying the blob server's NotFoundMsg is a miss, returned as a not-found naming
+// the blob. Any other 404 comes from something else on that address, so it is
+// a storage error, as is every other failure. Neither names the server; a fault logs it at
+// Warn instead.
+//
 // Returns:
 //   - io.ReadCloser: Reader for streaming the blob data
-//   - error: Any error that occurred during the operation
+//   - error: a not-found if the blob server has no such blob, a storage error for any other failure
 func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) (io.ReadCloser, error) {
 	encodedKey := base64.URLEncoding.EncodeToString(key) + "." + fileType.String()
 
 	query := options.FileOptionsToQuery(fileType, opts...)
 	url := fmt.Sprintf(blobURLFormat, s.baseURL, encodedKey, query.Encode()) // urlsafe: builds the request URL sent to the blob server, not a log line; the credentials in baseURL are the point
 
-	resp, err := s.httpClient.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, errors.NewStorageError("[HTTPStore] GetIoReader failed to create request", err)
+	}
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		return nil, errors.NewStorageError("[HTTPStore] GetIoReader failed", err)
 	}
 
-	if resp.StatusCode == http.StatusNotFound {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return resp.Body, nil
+	case http.StatusNotFound:
+		miss := isBlobServerMiss(resp)
 		resp.Body.Close()
-		return nil, errors.ErrNotFound
-	}
 
-	if resp.StatusCode != http.StatusOK {
+		if miss {
+			return nil, errors.NewNotFoundError("[HTTPStore] %s %s not found", fileType, util.ReverseAndHexEncodeSlice(key))
+		}
+
+		s.logger.Warnf("[HTTPStore] GetIoReader %s %s: %s answered 404 without the blob server's not-found body", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
+
+		return nil, errors.NewStorageError("[HTTPStore] GetIoReader failed with status code 404 without the blob server's not-found body")
+	default:
 		resp.Body.Close()
+		s.logger.Warnf("[HTTPStore] GetIoReader %s %s: %s answered status code %d", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL, resp.StatusCode) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
+
 		return nil, errors.NewStorageError("[HTTPStore] GetIoReader failed with status code %d", resp.StatusCode)
 	}
-
-	return resp.Body, nil
 }
 
 // Set stores a blob in the remote blob store.
@@ -390,7 +462,9 @@ func (s *HTTPStore) SetDAH(ctx context.Context, key []byte, fileType fileformat.
 }
 
 // Del deletes a blob from the remote blob store.
-// This operation is idempotent - deleting a non-existent blob (404) is treated as success.
+// This operation is idempotent - deleting a non-existent blob is success. The blob server
+// answers that with 204; a 404 counts as success only when it carries the server's NotFoundMsg,
+// since any other 404 is something else on that address and the blob may still be there.
 // A 401 - this client and the server do not share a token - is returned as a configuration
 // error, not a storage error: retrying cannot fix it.
 //
@@ -423,9 +497,14 @@ func (s *HTTPStore) Del(ctx context.Context, key []byte, fileType fileformat.Fil
 	}
 	defer resp.Body.Close()
 
-	// Treat 404 Not Found as success (idempotent deletion)
 	if resp.StatusCode == http.StatusNotFound {
-		return nil
+		if isBlobServerMiss(resp) {
+			return nil
+		}
+
+		s.logger.Warnf("[HTTPStore] Del %s %s: %s answered 404 without the blob server's not-found body", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
+
+		return errors.NewStorageError("[HTTPStore] Del failed with status code 404 without the blob server's not-found body")
 	}
 
 	if resp.StatusCode == http.StatusUnauthorized {

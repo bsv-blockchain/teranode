@@ -113,7 +113,9 @@ func (s *Server) Init(ctx context.Context) error {
 	initPrometheusMetrics()
 
 	// Initialize pruner service from UTXO store
-	prunerProvider, ok := s.utxoStore.(pruner.PrunerServiceProvider)
+	// utxo.As looks through wrappers such as the logging store, which would
+	// otherwise hide the wrapped store's pruner.
+	prunerProvider, ok := utxo.As[pruner.PrunerServiceProvider](s.utxoStore)
 	if !ok {
 		return errors.NewServiceError("UTXO store does not provide pruner service")
 	}

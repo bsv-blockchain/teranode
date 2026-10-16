@@ -14,6 +14,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
@@ -1162,4 +1164,96 @@ func TestParentOutputsForValidation_Forwards(t *testing.T) {
 	require.Equal(t, root.Outputs[1].Satoshis, answers[0].Satoshis)
 	require.Equal(t, root.Outputs[1].LockingScript.Bytes(), answers[0].LockingScript.Bytes())
 	require.Equal(t, utxo.ParentOutputTxNotFound, answers[1].Status)
+}
+
+// The pruner service finds a store's pruner with utxo.As, so a sql store
+// wrapped in the logger must still hand back its own pruner service.
+func TestAs_FindsPrunerBehindLogger(t *testing.T) {
+	sql.ResetPrunerServiceForTests()
+	t.Cleanup(sql.ResetPrunerServiceForTests)
+
+	s, base := newLoggedSQLiteStore(t)
+
+	_, plain := s.(pruner.PrunerServiceProvider)
+	require.False(t, plain, "the logger does not implement the pruner provider itself")
+
+	provider, ok := utxo.As[pruner.PrunerServiceProvider](s)
+	require.True(t, ok)
+
+	service, err := provider.GetPrunerService()
+	require.NoError(t, err)
+	require.NotNil(t, service)
+
+	inner, err := base.(pruner.PrunerServiceProvider).GetPrunerService()
+	require.NoError(t, err)
+	require.Same(t, inner, service)
+}
+
+// A logged store whose wrapped store has no pruner reports no pruner provider.
+func TestAs_NoPrunerBehindLogger(t *testing.T) {
+	inner, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	s := New(context.Background(), ulogger.TestLogger{}, inner)
+
+	_, ok := utxo.As[pruner.PrunerServiceProvider](s)
+	require.False(t, ok)
+}
+
+// indexWaitingStore adds the optional WaitForIndexReady method to a real store,
+// standing in for the aerospike store, which is the only store that has it.
+type indexWaitingStore struct {
+	utxo.Store
+	waited []string
+}
+
+func (s *indexWaitingStore) WaitForIndexReady(_ context.Context, indexName string) error {
+	s.waited = append(s.waited, indexName)
+	return nil
+}
+
+type indexWaiter = interface {
+	WaitForIndexReady(ctx context.Context, indexName string) error
+}
+
+// utxo.As looks through the logger, so a caller asking for the concrete store
+// gets the wrapped one back.
+func TestAs_FindsStoreBehindLogger(t *testing.T) {
+	s, base := newLoggedSQLiteStore(t)
+
+	_, isSQL := s.(*sql.Store)
+	require.False(t, isSQL, "a plain type assertion cannot see through the logger")
+
+	found, ok := utxo.As[*sql.Store](s)
+	require.True(t, ok)
+	require.Same(t, base, found)
+}
+
+// Block assembly waits for the unmined_since index when the store has
+// WaitForIndexReady. With logging on, the wait must still reach the store.
+func TestAs_FindsIndexWaiterBehindLogger(t *testing.T) {
+	_, base := newLoggedSQLiteStore(t)
+
+	inner := &indexWaitingStore{Store: base}
+	s := New(context.Background(), ulogger.TestLogger{}, inner)
+
+	waiter, ok := utxo.As[indexWaiter](s)
+	require.True(t, ok)
+	require.NoError(t, waiter.WaitForIndexReady(context.Background(), "unminedSinceIndex"))
+	require.Equal(t, []string{"unminedSinceIndex"}, inner.waited)
+}
+
+// The logger does not add WaitForIndexReady itself, so a logged store without
+// it still reports that it has none and block assembly records the wait as
+// skipped rather than successful.
+func TestAs_LoggedSQLStoreHasNoIndexWaiter(t *testing.T) {
+	s, _ := newLoggedSQLiteStore(t)
+
+	_, ok := utxo.As[indexWaiter](s)
+	require.False(t, ok)
+}
+
+func TestAs_NilStore(t *testing.T) {
+	_, ok := utxo.As[*sql.Store](nil)
+	require.False(t, ok)
 }

@@ -370,9 +370,10 @@ func (repo *Repository) GetTransaction(ctx context.Context, hash *chainhash.Hash
 	if err != nil {
 		if utxoFault != nil && (errors.Is(err, errors.ErrNotFound) || errors.Is(err, errors.ErrBlobNotFound)) {
 			// The fault itself is logged above and deliberately not wrapped here:
-			// the HTTP layer answers 404 for any error whose text says "not found",
-			// and a store fault can say exactly that ("Namespace not found" from a
-			// misconfigured aerospike) without being a miss.
+			// the HTTP layer answers 404 for any error with a not-found in its chain,
+			// and the fault can carry one without being a miss - aerospike reports an
+			// external transaction whose blobs are gone as a STORAGE_ERROR wrapping
+			// the blob store's not-found.
 			return nil, errors.NewServiceError("[Repository] GetTransaction: %s: the utxo store failed and the tx store has no copy", hash.String())
 		}
 
