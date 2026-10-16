@@ -37,7 +37,11 @@ type Interface interface {
 
 	// ProcessBlock validates and processes a complete block at the specified height.
 	// blockID is the pre-assigned block ID from the caller (0 = not pre-assigned, blockchain will auto-assign).
-	ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error
+	// headerProven is the caller's ancestry proof for a below-checkpoint block: true only when
+	// the caller can show the block's hash sits at or below a pinned checkpoint hash matched in
+	// an internally linked header run. False denies the below-checkpoint quick route and
+	// nothing else; the block then takes full validation.
+	ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32, headerProven bool) error
 
 	// ValidateBlock validates a block using the provided request, but does not update any state or database tables.
 	// This is useful for validating blocks without committing them to the database.
@@ -64,7 +68,7 @@ func (mv *MockBlockValidation) BlockFound(ctx context.Context, blockHash *chainh
 	return nil
 }
 
-func (mv *MockBlockValidation) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32) error {
+func (mv *MockBlockValidation) ProcessBlock(ctx context.Context, block *model.Block, blockHeight uint32, peerID, baseURL string, blockID uint32, headerProven bool) error {
 	return nil
 }
 

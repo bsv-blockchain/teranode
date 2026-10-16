@@ -154,9 +154,11 @@ type Options struct {
 	// The UDF branch honours the policy in full. The native-op branch synthesises
 	// its own write policy but still carries over the policy's FilterExpression
 	// when one is set, so a server-side eligibility gate applies identically on
-	// both paths (the pruner sets no filter today). Pass childHashes as the same
-	// []interface{} payload the legacy path would have wrapped in
-	// aerospike.NewValue (one Lua argument: a list of hex hash strings).
+	// both paths (the pruner sets no filter today). childHashes are the deleted
+	// children's txids. The implementation encodes them as the op's single
+	// argument, a list of hex hash strings, which is what the legacy path wraps
+	// in aerospike.NewValue; taking the hashes lets the native path write the
+	// payload without building those strings.
 	//
 	// The implementation must not create the parent record when it is absent —
 	// a missing parent is routine here and the Lua function it replaces returns
@@ -166,7 +168,7 @@ type Options struct {
 	//
 	// When nil, the pruner builds NewBatchUDF directly using LuaPackage
 	// (existing pre-PR-828 behaviour).
-	BuildAddDeletedChildrenRecord func(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []interface{}) aerospike.BatchRecordIfc
+	BuildAddDeletedChildrenRecord func(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []*chainhash.Hash) aerospike.BatchRecordIfc
 
 	// ObserveNativeOpError, when non-nil, is handed every error the parent-update
 	// batch surfaces — per-record and whole-batch alike — for records built by
@@ -236,7 +238,7 @@ type Service struct {
 
 	// Optional native-op-aware builder for the addDeletedChildren batch record.
 	// See Options.BuildAddDeletedChildrenRecord for the contract.
-	buildAddDeletedChildrenRecord func(*aerospike.BatchUDFPolicy, *aerospike.Key, []interface{}) aerospike.BatchRecordIfc
+	buildAddDeletedChildrenRecord func(*aerospike.BatchUDFPolicy, *aerospike.Key, []*chainhash.Hash) aerospike.BatchRecordIfc
 
 	// Optional sink for parent-update errors, letting the store demote itself off
 	// the native path. See Options.ObserveNativeOpError for the contract.
@@ -1148,8 +1150,16 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		}
 
 		// Check if children are safe (defensive mode only)
-		parentKey := rec.Record.Key.String()
-		childrenHashes, hasChildren := parentToChildren[parentKey]
+		// parentToChildren is only filled in defensive mode. Key.String formats the
+		// key with fmt.Sprintf, ~6% of the pruner's CPU when done for every record,
+		// so skip it when there is nothing to look up.
+		var childrenHashes []string
+
+		var hasChildren bool
+
+		if len(parentToChildren) > 0 {
+			childrenHashes, hasChildren = parentToChildren[rec.Record.Key.String()]
+		}
 
 		if hasChildren && len(childrenHashes) > 0 {
 			allSafe := true
@@ -2036,14 +2046,14 @@ func (s *Service) buildParentUpdateRecords(updates map[string]*parentUpdateInfo)
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
 
 	for _, info := range updates {
-		childHashList := make([]interface{}, 0, len(info.childHashes))
-		for _, childHash := range info.childHashes {
-			childHashList = append(childHashList, childHash.String())
-		}
-
 		if s.buildAddDeletedChildrenRecord != nil {
-			batchRecords = append(batchRecords, s.buildAddDeletedChildrenRecord(batchUDFPolicy, info.key, childHashList))
+			batchRecords = append(batchRecords, s.buildAddDeletedChildrenRecord(batchUDFPolicy, info.key, info.childHashes))
 		} else {
+			childHashList := make([]interface{}, 0, len(info.childHashes))
+			for _, childHash := range info.childHashes {
+				childHashList = append(childHashList, childHash.String())
+			}
+
 			batchRecords = append(batchRecords, aerospike.NewBatchUDF(
 				batchUDFPolicy,
 				info.key,
@@ -2272,26 +2282,27 @@ func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[
 // the same response encoding by anything in this repo, so an unreadable response
 // means the parent update's outcome is unknown. See classifyParentUpdateResult.
 func addDeletedChildrenStatus(resp interface{}) (status, errorCode, errorMessage string, ok bool) {
-	lookup, recognised := addDeletedChildrenFieldLookup(resp)
+	status, ok, recognised := addDeletedChildrenField(resp, fieldStatus)
 	if !recognised {
 		return "", "", "", false
 	}
 
-	status, ok = lookup(fieldStatus)
-	errorCode, _ = lookup(fieldErrorCode)
+	errorCode, _, _ = addDeletedChildrenField(resp, fieldErrorCode)
 
 	// Producers emit "message"; fall back to the "errorMessage" alias only when
 	// "message" is absent or empty.
-	if errorMessage, _ = lookup(fieldMessage); errorMessage == "" {
-		errorMessage, _ = lookup(fieldErrorMessage)
+	if errorMessage, _, _ = addDeletedChildrenField(resp, fieldMessage); errorMessage == "" {
+		errorMessage, _, _ = addDeletedChildrenField(resp, fieldErrorMessage)
 	}
 
 	return status, errorCode, errorMessage, ok
 }
 
-// addDeletedChildrenFieldLookup returns a string-field accessor over whichever
-// map encoding the response arrived in, or recognised == false when resp is not a
-// map at all.
+// addDeletedChildrenField reads one string field from whichever map encoding the
+// response arrived in. ok reports the field was present as a string; recognised
+// is false when resp is not a map at all. It is a plain function rather than a
+// returned accessor because a closure over the map allocated once per parent
+// update on the cleanup hot path.
 //
 // Three shapes are handled. The UDF path yields map[interface{}]interface{}
 // (the aerospike client's unpackMapNormal). map[string]interface{} is accepted
@@ -2300,34 +2311,28 @@ func addDeletedChildrenStatus(resp interface{}) (status, errorCode, errorMessage
 // ordered-map ext header) — no producer is known to emit it for this op, but
 // accepting it costs a case and rejecting it would, post-fail-closed, turn a
 // working native deployment into a hard error.
-func addDeletedChildrenFieldLookup(resp interface{}) (lookup func(string) (string, bool), recognised bool) {
+func addDeletedChildrenField(resp interface{}, field string) (value string, ok, recognised bool) {
 	switch m := resp.(type) {
 	case map[interface{}]interface{}:
-		return func(field string) (string, bool) {
-			v, ok := m[field].(string)
-			return v, ok
-		}, true
+		value, ok = m[field].(string)
+		return value, ok, true
 
 	case map[string]interface{}:
-		return func(field string) (string, bool) {
-			v, ok := m[field].(string)
-			return v, ok
-		}, true
+		value, ok = m[field].(string)
+		return value, ok, true
 
 	case []aerospike.MapPair:
-		return func(field string) (string, bool) {
-			for _, pair := range m {
-				if key, isString := pair.Key.(string); isString && key == field {
-					v, ok := pair.Value.(string)
-					return v, ok
-				}
+		for _, pair := range m {
+			if key, isString := pair.Key.(string); isString && key == field {
+				value, ok = pair.Value.(string)
+				return value, ok, true
 			}
+		}
 
-			return "", false
-		}, true
+		return "", false, true
 
 	default:
-		return nil, false
+		return "", false, false
 	}
 }
 
@@ -2396,6 +2401,25 @@ func tallyParentUpdateResults(batchRecords []aerospike.BatchRecordIfc, usesModTe
 	return tally
 }
 
+// isKeyNotFound reports whether a per-record batch error is KEY_NOT_FOUND, the
+// routine result for a parent or child the pruner already deleted. The client
+// sets these as a bare *AerospikeError with nothing wrapped, which is answered
+// from the ResultCode field; Matches, kept for anything else, boxes its variadic
+// argument and so allocated once per not-found result on the cleanup hot path.
+func isKeyNotFound(err aerospike.Error) bool {
+	if bare, ok := err.(*aerospike.AerospikeError); ok { //nolint:errorlint // exact-type fast path; anything wrapped takes Matches below
+		if bare == nil {
+			return false
+		}
+
+		if bare.Unwrap() == nil {
+			return bare.ResultCode == types.KEY_NOT_FOUND_ERROR
+		}
+	}
+
+	return err.Matches(types.KEY_NOT_FOUND_ERROR)
+}
+
 // tallyChildDeletionResults counts failed child-record deletions. KEY_NOT_FOUND
 // is idempotent success here — the child is already gone, which is the outcome
 // the deletion was asking for.
@@ -2403,7 +2427,7 @@ func tallyChildDeletionResults(batchRecords []aerospike.BatchRecordIfc) (deleteE
 	for _, rec := range batchRecords {
 		batchRec := rec.BatchRec()
 
-		if batchRec.Err == nil || batchRec.Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
+		if batchRec.Err == nil || isKeyNotFound(batchRec.Err) {
 			continue
 		}
 
@@ -2451,7 +2475,7 @@ const (
 // has no response map at all and a nil Err is the whole of its success signal.
 func classifyParentUpdateResult(batchRec *aerospike.BatchRecord, usesModTeranode bool) (parentUpdateOutcome, error) {
 	if batchRec.Err != nil {
-		if batchRec.Err.Matches(aerospike.ErrKeyNotFound.ResultCode) {
+		if isKeyNotFound(batchRec.Err) {
 			return parentUpdateNotFound, nil
 		}
 
@@ -2471,15 +2495,18 @@ func classifyParentUpdateResult(batchRec *aerospike.BatchRecord, usesModTeranode
 		return parentUpdateFailed, errors.NewProcessingError("parent update returned no %q bin", luaSuccessBin)
 	}
 
+	// Most responses are OK, which needs only the status field; the error fields
+	// are read on the failure branches alone.
+	if status, _, _ := addDeletedChildrenField(resp, fieldStatus); status == statusOK {
+		return parentUpdateOK, nil
+	}
+
 	status, errCode, errMsg, ok := addDeletedChildrenStatus(resp)
 	if !ok {
 		return parentUpdateFailed, errors.NewProcessingError("unreadable parent update response (%T)", resp)
 	}
 
 	switch status {
-	case statusOK:
-		return parentUpdateOK, nil
-
 	case statusError:
 		if errCode == errorCodeTxNotFound {
 			return parentUpdateNotFound, nil

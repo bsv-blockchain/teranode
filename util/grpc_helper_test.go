@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -139,6 +140,96 @@ func TestCreateAuthInterceptor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCreateAuthInterceptorRejectionsCounted pins that every rejection path
+// (missing metadata, missing key, mismatched key) increments
+// grpcAuthRejectionsTotal - a key mismatch across services otherwise fails
+// every protected RPC while HealthGRPC/Health stay green, with nothing to
+// alert on.
+func TestCreateAuthInterceptorRejectionsCounted(t *testing.T) {
+	const method = "/test.service/AuthCountedMethod"
+
+	interceptor := CreateAuthInterceptor("valid-key", map[string]bool{method: true})
+	info := &grpc.UnaryServerInfo{FullMethod: method}
+	mockHandler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return "success", nil
+	}
+
+	before := testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method))
+
+	// missing metadata
+	_, err := interceptor(context.Background(), "request", info, mockHandler)
+	require.Error(t, err)
+
+	// missing API key header
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.Error(t, err)
+
+	// mismatched API key
+	ctx = metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{apiKeyHeader: "wrong-key"}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.Error(t, err)
+
+	require.Equal(t, before+3, testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method)),
+		"all three rejection paths must be counted")
+
+	// a successful call must not increment the rejection counter
+	ctx = metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{apiKeyHeader: "valid-key"}))
+	_, err = interceptor(ctx, "request", info, mockHandler)
+	require.NoError(t, err)
+	require.Equal(t, before+3, testutil.ToFloat64(grpcAuthRejectionsTotal.WithLabelValues(method)))
+}
+
+// TestPanicRecoveryInterceptors covers the structural fix for the
+// slice-to-array panic class: grpc-go does not recover handler panics, so
+// without these interceptors a single malformed request kills the process.
+func TestPanicRecoveryInterceptors(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	t.Run("unary panic becomes Internal", func(t *testing.T) {
+		interceptor := CreatePanicRecoveryUnaryInterceptor(logger, "test")
+
+		before := testutil.ToFloat64(grpcPanicsRecoveredTotal.WithLabelValues("test", "/svc/Method"))
+
+		resp, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/svc/Method"},
+			func(ctx context.Context, req any) (any, error) {
+				panic("boom")
+			})
+
+		require.Nil(t, resp)
+		require.Equal(t, codes.Internal, status.Code(err))
+		require.Equal(t, before+1, testutil.ToFloat64(grpcPanicsRecoveredTotal.WithLabelValues("test", "/svc/Method")),
+			"a recovered unary panic must be counted so it is alertable, not just logged")
+	})
+
+	t.Run("unary success passes through", func(t *testing.T) {
+		interceptor := CreatePanicRecoveryUnaryInterceptor(logger, "test")
+
+		resp, err := interceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/svc/Method"},
+			func(ctx context.Context, req any) (any, error) {
+				return "ok", nil
+			})
+
+		require.NoError(t, err)
+		require.Equal(t, "ok", resp)
+	})
+
+	t.Run("stream panic becomes Internal", func(t *testing.T) {
+		interceptor := CreatePanicRecoveryStreamInterceptor(logger, "test")
+
+		before := testutil.ToFloat64(grpcPanicsRecoveredTotal.WithLabelValues("test", "/svc/Stream"))
+
+		err := interceptor(nil, nil, &grpc.StreamServerInfo{FullMethod: "/svc/Stream"},
+			func(srv any, stream grpc.ServerStream) error {
+				panic("boom")
+			})
+
+		require.Equal(t, codes.Internal, status.Code(err))
+		require.Equal(t, before+1, testutil.ToFloat64(grpcPanicsRecoveredTotal.WithLabelValues("test", "/svc/Stream")),
+			"a recovered stream panic must be counted so it is alertable, not just logged")
+	})
 }
 
 func TestCreateAuthInterceptorMissingMetadata(t *testing.T) {

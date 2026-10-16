@@ -36,7 +36,6 @@ import (
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/felixge/fgprof"
-	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -194,7 +193,7 @@ func startProfilerAndMetrics(logger ulogger.Logger, appSettings *settings.Settin
 		}()
 	} else {
 		if appSettings.StatsPrefix != "" {
-			gocore.RegisterStatsHandlers()
+			util.RegisterGocoreStatsHandlers(nil)
 		}
 
 		// start prometheus metrics endpoint if enabled
@@ -256,7 +255,7 @@ func newProfilerMux(logger ulogger.Logger, appSettings *settings.Settings, prome
 
 	if appSettings.StatsPrefix != "" {
 		logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, appSettings.StatsPrefix)
-		gocore.RegisterStatsHandlers(mux)
+		util.RegisterGocoreStatsHandlers(mux)
 	}
 
 	if prometheusEndpoint != "" {

@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/asset/repository"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
-	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
@@ -35,7 +34,7 @@ func newPeersHandler(t *testing.T, registry blockchain.PeerRegistryClientI) *HTT
 
 	return &HTTP{
 		logger:     ulogger.TestLogger{},
-		settings:   &settings.Settings{},
+		settings:   DefaultAssetTestSettings(),
 		repository: &repository.Repository{PeerRegistryClient: registry},
 		e:          echo.New(),
 		startTime:  time.Now(),

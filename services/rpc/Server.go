@@ -1089,7 +1089,16 @@ func (s *RPCServer) createMarshalledReply(id, result interface{}, replyErr error
 		if jErr, ok := replyErr.(*bsvjson.RPCError); ok {
 			jsonErr = jErr
 		} else {
-			jsonErr = s.internalRPCError(replyErr.Error(), "")
+			// A handler returned a bare Go error. Hand the caller the trimmed
+			// form rather than replyErr.Error(), which put internal service
+			// names and the storage layer's own text across the API boundary.
+			// s.rpcError logs the full chain, so nothing diagnostic is lost.
+			//
+			// No not-found mapping here: this site has no idea what the
+			// request asked for, and "the block you asked for does not exist"
+			// is the wrong answer to a request that named no block. Handlers
+			// that do name one opt in with s.rpcLookupError. See rpc_errors.go.
+			jsonErr = s.rpcError(replyErr, bsvjson.ErrRPCInternal.Code, "")
 		}
 	}
 

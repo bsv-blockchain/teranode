@@ -18,6 +18,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testCacheBucket is the backend setupTestCache builds. The probe tests run
+// against the deployed default; TestProcessTxMetaUsingCache_Lockfree reruns
+// them against the lock-free backend.
+var testCacheBucket = txmetacache.Unallocated
+
 func setupTestCache(t testing.TB) *txmetacache.TxMetaCache {
 	t.Helper()
 	ctx := context.Background()
@@ -30,16 +35,69 @@ func setupTestCache(t testing.TB) *txmetacache.TxMetaCache {
 	utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
 
-	c, err := txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, txmetacache.Unallocated)
+	c, err := txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, testCacheBucket)
 	require.NoError(t, err)
 
 	return c.(*txmetacache.TxMetaCache)
 }
 
-func setupCacheTestServer(t testing.TB, cache *txmetacache.TxMetaCache, batchSize, concurrency, threshold int) *Server {
+func TestProcessTxMetaUsingCache_Lockfree(t *testing.T) {
+	testCacheBucket = txmetacache.Lockfree
+
+	t.Cleanup(func() { testCacheBucket = txmetacache.Unallocated })
+
+	for name, fn := range map[string]func(*testing.T){
+		"PartialEntryTreatedAsMiss":       TestProcessTxMetaUsingCache_PartialEntryTreatedAsMiss,
+		"CoinbaseEntryWithNoParentsIsHit": TestProcessTxMetaUsingCache_CoinbaseEntryWithNoParentsIsHit,
+		"AllFound":                        TestProcessTxMetaUsingCache_AllFound,
+		"AllMissing":                      TestProcessTxMetaUsingCache_AllMissing,
+		"PartialHits":                     TestProcessTxMetaUsingCache_PartialHits,
+		"SkipCoinbasePlaceholder":         TestProcessTxMetaUsingCache_SkipCoinbasePlaceholder,
+		"SkipPrefilledEntries":            TestProcessTxMetaUsingCache_SkipPrefilledEntries,
+		"FailFastThresholdExceeded":       TestProcessTxMetaUsingCache_FailFastThresholdExceeded,
+		"MultipleBatches":                 TestProcessTxMetaUsingCache_MultipleBatches,
+		"FieldsMatchCachedMetaEndToEnd":   testProcessTxMetaUsingCacheFields,
+		"LargeMixedSubtree":               TestProcessTxMetaUsingCache_LargeMixedSubtree,
+	} {
+		t.Run(name, fn)
+	}
+}
+
+// testProcessTxMetaUsingCacheFields checks every field the probe copies out of
+// the cache, including the parent hashes and vouts, survive the round trip.
+func testProcessTxMetaUsingCacheFields(t *testing.T) {
+	cache := setupTestCache(t)
+	server := setupCacheTestServer(t, cache, 4, 1000)
+
+	hashes := generateTestHashes(3000)
+	populateCache(t, cache, hashes)
+
+	txMetaSlice := make([]metaSliceItem, len(hashes))
+
+	missed, err := server.processTxMetaUsingCache(context.Background(), hashes, txMetaSlice, false)
+	require.NoError(t, err)
+	require.Zero(t, missed)
+
+	ref, ok := cache.GetMetaCached(context.Background(), hashes[0])
+	require.True(t, ok)
+
+	refInpoints, err := ref.TxInpoints.Serialize()
+	require.NoError(t, err)
+
+	for i := range txMetaSlice {
+		require.True(t, txMetaSlice[i].isSet)
+		require.Equal(t, uint64(100), txMetaSlice[i].fee)
+		require.Equal(t, uint64(250), txMetaSlice[i].sizeInBytes)
+
+		got, err := txMetaSlice[i].txInpoints.Serialize()
+		require.NoError(t, err)
+		require.Equal(t, refInpoints, got)
+	}
+}
+
+func setupCacheTestServer(t testing.TB, cache *txmetacache.TxMetaCache, concurrency, threshold int) *Server {
 	t.Helper()
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheBatchSize = batchSize
 	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheConcurrency = concurrency
 	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold = threshold
 
@@ -84,7 +142,7 @@ func populateCache(t testing.TB, cache *txmetacache.TxMetaCache, hashes []chainh
 
 func TestProcessTxMetaUsingCache_PartialEntryTreatedAsMiss(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 1000)
+	server := setupCacheTestServer(t, cache, 4, 1000)
 	ctx := context.Background()
 
 	// Simulate a poisoned cache entry: a non-coinbase tx cached with empty
@@ -110,7 +168,7 @@ func TestProcessTxMetaUsingCache_PartialEntryTreatedAsMiss(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_CoinbaseEntryWithNoParentsIsHit(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 1000)
+	server := setupCacheTestServer(t, cache, 4, 1000)
 	ctx := context.Background()
 
 	// A coinbase tx legitimately has no parents; an empty-ParentTxHashes entry
@@ -137,7 +195,7 @@ func TestProcessTxMetaUsingCache_CoinbaseEntryWithNoParentsIsHit(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_MismatchedSliceLengths(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 100)
+	server := setupCacheTestServer(t, cache, 4, 100)
 	ctx := context.Background()
 
 	txHashes := generateTestHashes(10)
@@ -150,7 +208,6 @@ func TestProcessTxMetaUsingCache_MismatchedSliceLengths(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_NonCachedStore(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheBatchSize = 1024
 	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheConcurrency = 4
 	tSettings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold = 100
 
@@ -174,7 +231,7 @@ func TestProcessTxMetaUsingCache_NonCachedStore(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_AllFound(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 100)
+	server := setupCacheTestServer(t, cache, 4, 100)
 	ctx := context.Background()
 
 	txHashes := generateTestHashes(100)
@@ -194,7 +251,7 @@ func TestProcessTxMetaUsingCache_AllFound(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_AllMissing(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 1000) // High threshold to avoid fail-fast
+	server := setupCacheTestServer(t, cache, 4, 1000) // High threshold to avoid fail-fast
 	ctx := context.Background()
 
 	txHashes := generateTestHashes(100)
@@ -212,7 +269,7 @@ func TestProcessTxMetaUsingCache_AllMissing(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_PartialHits(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 1000)
+	server := setupCacheTestServer(t, cache, 4, 1000)
 	ctx := context.Background()
 
 	txHashes := generateTestHashes(100)
@@ -236,7 +293,7 @@ func TestProcessTxMetaUsingCache_PartialHits(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_SkipCoinbasePlaceholder(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 1000)
+	server := setupCacheTestServer(t, cache, 4, 1000)
 	ctx := context.Background()
 
 	txHashes := make([]chainhash.Hash, 10)
@@ -258,7 +315,7 @@ func TestProcessTxMetaUsingCache_SkipCoinbasePlaceholder(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_SkipPrefilledEntries(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 1000)
+	server := setupCacheTestServer(t, cache, 4, 1000)
 	ctx := context.Background()
 
 	txHashes := generateTestHashes(10)
@@ -285,7 +342,7 @@ func TestProcessTxMetaUsingCache_SkipPrefilledEntries(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_FailFastThresholdExceeded(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 5) // Low threshold of 5
+	server := setupCacheTestServer(t, cache, 4, 5) // Low threshold of 5
 	ctx := context.Background()
 
 	txHashes := generateTestHashes(100)
@@ -298,7 +355,7 @@ func TestProcessTxMetaUsingCache_FailFastThresholdExceeded(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_FailFastNotTriggered(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 1000) // High threshold
+	server := setupCacheTestServer(t, cache, 4, 1000) // High threshold
 	ctx := context.Background()
 
 	txHashes := generateTestHashes(10)
@@ -311,7 +368,7 @@ func TestProcessTxMetaUsingCache_FailFastNotTriggered(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_ContextCancellation(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 10, 1, 100000) // Small batch, single goroutine
+	server := setupCacheTestServer(t, cache, 1, 100000) // single probe worker
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
@@ -324,7 +381,7 @@ func TestProcessTxMetaUsingCache_ContextCancellation(t *testing.T) {
 
 func TestProcessTxMetaUsingCache_MultipleBatches(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 10, 4, 10000) // Small batch size
+	server := setupCacheTestServer(t, cache, 4, 10000)
 	ctx := context.Background()
 
 	txHashes := generateTestHashes(100) // Will require 10 batches
@@ -341,9 +398,107 @@ func TestProcessTxMetaUsingCache_MultipleBatches(t *testing.T) {
 	}
 }
 
+// TestProcessTxMetaUsingCache_LargeMixedSubtree probes a subtree large enough
+// to be split into many tasks, with a coinbase placeholder, prefilled entries,
+// hits and misses mixed through it, and checks every slot ends up as expected.
+func TestProcessTxMetaUsingCache_LargeMixedSubtree(t *testing.T) {
+	cache := setupTestCache(t)
+	server := setupCacheTestServer(t, cache, 4, 1_000_000)
+
+	const n = 50_000
+
+	txHashes := generateTestHashes(n)
+	txHashes[0] = *subtree.CoinbasePlaceholderHash
+
+	var cached []chainhash.Hash
+
+	for i := 1; i < n; i++ {
+		if i%3 != 0 {
+			cached = append(cached, txHashes[i])
+		}
+	}
+
+	populateCache(t, cache, cached)
+
+	txMetaSlice := make([]metaSliceItem, n)
+	for i := 5; i < n; i += 7 {
+		txMetaSlice[i] = metaSliceItem{isSet: true, fee: 9}
+	}
+
+	missed, err := server.processTxMetaUsingCache(context.Background(), txHashes, txMetaSlice, false)
+	require.NoError(t, err)
+
+	wantMissed := 0
+
+	for i := 0; i < n; i++ {
+		prefilled := i >= 5 && (i-5)%7 == 0
+
+		switch {
+		case i == 0:
+			require.False(t, txMetaSlice[i].isSet, "coinbase placeholder is never looked up")
+		case prefilled:
+			require.Equal(t, uint64(9), txMetaSlice[i].fee, "slot %d was prefilled and must be left alone", i)
+		case i%3 != 0:
+			require.True(t, txMetaSlice[i].isSet, "slot %d is cached", i)
+			require.Equal(t, uint64(100), txMetaSlice[i].fee, "slot %d", i)
+		default:
+			require.False(t, txMetaSlice[i].isSet, "slot %d is not cached", i)
+
+			wantMissed++
+		}
+	}
+
+	require.Equal(t, wantMissed, missed)
+}
+
+func TestProbeSpans(t *testing.T) {
+	for _, tc := range []struct{ n, size int }{{0, 4}, {1, 4}, {4, 4}, {5, 4}, {4097, 4096}, {1_000_000, 4096}} {
+		spans := probeSpans(tc.n, tc.size)
+
+		next := 0
+		for _, sp := range spans {
+			require.Equal(t, next, sp[0], "n=%d: spans must be contiguous", tc.n)
+			require.Greater(t, sp[1], sp[0], "n=%d: no empty span", tc.n)
+			require.LessOrEqual(t, sp[1]-sp[0], tc.size, "n=%d", tc.n)
+
+			next = sp[1]
+		}
+
+		require.Equal(t, tc.n, next, "n=%d: spans must cover every index", tc.n)
+	}
+}
+
+// BenchmarkProbeTxMetaCache_FullSubtree probes a full-size subtree, all hits,
+// with a fresh txMetaSlice per call as ValidateSubtreeInternal makes one.
+func BenchmarkProbeTxMetaCache_FullSubtree(b *testing.B) {
+	for name, bucket := range map[string]txmetacache.BucketType{"unallocated": txmetacache.Unallocated, "lockfree": txmetacache.Lockfree} {
+		b.Run(name, func(b *testing.B) {
+			testCacheBucket = bucket
+
+			b.Cleanup(func() { testCacheBucket = txmetacache.Unallocated })
+
+			cache := setupTestCache(b)
+			server := setupCacheTestServer(b, cache, 32, 1_000_000)
+
+			txHashes := generateTestHashes(1 << 20)
+			populateCache(b, cache, txHashes)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				txMetaSlice := make([]metaSliceItem, len(txHashes))
+				_, _ = server.processTxMetaUsingCache(context.Background(), txHashes, txMetaSlice, false)
+			}
+
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(len(txHashes)), "ns/tx")
+		})
+	}
+}
+
 func TestProcessTxMetaUsingCache_EmptyInput(t *testing.T) {
 	cache := setupTestCache(t)
-	server := setupCacheTestServer(t, cache, 1024, 4, 100)
+	server := setupCacheTestServer(t, cache, 4, 100)
 	ctx := context.Background()
 
 	txHashes := make([]chainhash.Hash, 0)
@@ -369,7 +524,7 @@ func BenchmarkProcessTxMetaUsingCache_AllHits(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
 			cache := setupTestCache(b)
-			server := setupCacheTestServer(b, cache, 1024, 32, 1000000)
+			server := setupCacheTestServer(b, cache, 32, 1000000)
 			ctx := context.Background()
 
 			txHashes := generateTestHashes(tc.txCount)
@@ -401,7 +556,7 @@ func BenchmarkProcessTxMetaUsingCache_AllMisses(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
 			cache := setupTestCache(b)
-			server := setupCacheTestServer(b, cache, 1024, 32, 1000000)
+			server := setupCacheTestServer(b, cache, 32, 1000000)
 			ctx := context.Background()
 
 			txHashes := generateTestHashes(tc.txCount)
@@ -433,7 +588,7 @@ func BenchmarkProcessTxMetaUsingCache_50PercentHitRate(b *testing.B) {
 	for _, tc := range testCases {
 		b.Run(tc.name, func(b *testing.B) {
 			cache := setupTestCache(b)
-			server := setupCacheTestServer(b, cache, 1024, 32, 1000000)
+			server := setupCacheTestServer(b, cache, 32, 1000000)
 			ctx := context.Background()
 
 			txHashes := generateTestHashes(tc.txCount)
@@ -460,7 +615,7 @@ func BenchmarkProcessTxMetaUsingCache_VariableConcurrency(b *testing.B) {
 	for _, concurrency := range concurrencyLevels {
 		b.Run("concurrency_"+string(rune('0'+concurrency/10))+string(rune('0'+concurrency%10)), func(b *testing.B) {
 			cache := setupTestCache(b)
-			server := setupCacheTestServer(b, cache, 1024, concurrency, 1000000)
+			server := setupCacheTestServer(b, cache, concurrency, 1000000)
 			ctx := context.Background()
 
 			txHashes := generateTestHashes(txCount)
@@ -476,43 +631,5 @@ func BenchmarkProcessTxMetaUsingCache_VariableConcurrency(b *testing.B) {
 
 			b.ReportMetric(float64(txCount), "tx/op")
 		})
-	}
-}
-
-func BenchmarkProcessTxMetaUsingCache_VariableBatchSize(b *testing.B) {
-	const txCount = 1024 * 1024
-	const batchSize = 1024
-
-	b.Run("batch_"+formatNumber(batchSize), func(b *testing.B) {
-		cache := setupTestCache(b)
-		server := setupCacheTestServer(b, cache, batchSize, 32, 1000000)
-		ctx := context.Background()
-
-		txHashes := generateTestHashes(txCount)
-		populateCache(b, cache, txHashes)
-
-		b.ReportAllocs()
-		b.ResetTimer()
-
-		for i := 0; i < b.N; i++ {
-			txMetaSlice := make([]metaSliceItem, len(txHashes))
-			_, _ = server.processTxMetaUsingCache(ctx, txHashes, txMetaSlice, false)
-		}
-
-		b.ReportMetric(float64(txCount), "tx/op")
-	})
-}
-
-func formatNumber(n int) string {
-	switch {
-	case n >= 1000:
-		return string(rune('0'+n/1000)) + "k"
-	default:
-		result := ""
-		for n > 0 {
-			result = string(rune('0'+n%10)) + result
-			n /= 10
-		}
-		return result
 	}
 }

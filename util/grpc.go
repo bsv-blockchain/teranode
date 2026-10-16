@@ -72,10 +72,11 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 	}
 
 	// Create server options
-	var serverOptions []grpc.ServerOption
+	serverOptions := make([]grpc.ServerOption, 0, 2)
 
-	// Collect unary interceptors: auth + extras
-	var unaryInterceptors []grpc.UnaryServerInterceptor
+	// Collect unary interceptors: panic recovery first, then auth + extras.
+	// Recovery has to sit outermost so it also covers the interceptors after it.
+	unaryInterceptors := []grpc.UnaryServerInterceptor{CreatePanicRecoveryUnaryInterceptor(l, serviceName)}
 
 	if authOptions != nil {
 		if authOptions.RequireAuthByDefault {
@@ -88,9 +89,10 @@ func StartGRPCServer(ctx context.Context, l ulogger.Logger, tSettings *settings.
 		unaryInterceptors = append(unaryInterceptors, authOptions.ExtraUnaryInterceptors...)
 	}
 
-	if len(unaryInterceptors) > 0 {
-		serverOptions = append(serverOptions, grpc.ChainUnaryInterceptor(unaryInterceptors...))
-	}
+	serverOptions = append(serverOptions,
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
+		grpc.ChainStreamInterceptor(CreatePanicRecoveryStreamInterceptor(l, serviceName)),
+	)
 
 	connectionOptions := &ConnectionOptions{
 		SecurityLevel: securityLevel,

@@ -25,6 +25,29 @@ const DifficultyAdjustmentWindow = 144
 // Removed global variables bigOne and oneLsh256 as they are no longer needed
 // The CalcWork function has been moved to the work package as CalcBlockWork
 
+// HeaderSource is everything the difficulty calculator reads about a block's
+// ancestry. blockchain_store.Store satisfies it, and so does the blockchain
+// client, which is what the legacy header cache combines with the headers it
+// holds above the committed tip, so one calculator judges both a block being
+// validated and a header that exists only in that cache.
+//
+// The contract is the store's: GetSuitableBlock picks the median-time block of
+// hash and its two parents (pow.cpp GetSuitableBlock), GetHashOfAncestorBlock
+// walks depth parents back and returns errors.ErrNotFound when the chain is
+// shorter, and GetBlockHeaders returns hash and then its ancestors, newest first.
+type HeaderSource interface {
+	GetSuitableBlock(ctx context.Context, blockHash *chainhash.Hash) (*model.SuitableBlock, error)
+	GetHashOfAncestorBlock(ctx context.Context, blockHash *chainhash.Hash, depth int) (*chainhash.Hash, error)
+	GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+}
+
+// Both readers the calculator is used with satisfy HeaderSource.
+var (
+	_ HeaderSource = blockchain_store.Store(nil)
+	_ HeaderSource = ClientI(nil)
+)
+
 // Difficulty handles the calculation and management of blockchain mining difficulty.
 // Implements the Bitcoin Difficulty Adjustment Algorithm (DAA) with caching for performance.
 //
@@ -72,6 +95,18 @@ func NewDifficulty(store blockchain_store.Store, logger ulogger.Logger, tSetting
 //
 // Returns the calculated NBit target difficulty.
 func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *model.BlockHeader, blockHeight uint32, currentBlockTime int64) (*model.NBit, error) {
+	return d.CalcNextWorkRequiredFrom(ctx, d.store, blockHeader, blockHeight, currentBlockTime)
+}
+
+// CalcNextWorkRequiredFrom is CalcNextWorkRequired reading the ancestry from src
+// instead of the store this Difficulty was built with. It is the same
+// calculation, not a second one: CalcNextWorkRequired is this function called
+// with that store.
+//
+// The two caches it consults are keyed by block hash, which commits to the
+// whole ancestry, so an answer cached from one source is the answer any honest
+// source gives for the same hash.
+func (d *Difficulty) CalcNextWorkRequiredFrom(ctx context.Context, src HeaderSource, blockHeader *model.BlockHeader, blockHeight uint32, currentBlockTime int64) (*model.NBit, error) {
 	// If regtest we don't adjust the difficulty
 	if d.settings.ChainCfgParams.NoDifficultyAdjustment {
 		return &blockHeader.Bits, nil
@@ -81,7 +116,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 	// Historical blocks must not be evaluated with the modern 144-block DAA.
 	// Preserve STN's existing rules until its parameters and history are reconciled.
 	if blockHeight < d.settings.ChainCfgParams.DaaForkHeight && d.settings.ChainCfgParams.Net != wire.STN {
-		return d.calcHistoricalWorkRequired(ctx, blockHeader, blockHeight, currentBlockTime)
+		return d.calcHistoricalWorkRequired(ctx, src, blockHeader, blockHeight, currentBlockTime)
 	}
 
 	// Special difficulty rule for testnet:
@@ -125,7 +160,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 
 	d.logger.Debugf("[Difficulty] blockHeader.Hash: %s, blockHeight: %d, blockHeader.Time: %d", blockHeader.Hash().String(), blockHeight, blockHeader.Timestamp)
 
-	lastSuitableBlock, err := d.store.GetSuitableBlock(ctx, blockHeader.Hash())
+	lastSuitableBlock, err := src.GetSuitableBlock(ctx, blockHeader.Hash())
 	if err != nil {
 		return nil, errors.NewStorageError("[Difficulty] error getting suitable block", err)
 	}
@@ -136,7 +171,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 
 	d.logger.Debugf("[Difficulty] lastSuitableBlock.Hash: %s, lastSuitableBlock.Height: %d, lastSuitableBlock.Time: %d", util.ReverseAndHexEncodeSlice(lastSuitableBlock.Hash), lastSuitableBlock.Height, lastSuitableBlock.Time)
 
-	ancestorHash, err := d.store.GetHashOfAncestorBlock(ctx, blockHeader.Hash(), DifficultyAdjustmentWindow)
+	ancestorHash, err := src.GetHashOfAncestorBlock(ctx, blockHeader.Hash(), DifficultyAdjustmentWindow)
 	if err != nil {
 		// Only use fallback if chain is too short (ErrNotFound).
 		// For other errors (timeouts, DB errors), we must return an error
@@ -152,7 +187,7 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 
 	d.logger.Debugf("[Difficulty] ancestorHash: %s", ancestorHash.String())
 
-	firstSuitableBlock, err := d.store.GetSuitableBlock(ctx, ancestorHash)
+	firstSuitableBlock, err := src.GetSuitableBlock(ctx, ancestorHash)
 	if err != nil {
 		return nil, errors.NewStorageError("[Difficulty] error getting suitable block", err)
 	}
@@ -178,17 +213,17 @@ func (d *Difficulty) CalcNextWorkRequired(ctx context.Context, blockHeader *mode
 
 // calcHistoricalWorkRequired applies the original 2016-block retarget, testnet's
 // minimum-difficulty recovery, and (after UAHF) emergency difficulty adjustment.
-func (d *Difficulty) calcHistoricalWorkRequired(ctx context.Context, parent *model.BlockHeader, height uint32, blockTime int64) (*model.NBit, error) {
+func (d *Difficulty) calcHistoricalWorkRequired(ctx context.Context, src HeaderSource, parent *model.BlockHeader, height uint32, blockTime int64) (*model.NBit, error) {
 	const interval = 2016
 	params := d.settings.ChainCfgParams
 	target := parent.Bits.CalculateTarget()
 	if (uint64(height)+1)%interval == 0 {
 		// The first interval starts at genesis: 2016 blocks span 2015 gaps.
-		hash, err := d.store.GetHashOfAncestorBlock(ctx, parent.Hash(), interval-1)
+		hash, err := src.GetHashOfAncestorBlock(ctx, parent.Hash(), interval-1)
 		if err != nil {
 			return nil, errors.NewStorageError("[Difficulty] getting historical retarget ancestor", err)
 		}
-		first, _, err := d.store.GetBlockHeader(ctx, hash)
+		first, _, err := src.GetBlockHeader(ctx, hash)
 		if err != nil {
 			return nil, errors.NewStorageError("[Difficulty] getting historical retarget header", err)
 		}
@@ -243,7 +278,7 @@ func (d *Difficulty) calcHistoricalWorkRequired(ctx context.Context, parent *mod
 		expectedHash := parent.HashPrevBlock
 		for {
 			count := uint64(min(int(height%interval), 32))
-			headers, _, err := d.store.GetBlockHeaders(ctx, expectedHash, count)
+			headers, _, err := src.GetBlockHeaders(ctx, expectedHash, count)
 			if err != nil {
 				return nil, errors.NewStorageError("[Difficulty] restoring historical testnet target", err)
 			}
@@ -278,7 +313,7 @@ func (d *Difficulty) calcHistoricalWorkRequired(ctx context.Context, parent *mod
 		if uint64(height)+1 < count {
 			count = uint64(height) + 1
 		}
-		headers, _, err := d.store.GetBlockHeaders(ctx, parent.Hash(), count)
+		headers, _, err := src.GetBlockHeaders(ctx, parent.Hash(), count)
 		if err != nil {
 			return nil, errors.NewStorageError("[Difficulty] getting historical median-time window", err)
 		}

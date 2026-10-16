@@ -3365,9 +3365,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	}
 
 	// Wait for the unmined_since index to be ready before attempting to get the iterator
-	if indexWaiter, ok := b.utxoStore.(interface {
+	if indexWaiter, ok := utxo.As[interface {
 		WaitForIndexReady(ctx context.Context, indexName string) error
-	}); ok {
+	}](b.utxoStore); ok {
 		indexName := "unminedSinceIndex"
 		prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(0)
 
@@ -3958,9 +3958,9 @@ func (b *BlockAssembler) CheckInputValidation(ctx context.Context) (int, error) 
 // for the startup load (fail on one).
 func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context, isReload bool) error {
 	// Wait for the unmined_since index to be ready
-	if indexWaiter, ok := b.utxoStore.(interface {
+	if indexWaiter, ok := utxo.As[interface {
 		WaitForIndexReady(ctx context.Context, indexName string) error
-	}); ok {
+	}](b.utxoStore); ok {
 		indexName := "unminedSinceIndex"
 		prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(0)
 

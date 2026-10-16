@@ -28,9 +28,9 @@ import (
 // outside the reflection-tagged Settings struct, the startXxx bootstrap
 // pattern), and telling those apart from a genuinely dead key needs
 // per-key investigation, not a blanket assertion - see
-// TestSettingsConfHasNoDeadKeys in settings_doc_test.go, which documents the
-// same tradeoff for a related but different check (keys asserted to stay
-// dead once removed, rather than keys asserted to resolve).
+// TestSettingsConfHasNoDeadKeys below, which makes the same tradeoff for a
+// related but different check (keys asserted to stay dead once removed,
+// rather than keys asserted to resolve).
 //
 // Instead, this test targets only the specific, mechanically-detectable
 // signature of the securityLevelGRPC bug: a settings.conf key whose
@@ -75,21 +75,6 @@ var settingsConfDeadKeyExceptions = []settingsConfDeadKeyException{
 		reason: "same ALL_CAPS docker-context-override block as LOG_LEVEL above; docker-compose-3blasters.yml " +
 			"sets it as a container env var, but no Go code reads this literal key and gocore's env lookup is " +
 			"exact-case, so the override appears inert - flagged for the settings owner, not fixed here",
-	},
-	{
-		key: "kafka_unitTest",
-		reason: "builds a full Kafka URL (settings.conf, near the other kafka_*Config entries) but, unlike " +
-			"every sibling kafka_*Config key, is never read by any Go code - the real setting is the ALL_CAPS " +
-			"KAFKA_UNITTEST, a bare topic-name string consumed by settings/kafka_settings.go. Looks dead in " +
-			"the same way securityLevelGRPC was dead, but left for the settings owner to decide whether to " +
-			"delete it or wire it up, to keep this change scoped to securityLevelGRPC",
-	},
-	{
-		key: "coinbase_Store",
-		reason: "settings.conf's only assignment is the context-only \"coinbase_Store.docker =\" line, which " +
-			"cannot resolve to anything on its own (no base assignment); the real key is coinbase_store " +
-			"(lowercase s), which already has its own context overrides a few lines above. Same typo shape as " +
-			"securityLevelGRPC, left for the settings owner to fix or remove so this change stays scoped",
 	},
 }
 
@@ -200,5 +185,53 @@ func TestSettingsConfNoShadowedKeys(t *testing.T) {
 			"bug class. Either correct the settings.conf key to %q, or - if %q is a genuinely distinct, "+
 			"intentionally-named key - add a reasoned entry to settingsConfDeadKeyExceptions",
 			confKey, real, confKey, real, confKey)
+	}
+}
+
+// settingsConfRemovedKeys maps each base key deleted from settings.conf
+// because nothing reads it to the PR that deleted it. A rebase that resolves a
+// settings.conf conflict by keeping both sides restores such keys without any
+// failure: #1744 put back the legacy_outpointBatcher* keys that #1699 removed.
+var settingsConfRemovedKeys = map[string]string{
+	"legacy_outpointBatcherConcurrency":     "#1699",
+	"legacy_outpointBatcherSize":            "#1699",
+	"legacy_spendBatcherConcurrency":        "#1699",
+	"legacy_spendBatcherSize":               "#1699",
+	"legacy_storeBatcherConcurrency":        "#1699",
+	"legacy_storeBatcherSize":               "#1699",
+	"blockvalidation_subtree_fetch_timeout": "#1744",
+	"coinbase_Store":                        "#1744",
+	"http_sign_response":                    "#1744",
+	"JAEGER_PORT":                           "#1744",
+	"kafka_unitTest":                        "#1744",
+	"min_block_height_for_e2e":              "#1744",
+	"p2p_bestblock_topic":                   "#1744",
+	"p2p_handshake_topic":                   "#1744",
+	"p2p_mining_on_topic":                   "#1744",
+	"p2p_optimise_retries":                  "#1744",
+	"p2p_shared_key":                        "#1744",
+	"p2p_sync_stuck_retry_threshold":        "#1744",
+	"PK4":                                   "#1744",
+	"PK5":                                   "#1744",
+	"PK6":                                   "#1744",
+	"spent_utxo_ttl":                        "#1744",
+	"startCoinbase":                         "#1744",
+	"startFaucet":                           "#1744",
+	"test_run_mode":                         "#1744",
+	"use_cgo_signer":                        "#1744",
+	"utxostore_dbTimeoutMillis":             "#1744",
+	"utxostore_outpointBatcherConcurrency":  "#1744",
+}
+
+// TestSettingsConfHasNoDeadKeys fails when a key listed in
+// settingsConfRemovedKeys is assigned in settings.conf again, in any context.
+func TestSettingsConfHasNoDeadKeys(t *testing.T) {
+	confKeys := settingsConfBaseKeys(t)
+
+	for key, pr := range settingsConfRemovedKeys {
+		if confKeys[key] {
+			t.Errorf("settings.conf assigns %q, which %s removed because nothing reads it. Delete it again; "+
+				"if code now reads it, remove it from settingsConfRemovedKeys", key, pr)
+		}
 	}
 }

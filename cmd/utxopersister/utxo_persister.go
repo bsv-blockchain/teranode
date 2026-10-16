@@ -22,6 +22,7 @@ import (
 	"strconv"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	utxopersisterservice "github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -29,9 +30,9 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/felixge/fgprof"
-	"github.com/ordishs/gocore"
 )
 
 // RunUtxoPersister initializes and runs the UTXO persister service.
@@ -63,7 +64,7 @@ func RunUtxoPersister(logger ulogger.Logger, settings *settings.Settings) {
 	} else {
 		logger.Infof("Profiler available at http://%s/debug/pprof", profilerAddr)
 
-		gocore.RegisterStatsHandlers()
+		util.RegisterGocoreStatsHandlers(nil)
 
 		logger.Infof("StatsServer listening on http://%s/%s/stats", profilerAddr, settings.StatsPrefix)
 
@@ -95,7 +96,7 @@ func RunUtxoPersister(logger ulogger.Logger, settings *settings.Settings) {
 		}
 	}
 
-	logger.Infof("Using blockStore at %s with hashPrefix %d", blockStoreURL, hashPrefix)
+	logger.Infof("Using blockStore at %s with hashPrefix %d", urlutil.Redact(blockStoreURL), hashPrefix)
 
 	// Create the block store
 	blockStore, err := blob.NewStore(logger, blockStoreURL, options.WithHashPrefix(hashPrefix))
@@ -114,7 +115,7 @@ func RunUtxoPersister(logger ulogger.Logger, settings *settings.Settings) {
 			return
 		}
 
-		logger.Infof("Using blockchainStore at %s", blockchainStoreURL)
+		logger.Infof("Using blockchainStore at %s", urlutil.Redact(blockchainStoreURL))
 
 		var blockchainStore blockchainstore.Store
 

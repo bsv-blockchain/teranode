@@ -14,6 +14,7 @@ import (
 	"syscall"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
@@ -70,12 +71,12 @@ func buildPostgresConnString(storeURL *url.URL) string {
 
 	// Only add user if it's not empty
 	if dbUser != "" {
-		connStr = fmt.Sprintf("%s user=%s", connStr, dbUser)
+		connStr = fmt.Sprintf("%s user=%s", connStr, dbUser) // urlsafe: builds the DSN handed to sql.Open; the caller never logs it
 	}
 
 	// Only add password if it's not empty
 	if dbPassword != "" {
-		connStr = fmt.Sprintf("%s password=%s", connStr, dbPassword)
+		connStr = fmt.Sprintf("%s password=%s", connStr, dbPassword) // urlsafe: builds the DSN handed to sql.Open; the caller never logs it
 	}
 
 	return connStr
@@ -85,7 +86,12 @@ func fixChainwork(dbURL string, dryRun bool, batchSize int, startHeight, endHeig
 	// Parse database URL
 	parsedURL, err := url.Parse(dbURL)
 	if err != nil {
-		return errors.NewProcessingError("failed to parse database URL", err)
+		// --db-url is a postgres DSN carrying its password in the userinfo, and
+		// url.Parse embeds the string it was given verbatim in its error. This
+		// error is printed to stdout by cli.go, which is container logs in
+		// practice. Even net/url's bare reason can quote part of the password, so
+		// report a fixed reason.
+		return errors.NewProcessingError("failed to parse database URL", urlutil.ParseErrorReason(err))
 	}
 
 	// Determine database type and connection string

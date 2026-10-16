@@ -50,6 +50,34 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// raceTolerantStoreWriter sits between the generator and the file storer. When the store
+// refuses this write with ErrBlobAlreadyExists, another writer (block validation or the block
+// persister) has published the same subtreeData first. The refusal comes from the store's
+// background goroutine, so it reaches whichever storer.Write runs next, usually long before
+// Close. Returning it would stop io.MultiWriter before the HTTP pipe and cut the peer's body
+// short, so it latches the refusal and swallows every later file write instead: the peer still
+// gets the complete body and the store keeps the other writer's file. Any other error passes
+// through. Only the single generator goroutine uses it.
+type raceTolerantStoreWriter struct {
+	w       io.Writer
+	lostErr error
+}
+
+func (r *raceTolerantStoreWriter) Write(p []byte) (int, error) {
+	if r.lostErr != nil {
+		return len(p), nil
+	}
+
+	n, err := r.w.Write(p)
+	if err != nil && errors.Is(err, errors.ErrBlobAlreadyExists) {
+		r.lostErr = err
+
+		return len(p), nil
+	}
+
+	return n, err
+}
+
 // semaphoreReadCloser wraps an io.ReadCloser and releases a semaphore permit when closed.
 type semaphoreReadCloser struct {
 	io.ReadCloser
@@ -276,7 +304,9 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 
 	// Use MultiWriter to write to both file storage and HTTP pipe simultaneously.
 	// Counted so an empty generation can be rejected before the blob is finalised.
-	counted := &countingWriter{w: io.MultiWriter(storer, httpWriter)}
+	// The store side tolerates a lost publish race so the peer's stream survives it.
+	storeSide := &raceTolerantStoreWriter{w: storer}
+	counted := &countingWriter{w: io.MultiWriter(storeSide, httpWriter)}
 
 	// Background goroutine: generate data and write to both destinations
 	g, gCtx := errgroup.WithContext(ctx)
@@ -334,8 +364,32 @@ func (repo *Repository) dualStreamWithFileCreation(ctx context.Context, subtreeH
 			return err
 		}
 
+		// Another writer (block validation's processSubtreeDataStream or the block persister's
+		// CreateSubtreeDataFileStreaming) published this subtreeData first and the store
+		// refused ours mid-stream. storeSide kept the peer's stream going, so the peer has the
+		// complete body: this request succeeded and the store holds the other writer's file.
+		// Abort only reaps the storer's goroutine and buffer; nothing of ours was published.
+		if storeSide.lostErr != nil {
+			storer.Abort(storeSide.lostErr)
+			repo.logger.Debugf("[GetSubtreeDataReader] subtreeData for %s was published by another writer while this one streamed; keeping theirs", subtreeHash.String())
+			_ = httpWriter.Close()
+			prometheusAssetSubtreeDataCreated.WithLabelValues("success", "lost_publish_race").Inc()
+			return nil
+		}
+
 		// Close the file storer successfully
 		if closeErr := storer.Close(gCtx); closeErr != nil {
+			// The same lost race, when the refusal arrives only after the last Write: the
+			// store's pre-write check had not finished by then, or an exclusive publish was
+			// refused at the link. Every byte had gone to both destinations, so this is a
+			// success for the peer too.
+			if errors.Is(closeErr, errors.ErrBlobAlreadyExists) {
+				repo.logger.Debugf("[GetSubtreeDataReader] subtreeData for %s was published by another writer while this one streamed; keeping theirs", subtreeHash.String())
+				_ = httpWriter.Close()
+				prometheusAssetSubtreeDataCreated.WithLabelValues("success", "lost_publish_race").Inc()
+				return nil
+			}
+
 			repo.logger.Warnf("[GetSubtreeDataReader] Error closing subtreeData file for %s: %v", subtreeHash.String(), closeErr)
 			_ = httpWriter.CloseWithError(closeErr)
 			prometheusAssetSubtreeDataCreated.WithLabelValues("error", "close_failed").Inc()

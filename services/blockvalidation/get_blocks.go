@@ -667,8 +667,7 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 // minCatchupPrefetchWeight is the floor charged for one block. Without it a run of tiny
 // blocks admits an unbounded number of concurrent prewarms within the byte budget; with it
 // the in-flight count can never exceed budget/floor. FetchNumWorkers already caps that at 16
-// today, so this is insurance against a raised worker count. Same value and reasoning as
-// netsync's minInFlightBlockWeight.
+// today, so this is insurance against a raised worker count.
 const minCatchupPrefetchWeight = 64 * 1024
 
 // acquireCatchupPrefetch reserves capacity for one block's subtree-data prewarm and returns

@@ -193,14 +193,14 @@ This is a core function of the blockpersister service that handles the complete 
     The function implements a multi-stage persistence process:
 
     1. **Convert raw block bytes** into a structured block model
-    2. **Check for the block file**, which is written last: if it exists, the block is already persisted and `BLOB_EXISTS` is returned before any work. UTXO files without a block file are left from an attempt that stopped early, and are removed
+    2. **Check for the block's files**: the block file and, when `ProcessUTXOFiles` is on, both UTXO files. If they all exist, the block is already persisted and `BLOB_EXISTS` is returned before any work. Any of them that exist without the rest were left by an attempt that stopped early, and are replaced: UTXO files without the block file, or a block file without its UTXO files, which versions that finalized the block file first left on a crash. Leftover UTXO files are removed before the rebuild. A leftover block file is removed only after the UTXO files are finalized, just before it is rewritten, so an attempt that cannot rebuild them leaves it in place
     3. **Create a new UTXO difference set** for tracking changes
     4. **Process the coinbase transaction** if no subtrees are present
     5. **For blocks with subtrees**, process each subtree concurrently according to configured limits
     6. **Close and finalize** the UTXO difference set once all transactions are processed, before the block file is written
     7. **Write the complete block** to persistent storage and finalize it
 
-    A failure before the UTXO files are finalized aborts them, and a failure while writing the block file aborts it, so a failed attempt never leaves a block file behind. A failure after the UTXO files are finalized leaves them in place without a block file, and the retry removes them in step 2. An error finalizing either fails the block. The Server treats `BLOB_EXISTS` as "already persisted" only when the block file exists.
+    A failure before the UTXO files are finalized aborts them, and a failure while writing the block file aborts it, so a failed attempt never leaves a block file behind. A failure after the UTXO files are finalized leaves them in place without a block file, and the retry removes them in step 2. An error finalizing either fails the block. The Server treats `BLOB_EXISTS` as "already persisted" only when the block's files all exist, by the same check as step 2.
 
 **Parameters:**
 
@@ -334,20 +334,19 @@ Processes UTXO changes by reading from the subtree data files. This phase runs *
 #### SubtreeDataWriter
 
 ```go
-type SubtreeDataWriter struct {
-    storer      *filestorer.FileStorer
-    nextBatchID int
-    // ... additional fields
-}
+func NewSubtreeDataWriter(ctx context.Context, storer *filestorer.FileStorer, window int) *SubtreeDataWriter
 ```
 
 The `SubtreeDataWriter` provides **ordered batch writes** for subtree data. It ensures batches are written in the correct order even when produced concurrently.
 
 **Key Methods:**
 
-- `WriteBatch(batchID int, txData [][]byte) error`: Writes a batch of transaction data at the specified position
-- `Close() error`: Finalizes the file (aborts if batches are pending)
+- `WriteBatch(batchIndex int, txBytes [][]byte) error`: Writes a batch of transaction data at the specified position
+- `Close(ctx context.Context) error`: Finalizes the file (aborts if batches are pending)
 - `Abort(err error)`: Aborts the write operation without finalizing
+
+!!! note "Bounded Window"
+    A batch that arrives before the batches ahead of it is held in memory until they are written. `WriteBatch` admits at most `window` batches counting from the next one to write, and a batch further ahead waits, so one slow batch cannot make the writer hold the whole subtree. `CreateSubtreeDataFileStreaming` passes its batch fetch concurrency, `max(4, NumCPU/2)`, as the window. The window bounds the parked batches only: batches waiting on the window and batches still fetching hold their own bytes, so the serialized bytes held at once come to about `2 × window − 1` batches. When `ctx` is cancelled, as the batch errgroup's context is when a batch fails, waiting batches return an error instead of waiting for a batch that will never arrive.
 
 !!! tip "Error Safety"
     If `Close()` is called while batches are still pending (gaps in batch sequence), the writer automatically aborts instead of finalizing an incomplete file.
@@ -418,7 +417,7 @@ All settings use the `BlockPersister` section (setting keys prefixed with `block
 
 #### Processing Configuration
 
-- **`BlockPersister.PersistSleep`**: Sleep duration between processing attempts when no blocks are available (default: `10s`).
+- **`BlockPersister.PersistSleep`**: Sleep duration between processing attempts when no blocks are available, and before retrying a block that failed to persist or to be marked persisted (default: `10s`). A shutdown cuts the sleep short.
 - **`BlockPersister.Concurrency`**: Number of parallel persistence workers (default: `8`).
 - **`BlockPersister.ProcessUTXOFiles`**: When true, processes UTXO files during block persistence (default: `true`).
 - **`BlockPersister.SkipUTXODelete`**: Debug setting to skip UTXO deletion during persistence (default: `false`).
@@ -486,9 +485,9 @@ return nil
 The file-based blob store implements automatic cleanup of stale temporary files:
 
 - Temporary files use `.tmp` extension during writes
-- On successful write, temp files are atomically renamed to final names
+- On successful write, temp files are atomically renamed to final names; a subtreeData another writer published first, refused by the store's existence check, is kept and promoted rather than failing the block
 - On error/abort, temp files are immediately deleted
-- During store initialization, stale `.tmp` files older than 10 minutes are automatically cleaned up
+- A `.tmp` file left by a crash is not swept by the file store; removing it is an operator task
 
 ## Metrics
 

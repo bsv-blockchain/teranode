@@ -535,7 +535,7 @@ Note: the Block Persister has no Kafka consumer at all — it polls the Blockcha
 
 **There is no `consumer_ratio` parameter.** It appears in older documentation and example URLs but is not read anywhere in the code — no `consumer_ratio`, `ConsumerRatio` or `consumerRatio` identifier exists, and it is not picked up by the generic URL-parameter helpers (`util.GetQueryParam*`) that parse every recognised Kafka URL parameter. Unknown query parameters are silently ignored, so leaving it in a URL is inert rather than harmful — but it does not scale consumers.
 
-Likewise, the service-specific `*_kafkaWorkers` settings (`validator_kafkaWorkers`, `blockvalidation_kafkaWorkers`, `block_kafkaWorkers`) are loaded into the settings structs but are not read by any consumer code path. They do not currently affect consumer concurrency either.
+Likewise, there are no `*_kafkaWorkers` settings (`validator_kafkaWorkers`, `blockvalidation_kafkaWorkers`, `block_kafkaWorkers`): they were loaded into the settings structs but never read by any consumer code path, and have been removed. A leftover key in `settings_local.conf` is silently ignored.
 
 ### Service-Specific Performance Settings
 
@@ -548,9 +548,7 @@ Likewise, the service-specific `*_kafkaWorkers` settings (`validator_kafkaWorker
 
 #### Validator Service Settings
 
-- **`validator_kafkaWorkers`**: declared but inert
-    - **Status**: The setting is defined and loaded (`settings/validator_settings.go`, `settings/settings.go`) but no code reads it, so changing it has no effect. The same applies to `blockvalidation_kafkaWorkers` and `block_kafkaWorkers`.
-    - **Use instead**: raise the topic's `partitions` and/or run more service instances in the same consumer group — see [Kafka Consumer Concurrency](#kafka-consumer-concurrency)
+The validator has no Kafka worker-count setting (`validator_kafkaWorkers` was removed). To raise consumer throughput, raise the topic's `partitions` and/or run more service instances in the same consumer group - see [Kafka Consumer Concurrency](#kafka-consumer-concurrency).
 
 ### Configuration Examples by Service
 

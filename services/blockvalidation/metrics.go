@@ -93,6 +93,12 @@ var (
 	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
 	// checkpoint). A rising rate indicates the fast path is in use during IBD.
 	prometheusBlockValidationOutpointOnlyBlocks prometheus.Counter
+
+	// quick-validation commit tail: per-step timings for commitBlock, the shared
+	// final commit for the quick-validation path.
+	prometheusBlockValidationQuickCommitAddBlock    prometheus.Histogram
+	prometheusBlockValidationQuickCommitUnlock      prometheus.Histogram
+	prometheusBlockValidationQuickCommitBlockExists prometheus.Histogram
 )
 
 var (
@@ -265,6 +271,36 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockvalidation",
 			Name:      "setmined_enqueue_overflow_total",
 			Help:      "Total number of setMined enqueues parked in the overflow set because setMinedChan was full. A sustained rise means producers are outpacing the serial setMined worker; the overflow set is deduped by block hash, so memory stays bounded by the number of distinct blocks.",
+		},
+	)
+
+	prometheusBlockValidationQuickCommitAddBlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_add_block_seconds",
+			Help:      "AddBlock duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitUnlock = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_unlock_seconds",
+			Help:      "Unlock pass duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockValidationQuickCommitBlockExists = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "quick_commit_block_exists_seconds",
+			Help:      "SetBlockExists duration in the quick-validation commit tail",
+			Buckets:   util.MetricsBucketsSeconds,
 		},
 	)
 

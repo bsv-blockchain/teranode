@@ -431,7 +431,9 @@ func TestKafkaProducerAndConsumer(t *testing.T) {
 		client, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_stop", false, nil)
 		require.NoError(t, err)
 
-		// default Kafka behaviour on message consumption error is to retry forever
+		// With no options a failed message is not retried in place: it and the
+		// rest of its fetch are not marked. Here every message fails, so nothing
+		// is committed and a restarted consumer gets the first message again.
 		client.Start(ctx, errClosure)
 		defer client.Close()
 
@@ -459,13 +461,46 @@ func TestKafkaProducerAndConsumer(t *testing.T) {
 		err = client.Close()
 		require.NoError(t, err)
 
-		// Verify first message was attempted more than once and that every message attempt was first message
-		require.Greater(t, len(messagesReceived), 1)
+		// The first message was delivered once, not retried in place.
+		require.NotEmpty(t, messagesReceived)
+
+		attemptsOfFirst := 0
 
 		for _, msg := range messagesReceived {
 			value, err := byteArrayToIntFromString(msg)
 			require.NoError(t, err)
+
+			if value == 0 {
+				attemptsOfFirst++
+			}
+		}
+
+		require.Equal(t, 1, attemptsOfFirst)
+
+		// Nothing was committed, so the next consumer in the group gets the
+		// failed message again, first.
+		redelivered := make(chan []byte, 1)
+
+		restarted, err := ukafka.NewKafkaConsumerGroupFromURL(logger, kafkaURL, "kafka_test_stop", false, nil)
+		require.NoError(t, err)
+
+		restarted.Start(ctx, func(message *ukafka.KafkaMessage) error {
+			select {
+			case redelivered <- message.Value:
+			default:
+			}
+
+			return nil
+		})
+		defer restarted.Close()
+
+		select {
+		case msg := <-redelivered:
+			value, err := byteArrayToIntFromString(msg)
+			require.NoError(t, err)
 			require.Equal(t, 0, value)
+		case <-time.After(10 * time.Second):
+			t.Fatal("failed message was not re-delivered to the restarted consumer")
 		}
 	})
 

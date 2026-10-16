@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1867,4 +1869,129 @@ func TestHealthConcurrency(t *testing.T) {
 	}
 
 	assert.Equal(t, 0, errorCount)
+}
+
+// shutdownLogger records when the processing loop logs that it is shutting down.
+type shutdownLogger struct {
+	ulogger.TestLogger
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func (l *shutdownLogger) Infof(format string, args ...interface{}) {
+	if strings.Contains(format, "Shutting down block processing loop") {
+		l.once.Do(func() { close(l.stopped) })
+	}
+}
+
+// loopOutcomeClient gives the processing loop one outcome, no block, an error or a block to
+// persist, and signals once the loop has asked for it. Start asks once before the loop starts, to
+// publish its initial state, so the loop's first call is the second.
+type loopOutcomeClient struct {
+	*MockBlockchainClient
+	block        *model.Block
+	blocksErr    error
+	persistedErr error
+	asked        chan struct{}
+	calls        atomic.Int32
+}
+
+func (c *loopOutcomeClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	if c.calls.Add(1) == 2 {
+		close(c.asked)
+	}
+
+	if c.blocksErr != nil {
+		return nil, c.blocksErr
+	}
+
+	if c.block == nil {
+		return nil, nil
+	}
+
+	return []*model.Block{c.block}, nil
+}
+
+func (c *loopOutcomeClient) SetBlockPersistedAt(ctx context.Context, blockHash *chainhash.Hash) error {
+	return c.persistedErr
+}
+
+// TestStart_ProcessingLoopStopsDuringPersistSleep checks that a shutdown stops the processing loop
+// while it sleeps PersistSleep, at every point it sleeps, instead of after the sleep.
+func TestStart_ProcessingLoopStopsDuringPersistSleep(t *testing.T) {
+	tests := []struct {
+		name string
+		// arrange sets up the client and returns the block store
+		arrange func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store
+	}{
+		{
+			name: "no block to process",
+			arrange: func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store {
+				return memory.New()
+			},
+		},
+		{
+			name: "getting the next block fails",
+			arrange: func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store {
+				client.blocksErr = errors.NewProcessingError("blockchain unavailable")
+				return memory.New()
+			},
+		},
+		{
+			name: "persisting the block fails",
+			arrange: func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store {
+				client.block = block
+				return &existsFailingStore{Memory: memory.New(), fileType: fileformat.FileTypeBlock}
+			},
+		},
+		{
+			name: "marking the block persisted fails",
+			arrange: func(t *testing.T, client *loopOutcomeClient, block *model.Block, blockBytes []byte) blob.Store {
+				client.block = block
+				client.persistedErr = errors.NewProcessingError("blockchain unavailable")
+
+				blockStore := memory.New()
+				for _, fileType := range []fileformat.FileType{fileformat.FileTypeBlock, fileformat.FileTypeUtxoAdditions, fileformat.FileTypeUtxoDeletions} {
+					require.NoError(t, blockStore.Set(t.Context(), block.Header.Hash()[:], fileType, blockBytes))
+				}
+
+				return blockStore
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block, blockBytes, _, mockUTXOStore, subtreeStore, _, _, tSettings := setup(t)
+			tSettings.BlockPersister.PersistSleep = time.Hour
+			tSettings.BlockPersister.HTTPListenAddress = ""
+
+			client := &loopOutcomeClient{MockBlockchainClient: NewMockBlockchainClient(), asked: make(chan struct{})}
+			blockStore := tt.arrange(t, client, block, blockBytes)
+			logger := &shutdownLogger{stopped: make(chan struct{})}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			server := New(ctx, logger, tSettings, blockStore, subtreeStore, mockUTXOStore, client)
+
+			go func() {
+				_ = server.Start(ctx, make(chan struct{}, 1))
+			}()
+
+			select {
+			case <-client.asked:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the processing loop did not ask for a block")
+			}
+
+			cancel()
+
+			select {
+			case <-logger.stopped:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the processing loop did not stop while it slept")
+			}
+		})
+	}
 }

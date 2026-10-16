@@ -221,7 +221,7 @@ type benchNode struct {
 const benchHeight = uint32(20_000)
 
 func newBenchNode(b *testing.B, storeName string) *benchNode {
-	ctx := context.Background()
+	ctx := newCancelCtx(b)
 	logger := ulogger.TestLogger{}
 
 	tSettings := test.CreateBaseTestSettings(b)

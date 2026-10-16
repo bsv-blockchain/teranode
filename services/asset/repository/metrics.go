@@ -42,6 +42,7 @@ func _initPrometheusMetrics() {
 			//     - file_existed: File already existed when checked
 			//     - file_appeared: File appeared during creation (rare race)
 			//     - waited_for_other: Waited for another instance to create file (quorum)
+			//     - lost_publish_race: Another writer published the file while this one streamed it; the peer got the whole body
 			//   Error cases:
 			//     - creation_failed: FileStorer creation failed
 			//     - storer_creation_failed: FileStorer creation failed (with quorum)

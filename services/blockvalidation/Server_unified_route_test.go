@@ -41,8 +41,12 @@ func newUnifiedRouteSettings(t *testing.T, unified, outpointOnly bool, checkpoin
 
 // TestServer_legacyUnifiedRoute: full truth table. The route opens ONLY when the
 // unified flag is on AND the source is legacy AND the shared outpoint-only gate
-// (flag + store support + hardcoded checkpoint boundary) holds. Any conjunct
-// missing keeps every block on the normal validation path (fail-safe).
+// (flag + store support + hardcoded checkpoint boundary) holds AND the caller has
+// proved the block's ancestry. Any conjunct missing keeps every block on the
+// normal validation path (fail-safe). wantEligible is legacyUnifiedEligible's
+// answer for the same row: the settings-and-height half, which must not read
+// the proof, because the parent-missing guard relies on it for an unproven
+// legacy orphan.
 func TestServer_legacyUnifiedRoute(t *testing.T) {
 	const cp = int32(2000)
 
@@ -53,16 +57,20 @@ func TestServer_legacyUnifiedRoute(t *testing.T) {
 		supports     bool
 		baseURL      string
 		height       uint32
+		headerProven bool
 		want         bool
+		wantEligible bool
 	}{
-		{name: "all on, legacy, below", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 1000, want: true},
-		{name: "at checkpoint", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 2000, want: true},
-		{name: "above checkpoint", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 2001, want: false},
-		{name: "unified flag off", unified: false, outpointOnly: true, supports: true, baseURL: "legacy", height: 1000, want: false},
-		{name: "outpoint-only flag off", unified: true, outpointOnly: false, supports: true, baseURL: "legacy", height: 1000, want: false},
-		{name: "store unsupported", unified: true, outpointOnly: true, supports: false, baseURL: "legacy", height: 1000, want: false},
-		{name: "non-legacy source", unified: true, outpointOnly: true, supports: true, baseURL: "http://peer:8090", height: 1000, want: false},
-		{name: "height 0", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 0, want: false},
+		{name: "all on, legacy, below, proven", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 1000, headerProven: true, want: true, wantEligible: true},
+		{name: "all on, legacy, below, unproven", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 1000, headerProven: false, want: false, wantEligible: true},
+		{name: "at checkpoint, proven", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 2000, headerProven: true, want: true, wantEligible: true},
+		{name: "at checkpoint, unproven", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 2000, headerProven: false, want: false, wantEligible: true},
+		{name: "above checkpoint", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 2001, headerProven: true, want: false, wantEligible: false},
+		{name: "unified flag off", unified: false, outpointOnly: true, supports: true, baseURL: "legacy", height: 1000, headerProven: true, want: false, wantEligible: false},
+		{name: "outpoint-only flag off", unified: true, outpointOnly: false, supports: true, baseURL: "legacy", height: 1000, headerProven: true, want: false, wantEligible: false},
+		{name: "store unsupported", unified: true, outpointOnly: true, supports: false, baseURL: "legacy", height: 1000, headerProven: true, want: false, wantEligible: false},
+		{name: "non-legacy source", unified: true, outpointOnly: true, supports: true, baseURL: "http://peer:8090", height: 1000, headerProven: true, want: false, wantEligible: false},
+		{name: "height 0", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 0, headerProven: true, want: false, wantEligible: false},
 	}
 
 	for _, tt := range tests {
@@ -75,7 +83,8 @@ func TestServer_legacyUnifiedRoute(t *testing.T) {
 			}
 
 			block := &model.Block{Height: tt.height}
-			require.Equal(t, tt.want, u.legacyUnifiedRoute(block, tt.baseURL))
+			require.Equal(t, tt.want, u.legacyUnifiedRoute(block, tt.baseURL, tt.headerProven))
+			require.Equal(t, tt.wantEligible, u.legacyUnifiedEligible(block, tt.baseURL), "eligibility never reads the proof")
 		})
 	}
 }
