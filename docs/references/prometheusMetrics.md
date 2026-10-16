@@ -427,6 +427,8 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_aerospike_txmeta_set_mined_batch`       | Counter    | Number of txmeta set_mined_batch calls done to aerospike map    |
 | `teranode_aerospike_txmeta_set_mined_batch_n`     | Counter    | Number of txmeta set_mined_batch txs done to aerospike map      |
 | `teranode_aerospike_txmeta_set_mined_batch_err_n` | Counter    | Number of txmeta set_mined_batch txs errors to aerospike map    |
+| `teranode_aerospike_expired_preservation_restore_failed` | Counter | Expired preservations whose master could not be restored after a failed child DAH follow-up |
+| `teranode_aerospike_longest_chain_restore_failed` | Counter | Longest-chain DAH updates whose master could not be restored after a failed pagination-record write |
 | `teranode_aerospike_utxo_get`                     | Counter    | Number of utxo get calls done to aerospike                      |
 | `teranode_aerospike_utxo_spend`                   | Counter    | Number of utxo spend calls done to aerospike                    |
 | `teranode_aerospike_utxo_reset`                   | Counter    | Number of utxo reset calls done to aerospike                    |

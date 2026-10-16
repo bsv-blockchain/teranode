@@ -354,7 +354,7 @@ func (s *Store) applyLongestChainChildDAH(ctx context.Context, f *childDAHFollow
 
 	var restoreErr error
 	if len(restores) > 0 {
-		restoreErr = s.restoreDAHBatch(ctx, restores)
+		restoreErr = s.restoreDAHBatch(ctx, restores, prometheusTxMetaAerospikeLongestChainRestoreFailed)
 	}
 
 	if err := errors.JoinCapped(10, applied.unsetErr, applied.setErr, restoreErr); err != nil {

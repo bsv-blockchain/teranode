@@ -95,6 +95,9 @@ var (
 	// expired preservations whose master could not be restored after a failed child DAH follow-up
 	prometheusTxMetaAerospikeExpiredPreservationRestoreFailed prometheus.Counter
 
+	// longest-chain DAH updates whose master could not be restored after a failed page write
+	prometheusTxMetaAerospikeLongestChainRestoreFailed prometheus.Counter
+
 	// metrics for external transactions
 	prometheusTxMetaAerospikeMapGetExternal prometheus.Histogram
 	prometheusTxMetaAerospikeMapSetExternal prometheus.Histogram
@@ -201,6 +204,14 @@ func _initPrometheusMetrics() {
 			Subsystem: "aerospike",
 			Name:      "expired_preservation_restore_failed",
 			Help:      "Number of expired preservations whose master could not be restored after a failed child DAH follow-up",
+		},
+	)
+	prometheusTxMetaAerospikeLongestChainRestoreFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "longest_chain_restore_failed",
+			Help:      "Number of longest-chain DAH updates whose master could not be restored after a failed pagination-record write",
 		},
 	)
 	prometheusTxMetaAerospikeMapSetMinedBatchErrN = promauto.NewCounter(
