@@ -2703,19 +2703,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 	})
 }
 
-// isCaughtUp reports whether the node is provably in the steady RUNNING state.
-//
-// It returns true ONLY for FSMStateRUNNING. This is the distinguishing signal
-// between a genuine floater (a not-in-block parent with empty/absent BlockIDs
-// that surfaces as ErrBlockIncomplete in RUNNING — provably permanent via the
-// SetMinedMulti->MinedSet invariant) and a legitimate #1031 catchup-ordering
-// parent (transient during sync, must be retried, never persisted invalid).
-//
-// Matching only RUNNING (rather than "!= CATCHINGBLOCKS") keeps every other
-// state on the fail-safe side: IDLE, a GetFSMCurrentState error or nil state, and
-// any future FSM enum addition all return false (treat as not-caught-up => retry,
-// never wrongly invalidate). Only the one state we can prove is caught up
-// authorizes invalidating a floater.
 // prepareBlockAssembly hands a block whose header checks passed and whose subtrees are in the
 // subtree store to block assembly, which binds the subtree list to the header itself and builds
 // the block's transaction map while the block is validated, so it has less to do once the block
@@ -2742,6 +2729,19 @@ func (u *BlockValidation) prepareBlockAssembly(block *model.Block) {
 	}()
 }
 
+// isCaughtUp reports whether the node is provably in the steady RUNNING state.
+//
+// It returns true ONLY for FSMStateRUNNING. This is the distinguishing signal
+// between a genuine floater (a not-in-block parent with empty/absent BlockIDs
+// that surfaces as ErrBlockIncomplete in RUNNING — provably permanent via the
+// SetMinedMulti->MinedSet invariant) and a legitimate #1031 catchup-ordering
+// parent (transient during sync, must be retried, never persisted invalid).
+//
+// Matching only RUNNING (rather than "!= CATCHINGBLOCKS") keeps every other
+// state on the fail-safe side: IDLE, a GetFSMCurrentState error or nil state, and
+// any future FSM enum addition all return false (treat as not-caught-up => retry,
+// never wrongly invalidate). Only the one state we can prove is caught up
+// authorizes invalidating a floater.
 func (u *BlockValidation) isCaughtUp(ctx context.Context) bool {
 	st, err := u.blockchainClient.GetFSMCurrentState(ctx)
 	if err != nil || st == nil {

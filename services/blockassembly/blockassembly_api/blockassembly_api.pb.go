@@ -1176,7 +1176,6 @@ func (x *GetBlockAssemblyTxsResponse) GetTxs() []string {
 	return nil
 }
 
-// Request for retrieving block data for an existing mining candidate.
 // Request to prepare for a block that is being validated.
 type PrepareBlockRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1222,6 +1221,7 @@ func (x *PrepareBlockRequest) GetBlock() []byte {
 	return nil
 }
 
+// Request for retrieving block data for an existing mining candidate.
 type GetCandidateBlockRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            []byte                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // the mining candidate ID (from a prior GetMiningCandidate call)

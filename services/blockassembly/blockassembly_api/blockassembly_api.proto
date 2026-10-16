@@ -319,12 +319,12 @@ message GetBlockAssemblyTxsResponse {
   repeated string txs = 2; // the transactions currently being assembled in the block assembly
 }
 
-// Request for retrieving block data for an existing mining candidate.
 // Request to prepare for a block that is being validated.
 message PrepareBlockRequest {
   bytes block = 1; // the block in model.Block wire format (header, counts, subtree hashes, coinbase)
 }
 
+// Request for retrieving block data for an existing mining candidate.
 message GetCandidateBlockRequest {
   bytes id = 1; // the mining candidate ID (from a prior GetMiningCandidate call)
 }
