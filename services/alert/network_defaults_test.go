@@ -103,12 +103,12 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 			name:    "explicit settings override network defaults",
 			network: "testnet",
 			configured: alertNetworkConfig{
-				GenesisKeys: mainnet.GenesisKeys[:2],
+				GenesisKeys: mainnet.GenesisKeys[:3],
 				ProtocolID:  "/custom/alert-system/1.0.0",
 				TopicName:   "custom_topic",
 			},
 			want: alertNetworkConfig{
-				GenesisKeys: mainnet.GenesisKeys[:2],
+				GenesisKeys: mainnet.GenesisKeys[:3],
 				ProtocolID:  "/custom/alert-system/1.0.0",
 				TopicName:   "custom_topic",
 			},
@@ -138,10 +138,10 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 			network: "testnet",
 			configured: alertNetworkConfig{
 				// a trailing separator in the setting yields a blank entry
-				GenesisKeys: []string{" " + mainnet.GenesisKeys[0] + " ", strings.ToUpper(mainnet.GenesisKeys[0]), mainnet.GenesisKeys[1], ""},
+				GenesisKeys: []string{" " + mainnet.GenesisKeys[0] + " ", strings.ToUpper(mainnet.GenesisKeys[0]), mainnet.GenesisKeys[1], "", mainnet.GenesisKeys[2]},
 			},
 			want: alertNetworkConfig{
-				GenesisKeys: mainnet.GenesisKeys[:2],
+				GenesisKeys: mainnet.GenesisKeys[:3],
 				ProtocolID:  testnet.ProtocolID,
 				TopicName:   testnet.TopicName,
 			},
@@ -159,7 +159,8 @@ func TestResolveAlertNetworkConfig(t *testing.T) {
 }
 
 func TestResolveAlertNetworkConfig_invalidGenesisKeys(t *testing.T) {
-	valid := upstreamNetwork(t, "mainnet").GenesisKeys[0]
+	mainnetKeys := upstreamNetwork(t, "mainnet").GenesisKeys
+	valid, others := mainnetKeys[0], mainnetKeys[1:]
 
 	tooMany := make([]string, 0, maxGenesisKeys+1)
 	for i := 0; i <= maxGenesisKeys; i++ {
@@ -174,11 +175,13 @@ func TestResolveAlertNetworkConfig_invalidGenesisKeys(t *testing.T) {
 		keys    []string
 		wantErr string
 	}{
-		{"placeholder", []string{valid, "custom_key"}, "alert_genesis_keys[1]"},
-		{"too short", []string{valid[:64]}, "expected 66 hex characters"},
-		{"uncompressed length", []string{valid + valid[2:]}, "expected 66 hex characters"},
-		{"not hex", []string{"zz" + valid[2:]}, "is not a valid public key"},
-		{"not on the curve", []string{"02" + strings.Repeat("00", 32)}, "is not a valid public key"},
+		{"placeholder", []string{valid, others[0], "custom_key"}, "alert_genesis_keys[2]"},
+		{"too short", []string{valid[:64], others[0], others[1]}, "expected 66 hex characters"},
+		{"uncompressed length", []string{valid + valid[2:], others[0], others[1]}, "expected 66 hex characters"},
+		{"not hex", []string{"zz" + valid[2:], others[0], others[1]}, "is not a valid public key"},
+		{"not on the curve", []string{"02" + strings.Repeat("00", 32), others[0], others[1]}, "is not a valid public key"},
+		{"fewer keys than required signers", []string{valid, others[0]}, "alerts need 3 distinct signers"},
+		{"repeated keys leave fewer than required signers", []string{valid, strings.ToUpper(valid), others[0]}, "alerts need 3 distinct signers"},
 		{"more keys than are verified", tooMany, "at most 10 are supported"},
 	}
 
