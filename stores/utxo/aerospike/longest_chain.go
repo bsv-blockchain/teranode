@@ -58,6 +58,12 @@ import (
 //
 // Missing off the longest chain stays fatal: the transaction goes back into block
 // assembly, and without a record its parents lose the pruner's protection.
+//
+// A pagination-record DAH write that still fails after its retry is returned as an error, and
+// reorgBlocks turns it into a failed reorg that handleReorg answers with a full block assembly reset.
+// That is deliberate: the reset reloads the unmined transactions and re-marks the ones the master
+// restore (applyLongestChainChildDAH) left in a mined state with unmined_since set, so nothing is lost,
+// at the price of one transient page failure costing an incremental reorg. Do not swallow this error.
 func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	if len(txHashes) == 0 {
 		return nil

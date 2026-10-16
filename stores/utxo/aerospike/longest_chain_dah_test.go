@@ -502,6 +502,69 @@ func TestMarkTransactionsOnLongestChain_FailedUnsetRestoresMaster(t *testing.T) 
 	require.Nil(t, h.dah(pageKey))
 }
 
+// TestMarkTransactionsOnLongestChain_FailedRaiseRestoresMaster: when the page write of a raise (master
+// X -> Y) still fails after the retry, the master goes back to X and gets its unmined_since back. A
+// failed first-time set (no previous DAH) is not restored: the master keeps the DAH it was given.
+func TestMarkTransactionsOnLongestChain_FailedRaiseRestoresMaster(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	s := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, cleanup := initAerospike(t, s, logger)
+	t.Cleanup(cleanup)
+
+	require.NoError(t, store.SetBlockHeight(1000))
+
+	retention := int(s.GetUtxoStoreBlockHeightRetention())
+	require.NotZero(t, retention)
+
+	h := &childDAHHarness{t: t, client: client, store: store, dahBin: fields.DeleteAtHeight.String()}
+
+	failPage := func(pageKey *aerospike.Key) {
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			for _, r := range records {
+				if string(r.BatchRec().Key.Digest()) == string(pageKey.Digest()) {
+					return aerospike.ErrNetwork
+				}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+		t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+	}
+
+	t.Run("raise is restored", func(t *testing.T) {
+		// mined, fully spent, DAH 1002 is below the 1001+retention a re-mark stamps: a raise
+		txID, masterKey, pageKey := h.seed("failed-raise", 1002, 1)
+		failPage(pageKey)
+
+		require.Error(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+		require.Equal(t, 1002, h.dah(masterKey), "master DAH goes back to X")
+		require.Equal(t, 1002, h.dah(pageKey), "page untouched")
+
+		rec, err := client.Get(nil, masterKey)
+		require.NoError(t, err)
+		require.Equal(t, 50, rec.Bins[fields.UnminedSince.String()], "unmined_since restored")
+
+		// the retry, with the fault gone, completes the raise
+		store.SetBatchOperateFn(nil)
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+		require.Equal(t, 1001+retention, h.dah(masterKey))
+		require.Equal(t, 1001+retention, h.dah(pageKey))
+	})
+
+	t.Run("first-time set is not restored", func(t *testing.T) {
+		txID, masterKey, pageKey := h.seed("failed-first-set", 0, 1)
+		failPage(pageKey)
+
+		require.Error(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+		require.Equal(t, 1001+retention, h.dah(masterKey), "the master keeps the DAH, the pages cannot be pruned early")
+
+		rec, err := client.Get(nil, masterKey)
+		require.NoError(t, err)
+		require.Nil(t, rec.Bins[fields.UnminedSince.String()], "unmined_since stays cleared")
+	})
+}
+
 // TestSetDAHForChildRecordsMulti_MixedPages: a present page is updated and a missing one is skipped,
 // without error and without creating it.
 func TestSetDAHForChildRecordsMulti_MixedPages(t *testing.T) {
