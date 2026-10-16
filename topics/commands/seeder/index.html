@@ -7282,7 +7282,7 @@
 </span></code></pre></div>
 <h2 id="6-how-to-run">6. How to Run<a class="headerlink" href="#6-how-to-run" title="Permanent link">&para;</a></h2>
 <p>To run the Seeder command, use the following command:</p>
-<div class="language-shell highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>teranode-cli<span class="w"> </span>seeder<span class="w"> </span>-inputDir<span class="w"> </span>&lt;folder&gt;<span class="w"> </span>-hash<span class="w"> </span>&lt;hash&gt;<span class="w"> </span><span class="o">[</span>-skipHeaders<span class="o">]</span><span class="w"> </span><span class="o">[</span>-skipUTXOs<span class="o">]</span><span class="w"> </span><span class="o">[</span>-force<span class="o">]</span><span class="w"> </span><span class="o">[</span>-skipChecksum<span class="o">]</span>
+<div class="language-shell highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>teranode-cli<span class="w"> </span>seeder<span class="w"> </span>-inputDir<span class="w"> </span>&lt;folder&gt;<span class="w"> </span>-hash<span class="w"> </span>&lt;hash&gt;<span class="w"> </span><span class="o">[</span>-skipHeaders<span class="o">]</span><span class="w"> </span><span class="o">[</span>-skipUTXOs<span class="o">]</span><span class="w"> </span><span class="o">[</span>-force<span class="w"> </span><span class="p">|</span><span class="w"> </span>-recover-checkpoint<span class="o">]</span><span class="w"> </span><span class="o">[</span>-skipChecksum<span class="o">]</span>
 </span></code></pre></div>
 <p>Options:</p>
 <ul>
@@ -7290,7 +7290,8 @@
 <li><code>-hash</code>: Hash of the UTXO set / headers to process.</li>
 <li><code>-skipHeaders</code>: (Optional) Skip processing of headers.</li>
 <li><code>-skipUTXOs</code>: (Optional) Skip processing of UTXOs.</li>
-<li><code>-force</code>: (Optional) Process even if <code>lastProcessed.dat</code> or BlockAssembler state already exists.</li>
+<li><code>-force</code>: (Optional) Always re-import the UTXO set, even if <code>lastProcessed.dat</code> or BlockAssembler state already exists. This is the right flag after wiping or recreating the UTXO store, and whenever you are unsure what the UTXO store holds. Cannot be combined with <code>-skipUTXOs</code>.</li>
+<li><code>-recover-checkpoint</code>: (Optional) Write the missing BlockAssembler checkpoint without importing anything, when <code>lastProcessed.dat</code> and the seeder's imported-tip record (<code>seederImportedTip.dat</code>) prove a completed import of this exact snapshot (same tip height and tip hash). Dangerous: both records live in the block store and say nothing about what the UTXO store currently holds, so never use it after wiping or recreating the UTXO store. If the records do not match the snapshot, the seeder refuses and writes nothing. Mutually exclusive with <code>-force</code>. Cannot be combined with <code>-skipUTXOs</code>.</li>
 <li><code>-skipChecksum</code>: (Optional) Skip checksum verification (see below). Only for callers that have already verified the files against their sidecars.</li>
 </ul>
 <h3 id="checksum-verification">Checksum verification<a class="headerlink" href="#checksum-verification" title="Permanent link">&para;</a></h3>
