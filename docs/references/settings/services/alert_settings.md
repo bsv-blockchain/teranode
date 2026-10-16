@@ -88,6 +88,7 @@ Example: `PORT_PREFIX=1` with `ALERT_P2P_PORT=9908` results in port 19908.
 | Setting | Validation | Error | When Checked |
 |---------|------------|-------|-------------|
 | GenesisKeys | Must not be empty after network defaults are applied | `config.ErrNoGenesisKeys` | During `Init()` |
+| GenesisKeys | Each key must be a hex-encoded compressed public key (66 hex characters); at most 10 keys. Blank entries are dropped and repeated keys (in any case) are kept once | Configuration error | During `Init()` |
 | P2P.IP | Length >= 5 characters | `config.ErrNoP2PIP` | During `Init()` |
 | P2P.Port | String length >= 2 characters | `config.ErrNoP2PPort` | During `Init()` |
 | StoreURL | Supported scheme (sqlite/sqlitememory/postgres/mysql) | `ErrDatastoreUnsupported` | During `Init()` |
