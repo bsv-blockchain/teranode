@@ -909,7 +909,7 @@ var checkedRowsPerDoc = map[string]int{
 	"propagation_settings.md":       13,
 	"pruner_settings.md":            26,
 	"rpc_settings.md":               11,
-	"subtreevalidation_settings.md": 23,
+	"subtreevalidation_settings.md": 24,
 	"utxopersister_settings.md":     2,
 	"validator_settings.md":         17,
 	"aerospike_settings.md":         13,
@@ -1136,7 +1136,7 @@ var deadSettingsConfKeyExemptions = []deadSettingsConfKeyExemption{
 	},
 }
 
-// TestSettingsConfHasNoDeadKeys guards against the specific inconsistency
+// TestSettingsConfDocDriftKeysStayDead guards against the specific inconsistency
 // ChiR6 found: a settings-table doc row deleted because it described a
 // feature that was never implemented, while the settings.conf block that set
 // the same key (with comments describing the same nonexistent behaviour) was
@@ -1149,12 +1149,12 @@ var deadSettingsConfKeyExemptions = []deadSettingsConfKeyExemption{
 // keys below, not a blanket assertion. Instead, this test is the narrow,
 // mechanically-checkable half of that follow-up: once a key is confirmed
 // dead, assert it stays dead.
-func TestSettingsConfHasNoDeadKeys(t *testing.T) {
+func TestSettingsConfDocDriftKeysStayDead(t *testing.T) {
 	present := settingsConfBaseKeys(t)
 
 	for _, e := range deadSettingsConfKeyExemptions {
 		require.False(t, present[e.key],
-			"settings.conf sets %q, which TestSettingsConfHasNoDeadKeys asserts is dead: %s - if it has been "+
+			"settings.conf sets %q, which TestSettingsConfDocDriftKeysStayDead asserts is dead: %s - if it has been "+
 				"reintroduced for a real feature, remove the deadSettingsConfKeyExemptions entry; otherwise delete "+
 				"the settings.conf line", e.key, e.reason)
 	}
