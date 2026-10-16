@@ -242,8 +242,8 @@ func dahUnchangedExpression(newDAH *uint32) *aerospike.Expression {
 // distinct "restore failed" error: such a master is left in its post-write state and nothing
 // revisits it.
 //
-// Shared by every caller whose master write is not retry-safe (expired preservation here; the
-// longest-chain path in PR #1951 will be the second).
+// Shared by every caller whose master write is not retry-safe: expired preservation, and the
+// longest-chain path (MarkTransactionsOnLongestChain). Each passes its own failure counter.
 func (s *Store) restoreDAHBatch(ctx context.Context, items []dahRestore, failedCounter prometheus.Counter) error {
 	pending := items
 
@@ -471,8 +471,8 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 // master write is not retry-safe: a retry sees old == new (or FILTERED_OUT) and queues nothing.
 // Callers differ in what they do when a child write still fails:
 //   - expired preservation (ProcessExpiredPreservations): RESTORES the master through
-//     restoreDAHBatch, so the next run redoes the transition. The longest-chain path in
-//     PR #1951 does the same with the same helper.
+//     restoreDAHBatch, so the next run redoes the transition. The longest-chain path
+//     (MarkTransactionsOnLongestChain) does the same with the same helper.
 //   - setMined (Lua and expressions) and spend (expressions): only LOG at Error, COUNT and RETURN
 //     the error (setMined returns it, spend increments prometheusUtxoMapErrors as its spends are
 //     already completed). They do NOT restore, so a failed unset or raise leaves the pages stale
