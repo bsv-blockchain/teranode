@@ -1347,12 +1347,14 @@ func handleGetpeerinfo(ctx context.Context, s *RPCServer, cmd interface{}, _ <-c
 			}
 
 			for _, p := range newResult.resp {
+				displayHeight := p.DisplayHeight()
+
 				info := &bsvjson.GetPeerInfoResult{
 					PeerID:         p.ID.String(),
 					Addr:           p.DataHubURL, // Use DataHub URL as address
 					SubVer:         p.ClientName,
-					CurrentHeight:  int32(p.Height),
-					StartingHeight: int32(p.Height), // Use current height as starting height
+					CurrentHeight:  int32(displayHeight),
+					StartingHeight: int32(displayHeight), // Use current height as starting height
 					BanScore:       int32(p.BanScore),
 					BytesRecv:      p.BytesReceived,
 					BytesSent:      0, // P2P doesn't track bytes sent currently

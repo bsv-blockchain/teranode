@@ -57,6 +57,7 @@ func TestProcessTxMetaUsingCache_Lockfree(t *testing.T) {
 		"FailFastThresholdExceeded":       TestProcessTxMetaUsingCache_FailFastThresholdExceeded,
 		"MultipleBatches":                 TestProcessTxMetaUsingCache_MultipleBatches,
 		"FieldsMatchCachedMetaEndToEnd":   testProcessTxMetaUsingCacheFields,
+		"LargeMixedSubtree":               TestProcessTxMetaUsingCache_LargeMixedSubtree,
 	} {
 		t.Run(name, fn)
 	}
@@ -394,6 +395,104 @@ func TestProcessTxMetaUsingCache_MultipleBatches(t *testing.T) {
 
 	for i, m := range txMetaSlice {
 		require.NotNil(t, m, "txMetaSlice[%d] should not be nil", i)
+	}
+}
+
+// TestProcessTxMetaUsingCache_LargeMixedSubtree probes a subtree large enough
+// to be split into many tasks, with a coinbase placeholder, prefilled entries,
+// hits and misses mixed through it, and checks every slot ends up as expected.
+func TestProcessTxMetaUsingCache_LargeMixedSubtree(t *testing.T) {
+	cache := setupTestCache(t)
+	server := setupCacheTestServer(t, cache, 4, 1_000_000)
+
+	const n = 50_000
+
+	txHashes := generateTestHashes(n)
+	txHashes[0] = *subtree.CoinbasePlaceholderHash
+
+	var cached []chainhash.Hash
+
+	for i := 1; i < n; i++ {
+		if i%3 != 0 {
+			cached = append(cached, txHashes[i])
+		}
+	}
+
+	populateCache(t, cache, cached)
+
+	txMetaSlice := make([]metaSliceItem, n)
+	for i := 5; i < n; i += 7 {
+		txMetaSlice[i] = metaSliceItem{isSet: true, fee: 9}
+	}
+
+	missed, err := server.processTxMetaUsingCache(context.Background(), txHashes, txMetaSlice, false)
+	require.NoError(t, err)
+
+	wantMissed := 0
+
+	for i := 0; i < n; i++ {
+		prefilled := i >= 5 && (i-5)%7 == 0
+
+		switch {
+		case i == 0:
+			require.False(t, txMetaSlice[i].isSet, "coinbase placeholder is never looked up")
+		case prefilled:
+			require.Equal(t, uint64(9), txMetaSlice[i].fee, "slot %d was prefilled and must be left alone", i)
+		case i%3 != 0:
+			require.True(t, txMetaSlice[i].isSet, "slot %d is cached", i)
+			require.Equal(t, uint64(100), txMetaSlice[i].fee, "slot %d", i)
+		default:
+			require.False(t, txMetaSlice[i].isSet, "slot %d is not cached", i)
+
+			wantMissed++
+		}
+	}
+
+	require.Equal(t, wantMissed, missed)
+}
+
+func TestProbeSpans(t *testing.T) {
+	for _, tc := range []struct{ n, size int }{{0, 4}, {1, 4}, {4, 4}, {5, 4}, {4097, 4096}, {1_000_000, 4096}} {
+		spans := probeSpans(tc.n, tc.size)
+
+		next := 0
+		for _, sp := range spans {
+			require.Equal(t, next, sp[0], "n=%d: spans must be contiguous", tc.n)
+			require.Greater(t, sp[1], sp[0], "n=%d: no empty span", tc.n)
+			require.LessOrEqual(t, sp[1]-sp[0], tc.size, "n=%d", tc.n)
+
+			next = sp[1]
+		}
+
+		require.Equal(t, tc.n, next, "n=%d: spans must cover every index", tc.n)
+	}
+}
+
+// BenchmarkProbeTxMetaCache_FullSubtree probes a full-size subtree, all hits,
+// with a fresh txMetaSlice per call as ValidateSubtreeInternal makes one.
+func BenchmarkProbeTxMetaCache_FullSubtree(b *testing.B) {
+	for name, bucket := range map[string]txmetacache.BucketType{"unallocated": txmetacache.Unallocated, "lockfree": txmetacache.Lockfree} {
+		b.Run(name, func(b *testing.B) {
+			testCacheBucket = bucket
+
+			b.Cleanup(func() { testCacheBucket = txmetacache.Unallocated })
+
+			cache := setupTestCache(b)
+			server := setupCacheTestServer(b, cache, 32, 1_000_000)
+
+			txHashes := generateTestHashes(1 << 20)
+			populateCache(b, cache, txHashes)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < b.N; i++ {
+				txMetaSlice := make([]metaSliceItem, len(txHashes))
+				_, _ = server.processTxMetaUsingCache(context.Background(), txHashes, txMetaSlice, false)
+			}
+
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/float64(len(txHashes)), "ns/tx")
+		})
 	}
 }
 

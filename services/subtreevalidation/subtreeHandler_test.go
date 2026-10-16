@@ -153,6 +153,8 @@ func TestSubtreesHandler(t *testing.T) {
 			utxoStore, _ := nullstore.NewNullStore()
 			blockchainClient := &blockchain.Mock{}
 			blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+			runningState := blockchain.FSMStateRUNNING
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 			blockIDsMap := make(map[uint32]bool)
 
@@ -356,6 +358,8 @@ func TestSubtreesHandler_NilSubtree(t *testing.T) {
 	utxoStore, _ := nullstore.NewNullStore()
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("IsFSMCurrentState", mock.Anything, mock.Anything).Return(true, nil)
+	runningState := blockchain.FSMStateRUNNING
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
 
 	// pre-populate the subtree store so GetSubtreeExists returns true once ValidateSubtreeInternal
 	// reaches the store check, simulating another goroutine having completed the write.

@@ -2881,6 +2881,12 @@
       "type": "object",
       "title": "PeerInfoResponse represents the JSON response for a single peer.",
       "properties": {
+        "advertised_height": {
+          "description": "AdvertisedHeight is a libp2p peer's raw claim, differing from Height only\nwhile this node is catching up. It is 0 for legacy peers, which never\nreport it, and for libp2p peers on versions that predate the field.",
+          "type": "integer",
+          "format": "uint32",
+          "x-go-name": "AdvertisedHeight"
+        },
         "ban_score": {
           "type": "integer",
           "format": "int64",
@@ -2955,6 +2961,7 @@
           "x-go-name": "DataHubURL"
         },
         "height": {
+          "description": "Height is the peer's latest known block height. For a libp2p peer it is\ncapped against local progress and is what sync decisions use; for a\nlegacy (wire-protocol) peer it is the height the peer reported, uncapped,\nand no sync decision reads it.",
           "type": "integer",
           "format": "uint32",
           "x-go-name": "Height"

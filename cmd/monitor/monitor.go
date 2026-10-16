@@ -943,7 +943,7 @@ func (m Model) renderPeersPanel() string {
 				repStyled = errorStyle.Render(repScore)
 			}
 
-			line := fmt.Sprintf("  %s h:%d rep:%s", peerID, peer.Height, repStyled)
+			line := fmt.Sprintf("  %s h:%d rep:%s", peerID, peer.DisplayHeight(), repStyled)
 			content.WriteString(line)
 			content.WriteString("\n")
 			shown++

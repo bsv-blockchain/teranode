@@ -29,21 +29,29 @@ type LegacyPeerResponse struct {
 //
 // swagger:model PeerInfoResponse
 type PeerInfoResponse struct {
-	ID              string `json:"id"`
-	Transport       string `json:"transport"`
-	ClientName      string `json:"client_name"`
-	Height          uint32 `json:"height"`
-	BlockHash       string `json:"block_hash"`
-	DataHubURL      string `json:"data_hub_url"`
-	NetworkAddress  string `json:"network_address,omitempty"`
-	BanScore        int    `json:"ban_score"`
-	IsBanned        bool   `json:"is_banned"`
-	IsConnected     bool   `json:"is_connected"`
-	ConnectedAt     int64  `json:"connected_at"`
-	BytesSent       uint64 `json:"bytes_sent"`
-	BytesReceived   uint64 `json:"bytes_received"`
-	LastBlockTime   int64  `json:"last_block_time"`
-	LastMessageTime int64  `json:"last_message_time"`
+	ID         string `json:"id"`
+	Transport  string `json:"transport"`
+	ClientName string `json:"client_name"`
+	// Height is the peer's latest known block height. For a libp2p peer it is
+	// capped against local progress and is what sync decisions use; for a
+	// legacy (wire-protocol) peer it is the height the peer reported, uncapped,
+	// and no sync decision reads it.
+	Height uint32 `json:"height"`
+	// AdvertisedHeight is a libp2p peer's raw claim, differing from Height only
+	// while this node is catching up. It is 0 for legacy peers, which never
+	// report it, and for libp2p peers on versions that predate the field.
+	AdvertisedHeight uint32 `json:"advertised_height"`
+	BlockHash        string `json:"block_hash"`
+	DataHubURL       string `json:"data_hub_url"`
+	NetworkAddress   string `json:"network_address,omitempty"`
+	BanScore         int    `json:"ban_score"`
+	IsBanned         bool   `json:"is_banned"`
+	IsConnected      bool   `json:"is_connected"`
+	ConnectedAt      int64  `json:"connected_at"`
+	BytesSent        uint64 `json:"bytes_sent"`
+	BytesReceived    uint64 `json:"bytes_received"`
+	LastBlockTime    int64  `json:"last_block_time"`
+	LastMessageTime  int64  `json:"last_message_time"`
 
 	// Catchup metrics
 	CatchupAttempts        int64   `json:"catchup_attempts"`
@@ -130,21 +138,22 @@ func peerInfoToResponse(peer *blockchain.PeerInfo) PeerInfoResponse {
 	}
 
 	response := PeerInfoResponse{
-		ID:              peer.ID,
-		Transport:       transportLabel(peer.TransportType),
-		ClientName:      peer.ClientName,
-		Height:          peer.Height,
-		BlockHash:       blockHashStr,
-		DataHubURL:      peer.DataHubURL,
-		NetworkAddress:  peer.NetworkAddress,
-		BanScore:        int(peer.BanScore),
-		IsBanned:        peer.IsBanned,
-		IsConnected:     peer.IsConnected,
-		ConnectedAt:     timeToUnix(peer.ConnectedAt),
-		BytesSent:       peer.BytesSent,
-		BytesReceived:   peer.BytesReceived,
-		LastBlockTime:   timeToUnix(peer.LastBlockTime),
-		LastMessageTime: timeToUnix(peer.LastMessageTime),
+		ID:               peer.ID,
+		Transport:        transportLabel(peer.TransportType),
+		ClientName:       peer.ClientName,
+		Height:           peer.Height,
+		AdvertisedHeight: peer.AdvertisedHeight,
+		BlockHash:        blockHashStr,
+		DataHubURL:       peer.DataHubURL,
+		NetworkAddress:   peer.NetworkAddress,
+		BanScore:         int(peer.BanScore),
+		IsBanned:         peer.IsBanned,
+		IsConnected:      peer.IsConnected,
+		ConnectedAt:      timeToUnix(peer.ConnectedAt),
+		BytesSent:        peer.BytesSent,
+		BytesReceived:    peer.BytesReceived,
+		LastBlockTime:    timeToUnix(peer.LastBlockTime),
+		LastMessageTime:  timeToUnix(peer.LastMessageTime),
 
 		// Catchup-specific counters. The timestamps remain the generic
 		// interaction ones; catchup-scoped timestamps are not tracked.
