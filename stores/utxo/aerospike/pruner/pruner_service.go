@@ -1611,6 +1611,11 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 		}
 	}
 
+	var (
+		missing      int
+		missingPages []string
+	)
+
 	if len(pageBatch) > 0 && ctx.Err() == nil {
 		if err := s.batchOperate(pageBatch); err != nil {
 			s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d pagination records, retrying next cycle: %v", len(pageBatch), err)
@@ -1620,10 +1625,17 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 
 				switch {
 				case br.Err != nil:
-					// a page that is already gone has nothing left to clear and nothing to retry
+					// a page that is already gone has nothing left to clear and nothing to retry,
+					// but under a still-protected master it is lost data: leave a trace
 					var asErr aerospike.Error
 					if !errors.As(br.Err, &asErr) || !asErr.Matches(types.KEY_NOT_FOUND_ERROR) {
 						failed++
+					} else {
+						if len(missingPages) < 10 {
+							missingPages = append(missingPages, fmt.Sprintf("%x", br.Key.Digest()))
+						}
+
+						missing++
 					}
 				case s.hadDAH(br):
 					pages++
@@ -1634,6 +1646,10 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 
 	if failed > 0 {
 		s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d unmined records, retrying next cycle", failed)
+	}
+
+	if missing > 0 {
+		s.logger.Warnf("[pruner] %d pagination records of unmined transactions were already deleted (first key digests: %v)", missing, missingPages)
 	}
 
 	if cleared := masters + pages; cleared > 0 {

@@ -139,6 +139,7 @@ func TestClearUnminedDAH(t *testing.T) {
 		require.Equal(t, 1, svc.clearUnminedDAH(context.Background(), clears(t)))
 		require.Equal(t, 2, *calls)
 		require.Zero(t, logger.errors, "a page that is already gone is not a failure")
+		require.Equal(t, 1, logger.warns, "a page already gone under an unmined master is lost data and must be logged")
 	})
 
 	t.Run("page per-record error is still a failure", func(t *testing.T) {
@@ -184,13 +185,16 @@ func TestClearUnminedDAH(t *testing.T) {
 	})
 }
 
-// errorCountLogger counts Errorf calls; the error logger of the tests only logs them.
+// errorCountLogger counts Errorf and Warnf calls; the error logger of the tests only logs them.
 type errorCountLogger struct {
 	ulogger.Logger
 	errors int
+	warns  int
 }
 
 func (l *errorCountLogger) Errorf(string, ...interface{}) { l.errors++ }
+
+func (l *errorCountLogger) Warnf(string, ...interface{}) { l.warns++ }
 
 func TestDropUnminedRecords_DedupesPageKeys(t *testing.T) {
 	svc := newTestService(t)
