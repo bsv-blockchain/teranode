@@ -572,12 +572,33 @@ func TestHandleMoveForwardRequest_ServesLeftoverSnapshotDuringDrain(t *testing.T
 	}()
 	t.Cleanup(func() { close(newSubtreeChan) })
 
+	// Hold the drain as it starts. The snapshot is stored over newSubtreeChan, the same channel
+	// the drain announces its subtrees on, so without the hold, whichever got to the reader first
+	// decided whether the snapshot request waited behind the gate for the whole drain.
+	drainHeld, releaseDrain := make(chan struct{}), make(chan struct{})
+
+	var releaseOnce, gateOnce sync.Once
+
+	drainStartHook = func() {
+		close(drainHeld)
+		<-releaseDrain
+	}
+
 	errChan := make(chan error, 1)
 
 	var handlerDone sync.WaitGroup
 
 	handlerDone.Go(func() {
 		stp.handleMoveForwardRequest(context.Background(), moveBlockRequest{block: block, errChan: errChan})
+	})
+
+	// On any exit, failed assertions included, let the drain finish before the channel closes.
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseDrain) })
+		gateOnce.Do(func() { close(gate) })
+		handlerDone.Wait()
+
+		drainStartHook = nil
 	})
 
 	select {
@@ -589,10 +610,19 @@ func TestHandleMoveForwardRequest_ServesLeftoverSnapshotDuringDrain(t *testing.T
 
 	require.Zero(t, incompleteStored.Load(), "the snapshot must not be stored until a caller asks for it")
 
+	select {
+	case <-drainHeld:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the deferred drain did not start")
+	}
+
 	start := time.Now()
 	data := stp.GetIncompleteSubtreeMiningData(context.Background())
 	require.Less(t, time.Since(start), time.Second, "the snapshot request waited behind the deferred drain")
 	require.True(t, stp.DrainingAfterBlock(), "precondition: the drain is still running")
+
+	// Let the drain run on into the gate, so the later checks see it still running.
+	releaseOnce.Do(func() { close(releaseDrain) })
 
 	require.NotNil(t, data, "the leftover txs must be served while the drain runs")
 	require.Len(t, data.Subtrees, 1)
@@ -602,7 +632,7 @@ func TestHandleMoveForwardRequest_ServesLeftoverSnapshotDuringDrain(t *testing.T
 	require.Same(t, data, stp.GetIncompleteSubtreeMiningData(context.Background()), "later callers get the same snapshot")
 	require.Equal(t, int32(1), incompleteStored.Load(), "the snapshot is stored once, when first asked for")
 
-	close(gate)
+	gateOnce.Do(func() { close(gate) })
 	handlerDone.Wait()
 }
 

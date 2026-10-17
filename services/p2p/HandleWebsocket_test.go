@@ -389,12 +389,17 @@ func TestHandleWebSocket(t *testing.T) {
 	// Signal that server is ready
 	serverReady <- struct{}{}
 
+	// Generous upper bounds: each wait returns as soon as its event happens, and a loaded
+	// CI runner (the package runs under -race next to every other package) can take
+	// longer than 2s to deliver the first frames.
+	const wait = 10 * time.Second
+
 	t.Run("Normal operation", func(t *testing.T) {
 		// Wait for server to be ready
 		select {
 		case <-serverReady:
 			t.Log("Server is ready")
-		case <-time.After(2 * time.Second):
+		case <-time.After(wait):
 			t.Fatal("Timeout waiting for server to be ready")
 		}
 
@@ -411,7 +416,7 @@ func TestHandleWebSocket(t *testing.T) {
 		select {
 		case <-connectedCh:
 			t.Log("Server acknowledged connection")
-		case <-time.After(2 * time.Second):
+		case <-time.After(wait):
 			t.Fatal("Timeout waiting for server connection acknowledgment")
 		}
 
@@ -419,7 +424,7 @@ func TestHandleWebSocket(t *testing.T) {
 
 		// First, read the initial node_status message that's sent automatically
 		t.Log("Reading initial node_status message")
-		err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		err = ws.SetReadDeadline(time.Now().Add(wait))
 		require.NoError(t, err)
 
 		messageType, message, err := ws.ReadMessage()
@@ -441,7 +446,7 @@ func TestHandleWebSocket(t *testing.T) {
 		// Read the test message
 		t.Log("Waiting for test message")
 
-		err = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		err = ws.SetReadDeadline(time.Now().Add(wait))
 		require.NoError(t, err)
 
 		messageType, message, err = ws.ReadMessage()
