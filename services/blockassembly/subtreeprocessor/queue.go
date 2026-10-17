@@ -2,6 +2,7 @@
 package subtreeprocessor
 
 import (
+	"math"
 	"sync/atomic"
 
 	"github.com/bsv-blockchain/go-subtree"
@@ -49,6 +50,36 @@ func normalizeMaxQueueItems(logger ulogger.Logger, maxItems int64, sendBatchSize
 	return maxItems
 }
 
+// normalizeMaxTransactionsInMemory turns the configured in-memory transaction
+// limit into the value the queue enforces. 0 leaves the limit disabled. A limit
+// that cannot hold one drain pass plus the coinbase placeholder that every
+// subtree chain carries would refuse every batch and wedge ingest, so it is
+// clamped up to that floor. A value beyond int64 saturates instead of wrapping
+// negative. Every call logs one line stating the limit in force.
+func normalizeMaxTransactionsInMemory(logger ulogger.Logger, limit uint64, sendBatchSize int) int64 {
+	if limit == 0 {
+		logger.Infof("BlockAssembly.MaxTransactionsInMemory=0; transactions held in memory are not limited")
+		return 0
+	}
+
+	if limit > math.MaxInt64 {
+		logger.Warnf("BlockAssembly.MaxTransactionsInMemory=%d exceeds the largest supported value; using %d", limit, int64(math.MaxInt64))
+		return math.MaxInt64
+	}
+
+	maxHeld := int64(limit)
+
+	floor := int64(maxBatchesPerIteration)*int64(sendBatchSize) + 1
+	if maxHeld < floor {
+		logger.Warnf("BlockAssembly.MaxTransactionsInMemory=%d is below one drain pass plus the coinbase placeholder (%d); clamping up to %d", maxHeld, floor, floor)
+		return floor
+	}
+
+	logger.Infof("BlockAssembly.MaxTransactionsInMemory=%d; ingest is refused beyond %d transactions held in memory", maxHeld, maxHeld)
+
+	return maxHeld
+}
+
 // LockFreeQueue represents a FIFO structure for batches of transactions.
 // This implementation is concurrent safe for queueing, but not for dequeueing.
 // Reference: https://www.cs.rochester.edu/research/synchronization/pseudocode/queues.html
@@ -68,6 +99,8 @@ type LockFreeQueue struct {
 	oldestPendingMillis atomic.Int64            // Timestamp of the oldest pending batch; 0 when the queue is empty
 	clock               clock                   // Source of batch timestamps; replaced in tests
 	maxItems            int64                   // Hard ceiling on published-or-reserved items; <= 0 disables the bound
+	maxHeld             int64                   // Ceiling on transactions held in memory, queued plus already in subtrees; <= 0 disables the bound
+	heldBase            func() int64            // Transactions held outside the queue, counted against maxHeld
 }
 
 // NewLockFreeQueue creates and initializes a new, unbounded LockFreeQueue instance.
@@ -94,6 +127,23 @@ func NewLockFreeQueueWithLimit(maxItems int64) *LockFreeQueue {
 		clock:    realClock{},
 		maxItems: maxItems,
 	}
+}
+
+// setHeldLimit bounds the transactions held in memory in total: the queued ones
+// plus those heldBase reports as already placed in subtrees. A maxHeld <= 0
+// disables the bound. It must be called before the queue is shared.
+func (q *LockFreeQueue) setHeldLimit(maxHeld int64, heldBase func() int64) {
+	q.maxHeld = maxHeld
+	q.heldBase = heldBase
+}
+
+// heldTotal returns the transactions held in memory if queued were queued.
+func (q *LockFreeQueue) heldTotal(queued int64) int64 {
+	if q.heldBase == nil {
+		return queued
+	}
+
+	return q.heldBase() + queued
 }
 
 // length returns the current number of transactions queued, not the number
@@ -259,19 +309,30 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
 	n := int64(len(nodes)) // gosec:nolint
 
-	if q.maxItems <= 0 {
+	if q.maxItems <= 0 && q.maxHeld <= 0 {
 		q.enqueueBatch(nodes, txInpoints)
 		return true
 	}
 
 	after := q.queueLength.Add(n) // reserve
-	if after <= q.maxItems {
+
+	queueRoom := q.maxItems <= 0 || after <= q.maxItems
+	heldRoom := q.maxHeld <= 0 || q.heldTotal(after) <= q.maxHeld
+
+	if queueRoom && heldRoom {
 		q.publish(nodes, txInpoints) // reservation already accounted
 
 		return true
 	}
 
-	if n > q.maxItems && after-n == 0 {
+	// A batch larger than a whole bound can never satisfy a reservation, so it is
+	// admitted alone onto an empty queue (see above). For the in-memory limit that
+	// is allowed only while the node is not already at the limit, so repeated
+	// oversize batches cannot grow the holding without bound.
+	queueOversize := q.maxItems > 0 && n > q.maxItems
+	heldOversize := q.maxHeld > 0 && n > q.maxHeld && q.heldTotal(0) < q.maxHeld
+
+	if after-n == 0 && (queueRoom || queueOversize) && (heldRoom || heldOversize) {
 		// Nil-guarded because NewLockFreeQueue* is constructed directly by unit
 		// tests, which never run this package's metric registration.
 		if prometheusSubtreeProcessorOversizeBatchAdmitted != nil {
