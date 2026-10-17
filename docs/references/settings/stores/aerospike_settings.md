@@ -46,39 +46,47 @@ aerospike:///?MaxRetries=5&SleepBetweenRetries=500ms&TotalTimeout=1s&SocketTimeo
 
 **Supported Policy Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| MaxRetries | int | Maximum retry attempts |
-| SleepBetweenRetries | duration | Delay between retry attempts |
-| SleepMultiplier | int | Backoff multiplier for retries |
-| TotalTimeout | duration | Total operation timeout |
-| SocketTimeout | duration | Socket-level timeout |
-| ConcurrentNodes | int | Number of concurrent node connections |
+`getAerospikeClient` (`util/aerospike.go`) reads only these query keys. It ignores any other key in the URL. A key that is not set keeps the Aerospike client default.
+
+| Parameter | Type | Read | Write | Batch | Query | Description |
+|-----------|------|------|-------|-------|-------|-------------|
+| MaxRetries | int | yes | yes | yes | yes | Maximum retry attempts |
+| TotalTimeout | duration | yes | yes | yes | yes | Total operation timeout |
+| SocketTimeout | duration | yes | yes | yes | yes | Socket-level timeout |
+| SleepBetweenRetries | duration | yes | yes | yes | yes | Delay between retry attempts |
+| SleepMultiplier | float | yes | yes | yes | yes | Backoff multiplier for retries |
+| ExitFastOnExhaustedConnectionPool | bool | yes | yes | no | no | Fail at once when the connection pool is exhausted |
+| AllowInlineSSD | bool | no | no | yes | no | Process batch keys inline on SSD namespaces |
+| ConcurrentNodes | int | no | no | yes | no | Number of nodes the batch is sent to at the same time; 0 sends to all |
+
+The read mode and the commit level are not configurable:
+
+- Reads use the client default read mode: `ReadModeAP=ONE` for an available-mode namespace, and `ReadModeSC=SESSION` for a strong-consistency namespace.
+- Writes always use `CommitLevel=COMMIT_ALL`. A write is acknowledged only when the master and every reachable replica hold it.
+
+For the consistency mode of the UTXO namespace, see [UTXO Store](../../../topics/stores/utxo.md#consistency-mode).
 
 ### Policy Types
 
 **Batch Policy** (for bulk operations):
 
-- Higher timeout (default: 64s total, 10s socket)
-- Used for batch read/write operations
-- ConcurrentNodes parameter controls parallelism
+- `settings.conf`: 5m total, 60s socket
+- Used for batch read and write operations
+- `ConcurrentNodes` controls how many nodes the batch is sent to at the same time
 
 **Read Policy** (for single record reads):
 
-- Lower timeout (default: 1s total, 1s socket)
-- Optimized for low-latency reads
+- `settings.conf`: 1s total, 1s socket
 - Used for UTXO lookups
 
 **Write Policy** (for single record writes):
 
-- Lower timeout (default: 1s total, 1s socket)
-- Controls write behavior (create, update, replace)
+- `settings.conf`: 1s total, 1s socket
 - Used for UTXO creation and updates
 
 **Query Policy** (for query operations):
 
-- Timeout configuration for query operations
-- Used for database queries
+- Timeout and retry configuration for query operations
 
 ### Policy Configuration Behavior
 

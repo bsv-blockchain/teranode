@@ -51,7 +51,7 @@ It handles the core functionalities of the UTXO Store:
 
 **Principles**:
 
-- All operations are atomic.
+- Each operation on one record is atomic. A transaction whose outputs span several records uses the [lock record pattern](#lock-record-pattern-for-multi-record-transactions) to complete as one unit.
 - All data is shared across servers with standard sharing algorithms.
 - In production, the data is stored in a Master and Replica configuration.
 - No centralised broker - all clients know where each hash is stored.
@@ -473,6 +473,20 @@ The following datastores are supported (either in development / experimental or 
 - Memory-based stores are typically faster but may require additional persistence mechanisms.
 - Databases like Aerospike provide a balance of speed and persistence, suitable for larger, more complex systems.
 - Nullstore is more appropriate for testing, development, or lightweight applications.
+
+#### Consistency Mode
+
+Aerospike runs each namespace in one of two modes. In **available mode** (the default), the cluster keeps accepting reads and writes during a network partition, so a read can return data that is not the latest committed write. In **strong-consistency mode**, a partition makes some records unavailable rather than stale. Strong-consistency mode is an Aerospike Enterprise Edition feature, and is set per namespace with `strong-consistency true`.
+
+Teranode does not set or require a mode. No Aerospike configuration in this repository sets `strong-consistency`, so each one runs the UTXO namespace in available mode. This includes the Docker, Kubernetes, compose and test configurations, and the `deploy/docker/base/aerospike-ee.conf` file for the Enterprise image.
+
+The controls that Teranode applies are the same in both modes:
+
+- **Writes**: every write uses `CommitLevel=COMMIT_ALL` (`util/aerospike.go`), so a write is acknowledged only when the master and every reachable replica hold it. This is not configurable. In available mode it narrows the window for a stale read during a partition, but does not close it, because each side of a partition can still accept writes.
+- **Reads**: the read mode is not configurable. Reads use the client defaults: `ReadModeAP=ONE` in available mode, and `ReadModeSC=SESSION` in strong-consistency mode. So a namespace changed to strong-consistency mode needs no client change.
+- **Spend and unspend**: each spend and each unspend is one operation on one record, through the `teranode.lua` UDF or a filter expression (`stores/utxo/aerospike/spend.go`, `un_spend.go`). The record cannot be left half-spent by that operation.
+
+An operator who needs reads that never return stale data during a partition must run the UTXO namespace in strong-consistency mode on Aerospike Enterprise Edition. See the [Aerospike settings reference](../../references/settings/stores/aerospike_settings.md#policy-url-format) for the policy URLs.
 
 ### 5.3. Data Pruning
 
