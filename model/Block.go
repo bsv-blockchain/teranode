@@ -115,6 +115,13 @@ type Block struct {
 	// len(Subtrees) x subtree 0 once the subtree list is bound to the header
 	// (getAndValidateSubtreesWithDedup).
 	txMapCount uint64
+	// txMapSubtreeSize is the subtree size txMap was filled with: a tx's index
+	// in it is subIdx*txMapSubtreeSize+txIdx (putSubtreeInTxMap). Set by the
+	// same two fills as txMapCount and reset when txMap is released.
+	// validOrderAndBlessed computes each tx's own index from it, so the index
+	// space is the one the fill defined, not subtree 0's capacity at check time,
+	// which a release (0) or a reload (another cap) can change.
+	txMapSubtreeSize uint64
 	// nodeIndexPins counts the live in-memory node indexes over this block's
 	// node arrays (pinNodeIndex). While it is above zero a release of the
 	// subtrees neither pools a node array nor unmaps one: the index reads its
@@ -1245,6 +1252,7 @@ func (b *Block) releaseTxMap() {
 	}
 
 	b.txMap = nil
+	b.txMapSubtreeSize = 0
 
 	// Close what a release deferred while the index was live. Like the disk map's
 	// Close above, a failure here has no logger to go to.
@@ -1499,6 +1507,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 	// Size both map variants from the loaded block body rather than the
 	// peer-supplied TransactionCount, and keep the value for the release key.
 	b.txMapCount = b.txMapEntryCount()
+	b.txMapSubtreeSize = uint64(subtreeSize) // nolint: gosec
 
 	if len(diskMapDirs) > 0 {
 		// An empty (coinbase-only) block inserts nothing, but the mmap-backed
@@ -1517,7 +1526,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		}
 		b.txMap = diskMap
 	} else {
-		// An index over the block's own node arrays (6 bytes a tx), allocated for
+		// An index over the block's own node arrays (about 11 bytes a tx), allocated for
 		// this block only. Counts beyond maxTxMapPrealloc get a capped
 		// preallocation and grow on insert rather than failing the block (issue
 		// 1428); indexes beyond 32 bits get the 64-bit map.
@@ -1758,17 +1767,26 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		}
 	}
 
-	// Every txMap is filled at subIdx*Size()+txIdx of the first subtree (putSubtreeInTxMap), so
-	// a tx's own index is computed rather than looked up. The first subtree must be here to
-	// size it: without it the other workers would compare parents against a wrong index.
-	var txMapSubtreeSize uint64
+	// Every txMap is filled at subIdx*size+txIdx (putSubtreeInTxMap), so a tx's own index is
+	// computed rather than looked up, with the size the fill used (b.txMapSubtreeSize): subtree
+	// 0's capacity now can differ, reading 0 after a release or another cap after a reload, and
+	// would put a tx's own index somewhere else than the one its parents are compared against.
+	// Only a txMap filled outside the two fills (a direct caller) has no recorded size; its index
+	// space is subtree 0's as it is now.
+	txMapSubtreeSize := b.txMapSubtreeSize
 
-	if len(subtrees) > 0 {
+	if txMapSubtreeSize == 0 && len(subtrees) > 0 {
 		if subtrees[0] == nil {
-			return errors.NewProcessingError("[validateSubtree][%s] subtree %d was released during validation", b.String(), 0)
+			return errors.NewProcessingError("[validOrderAndBlessed][%s] subtree %d was released during validation", b.String(), 0)
 		}
 
 		txMapSubtreeSize = uint64(subtrees[0].Size()) // nolint: gosec
+	}
+
+	// With more than one subtree every index past subtree 0 depends on the size; without one
+	// they would all collapse onto their position within their subtree.
+	if txMapSubtreeSize == 0 && len(subtrees) > 1 {
+		return errors.NewProcessingError("[validOrderAndBlessed][%s] the first subtree was released during validation, its size is unknown", b.String())
 	}
 
 	if len(diskMapDirs) > 0 {
@@ -2483,6 +2501,7 @@ func (b *Block) getAndValidateSubtreesWithDedup(ctx context.Context, logger ulog
 
 		b.txMapCount = uint64(len(b.Subtrees)) * uint64(first.Length()) // nolint: gosec
 		subtreeSize = first.Size()
+		b.txMapSubtreeSize = uint64(subtreeSize) // nolint: gosec
 
 		// The highest index is that of the last subtree's last node. A subtree in
 		// between that is too long for its slot is indexed apart (putOverflow) and
