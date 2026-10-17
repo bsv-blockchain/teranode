@@ -27,6 +27,12 @@ func ResetPrunerServiceForTests() {
 	prunerServiceError = nil
 }
 
+// Stamper returns pruner.NoStamp: an aerospike store writes each UTXO's block when it is mined,
+// so it has nothing to stamp.
+func (s *Store) Stamper() pruner.Stamper {
+	return pruner.NoStamp
+}
+
 // GetPrunerService returns a pruner service for the Aerospike store.
 // This implements the pruner.PrunerProvider interface.
 func (s *Store) GetPrunerService() (pruner.Service, error) {

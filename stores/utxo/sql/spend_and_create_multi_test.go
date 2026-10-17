@@ -20,6 +20,7 @@ func spendAndCreateMultiSuite(t *testing.T, newStore func(t *testing.T) utxostor
 	t.Run("concurrency bound", func(t *testing.T) { tests.SpendAndCreateMultiConcurrencyBound(t, newStore(t)) })
 	t.Run("result mapping", func(t *testing.T) { tests.SpendAndCreateMultiResultMapping(t, newStore(t)) })
 	t.Run("options pass through", func(t *testing.T) { tests.SpendAndCreateMultiOptionsPassThrough(t, newStore(t)) })
+	t.Run("subtree indexes", func(t *testing.T) { tests.SpendAndCreateMultiSubtreeIdxs(t, newStore(t)) })
 	t.Run("cancelled between levels", func(t *testing.T) { tests.SpendAndCreateMultiCancelledBetweenLevels(t, newStore(t)) })
 	t.Run("parents deduplicated", func(t *testing.T) { tests.SpendAndCreateMultiParentsDeduplicated(t, newStore(t)) })
 }

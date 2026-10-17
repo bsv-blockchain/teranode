@@ -1742,8 +1742,14 @@ func (s *server) pushTxMsg(sp *serverPeer, hash *chainhash.Hash, doneChan chan<-
 		return err
 	}
 
+	// A record with no serialized body is a legal answer from the UTXO store — the
+	// tx_body partition has aged out, or utxostore_skipTxBodyBelowCheckpoint meant the
+	// bytes below the checkpoint were never written — and the peer asked for the
+	// transaction itself, which this node cannot produce. Refuse, and say why:
+	// "nil from transaction pool" reads like a store fault for something that is
+	// the store's ordinary steady state.
 	if txMeta == nil || txMeta.Tx == nil {
-		err = fmt.Errorf("[pushTxMsg] tx %v is nil from transaction pool", hash)
+		err = fmt.Errorf("[pushTxMsg] tx %v is in the store but its body is not retained by this node (aged out, or below the utxostore_skipTxBodyBelowCheckpoint boundary)", hash)
 
 		sp.server.logger.Warnf("%s", err.Error())
 
@@ -3486,52 +3492,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 
 	// /TERANODE CONFIG
 
-	services := defaultServices
-	// cfg.NoPeerBloomFilters
-	services &^= wire.SFNodeBloom
-	// cfg.NoCFilters
-	services &^= wire.SFNodeCF
-
-	// Determine node type (full vs pruned) based on block persister status
-	// This uses the same logic as the P2P service to ensure consistent advertising
-	var bestHeight uint32
-	var blockPersisterHeight uint32
-
-	// Get current best height and block persister height
-	if blockchainClient != nil {
-		if _, bestBlockMeta, err := blockchainClient.GetBestBlockHeader(ctx); err == nil && bestBlockMeta != nil {
-			bestHeight = bestBlockMeta.Height
-		}
-
-		// Query block persister height from blockchain state
-		if stateData, err := blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(stateData) >= 4 {
-			blockPersisterHeight = binary.LittleEndian.Uint32(stateData)
-		}
-	}
-
-	retentionWindow := uint32(0)
-	if tSettings.GlobalBlockHeightRetention > 0 {
-		retentionWindow = tSettings.GlobalBlockHeightRetention
-	}
-
-	prunerBlockTrigger := ""
-	if tSettings != nil {
-		prunerBlockTrigger = tSettings.Pruner.BlockTrigger
-	}
-
-	storage := util.DetermineStorageMode(blockPersisterHeight, bestHeight, retentionWindow, prunerBlockTrigger)
-	logger.Infof("Legacy service determined storage mode: %s (persisterHeight=%d, bestHeight=%d, retention=%d)",
-		storage, blockPersisterHeight, bestHeight, retentionWindow)
-
-	if storage == "full" {
-		// Advertise as full node
-		services |= wire.SFNodeNetwork
-		services &^= wire.SFNodeNetworkLimited
-	} else {
-		// Advertise as pruned node
-		services &^= wire.SFNodeNetwork
-		services |= wire.SFNodeNetworkLimited
-	}
+	services := advertisedServices(ctx, logger, tSettings, blockchainClient)
 
 	peersDir := cfg.DataDir
 	if !tSettings.Legacy.SavePeers {
@@ -3643,48 +3604,7 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	// network.
 	var newAddressFunc func() (net.Addr, error)
 	if len(cfg.ConnectPeers) == 0 {
-		newAddressFunc = func() (net.Addr, error) {
-			// One snapshot for the whole selection, so every candidate is
-			// judged against the same peer set. Asking per candidate would let
-			// the set shift mid-sift, and would pay for a peer walk on each of
-			// the hundred tries below rather than once.
-			occupiedGroups := s.OutboundGroups()
-
-			for tries := 0; tries < 100; tries++ {
-				addr := s.addrManager.GetAddress()
-				if addr == nil {
-					break
-				}
-
-				// Address will not be invalid, local or unroutable
-				// because addrmanager rejects those on addition.
-				// Just check that we don't already have an address
-				// in the same group so that we are not connecting
-				// to the same network segment at the expense of
-				// others.
-				if _, occupied := occupiedGroups[addrmgr.GroupKey(addr.NetAddress())]; occupied {
-					continue
-				}
-
-				// only allow recent nodes (10mins) after we failed 30
-				// times
-				if tries < 30 && time.Since(addr.LastAttempt()) < 10*time.Minute {
-					continue
-				}
-
-				// allow nondefault ports after 50 failed tries.
-				if tries < 50 && fmt.Sprintf("%d", addr.NetAddress().Port) !=
-					activeNetParams.DefaultPort {
-					continue
-				}
-
-				addrString := addrmgr.NetAddressKey(addr.NetAddress())
-
-				return addrStringToNetAddr(addrString)
-			}
-
-			return nil, errors.NewProcessingError("no valid connect address")
-		}
+		newAddressFunc = s.nextConnectAddress
 	}
 
 	// Create a connection manager.
@@ -3766,6 +3686,105 @@ func newServer(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 	}()
 
 	return &s, nil
+}
+
+// nextConnectAddress picks the next address the connection manager should dial
+// from the address book, or an error when no candidate passes the filters.
+func (s *server) nextConnectAddress() (net.Addr, error) {
+	// One snapshot for the whole selection, so every candidate is
+	// judged against the same peer set. Asking per candidate would let
+	// the set shift mid-sift, and would pay for a peer walk on each of
+	// the hundred tries below rather than once.
+	occupiedGroups := s.OutboundGroups()
+
+	for tries := 0; tries < 100; tries++ {
+		addr := s.addrManager.GetAddress()
+		if addr == nil {
+			break
+		}
+
+		// Address will not be invalid, local or unroutable
+		// because addrmanager rejects those on addition.
+		// Just check that we don't already have an address
+		// in the same group so that we are not connecting
+		// to the same network segment at the expense of
+		// others.
+		if _, occupied := occupiedGroups[addrmgr.GroupKey(addr.NetAddress())]; occupied {
+			continue
+		}
+
+		// only allow recent nodes (10mins) after we failed 30
+		// times
+		if tries < 30 && time.Since(addr.LastAttempt()) < 10*time.Minute {
+			continue
+		}
+
+		// allow nondefault ports after 50 failed tries.
+		if tries < 50 && fmt.Sprintf("%d", addr.NetAddress().Port) !=
+			activeNetParams.DefaultPort {
+			continue
+		}
+
+		addrString := addrmgr.NetAddressKey(addr.NetAddress())
+
+		return addrStringToNetAddr(addrString)
+	}
+
+	return nil, errors.NewProcessingError("no valid connect address")
+}
+
+// advertisedServices returns the service flags this node advertises. It starts
+// from the defaults without bloom filters or compact filters, then advertises
+// full or pruned node type from the block persister status.
+func advertisedServices(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings, blockchainClient blockchain.ClientI) wire.ServiceFlag {
+	services := defaultServices
+	// cfg.NoPeerBloomFilters
+	services &^= wire.SFNodeBloom
+	// cfg.NoCFilters
+	services &^= wire.SFNodeCF
+
+	// Determine node type (full vs pruned) based on block persister status
+	// This uses the same logic as the P2P service to ensure consistent advertising
+	var bestHeight uint32
+	var blockPersisterHeight uint32
+
+	// Get current best height and block persister height
+	if blockchainClient != nil {
+		if _, bestBlockMeta, err := blockchainClient.GetBestBlockHeader(ctx); err == nil && bestBlockMeta != nil {
+			bestHeight = bestBlockMeta.Height
+		}
+
+		// Query block persister height from blockchain state
+		if stateData, err := blockchainClient.GetState(ctx, "BlockPersisterHeight"); err == nil && len(stateData) >= 4 {
+			blockPersisterHeight = binary.LittleEndian.Uint32(stateData)
+		}
+	}
+
+	retentionWindow := uint32(0)
+	if tSettings.GlobalBlockHeightRetention > 0 {
+		retentionWindow = tSettings.GlobalBlockHeightRetention
+	}
+
+	prunerBlockTrigger := ""
+	if tSettings != nil {
+		prunerBlockTrigger = tSettings.Pruner.BlockTrigger
+	}
+
+	storage := util.DetermineStorageMode(blockPersisterHeight, bestHeight, retentionWindow, prunerBlockTrigger)
+	logger.Infof("Legacy service determined storage mode: %s (persisterHeight=%d, bestHeight=%d, retention=%d)",
+		storage, blockPersisterHeight, bestHeight, retentionWindow)
+
+	if storage == "full" {
+		// Advertise as full node
+		services |= wire.SFNodeNetwork
+		services &^= wire.SFNodeNetworkLimited
+	} else {
+		// Advertise as pruned node
+		services &^= wire.SFNodeNetwork
+		services |= wire.SFNodeNetworkLimited
+	}
+
+	return services
 }
 
 // initListeners initializes the configured net listeners and adds any bound

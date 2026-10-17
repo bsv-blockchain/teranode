@@ -3060,6 +3060,17 @@ func TestReset_ConflictDetectionViaValidateInputs(t *testing.T) {
 	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx)
 	require.False(t, containsHash(hashes, *txAHash),
 		"after reset(validateInputs=true), a tx whose input is spent by another tx must NOT be in block assembly")
+
+	// Absence alone does not prove WHY txA was dropped, and for a long time it was
+	// dropped for the wrong reason: on a SQL store validateUnminedTxInputs asked
+	// for fields.Inputs and bailed on a nil txMeta.Tx, which that store only
+	// populates for fields.Tx, so every unmined transaction was discarded before
+	// any input was examined. This test passed throughout. Assert the conflict was
+	// actually detected, which is the only outcome that also marks the record.
+	txAMeta, getErr := items.utxoStore.Get(ctx, txAHash, utxofields.Conflicting)
+	require.NoError(t, getErr)
+	require.True(t, txAMeta.Conflicting,
+		"txA must be dropped by conflict detection, which marks it conflicting -- not by a read that failed before looking")
 }
 
 // TestTriggerReconcile verifies that triggerReconcile is non-blocking and

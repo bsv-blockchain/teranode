@@ -475,8 +475,13 @@ func TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists(t *testing
 	)
 
 	testHash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	// Spent by a different transaction, which every store names: aerospike and sql fill
+	// ConflictingTxID from the spend record, and utxoset from its journal. A bare ErrSpent with
+	// no spender is utxoset's shape for coins this transaction may have taken itself, which the
+	// resubmission check answers instead (TestValidate_ResubmissionIsRecognisedByItsOwnTxid).
+	winner := chainhash.Hash{0x0b}
 	spends := []*utxo.Spend{
-		{TxID: testHash, Vout: 0, Err: errors.ErrSpent},
+		{TxID: testHash, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner},
 	}
 
 	// The store knows the real parent: the validator re-extends from the
@@ -682,7 +687,10 @@ func TestValidator_ValidateInternal_UTXOError_ConflictingTxCreation(t *testing.T
 
 	// Mock the spend phase to return UTXO error with conflicting spend (Once so
 	// the conflicting-fallback create below matches the second expectation)
-	spends := []*utxo.Spend{{TxID: &chainhash.Hash{}, Vout: 0, Err: errors.ErrSpent}}
+	// Spent by a named other transaction, as every store reports a real conflict; see
+	// TestValidator_ValidateInternal_CreateConflicting_TxAlreadyExists.
+	winner := chainhash.Hash{0x0b}
+	spends := []*utxo.Spend{{TxID: &chainhash.Hash{}, Vout: 0, Err: errors.ErrSpent, ConflictingTxID: &winner}}
 	utxoErr := errors.NewUtxoError("utxo error", errors.ErrUtxoError)
 	mockStore.On("SpendAndCreate", mock.Anything, tx, mock.Anything, mock.Anything).Return(nil, spends, utxoErr).Once()
 

@@ -58,6 +58,7 @@ var (
 	prometheusBlockAssemblerStateDuration               *prometheus.HistogramVec
 	prometheusBlockAssemblerGenerateBlocks              prometheus.Histogram
 	prometheusBlockAssemblerUtxoIndexReady              *prometheus.GaugeVec
+	prometheusBlockAssemblerUnminedUndecidedExcluded    prometheus.Counter
 	prometheusBlockAssemblerUtxoIndexWaitDuration       *prometheus.HistogramVec
 	prometheusBlockAssemblerGetUnminedTxIteratorTime    *prometheus.HistogramVec
 	prometheusBlockAssemblerIteratorProcessingTime      *prometheus.HistogramVec
@@ -402,6 +403,15 @@ func _initPrometheusMetrics() {
 			Name:      "generate_blocks",
 			Help:      "Histogram of generating blocks in block assembler",
 			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblerUnminedUndecidedExcluded = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "unmined_undecided_excluded",
+			Help:      "Unmined transactions left out of a reload because their inputs could not be checked, permanently or in two loads in a row",
 		},
 	)
 

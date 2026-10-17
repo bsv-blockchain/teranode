@@ -1677,6 +1677,10 @@ func TestSmokeTests(t *testing.T) {
 		tests.SpendAndCreateCreateOnly(t, store)
 	})
 
+	t.Run("aerospike_create_returns_written_state", func(t *testing.T) {
+		tests.CreateReturnsWrittenState(t, store)
+	})
+
 	t.Run("aerospike_spend_and_create_spend_only", func(t *testing.T) {
 		err := store.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)

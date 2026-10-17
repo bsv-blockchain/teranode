@@ -150,52 +150,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			blockHeight := sig.blockHeight
 			blockHashStr := sig.blockHash.String()
 
-			if blockHeight <= s.lastProcessedHeight.Load() {
-				continue
-			}
-
-			// Skip all pruning until block height exceeds minimum threshold
-			if s.settings.Pruner.MinBlockHeight > 0 && blockHeight <= s.settings.Pruner.MinBlockHeight {
-				s.logger.Debugf("[pruner][%s:%d] skipping - block height below minimum (%d)", blockHashStr, blockHeight, s.settings.Pruner.MinBlockHeight)
-				prunerSkipped.WithLabelValues("below_min_height").Inc()
-				continue
-			}
-
-			// Check FSM state - skip during CATCHINGBLOCKS if configured.
-			// Guard against a nil blockchainClient (e.g. in tests) the same
-			// way the blockAssemblyClient check below does.
-			if s.settings.Pruner.SkipDuringCatchup && s.blockchainClient != nil {
-				fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)
-				if err != nil {
-					s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
-					prunerSkipped.WithLabelValues("fsm_error").Inc()
-					continue
-				}
-				// Only RUNNING proves no catchup is in flight: an operator STOP
-				// parks a catching-up node in IDLE while its batch still runs.
-				if fsmState == nil || *fsmState != blockchain.FSMStateRUNNING {
-					s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
-					prunerSkipped.WithLabelValues("catchup_mode").Inc()
-					continue
-				}
-			}
-
-			// Wait for block to have mined_set=true before pruning.
-			// Both trigger modes need this: OnBlockMined notifications arrive before
-			// setTxMined completes, and OnBlockPersisted notifications arrive before
-			// setTxMined completes because block persister doesn't check mined_set.
-			// Without this wait, the pruner can delete transactions via DAH that
-			// setTxMined still needs to process.
-			if s.blockAssemblyClient != nil {
-				s.logger.Debugf("[pruner][%s:%d] waiting for mined_set=true", blockHashStr, blockHeight)
-				if !s.waitForBlockMinedStatus(ctx, &sig.blockHash) {
-					continue
-				}
-				s.logger.Debugf("[pruner][%s:%d] block has mined_set=true", blockHashStr, blockHeight)
-			}
-
-			// Safety check before pruning
-			if !s.checkBlockAssemblySafeForPruner(ctx, "pruner", blockHeight) {
+			if !s.shouldPrune(ctx, sig) {
 				continue
 			}
 
@@ -209,84 +164,28 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			s.blobNotify <- sig
 			s.logger.Debugf("[pruner][%s:%d] notified blob deletion worker", blockHashStr, blockHeight)
 
+			// And the stamp worker, the same way: the start conditions have passed, so a
+			// notification-driven drain gets them by construction.
+			if s.stamper != nil {
+				select {
+				case <-s.stampNotify:
+				default:
+				}
+				s.stampNotify <- sig
+				s.logger.Debugf("[pruner][%s:%d] notified stamp worker", blockHashStr, blockHeight)
+			}
+
 			prunerActive.Set(1)
 
-			// Phase 1: Preserve parents of old unmined transactions
-			// This must run before Phase 2 to protect parents from deletion
-			phase1Failed := false
-			if s.utxoStore != nil && !s.settings.Pruner.SkipPreserveParents {
-				s.logger.Debugf("[pruner][%s:%d] phase 1: preserving parents", blockHashStr, blockHeight)
-				startTime := time.Now()
-				if recordsProcessed, err := utxo.PreserveParentsOfOldUnminedTransactions(
-					ctx, s.utxoStore, blockHeight, blockHashStr, s.settings, s.logger,
-				); err != nil {
-					if ctx.Err() != nil {
-						// shutting down, not a Phase 1 failure
-						prunerActive.Set(0)
-						return
-					}
-
-					s.logger.Errorf("[pruner][%s:%d] phase 1: failed to preserve parents, phase 2 skipped this cycle: %v", blockHashStr, blockHeight, err)
-					prunerErrors.WithLabelValues("preserve_parents").Inc()
-					prunerPreserveParentsFailing.Inc()
-					phase1Failed = true
-				} else {
-					prunerPreserveParentsFailing.Set(0)
-					prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
-					if recordsProcessed > 0 {
-						prunerUpdatingParents.Add(float64(recordsProcessed))
-					}
-				}
-			} else if s.settings.Pruner.SkipPreserveParents {
-				prunerPreserveParentsFailing.Set(0)
-				s.logger.Infof("[pruner][%s:%d] phase 1: skipped (pruner_skipPreserveParents=true)", blockHashStr, blockHeight)
-			}
-
-			// Phase 1b: Expire old parent preservations
-			// Clears PreserveUntil on preserved parents that have reached their expiry height and
-			// re-stamps DeleteAtHeight ONLY when the parent is genuinely safe to prune (the eligibility
-			// check lives in the store). Without this, preserved parents keep PreserveUntil set and
-			// DeleteAtHeight cleared forever and are never pruned. Runs before Phase 2; any DAH it
-			// re-stamps is in the future (currentHeight+retention), so nothing it touches is deleted
-			// this cycle. It still runs when Phase 1 failed: it deletes nothing, and a DAH it stamps
-			// on a parent that turns out to have unmined children is cleared again by the next
-			// successful Phase 1 before any Phase 2 runs.
-			if s.utxoStore != nil && !s.settings.Pruner.SkipProcessExpiredPreservations {
-				s.logger.Debugf("[pruner][%s:%d] phase 1b: expiring old preservations", blockHashStr, blockHeight)
-				startTime := time.Now()
-				if err := s.utxoStore.ProcessExpiredPreservations(ctx, blockHeight); err != nil {
-					s.logger.Warnf("[pruner][%s:%d] phase 1b: failed to expire preservations: %v", blockHashStr, blockHeight, err)
-					prunerErrors.WithLabelValues("expire_preservations").Inc()
-				} else {
-					prunerDuration.WithLabelValues("expire_preservations").Observe(time.Since(startTime).Seconds())
-				}
-			} else if s.settings.Pruner.SkipProcessExpiredPreservations {
-				s.logger.Infof("[pruner][%s:%d] phase 1b: skipped (pruner_skipProcessExpiredPreservations=true)", blockHashStr, blockHeight)
-			}
-
-			// Phase 2: DAH pruning (deletion)
-			// Deletes transactions marked for deletion at or before the current height.
-			// Never runs in a cycle where Phase 1 failed: a stale DeleteAtHeight on a parent of an old
-			// unmined transaction would not have been cleared, so Phase 2 could delete it.
-			if phase1Failed {
-				s.logger.Warnf("[pruner][%s:%d] phase 2: skipped because phase 1 failed; the next block notification retries pruning", blockHashStr, blockHeight)
-				prunerSkipped.WithLabelValues("preserve_parents_failed").Inc()
+			switch s.runPrunePhases(ctx, blockHeight, blockHashStr) {
+			case prunePhasesShutdown:
+				prunerActive.Set(0)
+				return
+			case prunePhasesSkippedDeletion:
 				prunerActive.Set(0)
 
 				// Do not update lastProcessedHeight: the next notification must be processed
 				continue
-			}
-
-			if s.prunerService != nil {
-				startTime := time.Now()
-				recordsProcessed, err := s.prunerService.Prune(ctx, blockHeight, blockHashStr)
-				if err != nil {
-					s.logger.Errorf("[pruner][%s:%d] phase 2: DAH pruner failed: %v", blockHashStr, blockHeight, err)
-					prunerErrors.WithLabelValues("dah_pruner").Inc()
-				} else {
-					prunerDuration.WithLabelValues("dah_pruner").Observe(time.Since(startTime).Seconds())
-					prunerDeletingChildren.Add(float64(recordsProcessed))
-				}
 			}
 
 			prunerCurrentHeight.Set(float64(blockHeight))
@@ -296,4 +195,157 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			s.lastProcessedHeight.Store(blockHeight)
 		}
 	}
+}
+
+// shouldPrune runs the start conditions for one notification: the height
+// gates, the FSM state, the mined_set wait and the block assembly safety check.
+// It returns false when this notification must be skipped, having already logged
+// and counted why.
+func (s *Server) shouldPrune(ctx context.Context, sig pruneSignal) bool {
+	blockHeight := sig.blockHeight
+	blockHashStr := sig.blockHash.String()
+
+	if blockHeight <= s.lastProcessedHeight.Load() {
+		return false
+	}
+
+	// Skip all pruning until block height exceeds minimum threshold
+	if s.settings.Pruner.MinBlockHeight > 0 && blockHeight <= s.settings.Pruner.MinBlockHeight {
+		s.logger.Debugf("[pruner][%s:%d] skipping - block height below minimum (%d)", blockHashStr, blockHeight, s.settings.Pruner.MinBlockHeight)
+		prunerSkipped.WithLabelValues("below_min_height").Inc()
+		return false
+	}
+
+	// Check FSM state - skip during CATCHINGBLOCKS if configured.
+	// Guard against a nil blockchainClient (e.g. in tests) the same
+	// way the blockAssemblyClient check below does.
+	if s.settings.Pruner.SkipDuringCatchup && s.blockchainClient != nil {
+		fsmState, err := s.blockchainClient.GetFSMCurrentState(ctx)
+		if err != nil {
+			s.logger.Warnf("Failed to get FSM state, skipping pruner: %v", err)
+			prunerSkipped.WithLabelValues("fsm_error").Inc()
+			return false
+		}
+		// Only RUNNING proves no catchup is in flight: an operator STOP
+		// parks a catching-up node in IDLE while its batch still runs.
+		if fsmState == nil || *fsmState != blockchain.FSMStateRUNNING {
+			s.logger.Debugf("[pruner][%s:%d] skipping during catchup", blockHashStr, blockHeight)
+			prunerSkipped.WithLabelValues("catchup_mode").Inc()
+			return false
+		}
+	}
+
+	// Wait for block to have mined_set=true before pruning.
+	// Both trigger modes need this: OnBlockMined notifications arrive before
+	// setTxMined completes, and OnBlockPersisted notifications arrive before
+	// setTxMined completes because block persister doesn't check mined_set.
+	// Without this wait, the pruner can delete transactions via DAH that
+	// setTxMined still needs to process.
+	if s.blockAssemblyClient != nil {
+		s.logger.Debugf("[pruner][%s:%d] waiting for mined_set=true", blockHashStr, blockHeight)
+		if !s.waitForBlockMinedStatus(ctx, &sig.blockHash) {
+			return false
+		}
+		s.logger.Debugf("[pruner][%s:%d] block has mined_set=true", blockHashStr, blockHeight)
+	}
+
+	// Safety check before pruning
+	return s.checkBlockAssemblySafeForPruner(ctx, "pruner", blockHeight)
+}
+
+// prunePhasesResult tells prunerProcessor how a cycle of runPrunePhases ended.
+type prunePhasesResult int
+
+const (
+	// prunePhasesDone: every phase ran (a phase may still have failed and been counted)
+	prunePhasesDone prunePhasesResult = iota
+	// prunePhasesSkippedDeletion: Phase 1 failed, so Phase 2 did not run and the
+	// height must be retried on the next notification
+	prunePhasesSkippedDeletion
+	// prunePhasesShutdown: the context was cancelled during Phase 1
+	prunePhasesShutdown
+)
+
+// runPrunePhases runs the three pruning phases for one block height in order:
+// preserve parents, expire old preservations, then DAH deletion. A failed Phase 1b
+// or Phase 2 is logged and counted. A failed Phase 1 still lets Phase 1b run, but
+// Phase 2 is skipped, because a stale DeleteAtHeight on a parent of an old unmined
+// transaction would not have been cleared and Phase 2 could delete it.
+func (s *Server) runPrunePhases(ctx context.Context, blockHeight uint32, blockHashStr string) prunePhasesResult {
+	// Phase 1: Preserve parents of old unmined transactions
+	// This must run before Phase 2 to protect parents from deletion
+	phase1Failed := false
+	if s.utxoStore != nil && !s.settings.Pruner.SkipPreserveParents {
+		s.logger.Debugf("[pruner][%s:%d] phase 1: preserving parents", blockHashStr, blockHeight)
+		startTime := time.Now()
+		if recordsProcessed, err := utxo.PreserveParentsOfOldUnminedTransactions(
+			ctx, s.utxoStore, blockHeight, blockHashStr, s.settings, s.logger,
+		); err != nil {
+			if ctx.Err() != nil {
+				// shutting down, not a Phase 1 failure
+				return prunePhasesShutdown
+			}
+
+			s.logger.Errorf("[pruner][%s:%d] phase 1: failed to preserve parents, phase 2 skipped this cycle: %v", blockHashStr, blockHeight, err)
+			prunerErrors.WithLabelValues("preserve_parents").Inc()
+			prunerPreserveParentsFailing.Inc()
+			phase1Failed = true
+		} else {
+			prunerPreserveParentsFailing.Set(0)
+			prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
+			if recordsProcessed > 0 {
+				prunerUpdatingParents.Add(float64(recordsProcessed))
+			}
+		}
+	} else if s.settings.Pruner.SkipPreserveParents {
+		prunerPreserveParentsFailing.Set(0)
+		s.logger.Infof("[pruner][%s:%d] phase 1: skipped (pruner_skipPreserveParents=true)", blockHashStr, blockHeight)
+	}
+
+	// Phase 1b: Expire old parent preservations
+	// Clears PreserveUntil on preserved parents that have reached their expiry height and
+	// re-stamps DeleteAtHeight ONLY when the parent is genuinely safe to prune (the eligibility
+	// check lives in the store). Without this, preserved parents keep PreserveUntil set and
+	// DeleteAtHeight cleared forever and are never pruned. Runs before Phase 2; any DAH it
+	// re-stamps is in the future (currentHeight+retention), so nothing it touches is deleted
+	// this cycle. It still runs when Phase 1 failed: it deletes nothing, and a DAH it stamps
+	// on a parent that turns out to have unmined children is cleared again by the next
+	// successful Phase 1 before any Phase 2 runs.
+	if s.utxoStore != nil && !s.settings.Pruner.SkipProcessExpiredPreservations {
+		s.logger.Debugf("[pruner][%s:%d] phase 1b: expiring old preservations", blockHashStr, blockHeight)
+		startTime := time.Now()
+		if err := s.utxoStore.ProcessExpiredPreservations(ctx, blockHeight); err != nil {
+			s.logger.Warnf("[pruner][%s:%d] phase 1b: failed to expire preservations: %v", blockHashStr, blockHeight, err)
+			prunerErrors.WithLabelValues("expire_preservations").Inc()
+		} else {
+			prunerDuration.WithLabelValues("expire_preservations").Observe(time.Since(startTime).Seconds())
+		}
+	} else if s.settings.Pruner.SkipProcessExpiredPreservations {
+		s.logger.Infof("[pruner][%s:%d] phase 1b: skipped (pruner_skipProcessExpiredPreservations=true)", blockHashStr, blockHeight)
+	}
+
+	// Phase 2: DAH pruning (deletion)
+	// Deletes transactions marked for deletion at or before the current height.
+	// Never runs in a cycle where Phase 1 failed: a stale DeleteAtHeight on a parent of an old
+	// unmined transaction would not have been cleared, so Phase 2 could delete it.
+	if phase1Failed {
+		s.logger.Warnf("[pruner][%s:%d] phase 2: skipped because phase 1 failed; the next block notification retries pruning", blockHashStr, blockHeight)
+		prunerSkipped.WithLabelValues("preserve_parents_failed").Inc()
+
+		return prunePhasesSkippedDeletion
+	}
+
+	if s.prunerService != nil {
+		startTime := time.Now()
+		recordsProcessed, err := s.prunerService.Prune(ctx, blockHeight, blockHashStr)
+		if err != nil {
+			s.logger.Errorf("[pruner][%s:%d] phase 2: DAH pruner failed: %v", blockHashStr, blockHeight, err)
+			prunerErrors.WithLabelValues("dah_pruner").Inc()
+		} else {
+			prunerDuration.WithLabelValues("dah_pruner").Observe(time.Since(startTime).Seconds())
+			prunerDeletingChildren.Add(float64(recordsProcessed))
+		}
+	}
+
+	return prunePhasesDone
 }

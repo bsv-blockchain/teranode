@@ -45,6 +45,7 @@
 | MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
 | BlockHeightRetentionAdjustment | int32 | 0 | utxostore_blockHeightRetentionAdjustment | **CRITICAL** - Retention adjustment |
 | DisableDAHCleaner | bool | false | utxostore_disableDAHCleaner | **CRITICAL** - DAH cleaner process control |
+| SkipTxBodyBelowCheckpoint | bool | false | utxostore_skipTxBodyBelowCheckpoint | utxoset only - skip the tx_body write at or below the hardcoded checkpoint |
 
 ### PostgreSQL Connection Pool (PostgresPool)
 
