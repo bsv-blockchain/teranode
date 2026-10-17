@@ -81,6 +81,24 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   until it is reimaged. No chain state is corrupted. Upgrade Blockchain last, or raise
   `blockchain_maxMedianTimePastHeights` for the duration of the rollout. (#1776)
 
+- **The alert service now picks its network identity by `network`, and validates
+  `alert_genesis_keys`.** `alert_genesis_keys`, `alert_protocol_id` and `alert_topic_name`
+  default to empty, and each empty one takes the go-alert-system default for the
+  configured network: testnet and stn nodes now join their own alert network
+  (`/bitcoin-testnet/alert-system/0.0.1`, testnet genesis keys) instead of the mainnet
+  protocol and keys. Mainnet resolves to the same values as before. Regtest, teratestnet
+  and tstn keep the mainnet keys and protocol on `bitcoin_alert_system_<network>` and log
+  a warning. A non-empty `alert_topic_name` is now honoured on every network.
+
+  Affects testnet/stn nodes and any deployment that sets these keys. Clear values copied
+  from the old mainnet defaults into `settings_local.conf`, helm values or env, or a
+  testnet node stays on the mainnet alert network. An explicit `alert_genesis_keys` must
+  now hold 3 to 10 hex-encoded compressed public keys (blank entries are dropped, repeats
+  kept once), or the alert service fails to start with a configuration error. An alert
+  store that holds only the genesis alert and was seeded with other keys (a testnet or stn
+  store from v0.16.x or earlier) has its active keys reset to the resolved genesis keys on
+  first start, with a warning; there is no need to delete `alert.db`. (#1955)
+
 ### Breaking — behaviour changes on upgrade
 
 - **Peer-announced subtrees are validated at most 32 at a time.** The new
