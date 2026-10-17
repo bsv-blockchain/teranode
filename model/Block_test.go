@@ -3230,36 +3230,6 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
-	t.Run("validateTransaction error paths", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
-		require.NoError(t, err)
-
-		// Initialize txMap but don't add any transactions
-		block.txMap = txmap.NewSplitSwissMapUint64(10)
-
-		ctx := context.Background()
-		deps := &validationDependencies{}
-
-		validationCtx := &validationContext{
-			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
-		}
-
-		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-
-		params := &transactionValidationParams{
-			subtreeMetaSlice: nil, // This will cause an error
-			subtreeHash:      hash1,
-			sIdx:             0,
-			snIdx:            0,
-			subtreeNode:      subtreepkg.Node{Hash: *hash1},
-		}
-
-		// Should error because transaction not in txMap
-		_, err = block.validateTransaction(ctx, deps, validationCtx, params)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not in the txMap")
-	})
-
 	// Skip problematic validateSubtree test for now
 
 	// Skip problematic checkDuplicateInputs test for now
@@ -4796,43 +4766,6 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 	txHash, _ := chainhash.NewHashFromStr("abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890")
 	parentHash, _ := chainhash.NewHashFromStr("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321")
 	subtreeHash, _ := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
-
-	t.Run("transaction not found in txMap", func(t *testing.T) {
-		// Test case where transaction hash is not in the block's txMap
-		deps := &validationDependencies{
-			txMetaStore:           createTestUTXOStore(t),
-			subtreeStore:          &mockSubtreeStore{shouldError: true},
-			currentChain:          []*BlockHeader{},
-			currentBlockHeaderIDs: []uint32{},
-			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
-		}
-
-		validationCtx := &validationContext{
-			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
-			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             newTestParentSpendsMap(4),
-		}
-
-		// Create subtree and subtree meta
-		subtree := &subtreepkg.Subtree{}
-		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
-
-		params := &transactionValidationParams{
-			subtreeMetaSlice: subtreeMeta,
-			subtreeHash:      subtreeHash,
-			sIdx:             0,
-			snIdx:            0,
-			subtreeNode:      subtreepkg.Node{Hash: *txHash},
-		}
-
-		// Transaction not in txMap should return error
-		missingParents, err := block.validateTransaction(ctx, deps, validationCtx, params)
-
-		// Should error because transaction is not found in txMap
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not in the txMap")
-		assert.Nil(t, missingParents)
-	})
 
 	t.Run("successful validation with no missing parents", func(t *testing.T) {
 		// Test case where transaction validation succeeds

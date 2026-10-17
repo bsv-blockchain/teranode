@@ -115,6 +115,13 @@ type Block struct {
 	// len(Subtrees) x subtree 0 once the subtree list is bound to the header
 	// (getAndValidateSubtreesWithDedup).
 	txMapCount uint64
+	// txMapSubtreeSize is the subtree size txMap was filled with: a tx's index
+	// in it is subIdx*txMapSubtreeSize+txIdx (putSubtreeInTxMap). Set by the
+	// same two fills as txMapCount and reset when txMap is released.
+	// validOrderAndBlessed computes each tx's own index from it, so the index
+	// space is the one the fill defined, not subtree 0's capacity at check time,
+	// which a release (0) or a reload (another cap) can change.
+	txMapSubtreeSize uint64
 	// nodeIndexPins counts the live in-memory node indexes over this block's
 	// node arrays (pinNodeIndex). While it is above zero a release of the
 	// subtrees neither pools a node array nor unmaps one: the index reads its
@@ -1232,6 +1239,9 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 // errors during the subtree load, checkDuplicateTransactions or
 // validOrderAndBlessed.
 func (b *Block) releaseTxMap() {
+	// Forgotten even without a txMap: a fill that recorded it can fail before assigning one.
+	b.txMapSubtreeSize = 0
+
 	if b.txMap == nil {
 		return
 	}
@@ -1496,9 +1506,16 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		subtreeSize = firstSubtree.Size()
 	}
 
+	// Every subtree's index space starts at subIdx*subtreeSize: with a size of 0 and more than
+	// one subtree they would all start at 0. A first subtree that reads 0 was released.
+	if subtreeSize == 0 && len(b.SubtreeSlices) > 1 {
+		return errors.NewProcessingError("[checkDuplicateTransactions][%s] first subtree was released during validation, its size is unknown", b.String())
+	}
+
 	// Size both map variants from the loaded block body rather than the
 	// peer-supplied TransactionCount, and keep the value for the release key.
 	b.txMapCount = b.txMapEntryCount()
+	b.txMapSubtreeSize = uint64(subtreeSize) // nolint: gosec
 
 	if len(diskMapDirs) > 0 {
 		// An empty (coinbase-only) block inserts nothing, but the mmap-backed
@@ -1517,7 +1534,7 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		}
 		b.txMap = diskMap
 	} else {
-		// An index over the block's own node arrays (6 bytes a tx), allocated for
+		// An index over the block's own node arrays (about 11 bytes a tx), allocated for
 		// this block only. Counts beyond maxTxMapPrealloc get a capped
 		// preallocation and grow on insert rather than failing the block (issue
 		// 1428); indexes beyond 32 bits get the 64-bit map.
@@ -1758,6 +1775,28 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		}
 	}
 
+	// Every txMap is filled at subIdx*size+txIdx (putSubtreeInTxMap), so a tx's own index is
+	// computed rather than looked up, with the size the fill used (b.txMapSubtreeSize): subtree
+	// 0's capacity now can differ, reading 0 after a release or another cap after a reload, and
+	// would put a tx's own index somewhere else than the one its parents are compared against.
+	// Only a txMap filled outside the two fills (a direct caller) has no recorded size; its index
+	// space is subtree 0's as it is now.
+	txMapSubtreeSize := b.txMapSubtreeSize
+
+	if txMapSubtreeSize == 0 && len(subtrees) > 0 {
+		if subtrees[0] == nil {
+			return errors.NewProcessingError("[validOrderAndBlessed][%s] subtree %d was released during validation", b.String(), 0)
+		}
+
+		txMapSubtreeSize = uint64(subtrees[0].Size()) // nolint: gosec
+	}
+
+	// With more than one subtree every index past subtree 0 depends on the size; without one
+	// they would all collapse onto their position within their subtree.
+	if txMapSubtreeSize == 0 && len(subtrees) > 1 {
+		return errors.NewProcessingError("[validOrderAndBlessed][%s] the first subtree was released during validation, its size is unknown", b.String())
+	}
+
 	if len(diskMapDirs) > 0 {
 		diskMap, diskErr := NewDiskParentSpendsMap(DiskParentSpendsMapOptions{
 			BasePaths:      diskMapDirs,
@@ -1783,6 +1822,7 @@ func (b *Block) validOrderAndBlessed(ctx context.Context, logger ulogger.Logger,
 		parentSpendsMap:             psMap,
 		dedup:                       dedup,
 		subtreeBase:                 subtreeBase,
+		txMapSubtreeSize:            txMapSubtreeSize,
 	}
 
 	concurrency := b.getValidationConcurrency(validOrderAndBlessedConcurrency)
@@ -2109,6 +2149,8 @@ type validationContext struct {
 	dedup           inpointDedupper
 	// subtreeBase[s] is the block index of the first transaction of subtree s
 	subtreeBase []uint64
+	// txMapSubtreeSize is the width of a subtree's index space in the txMap
+	txMapSubtreeSize uint64
 }
 
 func (b *Block) buildBlockHeaderHashesMap(currentChain []*BlockHeader) map[chainhash.Hash]struct{} {
@@ -2217,11 +2259,8 @@ type transactionValidationParams struct {
 
 func (b *Block) validateTransaction(ctx context.Context, deps *validationDependencies, validationCtx *validationContext,
 	params *transactionValidationParams) ([]missingParentTx, error) {
-	txIdx, ok := b.txMap.Get(params.subtreeNode.Hash)
-	if !ok {
-		return nil, errors.NewNotFoundError("[validOrderAndBlessed][%s][%s:%d]:%d transaction %s is not in the txMap",
-			b.String(), params.subtreeHash.String(), params.sIdx, params.snIdx, params.subtreeNode.Hash.String())
-	}
+	// the index the tx was put in the txMap at; the duplicate check put every tx of the block
+	txIdx := uint64(params.sIdx)*validationCtx.txMapSubtreeSize + uint64(params.snIdx) // nolint: gosec
 
 	parentTxHashes, err := params.subtreeMetaSlice.GetParentTxHashes(params.snIdx)
 	if err != nil {
@@ -2470,6 +2509,7 @@ func (b *Block) getAndValidateSubtreesWithDedup(ctx context.Context, logger ulog
 
 		b.txMapCount = uint64(len(b.Subtrees)) * uint64(first.Length()) // nolint: gosec
 		subtreeSize = first.Size()
+		b.txMapSubtreeSize = uint64(subtreeSize) // nolint: gosec
 
 		// The highest index is that of the last subtree's last node. A subtree in
 		// between that is too long for its slot is indexed apart (putOverflow) and

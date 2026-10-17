@@ -28,14 +28,16 @@ type blockTxMap interface {
 
 // nodeIndex maps a tx hash to its 32-bit global index in the block without storing
 // the hash. A slot holds a 16-bit fingerprint and the index, 6 bytes against ~60
-// for the swiss map it replaces. A fingerprint match is confirmed against the node
+// for the swiss map it replaces, ~11 per entry at the presized load. A fingerprint match is confirmed against the node
 // hash the block already holds (hashAt), so answers are exact: a false fingerprint
 // match is only ever a wasted read. A hash seed, the insertion order and the number
 // of writers change the layout, never the answers.
 //
-// Slots are grouped in buckets of 8. An entry goes into the first free slot from its
-// home bucket and a lookup scans until a free slot; there are no deletes, so the scan
-// can't stop earlier. The index is split into shards, each with its own lock and
+// Slots are grouped in buckets of 10, one 64-byte cache line. An entry goes into the
+// first free slot from its home bucket and a lookup scans until a free slot; there are
+// no deletes, so the scan can't stop earlier. The index is presized to 60% full, so a
+// key that is not in it, like a parent mined in an earlier block, is mostly turned away
+// by its home bucket. The index is split into shards, each with its own lock and
 // buckets, so concurrent Puts on different shards don't contend.
 type nodeIndex struct {
 	shards    []nodeShard
@@ -45,11 +47,12 @@ type nodeIndex struct {
 	frozen    atomic.Bool
 }
 
-const nodeBucketSlots = 8
+const nodeBucketSlots = 10
 
 type nodeBucket struct {
 	fps  [nodeBucketSlots]uint16 // 0 = free slot
 	idxs [nodeBucketSlots]uint32
+	_    [4]byte // pad to a 64-byte cache line
 }
 
 type nodeShard struct {
@@ -90,9 +93,9 @@ func newNodeIndex(capacity int, hashAt func(idx uint32) *chainhash.Hash, hash fu
 	return x
 }
 
-// numNodeBuckets sizes for a 7/8 load.
+// numNodeBuckets sizes for a 60% load. A shard only grows past 90% (Put).
 func numNodeBuckets(entries int) int {
-	return max(1, (entries+nodeBucketSlots-2)/(nodeBucketSlots-1))
+	return max(1, (entries*10+nodeBucketSlots*6-1)/(nodeBucketSlots*6))
 }
 
 // split derives the home bucket and the fingerprint from the hash. The shard comes from
@@ -135,7 +138,7 @@ func (x *nodeIndex) find(s *nodeShard, hash *chainhash.Hash, h uint64) (b, slot 
 		}
 	}
 
-	panic("node index shard full") // unreachable: shards grow at 7/8 load
+	panic("node index shard full") // unreachable: shards grow at 90% load
 }
 
 // Put adds hash at idx. It returns a TxExists error (whose text putSubtreeInTxMap also matches) if hash is already in the
