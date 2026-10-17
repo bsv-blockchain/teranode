@@ -126,7 +126,9 @@ func TestValidOrderAndBlessed_DetachedFirstSubtreeIsNeverInvalid(t *testing.T) {
 			block.SubtreeSlices[0].ReleaseNodes()
 
 			err := block.validOrderAndBlessed(context.Background(), ulogger.TestLogger{}, deps, 4, dirs, 2)
+			require.Error(t, err, "run %d: a block whose subtree was released cannot be validated", run)
 			require.False(t, errors.Is(err, errors.ErrBlockInvalid), "run %d: a released subtree must not make an honest block invalid: %v", run, err)
+			require.True(t, errors.Is(err, errors.ErrProcessing), "run %d: the verdict must be retryable: %v", run, err)
 		}
 	})
 }
@@ -155,4 +157,42 @@ func TestValidOrderAndBlessed_UsesTheSubtreeSizeTheTxMapWasFilledWith(t *testing
 		err := block.validOrderAndBlessed(context.Background(), ulogger.TestLogger{}, deps, 1, dirs, 2)
 		require.ErrorContains(t, err, "comes before parent transaction")
 	})
+}
+
+// A txMap that a caller filled itself records no size; the check then reads subtree 0 as it is,
+// and a released subtree 0 (size 0) with more subtrees behind it must give a retryable error
+// rather than an index space in which every subtree starts at 0.
+func TestValidOrderAndBlessed_UnrecordedSizeWithReleasedFirstSubtreeIsProcessingError(t *testing.T) {
+	const size = 4
+
+	block, deps, _ := buildOrderFixture(t, size, []int{4, 4, 3}, map[int]parentSpec{5: {[]int{1}, []uint32{0}}})
+	require.NoError(t, block.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, 2, nil))
+	block.txMap.Freeze()
+
+	block.txMapSubtreeSize = 0 // as a direct caller that set b.txMap itself
+	block.SubtreeSlices[0].ReleaseNodes()
+
+	err := block.validOrderAndBlessed(context.Background(), ulogger.TestLogger{}, deps, 1, nil, 2)
+	require.True(t, errors.Is(err, errors.ErrProcessing), "got %v", err)
+	require.ErrorContains(t, err, "its size is unknown")
+}
+
+// The duplicate check refuses to fill a txMap whose index space it cannot define: a first subtree
+// of size 0 with more subtrees behind it would put every subtree at index 0.
+func TestCheckDuplicateTransactions_RefusesAFirstSubtreeOfSizeZero(t *testing.T) {
+	block, _, _ := buildOrderFixture(t, 4, []int{4, 4, 3}, map[int]parentSpec{})
+	block.SubtreeSlices[0].Nodes = nil
+
+	err := block.checkDuplicateTransactions(context.Background(), ulogger.TestLogger{}, 2, nil)
+	require.True(t, errors.Is(err, errors.ErrProcessing), "got %v", err)
+	require.Nil(t, block.txMap, "no txMap is built")
+	require.Zero(t, block.txMapSubtreeSize)
+}
+
+// releaseTxMap forgets the recorded size even when there is no txMap left to close (a fill that
+// failed after recording it).
+func TestReleaseTxMap_ForgetsTheSizeWithoutATxMap(t *testing.T) {
+	block := &Block{txMapSubtreeSize: 4}
+	block.releaseTxMap()
+	require.Zero(t, block.txMapSubtreeSize)
 }

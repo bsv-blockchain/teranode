@@ -1239,6 +1239,9 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 // errors during the subtree load, checkDuplicateTransactions or
 // validOrderAndBlessed.
 func (b *Block) releaseTxMap() {
+	// Forgotten even without a txMap: a fill that recorded it can fail before assigning one.
+	b.txMapSubtreeSize = 0
+
 	if b.txMap == nil {
 		return
 	}
@@ -1252,7 +1255,6 @@ func (b *Block) releaseTxMap() {
 	}
 
 	b.txMap = nil
-	b.txMapSubtreeSize = 0
 
 	// Close what a release deferred while the index was live. Like the disk map's
 	// Close above, a failure here has no logger to go to.
@@ -1502,6 +1504,12 @@ func (b *Block) checkDuplicateTransactions(ctx context.Context, logger ulogger.L
 		}
 
 		subtreeSize = firstSubtree.Size()
+	}
+
+	// Every subtree's index space starts at subIdx*subtreeSize: with a size of 0 and more than
+	// one subtree they would all start at 0. A first subtree that reads 0 was released.
+	if subtreeSize == 0 && len(b.SubtreeSlices) > 1 {
+		return errors.NewProcessingError("[checkDuplicateTransactions][%s] first subtree was released during validation, its size is unknown", b.String())
 	}
 
 	// Size both map variants from the loaded block body rather than the
