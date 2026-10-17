@@ -4,16 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"strconv"
+	"strings"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 )
 
 const (
-	blockPersisterHeightKey   = "BlockPersisterHeight"
-	utxoPersisterLastHeightFn = "lastProcessed.dat"
+	blockPersisterHeightKey = "BlockPersisterHeight"
 )
 
 // phase3Finalize rewrites persisted state keys and triggers cache /
@@ -27,7 +29,7 @@ func (e *env) phase3Finalize(ctx context.Context, pf *preflightResult) error {
 		return err
 	}
 
-	if err := e.deleteUTXOPersisterLastProcessed(ctx); err != nil {
+	if err := e.deleteUTXOPersisterLastProcessed(ctx, pf); err != nil {
 		return err
 	}
 
@@ -151,32 +153,64 @@ func (e *env) resetBlockPersisterHeight(ctx context.Context, pf *preflightResult
 	return nil
 }
 
-// deleteUTXOPersisterLastProcessed removes the file the utxo persister uses
-// to track its position. On next startup it will recompute from block
-// data — which is the correct behaviour post-rewind.
+// deleteUTXOPersisterLastProcessed removes the UTXO persister's lastProcessed
+// marker, but only when it sits above the rewind target. The persister trails
+// the tip and refuses to move its marker backwards
+// (services/utxopersister/Server.go), so a marker above the rewound tip would
+// stall it on next start; deleting it makes the persister recompute from block
+// data. A marker at or below the target still matches the blocks the rewind
+// kept, so it is left in place: deleting it there would needlessly force a full
+// rebuild from genesis. This mirrors resetBlockPersisterHeight's read-and-compare
+// guard (the action differs — delete vs rewrite — because the persister keys its
+// UTXO-set files off this marker and a clean recompute is the safe reset).
 //
-// NOTE: this Del does not currently match what the persister writes, and never
-// has. services/utxopersister/Server.go:772,826 uses the BLOCK store with
-// options.WithFilename("lastProcessed") and options.WithNoHashPrefix(), which
-// resolves to <blockstore>/lastProcessed.dat. This call uses the SUBTREE store
-// with filename "lastProcessed.dat", and ConstructFilename appends "." +
-// fileType, so it targets <subtreestore>/lastProcessed.dat.dat — a different
-// store and a different name. The Del is best-effort, so the miss is swallowed
-// by the Debugf below. Fixing it needs the block store, which resolveStores
-// does not open; tracked in #1353 rather than widened into the hashPrefix fix.
-//
-// WithNoHashPrefix does more than keep this path byte-identical now that the
-// store carries the node's hashPrefix (see newSubtreeStore). Without it
-// CalculatePrefix would derive "la" from the filename "lastProcessed.dat", and
-// ConstructFilename MkdirAlls the prefix folder on every call including Del
-// (stores/blob/options/Options.go:397-401) — so each rewind would leave a stray
-// empty <subtreestore>/la/ behind while still deleting nothing.
-func (e *env) deleteUTXOPersisterLastProcessed(ctx context.Context) error {
-	key := []byte(utxoPersisterLastHeightFn)
-	if err := e.subtreeStore.Del(ctx, key, fileformat.FileTypeDat,
-		options.WithFilename(utxoPersisterLastHeightFn), options.WithNoHashPrefix()); err != nil {
-		// Best-effort. Log and continue.
-		e.logger.Debugf("delete utxo-persister lastProcessed.dat: %v", err)
+// It addresses the marker exactly as the persister does
+// (services/utxopersister/Server.go): the BLOCK store, a nil key, filename
+// utxopersister.LastProcessedFilename and no hash prefix, which resolves to
+// <blockstore>/lastProcessed.dat, and reads its height the same way (a decimal
+// string). The operation is best-effort: a missing marker is normal, and any
+// failure is logged for the operator rather than failing a rewind whose
+// destructive phases have already run.
+func (e *env) deleteUTXOPersisterLastProcessed(ctx context.Context, pf *preflightResult) error {
+	if e.blockStore == nil {
+		e.logger.Debugf("no block store supplied; not touching the utxo-persister lastProcessed marker")
+		return nil
 	}
+
+	marker := []options.FileOption{options.WithFilename(utxopersister.LastProcessedFilename), options.WithNoHashPrefix()}
+
+	// Read the marker so only one the rewind has invalidated is deleted. The read
+	// doubles as the existence check: a missing marker is the normal case.
+	b, err := e.blockStore.Get(ctx, nil, fileformat.FileTypeDat, marker...)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			e.logger.Debugf("no utxo-persister lastProcessed marker to delete")
+			return nil
+		}
+
+		e.logger.Warnf("could not read the utxo-persister lastProcessed marker; if it exists and is above target %d, delete <blockstore>/lastProcessed.dat by hand so the persister recomputes: %v", pf.target, err)
+		return nil
+	}
+
+	existing, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
+	if err != nil {
+		e.logger.Warnf("could not parse the utxo-persister lastProcessed marker %q; if it is above target %d, delete <blockstore>/lastProcessed.dat by hand: %v", strings.TrimSpace(string(b)), pf.target, err)
+		return nil
+	}
+
+	// At or below the target the marker is still valid; deleting it would restart
+	// the persister from genesis for no reason.
+	if existing <= uint64(pf.target) {
+		e.logger.Infof("utxo-persister lastProcessed marker is %d, at/below target %d; leaving it untouched", existing, pf.target)
+		return nil
+	}
+
+	if err = e.blockStore.Del(ctx, nil, fileformat.FileTypeDat, marker...); err != nil {
+		e.logger.Warnf("could not delete the stale utxo-persister lastProcessed marker (was %d, above target %d); delete <blockstore>/lastProcessed.dat by hand so the persister rebuilds from genesis: %v", existing, pf.target, err)
+		return nil
+	}
+
+	e.logger.Warnf("deleted the utxo-persister lastProcessed marker (was %d, above target %d); the persister will rebuild from genesis on its next start", existing, pf.target)
+
 	return nil
 }
