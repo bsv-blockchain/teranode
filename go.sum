@@ -143,6 +143,8 @@ github.com/bsv-blockchain/go-subtree v1.6.1 h1:+ElMK3v1ryFAkg5CSXEdB52Mx+CyFVUz2
 github.com/bsv-blockchain/go-subtree v1.6.1/go.mod h1:TTUSuImDIDr+Br4TVJa4xhr6Ou99p9aUTGHOZZYaito=
 github.com/bsv-blockchain/go-subtree v1.6.2 h1:1cutO3HOfUDgEZSqzvh5qov6QDOPyjrsoTYc3J+caMQ=
 github.com/bsv-blockchain/go-subtree v1.6.2/go.mod h1:q7YXgbNQnqZSKTaP8lMQyCApQzrKJdYsF64OMyVYT0k=
+github.com/bsv-blockchain/go-subtree v1.6.3 h1:75dwSs1tQsXRIRBImEsGFTlROXXQF192fA2UjjJQT8M=
+github.com/bsv-blockchain/go-subtree v1.6.3/go.mod h1:q7YXgbNQnqZSKTaP8lMQyCApQzrKJdYsF64OMyVYT0k=
 github.com/bsv-blockchain/go-tx-map v1.5.0 h1:5wTbktWmQ+Kgus5Phh4s/Z3UmnLov4ih2QkM7pkMuz4=
 github.com/bsv-blockchain/go-tx-map v1.5.0/go.mod h1:ZDojRIjPPIq8OHff3zO1k9JEc9a6D5h7vBN4qfZkOhU=
 github.com/bsv-blockchain/go-tx-map v1.5.1 h1:cFvgwBNQ+51e+KGgF/tZLrEOyEknhHiNBmT965a7oec=
