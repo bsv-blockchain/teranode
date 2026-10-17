@@ -401,15 +401,28 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 	return subtreeToCheck, nil
 }
 
+// CheckBlockSubtrees validates every subtree a block references, fetching any it
+// does not hold, and reports whether the block's transactions are valid.
+//
+// Every error return goes through errors.WrapGRPC. teranode's *Error has no
+// GRPCStatus method and the gRPC server installs no error-converting interceptor,
+// so a bare *Error crosses the wire as codes.Unknown and the caller's
+// errors.UnwrapGRPC rebuilds only a generic ERR_ERROR. Block validation then
+// cannot tell this node's own faults from a bad block, and charges them to the
+// peer that served it (issues 1031 and 1368). WrapGRPC carries the whole chain in
+// the status details, consensus verdicts included.
 func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
-		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
+		// This message is the status line the caller logs, so it names the real failure.
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] failed to deserialise block from request bytes", err))
 	}
 
 	if request.BaseUrl != "" {
 		if err := util.ValidateURL(request.BaseUrl); err != nil {
-			return nil, errors.NewInvalidArgumentError("[CheckBlockSubtrees] invalid BaseUrl: %v", err)
+			// No %v verb: errors.New* takes a trailing error as the wrapped cause,
+			// so the verb would reach the caller's status line unformatted.
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[CheckBlockSubtrees] invalid BaseUrl", err))
 		}
 	}
 
@@ -492,7 +505,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	}
 
 	if err := existsGroup.Wait(); err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	missingSubtrees := make([]chainhash.Hash, 0, len(block.Subtrees))
@@ -552,7 +565,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		// hash pointer; that nil-guard lives inside fetchCandidateParentMedianTime.
 		candidateParentMedianTime, mtpErr = u.fetchCandidateParentMedianTime(ctx, block.Header.HashPrevBlock)
 		if mtpErr != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtrees] candidate-parent MTP", mtpErr)
+			return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] candidate-parent MTP", mtpErr))
 		}
 	}
 
@@ -574,7 +587,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
 	if err != nil {
-		return nil, errors.NewProcessingError("[CheckSubtree] Failed to get block headers from blockchain client", err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block headers from blockchain client", err))
 	}
 
 	blockIds := make(map[uint32]bool, len(blockHeaderIDs))
@@ -690,7 +703,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		releaseArenas,
 	)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	u.logger.Infof("[CheckBlockSubtrees] Completed processing %d transactions across %d subtree batches", totalProcessedTxs, numBatches)
