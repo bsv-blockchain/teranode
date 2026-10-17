@@ -226,6 +226,35 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 		isOnLongestChainExp,
 	)
 
+	// A record that was mined must outlive its highest block by the retention window,
+	// whatever height the caller passes: the caller's height can be the node's cached
+	// tip, which lags the block being processed, and the pruner deletes purely on the
+	// stamp. The floor only ever raises a stamp. The expression reads the pre-operate
+	// record, so it sees the heights already stored, and newDeleteHeight already
+	// covers the block being mined.
+	heightsBin := aerospike.ExpListBin(fields.BlockHeights.String())
+	hasHeights := aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.BlockHeights.String()),
+		aerospike.ExpGreater(aerospike.ExpListSize(heightsBin), aerospike.ExpIntVal(0)),
+	)
+	minedFloor := aerospike.ExpNumAdd(
+		aerospike.ExpListGetByRank(aerospike.ListReturnTypeValue, aerospike.ExpTypeINT, aerospike.ExpIntVal(-1), heightsBin),
+		aerospike.ExpIntVal(int64(blockHeightRetention)),
+	)
+	flooredDeleteHeight := aerospike.ExpCond(
+		hasHeights, aerospike.ExpMax(aerospike.ExpIntVal(newDeleteHeight), minedFloor),
+		aerospike.ExpIntVal(newDeleteHeight),
+	)
+
+	// Condition: a conflicting record already carries a stamp below its mined floor,
+	// written earlier from a lagging tip before the record was mined
+	conflictingStampBelowFloor := aerospike.ExpAnd(
+		isConflicting,
+		aerospike.ExpBinExists(fields.DeleteAtHeight.String()),
+		hasHeights,
+		aerospike.ExpLess(aerospike.ExpIntBin(fields.DeleteAtHeight.String()), minedFloor),
+	)
+
 	// Build the main conditional expression
 	// Order matters: check most specific conditions first
 	return aerospike.ExpCond(
@@ -233,10 +262,13 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 		aerospike.ExpNot(preserveUntilNotSet), aerospike.ExpUnknown(),
 
 		// If conflicting and no existing DAH, set DAH
-		aerospike.ExpAnd(isConflicting, dahNotExists), aerospike.ExpIntVal(newDeleteHeight),
+		aerospike.ExpAnd(isConflicting, dahNotExists), flooredDeleteHeight,
+
+		// If conflicting and the existing DAH is below the mined floor, raise it
+		conflictingStampBelowFloor, minedFloor,
 
 		// If master record and should set DAH
-		shouldSetDAHMaster, aerospike.ExpIntVal(newDeleteHeight),
+		shouldSetDAHMaster, flooredDeleteHeight,
 
 		// Default: no change
 		aerospike.ExpUnknown(),
