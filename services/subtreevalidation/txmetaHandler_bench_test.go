@@ -96,7 +96,7 @@ func buildBenchMessageV2(b *testing.B, entriesPerMessage int, payloadSize int) *
 
 	buf[0] = txmetacache.WireV2Magic
 	buf[1] = txmetacache.WireV2Version
-	// buf[2:4] reserved
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(txmetacache.BucketsCount))
 	binary.LittleEndian.PutUint32(buf[4:], uint32(entriesPerMessage))
 	off := 8
 

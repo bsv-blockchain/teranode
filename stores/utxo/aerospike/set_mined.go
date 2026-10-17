@@ -1,5 +1,3 @@
-// //go:build aerospike
-
 // Package aerospike provides an Aerospike-based implementation of the UTXO store interface.
 // It offers high performance, distributed storage capabilities with support for large-scale
 // UTXO sets and complex operations like freezing, reassignment, and batch processing.

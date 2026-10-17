@@ -284,7 +284,15 @@ var rpcUnimplemented = map[string]struct{}{
 	"preciousblock": {},
 }
 
-// Commands that are available to a limited user
+// Commands that are available to a limited user.
+//
+// This is a PERMISSION set, not a capability list: a name here says a
+// limited credential may ask, not that a handler will answer. Nineteen
+// allowlisted names dispatch to handleUnimplemented (see
+// limited_tier_capability_test.go for the pinned enumeration and the drift
+// guard). Pruning them would change which error a caller sees, so the list
+// stands labelled; keep the label in rpc_limit_user's longdesc in step with
+// any change here.
 var rpcLimited = map[string]struct{}{
 	// Websockets commands
 	"loadtxfilter":          {},
@@ -662,7 +670,10 @@ type RPCServer struct {
 	// logger provides structured logging capabilities for operational and debugging messages
 	logger ulogger.Logger
 
-	// rpcMaxClients is the maximum number of concurrent RPC clients allowed
+	// rpcMaxClients is the maximum number of concurrent in-flight RPC requests.
+	// Counted per request, not per socket: every reply closes the connection,
+	// so each request holds a slot for its whole duration (see limitConnections).
+	// The name predates that reading and stays for setting-key compatibility.
 	// This setting helps prevent resource exhaustion from too many simultaneous connections
 	rpcMaxClients int
 
@@ -846,10 +857,16 @@ func (s *RPCServer) RequestedProcessShutdown() <-chan struct{} {
 //
 // This function is safe for concurrent access through the use of atomic operations.
 func (s *RPCServer) limitConnections(w http.ResponseWriter, remoteAddr string) bool {
-	if int(atomic.LoadInt32(&s.numClients)+1) > s.rpcMaxClients {
-		s.logger.Infof("Max RPC clients exceeded [%d] - "+
-			"disconnecting client %s", s.rpcMaxClients,
+	if inFlight := int(atomic.LoadInt32(&s.numClients)); inFlight+1 > s.rpcMaxClients {
+		s.logger.Infof("Max concurrent RPC requests exceeded [%d of %d allowed, %d in flight] - "+
+			"refusing client %s", inFlight+1, s.rpcMaxClients, inFlight,
 			remoteAddr)
+		// The door sheds rather than queues - deliberately, so a crowd of
+		// callers cannot pile work behind an already-busy Validator - so a
+		// refused request is worth retrying as soon as a slot frees. A machine
+		// caller needs a number for that, not prose; 1s is a politeness floor
+		// for the log and the client, and a slot routinely frees sooner.
+		w.Header().Set("Retry-After", "1")
 		http.Error(w, "503 Too busy.  Try again later.",
 			http.StatusServiceUnavailable)
 
@@ -1415,6 +1432,26 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	return nil
 }
 
+// authShaForCredentials computes the stored comparison hash for one
+// user/pass pair, exactly as the request path expects it: the SHA-256 of the
+// "Basic base64(user:pass)" header value. An empty user OR pass yields the
+// all-zero array - no credentials configured does not disable
+// authentication, it locks the door: checkAuth is always called with
+// require=true on the request path, and no real header hashes to the zero
+// array. (The longdesc of rpc_user/rpc_pass once claimed otherwise; the
+// empty-credentials tests in auth_empty_credentials_test.go keep that
+// sentence from coming back wrong.)
+func authShaForCredentials(user, pass string) [sha256.Size]byte {
+	if user == "" || pass == "" {
+		return [sha256.Size]byte{}
+	}
+
+	login := user + ":" + pass
+	auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
+
+	return sha256.Sum256([]byte(auth))
+}
+
 // NewServer creates and configures a new RPC server instance with the given dependencies.
 //
 // This factory function creates a fully configured RPCServer instance, setting up:
@@ -1489,17 +1526,8 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, blockchainCl
 		logger.Warnf("rpc_limit_pass not set in config")
 	}
 
-	if rpcUser != "" && rpcPass != "" {
-		login := rpcUser + ":" + rpcPass
-		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
-		rpc.authsha = sha256.Sum256([]byte(auth))
-	}
-
-	if rpcLimitUser != "" && rpcLimitPass != "" {
-		login := rpcLimitUser + ":" + rpcLimitPass
-		auth := "Basic " + base64.StdEncoding.EncodeToString([]byte(login))
-		rpc.limitauthsha = sha256.Sum256([]byte(auth))
-	}
+	rpc.authsha = authShaForCredentials(rpcUser, rpcPass)
+	rpc.limitauthsha = authShaForCredentials(rpcLimitUser, rpcLimitPass)
 	// rpc.cfg.Chain.Subscribe(rpc.handleBlockchainNotification)
 
 	rpc.rpcMaxClients = tSettings.RPC.RPCMaxClients

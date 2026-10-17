@@ -17,8 +17,10 @@ var (
 	// tx meta cache stats - the following Prometheus metrics track key performance indicators
 	// for the transaction metadata cache to help with monitoring and tuning
 
-	// Current number of entries in the cache; monitors utilization and capacity
-	// prometheusBlockValidationTxMetaCacheSize prometheus.Gauge
+	// Current number of valid (readable) entries in the cache; monitors utilization
+	// and capacity. The raw map count including stale entries (EntriesCount) was
+	// removed from CacheStats upstream; valid entries are what utilization is sized on.
+	prometheusBlockValidationTxMetaCacheSize prometheus.Gauge
 	// Total count of cache insertions since startup; tracks write throughput
 	prometheusBlockValidationTxMetaCacheInsertions prometheus.Gauge
 	// Count of successful cache retrievals (cache hits); indicates cache effectiveness
@@ -160,6 +162,7 @@ func updateTxMetaCachePrometheusMetrics() {
 	prometheusBlockValidationTxMetaCacheGetOrigin.Set(float64(getOrigin))
 	prometheusBlockValidationTxMetaCacheEvictions.Set(float64(evictions))
 	prometheusBlockValidationTxMetaCacheTrims.Set(float64(trimCount))
+	prometheusBlockValidationTxMetaCacheSize.Set(float64(validEntriesCount))
 	prometheusBlockValidationTxMetaCacheMapSize.Set(float64(totalMapSize))
 	prometheusBlockValidationTxMetaCacheTotalElementsAdded.Set(float64(totalElementsAdded))
 	prometheusBlockValidationTxMetaCacheValidEntriesCount.Set(float64(validEntriesCount))
@@ -182,8 +185,8 @@ func initPrometheusMetrics() {
 //
 // Metrics are organized into functional categories:
 // 1. Capacity metrics:
-//   - size: Current number of entries in the cache
-//   - map_size: Total size of all bucket maps in the cache
+//   - size: Current number of valid (readable) entries in the cache
+//   - map_size: Total size of all bucket maps in the cache (slots, includes stale)
 //
 // 2. Performance metrics:
 //   - hits: Number of successful retrievals from the cache
@@ -198,17 +201,20 @@ func initPrometheusMetrics() {
 //   - evictions: Number of entries removed from the cache: deletes, plus an estimate of ring-wrap evictions on the lockfree cache
 //   - trims: Number of cache cleanup operations performed
 func _initPrometheusMetrics() {
-	// // Size metric tracks the current number of entries in the transaction metadata cache.
-	// // This is a point-in-time measurement that indicates cache utilization level and
-	// // helps identify potential capacity issues or unexpected cache clearing events.
-	// prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
-	// 	prometheus.GaugeOpts{
-	// 		Namespace: "teranode",
-	// 		Subsystem: "tx_meta_cache",
-	// 		Name:      "size",
-	// 		Help:      "Number of items in the tx meta cache",
-	// 	},
-	// )
+	// Size metric tracks the current number of valid (readable) entries in the
+	// transaction metadata cache. This is a point-in-time measurement that indicates
+	// cache utilization level and helps identify potential capacity issues or
+	// unexpected cache clearing events. Sourced from ValidEntriesCount: the raw
+	// map-wide count including stale entries no longer exists in CacheStats, and
+	// map_size measures bucket slots rather than entries, so it cannot substitute.
+	prometheusBlockValidationTxMetaCacheSize = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "tx_meta_cache",
+			Name:      "size",
+			Help:      "Number of valid (readable) entries in the tx meta cache",
+		},
+	)
 
 	// Insertions metric tracks the total number of items added to the transaction metadata cache.
 	// This counter increases monotonically and helps track write load on the cache,

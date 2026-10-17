@@ -48,6 +48,19 @@ import (
 // before a reassigned UTXO becomes spendable.
 const ReAssignedUtxoSpendableAfterBlocks = 1_000
 
+// ReassignedSpendableBlocks resolves the reassigned-UTXO hold a store should
+// apply: the utxostore_reassignedUtxoSpendableAfterBlocks setting when it is
+// set, otherwise the constant. One function so every store resolves it the
+// same way - the setting once worked on the SQLite store and was silently
+// ignored on Aerospike, inverting which deployments the knob actually reached.
+func ReassignedSpendableBlocks(tSettings *settings.Settings) uint32 {
+	if tSettings != nil && tSettings.UtxoStore.ReAssignedUtxoSpendableAfterBlocks > 0 {
+		return tSettings.UtxoStore.ReAssignedUtxoSpendableAfterBlocks
+	}
+
+	return ReAssignedUtxoSpendableAfterBlocks
+}
+
 // BlockState is the pair of chain-tip values validation reads together: the
 // block height and the median block time. GetBlockState returns it in a single
 // atomic load, so the two fields can never be torn mid-read the way separate

@@ -72,6 +72,12 @@ type Server struct {
 	pruneNotify         chan pruneSignal
 	stats               *gocore.Stat
 
+	// Catchup-guard visibility: name of the last non-RUNNING FSM state the
+	// skipDuringCatchup guard saw and when it was last warned about. Read and
+	// written only by the processing loop.
+	lastGuardStateName string
+	lastGuardWarnedAt  time.Time
+
 	// Blob deletion
 	blobStores           map[storetypes.BlobStoreType]blob.Store
 	blobNotify           chan pruneSignal
@@ -137,6 +143,20 @@ func (s *Server) Init(ctx context.Context) error {
 	}
 
 	// Blob deletion is now managed by blockchain service - no local DB needed
+
+	// Announce the trigger mode the service will act on. The service subscribes
+	// and reports healthy in either mode, and in OnBlockPersisted mode with no
+	// Block Persister deployed it then waits forever for a notification that no
+	// process will send - "pruning never happened" used to be discovered as disk
+	// growth. Named here - Init runs before any FSM wait - the silent
+	// configuration is visible early in every start-up. Prune passes themselves
+	// are already countable via the prunerDuration histogram, so an operator can
+	// alarm on a pass count that never leaves zero.
+	if blockTrigger == settings.PrunerBlockTriggerOnBlockPersisted {
+		s.logger.Infof("[pruner] trigger mode OnBlockPersisted: pruning waits for BlockPersisted notifications - if the Block Persister is not deployed nothing will ever prune; see pruner_block_trigger's recommendation for the persister-less mode")
+	} else {
+		s.logger.Infof("[pruner] trigger mode OnBlockMined: pruning triggers on mined blocks, no Block Persister required")
+	}
 
 	// Subscribe to blockchain notifications for event-driven pruning.
 	// The pruner_block_trigger setting controls which notification type is used:

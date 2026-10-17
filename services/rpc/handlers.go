@@ -2973,6 +2973,18 @@ func isIPOrSubnet(ipOrSubnet string) bool {
 }
 
 // handleGetchaintips implements the getchaintips command.
+//
+// The cached answer is keyed by the current best block hash, which is the
+// cache's invalidation on chain update. Chain tips describe where the chain
+// branches, so an entry older than the last new block - five minutes of them
+// under the flat TTL this used - is exactly the window in which an operator
+// checking a suspected reorganisation is told nothing happened. Keying on the
+// tip means a new block, reorg or invalidateblock retires the entry at once,
+// while polling within one block interval still hits the cache and stays
+// inside the rate limit the door enforces. The TTL remains as a memory bound
+// for abandoned tip keys, not as a staleness window. If the best header cannot
+// be read, the call fails open: it serves a fresh walk and skips the cache
+// rather than guess a key.
 func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan struct{}) (interface{}, error) {
 	ctx, _, deferFn := tracing.Tracer("rpc").Start(ctx, "handleGetchaintips",
 		tracing.WithParentStat(RPCStat),
@@ -2981,12 +2993,29 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 	)
 	defer deferFn()
 
-	if cached := rpcCallCache.Get("getchaintips"); cached != nil {
-		return cached.Value(), nil
-	}
-
 	_, ok := cmd.(*bsvjson.GetChainTipsCmd)
 	if !ok {
+		return nil, bsvjson.ErrRPCInternal
+	}
+
+	// The tip hash is an atomic read on the blockchain service, orders of
+	// magnitude cheaper than the tips walk this caches.
+	cacheKey := ""
+	if s.blockchainClient != nil {
+		if header, _, err := s.blockchainClient.GetBestBlockHeader(ctx); err == nil {
+			cacheKey = "getchaintips:" + header.Hash().String()
+		} else {
+			s.logger.Warnf("[handleGetchaintips] best header unavailable (%v); serving an uncached chain tips walk", err)
+		}
+	}
+
+	if cacheKey != "" {
+		if cached := rpcCallCache.Get(cacheKey); cached != nil {
+			return cached.Value(), nil
+		}
+	}
+
+	if s.blockchainClient == nil {
 		return nil, bsvjson.ErrRPCInternal
 	}
 
@@ -3008,8 +3037,8 @@ func handleGetchaintips(ctx context.Context, s *RPCServer, cmd interface{}, _ <-
 		})
 	}
 
-	if s.settings.RPC.CacheEnabled {
-		rpcCallCache.Set("getchaintips", result, 300*time.Second)
+	if s.settings.RPC.CacheEnabled && cacheKey != "" {
+		rpcCallCache.Set(cacheKey, result, 300*time.Second)
 	}
 
 	return result, nil

@@ -1996,12 +1996,12 @@ func Test_serializeTxMetaBatchV2(t *testing.T) {
 		{item: &txmetaBatchItem{hash: &h2, isDelete: true}, h: 0x0102030405060708},
 	}
 
-	data := serializeTxMetaBatchV2(items)
+	data := serializeTxMetaBatchV2(items, txmetacache.BucketsCount)
 
 	assert.Equal(t, byte(0xFF), data[0], "magic byte")
 	assert.Equal(t, byte(0x02), data[1], "version byte")
-	assert.Equal(t, byte(0x00), data[2], "reserved")
-	assert.Equal(t, byte(0x00), data[3], "reserved")
+	assert.Equal(t, uint16(txmetacache.BucketsCount), binary.LittleEndian.Uint16(data[2:4]),
+		"producer BucketsCount in the header")
 	assert.Equal(t, uint32(2), binary.LittleEndian.Uint32(data[4:]), "entry count")
 
 	// Entry 1 (ADD).

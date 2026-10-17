@@ -13,7 +13,7 @@
 | HTTPAddress | string | "`http://localhost:8090/api/v1`" | asset_httpAddress | **Required when Centrifuge enabled** - Must be non-empty and valid URL format |
 | HTTPListenAddress | string | ":8090" | asset_httpListenAddress | **CRITICAL** - HTTP server binding (fails during Init() if empty) |
 | HTTPPort | int | 8090 | ASSET_HTTP_PORT | **UNUSED** - HTTPListenAddress is used instead |
-| HTTPPublicAddress | string | "" | asset_httpPublicAddress | **UNUSED** - Reserved for future use |
+| HTTPPublicAddress | string | "" | asset_httpPublicAddress | Public URL advertised to peers as the DataHub/BaseURL; when empty, asset_httpAddress is advertised instead (private nodes get scored, see p2p checkStaticGossipURLs) |
 | SignHTTPResponses | bool | false | asset_sign_http_responses | Adds X-Signature header (requires P2P.PrivateKey, non-fatal if invalid) |
 | EchoDebug | bool | false | ECHO_DEBUG | Enables verbose logging and request middleware |
 | PropagationPublicURL | string | "" | asset_propagation_public_url | Public-facing URL for propagation service |

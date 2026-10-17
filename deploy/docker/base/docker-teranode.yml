@@ -2,6 +2,16 @@ x-teranode-base:
   &teranode-base
   image: ghcr.io/bsv-blockchain/teranode:v0.14.4
   init: true
+  # The file store's default semaphore budget (filestore_read_concurrency 768 /
+  # filestore_write_concurrency 256) assumes a 1024+ open-file limit, plus room for
+  # sockets, database pools and log files. A container's default soft nofile is far
+  # below that; with the default filestore_use_system_limits=true the node clamps the
+  # budget down to fit and logs one INFO line - it works, but throughput is silently
+  # reduced. Raise the limit explicitly instead of discovering the clamp later.
+  ulimits:
+    nofile:
+      soft: 8192
+      hard: 65536
   networks:
     - teranode-network
   volumes:
