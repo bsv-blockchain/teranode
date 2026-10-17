@@ -30,7 +30,6 @@ Settings are organized under the `Pruner` struct in `settings.Settings`.
 | SkipProcessExpiredPreservations | bool | false | pruner_skipProcessExpiredPreservations | Skip Phase 1b - expiry of old parent preservations |
 | MinBlockHeight | uint32 | 0 | pruner_min_block_height | Skip all pruning until block height exceeds this value |
 | SkipDeletions | bool | false | pruner_skipDeletions | Skip deletion operations during pruning |
-| UTXOPrunedSetMaxEntries | int | 10000000 | pruner_utxoPrunedSetMaxEntries | Soft cap on the in-memory pruned-TX set (0 = built-in 2B default, not unlimited) |
 
 ### Service Control
 
@@ -246,19 +245,6 @@ pruning and higher resource usage.
 and reduces the group limit if it would exceed the threshold. `settings.conf` deliberately ships a
 group limit of 1: at scale, parallel chunk processing can starve transaction throughput.
 
-### Pruned-TX Set
-
-`UTXOPrunedSetMaxEntries` caps the in-memory `PrunedTxSet`, which tracks TXIDs pruned across
-sessions so wasteful Aerospike parent updates can be skipped pre-flight. It is held on the service
-struct and reused across prune sessions within a process, never persisted across restarts. The set
-is a sharded two-generation cuckoo filter: when the current generation fills it rotates into the
-previous slot and a fresh one is allocated, so `Add` keeps succeeding and old entries age out. A
-high `utxo_pruner_pruned_set_rotations` rate is the signal that the cap is too small.
-
-The cap is the total entry budget across both generations of all shards, so memory is roughly one
-byte per entry: 10M ≈ 10 MiB, 100M ≈ 100 MiB, and `0` selects the built-in 2B default ≈ 2 GiB. The
-optimisation is disabled automatically when `UTXODefensiveEnabled` is true.
-
 ### Defensive Mode
 
 When `UTXODefensiveEnabled` is true the pruner verifies that ALL spending children of a parent are
@@ -420,7 +406,6 @@ While not configuration settings, these Prometheus metrics should be monitored:
 - `teranode_pruner_skipped_total{reason="block_assembly_timeout"}`: Indicates Block Assembly issues
 - `teranode_pruner_errors_total`: Indicates database or connectivity issues
 - `utxo_cleanup_batch_duration_seconds`: Indicates Aerospike performance
-- `utxo_pruner_pruned_set_rotations`: high rate means `pruner_utxoPrunedSetMaxEntries` is too small
 
 ## Troubleshooting Configuration Issues
 

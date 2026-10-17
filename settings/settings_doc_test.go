@@ -907,7 +907,7 @@ var checkedRowsPerDoc = map[string]int{
 	"legacy_settings.md":            28,
 	"p2p_settings.md":               46,
 	"propagation_settings.md":       13,
-	"pruner_settings.md":            26,
+	"pruner_settings.md":            25,
 	"rpc_settings.md":               11,
 	"subtreevalidation_settings.md": 24,
 	"utxopersister_settings.md":     2,
