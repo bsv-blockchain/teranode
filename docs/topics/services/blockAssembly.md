@@ -397,6 +397,8 @@ During a reorganization, the `BlockAssembler` performs two key operations:
 1. Removes (rolls back) transactions from blocks in the current chain, starting from where the fork occurred
 2. Applies transactions from the new chain's blocks, ensuring the node switches to the stronger chain
 
+For the order of these operations relative to the Blockchain service, Block Validation and the UTXO store, see [Reorg Coordination Order](../architecture/teranode-overall-system-design.md#921-reorg-coordination-order).
+
 The service automatically manages chain selection through:
 
 1. **Best Chain Detection**:
