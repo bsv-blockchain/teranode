@@ -1844,6 +1844,7 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 	var (
 		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes)/16)
 		run                 inpointRunBuilder
+		inpoints            []subtreepkg.Inpoint
 	)
 
 	subtreeMetaSlice, err := b.loadSubtreeMeta(ctx, logger, deps, subtree, subtreeHash, sIdx)
@@ -1870,9 +1871,11 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 			snIdx:            snIdx,
 			subtreeNode:      subtreeNode,
 			run:              run,
+			inpoints:         inpoints,
 		}
 
 		missingParents, err := b.validateTransaction(ctx, deps, validationCtx, params)
+		inpoints = params.inpoints
 		if err != nil {
 			if run != nil {
 				// The checks used to run in tx order with the duplicate input
@@ -2211,6 +2214,9 @@ type transactionValidationParams struct {
 	// run collects the subtree's inputs for the batched duplicate check; nil when
 	// the duplicate check is done per input through the parent-spends map
 	run inpointRunBuilder
+	// inpoints is reused from one transaction to the next to hand its inputs to
+	// run, which does not keep them
+	inpoints []subtreepkg.Inpoint
 	// inputsChecked is set once the transaction's duplicate input check passed
 	inputsChecked bool
 }
@@ -2236,13 +2242,15 @@ func (b *Block) validateTransaction(ctx context.Context, deps *validationDepende
 
 	// Check for duplicate inputs
 	if params.run != nil {
-		txInpoints, inpErr := params.subtreeMetaSlice.GetTxInpoints(params.snIdx)
+		var inpErr error
+
+		params.inpoints, inpErr = params.subtreeMetaSlice.AppendTxInpoints(params.snIdx, params.inpoints[:0])
 		if inpErr != nil {
 			return nil, errors.NewStorageError("[validOrderAndBlessed][%s][%s:%d]:%d error getting tx inpoints from subtree meta slice",
 				b.String(), params.subtreeHash.String(), params.sIdx, params.snIdx, inpErr)
 		}
 
-		params.run.addTx(validationCtx.subtreeBase[params.sIdx]+uint64(params.snIdx), txInpoints) //nolint:gosec // non-negative
+		params.run.addTx(validationCtx.subtreeBase[params.sIdx]+uint64(params.snIdx), params.inpoints) //nolint:gosec // non-negative
 	} else if err = b.checkDuplicateInputs(params.subtreeMetaSlice, validationCtx, params.subtreeHash, params.sIdx, params.snIdx, params.subtreeNode); err != nil {
 		return nil, err
 	}

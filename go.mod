@@ -14,7 +14,7 @@ require (
 	github.com/bsv-blockchain/go-bt/v2 v2.7.4
 	github.com/bsv-blockchain/go-chaincfg v1.6.2
 	github.com/bsv-blockchain/go-sdk v1.7.2
-	github.com/bsv-blockchain/go-subtree v1.6.2
+	github.com/bsv-blockchain/go-subtree v1.6.3
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.4.0
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
