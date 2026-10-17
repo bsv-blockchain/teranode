@@ -209,7 +209,7 @@ type Server struct {
 	// ttlCachesStarted records that Init reached the point where it starts the
 	// ttlcache eviction loops (processBlockNotify, catchupAlternatives,
 	// blockCatchupAttempts, peerMaliciousCache, blockCorruptAttempts,
-	// blockPolicyDeclineAttempts), so Stop only calls
+	// blockPolicyDeclineAttempts, announcedBlockRateLimits), so Stop only calls
 	// ttlcache.Stop - a blocking send to that loop - when a receiver exists.
 	ttlCachesStarted atomic.Bool
 
@@ -242,6 +242,13 @@ type Server struct {
 	// budgets that happen to be sized the same. Same key type, fixed window and no-touch-on-hit
 	// semantics as the corrupt cap, for the same anti-wedge reason.
 	blockPolicyDeclineAttempts *ttlcache.Cache[blockAttemptKey, int]
+
+	// announcedBlockRateLimits counts, per announcing peer, the 429s its /block/:hash answered
+	// within a fixed window, so a 429 is free only up to an allowance. See
+	// reportAnnouncedBlockFetchFailure. announcedBlockRateLimitsMu makes its read-modify-write
+	// atomic across the blockFound workers.
+	announcedBlockRateLimits   *ttlcache.Cache[string, int]
+	announcedBlockRateLimitsMu sync.Mutex
 
 	// stats tracks operational metrics for monitoring and troubleshooting
 	stats *gocore.Stat
@@ -475,6 +482,7 @@ func New(
 			// must not keep serving an ever-staler verdict.
 			ttlcache.WithDisableTouchOnHit[string, bool](),
 		),
+		announcedBlockRateLimits: newAnnouncedBlockRateLimitCache(),
 		blockCorruptAttempts: ttlcache.New[blockAttemptKey, int](
 			ttlcache.WithTTL[blockAttemptKey, int](corruptAttemptCooldown(tSettings)),
 			// Fixed window from the first corrupt failure; gate Get checks must never
@@ -800,6 +808,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		go u.blockPolicyDeclineAttempts.Start()
 	}
 
+	if u.announcedBlockRateLimits != nil {
+		go u.announcedBlockRateLimits.Start()
+	}
+
 	// Start fork manager cleanup routine
 	go u.forkManager.StartCleanupRoutine(ctx)
 
@@ -1067,6 +1079,9 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	queueSize := u.blockPriorityQueue.Size()
 	shouldConsiderCatchup := u.settings.BlockValidation.UseCatchupWhenBehind && (queueSize > 10 || len(u.blockFoundCh) > 3)
 
+	// Set when the backlog branch below has fetched the block and falls through to the queue.
+	var block *model.Block
+
 	if shouldConsiderCatchup {
 		// Fetch the block to classify it before deciding on catchup. Bound the
 		// fetch: ctx here is the blockFoundCh worker's service-lifetime context,
@@ -1075,8 +1090,10 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		// a slow peer pin the worker indefinitely. Same budget as the
 		// priority-queue catchup fetch in addBlockToPriorityQueue.
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, peerBlockFetchTimeout)
-		block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+		fetched, source, err := u.fetchAnnouncedBlock(ctx, fetchCtx, blockFound)
 		fetchCancel()
+		block = fetched
+		blockFound = source
 		if err != nil {
 			if blockFound.errCh != nil {
 				blockFound.errCh <- err
@@ -1161,15 +1178,20 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		}
 	}
 
-	// Add block to priority queue
-	u.addBlockToPriorityQueue(ctx, blockFound)
+	// Add block to priority queue. If the backlog branch fetched it, queue that block: fetching it
+	// again would charge the source a second time, and after a fallback that source is an alternative.
+	if block != nil {
+		u.queueFetchedBlock(ctx, blockFound, block)
+	} else {
+		u.addBlockToPriorityQueue(ctx, blockFound)
+	}
 
 	// Update metrics
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 
-	// Send response to error channel if it exists (addBlockToPriorityQueue handles the errCh internally)
+	// Send response to error channel if it exists (both queue paths answer the errCh internally)
 	// but if it doesn't send a response in all cases, we need to ensure we don't leave the caller hanging
-	// The errCh should already be handled by addBlockToPriorityQueue, so we just return
+	// The errCh should already be handled by them, so we just return
 	return nil
 }
 
@@ -1270,7 +1292,7 @@ func (u *Server) Stop(ctx context.Context) error {
 	// ttlcache.Stop is an unbuffered send whose only receiver lives inside
 	// Start, so stopping a never-started cache (a Server from NewServer whose
 	// Init never ran or returned early) hangs forever. One flag covers all
-	// six caches — they start together in Init. Nil guards retained for
+	// seven caches — they start together in Init. Nil guards retained for
 	// Server-literal test fixtures that wire only some of them.
 	if u.ttlCachesStarted.Load() {
 		u.processBlockNotify.Stop()
@@ -1288,6 +1310,10 @@ func (u *Server) Stop(ctx context.Context) error {
 
 		if u.blockPolicyDeclineAttempts != nil {
 			u.blockPolicyDeclineAttempts.Stop()
+		}
+
+		if u.announcedBlockRateLimits != nil {
+			u.announcedBlockRateLimits.Stop()
 		}
 	}
 
@@ -2911,20 +2937,11 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), peerBlockFetchTimeout)
 	defer fetchCancel()
 
-	// Fetch the block to classify it
-	block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, blockFound.peerID, blockFound.baseURL)
+	// Fetch the block to classify it. On a 429 the block may come from another peer, which then
+	// becomes the source for the rest of this announcement.
+	block, blockFound, err := u.fetchAnnouncedBlock(ctx, fetchCtx, blockFound)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
-
-		// Report peer failure to P2P service for reputation tracking
-		// This ensures peers with misconfigured asset servers (e.g., 401 errors) have their reputation degraded
-		// A 429 is not charged: /block/:hash shares the peer's per-IP rate-limit bucket with the catch-up
-		// routes our own fan-out drains, so it is our collision, not the announcer's fault. Same reasoning as
-		// isLocalCatchupFault, which is too broad here: it also treats a 401 or 500 (ErrServiceError) as local.
-		if blockFound.peerID != "" && !errors.Is(err, errors.ErrServiceRateLimited) {
-			u.reportCatchupFailure(ctx, blockFound.peerID)
-			u.reportCatchupError(ctx, blockFound.peerID, err.Error())
-		}
 
 		if blockFound.errCh != nil {
 			blockFound.errCh <- err
@@ -2932,6 +2949,12 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 		return
 	}
 
+	u.queueFetchedBlock(ctx, blockFound, block)
+}
+
+// queueFetchedBlock hands an announced block, already fetched from blockFound's source, to catchup
+// if its parent is missing and to the priority queue otherwise. It answers blockFound.errCh.
+func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockFound, block *model.Block) {
 	// Check if parent exists - if not, send directly to catchup
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {

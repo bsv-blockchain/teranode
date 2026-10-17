@@ -36,7 +36,97 @@ const (
 	// announcement flood, short enough that a freshly banned peer is refused
 	// within seconds.
 	peerMaliciousCacheTTL = 5 * time.Second
+
+	// announcedBlockRateLimitAllowance is how many 429s a peer's /block/:hash may answer within
+	// announcedBlockRateLimitWindow before a 429 on an announced-block fetch is charged like any
+	// other failure. See reportAnnouncedBlockFetchFailure.
+	announcedBlockRateLimitAllowance = 3
+	announcedBlockRateLimitWindow    = 10 * time.Minute
+
+	// announcedBlockRateLimitMaxTracked bounds the per-peer 429 counters, so a stream of distinct
+	// peer IDs cannot grow the cache without limit.
+	announcedBlockRateLimitMaxTracked = 10_000
 )
+
+// newAnnouncedBlockRateLimitCache builds the per-peer 429 counter used by
+// spendAnnouncedBlockRateLimitAllowance. The window is fixed from the first 429: reads never extend
+// it, so a peer's allowance comes back once the window lapses.
+func newAnnouncedBlockRateLimitCache() *ttlcache.Cache[string, int] {
+	return ttlcache.New[string, int](
+		ttlcache.WithTTL[string, int](announcedBlockRateLimitWindow),
+		ttlcache.WithDisableTouchOnHit[string, int](),
+		ttlcache.WithCapacity[string, int](announcedBlockRateLimitMaxTracked),
+	)
+}
+
+// spendAnnouncedBlockRateLimitAllowance records one 429 from peerID's /block/:hash and reports
+// whether the peer is now past its allowance, meaning the 429 must be charged. Without the cache
+// (Server literals in tests) every 429 is charged: failing closed costs an honest peer at most
+// some reputation, while failing open makes 429 a free pass.
+//
+// The allowance is per peer ID, so a peer minting fresh IDs gets a fresh allowance each time. That
+// costs it a new libp2p identity per few 429s, and each ID is still charged once past its allowance.
+func (u *Server) spendAnnouncedBlockRateLimitAllowance(peerID string) bool {
+	if u.announcedBlockRateLimits == nil {
+		return true
+	}
+
+	u.announcedBlockRateLimitsMu.Lock()
+	defer u.announcedBlockRateLimitsMu.Unlock()
+
+	n := 1
+
+	// Preserve the original expiry, as recordPolicyDeclineAttempt does: a Set with a full TTL on
+	// every 429 would let a steady trickle keep the window open forever.
+	ttl := ttlcache.DefaultTTL
+	if item := u.announcedBlockRateLimits.Get(peerID); item != nil {
+		n = item.Value() + 1
+
+		if remaining := time.Until(item.ExpiresAt()); remaining > 0 {
+			ttl = remaining
+		}
+	}
+
+	u.announcedBlockRateLimits.Set(peerID, n, ttl)
+
+	return n > announcedBlockRateLimitAllowance
+}
+
+// reportAnnouncedBlockFetchFailure charges peerID for a failed fetch of a block it announced, from
+// the baseURL it announced. Both blockFound fetch sites use it, so whether a peer pays for a broken
+// endpoint does not depend on which of them ran.
+//
+// Every failure is charged, with two exceptions:
+//
+//   - The caller's ctx is done. That is this node shutting down, not the peer failing.
+//   - A 429 within the peer's allowance. The peer's /block/:hash shares its per-IP rate-limit
+//     bucket with the catch-up routes this node's own fan-out drains, so an occasional 429 is our
+//     collision. But the announcer chose the baseURL, so a 429 alone proves nothing: past the
+//     allowance it is charged, or a peer could answer 429 on purpose and announce for free.
+//
+// A fetch deadline is charged. The fetch budget is detached from the caller (or derived from a
+// ctx checked above), so a deadline means the announcer's endpoint used the whole budget, and
+// exempting it would let a peer stall every fetch at no cost.
+//
+// This differs from isLocalCatchupFault, which exempts every 429 and also ErrServiceError (so a
+// 401 or 500). In catch-up this node picked the peer and is hammering it, so 429s there are
+// expected and frequent; on this path the peer picked us, and a 401 or 500 is its misconfiguration.
+//
+// It reports whether the peer was charged.
+func (u *Server) reportAnnouncedBlockFetchFailure(ctx context.Context, peerID string, err error) bool {
+	if peerID == "" || err == nil || ctx.Err() != nil {
+		return false
+	}
+
+	if errors.Is(err, errors.ErrServiceRateLimited) && !u.spendAnnouncedBlockRateLimitAllowance(peerID) {
+		return false
+	}
+
+	u.reportCatchupFailure(ctx, peerID)
+	u.reportCatchupError(ctx, peerID, err.Error())
+
+	return true
+}
 
 // isLegacyPeerID reports whether peerID was namespaced by the legacy netsync path rather than
 // being a real p2p identity.
@@ -368,6 +458,13 @@ func isUnboundTxInvalidVerdict(err error) bool {
 // a 429 was ErrServiceError and already landed in this set. It is deliberately NOT
 // added to IsTransientLocalError, which legacy netsync uses to decide whether to keep
 // a delivering peer.
+//
+// This covers a 429 only as a catch-up run's TERMINAL error. Mid-run, a peer whose
+// subtree fetch runs out of 429 retries is still recorded by recordCatchupPeerFailure,
+// and the releaseCatchupLock drain charges it if the run fails. That charge is kept on
+// purpose as the rotation signal: the peer advertises its own DataHubURL, so a peer
+// answering 429 deliberately must not be able to dodge every charge. The announced-block
+// fetch has its own, bounded rule; see reportAnnouncedBlockFetchFailure.
 func isLocalCatchupFault(err error) bool {
 	return errors.IsTransientLocalError(err) ||
 		errors.Is(err, errors.ErrServiceRateLimited) ||
