@@ -145,18 +145,17 @@ wired into any compose file and are left alone):
 
 | Stack | Config |
 | --- | --- |
-| Local / mainnet / testnet docker | [`deploy/docker/base/prometheus.yml`](../../../deploy/docker/base/prometheus.yml) |
+| Base `prometheus` service (`deploy/docker/base/docker-services.yml`; no stack in this repo extends it) | [`deploy/docker/base/prometheus.yml`](../../../deploy/docker/base/prometheus.yml) |
 | Monitoring-only docker | [`deploy/docker/monitoring/prometheus.yml`](../../../deploy/docker/monitoring/prometheus.yml) |
 | 3-node compose (`docker-compose-ss.yml`, `docker-compose-3blasters.yml`) | [`prometheus-1.yml`](../../prometheus/prometheus-1.yml), `-2`, `-3` |
 | Host-network tests (`test/docker-compose-host.yml`) | [`prometheus-host-1.yml`](../../prometheus/prometheus-host-1.yml), `-2`, `-3` |
 
-Alert *delivery* is only wired in the `deploy/docker/base` stack, which runs an
-Alertmanager (UI on <http://localhost:9094>) configured in
-[`deploy/docker/base/alertmanager.yml`](../../../deploy/docker/base/alertmanager.yml).
-That Alertmanager has **no notifier attached** — firing alerts are visible in
-its UI and in Prometheus (`/alerts`), but nothing is sent anywhere until a
-receiver is added. In the other stacks the rules are evaluated and visible in
-the Prometheus UI, but there is no Alertmanager at all.
+No stack in this repo runs an Alertmanager: the rules are evaluated and
+visible in each stack's Prometheus UI (`/alerts`), and nothing is sent
+anywhere. `deploy/docker/base/docker-services.yml` still defines an
+`alertmanager` service (UI on <http://localhost:9094>) configured in
+[`deploy/docker/base/alertmanager.yml`](../../../deploy/docker/base/alertmanager.yml),
+with **no notifier attached**, but no compose file extends it.
 
 Note: `teranode_blockassembly_current_state` is a numeric gauge, so the
 `BlockAssemblerStuckInState` rule compares it against the state number
