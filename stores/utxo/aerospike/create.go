@@ -273,7 +273,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 			return nil, ctxErr
 		}
 
-		return nil, errors.NewServiceUnavailableError("aerospike store batch did not complete within %s", s.batcherWait)
+		// The item is still queued and the dispatcher writes it regardless, so the
+		// record may yet be committed: the outcome is unknown, not a failure.
+		return nil, utxo.MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("aerospike store batch did not complete within %s", s.batcherWait))
 	}
 
 	// group.Wait returned nil: the item has completed, so its result slot is

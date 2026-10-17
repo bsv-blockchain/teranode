@@ -31,6 +31,13 @@ type spendRetrySpyStore struct {
 	spendCalls   atomic.Int64
 }
 
+// SpendAndCreateMulti runs the list one transaction at a time through this store's
+// SpendAndCreate, so the wrapper sees every call quick validation makes when it applies a
+// batch as one list.
+func (s *spendRetrySpyStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, s, utxo.UniformSpendAndCreateMultiWidths(1), txs, blockHeight, opts...)
+}
+
 func (s *spendRetrySpyStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
 	options, err := utxo.ParseCreateOptions(opts...)
 	if err != nil {
@@ -90,7 +97,7 @@ func TestApplyTxsWithRetry_HardFailDoesNotCancelSiblingsMidCall(t *testing.T) {
 
 	items := make([]txApply, len(txs))
 	for i, tx := range txs {
-		items[i] = txApply{tx: tx, subtreeIdx: 0}
+		items[i] = txApply{tx: tx}
 	}
 
 	failing := *txs[0].TxIDChainHash()
@@ -187,6 +194,21 @@ func TestSpendBatchWithRetry(t *testing.T) {
 		spy.failErr[h] = errors.NewTxInvalidError("bad tx") // not retryable
 
 		require.Error(t, u.spendBatchWithRetry(context.Background(), block, txs, false))
+	})
+
+	t.Run("a cancelled context surfaces as a context error and spends nothing", func(t *testing.T) {
+		spy := &spendRetrySpyStore{failuresLeft: map[chainhash.Hash]int{}, failErr: map[chainhash.Hash]error{}}
+		u, block, txs := newSpendRetryHarness(t, spy)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := u.spendBatchWithRetry(ctx, block, txs, false)
+		require.Error(t, err)
+		// A context error, not a processing one: the legacy park's commit classifier reads a
+		// processing error as a verdict on the block and drops it.
+		require.True(t, errors.IsContextError(err), "a cancel must surface as a context error, got: %v", err)
+		require.Equal(t, int64(0), spy.spendCalls.Load())
 	})
 
 	t.Run("no progress: permanently-retryable tx gives up with error", func(t *testing.T) {

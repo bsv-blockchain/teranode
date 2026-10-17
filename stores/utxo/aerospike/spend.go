@@ -110,6 +110,9 @@ type batchSpend struct {
 	published         atomic.Bool
 	ignoreConflicting bool
 	ignoreLocked      bool
+	// requireParentOutput turns off the "already blessed" fallback for this item;
+	// see utxo.IgnoreFlags.RequireParentOutputs.
+	requireParentOutput bool
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -395,6 +398,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
+	useRequireParentOutputs := len(ignoreFlags) > 0 && ignoreFlags[0].RequireParentOutputs
 
 	spends, err = utxo.GetSpends(tx)
 	if err != nil {
@@ -423,11 +427,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		}
 
 		item := &batchSpend{
-			spend:             spend,
-			blockHeight:       blockHeight,
-			group:             group,
-			ignoreConflicting: useIgnoreConflicting,
-			ignoreLocked:      useIgnoreLocked,
+			spend:               spend,
+			blockHeight:         blockHeight,
+			group:               group,
+			ignoreConflicting:   useIgnoreConflicting,
+			ignoreLocked:        useIgnoreLocked,
+			requireParentOutput: useRequireParentOutputs,
 		}
 		items[idx] = item
 
@@ -850,7 +855,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 
 		spend := item.spend
 
-		if spend.Err != nil && errors.Is(spend.Err, errors.ErrTxNotFound) {
+		if spend.Err != nil && errors.Is(spend.Err, errors.ErrTxNotFound) && !item.requireParentOutput {
 			// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
 			// the utxo store. We can check whether the tx already exists, which means it has been validated and
 			// blessed. In this case we can just clear the error.

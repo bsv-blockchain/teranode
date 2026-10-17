@@ -20,8 +20,18 @@ func spendAndCreateMultiSuite(t *testing.T, newStore func(t *testing.T) utxostor
 	t.Run("concurrency bound", func(t *testing.T) { tests.SpendAndCreateMultiConcurrencyBound(t, newStore(t)) })
 	t.Run("result mapping", func(t *testing.T) { tests.SpendAndCreateMultiResultMapping(t, newStore(t)) })
 	t.Run("options pass through", func(t *testing.T) { tests.SpendAndCreateMultiOptionsPassThrough(t, newStore(t)) })
+	t.Run("subtree indexes", func(t *testing.T) { tests.SpendAndCreateMultiSubtreeIdxs(t, newStore(t)) })
 	t.Run("cancelled between levels", func(t *testing.T) { tests.SpendAndCreateMultiCancelledBetweenLevels(t, newStore(t)) })
 	t.Run("parents deduplicated", func(t *testing.T) { tests.SpendAndCreateMultiParentsDeduplicated(t, newStore(t)) })
+	t.Run("below checkpoint matches a loop", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointMatchesLoop(t, newStore(t)) })
+	t.Run("below checkpoint two waves", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointTwoWaves(t, newStore(t)) })
+	t.Run("below checkpoint create fails", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointCreateFails(t, newStore(t)) })
+	t.Run("below checkpoint existing respent", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointExistingRespent(t, newStore(t)) })
+	t.Run("below checkpoint missing parent", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointMissingParent(t, newStore(t)) })
+	t.Run("below checkpoint existing parent pruned", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointExistingParentPruned(t, newStore(t)) })
+	t.Run("below checkpoint second wave missing parent", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointSecondWaveMissingParent(t, newStore(t)) })
+	t.Run("below checkpoint cancel mid-call", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointCancelMidCall(t, newStore(t)) })
+	t.Run("below checkpoint rollback outlives deadline", func(t *testing.T) { tests.SpendAndCreateMultiBelowCheckpointRollbackOutlivesDeadline(t, newStore(t)) })
 }
 
 func TestSpendAndCreateMultiSQLite(t *testing.T) {

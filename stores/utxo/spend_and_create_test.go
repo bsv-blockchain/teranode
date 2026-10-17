@@ -54,6 +54,14 @@ func (f *fakeSequentialStore) Unspend(_ context.Context, spends []*Spend, _ ...b
 	return nil
 }
 
+// boundedSequentialStore names its own rollback bound.
+type boundedSequentialStore struct {
+	fakeSequentialStore
+	bound time.Duration
+}
+
+func (b *boundedSequentialStore) SpendRollbackTimeout() time.Duration { return b.bound }
+
 func shortenUnspendBackoff(t *testing.T) {
 	t.Helper()
 
@@ -137,7 +145,9 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.Equal(t, 0, f.unspendCalls)
 	})
 
-	t.Run("rollback backoff aborts when the context is cancelled", func(t *testing.T) {
+	t.Run("rollback outlives the caller's cancel", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
 		cancelledCtx, cancel := context.WithCancel(ctx)
 		cancel()
 
@@ -147,9 +157,62 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 			unspendErrs: []error{errors.NewStorageError("t1")},
 		}
 
-		_, _, err := SequentialSpendAndCreate(cancelledCtx, logger, f, tx, 100)
+		_, spends, err := SequentialSpendAndCreate(cancelledCtx, logger, f, tx, 100)
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.NotContains(t, err.Error(), "reversing", "the rollback must complete under its own context")
+		require.Nil(t, spends, "a completed rollback leaves no spends in effect")
+		require.Equal(t, 2, f.unspendCalls)
+	})
+
+	t.Run("a create whose outcome is unknown keeps the spends", func(t *testing.T) {
+		for _, createErr := range []error{
+			context.DeadlineExceeded,
+			errors.NewContextCanceledError("create did not finish", context.Canceled),
+			MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("store batch did not complete within 1s")),
+			errors.NewProcessingError("wrapped", MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("store batch did not complete within 1s"))),
+		} {
+			f := &fakeSequentialStore{
+				spends:    []*Spend{{}},
+				createErr: createErr,
+			}
+
+			md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+			require.True(t, IsCreateOutcomeUnknown(err), "%v", err)
+			require.Nil(t, md)
+			require.Len(t, spends, 1, "the create may still commit, so the spends stay in effect")
+			require.Equal(t, 0, f.unspendCalls)
+		}
+	})
+
+	t.Run("an unmarked service-unavailable create failure rolls back", func(t *testing.T) {
+		f := &fakeSequentialStore{
+			spends:    []*Spend{{}},
+			createErr: errors.NewServiceUnavailableError("store is down"),
+		}
+
+		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+		require.False(t, IsCreateOutcomeUnknown(err))
+		require.Nil(t, spends, "a create that definitely failed is rolled back")
+		require.Equal(t, 1, f.unspendCalls)
+	})
+
+	t.Run("rollback backoff stops at the rollback bound", func(t *testing.T) {
+		f := &boundedSequentialStore{
+			fakeSequentialStore: fakeSequentialStore{
+				spends:      []*Spend{{}},
+				createErr:   errors.NewProcessingError("create blew up"),
+				unspendErrs: []error{errors.NewStorageError("t1"), errors.NewStorageError("t2"), errors.NewStorageError("t3")},
+			},
+			bound: time.Millisecond,
+		}
+
+		start := time.Now()
+		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.Less(t, time.Since(start), unspendRetryBackoffBase/2, "a backoff past the rollback bound must be cut short")
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "context cancelled")
+		require.Contains(t, err.Error(), "context cancelled during retry backoff")
+		require.Len(t, spends, 1, "a failed rollback returns the spends still in effect")
 		require.Equal(t, 1, f.unspendCalls)
 	})
 

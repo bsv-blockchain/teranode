@@ -2067,6 +2067,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 	useSkipUTXOHashCheck := len(ignoreFlags) > 0 && ignoreFlags[0].SkipUTXOHashCheck
+	useRequireParentOutputs := len(ignoreFlags) > 0 && ignoreFlags[0].RequireParentOutputs
 
 	if useSkipUTXOHashCheck {
 		spends, err = utxo.GetSpendsOutpointOnly(tx)
@@ -2164,8 +2165,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 
 			// Handle "already blessed" — parent tx not found but spending tx exists.
-			// Mirrors aerospike spend.go:343-361.
-			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) {
+			// Mirrors aerospike resolveSpendCompletions. Not with RequireParentOutputs:
+			// there the spending tx's record was created before this spend, so it
+			// proves nothing about the spend.
+			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) && !useRequireParentOutputs {
 				mu.Lock()
 				exists := txAlreadyExists
 				mu.Unlock()
