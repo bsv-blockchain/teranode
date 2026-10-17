@@ -516,7 +516,20 @@ The Block Assembly service implements robust error handling across multiple laye
 
 - **Conflicting Transaction Detection**: During reorgs, the service identifies and marks conflicting transactions in affected subtrees
 - **Transaction Recovery**: Non-conflicting transactions are automatically re-added to new subtrees
-- **Deep Reorg Protection**: Reorganizations affecting more than the coinbase maturity threshold (typically 100 blocks) trigger a full service reset for safety
+- **Deep Reorg Protection**: Block Assembly does a full reset, not an in-place reorg, when the deeper side of the reorg reaches the UTXO retention at any height, or reaches coinbase maturity (100 blocks on mainnet) above height 1000 (`reorgNeedsReset`). It also resets when a moved-back block is invalid, or when the in-place reorg fails. A catch-up with no blocks to move back never resets, however many blocks it moves forward.
+
+##### Regression Tests
+
+`TestProcessNewBlockAnnouncement_CatchupVsReorg` (`services/blockassembly/block_assembler_catchup_test.go`) is the regression test for this routing. It checks which path `processNewBlockAnnouncement` takes:
+
+- no action when Block Assembly is already at the tip
+- a single `MoveForwardBlock` for a one-block gap
+- catch-up for a gap of two or more blocks with nothing to move back, with no reset for a 150-block catch-up
+- an in-place reorg for a one-block fork
+- a reset for a reorg at coinbase-maturity depth above height 1000, and for a reorg at the UTXO retention below height 1000. These two subtests call `handleReorg` directly.
+- no tip change when catch-up fails: Block Assembly stays at its tip from before the catch-up
+
+The test replaces the subtree processor with a mock, so it covers the routing decision only. It does not cover reorg handling in `services/blockchain`, `services/blockvalidation` or `stores/utxo`, which need their own regression tests. `make test` runs it, in the `test` job of `teranode_pr_tests.yaml` on every pull request, and in the `go-test` job of `teranode_main_tests.yaml` on every push to `main`, `staging` or `release/*` and on every `v*` tag.
 
 #### Clock Skew Stopping Block Production
 

@@ -149,10 +149,11 @@ network=testnet SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run -tags aerospike .
 
 For running various test suites (not typically needed for development):
 
-- `test_tna` - TNA integration test suite (`test/tna/`)
-- `test_tec` - TEC integration test suite (`test/tec/`)
-- `test_tnd` - TND integration test suite (`test/tnd/`)
-- `test_tnf` - TNF integration test suite (`test/tnf/`)
+- `test_tna` - TNA acceptance test suite (`test/tna/`)
+- `test_tec` - TEC acceptance test suite (`test/tec/`)
+
+The `test/tnb/`, `test/tnd/`, `test/tnf/` and `test/tnj/` acceptance suites have no build tag. For the test level of each suite, see [Running Tests](runningTests.md#test-levels).
+
 - `test_smoke` - Smoke tests (docker-based, see `test/e2e/docker/`)
 - `test_functional` - Functional tests (subset of smoke tests)
 
