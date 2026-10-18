@@ -51,6 +51,16 @@ type LaneCache struct {
 	oversize  atomic.Uint64
 	inserts   stripedCounter
 	laneWaits atomic.Uint64
+
+	// lapped is the highest lapped-entry estimate UpdateStats has reported
+	// since the last Reset, so the evictions it feeds never go down between
+	// calls. resetEvicted counts the entries every Reset dropped.
+	lapped       atomic.Uint64
+	resetEvicted atomic.Uint64
+
+	// resetWritten is the lane bytes written up to the last Reset, so the
+	// estimate only sees what was written since.
+	resetWritten atomic.Uint64
 }
 
 // lfLane is three cache lines: owner (scanned by writers looking for a lane),
@@ -602,6 +612,10 @@ func (c *LaneCache) Reset() {
 		c.lanes[i].snap.Store(c.lanes[i].tail.Add(c.ringSize + 8))
 	}
 
+	// Every entry is gone: bank them all as evicted and restart the estimate.
+	c.resetEvicted.Add(c.inserts.Load())
+	c.resetWritten.Store(c.written())
+	c.lapped.Store(0)
 	c.inserts.reset()
 }
 
@@ -610,21 +624,52 @@ func (c *LaneCache) Oversize() uint64 {
 	return c.oversize.Load()
 }
 
-// UpdateStats adds the cache's entry estimate to s.
-func (c *LaneCache) UpdateStats(s *Stats) {
-	inserts := c.inserts.Load()
-
+// written returns the bytes written to all lanes since the cache was made.
+func (c *LaneCache) written() uint64 {
 	var written uint64
 
 	for i := range c.lanes {
 		written += c.lanes[i].tail.Load() - lfHeaderBytes
 	}
 
+	return written
+}
+
+// UpdateStats adds the cache's entry estimate to s.
+func (c *LaneCache) UpdateStats(s *Stats) {
+	inserts := c.inserts.Load()
+
+	written := c.written() - c.resetWritten.Load()
+
 	live := inserts
 	if capacity := uint64(len(c.lanes)) * c.ringSize; written > capacity {
 		live = uint64(float64(inserts) * float64(capacity) / float64(written))
 	}
 
+	// Entries a ring wrap overwrote are the cache's evictions. The estimate
+	// can dip slightly as the average record size drifts; report the highest
+	// value seen so a rate() over the metric never reads a dip as a reset.
+	lapped := inserts - live
+	for {
+		prev := c.lapped.Load()
+		if lapped <= prev {
+			lapped = prev
+			break
+		}
+
+		if c.lapped.CompareAndSwap(prev, lapped) {
+			break
+		}
+	}
+
+	// A concurrent Reset can leave the high-water mark above the restarted
+	// insert count for a moment.
+	lapped = min(lapped, inserts)
+	live = inserts - lapped
+
+	// An estimate: a record superseded by a later Set of the same key, or
+	// deleted, also counts once the ring wraps over it.
+	s.Evictions += c.resetEvicted.Load() + lapped
 	s.CurrentGenEntries += live
 	s.ValidEntriesCount += live
 	s.TotalMapSize += live

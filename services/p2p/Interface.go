@@ -14,19 +14,23 @@ import (
 // any transport-specific representations (like protobuf).
 // Thread safety: All access to peer data is protected by PeerRegistry's mutex.
 type PeerInfo struct {
-	ID              peer.ID
-	ClientName      string // Human-readable name of the client software
-	Height          uint32
-	BlockHash       *chainhash.Hash
-	DataHubURL      string
-	BanScore        int
-	IsBanned        bool
-	IsConnected     bool // Whether this peer is directly connected (vs gossiped)
-	ConnectedAt     time.Time
-	BytesReceived   uint64
-	LastBlockTime   time.Time
-	LastMessageTime time.Time // Last time we received any message from this peer
-	Storage         string    // Storage mode: "full", "pruned", or empty (unknown/old version)
+	ID         peer.ID
+	ClientName string // Human-readable name of the client software
+	Height     uint32 // Capped against local progress; drives sync decisions
+	// AdvertisedHeight is the height the peer actually claimed, before the
+	// unvalidated-lead cap. Reported to operators so a catching-up node does
+	// not display every peer at localHeight+maxLead.
+	AdvertisedHeight uint32
+	BlockHash        *chainhash.Hash
+	DataHubURL       string
+	BanScore         int
+	IsBanned         bool
+	IsConnected      bool // Whether this peer is directly connected (vs gossiped)
+	ConnectedAt      time.Time
+	BytesReceived    uint64
+	LastBlockTime    time.Time
+	LastMessageTime  time.Time // Last time we received any message from this peer
+	Storage          string    // Storage mode: "full", "pruned", or empty (unknown/old version)
 
 	// Interaction metrics - track peer reliability across all interactions (blocks, subtrees, catchup, etc.)
 	InteractionAttempts    int64         // Total number of interactions with this peer
@@ -60,6 +64,17 @@ type PeerInfo struct {
 	// Catchup error tracking
 	LastCatchupError     string    // Last error message from catchup attempt with this peer
 	LastCatchupErrorTime time.Time // When the last catchup error occurred
+}
+
+// DisplayHeight is the height to show an operator: what the peer advertised,
+// or the capped Height for peers on versions that predate AdvertisedHeight.
+// Never use it for sync decisions; those read Height.
+func (p *PeerInfo) DisplayHeight() uint32 {
+	if p.AdvertisedHeight != 0 {
+		return p.AdvertisedHeight
+	}
+
+	return p.Height
 }
 
 // ClientI defines the interface for P2P client operations.

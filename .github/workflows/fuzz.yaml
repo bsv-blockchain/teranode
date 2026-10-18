@@ -72,6 +72,8 @@ jobs:
             target: FuzzReadBlockFromReader
           - pkg: model
             target: FuzzDiskParentSpendsMap_Parity
+          - pkg: model
+            target: FuzzDecodeSubtreeMetaBody
           - pkg: pkg/fileformat
             target: FuzzHeaderParsersAgree
           - pkg: pkg/fileformat

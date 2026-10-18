@@ -205,3 +205,51 @@ func TestTxMetaCache_GetMetaCachedInto_ShortOutputsAreAnError(t *testing.T) {
 	_, err = c.GetMetaCachedInto(context.Background(), hashes, make([]uint64, 1), make([]CachedMeta, 2), make([]bool, 2))
 	require.Error(t, err)
 }
+
+// TestTxMetaCache_Lockfree_CacheStatsReportsLappedEvictions checks that the
+// lockfree cache's ring-wrap evictions reach CacheStats, which feeds the
+// teranode_tx_meta_cache_evictions gauge.
+func TestTxMetaCache_Lockfree_CacheStatsReportsLappedEvictions(t *testing.T) {
+	c := newTestTxMetaCache(t, Lockfree)
+	lanes := c.cache.(*lockFreeBackend).cache
+
+	require.Zero(t, c.GetCacheStats().Evictions)
+
+	for i := uint64(0); i < 1_500_000; i++ {
+		k := mixedKey(i)
+		require.NoError(t, lanes.Set(k[:], lfValue(i)))
+	}
+
+	stats := c.GetCacheStats()
+	require.Positive(t, stats.Evictions)
+	require.Equal(t, stats.TotalElementsAdded, stats.Evictions+stats.ValidEntriesCount)
+}
+
+// TestTxMetaCache_BucketLocality pins which backends gain from lookups grouped
+// by ProbeRangeOf: the bucketed ones take a lock per bucket, the lockfree
+// cache has one global index and gains nothing.
+func TestTxMetaCache_BucketLocality(t *testing.T) {
+	for _, tc := range allBucketTypes {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestTxMetaCache(t, tc.bucket)
+			require.Equal(t, tc.bucket != Lockfree, c.BucketLocality())
+		})
+	}
+}
+
+// A scratch rebuilt after its pool was emptied (every GC) is sized for the
+// whole batch at once, instead of doubling its way up through the reads.
+func TestIntoScratch_ReserveSizesForTheBatch(t *testing.T) {
+	sc := &intoScratch{}
+	sc.reserve(4096)
+	require.GreaterOrEqual(t, cap(sc.raw), 4096*intoScratchBytesPerEntry)
+	require.Empty(t, sc.raw)
+
+	big := &intoScratch{}
+	big.reserve(1 << 20)
+	require.LessOrEqual(t, cap(big.raw), intoScratchMaxRetain, "never reserve more than the pool retains")
+
+	kept := &intoScratch{raw: make([]byte, 0, 1<<20)}
+	kept.reserve(16)
+	require.Equal(t, 1<<20, cap(kept.raw), "a big enough buffer is kept")
+}

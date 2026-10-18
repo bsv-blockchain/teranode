@@ -486,6 +486,21 @@ func (s *Client) GetCandidateBlock(ctx context.Context, candidateID []byte) (*bl
 	return res, nil
 }
 
+// PrepareBlock sends block assembly a block on its tip that block validation has started
+// validating, so it can build the block's transaction map before the block is added.
+func (s *Client) PrepareBlock(ctx context.Context, block *model.Block) error {
+	blockBytes, err := block.Bytes()
+	if err != nil {
+		return errors.NewProcessingError("[PrepareBlock][%s] failed to serialize block", block.String(), err)
+	}
+
+	if _, err = s.client.PrepareBlock(ctx, &blockassembly_api.PrepareBlockRequest{Block: blockBytes}); err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // sendBatchToBlockAssembly sends a batch of transactions to block assembly.
 // Uses columnar format if enabled in settings, otherwise uses traditional row format.
 //

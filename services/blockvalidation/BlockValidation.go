@@ -33,6 +33,7 @@ import (
 	p2pconstants "github.com/bsv-blockchain/teranode/interfaces/p2p"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
@@ -227,6 +228,11 @@ type BlockValidation struct {
 	// runs without a P2P service; all uses are nil-guarded. Wired through NewBlockValidation's
 	// variadic opts before any goroutine starts, so it is never written post-construction.
 	p2pClient P2PClientI
+
+	// blockAssemblyClient is told about a block from a peer once its header checks passed
+	// (prepareBlockAssembly). Optional and may be nil; wired through NewBlockValidation's
+	// variadic opts like p2pClient.
+	blockAssemblyClient blockassembly.ClientI
 
 	// lastValidatedBlocks caches recently validated blocks for 2 minutes
 	lastValidatedBlocks *expiringmap.ExpiringMap[chainhash.Hash, *model.Block]
@@ -455,6 +461,10 @@ func NewBlockValidation(ctx context.Context, logger ulogger.Logger, tSettings *s
 	for _, o := range opts {
 		if c, ok := o.(P2PClientI); ok {
 			bv.p2pClient = c
+		}
+
+		if c, ok := o.(blockassembly.ClientI); ok {
+			bv.blockAssemblyClient = c
 		}
 	}
 
@@ -1611,6 +1621,11 @@ const validationResultGrace = 100 * time.Millisecond
 // second independent timeout, so the two cannot drift apart.
 const revalidateFromScratchDelay = 2 * validationResultGrace
 
+// prepareBlockAssemblyTimeout bounds the hint to block assembly in prepareBlockAssembly, which
+// nothing waits on. Block assembly only starts a goroutine, so this only matters when it is
+// unreachable.
+const prepareBlockAssemblyTimeout = 2 * time.Second
+
 func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *ValidateBlockOptions, validate func(opts *ValidateBlockOptions) error) error {
 	result := &validationResult{
 		done: make(chan struct{}),
@@ -2222,6 +2237,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 		}
 
+		// The block's subtrees are in the subtree store now. Under optimistic mining the block is
+		// added straight away, so block assembly has nothing to get ahead of.
+		if !useOptimisticMining && !opts.IsCatchupMode && !opts.IsRevalidation {
+			u.prepareBlockAssembly(block)
+		}
+
 		var optimisticMiningWg sync.WaitGroup
 
 		oldBlockIDsMap := txmap.NewSyncedMap[chainhash.Hash, []uint32]()
@@ -2680,6 +2701,32 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 		return nil
 	})
+}
+
+// prepareBlockAssembly hands a block whose header checks passed and whose subtrees are in the
+// subtree store to block assembly, which binds the subtree list to the header itself and builds
+// the block's transaction map while the block is validated, so it has less to do once the block
+// is added. It is only a hint: it does not wait for block assembly, and an error is logged.
+func (u *BlockValidation) prepareBlockAssembly(block *model.Block) {
+	if u.blockAssemblyClient == nil || len(block.Subtrees) == 0 {
+		return
+	}
+
+	// a copy, so the call does not read the block while validation updates it
+	prepared, err := model.NewBlock(block.Header, block.CoinbaseTx, slices.Clone(block.Subtrees), block.TransactionCount, block.SizeInBytes, block.Height, 0)
+	if err != nil {
+		u.logger.Warnf("[ValidateBlock][%s] failed to copy the block for block assembly: %v", block.Hash().String(), err)
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), prepareBlockAssemblyTimeout)
+		defer cancel()
+
+		if err := u.blockAssemblyClient.PrepareBlock(ctx, prepared); err != nil {
+			u.logger.Warnf("[ValidateBlock][%s] failed to prepare block assembly for the block: %v", prepared.Hash().String(), err)
+		}
+	}()
 }
 
 // isCaughtUp reports whether the node is provably in the steady RUNNING state.

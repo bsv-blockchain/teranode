@@ -133,6 +133,12 @@ var (
 	// subtree already exists. This is individually benign (best-effort, no retries), but without
 	// a metric a spike in the rate would be invisible.
 	prometheusSubtreeAlreadyExistsSkipped prometheus.Counter
+
+	// prometheusPeerSubtreeAdmissionWait tracks how long a peer subtree waited for a
+	// subtreevalidation_peerSubtreeConcurrency slot, and prometheusPeerSubtreeAdmissionWaiting
+	// how many are waiting now. Together they show whether the limit is too low.
+	prometheusPeerSubtreeAdmissionWait    prometheus.Histogram
+	prometheusPeerSubtreeAdmissionWaiting prometheus.Gauge
 )
 
 var (
@@ -334,6 +340,25 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreevalidation",
 			Name:      "subtree_already_exists_skipped_total",
 			Help:      "Number of subtree Kafka messages skipped because the subtree already exists",
+		},
+	)
+
+	prometheusPeerSubtreeAdmissionWait = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "peer_subtree_admission_wait",
+			Help:      "Seconds a peer subtree waited for a validation slot (subtreevalidation_peerSubtreeConcurrency)",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+
+	prometheusPeerSubtreeAdmissionWaiting = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "peer_subtree_admission_waiting",
+			Help:      "Peer subtrees waiting for a validation slot (subtreevalidation_peerSubtreeConcurrency)",
 		},
 	)
 }

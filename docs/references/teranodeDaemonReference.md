@@ -394,7 +394,6 @@ The daemon uses a variety of configuration options to control service behavior a
 |---------|-------------|---------|--------|
 | `Kafka.Brokers` | Kafka broker addresses | - | Required for inter-service communication |
 | `Kafka.ValidatorTxsConfig` | Kafka topic configuration for validator transactions | - | Affects how transaction data flows between services |
-| `Validator.KafkaWorkers` | Number of Kafka workers for validator service | `100` | Affects throughput of Kafka message processing |
 | `ClientName` | Client identifier for Kafka consumer groups | - | Ensures unique consumer group names per instance |
 
 ### PostgreSQL Settings

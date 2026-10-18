@@ -23,6 +23,11 @@ import (
 // subtree (~1M txs, ~4k per range) still gets one task per range.
 const probeTaskMinKeys = 2048
 
+// probeSpanKeys is the span of txMetaSlice one probe task covers when the
+// cache has no BucketLocality: as many lookups as a bucket range holds in a
+// full-size subtree, so both layouts split a subtree into about as many tasks.
+const probeSpanKeys = 4096
+
 // probePool is a server-wide pool of cache-probe worker slots, sized by
 // subtreevalidation_processTxMetaUsingCache_Concurrency and created on first
 // use so struct-literal Servers (tests) get it too.
@@ -82,9 +87,11 @@ func (u *Server) processBlockTxMetaUsingCache(ctx context.Context, txHashes []ch
 // probeTxMetaCache attempts to retrieve transaction metadata from the cache for a batch
 // of transactions.
 //
-// The lookups are grouped by cache bucket range (txmetacache.ProbeRangeOf) and each task
-// (one or more adjacent ranges) is probed with one GetMetaCachedMulti call, so every bucket's
-// read lock is taken once per task rather than once per transaction. Tasks run on probe workers
+// On a bucketed cache the lookups are grouped by bucket range (txmetacache.ProbeRangeOf) and
+// each task (one or more adjacent ranges) is probed with one batched read, so every bucket's
+// read lock is taken once per task rather than once per transaction. A cache without bucket
+// locks (TxMetaCache.BucketLocality false) gets contiguous spans of txHashes instead, so each
+// task writes its part of txMetaSlice sequentially. Tasks run on probe workers
 // whose number is limited across ALL concurrent calls drawing from the same pool
 // (subtreevalidation_processTxMetaUsingCache_Concurrency): when hundreds of subtrees arrive at
 // once they share the workers instead of each starting its own, which kept thousands of
@@ -119,15 +126,48 @@ func (u *Server) probeTxMetaCache(ctx context.Context, pool *probePool, txHashes
 
 	missingTxThreshold := uint32(u.settings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold) // nolint: gosec // G115: configured threshold is non-negative
 
-	// Hash each lookup once (the cache reuses it) and group the indices still
-	// to look up by bucket range with a counting sort.
+	var (
+		missed atomic.Uint32
+		tasks  int
+		probe  func(ctx context.Context, task int) error
+	)
+
+	if cache.BucketLocality() {
+		keyHashes, order, ranges := groupByProbeRange(txHashes, txMetaSlice)
+		tasks = len(ranges)
+		probe = func(ctx context.Context, task int) error {
+			return probeCacheRange(ctx, cache, txHashes, keyHashes, txMetaSlice, order[ranges[task][0]:ranges[task][1]], &missed, failFast, missingTxThreshold)
+		}
+	} else {
+		// No bucket locks to save: give each task a contiguous span, so its
+		// result writes into txMetaSlice are sequential rather than scattered
+		// across the whole slice.
+		spans := probeSpans(len(txHashes), probeSpanKeys)
+		tasks = len(spans)
+		probe = func(ctx context.Context, task int) error {
+			return probeCacheSpan(ctx, cache, txHashes, txMetaSlice, spans[task][0], spans[task][1], &missed, failFast, missingTxThreshold)
+		}
+	}
+
+	if err := pool.run(ctx, u, tasks, probe); err != nil {
+		return int(missed.Load()), errors.NewProcessingError("error processing txMeta using cache", err)
+	}
+
+	return int(missed.Load()), nil
+}
+
+// groupByProbeRange hashes the lookups still to do once (the cache reuses the
+// hash) and groups their indices by bucket range with a counting sort. It
+// returns the hashes, the grouped indices, and per task the [start, end) of
+// its indices in order.
+func groupByProbeRange(txHashes []chainhash.Hash, txMetaSlice []metaSliceItem) ([]uint64, []int32, [][2]int) {
 	keyHashes := make([]uint64, len(txHashes))
 	pending := make([]bool, len(txHashes))
 
 	var counts [txmetacache.ProbeRanges]int
 
 	for i := range txHashes {
-		if txMetaSlice[i].isSet || txHashes[i].Equal(*subtree.CoinbasePlaceholderHash) {
+		if !probePending(txHashes, txMetaSlice, i) {
 			continue
 		}
 
@@ -157,21 +197,34 @@ func (u *Server) probeTxMetaCache(ctx context.Context, pool *probePool, txHashes
 		next[r]++
 	}
 
-	var (
-		missed  atomic.Uint32
-		aborted bool // not every task was started
-	)
+	tasks := probeTasks(counts[:], probeTaskMinKeys)
+	ranges := make([][2]int, len(tasks))
 
+	for k, task := range tasks {
+		// Ranges task[0]..task[1]-1 are contiguous in order.
+		ranges[k] = [2]int{starts[task[0]], next[task[1]-1]}
+	}
+
+	return keyHashes, order, ranges
+}
+
+// probePending reports whether txMetaSlice[i] still has to be looked up: it is
+// not filled in yet and is not the coinbase placeholder.
+func probePending(txHashes []chainhash.Hash, txMetaSlice []metaSliceItem, i int) bool {
+	return !txMetaSlice[i].isSet && !txHashes[i].Equal(*subtree.CoinbasePlaceholderHash)
+}
+
+// run starts one goroutine per task, each holding one of the pool's slots, and
+// waits for them. Slots are taken before a goroutine starts, so the number of
+// probe goroutines is bounded across every concurrent call.
+func (p *probePool) run(ctx context.Context, u *Server, tasks int, probe func(ctx context.Context, task int) error) error {
 	g, gCtx := errgroup.WithContext(ctx)
-	slots := pool.slotsFor(u)
+	slots := p.slotsFor(u)
+
+	aborted := false // not every task was started
 
 dispatch:
-	for _, task := range probeTasks(counts[:], probeTaskMinKeys) {
-		// Ranges task[0]..task[1]-1 are contiguous in order.
-		indices := order[starts[task[0]]:next[task[1]-1]]
-
-		// Take a shared probe slot before starting the goroutine, so the number
-		// of probe goroutines is bounded across every concurrent call.
+	for task := 0; task < tasks; task++ {
 		select {
 		case slots <- struct{}{}:
 		case <-gCtx.Done():
@@ -180,14 +233,14 @@ dispatch:
 		}
 
 		g.Go(func() error {
-			pool.enter()
+			p.enter()
 
 			defer func() {
-				pool.leave()
+				p.leave()
 				<-slots
 			}()
 
-			return probeCacheRange(gCtx, cache, txHashes, keyHashes, txMetaSlice, indices, &missed, failFast, missingTxThreshold)
+			return probe(gCtx, task)
 		})
 	}
 
@@ -198,11 +251,7 @@ dispatch:
 		err = errors.NewContextCanceledError("[processTxMetaUsingCache context cancelled]", ctx.Err())
 	}
 
-	if err != nil {
-		return int(missed.Load()), errors.NewProcessingError("error processing txMeta using cache", err)
-	}
-
-	return int(missed.Load()), nil
+	return err
 }
 
 // probeTasks splits the per-range lookup counts into tasks of adjacent ranges,
@@ -235,10 +284,22 @@ func probeTasks(counts []int, minKeys int) [][2]int {
 	return tasks
 }
 
+// probeSpans splits [0, n) into contiguous spans of at most size indices.
+func probeSpans(n, size int) [][2]int {
+	spans := make([][2]int, 0, (n+size-1)/size)
+
+	for lo := 0; lo < n; lo += size {
+		spans = append(spans, [2]int{lo, min(lo+size, n)})
+	}
+
+	return spans
+}
+
 // probeScratch is probeCacheRange's per-task working memory. A task covers
 // thousands of lookups, so these slices are hundreds of KB; allocating them
 // per task would take the heap's global lock each time.
 type probeScratch struct {
+	indices   []int32
 	hashes    []chainhash.Hash
 	keyHashes []uint64
 	found     []bool
@@ -265,18 +326,57 @@ func (sc *probeScratch) sized(n int) ([]chainhash.Hash, []uint64, []bool, []txme
 // bucket ranges, with a single batched cache read and fills txMetaSlice.
 func probeCacheRange(ctx context.Context, cache *txmetacache.TxMetaCache, txHashes []chainhash.Hash, keyHashes []uint64,
 	txMetaSlice []metaSliceItem, indices []int32, missed *atomic.Uint32, failFast bool, missingTxThreshold uint32) error {
+	sc := probeScratchPool.Get().(*probeScratch)
+	defer probeScratchPool.Put(sc)
+
+	return probeIndices(ctx, cache, sc, txHashes, keyHashes, txMetaSlice, indices, missed, failFast, missingTxThreshold)
+}
+
+// probeCacheSpan looks up the pending indices in [lo, hi) with a single
+// batched cache read and fills txMetaSlice. It passes no key hashes, so it is
+// only for a backend without BucketLocality, which does not use them.
+func probeCacheSpan(ctx context.Context, cache *txmetacache.TxMetaCache, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem,
+	lo, hi int, missed *atomic.Uint32, failFast bool, missingTxThreshold uint32) error {
+	sc := probeScratchPool.Get().(*probeScratch)
+	defer probeScratchPool.Put(sc)
+
+	indices := sc.indices[:0]
+
+	for i := lo; i < hi; i++ {
+		if probePending(txHashes, txMetaSlice, i) {
+			indices = append(indices, int32(i)) // nolint: gosec // G115: a subtree batch is far below 2^31 transactions
+		}
+	}
+
+	sc.indices = indices
+
+	return probeIndices(ctx, cache, sc, txHashes, nil, txMetaSlice, indices, missed, failFast, missingTxThreshold)
+}
+
+// probeIndices looks up txHashes at the given indices with a single batched
+// cache read, using sc as working memory, and fills txMetaSlice. keyHashes may
+// be nil, for a backend that does not use them.
+func probeIndices(ctx context.Context, cache *txmetacache.TxMetaCache, sc *probeScratch, txHashes []chainhash.Hash, keyHashes []uint64,
+	txMetaSlice []metaSliceItem, indices []int32, missed *atomic.Uint32, failFast bool, missingTxThreshold uint32) error {
 	if ctx.Err() != nil {
 		return errors.NewContextCanceledError("[processTxMetaUsingCache context cancelled]", ctx.Err())
 	}
 
-	sc := probeScratchPool.Get().(*probeScratch)
-	defer probeScratchPool.Put(sc)
+	if len(indices) == 0 {
+		return nil
+	}
 
 	hashes, hashKeys, found, metas := sc.sized(len(indices))
+	if keyHashes == nil {
+		hashKeys = nil
+	}
 
 	for j, i := range indices {
 		hashes[j] = txHashes[i]
-		hashKeys[j] = keyHashes[i]
+	}
+
+	for j := range hashKeys {
+		hashKeys[j] = keyHashes[indices[j]]
 	}
 
 	// Decode straight into caller-owned values: no *meta.Data per hit. The

@@ -2090,9 +2090,12 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 	prometheusBlockAssemblerGetMiningCandidate.Inc()
 
-	// Handle block-processing-in-progress state
+	// Handle block-processing-in-progress state. A reorg, reconcile or reset is
+	// still moving block assembly to the chain tip, so a candidate built on the
+	// block assembly tip would mine on the old side of a reorg.
 	currentState := b.GetCurrentRunningState()
-	if currentState == StateBlockchainSubscription || currentState == StateMovingUp {
+	if currentState == StateBlockchainSubscription || currentState == StateMovingUp ||
+		currentState == StateReorging || currentState == StateReconciling || currentState == StateResetting {
 		b.logger.Infof("[GetMiningCandidate] Block processing in progress (state: %s), returning empty block template for new height", StateStrings[currentState])
 
 		bestBlockHeader, bestBlockMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)

@@ -84,7 +84,7 @@ func TestSeeder_SkipHeaders_CorruptedHeaderFileFailsVerification(t *testing.T) {
 	require.NoError(t, err)
 	tSettings.UtxoStore.UtxoStore = utxoStoreURL
 
-	err = Seeder(ulogger.TestLogger{}, tSettings, dir, hash, true /* skipHeaders */, false /* skipUTXOs */, false /* force */, false /* skipChecksum */)
+	err = Seeder(ulogger.TestLogger{}, tSettings, dir, hash, true /* skipHeaders */, false /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, false /* skipChecksum */)
 	require.Error(t, err, "a corrupted headers file must not be silently consumed when -skipHeaders is set")
 	require.Contains(t, err.Error(), "checksum verification failed for headers file")
 }
@@ -119,7 +119,7 @@ func TestSeeder_SkipChecksum_DoesNotVerifySidecars(t *testing.T) {
 	require.NoError(t, err)
 	tSettings.UtxoStore.UtxoStore = utxoStoreURL
 
-	err = Seeder(ulogger.TestLogger{}, tSettings, dir, hash, true /* skipHeaders */, false /* skipUTXOs */, false /* force */, true /* skipChecksum */)
+	err = Seeder(ulogger.TestLogger{}, tSettings, dir, hash, true /* skipHeaders */, false /* skipUTXOs */, false /* force */, false /* recoverCheckpoint */, true /* skipChecksum */)
 	if err != nil {
 		require.NotContains(t, err.Error(), "checksum verification failed")
 	}

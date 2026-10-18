@@ -770,7 +770,7 @@ func (u *Server) Init(ctx context.Context) (err error) {
 	// that served a corrupt block body (bitcoin-sv/teranode#4692) with correct attribution to
 	// the serving peer — wired inside the constructor before any worker goroutine starts.
 	if u.blockValidation == nil {
-		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, u.p2pClient)
+		u.blockValidation = NewBlockValidation(ctx, u.logger, u.settings, u.blockchainClient, u.subtreeStore, u.txStore, u.utxoStore, u.validatorClient, subtreeValidationClient, u.p2pClient, u.blockAssemblyClient)
 	}
 
 	// Record that the ttlcache eviction loops start here, BEFORE the go
