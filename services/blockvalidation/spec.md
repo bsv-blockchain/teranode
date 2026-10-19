@@ -236,6 +236,7 @@ A missing-parent or not-found transaction result SHALL be classified as a transi
 | HEADER-CONTEXT | `ERR_BLOCK_HEADER_CONTEXT` | never | no | no | once, from scratch |
 | POLICY-DECLINED | `ERR_BLOCK_POLICY_DECLINED` | never | no | no | per BV-PEER-002 |
 | LOCAL | service / storage / processing / context | never | no | no | yes |
+| CLOCK-DEFERRED (BV-HEADER-006) | to be assigned (today `ERR_BLOCK_INVALID`, GAP-BV-050) | never | no | no | yes, on re-announcement |
 
 **BV-VERDICT-002.** A CORRUPT outcome MUST NOT add the block to the Blockchain store in any form, MUST NOT set the invalid flag for the hash, and MUST NOT mark the hash as existing in any cache that gates re-announcement.
 
@@ -478,7 +479,7 @@ A breaker MUST always be able to return to closed.
 
 **BV-QUICK-029.** Every below-checkpoint decision in this service SHALL derive its boundary from the single shared definition of the highest hardcoded checkpoint.
 
-**BV-QUICK-030.** At or below the highest hardcoded checkpoint, quick validation SHALL trust the checkpoint for every consensus rule it does not evaluate. That is wider than bitcoin-sv's `assumevalid`, which skips only script verification. The rules trusted rather than checked are: scripts; finality (BV-BODY-015, BV-BODY-019); relative lock times; per-transaction and per-block sigops (BV-BODY-021); fees and the coinbase reward (BV-BODY-010); and, in outpoint-only mode, input values and coinbase maturity.
+**BV-QUICK-030.** At or below the highest hardcoded checkpoint, quick validation SHALL trust the checkpoint for every consensus rule it does not evaluate. That is wider than bitcoin-sv's `assumevalid`, which skips only script verification. The rules trusted rather than checked are: scripts; finality (BV-BODY-015, BV-BODY-019); relative lock times; per-transaction and per-block sigops (BV-BODY-021); fees and the coinbase reward (BV-BODY-010); and, in outpoint-only mode, input values. Coinbase maturity is NOT trusted: the UTXO store enforces it on outpoint-only spends too (pinned by `TestMinimalCreate_CoinbaseMaturity_OutpointOnlySpend`).
 
 **BV-QUICK-031.** Quick validation of blocks above the highest hardcoded checkpoint, which only the operator catchup-checkpoint override enables (BV-CONFIG-005), is an operator trust assumption. On that range quick validation SHOULD still enforce coinbase finality (BV-BODY-019), coinbase maturity and transaction finality.
 
@@ -1183,7 +1184,7 @@ On the optimistic background path, an old-block-ID INVALID verdict calls `Invali
 
 **GAP-BV-013.** Optimistic crash and sweep race.
 *Affects:* BV-OPTIMISTIC-008, BV-COMMIT-002.
-A block added optimistically whose background validation never ran is later marked `subtrees_set` and mined by the sweep without ever being validated. The sweep can also set `subtrees_set` while background validation is still running (`BlockValidation.go` ~3495, documented as KNOWN LIMITATION).
+A block added optimistically whose background validation never ran is later marked `subtrees_set` and mined by the sweep without ever being validated. The sweep can also set `subtrees_set` while background validation is still running (`BlockValidation.go` ~3495, documented as KNOWN LIMITATION). The same happens without any crash: an optimistic revalidation is queued on a two-slot in-memory channel, and after its 4 attempts are exhausted the block stays on the chain unvalidated and is later accepted by the sweep.
 *Work required:* persist a "pending background validation" marker and exclude such blocks from the sweep until validated.
 
 **GAP-BV-014.** Parent-mined give-up returns the wrong code.
@@ -1384,8 +1385,8 @@ Teranode does not enforce BIP30 below `BIP0034Height`, and when a coinbase's ID 
 
 **GAP-BV-050.** Future-dated catchup headers are reported malicious.
 *Affects:* BV-CATCHUP-007, BV-HEADER-006.
-A header more than 2 hours ahead of the local clock is treated as a malicious response (`catchup/header_validation.go` ~49). bitcoin-sv attaches no penalty to `time-too-new`, so a node with a fast clock would ban honest peers. Whether the block path (BV-HEADER-006) also publishes an invalid-block notification for this case has not been verified.
-*Work required:* abort without a malicious report; verify and align the block path.
+A header more than 2 hours ahead of the local clock is treated as a malicious response (`catchup/header_validation.go` ~49). bitcoin-sv attaches no penalty to `time-too-new`, so a node with a fast clock would ban honest peers. On the block path, a future-dated block is rejected with `ERR_BLOCK_INVALID` (`model/Block.go` ~699), and tests pin that code (`model/Block_test.go` ~603, `cheap_header_no_persist_test.go` ~345). Whether an invalid-block notification is published for it has not been verified.
+*Work required:* abort without a malicious report; give the block-path outcome its own class (the CLOCK-DEFERRED row of BV-VERDICT-001) and assert no notification and no strike.
 
 **GAP-BV-051.** Every duplicate transaction is classified CORRUPT.
 *Affects:* BV-BODY-004.
@@ -1401,6 +1402,36 @@ A fork deeper than `CoinbaseMaturity` is reported malicious regardless of its wo
 *Affects:* BV-HEADER-001, BV-HEADER-004.
 The PoW ceiling is the looser of `PowLimit` and `PowLimitBits` (`model/BlockHeader.go` ~320), which on STN admits 0x207fffff where bitcoin-sv's STN `powLimit` rejects it. Teranode also applies the modern DAA to STN at all heights (`services/blockchain/Difficulty.go` ~117), where bitcoin-sv's STN `DaaHeight` is 2200 with the EDA before it. STN only.
 *Work required:* match bitcoin-sv's STN parameters, or record STN as an intentional deviation.
+
+**GAP-BV-054.** Three worker paths have no panic recovery.
+*Affects:* BV-STARTUP-007.
+The only `recover()` in the service is in the block-found workers (`Server.go` ~825). The priority-queue workers (`blockProcessingWorker`, ~2120), the catchup consumer (`processCatchupChItem`, ~2235) and the goroutine started inside the Kafka message handler (~889) have none, so a panic on any of those paths terminates the process. Verified by reading the code.
+*Work required:* recover on each path, report to any waiting caller, and continue.
+
+**GAP-BV-055.** The chained create wave can be cancelled mid-call.
+*Affects:* BV-QUICK-018.
+The create-only wave calls `SpendAndCreate` directly under the errgroup context (`quick_validate.go` ~2490), unlike the one-wave and spend waves, which detach in-flight store calls. A sibling failure or shutdown therefore cancels a create that is already running. Verified by reading the code.
+*Work required:* run each create under the same detached, bounded context as the other waves.
+
+**GAP-BV-056.** A post-commit error on the quick route deletes a committed block's subtree files.
+*Affects:* BV-QUICK-015, BV-QUICK-021, BV-COMMIT-002.
+`commitBlock` returns an error when unlocking fails after `AddBlock` has committed the block with `subtrees_set` and `mined_set` true (`quick_validate.go` ~540-580). `tryQuickValidation` treats that as a local failure, deletes the `.subtree` files the attempt wrote, and falls through to full validation (`catchup.go` ~2047-2072), which finds the block already stored and does nothing. The block is left committed and marked `subtrees_set` with its subtree files deleted and its outputs locked. Verified by reading the code; not reproduced.
+*Work required:* treat any error after `AddBlock` as post-commit: never delete the block's files, and retry the unlock.
+
+**GAP-BV-057.** Revert failures are swallowed and `mined_set` is still set.
+*Affects:* BV-COMMIT-011.
+When reverting an invalid block's mined tags, `UpdateTxMinedStatus` logs `SetMinedMulti` errors and coverage gaps and returns success (`model/update-tx-mined.go` ~424-427), and missing subtrees are skipped. The caller then sets `mined_set`, so the block is never revisited and its transactions can keep stale tags. `model/update-tx-mined_test.go` ~1396 pins the swallowing. Verified by reading the code.
+*Work required:* return the error on the revert path, so `mined_set` stays false and the sweep retries.
+
+**GAP-BV-058.** Flag updates are unconditional and can overwrite an invalidation or revalidation.
+*Affects:* BV-COMMIT-005, BV-COMMIT-011, BV-REVALIDATE-003.
+`SetBlockMinedSet` and `SetBlockSubtreesSet` are plain `UPDATE … WHERE hash = $1` (`stores/blockchain/sql/SetBlockMinedSet.go`, `SetBlockSubtreesSet.go`). A tagging run in flight when the block is invalidated or revalidated sets `mined_set = true` after `InvalidateBlock` or `RevalidateBlock` cleared it. The `BlockMinedUnset` notification for a hash already being processed is skipped and not re-queued, and the sweep no longer lists the block. Result: an invalid block with stale tags, or a revalidated block with no tags, both with `mined_set = true`. Derived from the code; not reproduced.
+*Work required:* make the flag write conditional on the block's state at the start of the run (e.g. compare-and-set on `invalid` and a generation counter), and re-queue a skipped unset.
+
+**GAP-BV-059.** The subtrees sweep is not single-flight.
+*Affects:* BV-COMMIT-008.
+The mined-not-set sweep is guarded by a compare-and-swap (`BlockValidation.go` ~920); `processSubtreesNotSet` (~1096) has no guard, and the periodic goroutines that run it are never awaited. Overlapping passes can run when one pass outlasts the processing interval. Verified by reading the code.
+*Work required:* add the same guard.
 
 ---
 
