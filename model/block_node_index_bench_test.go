@@ -48,6 +48,24 @@ func BenchmarkNodeIndexLarge(b *testing.B) {
 		b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/n, "ns/put")
 	})
 
+	// putRange of subtree-sized ranges, as the block's subtrees are loaded
+	b.Run("putrange", func(b *testing.B) {
+		const subtree = 1 << 20
+
+		for it := 0; it < b.N; it++ {
+			x := newNodeIndex(n, nodes.hashAt, hash)
+			parallelChunks(n/subtree, workers, func(lo, hi int) {
+				for st := lo; st < hi; st++ {
+					if _, err := x.putRange(uint32(st*subtree), subtree); err != nil { // nolint: gosec
+						panic(err)
+					}
+				}
+			})
+		}
+
+		b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/n, "ns/put")
+	})
+
 	// built here, not in put, so the get benchmarks also run on their own (-bench .../get)
 	x := fill()
 	x.Freeze()
@@ -77,6 +95,43 @@ func BenchmarkNodeIndexLarge(b *testing.B) {
 					for i := lo; i < hi; i++ {
 						if _, ok := x.Get(*parents[i]); ok {
 							c++
+						}
+					}
+
+					found.Add(int64(c))
+				})
+
+				if int(found.Load()) != n-misses {
+					b.Fatalf("found %d, want %d", found.Load(), n-misses)
+				}
+			}
+
+			b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/n, "ns/get")
+		})
+
+		b.Run(fmt.Sprintf("getbatch/miss=%v", missRate), func(b *testing.B) {
+			const batch = 64
+
+			for it := 0; it < b.N; it++ {
+				var found atomic.Int64
+
+				parallelChunks(n, workers, func(lo, hi int) {
+					var ls [batch]nodeLookup
+
+					c := 0
+
+					for i := lo; i < hi; i += batch {
+						m := min(batch, hi-i)
+						for k := 0; k < m; k++ {
+							ls[k].hash = parents[i+k]
+						}
+
+						x.getBatch(ls[:m])
+
+						for k := 0; k < m; k++ {
+							if ls[k].found {
+								c++
+							}
 						}
 					}
 

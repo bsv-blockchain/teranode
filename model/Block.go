@@ -1657,6 +1657,10 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 	// pins every worker on atomic ops instead of doing useful dedup work.
 	baseIdx := subIdx * subtreeSize
 
+	if nodeIdx != nil && !overflowing {
+		return putSubtreeInNodeIndex(blockLabel, nodeIdx, nodes, subIdx, baseIdx)
+	}
+
 	for txIdx := 0; txIdx < len(nodes); txIdx++ {
 		if subIdx == 0 && txIdx == 0 && nodes[txIdx].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			continue
@@ -1686,6 +1690,34 @@ func (b *Block) putSubtreeInTxMap(blockLabel string, subtree *subtreepkg.Subtree
 	}
 
 	return nil
+}
+
+// putSubtreeInNodeIndex is putSubtreeInTxMap for a subtree that fits its slot of an
+// in-memory node index: one putRange over its nodes, with the errors a Put of each would
+// give.
+func putSubtreeInNodeIndex(blockLabel string, nodeIdx *blockNodeIndex, nodes []subtreepkg.Node, subIdx, baseIdx int) error {
+	first := 0
+	if subIdx == 0 && len(nodes) > 0 && nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+		first = 1
+	}
+
+	lo, err := safeconversion.IntToUint64(baseIdx + first)
+	if err != nil {
+		return errors.NewProcessingError("[BLOCK][%s] failed to convert index to uint64", blockLabel, err)
+	}
+
+	at, err := nodeIdx.putRange(lo, len(nodes)-first)
+	if err == nil {
+		return nil
+	}
+
+	hash := nodes[at-uint64(baseIdx)].Hash //nolint:gosec // at is within the range put
+
+	if errors.Is(err, errors.ErrTxExists) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] block contains duplicate transaction %s", blockLabel, hash.String())
+	}
+
+	return errors.NewStorageError("[BLOCK][%s] error adding transaction %s to txMap", blockLabel, hash.String(), err)
 }
 
 // parentSpendsCapacity returns the capacity hint for the parent-spends map:
@@ -1885,6 +1917,7 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 		checkParentTxHashes = make([]missingParentTx, 0, len(subtree.Nodes)/16)
 		run                 inpointRunBuilder
 		inpoints            []subtreepkg.Inpoint
+		parents             parentLookups
 	)
 
 	subtreeMetaSlice, err := b.loadSubtreeMeta(ctx, logger, deps, subtree, subtreeHash, sIdx)
@@ -1912,6 +1945,7 @@ func (b *Block) validateSubtree(ctx context.Context, logger ulogger.Logger, deps
 			subtreeNode:      subtreeNode,
 			run:              run,
 			inpoints:         inpoints,
+			parents:          parents.of(b.txMap, subtreeMetaSlice, snIdx),
 		}
 
 		missingParents, err := b.validateTransaction(ctx, deps, validationCtx, params)
@@ -2259,6 +2293,9 @@ type transactionValidationParams struct {
 	// inpoints is reused from one transaction to the next to hand its inputs to
 	// run, which does not keep them
 	inpoints []subtreepkg.Inpoint
+	// parents, when set, holds the txMap answers for the transaction's parents
+	// (parentLookups)
+	parents []nodeLookup
 	// inputsChecked is set once the transaction's duplicate input check passed
 	inputsChecked bool
 }
@@ -2308,7 +2345,51 @@ func (b *Block) validateTransaction(ctx context.Context, deps *validationDepende
 	// }
 
 	// Check parent transactions
-	return b.checkParentTransactions(parentTxHashes, txIdx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
+	return b.checkParents(parentTxHashes, params.parents, txIdx, params.subtreeNode, params.subtreeHash, params.sIdx, params.snIdx)
+}
+
+// parentLookupWindow is how many transactions' parents parentLookups looks up at once.
+const parentLookupWindow = 32
+
+// parentLookups holds the txMap answers for the parents of a window of a subtree's
+// transactions, so the lookups of the window go to an in-memory node index as one batch
+// (blockNodeIndex.getBatch) and their cache misses overlap.
+type parentLookups struct {
+	lookups []nodeLookup
+	// offsets[i-start] is where the lookups of transaction i start; one more for the end
+	offsets    []int
+	start, end int
+}
+
+// of returns the lookups for the parents of transaction snIdx of meta, in
+// ParentTxHashes order, looking up the next window when snIdx is past the current one.
+// It returns nil when txMap is not an in-memory node index.
+func (p *parentLookups) of(txMap blockTxMap, meta *subtreepkg.Meta, snIdx int) []nodeLookup {
+	nodeIdx, ok := txMap.(*blockNodeIndex)
+	if !ok || snIdx >= len(meta.TxInpoints) {
+		return nil
+	}
+
+	if snIdx < p.start || snIdx >= p.end {
+		p.start, p.end = snIdx, min(snIdx+parentLookupWindow, len(meta.TxInpoints))
+		p.lookups, p.offsets = p.lookups[:0], p.offsets[:0]
+
+		for i := p.start; i < p.end; i++ {
+			p.offsets = append(p.offsets, len(p.lookups))
+
+			hashes := meta.TxInpoints[i].ParentTxHashes
+			for k := range hashes {
+				p.lookups = append(p.lookups, nodeLookup{hash: &hashes[k]})
+			}
+		}
+
+		p.offsets = append(p.offsets, len(p.lookups))
+		nodeIdx.getBatch(p.lookups)
+	}
+
+	i := snIdx - p.start
+
+	return p.lookups[p.offsets[i]:p.offsets[i+1]]
 }
 
 func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validationCtx *validationContext,
@@ -2335,10 +2416,31 @@ func (b *Block) checkDuplicateInputs(subtreeMetaSlice *subtreepkg.Meta, validati
 
 func (b *Block) checkParentTransactions(parentTxHashes []chainhash.Hash, txIdx uint64,
 	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) ([]missingParentTx, error) {
+	return b.checkParents(parentTxHashes, nil, txIdx, subtreeNode, subtreeHash, sIdx, snIdx)
+}
+
+// checkParents is checkParentTransactions with the txMap answers for the parents already
+// looked up (parentLookups), in parentTxHashes order. Without them it does a Get of each.
+func (b *Block) checkParents(parentTxHashes []chainhash.Hash, lookups []nodeLookup, txIdx uint64,
+	subtreeNode subtreepkg.Node, subtreeHash *chainhash.Hash, sIdx, snIdx int) ([]missingParentTx, error) {
 	checkParentTxHashes := make([]missingParentTx, 0, len(parentTxHashes)/16) // assume 1 in 16 parents will be missing
 
-	for _, parentTxHash := range parentTxHashes {
-		parentTxIdx, foundInSameBlock := b.txMap.Get(parentTxHash)
+	if len(lookups) != len(parentTxHashes) {
+		lookups = nil
+	}
+
+	for i, parentTxHash := range parentTxHashes {
+		var (
+			parentTxIdx      uint64
+			foundInSameBlock bool
+		)
+
+		if lookups != nil {
+			parentTxIdx, foundInSameBlock = lookups[i].idx, lookups[i].found
+		} else {
+			parentTxIdx, foundInSameBlock = b.txMap.Get(parentTxHash)
+		}
+
 		if foundInSameBlock {
 			// parent tx was found in the same block as our tx, check idx
 			if parentTxIdx > txIdx {

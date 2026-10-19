@@ -4,6 +4,7 @@ import (
 	"hash/maphash"
 	"math"
 	mathbits "math/bits"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -112,7 +113,11 @@ func (x *nodeIndex) split(h uint64, s *nodeShard) (int, uint16) {
 }
 
 func (x *nodeIndex) shard(h uint64) *nodeShard {
-	return &x.shards[(h>>16)&x.shardMask]
+	return &x.shards[x.shardIndex(h)]
+}
+
+func (x *nodeIndex) shardIndex(h uint64) uint64 {
+	return (h >> 16) & x.shardMask
 }
 
 // find returns the bucket and slot holding hash, or the first free slot and found=false.
@@ -155,14 +160,24 @@ func (x *nodeIndex) Put(hash chainhash.Hash, idx uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	b, slot, found := x.find(s, &hash, h)
-	if found {
+	if !x.insert(s, &hash, h, idx) {
 		return errors.NewTxExistsError("hash already exists in map")
+	}
+
+	return nil
+}
+
+// insert adds hash at idx to shard s, whose lock the caller holds. It returns false,
+// and adds nothing, if hash is already in the index.
+func (x *nodeIndex) insert(s *nodeShard, hash *chainhash.Hash, h uint64, idx uint32) bool {
+	b, slot, found := x.find(s, hash, h)
+	if found {
+		return false
 	}
 
 	if s.n+1 > len(s.buckets)*(nodeBucketSlots-1) {
 		x.grow(s)
-		b, slot, _ = x.find(s, &hash, h)
+		b, slot, _ = x.find(s, hash, h)
 	}
 
 	_, fp := x.split(h, s)
@@ -170,7 +185,237 @@ func (x *nodeIndex) Put(hash chainhash.Hash, idx uint32) error {
 	s.buckets[b].idxs[slot] = idx
 	s.n++
 
-	return nil
+	return true
+}
+
+// putRangeChunk is how many entries putRange groups by shard at a time. A shard of the
+// largest index (8192 shards) gets about 32 of them per lock; the scratch for a full
+// chunk is 8MB.
+const putRangeChunk = 1 << 18
+
+// nodePut is an entry of putRange: a node index and the hash of its node hash.
+type nodePut struct {
+	h   uint64
+	idx uint32
+}
+
+type putRangeScratch struct {
+	in, out []nodePut
+	ends    []uint32
+}
+
+// putRangeScratchPool holds scratch sized for the ranges it has seen, so a small block
+// only allocates what its subtrees need.
+var putRangeScratchPool = sync.Pool{New: func() any { return &putRangeScratch{} }}
+
+// putRange does a Put of the node at every index of [lo, lo+n), and returns at the first
+// index whose node hash is already in the index or earlier in the range, with a TxExists
+// error. On that error indexes after it may have been added.
+//
+// A Put takes its shard's lock, and an uncontended lock still costs a cache line moved
+// between cores, then misses the cache on the home bucket. putRange instead sorts a chunk
+// of entries by shard, takes each lock once for all of a shard's entries, and reads their
+// home buckets before inserting any, so the cache misses overlap instead of following one
+// another.
+func (x *nodeIndex) putRange(lo uint32, n int) (uint32, error) {
+	if x.frozen.Load() {
+		return 0, errors.NewProcessingError("map is frozen")
+	}
+
+	if n <= 0 {
+		return 0, nil
+	}
+
+	// with about one entry per shard there is nothing to batch
+	if n < 2*len(x.shards) {
+		return x.putEach(lo, n)
+	}
+
+	sc := putRangeScratchPool.Get().(*putRangeScratch)
+	defer putRangeScratchPool.Put(sc)
+
+	for start := 0; start < n; start += putRangeChunk {
+		if dup, ok := x.putChunk(lo+uint32(start), min(putRangeChunk, n-start), sc); !ok { // nolint: gosec
+			return dup, errors.NewTxExistsError("hash already exists in map")
+		}
+	}
+
+	return 0, nil
+}
+
+// putEach is putRange as a Put of each index in order.
+func (x *nodeIndex) putEach(lo uint32, n int) (uint32, error) {
+	for i := 0; i < n; i++ {
+		idx := lo + uint32(i) // nolint: gosec
+		h := x.hash(*x.hashAt(idx))
+		s := x.shard(h)
+
+		s.mu.Lock()
+		ok := x.insert(s, x.hashAt(idx), h, idx)
+		s.mu.Unlock()
+
+		if !ok {
+			return idx, errors.NewTxExistsError("hash already exists in map")
+		}
+	}
+
+	return 0, nil
+}
+
+// putChunk is putRange for at most putRangeChunk entries. It returns false and the first
+// duplicate index if there is one.
+func (x *nodeIndex) putChunk(lo uint32, n int, sc *putRangeScratch) (uint32, bool) {
+	numShards := len(x.shards)
+
+	if cap(sc.in) < n {
+		sc.in, sc.out = make([]nodePut, n), make([]nodePut, n)
+	}
+
+	if cap(sc.ends) < numShards {
+		sc.ends = make([]uint32, numShards)
+	}
+
+	ends := sc.ends[:numShards]
+	clear(ends)
+
+	in, out := sc.in[:n], sc.out[:n]
+
+	// hash outside the locks, counting entries per shard
+	for i := range in {
+		idx := lo + uint32(i) // nolint: gosec
+		h := x.hash(*x.hashAt(idx))
+		in[i] = nodePut{h: h, idx: idx}
+		ends[x.shardIndex(h)]++
+	}
+
+	// ends[s] becomes the start of shard s, then its end as the entries are placed
+	var pos uint32
+	for s := range ends {
+		pos, ends[s] = pos+ends[s], pos
+	}
+
+	for _, e := range in {
+		s := x.shardIndex(e.h)
+		out[ends[s]] = e
+		ends[s]++
+	}
+
+	var (
+		dup   uint32
+		found bool
+	)
+
+	// Writers that walked the shards in the same order would queue behind each other on
+	// every lock, so each chunk starts at a shard of its own.
+	first := int(x.shardIndex(in[0].h))
+
+	for k := range ends {
+		s := (first + k) & int(x.shardMask) // nolint: gosec
+
+		start := uint32(0)
+		if s > 0 {
+			start = ends[s-1]
+		}
+
+		if ends[s] > start {
+			if d, ok := x.putGroup(&x.shards[s], out[start:ends[s]]); !ok && (!found || d < dup) {
+				dup, found = d, true
+			}
+		}
+	}
+
+	return dup, !found
+}
+
+// putGroup inserts entries of shard s in order under one lock, after reading their home
+// buckets. It returns false and the first duplicate index if there is one; the
+// entries are in index order, so that is the first one found.
+func (x *nodeIndex) putGroup(s *nodeShard, group []nodePut) (uint32, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// independent loads, so the cache misses of the whole group are in flight together
+	var sink uint16
+
+	for _, e := range group {
+		b, _ := x.split(e.h, s)
+		sink ^= s.buckets[b].fps[0]
+	}
+
+	runtime.KeepAlive(sink)
+
+	var (
+		dup   uint32
+		found bool
+	)
+
+	for _, e := range group {
+		if !x.insert(s, x.hashAt(e.idx), e.h, e.idx) && !found {
+			dup, found = e.idx, true
+		}
+	}
+
+	return dup, !found
+}
+
+// nodeLookup is one key of getBatch: hash in, idx and found out.
+type nodeLookup struct {
+	hash  *chainhash.Hash
+	h     uint64
+	idx   uint64
+	found bool
+}
+
+// getBatch does a Get of every lookup in ls. On a frozen index it reads the home buckets of
+// all of them, then the node hashes their fingerprints point at, before the lookups
+// themselves, so the cache misses of the batch overlap instead of following one another.
+func (x *nodeIndex) getBatch(ls []nodeLookup) {
+	if !x.frozen.Load() {
+		for i := range ls {
+			idx, ok := x.Get(*ls[i].hash)
+			ls[i].idx, ls[i].found = uint64(idx), ok
+		}
+
+		return
+	}
+
+	var sink uint16
+
+	for i := range ls {
+		ls[i].h = x.hash(*ls[i].hash)
+	}
+
+	for i := range ls {
+		s := x.shard(ls[i].h)
+		b, _ := x.split(ls[i].h, s)
+		sink ^= s.buckets[b].fps[0]
+	}
+
+	for i := range ls {
+		s := x.shard(ls[i].h)
+		b, fp := x.split(ls[i].h, s)
+		bk := &s.buckets[b]
+
+		for slot := 0; slot < nodeBucketSlots && bk.fps[slot] != 0; slot++ {
+			if bk.fps[slot] == fp {
+				sink ^= uint16(x.hashAt(bk.idxs[slot])[0])
+				break
+			}
+		}
+	}
+
+	runtime.KeepAlive(sink)
+
+	for i := range ls {
+		s := x.shard(ls[i].h)
+
+		b, slot, found := x.find(s, ls[i].hash, ls[i].h)
+		if found {
+			ls[i].idx, ls[i].found = uint64(s.buckets[b].idxs[slot]), true
+		} else {
+			ls[i].idx, ls[i].found = 0, false
+		}
+	}
 }
 
 // Get returns the index of hash. After Freeze it takes no lock.
@@ -394,6 +639,57 @@ func (m *blockNodeIndex) Put(hash chainhash.Hash, idx uint64) error {
 	}
 
 	return nil
+}
+
+// putRange does a Put of the node at every index of [lo, lo+n) (nodeIndex.putRange). On an
+// error it returns the index of the node it failed at: the first duplicate, or the first
+// index above the 32-bit range.
+func (m *blockNodeIndex) putRange(lo uint64, n int) (uint64, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+
+	if last := lo + uint64(n) - 1; last > math.MaxUint32 || last < lo { // nolint: gosec
+		at := max(lo, math.MaxUint32+1)
+		return at, errors.NewProcessingError("tx index %d does not fit the 32-bit in-memory tx index", at)
+	}
+
+	dup, err := m.idx.putRange(uint32(lo), n)
+	if err != nil && !errors.Is(err, errors.ErrTxExists) {
+		return lo, err
+	}
+
+	// as in Put: a node is also a duplicate of an overflow entry, and the first
+	// duplicate either way is the one reported
+	limit := n
+	if err != nil {
+		limit = int(uint64(dup) - lo) // nolint: gosec
+	}
+
+	if m.hasOverflow.Load() {
+		for i := 0; i < limit; i++ {
+			if _, ok := m.inOverflow(*m.hashAt(uint32(lo) + uint32(i))); ok { // nolint: gosec
+				return lo + uint64(i), errors.NewTxExistsError("hash already exists in map") // nolint: gosec
+			}
+		}
+	}
+
+	return uint64(dup), err
+}
+
+// getBatch does a Get of every lookup in ls (nodeIndex.getBatch).
+func (m *blockNodeIndex) getBatch(ls []nodeLookup) {
+	m.idx.getBatch(ls)
+
+	if !m.hasOverflow.Load() {
+		return
+	}
+
+	for i := range ls {
+		if !ls[i].found {
+			ls[i].idx, ls[i].found = m.inOverflow(*ls[i].hash)
+		}
+	}
 }
 
 // Get returns the index of hash.
