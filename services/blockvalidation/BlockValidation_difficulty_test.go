@@ -253,9 +253,7 @@ func TestValidateBlock_DoesNotMeetTargetDifficulty(t *testing.T) {
 	notificationChan := make(chan *blockchain_api.Notification, 1)
 	mockBlockchain.On("Subscribe", mock.Anything, mock.Anything).Return(notificationChan, nil).Maybe()
 
-	// Mock GetNextWorkRequired to return the expected difficulty
-	mockBlockchain.On("GetNextWorkRequired", mock.Anything, prevBlockHeader.Hash(), mock.Anything).
-		Return(expectedNBits, nil).Once()
+	// A header that fails its own target must be rejected before querying expected work.
 
 	// Mock AddBlock to store invalid block when difficulty target is not met
 	mockBlockchain.On("AddBlock", mock.Anything, block, "", mock.Anything).Return(nil).Once()

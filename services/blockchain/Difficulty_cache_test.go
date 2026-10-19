@@ -43,7 +43,9 @@ func TestDifficulty_GetHashOfAncestorBlock_TimeoutReturnsError(t *testing.T) {
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	params := chaincfg.MainNetParams
+	params.DaaForkHeight = 0 // This synthetic short chain exercises the modern DAA.
+	tSettings.ChainCfgParams = &params
 
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
@@ -117,7 +119,9 @@ func TestDifficulty_GetHashOfAncestorBlock_ChainTooShortUsesFallback(t *testing.
 	require.NoError(t, err)
 
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	params := chaincfg.MainNetParams
+	params.DaaForkHeight = 0 // This synthetic short chain exercises the modern DAA.
+	tSettings.ChainCfgParams = &params
 
 	blockchainStore, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)

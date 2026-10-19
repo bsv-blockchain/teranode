@@ -42,9 +42,14 @@ UTXOStore --> AlertSystem: Confirmation
 deactivate UTXOStore
 
 == Reassign UTXO ==
+note over AlertSystem, DataStore #FFDDDD
+  Do not use ownership-changing reassignment.
+  The replacement script is not persisted.
+  Both owners remain unable to spend after maturity.
+end note
 AlertSystem -> UTXOStore: ReAssignUTXO(ctx, utxo, newUtxo)
 activate UTXOStore
-UTXOStore -> DataStore: Update UTXO assignment
+UTXOStore -> DataStore: Replace commitment and set maturity gate
 DataStore --> UTXOStore: Confirmation
 UTXOStore --> AlertSystem: Confirmation
 deactivate UTXOStore

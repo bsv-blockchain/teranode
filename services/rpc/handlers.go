@@ -868,20 +868,30 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 	// MaxRawTxFee of 0 disables it entirely (operator opt-out).
 	allowHighFees := c.AllowHighFees != nil && *c.AllowHighFees
 	if !allowHighFees && s.settings.Policy.MaxRawTxFee > 0 {
-		// Extend the tx so PreviousTxSatoshis is populated; PreviousOutputsDecorate
-		// populates the input fields but does not flip tx.IsExtended() on its own
-		// (go-bt requires an explicit SetExtended call). We mark it explicitly so
-		// the validator's own IsExtended() guard skips re-decoration, and so the
-		// gRPC client serialises the extended bytes instead of wire bytes.
-		if !tx.IsExtended() {
-			if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
-				return nil, &bsvjson.RPCError{
-					Code:    bsvjson.ErrRPCVerify,
-					Message: "TX rejected: " + err.Error(),
-				}
+		// Resolve the fee from local outputs even when the caller sends extended
+		// bytes. The decorator only fills missing fields, so clear both supplied
+		// fields first; removing the IsExtended gate alone would still trust them.
+		// The validator re-reads the parents for consensus validation. This read
+		// must happen before submission so an excessive fee can reject the call.
+		for _, input := range tx.Inputs {
+			if input == nil {
+				continue
 			}
-			tx.SetExtended(true)
+
+			input.PreviousTxScript = nil
+			input.PreviousTxSatoshis = 0
 		}
+
+		tx.SetExtended(false)
+
+		if err = s.utxoStore.PreviousOutputsDecorate(ctx, tx); err != nil {
+			return nil, &bsvjson.RPCError{
+				Code:    bsvjson.ErrRPCVerify,
+				Message: "TX rejected: " + err.Error(),
+			}
+		}
+
+		tx.SetExtended(true)
 
 		inputSats := tx.TotalInputSatoshis()
 		outputSats := tx.TotalOutputSatoshis()
@@ -2621,27 +2631,16 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	return nil, nil
 }
 
-// handleReassign implements the reassign command, which reassigns a specific UTXO to a
-// new UTXO hash, allowing for flexible UTXO management.
-//
-// This command provides a way to update the UTXO set by reassigning a UTXO to a new
-// UTXO hash. This is useful in scenarios such as:
-// - Correcting errors in the UTXO set
-// - Updating the UTXO set after a chain reorganization
-// - Managing UTXOs during testing and debugging
-//
-// The reassign operation is used to correct mistakes in the UTXO management process.
-//
-// Security considerations:
-// - Requires admin privileges to execute
-// - May trigger transaction reordering in the transaction processing system
-// - Changes persist across node restarts
-// - Should be used carefully to avoid disrupting legitimate transactions
+// handleReassign updates a frozen output's commitment and maturity gate using
+// an outpoint and old/new commitment hashes. Both full and limited RPC users can
+// call it. It does not persist a replacement script or refuse an ownership change;
+// changing the owner currently strands the output even after maturity.
+// See https://github.com/bsv-blockchain/teranode/issues/1725.
 //
 // Parameters:
 //   - ctx: Context for cancellation and tracing
 //   - s: The RPC server instance providing access to service clients
-//   - cmd: The parsed command arguments (bsvjson.ReassignCmd with OldTxID, OldVout, and NewUTXOHash)
+//   - cmd: The parsed command arguments (bsvjson.ReassignCmd with OldTxID, OldVout, OldUTXOHash, and NewUTXOHash)
 //   - _: Unused channel for close notification
 //
 // Returns:

@@ -358,18 +358,11 @@ func (n *Node) getAddToConsensusBlacklistResponse(fund models.Fund, err error) m
 	}
 }
 
-// AddToConfiscationTransactionWhitelist re-assigns UTXOs to a confiscation transaction.
-// This critical enforcement mechanism allows authorized confiscation transactions to spend
-// previously frozen UTXOs. The method validates each transaction and its inputs, ensuring
-// that the confiscation transaction is properly formatted and that the inputs refer to
-// valid, frozen UTXOs.
-//
-// For each confiscation transaction, the method:
-// - Validates the transaction format and structure
-// - Verifies each input against its parent transaction
-// - Extracts the public key from the unlocking script
-// - Creates a new locking script for the UTXO based on the public key
-// - Updates the UTXO store to allow the confiscation transaction to spend the UTXO
+// AddToConfiscationTransactionWhitelist derives replacement commitments from
+// confiscation transactions and applies them to frozen UTXOs. It derives a new
+// locking script but does not persist it. A successful response therefore does
+// not establish spendability: changing the owner currently strands the output.
+// See https://github.com/bsv-blockchain/teranode/issues/1725.
 //
 // Parameters:
 //   - ctx: Context for the operation, allowing for cancellation and timeouts
@@ -450,7 +443,9 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 				LockingScript: newLockingScript,                                          // new locking script
 			}
 
-			// the new utxo hash allows the original output to be spent by the confiscation transaction
+			// Calculate the replacement commitment. ReAssignUTXO does not persist
+			// the replacement script, so changing the owner currently strands
+			// the output for both owners after mandatory re-extension (issue 1725).
 			newUtxoHash, err := util.UTXOHashFromOutput(txIn.PreviousTxIDChainHash(), amendedOutputScript, txIn.PreviousTxOutIndex)
 			if err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)

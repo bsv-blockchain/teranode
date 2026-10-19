@@ -319,7 +319,7 @@ func isAerospikeNotReadyError(err error) bool {
 // initializeSQLite returns a SQLite in-memory URL (no container needed)
 func (cm *ContainerManager) initializeSQLite() (*url.URL, error) {
 	// SQLite doesn't require a container, use in-memory database
-	cm.containerURL = "sqlite://memory:"
+	cm.containerURL = "sqlitememory://"
 
 	parsedURL, err := url.Parse(cm.containerURL)
 	if err != nil {

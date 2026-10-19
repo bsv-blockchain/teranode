@@ -35,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -61,6 +62,9 @@ type ValidateBlockOptions struct {
 	// CachedHeaders provides pre-fetched headers to avoid redundant database queries.
 	// When provided, ValidateBlock will use these headers instead of fetching them.
 	CachedHeaders []*model.BlockHeader
+
+	// checkpointProven is set only for a block in a verified catchup header prefix.
+	checkpointProven bool
 
 	// IsCatchupMode indicates the block is being validated during catchup.
 	// This enables optimizations like reduced logging and header reuse.
@@ -1329,6 +1333,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] bad coinbase length", block.Header.Hash().String())
 		}
 
+		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
+			if !opts.IsRevalidation {
+				u.storeInvalidBlock(ctx, block, opts.PeerID, err.Error())
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
+		}
+
 		// Use cached headers if available (during catchup), otherwise fetch from blockchain
 		var blockHeaders []*model.BlockHeader
 		if opts.CachedHeaders != nil && len(opts.CachedHeaders) > 0 {
@@ -1399,6 +1411,54 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 		}
 
+		// Reject invalid headers before subtree validation can mutate transaction state.
+		if limitErr := block.Header.HasMetPowLimit(u.settings.ChainCfgParams); limitErr != nil {
+			if !opts.IsRevalidation {
+				u.storeInvalidBlock(ctx, block, opts.PeerID, "block declares a target easier than the network proof-of-work limit")
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] block declares a target easier than the network proof-of-work limit", block.Header.Hash().String(), limitErr)
+		}
+
+		headerValid, _, err := block.Header.HasMetTargetDifficulty()
+		if !headerValid {
+			reason := "block does not meet target difficulty"
+			if err != nil {
+				reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
+			}
+			if !opts.IsRevalidation {
+				u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+			}
+
+			return errors.NewBlockInvalidError("[ValidateBlock][%s] %s", block.Header.Hash().String(), reason, err)
+		}
+
+		// Only checkpoint-proven ancestry certifies historical difficulty rules.
+		// Parent-derived height alone does not authenticate a peer's fork.
+		skipDifficultyCheck := u.skipExpectedDifficulty(ctx, block, opts.checkpointProven)
+
+		if skipDifficultyCheck {
+			ctxLogger.Debugf("[ValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
+				block.Header.Hash().String(), block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
+		} else {
+			// Check that the nBits (difficulty target) is correct for this block
+			expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
+			if err != nil {
+				return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
+			}
+
+			// Compare the block's nBits with the expected nBits
+			if expectedNBits != nil && block.Header.Bits != *expectedNBits {
+				reason := fmt.Sprintf("incorrect difficulty bits: got %v, expected %v", block.Header.Bits, *expectedNBits)
+				if !opts.IsRevalidation {
+					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
+				}
+
+				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
+					block.Header.Hash().String(), block.Header.Bits, expectedNBits)
+			}
+		}
+
 		// validate all the subtrees in the block
 		ctxLogger.Infof("[ValidateBlock][%s] validating %d subtrees", block.Hash().String(), len(block.Subtrees))
 
@@ -1434,47 +1494,6 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			useOptimisticMining = false
 			if !opts.IsCatchupMode {
 				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
-			}
-		}
-
-		// Skip difficulty validation for blocks at or below the highest checkpoint
-		// These blocks are already verified by checkpoints, so we don't need to validate difficulty
-		highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
-		skipDifficultyCheck := block.Height <= highestCheckpointHeight
-
-		if skipDifficultyCheck {
-			ctxLogger.Debugf("[ValidateBlock][%s] skipping difficulty validation for block at height %d (at or below checkpoint height %d)",
-				block.Header.Hash().String(), block.Height, highestCheckpointHeight)
-		} else {
-			// First check that the nBits (difficulty target) is correct for this block
-			expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, block.Header.HashPrevBlock, int64(block.Header.Timestamp))
-			if err != nil {
-				return errors.NewServiceError("[ValidateBlock][%s] failed to get expected work required", block.Header.Hash().String(), err)
-			}
-
-			// Compare the block's nBits with the expected nBits
-			if expectedNBits != nil && block.Header.Bits != *expectedNBits {
-				reason := fmt.Sprintf("incorrect difficulty bits: got %v, expected %v", block.Header.Bits, *expectedNBits)
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
-				}
-
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
-					block.Header.Hash().String(), block.Header.Bits, expectedNBits)
-			}
-
-			// Then check that the block hash meets the difficulty target
-			headerValid, _, err := block.Header.HasMetTargetDifficulty()
-			if !headerValid {
-				reason := "block does not meet target difficulty"
-				if err != nil {
-					reason = fmt.Sprintf("block does not meet target difficulty: %s", err.Error())
-				}
-				if !opts.IsRevalidation {
-					u.storeInvalidBlock(ctx, block, opts.PeerID, reason)
-				}
-
-				return errors.NewBlockInvalidError("[ValidateBlock][%s] block does not meet target difficulty: %s", block.Header.Hash().String(), err)
 			}
 		}
 
@@ -1899,16 +1918,39 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 	)
 	defer deferFn()
 
-	// Skip difficulty validation for blocks at or below the highest checkpoint
-	// These blocks are already verified by checkpoints, so we don't need to validate difficulty
-	highestCheckpointHeight := blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints)
-	skipDifficultyCheck := blockData.block.Height <= highestCheckpointHeight
+	// Checkpoint enforcement, mirroring ValidateBlockWithOptions: this path is reachable
+	// before that guard runs (the GetBlockHeaders-failure branch enqueues here) and carries
+	// the same difficulty skip, so assert the checkpoint hash-match here too. block.Height is
+	// already settled against the parent by the time a block reaches this worker (every
+	// ReValidateBlock call site sits inside ValidateBlockWithOptions, downstream of
+	// Server.deriveBlockHeight). No storeInvalidBlock: this is a revalidation path.
+	if err := catchup.ValidateHeaderAgainstCheckpoints(blockData.block.Header, blockData.block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] block conflicts with hardcoded checkpoint", blockData.block.Hash().String(), err)
+	}
+
+	// The header hash must meet the target its own nBits declares, below checkpoint or not
+	// — see the matching block in ValidateBlockWithOptions for why this half of the old
+	// skip is never safe to take. Enforced before the subtree work below.
+	// Same floor as ValidateBlockWithOptions, and for the same reason: this path
+	// runs validateBlockSubtrees (UTXO-mutating) below, so the declared target must
+	// be bounded here rather than left to block.Valid afterwards.
+	if limitErr := blockData.block.Header.HasMetPowLimit(u.settings.ChainCfgParams); limitErr != nil {
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] block declares a target easier than the network proof-of-work limit", blockData.block.Header.Hash().String(), limitErr)
+	}
+
+	if headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty(); !headerValid {
+		return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err.Error(), err)
+	}
+
+	// Skip the expected-nBits (DAA) check for blocks at or below the highest checkpoint:
+	// the difficulty schedule over that prefix is certified by the pinned checkpoint hashes.
+	skipDifficultyCheck := u.skipExpectedDifficulty(ctx, blockData.block, false)
 
 	if skipDifficultyCheck {
-		u.logger.Debugf("[reValidateBlock][%s] skipping difficulty validation for block at height %d (at or below checkpoint height %d)",
-			blockData.block.Header.Hash().String(), blockData.block.Height, highestCheckpointHeight)
+		u.logger.Debugf("[reValidateBlock][%s] skipping expected-nBits validation for block at height %d (at or below highest checkpoint height %d)",
+			blockData.block.Header.Hash().String(), blockData.block.Height, blockchain.HighestCheckpointHeight(u.settings.ChainCfgParams.Checkpoints))
 	} else {
-		// First check that the nBits (difficulty target) is correct for this block
+		// Check that the nBits (difficulty target) is correct for this block
 		expectedNBits, err := u.blockchainClient.GetNextWorkRequired(ctx, blockData.block.Header.HashPrevBlock, int64(blockData.block.Header.Timestamp))
 		if err != nil {
 			return errors.NewServiceError("[reValidateBlock][%s] failed to get expected work required", blockData.block.Header.Hash().String(), err)
@@ -1918,12 +1960,6 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		if expectedNBits != nil && blockData.block.Header.Bits != *expectedNBits {
 			return errors.NewBlockInvalidError("[reValidateBlock][%s] block has incorrect difficulty bits: got %v, expected %v",
 				blockData.block.Header.Hash().String(), blockData.block.Header.Bits, expectedNBits)
-		}
-
-		// Then check that the block hash meets the difficulty target
-		headerValid, _, err := blockData.block.Header.HasMetTargetDifficulty()
-		if !headerValid {
-			return errors.NewBlockInvalidError("[reValidateBlock][%s] block does not meet target difficulty: %s", blockData.block.Header.Hash().String(), err)
 		}
 	}
 
@@ -2449,4 +2485,50 @@ func (u *BlockValidation) StopCaches() {
 	u.lastValidatedBlocks.Stop()
 	u.blockExistsCache.Stop()
 	u.subtreeExistsCache.Stop()
+}
+
+// skipExpectedDifficulty requires checkpoint ancestry and fails closed on missing chain state.
+func (u *BlockValidation) skipExpectedDifficulty(ctx context.Context, block *model.Block, checkpointProven bool) bool {
+	checkpoints := u.settings.ChainCfgParams.Checkpoints
+
+	if !model.BelowCheckpoint(checkpoints, block.Height) {
+		return false
+	}
+
+	_, bestMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil || bestMeta == nil {
+		u.logger.Warnf("[skipExpectedDifficulty][%s] could not read best block header, applying the expected-nBits rule: %v", block.Hash().String(), err)
+		return false
+	}
+
+	// Invalidation removes descendants from the best chain, so reconsidering
+	// historical blocks is covered by the syncing arm as the prefix is rebuilt.
+	if !model.SkipExpectedDifficulty(checkpoints, block.Height, bestMeta.Height) {
+		return false
+	}
+	if checkpointProven {
+		return true
+	}
+
+	// Historical reconsideration may rebuild an invalidated prefix. Prove its
+	// ancestry from a stored pinned checkpoint, including invalidated headers;
+	// merely finding the candidate in storage would also trust stored forks.
+	for _, checkpoint := range checkpoints {
+		if checkpoint.Height < 0 || uint32(checkpoint.Height) < block.Height || checkpoint.Hash == nil {
+			continue
+		}
+		if uint32(checkpoint.Height) == block.Height && checkpoint.Hash.IsEqual(block.Hash()) {
+			return true
+		}
+		_, checkpointMeta, err := u.blockchainClient.GetBlockHeader(ctx, checkpoint.Hash)
+		if err != nil || checkpointMeta == nil || checkpointMeta.Height != uint32(checkpoint.Height) {
+			continue
+		}
+		headers, metas, err := u.blockchainClient.GetBlockHeadersFromOldest(ctx, checkpoint.Hash, block.Hash(), 1)
+		if err == nil && len(headers) == 1 && len(metas) == 1 && headers[0] != nil && metas[0] != nil &&
+			metas[0].Height == block.Height && headers[0].Hash().IsEqual(block.Hash()) {
+			return true
+		}
+	}
+	return false
 }

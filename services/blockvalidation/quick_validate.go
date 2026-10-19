@@ -3,6 +3,7 @@ package blockvalidation
 import (
 	"bufio"
 	"context"
+	"runtime"
 	"sync"
 	"time"
 
@@ -150,6 +151,10 @@ func (u *BlockValidation) buildSubtreeAndQueueWrite(ctx context.Context, block *
 		}
 	}
 
+	// RootHash initializes a lazy cache. Populate it before sharing the subtree
+	// with the async serializer and the block merkle check.
+	fullSubtree.RootHash()
+
 	// Set on block for merkle validation (synchronous)
 	block.SubtreeSlices[subtreeIdx] = fullSubtree
 
@@ -198,10 +203,13 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
 	}
 
-	var (
-		err error
-		id  uint64
-	)
+	cleanup, err := u.authenticateQuickBlockBody(ctx, block)
+	defer cleanup()
+	if err != nil {
+		return err
+	}
+
+	var id uint64
 
 	if len(block.Subtrees) > 0 {
 		// Process all subtrees in streaming fashion - creates UTXOs, spends, writes files
@@ -287,10 +295,13 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		return errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
 	}
 
-	var (
-		err error
-		id  uint64
-	)
+	cleanup, err := u.authenticateQuickBlockBody(ctx, block)
+	defer cleanup()
+	if err != nil {
+		return err
+	}
+
+	var id uint64
 
 	if len(block.Subtrees) > 0 {
 		// Process subtrees with async file writes
@@ -352,6 +363,8 @@ type subtreeResult struct {
 	subtreeHash       chainhash.Hash
 	subtreeIdx        int
 	fullSubtreeExists bool // True if full .subtree file already exists (checked during prefetch)
+	borrowed          bool // nodes owned by the whole-block preflight
+	localFileType     fileformat.FileType
 	err               error
 }
 
@@ -386,7 +399,9 @@ func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model
 // This is the fallback when SubtreeBatchPrefetchDepth is 0.
 func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
-	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	if len(block.SubtreeSlices) != numSubtrees {
+		block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	}
 	var existingBlockID uint64
 
 	// Get block ID first (check for retry using first tx after reading first batch)
@@ -467,7 +482,9 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 //   - On retry, Create() returns ErrTxExists, and SetMinedMulti() updates the correct BlockID
 func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
-	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	if len(block.SubtreeSlices) != numSubtrees {
+		block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	}
 	var existingBlockID uint64
 	blockIDSet := false
 
@@ -609,7 +626,9 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 //   - error: If processing fails or context is cancelled
 func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
-	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	if len(block.SubtreeSlices) != numSubtrees {
+		block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
+	}
 	var existingBlockID uint64
 	blockIDSet := false
 
@@ -749,7 +768,7 @@ func (u *BlockValidation) validateSubtrees(ctx context.Context, block *model.Blo
 }
 
 // readSubtree reads a single subtree from disk and validates its transactions.
-func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) subtreeResult {
+func (u *BlockValidation) readSubtreeNodes(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) (result subtreeResult) {
 	// On retry the subtree may already be promoted to FileTypeSubtree (the
 	// "already validated" marker) and FileTypeSubtreeToCheck cleaned up, so
 	// consult both file types — see findLocalSubtreeFile.
@@ -760,37 +779,91 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	if !localExists {
 		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] subtree %s not found locally", block.Hash().String(), subtreeHash.String())}
 	}
-	subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
-	if err != nil {
-		return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+	// Reuse nodes authenticated by the quick preflight. Each batch reads its
+	// slice before the processing stage replaces it with the completed subtree.
+	var subtree *subtreepkg.Subtree
+	if len(block.SubtreeSlices) == len(block.Subtrees) {
+		subtree = block.SubtreeSlices[subtreeIdx]
 	}
-	defer subtreeReader.Close()
-
-	// Use pooled buffered reader to reduce GC pressure
+	borrowed := subtree != nil
+	defer func() {
+		if result.err != nil && !borrowed && subtree != nil {
+			_ = subtree.Close()
+		}
+	}()
 	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
-	bufferedReader.Reset(subtreeReader)
 	defer func() {
 		bufferedReader.Reset(nil)
 		bufioReaderPool.Put(bufferedReader)
 	}()
-
-	// subtree only contains the tx hashes (nodes) of the subtree
-	var subtree *subtreepkg.Subtree
-	if u.mmapDir != "" {
-		subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
+	if subtree == nil {
+		subtreeReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
 		if err != nil {
-			// Fallback to heap on mmap failure — reset reader and retry
-			u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
-			bufferedReader.Reset(subtreeReader)
+			return subtreeResult{err: errors.NewNotFoundError("[getBlockTransactions][%s] failed to get subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+		}
+		defer func() { _ = subtreeReader.Close() }()
+
+		bufferedReader.Reset(subtreeReader)
+		// subtree only contains the tx hashes (nodes) of the subtree
+		if u.mmapDir != "" {
+			subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
+			if err != nil {
+				// Fallback to heap on mmap failure — reset reader and retry
+				u.logger.Warnf("[getBlockTransactions][%s] mmap deserialization failed for subtree %s, falling back to heap: %v", block.Hash().String(), subtreeHash.String(), err)
+				_ = subtreeReader.Close()
+				reopened, openErr := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], localFileType)
+				if openErr != nil {
+					return subtreeResult{err: errors.NewStorageError("failed to reopen subtree after mmap failure", openErr)}
+				}
+				subtreeReader = reopened
+				bufferedReader.Reset(subtreeReader)
+				subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
+			}
+		} else {
 			subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
 		}
-	} else {
-		subtree, err = subtreepkg.NewSubtreeFromReader(bufferedReader)
-	}
-	if err != nil {
-		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err)}
+		if err != nil {
+			return subtreeResult{err: catchupArtifactError(ctx, *subtreeHash, localFileType,
+				errors.NewBlockInvalidError("[getBlockTransactions][%s] failed to deserialize subtree %s", block.Hash().String(), subtreeHash.String(), err))}
+		}
+
 	}
 
+	// Check if full .subtree file already exists (for retry scenarios). If the
+	// reader above already pulled from FileTypeSubtree we know it's present
+	// without another store round-trip.
+	fullSubtreeExists := localFileType == fileformat.FileTypeSubtree
+	if !fullSubtreeExists {
+		fullSubtreeExists, _ = u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	}
+
+	return subtreeResult{
+		subtree:           subtree,
+		subtreeHash:       *subtreeHash,
+		subtreeIdx:        subtreeIdx,
+		fullSubtreeExists: fullSubtreeExists,
+		borrowed:          borrowed,
+		localFileType:     localFileType,
+	}
+}
+
+func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, subtreeIdx int, subtreeHash *chainhash.Hash) (result subtreeResult) {
+	result = u.readSubtreeNodes(ctx, block, subtreeIdx, subtreeHash)
+	if result.err != nil {
+		return result
+	}
+	subtree := result.subtree
+	borrowed := result.borrowed
+	defer func() {
+		if result.err != nil && !borrowed {
+			_ = subtree.Close()
+		}
+	}()
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	defer func() {
+		bufferedReader.Reset(nil)
+		bufioReaderPool.Put(bufferedReader)
+	}()
 	// get the subtree data from disk
 	subtreeDataReader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
 	if err != nil {
@@ -804,7 +877,8 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 	// the subtree data reader will make sure the data matches the transaction ids from the subtree
 	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, bufferedReader)
 	if err != nil {
-		return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] failed to deserialize subtree data %s: %v", block.Hash().String(), subtreeHash.String(), err)}
+		return subtreeResult{err: catchupArtifactError(ctx, *subtreeHash, fileformat.FileTypeSubtreeData,
+			errors.NewBlockInvalidError("[getBlockTransactions][%s] failed to deserialize subtree data %s", block.Hash().String(), subtreeHash.String(), err))}
 	}
 
 	// Validate transactions in this subtree
@@ -812,31 +886,20 @@ func (u *BlockValidation) readSubtree(ctx context.Context, block *model.Block, s
 		if subtreeIdx == 0 && idx == 0 {
 			// First tx in first subtree must be coinbase
 			if tx != nil && !tx.IsCoinbase() {
-				return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] invalid coinbase tx at index %d in subtree %s", block.Hash().String(), idx, subtreeHash.String())}
+				return subtreeResult{err: catchupArtifactError(ctx, *subtreeHash, fileformat.FileTypeSubtreeData,
+					errors.NewBlockInvalidError("[getBlockTransactions][%s] invalid coinbase tx at index %d in subtree %s", block.Hash().String(), idx, subtreeHash.String()))}
 			}
 			subtreeData.Txs[idx] = nil // set to nil to indicate coinbase
 		} else {
 			if tx == nil {
-				return subtreeResult{err: errors.NewProcessingError("[getBlockTransactions][%s] missing tx at index %d in subtree %s", block.Hash().String(), idx, subtreeHash.String())}
+				return subtreeResult{err: catchupArtifactError(ctx, *subtreeHash, fileformat.FileTypeSubtreeData,
+					errors.NewBlockInvalidError("[getBlockTransactions][%s] missing tx at index %d in subtree %s", block.Hash().String(), idx, subtreeHash.String()))}
 			}
 		}
 	}
 
-	// Check if full .subtree file already exists (for retry scenarios). If the
-	// reader above already pulled from FileTypeSubtree we know it's present
-	// without another store round-trip.
-	fullSubtreeExists := localFileType == fileformat.FileTypeSubtree
-	if !fullSubtreeExists {
-		fullSubtreeExists, _ = u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
-	}
-
-	return subtreeResult{
-		subtree:           subtree,
-		subtreeData:       subtreeData,
-		subtreeHash:       *subtreeHash,
-		subtreeIdx:        subtreeIdx,
-		fullSubtreeExists: fullSubtreeExists,
-	}
+	result.subtreeData = subtreeData
+	return result
 }
 
 // writeSubtreeFilesFromTxs writes the full subtree file to disk.
@@ -968,7 +1031,8 @@ func (u *BlockValidation) unlockSubtreeTransactions(ctx context.Context, subtree
 // to avoid recomputing data and enable parallel operations.
 type SubtreeProcessingBatch struct {
 	// subtrees contains the raw subtree structures (tx hashes/nodes)
-	subtrees []*subtreepkg.Subtree
+	subtrees         []*subtreepkg.Subtree
+	borrowedSubtrees []bool
 
 	// subtreeData contains the full transaction data for each subtree
 	subtreeData []*subtreepkg.Data
@@ -995,11 +1059,83 @@ type SubtreeProcessingBatch struct {
 
 // Close releases mmap-backed subtree resources in this batch.
 func (b *SubtreeProcessingBatch) Close() {
-	for _, st := range b.subtrees {
-		if st != nil {
-			st.Close()
+	for i, st := range b.subtrees {
+		if st != nil && (i >= len(b.borrowedSubtrees) || !b.borrowedSubtrees[i]) {
+			_ = st.Close()
 		}
 	}
+}
+
+// discardSuppliedPreviousOutputs clears the previous-output metadata a
+// transaction arrived with, so the extension paths below repopulate it from the
+// block's own parents or from the local UTXO store.
+//
+// Subtree data is fetched from the peer that announced the block and arrives in
+// extended format, which means the peer — not this node — would otherwise choose
+// the locking script and value used for script execution and value conservation.
+// That is exploitable because the UTXO commitment (util.UTXOHashInto) hashes
+// `lockingScript || VarInt(satoshis)` without a script-length prefix: the
+// script/value boundary is not pinned, so a shorter spendable script paired with
+// a larger value reproduces a genuine output's commitment and passes the store's
+// utxoHash check (GHSA-v76m-6vc7-g7c7).
+//
+// An in-block parent's outputs are committed to by its txid, so resolving
+// against them is as authoritative as the store.
+func discardSuppliedPreviousOutputs(tx *bt.Tx) {
+	for _, input := range tx.Inputs {
+		if input == nil {
+			continue
+		}
+
+		input.PreviousTxScript = nil
+		input.PreviousTxSatoshis = 0
+	}
+
+	// IsExtended() also reports true from this flag alone, so clearing the
+	// per-input fields is not enough on its own.
+	tx.SetExtended(false)
+}
+
+// extendTxFromSameBlockParents fills tx's previous-output metadata from parents
+// carried in the same block, reporting whether any input still needs a UTXO
+// store lookup.
+//
+// PreviousTxOutIndex comes from the untrusted block, so it is bounds-checked
+// before indexing the parent's outputs: an input naming a non-existent output
+// would otherwise panic the validating node with index-out-of-range. Every
+// transaction in every block now reaches this path, since peer-supplied
+// previous outputs are discarded rather than trusted, so that index is fully
+// attacker-controlled.
+func extendTxFromSameBlockParents(tx *bt.Tx, parents map[chainhash.Hash]*bt.Tx) (needsExternalLookup bool, err error) {
+	for j, input := range tx.Inputs {
+		// Skip a nil input rather than dereferencing it. The inline loop this
+		// replaced had no check, so nothing regresses, but
+		// discardSuppliedPreviousOutputs walks the same slice a few lines earlier
+		// and does guard it — one of the two asserting the hazard while the other
+		// panics on it is worse than either choice made consistently.
+		if input == nil {
+			continue
+		}
+
+		parentHash := input.PreviousTxIDChainHash()
+
+		parentTx, ok := parents[*parentHash]
+		if !ok {
+			needsExternalLookup = true
+			continue
+		}
+
+		vout := input.PreviousTxOutIndex
+		if parentTx.Outputs == nil || int(vout) >= len(parentTx.Outputs) || parentTx.Outputs[vout] == nil {
+			return false, errors.NewProcessingError("tx %s input %d references non-existent output %d of same-block parent %s",
+				tx.TxIDChainHash().String(), j, vout, parentHash.String())
+		}
+
+		tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[vout].Satoshis
+		tx.Inputs[j].PreviousTxScript = parentTx.Outputs[vout].LockingScript
+	}
+
+	return needsExternalLookup, nil
 }
 
 // processSubtreeBatch reads and extends a batch of subtrees.
@@ -1029,13 +1165,14 @@ func (u *BlockValidation) processSubtreeBatch(
 	batchSize := batchEnd - batchStart
 
 	batch := &SubtreeProcessingBatch{
-		subtrees:      make([]*subtreepkg.Subtree, batchSize),
-		subtreeData:   make([]*subtreepkg.Data, batchSize),
-		subtreeHashes: make([]chainhash.Hash, batchSize),
-		txRanges:      make([][2]int, batchSize),
-		batchTxs:      make([]*bt.Tx, 0),
-		batchStart:    batchStart,
-		batchEnd:      batchEnd,
+		subtrees:         make([]*subtreepkg.Subtree, batchSize),
+		borrowedSubtrees: make([]bool, batchSize),
+		subtreeData:      make([]*subtreepkg.Data, batchSize),
+		subtreeHashes:    make([]chainhash.Hash, batchSize),
+		txRanges:         make([][2]int, batchSize),
+		batchTxs:         make([]*bt.Tx, 0),
+		batchStart:       batchStart,
+		batchEnd:         batchEnd,
 	}
 
 	// Phase 1: Read subtrees in parallel
@@ -1046,6 +1183,7 @@ func (u *BlockValidation) processSubtreeBatch(
 
 	readerCtx, cancelReaders := context.WithCancel(ctx)
 	g, gCtx := errgroup.WithContext(readerCtx)
+	defer func() { cancelReaders(); _ = g.Wait() }()
 	util.SafeSetLimit(g, 128)
 
 	for i := 0; i < batchSize; i++ {
@@ -1086,6 +1224,7 @@ func (u *BlockValidation) processSubtreeBatch(
 		}
 
 		batch.subtrees[i] = result.subtree
+		batch.borrowedSubtrees[i] = result.borrowed
 		batch.subtreeData[i] = result.subtreeData
 		batch.subtreeHashes[i] = result.subtreeHash
 
@@ -1095,21 +1234,19 @@ func (u *BlockValidation) processSubtreeBatch(
 				continue // skip coinbase
 			}
 
-			// Try to extend from same-block parents first
-			if !tx.IsExtended() {
-				needsExternalLookup := false
-				for j, input := range tx.Inputs {
-					parentHash := input.PreviousTxIDChainHash()
-					if parentTx, ok := extendedTxsFromPrevBatches[*parentHash]; ok {
-						tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[input.PreviousTxOutIndex].Satoshis
-						tx.Inputs[j].PreviousTxScript = parentTx.Outputs[input.PreviousTxOutIndex].LockingScript
-					} else {
-						needsExternalLookup = true
-					}
-				}
-				if needsExternalLookup {
-					txsNeedingExtension = append(txsNeedingExtension, tx)
-				}
+			// Never trust previous-output metadata supplied by the announcing
+			// peer; re-resolve it locally.
+			discardSuppliedPreviousOutputs(tx)
+
+			// Re-resolve same-block parents after clearing supplied metadata.
+			needsExternalLookup, extendErr := extendTxFromSameBlockParents(tx, extendedTxsFromPrevBatches)
+			if extendErr != nil {
+				cancelReaders()
+				return nil, errors.NewProcessingError("[processSubtreeBatch][%s] same-block parent extension failed", block.Hash().String(), extendErr)
+			}
+
+			if needsExternalLookup {
+				txsNeedingExtension = append(txsNeedingExtension, tx)
 			}
 
 			extendedTxsFromPrevBatches[*tx.TxIDChainHash()] = tx
@@ -1340,6 +1477,7 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 
 	batch := &SubtreeProcessingBatch{
 		subtrees:          make([]*subtreepkg.Subtree, batchSize),
+		borrowedSubtrees:  make([]bool, batchSize),
 		subtreeData:       make([]*subtreepkg.Data, batchSize),
 		subtreeHashes:     make([]chainhash.Hash, batchSize),
 		txRanges:          make([][2]int, batchSize),
@@ -1357,6 +1495,7 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 
 	readerCtx, cancelReaders := context.WithCancel(ctx)
 	g, gCtx := errgroup.WithContext(readerCtx)
+	defer func() { cancelReaders(); _ = g.Wait() }()
 	util.SafeSetLimit(g, 128)
 
 	for i := 0; i < batchSize; i++ {
@@ -1395,6 +1534,7 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 		}
 
 		batch.subtrees[i] = result.subtree
+		batch.borrowedSubtrees[i] = result.borrowed
 		batch.subtreeData[i] = result.subtreeData
 		batch.subtreeHashes[i] = result.subtreeHash
 		batch.fullSubtreeExists[i] = result.fullSubtreeExists
@@ -1433,21 +1573,18 @@ func (u *BlockValidation) extendBatch(
 				continue // skip coinbase
 			}
 
-			// Try to extend from same-block parents first
-			if !tx.IsExtended() {
-				needsExternalLookup := false
-				for j, input := range tx.Inputs {
-					parentHash := input.PreviousTxIDChainHash()
-					if parentTx, ok := extendedTxs[*parentHash]; ok {
-						tx.Inputs[j].PreviousTxSatoshis = parentTx.Outputs[input.PreviousTxOutIndex].Satoshis
-						tx.Inputs[j].PreviousTxScript = parentTx.Outputs[input.PreviousTxOutIndex].LockingScript
-					} else {
-						needsExternalLookup = true
-					}
-				}
-				if needsExternalLookup {
-					txsNeedingExtension = append(txsNeedingExtension, tx)
-				}
+			// Never trust previous-output metadata supplied by the announcing
+			// peer; re-resolve it locally.
+			discardSuppliedPreviousOutputs(tx)
+
+			// Re-resolve same-block parents after clearing supplied metadata.
+			needsExternalLookup, extendErr := extendTxFromSameBlockParents(tx, extendedTxs)
+			if extendErr != nil {
+				return errors.NewProcessingError("[extendBatch][%s] same-block parent extension failed", block.Hash().String(), extendErr)
+			}
+
+			if needsExternalLookup {
+				txsNeedingExtension = append(txsNeedingExtension, tx)
 			}
 
 			extendedTxs[*tx.TxIDChainHash()] = tx
@@ -1465,4 +1602,136 @@ func (u *BlockValidation) extendBatch(
 	}
 
 	return nil
+}
+
+// authenticateQuickBlockBody authenticates every node and transaction before
+// mutation. The returned cleanup owns the loaded nodes until all processing has
+// joined; batches borrow them and cannot unmap them on an intermediate error.
+func (u *BlockValidation) authenticateQuickBlockBody(ctx context.Context, block *model.Block) (func(), error) {
+	body := &model.Block{Header: block.Header, CoinbaseTx: block.CoinbaseTx, Subtrees: block.Subtrees,
+		SubtreeSlices: make([]*subtreepkg.Subtree, len(block.Subtrees))}
+	cleanup := func() {
+		for i, st := range body.SubtreeSlices {
+			if st != nil {
+				_ = st.Close()
+				if i < len(block.SubtreeSlices) && block.SubtreeSlices[i] == st {
+					block.SubtreeSlices[i] = nil
+				}
+			}
+		}
+	}
+	// Bound both mapped-node reads and decoded transaction data. Each worker
+	// releases decoded transactions before accepting another subtree.
+	concurrency := u.settings.Block.GetAndValidateSubtreesConcurrency
+	if concurrency <= 0 {
+		concurrency = max(4, runtime.NumCPU()/2)
+	}
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(g, concurrency)
+	sizes := make([]uint64, len(body.Subtrees))
+	// A pending node file is bound to its hash only by matching transactions:
+	// a collapsed tree level passes the node check. Body-level failures that
+	// rest on a node file this attempt did not bind must not convict the peer.
+	unbound := make([]bool, len(body.Subtrees))
+	for i, hash := range body.Subtrees {
+		g.Go(func() error {
+			// Use a separate read view: its slices are empty, so this read owns
+			// the mmap allocation. Publishing results does not race other readers.
+			view := &model.Block{Header: body.Header, CoinbaseTx: body.CoinbaseTx, Subtrees: body.Subtrees}
+			result := u.readSubtreeNodes(gCtx, view, i, hash)
+			if result.err != nil {
+				return result.err
+			}
+			st := result.subtree
+			body.SubtreeSlices[i] = st
+			if result.localFileType == fileformat.FileTypeSubtreeToCheck {
+				// The length check catches a file replaced after it was bound.
+				tracked, bound, leaves := boundCatchupArtifact(gCtx, *hash)
+				unbound[i] = tracked && (!bound || leaves != st.Length())
+			}
+			if len(st.Nodes) == 0 {
+				return catchupArtifactError(gCtx, *hash, result.localFileType,
+					errors.NewBlockInvalidError("[quickValidateBlock][%s] subtree must not be empty", block.Hash().String()))
+			}
+			// Deserialization reads a cached root from the file. Recompute it
+			// from nodes instead of trusting that cache or the blob-store key.
+			// No node is being replaced: avoid copying mmap-backed nodes to heap.
+			// A root-consistent but non-canonical list is equally a property of
+			// the stored file, not of the block body.
+			err := verifySubtreeNodes(st.Nodes, hash)
+			if err == nil && !st.RootHash().IsEqual(hash) {
+				err = errors.NewProcessingError("serialized root does not match %s", hash.String())
+			}
+			if err != nil {
+				return catchupArtifactError(gCtx, *hash, result.localFileType,
+					errors.NewBlockInvalidError("[quickValidateBlock][%s] subtree %s nodes do not match its root", block.Hash().String(), hash.String(), err))
+			}
+			// Once the stored nodes match their key, their position in the body
+			// is the announcing peer's responsibility, not a cache corruption.
+			if i == 0 && !st.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				invalid := errors.NewBlockInvalidError("[quickValidateBlock][%s] first subtree must start with the coinbase placeholder", block.Hash().String())
+				if unbound[i] {
+					return unboundCatchupArtifactsError(gCtx, []catchupArtifactKey{{hash: *hash, kind: result.localFileType}}, invalid)
+				}
+				return invalid
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return cleanup, err
+	}
+	var unboundFiles []catchupArtifactKey
+	for i, hash := range body.Subtrees {
+		if unbound[i] {
+			unboundFiles = append(unboundFiles, catchupArtifactKey{hash: *hash, kind: fileformat.FileTypeSubtreeToCheck})
+		}
+	}
+	if err := model.CheckSubtreeSlicesForDuplicateTxs(body.SubtreeSlices); err != nil {
+		return cleanup, unboundCatchupArtifactsError(ctx, unboundFiles, err)
+	}
+	if err := body.CheckMerkleRoot(ctx); err != nil {
+		return cleanup, unboundCatchupArtifactsError(ctx, unboundFiles,
+			errors.NewBlockInvalidError("[quickValidateBlock][%s] body does not match header merkle root", block.Hash().String(), err))
+	}
+	var authenticatedCount uint64
+	// CheckMerkleRoot above already enforces subtree lengths and partitioning.
+	for _, st := range body.SubtreeSlices {
+		authenticatedCount += uint64(st.Length())
+	}
+	if len(body.Subtrees) == 0 {
+		authenticatedCount = 1
+	}
+	if block.TransactionCount != authenticatedCount {
+		return cleanup, unboundCatchupArtifactsError(ctx, unboundFiles,
+			errors.NewBlockInvalidError("[quickValidateBlock][%s] transaction count %d does not match authenticated body count %d", block.Hash().String(), block.TransactionCount, authenticatedCount))
+	}
+	// With node structure and header commitments established, parse all bodies
+	// in parallel before permitting the first UTXO operation.
+	dataGroup, dataCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(dataGroup, concurrency)
+	for i, hash := range body.Subtrees {
+		dataGroup.Go(func() error {
+			result := u.readSubtree(dataCtx, body, i, hash)
+			if result.err != nil {
+				return result.err
+			}
+			for _, tx := range result.subtreeData.Txs {
+				if tx != nil {
+					sizes[i] += uint64(tx.Size())
+				}
+			}
+			return nil
+		})
+	}
+	if err := dataGroup.Wait(); err != nil {
+		return cleanup, err
+	}
+	var transactionBytes uint64
+	for _, size := range sizes {
+		transactionBytes += size
+	}
+	block.SubtreeSlices = append([]*subtreepkg.Subtree(nil), body.SubtreeSlices...)
+	block.SizeInBytes = 80 + util.VarintSize(authenticatedCount) + uint64(block.CoinbaseTx.Size()) + transactionBytes
+	return cleanup, nil
 }

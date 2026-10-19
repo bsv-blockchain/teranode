@@ -159,14 +159,15 @@ group Alert System Operations
 
   Alert -> UTXO : ReAssignUTXO(oldUtxo, newUtxo, settings)
   activate UTXO
-  UTXO -> UTXO : Transfer UTXO ownership
+  UTXO -> UTXO : Replace commitment and set maturity gate
   note right of UTXO
-    **Reassignment:**
-    • Court-ordered transfers
-    • Asset recovery operations
-    • Requires 1,000 block delay
+    **Reassignment limitation:**
+    • Replacement script is not persisted
+    • Changing owner strands the output for both owners
+    • Maturity does not restore spendability
+    • Do not use ownership-changing reassignment
   end note
-  UTXO -> Alert : UTXO reassigned
+  UTXO -> Alert : Commitment updated (not proof of spendability)
   deactivate UTXO
 end
 

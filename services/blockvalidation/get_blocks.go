@@ -10,13 +10,13 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
@@ -436,57 +436,117 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 	return contributingPeers, nil
 }
 
-// fetchAndStoreSubtree fetches and stores only the subtree (for subtreeToCheck)
-func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, peerID, baseURL string) (*subtreepkg.Subtree, error) {
+// verifySubtreeNodes checks that nodes hash to root and are not a padded form
+// of a shorter list. The merkle construction hashes a missing right sibling as
+// a copy of the left, so a duplicated level tail or zero padding reproduces the
+// root of a shorter list (CVE-2012-2459). Other equal siblings are genuinely
+// duplicate transactions, left to the block checks. This does not bind a list
+// to its hash: any tree level also hashes to root, and only matching
+// transactions rule that out.
+func verifySubtreeNodes(nodes []subtreepkg.Node, root *chainhash.Hash) error {
+	merkles, err := subtreepkg.BuildMerkleTreeStoreFromBytes(nodes)
+	if err != nil {
+		return errors.NewProcessingError("failed to compute subtree root", err)
+	}
+	if len(*merkles) == 0 || !(*merkles)[len(*merkles)-1].IsEqual(root) {
+		return errors.NewProcessingError("subtree nodes do not hash to %s", root.String())
+	}
+	var zero chainhash.Hash
+	for i := range nodes {
+		if nodes[i].Hash.Equal(zero) {
+			return errors.NewProcessingError("subtree %s has a zero leaf at index %d", root.String(), i)
+		}
+	}
+	// A level with an even count of at least four whose last two entries are
+	// equal hashes like the same level without its last entry. With two, the
+	// shorter level is a single entry, which is its own root, so the subtree
+	// hash differs. Lifting a final subtree does make [a] and [a,a] give the
+	// same block merkle root, but under different subtree hashes: that is a
+	// mutated block body, which the duplicate transaction check rejects.
+	count := len(nodes)
+	if count >= 4 && count%2 == 0 && nodes[count-1].Hash.Equal(nodes[count-2].Hash) {
+		return errors.NewProcessingError("subtree %s has equal sibling leaves at its tail", root.String())
+	}
+	// Internal levels are stored bottom-up, each padded to a power of two.
+	offset := 0
+	for width := subtreepkg.NextPowerOfTwo(len(nodes)) / 2; width > 1; width /= 2 {
+		count = (count + 1) / 2
+		if count >= 4 && count%2 == 0 && (*merkles)[offset+count-1].Equal((*merkles)[offset+count-2]) {
+			return errors.NewProcessingError("subtree %s has equal sibling nodes at a level tail", root.String())
+		}
+		offset += width
+	}
+	return nil
+}
+
+// fetchAndStoreSubtree returns the nodes to check a peer's subtree data against:
+// the validated nodes if they are stored, otherwise the peer's own node list.
+// A peer's list is not stored here. Any merkle level hashes to the subtree
+// root, so only matching transactions bind it; fetchAndStoreSubtreeData stores
+// it once they do.
+func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash, peerID, baseURL string) (*subtreepkg.Subtree, bool, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtree",
 		tracing.WithParentStat(u.stats),
 		// tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtree] fetching subtree for %s", subtreeHash.String()),
 	)
 	defer deferFn()
 
-	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
+	store := u.catchupSubtreeStore(ctx)
 
-	// Check if we already have the subtree, under either FileTypeSubtreeToCheck
-	// (peer-fetched, pending validation) or FileTypeSubtree (already validated).
-	// See findLocalSubtreeFile for why both must be consulted.
-	localFileType, localExists, err := findLocalSubtreeFile(ctx, u.subtreeStore, *subtreeHash)
+	// A pending FileTypeSubtreeToCheck is deliberately not reused: it may be
+	// a collapsed tree level, and checking fresh data against it could not
+	// tell which of the two is wrong.
+	validated, err := store.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if err != nil {
-		return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] error checking subtree existence for %s", subtreeHash.String(), err)
+		return nil, false, errors.NewStorageError("[catchup:fetchAndStoreSubtree] error checking subtree existence for %s", subtreeHash.String(), err)
 	}
 
-	if localExists {
+	if validated {
 		u.logger.Debugf("[catchup:fetchAndStoreSubtree] Subtree already exists for %s, loading from store", subtreeHash.String())
 
-		// Load existing subtree from store under whichever file type was found
-		subtreeBytes, err := u.subtreeStore.Get(ctx, subtreeHash[:], localFileType)
+		subtreeBytes, err := store.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 		if err != nil {
-			return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to get existing subtree for %s", subtreeHash.String(), err)
+			return nil, false, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to get existing subtree for %s", subtreeHash.String(), err)
 		}
 
 		subtree, err := subtreeFromBytesWithMmap(subtreeBytes, u.settings.BlockValidation.SubtreeMmapDir)
 		if err != nil {
-			return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to deserialize existing subtree for %s", subtreeHash.String(), err)
+			return nil, false, catchupArtifactError(ctx, *subtreeHash, fileformat.FileTypeSubtree,
+				errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to deserialize existing subtree for %s", subtreeHash.String(), err))
+		}
+		// Peer data is judged against these nodes, so corrupt ones would
+		// convict every honest peer.
+		if err = verifySubtreeNodes(subtree.Nodes, subtreeHash); err != nil {
+			_ = subtree.Close()
+			return nil, false, catchupArtifactError(ctx, *subtreeHash, fileformat.FileTypeSubtree,
+				errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Existing subtree nodes do not match %s", subtreeHash.String(), err))
 		}
 
-		return subtree, nil
+		return subtree, true, nil
 	}
 
 	// Fetch subtree from peer
 	subtreeNodeBytes, subtreeErr := u.fetchSubtreeFromPeer(ctx, subtreeHash, peerID, baseURL)
 	if subtreeErr != nil {
-		return nil, errors.NewServiceError("[catchup:fetchAndStoreSubtree] Failed to fetch subtree for %s", subtreeHash.String(), subtreeErr)
+		return nil, false, errors.NewServiceError("[catchup:fetchAndStoreSubtree] Failed to fetch subtree for %s", subtreeHash.String(), subtreeErr)
+	}
+
+	// A payload that is not a whole number of hashes is malformed.
+	if len(subtreeNodeBytes)%chainhash.HashSize != 0 {
+		u.reportCatchupError(ctx, peerID, "subtree nodes are not a whole number of hashes")
+		return nil, false, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Peer %s (%s) provided %d bytes of subtree nodes for %s", peerID, baseURL, len(subtreeNodeBytes), subtreeHash.String())
 	}
 
 	// in the subtree validation, we only use the hashes of the FileTypeSubtreeToCheck, which is what is returned from the peer
 	numberOfNodes := len(subtreeNodeBytes) / chainhash.HashSize
 	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(numberOfNodes)
 	if err != nil {
-		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to create subtree with %d nodes for %s", numberOfNodes, subtreeHash.String(), err)
+		return nil, false, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to create subtree with %d nodes for %s", numberOfNodes, subtreeHash.String(), err)
 	}
 
 	// Sanity check, subtrees should never be empty
 	if numberOfNodes == 0 {
-		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Subtree for %s has zero nodes", subtreeHash.String())
+		return nil, false, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Subtree for %s has zero nodes", subtreeHash.String())
 	}
 
 	// Deserialize the subtree nodes from the bytes
@@ -495,46 +555,38 @@ func (u *Server) fetchAndStoreSubtree(ctx context.Context, block *model.Block, s
 		nodeBytes := subtreeNodeBytes[i*chainhash.HashSize : (i+1)*chainhash.HashSize]
 		nodeHash, err := chainhash.NewHash(nodeBytes)
 		if err != nil {
-			return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to create hash from bytes for subtree %s at index %d", subtreeHash.String(), i, err)
+			return nil, false, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to create hash from bytes for subtree %s at index %d", subtreeHash.String(), i, err)
 		}
 
 		if i == 0 && nodeHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 			if err = subtree.AddCoinbaseNode(); err != nil {
-				return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to add coinbase node to subtree %s at index %d", subtreeHash.String(), i, err)
+				return nil, false, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to add coinbase node to subtree %s at index %d", subtreeHash.String(), i, err)
 			}
 			continue
 		}
 
 		// Add the node to the subtree, we do not know the fee or size yet, so we use 0
 		if err = subtree.AddNode(*nodeHash, 0, 0); err != nil {
-			return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to add node %s to subtree %s at index %d", nodeHash.String(), subtreeHash.String(), i, err)
+			return nil, false, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to add node %s to subtree %s at index %d", nodeHash.String(), subtreeHash.String(), i, err)
 		}
 	}
 
-	subtreeBytes, err := subtree.Serialize()
-	if err != nil {
-		return nil, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Failed to serialize subtree %s for %s", subtreeHash.String(), err)
-	}
-
-	// Store subtree (for subtreeToCheck) in subtreeStore
-	if err = u.subtreeStore.Set(ctx,
-		subtreeHash[:],
-		fileformat.FileTypeSubtreeToCheck,
-		subtreeBytes,
-		options.WithAllowOverwrite(true),
-		options.WithDeleteAt(dah),
-	); err != nil {
-		return nil, errors.NewStorageError("[catchup:fetchAndStoreSubtree] Failed to store subtreeToCheck for %s", subtreeHash.String(), err)
+	if err = verifySubtreeNodes(subtree.Nodes, subtreeHash); err != nil {
+		u.reportCatchupError(ctx, peerID, "subtree nodes do not match their hash")
+		return nil, false, errors.NewProcessingError("[catchup:fetchAndStoreSubtree] Peer %s (%s) provided subtree nodes that do not match %s", peerID, baseURL, subtreeHash.String(), err)
 	}
 
 	// Reputation is credited post-validation in validateBlocksOnChannel via reportValidBlockForPeers
 
-	return subtree, nil
+	return subtree, false, nil
 }
 
-// fetchAndStoreSubtreeData fetches and stores only the subtreeData
+// fetchAndStoreSubtreeData fetches the peer's subtree data and checks it against
+// subtree. Matching transactions bind the node list to its hash, so both files
+// are stored only then. A mismatch is the peer's fault: it served both files,
+// or its data contradicts validated nodes.
 func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
-	subtree *subtreepkg.Subtree, peerID, baseURL string) error {
+	subtree *subtreepkg.Subtree, validated bool, peerID, baseURL string) error {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchAndStoreSubtreeData",
 		tracing.WithParentStat(u.stats),
 		tracing.WithDebugLogMessage(u.logger, "[catchup:fetchAndStoreSubtreeData][%s] Fetching subtree data from peer %s (%s) for subtree %s", block.Hash().String(), peerID, baseURL, subtreeHash.String()),
@@ -543,17 +595,6 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 
 	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
 
-	// Check if we already have the subtreeData
-	subtreeDataExists, err := u.subtreeStore.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
-	if err != nil {
-		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Error checking subtreeData existence for %s: %v", subtreeHash.String(), err)
-	}
-
-	if subtreeDataExists {
-		u.logger.Debugf("[catchup:fetchAndStoreSubtreeData] SubtreeData already exists for %s, skipping fetch", subtreeHash.String())
-		return nil
-	}
-
 	// Detach from sibling cancellation: this function is called from a per-subtree
 	// goroutine inside fetchSubtreeDataForBlock's errgroup. Using gCtx for the HTTP
 	// fetch + parse + store means a single sibling failure cancels every in-flight
@@ -561,8 +602,7 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	// connection, causing the peer to abort its on-demand creation (storer.Abort) and
 	// throw away Aerospike work that was already paid for. Detaching here lets each
 	// fetch run to completion (or hit its own http_streaming_timeout) so the peer can
-	// finish writing its subtreeData file. The existence check above still respects
-	// the original ctx, so a pre-cancelled call still exits early.
+	// finish writing its subtreeData file.
 	//
 	// See companion fix in services/subtreevalidation/check_block_subtrees.go.
 	ctx = context.WithoutCancel(ctx)
@@ -585,7 +625,13 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 	// loading the subtree data like this will validate the data as it is read
 	// compared to the transactions in the subtree
 	subtreeData, err := subtreepkg.NewSubtreeDataFromReader(subtree, subtreeDataBufferedReader)
+	if err == nil {
+		err = checkSubtreeDataMatchesNodes(subtree, subtreeData)
+	}
 	if err != nil {
+		if errors.Is(err, subtreepkg.ErrTxHashMismatch) || errors.Is(err, subtreepkg.ErrTxIndexOutOfBounds) {
+			u.reportCatchupError(ctx, peerID, "subtree data does not match subtree nodes")
+		}
 		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Failed to create subtreeData for %s", subtreeHash.String(), err)
 	}
 
@@ -605,18 +651,203 @@ func (u *Server) fetchAndStoreSubtreeData(ctx context.Context, block *model.Bloc
 		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Peer %s (%s) provided incomplete subtree data for %s", peerID, baseURL, subtreeHash.String(), err)
 	}
 
-	// Store subtreeData (raw data) in subtreeStore
-	if err = u.subtreeStore.Set(ctx,
-		subtreeHash[:],
-		fileformat.FileTypeSubtreeData,
-		subtreeDataBytes,
-		options.WithAllowOverwrite(true),
-		options.WithDeleteAt(dah),
-	); err != nil {
+	subtreeBytes, err := subtree.Serialize()
+	if err != nil {
+		return errors.NewProcessingError("[catchup:fetchAndStoreSubtreeData] Failed to serialize subtree %s", subtreeHash.String(), err)
+	}
+	// The data binds the peer's list unless it could be a collapsed tree level;
+	// then both files are stored unbound, so no verdict can rest on them.
+	bound := validated || !allMerkleNodeSized(subtree, subtreeData.Txs)
+	if err = u.storeBoundSubtreeFile(ctx, subtreeHash, fileformat.FileTypeSubtreeData, subtreeDataBytes, dah, 0, bound); err != nil {
 		return errors.NewStorageError("[catchup:fetchAndStoreSubtreeData] Failed to store subtreeData for %s", subtreeHash.String(), err)
+	}
+	if validated {
+		return u.bindPendingToValidated(ctx, block, subtreeHash)
+	}
+	if err = u.storeBoundSubtreeFile(ctx, subtreeHash, fileformat.FileTypeSubtreeToCheck, subtreeBytes, dah, subtree.Length(), bound); err != nil {
+		return errors.NewStorageError("[catchup:fetchAndStoreSubtreeData] Failed to store subtreeToCheck for %s", subtreeHash.String(), err)
 	}
 
 	return nil
+}
+
+// allMerkleNodeSized reports whether every transaction outside the coinbase slot
+// is 64 bytes; see isMerkleNodeSized.
+func allMerkleNodeSized(subtree *subtreepkg.Subtree, txs []*bt.Tx) bool {
+	start := 0
+	if len(subtree.Nodes) > 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+		start = 1
+	}
+	if start >= len(txs) {
+		return false
+	}
+	for _, tx := range txs[start:] {
+		if tx == nil || !isMerkleNodeSized(tx) {
+			return false
+		}
+	}
+	return true
+}
+
+// bindPendingToValidated replaces a pending node list with the validated one.
+// Readers prefer the pending file, which may be stale or collapsed.
+func (u *Server) bindPendingToValidated(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash) error {
+	store := u.catchupSubtreeStore(ctx)
+	pending, err := store.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
+	if err != nil || !pending {
+		return err
+	}
+	validatedBytes, err := store.Get(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	if err != nil {
+		return errors.NewStorageError("[catchup:bindPendingToValidated] Failed to get subtree %s", subtreeHash.String(), err)
+	}
+	validated, err := subtreepkg.NewSubtreeFromBytes(validatedBytes)
+	if err == nil {
+		err = verifySubtreeNodes(validated.Nodes, subtreeHash)
+	}
+	if err != nil {
+		return catchupArtifactError(ctx, *subtreeHash, fileformat.FileTypeSubtree,
+			errors.NewProcessingError("[catchup:bindPendingToValidated] Invalid validated subtree %s", subtreeHash.String(), err))
+	}
+	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
+	if err = u.storeBoundSubtreeFile(ctx, subtreeHash, fileformat.FileTypeSubtreeToCheck, validatedBytes, dah, validated.Length(), true); err != nil {
+		return errors.NewStorageError("[catchup:bindPendingToValidated] Failed to store subtreeToCheck for %s", subtreeHash.String(), err)
+	}
+	return nil
+}
+
+// checkSubtreeDataMatchesNodes requires a transaction matching every node.
+// go-subtree's reader stops quietly at EOF, leaving unfilled slots nil (and
+// Data.Serialize then dereferences a nil slot 0), and it places a coinbase
+// found in second position into slot 0 over the transaction already there.
+// Only the coinbase placeholder slot may be empty or hold another hash. A
+// missing transaction is reported as a length mismatch, not a hash mismatch:
+// an honest server that aborts a committed stream also ends it cleanly.
+func checkSubtreeDataMatchesNodes(subtree *subtreepkg.Subtree, data *subtreepkg.Data) error {
+	for i, node := range subtree.Nodes {
+		if i == 0 && node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+		if data.Txs[i] == nil {
+			return errors.NewProcessingError("subtree data is missing transaction %d", i, subtreepkg.ErrSubtreeLengthMismatch)
+		}
+		if !data.Txs[i].TxIDChainHash().Equal(node.Hash) {
+			return errors.NewProcessingError("subtree data transaction %d does not match its node", i, subtreepkg.ErrTxHashMismatch)
+		}
+	}
+	return nil
+}
+
+// bindStoredSubtree reuses subtree data already on disk. Transaction data is
+// self-authenticating: its txids must be the canonical leaves of the subtree
+// hash, which no collapsed or padded node list can fake. The node list is then
+// derived from the data, whatever node file is stored. Returns false when the
+// data is missing or does not authenticate, so it is fetched again.
+func (u *Server) bindStoredSubtree(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash) (bool, error) {
+	store := u.catchupSubtreeStore(ctx)
+	exists, err := store.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+	if err != nil {
+		return false, errors.NewStorageError("[catchup:bindStoredSubtree] error checking subtreeData existence for %s", subtreeHash.String(), err)
+	}
+	if !exists {
+		return false, nil
+	}
+	validated, err := store.Exists(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	if err != nil {
+		return false, errors.NewStorageError("[catchup:bindStoredSubtree] error checking subtree existence for %s", subtreeHash.String(), err)
+	}
+	if validated {
+		// Accepted with this data by an earlier validation.
+		return true, u.bindPendingToValidated(ctx, block, subtreeHash)
+	}
+	reader, err := store.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeData)
+	if err != nil {
+		return false, errors.NewStorageError("[catchup:bindStoredSubtree] failed to read subtreeData for %s", subtreeHash.String(), err)
+	}
+	defer reader.Close()
+	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
+	bufferedReader.Reset(reader)
+	defer func() {
+		bufferedReader.Reset(nil)
+		bufioReaderPool.Put(bufferedReader)
+	}()
+	coinbaseSlot := len(block.Subtrees) > 0 && block.Subtrees[0].IsEqual(subtreeHash)
+	subtree, ambiguous, err := subtreeFromData(bufferedReader, coinbaseSlot)
+	if err == nil {
+		err = verifySubtreeNodes(subtree.Nodes, subtreeHash)
+	}
+	if err != nil {
+		u.logger.Warnf("[catchup:bindStoredSubtree] stored subtreeData for %s does not authenticate, fetching again: %v", subtreeHash.String(), err)
+		return false, nil
+	}
+	subtreeBytes, err := subtree.Serialize()
+	if err != nil {
+		return false, errors.NewProcessingError("[catchup:bindStoredSubtree] Failed to serialize subtree %s", subtreeHash.String(), err)
+	}
+	if ambiguous {
+		// It cannot prove its own node list; a peer must supply both again.
+		return false, nil
+	}
+	dah := block.Height + u.settings.GetSubtreeValidationBlockHeightRetention()
+	if err = u.storeBoundSubtreeFile(ctx, subtreeHash, fileformat.FileTypeSubtreeToCheck, subtreeBytes, dah, subtree.Length(), true); err != nil {
+		return false, errors.NewStorageError("[catchup:bindStoredSubtree] Failed to store subtreeToCheck for %s", subtreeHash.String(), err)
+	}
+	return true, nil
+}
+
+// subtreeFromData builds the node list implied by serialized subtree data. The
+// first subtree of a block reserves its first slot for the coinbase, which the
+// data may or may not include. ambiguous reports data that does not bind the
+// list: see merkleLevelSized.
+func subtreeFromData(r io.Reader, coinbaseSlot bool) (subtree *subtreepkg.Subtree, ambiguous bool, err error) {
+	var leaves []chainhash.Hash
+	ambiguous = true
+	for {
+		tx := &bt.Tx{}
+		if _, err := tx.ReadFrom(r); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, false, errors.NewProcessingError("failed to read transaction %d", len(leaves), err)
+		}
+		if coinbaseSlot && len(leaves) == 0 && tx.IsCoinbase() {
+			continue
+		}
+		ambiguous = ambiguous && isMerkleNodeSized(tx)
+		leaves = append(leaves, *tx.TxIDChainHash())
+	}
+	count := len(leaves)
+	if coinbaseSlot {
+		count++
+	}
+	if count == 0 {
+		return nil, false, errors.NewProcessingError("subtree data is empty")
+	}
+	ambiguous = ambiguous && len(leaves) > 0
+	subtree, err = subtreepkg.NewIncompleteTreeByLeafCount(count)
+	if err != nil {
+		return nil, false, errors.NewProcessingError("failed to create subtree with %d nodes", count, err)
+	}
+	if coinbaseSlot {
+		if err = subtree.AddCoinbaseNode(); err != nil {
+			return nil, false, errors.NewProcessingError("failed to add coinbase node", err)
+		}
+	}
+	for _, leaf := range leaves {
+		if err = subtree.AddNode(leaf, 0, 0); err != nil {
+			return nil, false, errors.NewProcessingError("failed to add node %s", leaf.String(), err)
+		}
+	}
+	return subtree, ambiguous, nil
+}
+
+// isMerkleNodeSized reports a transaction whose serialization is exactly two
+// merkle children long, so its txid may be an internal merkle node. Data binds
+// a node list unless every transaction is that size: only then can the data
+// be a whole collapsed tree level. The coinbase slot is excluded, as the
+// placeholder leaf has no preimage.
+func isMerkleNodeSized(tx *bt.Tx) bool {
+	return tx.Size() == 2*chainhash.HashSize
 }
 
 // fetchAndStoreSubtreeAndSubtreeData fetches both subtree and subtreeData for a single subtree hash
@@ -631,11 +862,15 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 	)
 	defer deferFn()
 
+	if bound, err := u.bindStoredSubtree(ctx, block, subtreeHash); err != nil || bound {
+		return "", err
+	}
+
 	// Try primary peer first
-	subtree, err := u.fetchAndStoreSubtree(ctx, block, subtreeHash, peerID, baseURL)
+	subtree, validated, err := u.fetchAndStoreSubtree(ctx, block, subtreeHash, peerID, baseURL)
 	if err == nil {
 		// Primary peer succeeded for subtree, now try subtreeData
-		if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, peerID, baseURL); err == nil {
+		if err = u.fetchAndStoreSubtreeDataAndRelease(ctx, block, subtreeHash, subtree, validated, peerID, baseURL); err == nil {
 			return peerID, nil // Success
 		}
 		// Check if error is local (not peer-related) - don't retry with other peers
@@ -671,7 +906,7 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 				u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Trying alternative peer %s for subtree %s", altPeerID, subtreeHash.String())
 
 				// Try to fetch subtree from alternative peer
-				subtree, err = u.fetchAndStoreSubtree(ctx, block, subtreeHash, altPeerID, altBaseURL)
+				subtree, validated, err = u.fetchAndStoreSubtree(ctx, block, subtreeHash, altPeerID, altBaseURL)
 				if err != nil {
 					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtree %s: %v", altPeerID, subtreeHash.String(), err)
 					lastErr = err
@@ -683,7 +918,7 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 				}
 
 				// Subtree succeeded, try subtreeData
-				if err = u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, altPeerID, altBaseURL); err != nil {
+				if err = u.fetchAndStoreSubtreeDataAndRelease(ctx, block, subtreeHash, subtree, validated, altPeerID, altBaseURL); err != nil {
 					u.logger.Debugf("[catchup:fetchAndStoreSubtreeAndSubtreeData] Alternative peer %s failed for subtreeData %s: %v", altPeerID, subtreeHash.String(), err)
 					lastErr = err
 					// Don't continue trying other peers if it's a local error
@@ -704,6 +939,14 @@ func (u *Server) fetchAndStoreSubtreeAndSubtreeData(ctx context.Context, block *
 	// the wrapped error, so a "%v" placeholder for lastErr would render as
 	// %!v(MISSING). The wrapped error is preserved in the chain.
 	return "", errors.NewServiceError("[catchup:fetchAndStoreSubtreeAndSubtreeData] All peers failed to fetch subtree %s", subtreeHash.String(), lastErr)
+}
+
+// fetchAndStoreSubtreeDataAndRelease is fetchAndStoreSubtreeData followed by
+// releasing subtree, which may be mmap-backed when loaded from the store.
+func (u *Server) fetchAndStoreSubtreeDataAndRelease(ctx context.Context, block *model.Block, subtreeHash *chainhash.Hash,
+	subtree *subtreepkg.Subtree, validated bool, peerID, baseURL string) error {
+	defer func() { _ = subtree.Close() }()
+	return u.fetchAndStoreSubtreeData(ctx, block, subtreeHash, subtree, validated, peerID, baseURL)
 }
 
 // fetchSubtreeFromPeer fetches subtree (for subtreeToCheck) from a peer via HTTP

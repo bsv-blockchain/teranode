@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -79,6 +81,40 @@ func (s *CatchupTestSuite) setupMocks() {
 
 	// Provide a permissive default for Spend to avoid unexpected calls from concurrent validation goroutines.
 	s.MockUTXOStore.On("Spend", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, nil).Maybe()
+
+	// Permissive default for BatchPreviousOutputsDecorate. Block validation now
+	// discards peer-supplied previous-output metadata and re-resolves it locally
+	// (GHSA-v76m-6vc7-g7c7), so blocks whose transactions arrive already extended
+	// reach the store too.
+	//
+	// It has to actually decorate: returning nil without filling anything would
+	// be a lie the callers depend on, since any input left empty reaches fee
+	// calculation with zero satoshis. Values mirror nullstore's
+	// PreviousOutputsDecorate — a stand-in parent, not the real one; tests that
+	// care about real parent values supply their own store instead of this mock.
+	s.MockUTXOStore.On("BatchPreviousOutputsDecorate", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			txs, ok := args.Get(1).([]*bt.Tx)
+			if !ok {
+				return
+			}
+
+			for _, tx := range txs {
+				if tx == nil {
+					continue
+				}
+
+				for _, input := range tx.Inputs {
+					if input == nil || input.PreviousTxScript != nil {
+						continue
+					}
+
+					input.PreviousTxScript = bscript.NewFromBytes([]byte{0x51})
+					input.PreviousTxSatoshis = 100_000_000_000
+				}
+			}
+		}).
+		Return(nil).Maybe()
 
 	// Permissive default for GetBlockByHeight — used by locator capping when
 	// blockchain height > UTXO height. Returns error so capping falls back to blockchain height.

@@ -144,9 +144,11 @@ func (s *Store) UnFreezeUTXOs(ctx context.Context, spends []*utxostore.Spend, tS
 	return nil
 }
 
-// ReAssignUTXO reassigns a frozen UTXO to a new transaction output.
-// The UTXO must be frozen before it can be reassigned.
-// The reassigned UTXO becomes spendable after ReAssignedUtxoSpendableAfterBlocks blocks.
+// ReAssignUTXO updates a frozen output's commitment and maturity gate.
+// It selects by outpoint without checking the supplied old commitment. A positive
+// configured delay is used; zero falls back to 1,000 blocks. No replacement script
+// is stored, so changing the owner strands the output even after maturity.
+// See https://github.com/bsv-blockchain/teranode/issues/1725.
 func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo *utxostore.Spend, tSettings *settings.Settings) error {
 	// check whether the UTXO is frozen
 	q := `

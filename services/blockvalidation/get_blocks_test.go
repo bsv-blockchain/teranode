@@ -1672,7 +1672,7 @@ func TestSubtreeFunctions(t *testing.T) {
 
 		suite.Server.subtreeStore = memory.New()
 
-		subtreeHash := &chainhash.Hash{0x01, 0x02, 0x03}
+		subtreeHash := subtree.RootHash()
 
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
@@ -1929,32 +1929,13 @@ func TestFetchSubtreeDataForBlock(t *testing.T) {
 	})
 
 	t.Run("MultipleSubtrees", func(t *testing.T) {
-		subtreeHash1 := createTestHash("subtree1")
-		subtreeHash2 := createTestHash("subtree2")
-		subtreeHash3 := createTestHash("subtree3")
-
+		// Node lists are content-addressed, so distinct subtrees need distinct nodes.
 		block := &model.Block{
-			Subtrees: []*chainhash.Hash{subtreeHash1, subtreeHash2, subtreeHash3},
-		}
-
-		// Create node hashes for the subtree endpoint (raw hashes, not serialized subtree)
-		var nodeHashes []byte
-		// First is coinbase placeholder
-		nodeHashes = append(nodeHashes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
-		// Then the transaction hashes - just use the first 3 for simplicity
-		nodeHashes = append(nodeHashes, txs[1].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[2].TxIDChainHash()[:]...)
-		nodeHashes = append(nodeHashes, txs[3].TxIDChainHash()[:]...)
-
-		// Mock HTTP responses for all subtrees
-		for _, hash := range block.Subtrees {
-			subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, hash.String())
-			subtreeDataURL := fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String())
-
-			httpmock.RegisterResponder("GET", subtreeURL,
-				httpmock.NewBytesResponder(200, nodeHashes))
-			httpmock.RegisterResponder("GET", subtreeDataURL,
-				httpmock.NewBytesResponder(200, subtreeDataBytes))
+			Subtrees: []*chainhash.Hash{
+				registerSingleTxSubtree(baseURL, txs[1]),
+				registerSingleTxSubtree(baseURL, txs[2]),
+				registerSingleTxSubtree(baseURL, txs[3]),
+			},
 		}
 
 		_, err := server.fetchSubtreeDataForBlock(ctx, block, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", baseURL)
@@ -2122,14 +2103,15 @@ func TestFetchSubtreeDataForBlock_SiblingFailureDoesNotCancelInFlight(t *testing
 	subtreeDataABytes, err := subtreeDataA.Serialize()
 	require.NoError(t, err)
 
-	// Pre-stage subtreeToCheck files so fetchAndStoreSubtree skips its /subtree HTTP
-	// fetch — the regression is solely about the subtree_data path.
-	subtreeASer, err := subtreeA.Serialize()
-	require.NoError(t, err)
-	subtreeBSer, err := subtreeB.Serialize()
-	require.NoError(t, err)
-	require.NoError(t, subtreeStore.Set(ctx, subtreeA.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeASer))
-	require.NoError(t, subtreeStore.Set(ctx, subtreeB.RootHash()[:], fileformat.FileTypeSubtreeToCheck, subtreeBSer))
+	// Serve both node lists; the regression is solely about the subtree_data path.
+	for _, st := range []*subtreepkg.Subtree{subtreeA, subtreeB} {
+		var nodes []byte
+		for _, node := range st.Nodes {
+			nodes = append(nodes, node.Hash[:]...)
+		}
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, st.RootHash().String()),
+			httpmock.NewBytesResponder(200, nodes))
+	}
 
 	bFailed := make(chan struct{})
 
@@ -2733,7 +2715,8 @@ func TestBlockWorker(t *testing.T) {
 
 	t.Run("WorkerProcessesBlocksWithSubtrees", func(t *testing.T) {
 		// Create test blocks with subtrees
-		subtreeHash2 := createTestHash("subtree2")
+		// Node lists are content-addressed, so distinct subtrees need distinct nodes.
+		subtreeHash2 := registerSingleTxSubtree(baseURL, txs[0])
 
 		block1 := &model.Block{
 			Subtrees: []*chainhash.Hash{subtreeHash},
@@ -2751,8 +2734,8 @@ func TestBlockWorker(t *testing.T) {
 		nodeHashes = append(nodeHashes, txs[2].TxIDChainHash()[:]...)
 		nodeHashes = append(nodeHashes, txs[3].TxIDChainHash()[:]...)
 
-		// Mock HTTP responses for all subtrees
-		for _, hash := range []*chainhash.Hash{subtreeHash, subtreeHash2} {
+		// Mock HTTP responses for the multi-transaction subtree
+		for _, hash := range []*chainhash.Hash{subtreeHash} {
 			subtreeURL := fmt.Sprintf("%s/subtree/%s", baseURL, hash.String())
 			subtreeDataURL := fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String())
 
@@ -3125,6 +3108,14 @@ func createTestHash(input string) *chainhash.Hash {
 	return &hash
 }
 
+// registerSingleTxSubtree serves a one-transaction subtree and returns its hash.
+func registerSingleTxSubtree(baseURL string, tx *bt.Tx) *chainhash.Hash {
+	hash := tx.TxIDChainHash()
+	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, hash.String()), httpmock.NewBytesResponder(200, hash[:]))
+	httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, hash.String()), httpmock.NewBytesResponder(200, tx.Bytes()))
+	return hash
+}
+
 // TestFetchAndStoreSubtree tests the fetchAndStoreSubtree function comprehensively
 func TestFetchAndStoreSubtree(t *testing.T) {
 	t.Run("SubtreeAlreadyExists", func(t *testing.T) {
@@ -3149,7 +3140,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		subtreeBytes, err := subtree.Serialize()
 		require.NoError(t, err)
 
-		subtreeHash := chainhash.DoubleHashH(subtreeBytes)
+		subtreeHash := *subtree.RootHash()
 
 		// Pre-store the subtree
 		err = suite.Server.subtreeStore.Set(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, subtreeBytes)
@@ -3160,11 +3151,17 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		// Fetch the subtree (should load from store, not network)
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		// A pending node list is not bound to its hash, so the peer's list is fetched
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+		httpmock.RegisterResponder("GET", fmt.Sprintf("http://test-peer/subtree/%s", subtreeHash.String()),
+			httpmock.NewBytesResponder(200, testNodeBytes(hash1, hash2, hash3, hash4)))
+		result, validated, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
+		assert.False(t, validated)
+		assert.Equal(t, 1, httpmock.GetTotalCallCount())
 	})
 
 	// Regression guard for the dual file-type lookup: if the subtree has
@@ -3191,7 +3188,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		subtreeBytes, err := subtree.Serialize()
 		require.NoError(t, err)
 
-		subtreeHash := chainhash.DoubleHashH(subtreeBytes)
+		subtreeHash := *subtree.RootHash()
 
 		// Pre-store under the "already validated" marker only.
 		err = suite.Server.subtreeStore.Set(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtree, subtreeBytes)
@@ -3200,7 +3197,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		testBlock := &model.Block{Height: 100}
 
 		// Should succeed with no HTTP mock registered: load from store, not network.
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		result, _, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, &subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -3214,14 +3211,13 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		subtreeHash := createTestHash("subtree1")
-
 		// Create subtree node bytes (4 hashes)
 		nodeBytes := make([]byte, 0)
 		hash1 := chainhash.DoubleHashH([]byte("tx1"))
 		hash2 := chainhash.DoubleHashH([]byte("tx2"))
 		hash3 := chainhash.DoubleHashH([]byte("tx3"))
 		hash4 := chainhash.DoubleHashH([]byte("tx4"))
+		subtreeHash := testNodesRoot(t, hash1, hash2, hash3, hash4)
 
 		nodeBytes = append(nodeBytes, hash1[:]...)
 		nodeBytes = append(nodeBytes, hash2[:]...)
@@ -3238,15 +3234,15 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		result, _, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 
-		// Verify subtree was stored
+		// The node list is stored only once its transactions match
 		exists, err := suite.Server.subtreeStore.Exists(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck)
 		assert.NoError(t, err)
-		assert.True(t, exists)
+		assert.False(t, exists)
 	})
 
 	t.Run("SubtreeWithCoinbaseNode", func(t *testing.T) {
@@ -3256,8 +3252,6 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		subtreeHash := createTestHash("subtree-coinbase")
-
 		// Create subtree node bytes with coinbase placeholder as first node
 		nodeBytes := make([]byte, 0)
 		nodeBytes = append(nodeBytes, subtreepkg.CoinbasePlaceholderHashValue[:]...)
@@ -3265,6 +3259,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		hash2 := chainhash.DoubleHashH([]byte("tx2"))
 		hash3 := chainhash.DoubleHashH([]byte("tx3"))
 		hash4 := chainhash.DoubleHashH([]byte("tx4"))
+		subtreeHash := testNodesRoot(t, subtreepkg.CoinbasePlaceholderHashValue, hash2, hash3, hash4)
 
 		nodeBytes = append(nodeBytes, hash2[:]...)
 		nodeBytes = append(nodeBytes, hash3[:]...)
@@ -3280,7 +3275,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		result, _, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -3305,7 +3300,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		result, _, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3332,7 +3327,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		result, _, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3347,14 +3342,14 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 		subtreeHash := createTestHash("corrupt-subtree")
 
 		// Store corrupt data
-		err := suite.Server.subtreeStore.Set(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, []byte("corrupt"))
+		err := suite.Server.subtreeStore.Set(suite.Ctx, subtreeHash[:], fileformat.FileTypeSubtree, []byte("corrupt"))
 		require.NoError(t, err)
 
 		testBlock := &model.Block{
 			Height: 100,
 		}
 
-		result, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
+		result, _, err := suite.Server.fetchAndStoreSubtree(suite.Ctx, testBlock, subtreeHash, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -3364,7 +3359,7 @@ func TestFetchAndStoreSubtree(t *testing.T) {
 
 // TestFetchAndStoreSubtreeDataEdgeCases tests edge cases in fetchAndStoreSubtreeData
 func TestFetchAndStoreSubtreeDataEdgeCases(t *testing.T) {
-	t.Run("SubtreeDataAlreadyExists", func(t *testing.T) {
+	t.Run("StoredSubtreeDataThatDoesNotAuthenticate", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
 		defer suite.Cleanup()
 
@@ -3391,9 +3386,10 @@ func TestFetchAndStoreSubtreeDataEdgeCases(t *testing.T) {
 			Height: 100,
 		}
 
-		// This should skip fetching since data already exists
-		err = suite.Server.fetchAndStoreSubtreeData(suite.Ctx, testBlock, &subtreeHash, subtree, "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ", "http://test-peer")
-		assert.NoError(t, err)
+		// Stored data that does not authenticate against the hash is fetched again
+		bound, err := suite.Server.bindStoredSubtree(suite.Ctx, testBlock, &subtreeHash)
+		require.NoError(t, err)
+		require.False(t, bound)
 	})
 }
 

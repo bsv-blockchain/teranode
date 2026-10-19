@@ -8,7 +8,6 @@
 // $ go test -v -run "^TestUtxoTestSuite$/TestDeleteParentTx$" -tags test_utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestFreezeAndUnfreezeUtxos$" -tags test_utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSaveUTXOsIfExtStoreHasTXs$" -tags test_utxo
-// $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowReassign$" -tags test_utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestShouldAllowSpendAllUtxosWithAerospikeFailure$" -tags test_utxo
 // $ go test -v -run "^TestUtxoTestSuite$/TestConnectionPoolLimiting$" -tags test_utxo
 package smoke

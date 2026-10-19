@@ -411,6 +411,10 @@ func (b *Block) Valid(ctx context.Context, logger ulogger.Logger, subtreeStore S
 	)
 	defer deferFn()
 
+	if err := b.Header.HasMetPowLimit(settings.ChainCfgParams); err != nil {
+		return false, errors.NewBlockInvalidError("[BLOCK][%s] block declares a target easier than the network proof-of-work limit", b.String(), err)
+	}
+
 	// 1. Check that the block header hash is less than the target difficulty.
 	headerValid, _, err := b.Header.HasMetTargetDifficulty()
 	if err != nil {

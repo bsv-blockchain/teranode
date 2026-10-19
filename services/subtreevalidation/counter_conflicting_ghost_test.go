@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -66,7 +67,7 @@ func TestCheckCounterConflictingOnCurrentChain_ToleratesGhostSpender(t *testing.
 	mockStore.On("Get", mock.Anything, hashMatcher(winningTxHash), []fields.FieldName{fields.Utxos, fields.ConflictingChildren, fields.DeletedChildren}).
 		Return(&meta.Data{}, nil)
 
-	u := &Server{utxoStore: mockStore}
+	u := &Server{logger: ulogger.NewErrorTestLogger(t), utxoStore: mockStore}
 
 	err := u.checkCounterConflictingOnCurrentChain(ctx, winningTxHash, map[uint32]bool{7: true})
 
@@ -99,12 +100,13 @@ func TestCheckCounterConflictingOnCurrentChain_StillRejectsMinedCounter(t *testi
 	mockStore.On("GetMeta", mock.Anything, hashMatcher(counterTxHash), mock.Anything).
 		Return(&meta.Data{BlockIDs: []uint32{7}}, nil)
 
+	// only the conflicting tx's own cone is walked here; the counter's cone was
+	// already walked (and frozen-checked) inside GetCounterConflictingTxHashes, so
+	// the per-member re-walk was dropped in issue 1391
 	mockStore.On("Get", mock.Anything, hashMatcher(conflictingTxHash), []fields.FieldName{fields.Utxos, fields.ConflictingChildren, fields.DeletedChildren}).
 		Return(&meta.Data{}, nil)
-	mockStore.On("Get", mock.Anything, hashMatcher(counterTxHash), []fields.FieldName{fields.Utxos, fields.ConflictingChildren, fields.DeletedChildren}).
-		Return(&meta.Data{}, nil)
 
-	u := &Server{utxoStore: mockStore}
+	u := &Server{logger: ulogger.NewErrorTestLogger(t), utxoStore: mockStore}
 
 	err := u.checkCounterConflictingOnCurrentChain(ctx, conflictingTxHash, map[uint32]bool{7: true})
 

@@ -501,23 +501,73 @@ Transactions in standard Bitcoin format are extended in-memory for validation:
 
 **Merkle Root Verification:**
 
-After processing all transactions, the system verifies:
+A subtree node list must hash to the requested subtree hash, have no zero
+leaves, and must not end any level of four or more entries with two equal
+entries. That rules out a repeated tail or zero padding, which reproduce the
+root of a shorter list under the same subtree hash. Other equal siblings are
+genuinely duplicate transactions, and the block checks reject them. Lifting the
+final subtree makes `[a]` and `[a,a]` give the same block merkle root under
+different subtree hashes; that mutated body is rejected by the duplicate
+transaction check. The node check still does not
+tie a list to its hash, because any level of the merkle tree, including the
+root itself as a single leaf, hashes to the same root. Only the transactions
+bind a node list to its hash.
 
-```go
-if err := block.CheckMerkleRoot(ctx); err != nil {
-    return errors.NewProcessingError("merkle root mismatch")
-}
-```
+Catchup therefore stores a node list only together with transaction data that
+matches it:
 
-This ensures the transactions match the block header before proceeding.
+- Stored transaction data authenticates itself. Its transaction IDs must form
+  the canonical leaves of the subtree hash (the first subtree of a block keeps
+  its coinbase placeholder). When it does, the node list is derived from it,
+  whatever node file is stored, and no peer is contacted. Stored data that fails
+  this check is fetched again.
+- Otherwise the node list and the data come from the same peer and are checked
+  against each other in memory. A mismatch is that peer's fault. It is charged
+  and the next peer is tried, and nothing is stored. A pending node file is not
+  reused for this, because it cannot show which of the two files is wrong.
+- A matched node list is the only list for its hash, so it replaces any stored
+  file. The exception is data in which every transaction outside the coinbase
+  slot is exactly 64 bytes. A 64-byte transaction can serialize as two merkle
+  children, so its txid may be an internal node, and such data may be a whole
+  collapsed tree level. Its node list is never treated as bound, the data is
+  not reused from the store, and when a body check fails on it both files are
+  evicted.
+- A validated `.subtree` replaces a pending node list stored next to it.
+
+Before processing can mutate UTXOs, `authenticateQuickBlockBody` runs the
+node-list check against both the stored root and the requested subtree hash. It
+then checks the block merkle root, subtree partitioning, duplicate transactions
+and declared transaction count, and parses every transaction body. This
+authenticates the supplied bytes against the checkpoint-proven header before
+quick processing starts. A body-level failure convicts the peer only if every
+pending node file it relies on was bound in this attempt and still has the
+bound length. Otherwise the unbound files are evicted, and the next attempt
+decides.
 
 **Error Handling:**
 
-If quick validation encounters any errors:
+Quick validation authenticates the complete body before assigning a block ID or
+mutating UTXOs. Error handling depends on what failed:
 
-- Removes `.subtree` files to force reprocessing
-- Falls back to normal validation automatically
-- Normal validation re-creates UTXOs and validates with full script execution
+- An invalid body (`ErrBlockInvalid`) aborts catchup without normal-validation
+  fallback or wholesale deletion of shared `.subtree` files. After all readers
+  and writers finish, cleanup removes pending files created by this attempt,
+  preserving files that already existed and data for promoted subtrees.
+- Corrupt cached subtree nodes (including node lists that do not match their
+  hash) or transaction data are local storage failures,
+  not evidence against the current peer. Catchup aborts without penalizing that
+  peer or entering normal validation. After workers finish, the identified
+  corrupt files are removed so a later attempt can fetch fresh copies. Pending
+  files retained from an earlier attempt are treated as cached data too. Other
+  local service failures also abort, without evicting healthy cached files.
+- An incomplete block aborts catchup while retaining files for another peer to
+  reuse. Other quick-validation failures remove `.subtree` files and clear
+  cached subtree slices before falling back to normal validation, which
+  re-creates UTXOs and performs full script validation.
+
+Artifact cleanup uses the configured subtree-fetch concurrency (default eight),
+a five-second timeout per file, and a one-minute overall deadline. Failed or
+unprocessed deletions leave files in place and produce a single summary warning.
 
 For implementation details, see `quick_validate.go` in `services/blockvalidation/`.
 

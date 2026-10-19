@@ -17,7 +17,8 @@ const (
 	TxID FieldName = "txID"
 	// Inputs represents the transaction inputs data
 	Inputs FieldName = "inputs"
-	// Outputs represents the transaction outputs data
+	// Outputs populates Data.Tx with the parent outputs. Data.Tx may be a partial
+	// projection: do not hash or serialize it as a complete transaction.
 	Outputs FieldName = "outputs"
 	// External indicates external data associated with the transaction
 	External FieldName = "external"

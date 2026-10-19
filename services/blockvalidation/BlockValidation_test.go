@@ -410,7 +410,9 @@ func TestBlockValidationValidateBlockSmall(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 
-	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	tSettings.ChainCfgParams = test.MainNetParamsForSyntheticPoW()
+	// This synthetic PoW fixture uses modern difficulty rules from genesis.
+	tSettings.ChainCfgParams.DaaForkHeight = 0
 
 	blockHeader := &model.BlockHeader{
 		Version:        1,
@@ -1258,7 +1260,7 @@ func TestBlockValidationRequestMissingTransaction(t *testing.T) {
 	}
 
 	// Create block header
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 	hashPrevBlock := chaincfg.RegressionNetParams.GenesisBlock.BlockHash()
 
 	// Calculate merkle root using coinbase and subtree
@@ -1815,7 +1817,7 @@ func createValidBlock(t *testing.T, tSettings *settings.Settings, txMetaStore ut
 	replicatedSubtree.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
 	calculatedMerkleRootHash := replicatedSubtree.RootHash()
 
-	nBits, _ := model.NewNBitFromString("2000ffff")
+	nBits, _ := model.NewNBitFromString("207fffff")
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,

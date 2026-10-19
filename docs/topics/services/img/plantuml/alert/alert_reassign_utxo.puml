@@ -26,6 +26,12 @@ participant "Alert Service" as AlertService
 participant "UTXO Store" as UTXOStore
 database "Datastore" as DB
 
+note over P2P, DB #FFDDDD
+  Ownership-changing reassignment strands the output.
+  The derived replacement script is not persisted.
+  Successful processing does not prove spendability.
+end note
+
 P2P -> AlertService: AddToConfiscationTransactionWhitelist(txs)
 activate AlertService
 
@@ -47,7 +53,7 @@ loop for each transaction in txs
 
         AlertService -> UTXOStore: ReAssignUTXO(ctx, oldUtxo, newUtxo)
         activate UTXOStore
-        UTXOStore -> DB: Update UTXO assignment
+        UTXOStore -> DB: Replace commitment and set maturity gate
         DB --> UTXOStore: Confirm update
         UTXOStore --> AlertService: Confirm reassignment
         deactivate UTXOStore

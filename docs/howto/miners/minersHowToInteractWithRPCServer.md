@@ -193,15 +193,17 @@ The Teranode RPC server provides a JSON-RPC interface for interacting with the n
 
     - Returns: Boolean `true` if successful
 
-6. `reassign`: Reassigns ownership of a specific UTXO to a new Bitcoin address
-    - Parameters:
+6. `reassign`: Replaces a frozen UTXO's commitment using its outpoint and the old and new hashes
+    - **Do not use ownership-changing reassignment**; see the [limitation and backend differences](../../topics/services/alert.md#24-utxo-reassignment).
+    - Parameters (positional, in this order):
 
-        - `txid` (string, required): The transaction ID of the UTXO
-        - `vout` (numeric, required): The output index
-        - `destination` (string, required): The Bitcoin address to reassign to
+        - `oldtxid` (string, required): Transaction ID of the frozen output, as a hex hash
+        - `oldvout` (numeric, required): Output index
+        - `oldutxohash` (string, required): Supplied current UTXO commitment, as a hex hash; checked by Aerospike but not SQL
+        - `newutxohash` (string, required): Replacement UTXO commitment, as a hex hash
 
-    - Returns: Boolean `true` if successful
-    - Note: The UTXO must be frozen before it can be reassigned
+    - Returns: JSON `null` on success; an error if hash parsing or the store operation fails
+    - Note: The output must be frozen. The command accepts no destination address and does not store a replacement locking script. Success does not establish spendability.
 
 7. `getrawmempool`: Returns transaction IDs being processed for block assembly
     - Parameters:

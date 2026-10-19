@@ -1667,7 +1667,14 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		}
 	}
 
-	if contains(bins, fields.Tx) {
+	// fields.Outputs is a projection in its own right: the outputs query above
+	// already ran for it, and the validator's re-extension path reads nothing but
+	// Outputs[vout] (GHSA-v76m-6vc7-g7c7). Without this the decoded outputs were
+	// built and then dropped, and Data.Tx came back nil.
+	//
+	// fields.Inputs deliberately not included: it has never attached here, and
+	// widening it would change what existing callers of that projection see.
+	if contains(bins, fields.Tx) || contains(bins, fields.Outputs) {
 		data.Tx = &tx
 	}
 
@@ -3605,9 +3612,18 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 			continue // already marked as error above
 		}
 
-		// Build tx if needed for Tx or TxInpoints fields
+		// Build tx for the projections that are meant to land in Data.Tx.
+		// fields.Outputs is one of them: the outputs query already ran for it and
+		// the validator's re-extension path reads nothing but Outputs[vout]
+		// (GHSA-v76m-6vc7-g7c7), but the rows were built and then dropped, so
+		// Data.Tx came back nil.
+		//
+		// Deliberately NOT keyed on needInputs/needOutputs: needInputs is also
+		// true for fields.Inputs, which has always returned a nil Data.Tx, and
+		// callers distinguish "no transaction" by that nil. (fields.TxInpoints is
+		// in the list below and does attach, so it is not the motivating case.)
 		var tx *bt.Tx
-		if contains(bins, fields.Tx) || contains(bins, fields.TxInpoints) {
+		if contains(bins, fields.Tx) || contains(bins, fields.TxInpoints) || contains(bins, fields.Outputs) {
 			tx = &bt.Tx{
 				Version:  row.version,
 				LockTime: row.lockTime,

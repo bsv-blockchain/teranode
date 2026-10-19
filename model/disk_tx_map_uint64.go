@@ -46,7 +46,7 @@ type dtmDiskShard struct {
 	done         chan struct{}
 	path         string
 	prefix       string
-	bytesWritten int64 // only touched by the single writer goroutine — no atomic needed
+	bytesWritten atomic.Int64 // written by writer goroutine, read by Stats() — must be atomic
 }
 
 // DiskTxMapUint64 implements txmap.TxMap using sharded cuckoo filters for fast
@@ -157,7 +157,7 @@ func (m *DiskTxMapUint64) writerLoop(diskIdx int) {
 		var buf [8]byte
 		binary.LittleEndian.PutUint64(buf[:], entry.value)
 		_ = d.batch.Set(entry.key[:], buf[:])
-		d.bytesWritten += int64(chainhash.HashSize + 8)
+		d.bytesWritten.Add(int64(chainhash.HashSize + 8))
 		pending++
 
 		if pending >= dtmWriterFlushThreshold {
@@ -394,11 +394,11 @@ type DiskMapStats struct {
 	DiskBytesWritten int64
 }
 
-// Stats returns current metrics. Safe to call after Flush() when writer goroutines are idle.
+// Stats returns current metrics. Safe to call while writer goroutines are running.
 func (m *DiskTxMapUint64) Stats() DiskMapStats {
 	var diskBytes int64
 	for i := range m.disks {
-		diskBytes += m.disks[i].bytesWritten
+		diskBytes += m.disks[i].bytesWritten.Load()
 	}
 	return DiskMapStats{
 		Entries:          m.count.Load(),

@@ -9,7 +9,7 @@
     - [2.3. Validating the Transaction](#23-validating-the-transaction)
         - [2.3.1. Consensus Rules vs Policy Checks](#231-consensus-rules-vs-policy-checks)
         - [2.3.2. Transaction Format Extension](#232-transaction-format-extension)
-    - [2.4. Script Verification](#24-script-verification)
+    - [2.4. BDK Transaction Validation](#24-bdk-transaction-validation)
     - [2.5. Error Handling and Transaction Rejection](#25-error-handling-and-transaction-rejection)
     - [2.6. Concurrent Processing](#26-concurrent-processing)
     - [2.7. Post-validation: Updating stores and propagating the transaction](#27-post-validation-updating-stores-and-propagating-the-transaction)
@@ -254,7 +254,7 @@ The above represents an implementation of the core Teranode validation rules:
 
     - A transaction must not spend frozen UTXOs (see 3.13 – Integration with Alert System)
 
-    - A node must not be able to spend a confiscated (re-assigned) transaction until 1,000 blocks after the transaction was re-assigned (confiscation maturity). The difference between block height and height at which the transaction was re-assigned must not be less than one thousand.
+    - Reassigned outputs have a maturity gate, but ownership changes currently remain unspendable after it opens; see the [reassignment limitation and backend differences](alert.md#24-utxo-reassignment).
 
 ### 2.3.1. Consensus Rules vs Policy Checks
 
