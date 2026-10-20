@@ -192,6 +192,12 @@ test-heavy:
 test-bvgaps:
 	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestGapBV' ./model/... ./services/blockvalidation/...
 
+# compile and vet the gap-proof tests without running them, so a rename in the code they exercise
+# breaks the build here (and in CI) instead of silently when a gap is fixed.
+.PHONY: vet-bvgaps
+vet-bvgaps:
+	go vet -tags "bvgaps testtxmetacache" ./model/... ./services/blockvalidation/...
+
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:
@@ -568,7 +574,7 @@ install-lint:
 # lint will check the changed files in the current branch compared to main, including commits and unstaged/untracked changes
 # It will show new linting errors/warnings, by updating local copy of origin/main with the latest state of the remote main branch.
 .PHONY: lint
-lint: lint-tracing-info
+lint: lint-tracing-info vet-bvgaps
 	git fetch origin main
 	golangci-lint run ./... --new-from-rev origin/main --disable gosec --disable prealloc # TODO: re-enable gosec once gosec >v2.23.0 is released (fixes float constant panic)
 

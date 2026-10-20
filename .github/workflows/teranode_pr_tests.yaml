@@ -52,6 +52,11 @@ jobs:
         with:
           build_cache: 'false'
 
+      # The Block Validation gap-proof tests sit behind the bvgaps build tag, which nothing else
+      # compiles; vet them so a rename in the code they exercise fails the PR.
+      - name: Vet gap-proof tests (bvgaps)
+        run: make vet-bvgaps
+
       - name: golangci-lint with checkstyle report
         uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:

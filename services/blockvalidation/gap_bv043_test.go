@@ -178,9 +178,13 @@ func TestGapBV043_ReValidateInvalidAncestorVerdictInvalidatesBlock(t *testing.T)
 
 	err = bv.reValidateBlock(revalidateBlockData{block: blockC, baseURL: "test", optimisticallyAdded: true})
 
-	// Precondition: the failure is the INVALID verdict of the ancestor-membership check, not a setup error.
-	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "precondition: expected the ancestor check's ErrBlockInvalid verdict, got: %v", err)
+	// Precondition: either reValidateBlock acted on the verdict and returned nil (the fix, as the
+	// other branches do), or it returned the ancestor check's INVALID verdict (today). Anything else
+	// is a setup error, not the gap.
+	revalidateErr := err
+	if revalidateErr != nil {
+		require.True(t, errors.Is(revalidateErr, errors.ErrBlockInvalid), "precondition: expected the ancestor check's ErrBlockInvalid verdict, got: %v", revalidateErr)
+	}
 
 	_, cMeta, err := blockchainClient.GetBlockHeader(ctx, blockC.Hash())
 	require.NoError(t, err)

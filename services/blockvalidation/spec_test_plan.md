@@ -724,6 +724,8 @@ Each was confirmed by reading the code, and is now recorded in the spec's Confor
 | GAP-BV-057 | Errors while reverting an invalid block's mined tags are swallowed, and `mined_set` is set anyway, so stale tags are never revisited. | High |
 | GAP-BV-058 | `SetBlockMinedSet` and `SetBlockSubtreesSet` are unconditional updates. A tagging run in flight can overwrite an invalidation or revalidation. Derived from the code; not reproduced. | High |
 | GAP-BV-059 | The subtrees sweep is not single-flight, unlike the mined sweep. | Low |
+| GAP-BV-060 | On the default non-optimistic path, a contextual header failure (median time past, version floor) is not published as an invalid-block notification, so the peer is never struck. Found in review; proven by `TestGapBV060_UnboundHeaderFinalVerdictPublishesNotification`. | Medium |
+| GAP-BV-061 | Catchup logs and continues when reading or clearing `mined_set` on the old branch fails, leaving stale mined tags after the reorg. Found in review; proven by `TestGapBV061_CatchupAbortsWhenOldBranchMinedSetClearFails`. | High |
 
 The spec also gained:
 

@@ -138,7 +138,7 @@ This rule SHALL apply at every height. No checkpoint, quick-validation route or 
 
 **BV-HEADER-008.** A block's signed nVersion MUST be ≥ 2 from `BIP0034Height`, ≥ 3 from `BIP0066Height`, and ≥ 4 from `BIP0065Height`. A violation MUST be rejected with `ERR_BLOCK_INVALID` and reason `bad-version`. Height 0 is exempt.
 
-**BV-HEADER-009.** A header verdict under BV-HEADER-001 through BV-HEADER-005, BV-HEADER-007 or BV-HEADER-008 is final for the header and MUST NOT be persisted as an invalid block record. The service MUST publish the invalid-block notification (BV-VERDICT-011) for it. BV-HEADER-006 is excluded: it is clock-dependent.
+**BV-HEADER-009.** A header verdict under BV-HEADER-001 through BV-HEADER-005, BV-HEADER-007 or BV-HEADER-008 is final for the header and MUST NOT be persisted as an invalid block record. The service MUST publish the invalid-block notification (BV-VERDICT-011) for it, whether or not the body has been bound to the header, because the verdict depends on the header alone. BV-HEADER-006 is excluded: it is clock-dependent. (Today the default non-optimistic path publishes nothing for a BV-HEADER-007 or BV-HEADER-008 failure: GAP-BV-060.)
 
 **BV-HEADER-010.** When the available previous-header run is too short, unanchored or unlinked to evaluate BV-HEADER-004 or BV-HEADER-007, validation MUST fail with `ERR_BLOCK_HEADER_CONTEXT`. This outcome is not a verdict on the block: it MUST NOT be persisted and MUST NOT be charged to a peer. The service SHALL re-attempt the block exactly once from scratch with a freshly built header run.
 
@@ -225,7 +225,7 @@ A missing-parent or not-found transaction result SHALL be classified as a transi
 
 ### Verdict Classification Contract (`BV-VERDICT-NNN`)
 
-**BV-VERDICT-001.** Every failed validation SHALL resolve to exactly one outcome class: CORRUPT, INVALID, HEADER-FINAL, INCOMPLETE, HEADER-CONTEXT, POLICY-DECLINED, or LOCAL. Each class has the effects below, and no others.
+**BV-VERDICT-001.** Every failed validation SHALL resolve to exactly one outcome class: CORRUPT, INVALID, HEADER-FINAL, INCOMPLETE, HEADER-CONTEXT, POLICY-DECLINED, CLOCK-DEFERRED, or LOCAL. Each class has the effects below, and no others.
 
 | Class | Error code | Persist invalid record | Strike serving peer | Publish invalid-block notification | Re-fetch / retry permitted |
 |---|---|---|---|---|---|
@@ -333,8 +333,10 @@ Each pass SHALL be single-flight.
 - CORRUPT → `ERR_BLOCK_CORRUPT`;
 - a payload that does not deserialize → `ERR_PROCESSING` `failed to create block from bytes`;
 - failure to read the previous-header run → `ERR_SERVICE_ERROR` `failed to get block headers`;
-- storage, service and HEADER-CONTEXT errors, from any step including the ancestor-membership check (BV-BODY-013) → passed through unchanged;
-- all other failures → `ERR_BLOCK_INVALID` with message `block is not valid`.
+- LOCAL failures (storage, service, processing, cancellation or deadline) and HEADER-CONTEXT errors, from any step including `block.Valid` and the ancestor-membership check (BV-BODY-013) → passed through unchanged, never reported as invalid;
+- INVALID and HEADER-FINAL verdicts → `ERR_BLOCK_INVALID` with message `block is not valid`.
+
+(Today local processing errors and ancestor-check lookup failures are relabelled as invalid: GAP-BV-040.)
 
 On success it returns `ok = true` with a message of the form `Block <summary> is valid`, where the summary names the block's hash, height, ID, transaction count and size.
 
@@ -366,7 +368,7 @@ On success it returns `ok = true` with a message of the form `Block <summary> is
 
 **BV-CATCHUP-012.** Let T = `blockvalidation_secret_mining_threshold` (default `CoinbaseMaturity − 1`). When local best height > T and fork depth > T, and the cumulative work of the ancestor plus every offered header after it does not exceed the local tip's chainwork, the catchup MUST be rejected and the peer reported for secret mining. An offered chain with more work MUST be followed.
 
-**BV-CATCHUP-013.** When fork depth > 0, the service SHALL clear `mined_set` on the local blocks above the common ancestor and emit `BlockMinedUnset` for each. This clearing MUST NOT happen until every header-chain check in BV-CATCHUP-007 through BV-CATCHUP-012 and BV-CATCHUP-014 has passed.
+**BV-CATCHUP-013.** When fork depth > 0, the service SHALL clear `mined_set` on the local blocks above the common ancestor and emit `BlockMinedUnset` for each. This clearing MUST NOT happen until every header-chain check in BV-CATCHUP-007 through BV-CATCHUP-012 and BV-CATCHUP-014 has passed. If reading the fork-side headers or clearing `mined_set` on any of them fails, the catchup MUST abort before any catchup block is validated, without charging the peer (the fault is local); it MUST NOT proceed with the reorg. (Today it logs and proceeds: GAP-BV-061.)
 
 **BV-CATCHUP-014.** When quick validation is allowed (`blockvalidation_catchup_allow_quick_validation`) and fork depth is 0, every checkpoint whose height falls within the fetched header range MUST match the fetched header's hash. A mismatch MUST abort the catchup.
 
@@ -431,7 +433,7 @@ A breaker MUST always be able to return to closed.
 
 **BV-QUICK-007.** Height 0, and an empty checkpoint table, MUST make a block ineligible for every below-checkpoint route.
 
-**BV-QUICK-008.** Quick validation MUST reject a block below its version floor (BV-HEADER-008) with `ERR_BLOCK_INVALID`. It MUST reject a missing coinbase, or one with no inputs, with `ERR_BLOCK_INCOMPLETE`.
+**BV-QUICK-008.** Quick validation MUST reject a block below its version floor (BV-HEADER-008) with `ERR_BLOCK_INVALID`. It MUST reject a missing coinbase with `ERR_BLOCK_INCOMPLETE`. A present coinbase with no inputs is consensus-invalid and falls under BV-QUICK-011 (`ERR_BLOCK_INVALID`; today INCOMPLETE, GAP-BV-046).
 
 **BV-QUICK-009.** Quick validation MUST prove the body bound to the header (BV-BODY-001 through BV-BODY-004) before assigning a block ID or mutating the UTXO store. A failure MUST be `ERR_BLOCK_CORRUPT`.
 
@@ -1050,7 +1052,9 @@ flowchart TD
     B -- yes --> LOCAL[LOCAL — retry, no charge]
     B -- no --> C{Header context too short<br/>or unlinked?}
     C -- yes --> HC[HEADER_CONTEXT — retry once from scratch]
-    C -- no --> D{Header rule failed?}
+    C -- no --> T{Timestamp more than 2 h<br/>after local clock?}
+    T -- yes --> CD[CLOCK_DEFERRED — no notify,<br/>no strike, accept on re-announce]
+    T -- no --> D{Header rule failed?}
     D -- yes --> HF[INVALID header-final —<br/>notify, never persist]
     D -- no --> E{Local policy?<br/>excessiveblocksize}
     E -- yes --> POL[POLICY_DECLINED —<br/>per-peer budget, no strike]
@@ -1208,7 +1212,7 @@ When the previous-header run cannot be read, the service calls `ReValidateBlock`
 
 **GAP-BV-017.** `ValidateBlock` skips service-level header rules.
 *Affects:* BV-REVALIDATE-008, BV-REVALIDATE-010.
-`Server.ValidateBlock` runs block-level validation but not the `powLimit`, expected-nBits or checkpoint checks, so it can report `ok = true` for a block that full validation rejects. It also uses the body's height unsettled when `height = 0` (`Server.go` ~1541-1636).
+`Server.ValidateBlock` runs block-level validation but not the `powLimit`, expected-nBits or checkpoint checks, the parent-invalid check (BV-VERDICT-005) or the `excessiveblocksize` policy (BV-BODY-018), so it can report `ok = true` for a block that full validation rejects (for example a child of a stored-invalid parent, or an over-limit block). It also uses the body's height unsettled when `height = 0` (`Server.go` ~1541-1636).
 *Work required:* share the header gate with full validation, and derive the height.
 
 **GAP-BV-018.** `ValidateBlock` ignores `is_revalidation`.
@@ -1342,10 +1346,10 @@ When the producer cannot be created after its retries (e.g. unreachable broker),
 *Work required:* set `mined_set` up front only on the legacy route at or below the highest hardcoded checkpoint; otherwise keep the ID but run mined-tagging.
 *Proof:* confirmed by `TestGapBV039_PreassignedBlockIDStillTagsTransactions`, which fails today (`make test-bvgaps`).
 
-**GAP-BV-040.** `ValidateBlock` relabels ancestor-check failures as invalid.
-*Affects:* BV-REVALIDATE-009, BV-VERDICT-008.
-Any error from the ancestor-membership check, including a storage or service failure of the lookup, is returned as `ERR_BLOCK_INVALID` `block is not valid` (`Server.go` ~1614). A transient store fault therefore reports a valid block as invalid.
-*Work required:* pass storage and service errors through unchanged, as for the other steps.
+**GAP-BV-040.** `ValidateBlock` relabels local failures as invalid.
+*Affects:* BV-REVALIDATE-009, BV-VERDICT-001, BV-VERDICT-008.
+Any error from the ancestor-membership check, including a storage or service failure of the lookup, is returned as `ERR_BLOCK_INVALID` `block is not valid` (`Server.go` ~1614). From `block.Valid`, only storage, service and header-context errors are passed through (~1608); a LOCAL `ERR_PROCESSING` (or a cancellation) is relabelled `block is not valid`. A transient local fault therefore tells the `checkblock` caller that a possibly valid block is invalid.
+*Work required:* pass every LOCAL error through unchanged, from every step, and report `ERR_BLOCK_INVALID` only for INVALID and HEADER-FINAL verdicts.
 
 **GAP-BV-041.** Queue ageing and skip promotion are evaluated lazily.
 *Affects:* BV-QUEUE-004.
@@ -1451,6 +1455,18 @@ When reverting an invalid block's mined tags, `UpdateTxMinedStatus` logs `SetMin
 *Affects:* BV-COMMIT-008.
 The mined-not-set sweep is guarded by a compare-and-swap (`BlockValidation.go` ~920); `processSubtreesNotSet` (~1096) has no guard, and the periodic goroutines that run it are never awaited. Overlapping passes can run when one pass outlasts the processing interval. Verified by reading the code.
 *Work required:* add the same guard.
+
+**GAP-BV-060.** Contextual header failures publish nothing on the non-optimistic path.
+*Affects:* BV-HEADER-009, BV-VERDICT-001, BV-VERDICT-011.
+`block.Valid` runs the contextual header checks (median time past, version floor) before it binds the body. On the default non-optimistic path a failure reaches the catch-all in `BlockValidation.go` ~2559-2575 with `bodyBoundToHeader = false`, which logs "not persisting invalid verdict" and returns `ERR_BLOCK_INVALID` without calling `kafkaNotifyBlockInvalid`. Not persisting is correct; not publishing is not: the verdict depends on the header alone, the peer is never struck, and the header is re-validated on every announcement. The optimistic path publishes through `rejectFinalHeaderVerdict` (~2246). Verified by reading the code.
+*Work required:* publish the invalid-block notification for HEADER-FINAL verdicts reached inside `block.Valid` (distinguish them from unbound body verdicts), without persisting.
+*Proof:* confirmed by `TestGapBV060_UnboundHeaderFinalVerdictPublishesNotification` (control: `TestGapBV060_Control_BoundInvalidBodyPublishesNotification` passes), which fails today (`make test-bvgaps`).
+
+**GAP-BV-061.** Catchup proceeds when clearing `mined_set` on the old branch fails.
+*Affects:* BV-CATCHUP-013.
+`catchup.go` ~296-315 logs and continues when `GetBlockHeadersByHeight` fails, and counts but does not act on `ClearBlockMinedSet` failures. The reorg then goes ahead: old-branch blocks keep `mined_set = true`, the sweep never revisits them, and their transactions keep stale mined tags. Verified by reading the code.
+*Work required:* abort the catchup (LOCAL, no peer charge) when either call fails.
+*Proof:* confirmed by `TestGapBV061_CatchupAbortsWhenOldBranchMinedSetClearFails` (header read and clear failures), which fails today (`make test-bvgaps`).
 
 ---
 

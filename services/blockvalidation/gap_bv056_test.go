@@ -15,8 +15,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// gap056FailingUnlockStore is the real sqlitememory UTXO store except that the post-commit unlock
-// (SetLocked(..., false)) fails.
+// gap056FailingUnlockStore is the real sqlitememory UTXO store except that the first post-commit
+// unlock (SetLocked(..., false)) fails. Later unlocks succeed, so the retry the spec requires can
+// clear the lock and the test can pass once GAP-BV-056 is fixed.
 type gap056FailingUnlockStore struct {
 	utxo.Store
 
@@ -26,7 +27,9 @@ type gap056FailingUnlockStore struct {
 func (s *gap056FailingUnlockStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	if !value {
 		s.unlockCalls++
-		return errors.NewProcessingError("gap056: simulated unlock failure after AddBlock")
+		if s.unlockCalls == 1 {
+			return errors.NewProcessingError("gap056: simulated unlock failure after AddBlock")
+		}
 	}
 
 	return s.Store.SetLocked(ctx, txHashes, value)
@@ -85,7 +88,7 @@ func TestGapBV056_PostCommitUnlockFailureKeepsCommittedBlocksSubtreeFiles(t *tes
 	require.NoError(t, err)
 	require.True(t, exists, "committed block has subtrees_set=true but its .subtree file was deleted (post-commit error treated as local failure)")
 
-	// Spec assertion 2: the outputs must not remain locked.
+	// Spec assertion 2: the unlock is retried, so the outputs do not remain locked.
 	created, err := h.utxoStore.Get(h.ctx, child.TxIDChainHash(), fields.Locked)
 	require.NoError(t, err)
 	require.False(t, created.Locked, "committed block's outputs must not stay locked after the unlock failure")
