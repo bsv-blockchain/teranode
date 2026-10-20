@@ -3,7 +3,6 @@ package blockvalidation
 import (
 	"context"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -24,13 +23,13 @@ import (
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
-	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/test/fault"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -44,33 +43,11 @@ import (
 // provenance tests below use a block that spends a stored parent, because "never reaches
 // SpendAndCreate" has to be read off the UTXO store.
 
-// recordingBlockchainClient is the real blockchain client (LocalClient over a sqlitememory
-// store) that also records every block reaching AddBlock.
-type recordingBlockchainClient struct {
-	blockchain.ClientI
-
-	mu    sync.Mutex
-	added []chainhash.Hash
-}
-
-func (c *recordingBlockchainClient) AddBlock(ctx context.Context, block *model.Block, peerID string, opts ...options.StoreBlockOption) error {
-	c.mu.Lock()
-	c.added = append(c.added, *block.Hash())
-	c.mu.Unlock()
-
-	return c.ClientI.AddBlock(ctx, block, peerID, opts...)
-}
-
-func (c *recordingBlockchainClient) addedBlocks() []chainhash.Hash {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return append([]chainhash.Hash(nil), c.added...)
-}
-
 type unifiedRouteServer struct {
-	s            *Server
-	client       *recordingBlockchainClient
+	s *Server
+	// calls logs every call to the real blockchain client (LocalClient over a sqlitememory
+	// store); the tests read the blocks that reached AddBlock off it.
+	calls        *fault.Plan
 	utxoStore    *sql.Store
 	subtreeStore blob.Store
 	// subtreeValidation is a testify mock with no expectations: the quick route must never
@@ -79,6 +56,17 @@ type unifiedRouteServer struct {
 	subtreeValidation *subtreevalidation.MockSubtreeValidation
 	genesis           chainhash.Hash
 	bits              model.NBit
+}
+
+// addedBlocks returns the hashes of the blocks that reached AddBlock, in call order.
+func (us *unifiedRouteServer) addedBlocks() []chainhash.Hash {
+	var added []chainhash.Hash
+
+	for _, c := range us.calls.CallsTo("AddBlock") {
+		added = append(added, *c.Args[0].(*model.Block).Hash())
+	}
+
+	return added
 }
 
 // newUnifiedRouteServer builds a Server wired for the unified below-checkpoint route: real
@@ -116,7 +104,8 @@ func newUnifiedRouteServer(t *testing.T, name string) *unifiedRouteServer {
 	localClient, err := blockchain.NewLocalClient(logger, tSettings, blockchainStore, nil, utxoStore)
 	require.NoError(t, err)
 
-	client := &recordingBlockchainClient{ClientI: localClient}
+	calls := fault.NewPlan()
+	client := fault.NewBlockchainClient(localClient, calls)
 
 	subtreeStore := blobmemory.New()
 	txStore := blobmemory.New()
@@ -129,7 +118,7 @@ func newUnifiedRouteServer(t *testing.T, name string) *unifiedRouteServer {
 	require.NoError(t, err)
 
 	return &unifiedRouteServer{
-		s: s, client: client, utxoStore: utxoStore, subtreeStore: subtreeStore,
+		s: s, calls: calls, utxoStore: utxoStore, subtreeStore: subtreeStore,
 		subtreeValidation: subtreeValidation, genesis: *genesisHash, bits: *bits,
 	}
 }
@@ -232,7 +221,7 @@ func requireNothingApplied(t *testing.T, us *unifiedRouteServer, block *model.Bl
 	exists, err := us.s.blockchainClient.GetBlockExists(ctx, block.Hash())
 	require.NoError(t, err)
 	require.False(t, exists, "the block must not be stored, valid or invalid")
-	require.Empty(t, us.client.addedBlocks(), "nothing may reach AddBlock")
+	require.Empty(t, us.addedBlocks(), "nothing may reach AddBlock")
 
 	require.Equal(t, int(utxo.Status_OK), parentSpendStatus(t, us, parent), "the parent output must still be unspent")
 
@@ -283,7 +272,7 @@ func TestProcessBlockFound_UnifiedRouteBlockWithAStoredParentIsCommitted(t *test
 	exists, err := us.s.blockchainClient.GetBlockExists(context.Background(), block.Hash())
 	require.NoError(t, err)
 	require.True(t, exists, "the block is stored when processBlockFound returns")
-	require.Equal(t, []chainhash.Hash{*block.Hash()}, us.client.addedBlocks())
+	require.Equal(t, []chainhash.Hash{*block.Hash()}, us.addedBlocks())
 }
 
 // A legacy block on the unified route whose parent is not stored must never come back nil:
@@ -304,7 +293,7 @@ func TestProcessBlockFound_UnifiedRouteBlockWithNoStoredParentIsALocalFault(t *t
 			require.True(t, errors.IsTransientLocalError(err), "the failure is ours, not the peer's: %v", err)
 			require.Contains(t, err.Error(), "has no stored parent")
 
-			require.Empty(t, us.client.addedBlocks(), "nothing may be stored for a block whose parent is unknown")
+			require.Empty(t, us.addedBlocks(), "nothing may be stored for a block whose parent is unknown")
 			require.Empty(t, us.s.catchupCh, "a legacy block never takes the catch-up divert")
 		})
 	}
@@ -364,7 +353,7 @@ func TestProcessBlockFound_ProvenBelowCheckpointBlockIsAppliedByTheQuickRoute(t 
 	_, err := us.utxoStore.Get(context.Background(), child.TxIDChainHash())
 	require.NoError(t, err, "the quick route creates the child")
 
-	require.Equal(t, []chainhash.Hash{*block.Hash()}, us.client.addedBlocks())
+	require.Equal(t, []chainhash.Hash{*block.Hash()}, us.addedBlocks())
 	require.Empty(t, us.subtreeValidation.Calls, "the quick route never calls subtree validation")
 }
 
@@ -385,7 +374,7 @@ func TestServer_ProcessBlock_ForwardsHeaderProvenToTheRoute(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, int(utxo.Status_SPENT), parentSpendStatus(t, us, parent))
-		require.Equal(t, []chainhash.Hash{*block.Hash()}, us.client.addedBlocks())
+		require.Equal(t, []chainhash.Hash{*block.Hash()}, us.addedBlocks())
 	})
 
 	t.Run("unproven takes full validation", func(t *testing.T) {
@@ -420,7 +409,7 @@ func TestProcessBlockFound_NonLegacyBlockKeepsTheCatchupDivert(t *testing.T) {
 
 	require.Eventually(t, func() bool { return len(us.s.catchupCh) == 1 }, 5*time.Second, 10*time.Millisecond,
 		"the block must have been handed to catch-up")
-	require.Empty(t, us.client.addedBlocks())
+	require.Empty(t, us.addedBlocks())
 }
 
 // TestProcessBlockFound_BlockAssemblyBehindIsALocalFaultForAnEligibleBlockProvenOrNot

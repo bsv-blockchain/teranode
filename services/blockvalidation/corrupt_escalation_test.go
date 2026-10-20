@@ -3,7 +3,6 @@ package blockvalidation
 import (
 	"context"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -26,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/test/fault"
 	"github.com/jarcoal/httpmock"
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/mock"
@@ -167,38 +167,17 @@ func TestOptimisticCorrupt_InvalidateFailure_EscalatesNotSilentlyAccepted(t *tes
 	}
 }
 
-// invalidateFailsFirstNClient wraps a real blockchain client and makes the first N InvalidateBlock
-// calls fail, delegating every later call (and every other method) to the real client. This is the
-// fault injection the convergence test needs: the optimistic path's InvalidateBlock must fail so the
-// block is re-queued, and the retry's InvalidateBlock must then genuinely land in the store so the
-// end state can be asserted against real persisted metadata rather than against a mock's own return.
-type invalidateFailsFirstNClient struct {
-	blockchain.ClientI
+// invalidateFailsFirstN wraps a real blockchain client so that its first n InvalidateBlock calls
+// fail and every later call (and every other method) reaches the real client. This is the fault
+// the convergence test needs: the optimistic path's InvalidateBlock must fail so the block is
+// re-queued, and the retry's InvalidateBlock must then genuinely land in the store so the end
+// state can be asserted against real persisted metadata rather than against a mock's own return.
+// The returned plan logs the attempts.
+func invalidateFailsFirstN(client blockchain.ClientI, n int) (blockchain.ClientI, *fault.Plan) {
+	plan := fault.NewPlan()
+	plan.On("InvalidateBlock").FirstN(n).Fail(errors.NewError("invalidate store unavailable"))
 
-	failFirst int
-
-	mu    sync.Mutex
-	calls int
-}
-
-func (c *invalidateFailsFirstNClient) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) ([]chainhash.Hash, error) {
-	c.mu.Lock()
-	c.calls++
-	attempt := c.calls
-	c.mu.Unlock()
-
-	if attempt <= c.failFirst {
-		return nil, errors.NewError("invalidate store unavailable")
-	}
-
-	return c.ClientI.InvalidateBlock(ctx, blockHash)
-}
-
-func (c *invalidateFailsFirstNClient) attempts() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.calls
+	return fault.NewBlockchainClient(client, plan), plan
 }
 
 // coinbaseAtHeight builds a coinbase whose BIP34 scriptSig encodes the given height, using
@@ -263,7 +242,7 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 	// genesis unmined; without this the optimistic AddBlock is never reached.
 	require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
 
-	blockchainClient := &invalidateFailsFirstNClient{ClientI: realClient, failFirst: 1}
+	blockchainClient, faults := invalidateFailsFirstN(realClient, 1)
 
 	// The whole test hinges on the FIRST AddBlock succeeding: the corrupt tip has to reach the store
 	// before background block.Valid condemns it, otherwise there is no on-chain block for the retry to
@@ -338,7 +317,7 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 		t.Fatal("the corrupt body was not re-queued after InvalidateBlock failed")
 	}
 
-	require.Equal(t, 1, blockchainClient.attempts(), "the optimistic path must have attempted the invalidate exactly once")
+	require.Equal(t, 1, faults.Count("InvalidateBlock"), "the optimistic path must have attempted the invalidate exactly once")
 	require.Equal(t, block.Hash(), requeued.block.Hash())
 
 	// The premise of the whole branch: the body really is on-chain, because it was added before
@@ -358,7 +337,7 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 	require.Error(t, revalidateErr)
 	require.True(t, errors.IsBlockCorrupt(revalidateErr), "the body is still corrupt on the retry, got: %v", revalidateErr)
 
-	require.Equal(t, 2, blockchainClient.attempts(), "the retry must attempt the invalidate again rather than return silently")
+	require.Equal(t, 2, faults.Count("InvalidateBlock"), "the retry must attempt the invalidate again rather than return silently")
 
 	_, metaAfter, err := realClient.GetBlockHeader(ctx, block.Header.Hash())
 	require.NoError(t, err)
