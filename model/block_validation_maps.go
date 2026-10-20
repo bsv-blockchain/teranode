@@ -11,7 +11,7 @@ import (
 
 // Block validation builds a txMap of every transaction (used by
 // checkDuplicateTransactions). It is a nodeIndex over the block's own subtree node
-// arrays (block_node_index.go, 6 bytes a tx); the 64-bit SplitSwissMapUint64 below
+// arrays (block_node_index.go, about 11 bytes a tx); the 64-bit SplitSwissMapUint64 below
 // is only built for a block whose tx indexes exceed 32 bits.
 //
 // It is allocated per block, sized to what the block needs bucket by bucket: each

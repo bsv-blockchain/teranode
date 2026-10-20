@@ -301,6 +301,10 @@ func (m *MockSubtreeProcessor) MoveForwardBlock(block *model.Block) error {
 	return args.Error(0)
 }
 
+func (m *MockSubtreeProcessor) PrepareBlock(block *model.Block) {
+	m.Called(block)
+}
+
 // DrainPendingInvalidations and QueueInvalidation implement the invalidation
 // side of Interface.
 //

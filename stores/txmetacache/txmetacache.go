@@ -126,6 +126,11 @@ type CacheStats struct {
 
 	// LaneWaits counts the times a lockfree-cache writer found every lane busy.
 	LaneWaits uint64
+
+	// Evictions is the number of entries the cache dropped to make room (ring
+	// wraps); only the lockfree cache reports it. Explicit deletes are counted
+	// in the cache's own metrics.
+	Evictions uint64
 }
 
 // BucketType defines the allocation strategy for the cache's internal buckets.
@@ -452,6 +457,20 @@ var intoScratchPool = sync.Pool{
 // batch does not pin its buffer for the life of the process.
 const intoScratchMaxRetain = 4 * 1024 * 1024
 
+// intoScratchBytesPerEntry is the room reserved per lookup when a scratch has
+// to grow: a little above a typical entry (fee, size, flags and one or two
+// parents). The pool loses its scratches on every GC; reserving for the batch
+// up front replaces the doubling growth the reads would otherwise go through.
+const intoScratchBytesPerEntry = 128
+
+// reserve makes sure raw has room for n entries, up to intoScratchMaxRetain.
+func (sc *intoScratch) reserve(n int) {
+	need := min(n*intoScratchBytesPerEntry, intoScratchMaxRetain)
+	if cap(sc.raw) < need {
+		sc.raw = make([]byte, 0, need)
+	}
+}
+
 // Decoded parent hashes and vouts are carved from chunks that are never
 // reused, because callers keep the TxInpoints. A chunk is held by a per-P
 // carver in intoCarverPool until it is used up, so the heap's global span lock
@@ -530,6 +549,8 @@ func (t *TxMetaCache) GetMetaCachedInto(_ context.Context, hashes []chainhash.Ha
 	}
 
 	spans := sc.spans[:n]
+
+	sc.reserve(n)
 	t.cache.GetRawMulti(hashes, keyHashes, &sc.raw, spans)
 
 	carver := intoCarverPool.Get().(*intoCarver)
@@ -581,6 +602,17 @@ func KeyHash(hash *chainhash.Hash) uint64 {
 // instead of once per key.
 func ProbeRangeOf(keyHash uint64) int {
 	return int(keyHash % BucketsCount / (BucketsCount / ProbeRanges))
+}
+
+// BucketLocality reports whether grouping a large lookup by ProbeRangeOf pays
+// off on this cache's backend. The bucketed backends take a lock per bucket,
+// so a grouped batch takes each lock once. The lockfree cache has one global
+// index and no locks; for it the grouping only scatters the caller's result
+// writes, and it ignores keyHashes.
+func (t *TxMetaCache) BucketLocality() bool {
+	_, lockfree := t.cache.(*lockFreeBackend)
+
+	return !lockfree
 }
 
 // GetMeta retrieves transaction metadata for a given transaction hash, first checking the cache
@@ -1036,6 +1068,7 @@ func (t *TxMetaCache) GetCacheStats() *CacheStats {
 		CurrentGenEntries:  s.CurrentGenEntries,
 		PreviousGenEntries: s.PreviousGenEntries,
 		LaneWaits:          s.LaneWaits,
+		Evictions:          s.Evictions,
 	}
 }
 

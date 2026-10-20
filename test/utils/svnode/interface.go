@@ -87,6 +87,12 @@ type Options struct {
 	// Unlike addnode, -connect creates regular outbound connections that are
 	// used for initial block download in SV Node.
 	ConnectTo []string
+	// FreePorts runs the node on RPC and P2P ports picked free at each start
+	// attempt instead of RPCPort and P2PPort, and retries the start on new ports
+	// if the container fails. Read RPCURL and P2PHost after Start. A fixed port
+	// can be taken on a CI runner, above all one in the OS ephemeral range
+	// (32768+ on Linux), which any outgoing connection may be using.
+	FreePorts bool
 	// AdditionalArgs specifies extra command-line flags to pass to bitcoind.
 	// Example: []string{"-multistreams=1", "-multistreampolicies=BlockPriority,Default"}
 	AdditionalArgs []string

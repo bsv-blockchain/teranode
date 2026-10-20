@@ -2090,9 +2090,12 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 
 	prometheusBlockAssemblerGetMiningCandidate.Inc()
 
-	// Handle block-processing-in-progress state
+	// Handle block-processing-in-progress state. A reorg, reconcile or reset is
+	// still moving block assembly to the chain tip, so a candidate built on the
+	// block assembly tip would mine on the old side of a reorg.
 	currentState := b.GetCurrentRunningState()
-	if currentState == StateBlockchainSubscription || currentState == StateMovingUp {
+	if currentState == StateBlockchainSubscription || currentState == StateMovingUp ||
+		currentState == StateReorging || currentState == StateReconciling || currentState == StateResetting {
 		b.logger.Infof("[GetMiningCandidate] Block processing in progress (state: %s), returning empty block template for new height", StateStrings[currentState])
 
 		bestBlockHeader, bestBlockMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)
@@ -3365,9 +3368,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	}
 
 	// Wait for the unmined_since index to be ready before attempting to get the iterator
-	if indexWaiter, ok := b.utxoStore.(interface {
+	if indexWaiter, ok := utxo.As[interface {
 		WaitForIndexReady(ctx context.Context, indexName string) error
-	}); ok {
+	}](b.utxoStore); ok {
 		indexName := "unminedSinceIndex"
 		prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(0)
 
@@ -3958,9 +3961,9 @@ func (b *BlockAssembler) CheckInputValidation(ctx context.Context) (int, error) 
 // for the startup load (fail on one).
 func (b *BlockAssembler) loadUnminedTransactionsWithDiskSort(ctx context.Context, isReload bool) error {
 	// Wait for the unmined_since index to be ready
-	if indexWaiter, ok := b.utxoStore.(interface {
+	if indexWaiter, ok := utxo.As[interface {
 		WaitForIndexReady(ctx context.Context, indexName string) error
-	}); ok {
+	}](b.utxoStore); ok {
 		indexName := "unminedSinceIndex"
 		prometheusBlockAssemblerUtxoIndexReady.WithLabelValues(indexName).Set(0)
 

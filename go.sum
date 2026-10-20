@@ -105,8 +105,8 @@ github.com/benbjohnson/clock v1.3.5 h1:VvXlSJBzZpA/zum6Sj74hxwYI2DIxRWuNIoXAzHZz
 github.com/benbjohnson/clock v1.3.5/go.mod h1:J11/hYXuz8f4ySSvYwY0FKfm+ezbsZBKZxNJlLklBHA=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
-github.com/bitcoin-sv/bdk/module/gobdk v1.3.0 h1:AncNz5J1R+M1GZIngGL5jRLCmt5buhzIWFA4IZb77GY=
-github.com/bitcoin-sv/bdk/module/gobdk v1.3.0/go.mod h1:XxBr/Y+e+pMw3+e2xYECvEayfZM3RX3n0jVvOGC3krE=
+github.com/bitcoin-sv/bdk/module/gobdk v1.3.1 h1:LxwZkm9faQcFkMakrO4f11RSV/Tk94xZSR3uuGgq28Y=
+github.com/bitcoin-sv/bdk/module/gobdk v1.3.1/go.mod h1:XxBr/Y+e+pMw3+e2xYECvEayfZM3RX3n0jVvOGC3krE=
 github.com/bitcoinschema/go-bitcoin v0.3.20 h1:jWKT7ePYm4dPaIR2aIAVL8BwdsYtuG/4B87l1+KZyWs=
 github.com/bitcoinschema/go-bitcoin v0.3.20/go.mod h1:HyyMGUTtGE1qOgFJzCmvgsf3y55IfxJ+qLbwRm4Ski4=
 github.com/bitcoinsv/bsvd v0.0.0-20190609155523-4c29707f7173 h1:2yTIV9u7H0BhRDGXH5xrAwAz7XibWJtX2dNezMeNsUo=
@@ -141,8 +141,14 @@ github.com/bsv-blockchain/go-sdk v1.7.2 h1:AKJaeDOzcIqcLgEG/i5ksi6/StQsFEsGSZrIg
 github.com/bsv-blockchain/go-sdk v1.7.2/go.mod h1:NtCYkU9NX/D8wzdN+9zGUtl2Rpdp+Zk5Uhyd0Aww+/c=
 github.com/bsv-blockchain/go-subtree v1.6.1 h1:+ElMK3v1ryFAkg5CSXEdB52Mx+CyFVUz2wAbpCI8a6k=
 github.com/bsv-blockchain/go-subtree v1.6.1/go.mod h1:TTUSuImDIDr+Br4TVJa4xhr6Ou99p9aUTGHOZZYaito=
+github.com/bsv-blockchain/go-subtree v1.6.2 h1:1cutO3HOfUDgEZSqzvh5qov6QDOPyjrsoTYc3J+caMQ=
+github.com/bsv-blockchain/go-subtree v1.6.2/go.mod h1:q7YXgbNQnqZSKTaP8lMQyCApQzrKJdYsF64OMyVYT0k=
+github.com/bsv-blockchain/go-subtree v1.6.3 h1:75dwSs1tQsXRIRBImEsGFTlROXXQF192fA2UjjJQT8M=
+github.com/bsv-blockchain/go-subtree v1.6.3/go.mod h1:q7YXgbNQnqZSKTaP8lMQyCApQzrKJdYsF64OMyVYT0k=
 github.com/bsv-blockchain/go-tx-map v1.5.0 h1:5wTbktWmQ+Kgus5Phh4s/Z3UmnLov4ih2QkM7pkMuz4=
 github.com/bsv-blockchain/go-tx-map v1.5.0/go.mod h1:ZDojRIjPPIq8OHff3zO1k9JEc9a6D5h7vBN4qfZkOhU=
+github.com/bsv-blockchain/go-tx-map v1.5.1 h1:cFvgwBNQ+51e+KGgF/tZLrEOyEknhHiNBmT965a7oec=
+github.com/bsv-blockchain/go-tx-map v1.5.1/go.mod h1:xvZA9R3b0dbCTPiKGI26/R34v3LzmZ+xUnJnXL6kDXo=
 github.com/bsv-blockchain/go-wire v1.2.11 h1:jVbatioBZ21ebK7rrt9IY768VPVTMpk0KSPC2fm0lS0=
 github.com/bsv-blockchain/go-wire v1.2.11/go.mod h1:SOOpXy0TYp1sl0JAyG2Q/ZgWZAgxTiSc+sV4Vyd903U=
 github.com/bsv-blockchain/testcontainers-aerospike-go v0.4.0 h1:/sMNDs+FE9xyXeOyGtnT9d5IeEP1IGizgWUaGwzdg0M=

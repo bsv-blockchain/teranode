@@ -46,6 +46,7 @@ const (
 	BlockAssemblyAPI_GetBlockAssemblyBlockCandidate_FullMethodName   = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyBlockCandidate"
 	BlockAssemblyAPI_GetBlockAssemblyTxs_FullMethodName              = "/blockassembly_api.BlockAssemblyAPI/GetBlockAssemblyTxs"
 	BlockAssemblyAPI_GetCandidateBlock_FullMethodName                = "/blockassembly_api.BlockAssemblyAPI/GetCandidateBlock"
+	BlockAssemblyAPI_PrepareBlock_FullMethodName                     = "/blockassembly_api.BlockAssemblyAPI/PrepareBlock"
 )
 
 // BlockAssemblyAPIClient is the client API for BlockAssemblyAPI service.
@@ -129,6 +130,11 @@ type BlockAssemblyAPIClient interface {
 	// The response contains everything needed to assemble a standard Bitcoin wire format block.
 	// Returns NotFound if the candidate ID has expired or is invalid.
 	GetCandidateBlock(ctx context.Context, in *GetCandidateBlockRequest, opts ...grpc.CallOption) (*GetCandidateBlockResponse, error)
+	// PrepareBlock tells block assembly about a block on its current tip that block validation has
+	// started validating, so it can build the block's transaction map before the block is added.
+	// It is a hint: block assembly binds the subtree list to the header itself, and the map is only
+	// used for a block with that hash and subtree list.
+	PrepareBlock(ctx context.Context, in *PrepareBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error)
 }
 
 type blockAssemblyAPIClient struct {
@@ -329,6 +335,16 @@ func (c *blockAssemblyAPIClient) GetCandidateBlock(ctx context.Context, in *GetC
 	return out, nil
 }
 
+func (c *blockAssemblyAPIClient) PrepareBlock(ctx context.Context, in *PrepareBlockRequest, opts ...grpc.CallOption) (*EmptyMessage, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmptyMessage)
+	err := c.cc.Invoke(ctx, BlockAssemblyAPI_PrepareBlock_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // BlockAssemblyAPIServer is the server API for BlockAssemblyAPI service.
 // All implementations must embed UnimplementedBlockAssemblyAPIServer
 // for forward compatibility.
@@ -410,6 +426,11 @@ type BlockAssemblyAPIServer interface {
 	// The response contains everything needed to assemble a standard Bitcoin wire format block.
 	// Returns NotFound if the candidate ID has expired or is invalid.
 	GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error)
+	// PrepareBlock tells block assembly about a block on its current tip that block validation has
+	// started validating, so it can build the block's transaction map before the block is added.
+	// It is a hint: block assembly binds the subtree list to the header itself, and the map is only
+	// used for a block with that hash and subtree list.
+	PrepareBlock(context.Context, *PrepareBlockRequest) (*EmptyMessage, error)
 	mustEmbedUnimplementedBlockAssemblyAPIServer()
 }
 
@@ -476,6 +497,9 @@ func (UnimplementedBlockAssemblyAPIServer) GetBlockAssemblyTxs(context.Context, 
 }
 func (UnimplementedBlockAssemblyAPIServer) GetCandidateBlock(context.Context, *GetCandidateBlockRequest) (*GetCandidateBlockResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCandidateBlock not implemented")
+}
+func (UnimplementedBlockAssemblyAPIServer) PrepareBlock(context.Context, *PrepareBlockRequest) (*EmptyMessage, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareBlock not implemented")
 }
 func (UnimplementedBlockAssemblyAPIServer) mustEmbedUnimplementedBlockAssemblyAPIServer() {}
 func (UnimplementedBlockAssemblyAPIServer) testEmbeddedByValue()                          {}
@@ -840,6 +864,24 @@ func _BlockAssemblyAPI_GetCandidateBlock_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BlockAssemblyAPI_PrepareBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareBlockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockAssemblyAPIServer).PrepareBlock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockAssemblyAPI_PrepareBlock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockAssemblyAPIServer).PrepareBlock(ctx, req.(*PrepareBlockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // BlockAssemblyAPI_ServiceDesc is the grpc.ServiceDesc for BlockAssemblyAPI service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -922,6 +964,10 @@ var BlockAssemblyAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetCandidateBlock",
 			Handler:    _BlockAssemblyAPI_GetCandidateBlock_Handler,
+		},
+		{
+			MethodName: "PrepareBlock",
+			Handler:    _BlockAssemblyAPI_PrepareBlock_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -13,8 +13,9 @@
 | GRPCAddress | string | "localhost:8089" (Go default; overridden to `localhost:8086` by `settings.conf` via `SUBTREE_VALIDATION_GRPC_PORT`) | subtreevalidation_grpcAddress | gRPC client connections |
 | GRPCListenAddress | string | ":8089" (Go default; overridden to `:8086` by `settings.conf` via `SUBTREE_VALIDATION_GRPC_PORT`) | subtreevalidation_grpcListenAddress | **CRITICAL** - gRPC server binding, health checks only run if not empty |
 | ProcessTxMetaUsingCacheConcurrency | int | 32 | subtreevalidation_processTxMetaUsingCache_Concurrency | **CRITICAL** - Cache-probe workers shared by all subtrees being validated (server-wide, not per subtree; peer subtrees and block validation each get a pool of this size) |
+| PeerSubtreeConcurrency | int | 32 | subtreevalidation_peerSubtreeConcurrency | Peer-announced subtrees validated at once (each holds ~1 GiB per 1M txs); taken before the quorum lock, so block validation never waits behind the queue. Block subtrees do not use it. 0 or less disables the limit |
 | ProcessTxMetaUsingCacheMissingTxThreshold | int | 1 | subtreevalidation_processTxMetaUsingCache_MissingTxThreshold | Cache miss threshold |
-| SubtreeBlockHeightRetention | uint32 | globalBlockHeightRetention | subtreevalidation_subtreeBlockHeightRetention | Block height retention |
+| BlockHeightRetentionAdjustment | int32 | 0 | subtreevalidation_blockHeightRetentionAdjustment | Adjustment applied to `GlobalBlockHeightRetention` (see `GetSubtreeValidationBlockHeightRetention`) |
 | SubtreeDAHConcurrency | int | 8 | subtreevalidation_subtreeDAHConcurrency | DAH processing concurrency |
 | TxMetaCacheEnabled | bool | true | subtreevalidation_txMetaCacheEnabled | **CRITICAL** - Transaction metadata cache |
 | TxMetaCacheMaxMB | int | 256 | txMetaCacheMaxMB | Cache memory limit |
@@ -24,7 +25,6 @@
 | MissingTransactionsBatchSize | int | 16384 | subtreevalidation_missingTransactionsBatchSize | **CRITICAL** - Missing transaction batch size |
 | PercentageMissingGetFullData | float64 | 20 | subtreevalidation_percentageMissingGetFullData | **CRITICAL** - Full subtree vs individual transaction threshold |
 | BlacklistedBaseURLs | map[string]struct{} | {} | subtreevalidation_blacklisted_baseurls | URL blacklisting |
-| BlockHeightRetentionAdjustment | int32 | 0 | subtreevalidation_blockHeightRetentionAdjustment | Block height retention adjustment |
 | CheckBlockSubtreesConcurrency | int | 32 | subtreevalidation_check_block_subtrees_concurrency | **CRITICAL** - Block subtree checking concurrency |
 | PauseTimeout | time.Duration | 5m | subtreevalidation_pauseTimeout | **CRITICAL** - Maximum pause duration |
 | TxBatchSize | int | 1048576 | subtreevalidation_check_block_subtrees_tx_batch_size | Transaction batch size for CheckBlockSubtrees (0 = no batching) |

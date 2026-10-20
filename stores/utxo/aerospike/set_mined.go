@@ -259,6 +259,15 @@ func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRec
 		usePackage = LuaPackageMined
 	}
 
+	// setMined uses currentBlockHeight only to stamp unmined_since. When a block is invalidated
+	// (UnsetMined) the stamp is backdated like MarkTransactionsOnLongestChain(false) does (issue
+	// 1768): the parent's deleteAtHeight keeps counting from the original spend, so the pruner's
+	// parent-preservation scan must see this tx on its next cycle.
+	currentBlockHeight := thisBlockHeight
+	if minedBlockInfo.UnsetMined {
+		currentBlockHeight = utxo.BackdatedUnminedSince(s.GetBlockHeight(), s.settings.UtxoStore.UnminedTxRetention)
+	}
+
 	for idx, hash := range hashes {
 		key := batchKeys[idx]
 		if key == nil {
@@ -282,7 +291,7 @@ func (s *Store) prepareBatchRecordsForSetMined(batchRecords []aerospike.BatchRec
 			minedBlockInfo.BlockID,
 			minedBlockInfo.BlockHeight,
 			minedBlockInfo.SubtreeIdx,
-			thisBlockHeight,
+			currentBlockHeight,
 			s.settings.GetUtxoStoreBlockHeightRetention(),
 			minedBlockInfo.OnLongestChain,
 			minedBlockInfo.UnsetMined,
@@ -319,16 +328,8 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	// Collect follow-up actions to execute in batches after the loop
 	extraRecords := make([]*chainhash.Hash, 0, len(hashes))
-	dahSetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
-	dahUnsetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
+	// Child (pagination) record DAH follow-ups, last state per txid wins.
+	var childDAH childDAHFollowUps
 	// #1037: pagination/extra records of successfully-mined external txs whose
 	// `locked` flag must be cleared (the master-keyed setMined only clears the
 	// master). Populated from the setMined response's childCount (= totalExtraRecs).
@@ -366,7 +367,7 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			// pagination records. Clear them (the master's lock is cleared by the
 			// UDF itself). childCount == totalExtraRecs is surfaced by setMined on a
 			// mine; UnsetMined never reaches here as a clear (childCount only on mine).
-			if res != nil && !minedBlockInfo.UnsetMined && res.ChildCount > 0 {
+			if res != nil && hashes[idx] != nil && !minedBlockInfo.UnsetMined && res.ChildCount > 0 {
 				work.items = append(work.items, lockClearItem{txID: hashes[idx], childCount: res.ChildCount})
 			}
 		}
@@ -389,9 +390,11 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			if hashes[idx] == nil {
 				errs = errors.Join(errs, errors.NewProcessingError("aerospike SetMinedMulti returned blockIDs for nil hash at index %d", idx))
 				nrErrors++
-			} else {
-				blockIDs[*hashes[idx]] = blockIDsUint32
+
+				continue
 			}
+
+			blockIDs[*hashes[idx]] = blockIDsUint32
 		}
 
 		// Aggregate signals for batched follow-up work
@@ -402,19 +405,11 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 			case LuaSignalDAHSet:
 				// Only set DAH if retention is configured
 				if dahEnabled {
-					dahSetItems = append(dahSetItems, struct {
-						TxID           *chainhash.Hash
-						ChildCount     int
-						DeleteAtHeight uint32
-					}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: dahHeight})
+					childDAH.addSet(hashes[idx], res.ChildCount, dahHeight)
 					// External store DAH is disabled - lifecycle managed by pruner service
 				}
 			case LuaSignalDAHUnset:
-				dahUnsetItems = append(dahUnsetItems, struct {
-					TxID           *chainhash.Hash
-					ChildCount     int
-					DeleteAtHeight uint32
-				}{TxID: hashes[idx], ChildCount: res.ChildCount, DeleteAtHeight: 0})
+				childDAH.addUnset(hashes[idx], res.ChildCount)
 				// External store DAH is disabled - lifecycle managed by pruner service
 			}
 		}
@@ -422,15 +417,9 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
 
-	// work (pagination records of successfully-mined external txs) is returned to
-	// the caller for clearing, so a tx that was mined successfully is fully
-	// unlocked even if a sibling record in the same batch errored below.
-	if errs != nil || nrErrors > 0 {
-		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
-		return blockIDs, work, errors.NewError("aerospike batchRecord errors", errs)
-	}
-
-	// Execute aggregated follow-ups in batches
+	// Execute aggregated follow-ups in batches. These run BEFORE the sibling-error return
+	// below: the records that did succeed have already been mined, and a retry would hit the
+	// "block already present" no-op and never reconcile their child-record DAH.
 	var postErr error
 
 	if len(extraRecords) > 0 {
@@ -439,20 +428,20 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 		}
 	}
 
-	if len(dahSetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
-
-	if len(dahUnsetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahUnsetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
+	postErr = errors.JoinCapped(10, postErr, applied.unsetErr, applied.setErr)
 
 	// External store DAH is disabled - lifecycle managed by pruner service
 	// setDAHExternalTransactionMulti removed as it would no-op
+
+	if errs != nil || nrErrors > 0 {
+		if postErr != nil {
+			errs = errors.Join(errs, postErr)
+		}
+
+		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
+		return blockIDs, work, errors.NewError("aerospike batchRecord errors", errs)
+	}
 
 	if postErr != nil {
 		return blockIDs, work, errors.NewError("aerospike setMined follow-up batch errors", postErr)

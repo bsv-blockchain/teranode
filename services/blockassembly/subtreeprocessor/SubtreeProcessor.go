@@ -327,6 +327,11 @@ type SubtreeProcessor struct {
 	pendingInvalidationsMu sync.Mutex
 	pendingInvalidations   []chainhash.Hash
 
+	// prepared is the transaction map being built for a block that is still being
+	// validated (PrepareBlock), for moveForwardBlock to take once the block is added.
+	preparedMu sync.Mutex
+	prepared   *preparedTxMap
+
 	// subtreeStore provides persistent storage for subtrees
 	subtreeStore blob.Store
 
@@ -5416,6 +5421,13 @@ func (stp *SubtreeProcessor) createTransactionMapIfNeeded(ctx context.Context, b
 		transactionMap   *SortedHashSet
 		conflictingNodes []chainhash.Hash
 	)
+
+	// a map prepared while the block was validated, which also drops one prepared for another block
+	if prepared, preparedConflicting, ok := stp.takePreparedTxMap(ctx, block, len(blockSubtreesMap)); ok {
+		stp.logger.Infof("[moveForwardBlock][%s] using the transaction map prepared while the block was validated", block.String())
+
+		return prepared, preparedConflicting, nil
+	}
 
 	if len(blockSubtreesMap) > 0 {
 		if transactionMap, conflictingNodes, err = stp.CreateTransactionMap(ctx, blockSubtreesMap, len(block.Subtrees), block.TransactionCount); err != nil {

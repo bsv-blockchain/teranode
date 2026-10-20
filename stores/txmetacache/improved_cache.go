@@ -225,6 +225,11 @@ type Stats struct {
 	// busy and had to wait for one. It stays at 0 unless more writers run at
 	// once than the cache has lanes.
 	LaneWaits uint64
+
+	// Evictions is the number of entries the cache dropped to make room
+	// (ring wraps). Only the lockfree cache reports it; explicit deletes are
+	// counted separately by TxMetaCache.
+	Evictions uint64
 }
 
 // Reset clears all statistics in the Stats object.

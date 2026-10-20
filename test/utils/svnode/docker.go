@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -50,8 +51,68 @@ func NewDockerSVNode(opts Options) *DockerSVNode {
 	}
 }
 
+// freePortAttempts is how many times Start tries the container on newly
+// picked ports when Options.FreePorts is set: a port free when picked can be
+// taken before the node binds it.
+const freePortAttempts = 3
+
 // Start starts the svnode Docker container
 func (d *DockerSVNode) Start(ctx context.Context) error {
+	if !d.opts.FreePorts {
+		return d.startOnce(ctx)
+	}
+
+	var err error
+
+	for attempt := 1; attempt <= freePortAttempts; attempt++ {
+		if err = d.useFreePorts(); err != nil {
+			return err
+		}
+
+		if err = d.startOnce(ctx); err == nil || ctx.Err() != nil {
+			return err
+		}
+	}
+
+	return errors.NewProcessingError("svnode did not start on free ports in %d attempts", freePortAttempts, err)
+}
+
+// useFreePorts picks two distinct free ports for the node's RPC and P2P
+// listeners and points RPCURL and P2PHost at them.
+func (d *DockerSVNode) useFreePorts() error {
+	rpc, err := freePort()
+	if err != nil {
+		return err
+	}
+
+	p2p := rpc
+	for p2p == rpc {
+		if p2p, err = freePort(); err != nil {
+			return err
+		}
+	}
+
+	d.opts.RPCPort, d.opts.P2PPort = rpc, p2p
+	d.rpcURL = fmt.Sprintf("http://localhost:%d", rpc)
+	d.p2pHost = fmt.Sprintf("localhost:%d", p2p)
+
+	return nil
+}
+
+// freePort returns a TCP port that was free on all interfaces when checked.
+func freePort() (int, error) {
+	l, err := net.Listen("tcp", "0.0.0.0:0") // #nosec G102 -- probing for a free port, closed at once
+	if err != nil {
+		return 0, errors.NewProcessingError("failed to find a free port", err)
+	}
+
+	port := l.Addr().(*net.TCPAddr).Port
+
+	return port, l.Close()
+}
+
+// startOnce starts the container on the current ports.
+func (d *DockerSVNode) startOnce(ctx context.Context) error {
 	// Stop any existing container first
 	_ = d.Stop(ctx)
 
@@ -95,6 +156,11 @@ func (d *DockerSVNode) Start(ctx context.Context) error {
 		Started:          true,
 	})
 	if err != nil {
+		// A container that started and then exited (a port taken, say) is still there.
+		if ctr != nil {
+			_ = ctr.Terminate(context.Background())
+		}
+
 		return errors.NewProcessingError("failed to start svnode container", err)
 	}
 

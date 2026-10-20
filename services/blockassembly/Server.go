@@ -2243,6 +2243,27 @@ func (ba *BlockAssembly) computeCoinbaseBUMP(jobID string, subtreesInJob []*subt
 	return bumpBytes
 }
 
+// PrepareBlock hands a block that block validation has started validating to the subtree
+// processor, which builds its transaction map ahead of the block being added if the block is on
+// its current tip and its subtree list is bound to its header. The map is only used for a block
+// with that hash and subtree list, after it has been validated and added.
+func (ba *BlockAssembly) PrepareBlock(ctx context.Context, req *blockassembly_api.PrepareBlockRequest) (*blockassembly_api.EmptyMessage, error) {
+	block, err := model.NewBlockFromBytes(req.Block)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[PrepareBlock] invalid block", err))
+	}
+
+	_, _, endSpan := tracing.Tracer("blockassembly").Start(ctx, "PrepareBlock",
+		tracing.WithParentStat(ba.stats),
+		tracing.WithDebugLogMessage(ba.logger, "[PrepareBlock][%s] called", block.String()),
+	)
+	defer endSpan()
+
+	ba.blockAssembler.subtreeProcessor.PrepareBlock(block)
+
+	return &blockassembly_api.EmptyMessage{}, nil
+}
+
 // GetCandidateBlock retrieves the block metadata for an existing mining candidate.
 // It looks up the job by candidate ID, creates a default coinbase transaction,
 // computes the merkle root, and builds the 80-byte block header.

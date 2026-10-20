@@ -560,7 +560,7 @@ func SpendAndCreateMultiRepeatAtCutPoints(t *testing.T, db utxostore.Store) {
 				wrapper.crashAt = *w.Txs[cut.crash].TxIDChainHash()
 			}
 
-			_, _ = utxostore.DefaultSpendAndCreateMulti(runCtx, wrapper, 8, w.Txs, height, utxostore.WithIgnoreLocked(true))
+			_, _ = utxostore.DefaultSpendAndCreateMulti(runCtx, wrapper, utxostore.UniformSpendAndCreateMultiWidths(8), w.Txs, height, utxostore.WithIgnoreLocked(true))
 			cancel()
 
 			// The caller's pre-check: drop every transaction with a record.

@@ -170,3 +170,23 @@ func TestAttemptP2PPort_GivesUpAfterMaxAttempts(t *testing.T) {
 	require.Equal(t, maxP2PPortAttempts, attempts)
 	require.True(t, isAddrInUse(gotErr))
 }
+
+// TestGetFreePort_DrawsBelowTheEphemeralRange pins the fix for a bind collision
+// on a port the daemon tests had drawn minutes before starting the services.
+// A ":0" draw lands in the kernel's ephemeral range, which is also where every
+// outbound connection's source port comes from, so any client dial in a
+// parallel test package could take the port before the service bound it.
+// Linux starts that range at 32768 and macOS at 49152.
+func TestGetFreePort_DrawsBelowTheEphemeralRange(t *testing.T) {
+	for range 50 {
+		port, err := getFreePort()
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, port, freePortMin)
+		require.Less(t, port, freePortMax)
+		require.Less(t, port, 32768, "port %d is inside the Linux ephemeral range", port)
+
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		require.NoError(t, err, "port %d must be bindable on the wildcard address the services use", port)
+		_ = l.Close()
+	}
+}

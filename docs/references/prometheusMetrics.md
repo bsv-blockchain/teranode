@@ -352,6 +352,8 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_errors` | Counter   | Number of errors setting tx meta cache from kafka |
 | `teranode_subtreevalidation_kafka_malformed_messages_total` | Counter   | Malformed Kafka subtree messages dropped, labelled by `reason` (`nil_message`, `too_short`, `unmarshal_failure`, `bad_hash`, `bad_url`) |
 | `teranode_subtreevalidation_subtree_already_exists_skipped_total` | Counter | Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead |
+| `teranode_subtreevalidation_peer_subtree_admission_wait` | Histogram | Seconds a peer subtree waited for a `subtreevalidation_peerSubtreeConcurrency` slot |
+| `teranode_subtreevalidation_peer_subtree_admission_waiting` | Gauge | Peer subtrees waiting for a `subtreevalidation_peerSubtreeConcurrency` slot |
 
 ## Validator Service Metrics
 
@@ -402,7 +404,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_tx_meta_cache_hits`                 | Gauge | Number of hits in the tx meta cache                          |
 | `teranode_tx_meta_cache_misses`               | Gauge | Number of misses in the tx meta cache                        |
 | `teranode_tx_meta_cache_get_origin`           | Gauge | Number of get origins in the tx meta cache                   |
-| `teranode_tx_meta_cache_evictions`            | Gauge | Number of evictions in the tx meta cache                     |
+| `teranode_tx_meta_cache_evictions`            | Gauge | Number of entries removed from the tx meta cache: deletes on every backend, plus an estimate of entries overwritten by ring wraps on the `lockfree` cache |
 | `teranode_tx_meta_cache_trims`                | Gauge | Number of trim operations in the tx meta cache               |
 | `teranode_tx_meta_cache_map_size`             | Gauge | Number of total elements in the improved cache's bucket maps |
 | `teranode_tx_meta_cache_total_elements_added` | Gauge | Number of total number of elements added to the txmetacache  |
@@ -425,6 +427,8 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_aerospike_txmeta_set_mined_batch`       | Counter    | Number of txmeta set_mined_batch calls done to aerospike map    |
 | `teranode_aerospike_txmeta_set_mined_batch_n`     | Counter    | Number of txmeta set_mined_batch txs done to aerospike map      |
 | `teranode_aerospike_txmeta_set_mined_batch_err_n` | Counter    | Number of txmeta set_mined_batch txs errors to aerospike map    |
+| `teranode_aerospike_expired_preservation_restore_failed` | Counter | Expired preservations whose master could not be restored after a failed child DAH follow-up |
+| `teranode_aerospike_longest_chain_restore_failed` | Counter | Longest-chain DAH updates whose master could not be restored after a failed pagination-record write |
 | `teranode_aerospike_utxo_get`                     | Counter    | Number of utxo get calls done to aerospike                      |
 | `teranode_aerospike_utxo_spend`                   | Counter    | Number of utxo spend calls done to aerospike                    |
 | `teranode_aerospike_utxo_reset`                   | Counter    | Number of utxo reset calls done to aerospike                    |

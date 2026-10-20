@@ -16,9 +16,31 @@ import (
 )
 
 type mockS3Client struct {
-	mu            sync.RWMutex
-	store         map[string][]byte
+	mu    sync.RWMutex
+	store map[string][]byte
+
 	headObjectErr error
+
+	// getObjectMissErr overrides the error returned for a key that is not in the
+	// store, so a test can reproduce how the real SDK renders a 404 in the
+	// configurations affected by aws/aws-sdk-go-v2#2084 (as NotFound rather than
+	// NoSuchKey).
+	getObjectMissErr error
+
+	// downloadErr overrides Download directly, bypassing the GetObject delegation
+	// below. The real client does not implement Download in terms of GetObject: it
+	// calls transfermanager.GetObject (s3client.go), which issues its own
+	// HeadObject on the concurrent/ranged path and so surfaces a miss as
+	// *types.NotFound rather than *types.NoSuchKey. Injecting at this boundary is
+	// the only way to exercise that shape, since the delegation cannot produce it.
+	downloadErr error
+
+	// uploadErr and deleteErr fail the write and delete paths, so their error
+	// messages — which format the object key — can be exercised at all. Those are
+	// the branches that only run once something has already gone wrong, which is
+	// exactly when a mis-rendered key costs the most.
+	uploadErr error
+	deleteErr error
 }
 
 func newMockS3Client() S3Client {
@@ -52,6 +74,10 @@ func (m *mockS3Client) GetObject(ctx context.Context, input *s3.GetObjectInput) 
 
 	data, ok := m.store[key]
 	if !ok {
+		if m.getObjectMissErr != nil {
+			return nil, m.getObjectMissErr
+		}
+
 		return nil, &types.NoSuchKey{}
 	}
 
@@ -104,6 +130,10 @@ func (m *mockS3Client) DeleteObject(ctx context.Context, input *s3.DeleteObjectI
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.deleteErr != nil {
+		return nil, m.deleteErr
+	}
+
 	key := aws.ToString(input.Key)
 	delete(m.store, key)
 
@@ -136,11 +166,28 @@ func (m *mockS3Client) AbortMultipartUpload(ctx context.Context, input *s3.Abort
 }
 
 func (m *mockS3Client) Upload(ctx context.Context, input *s3.PutObjectInput) error {
+	m.mu.RLock()
+	uploadErr := m.uploadErr
+	m.mu.RUnlock()
+
+	if uploadErr != nil {
+		return uploadErr
+	}
+
 	_, err := m.PutObject(ctx, input)
+
 	return err
 }
 
 func (m *mockS3Client) Download(ctx context.Context, input *s3.GetObjectInput) ([]byte, error) {
+	m.mu.RLock()
+	downloadErr := m.downloadErr
+	m.mu.RUnlock()
+
+	if downloadErr != nil {
+		return nil, downloadErr
+	}
+
 	output, err := m.GetObject(ctx, input)
 	if err != nil {
 		return nil, err
@@ -188,4 +235,34 @@ func (m *mockS3Client) SetHeadObjectError(err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.headObjectErr = err
+}
+
+// SetGetObjectMissError sets the error GetObject returns for a key that is not in
+// the store. Written under the same lock the read path takes, so a test that
+// injects from one goroutine and reads from another stays race-free.
+func (m *mockS3Client) SetGetObjectMissError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.getObjectMissErr = err
+}
+
+// SetDownloadError makes Download fail directly, without going through GetObject.
+func (m *mockS3Client) SetDownloadError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.downloadErr = err
+}
+
+// SetUploadError makes Upload fail, reaching the write paths' error messages.
+func (m *mockS3Client) SetUploadError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.uploadErr = err
+}
+
+// SetDeleteError makes DeleteObject fail, reaching Del's error message.
+func (m *mockS3Client) SetDeleteError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.deleteErr = err
 }

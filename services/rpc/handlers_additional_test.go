@@ -6255,6 +6255,9 @@ func (m *mockBlockAssemblyClient) GetTransactionHashes(ctx context.Context) ([]s
 func (m *mockBlockAssemblyClient) GetCandidateBlock(ctx context.Context, candidateID []byte) (*blockassembly_api.GetCandidateBlockResponse, error) {
 	return nil, nil
 }
+func (m *mockBlockAssemblyClient) PrepareBlock(ctx context.Context, block *model.Block) error {
+	return nil
+}
 
 // TestHandleGetMiningInfoComprehensive tests the complete handleGetMiningInfo functionality
 func TestHandleGetMiningInfoComprehensive(t *testing.T) {
