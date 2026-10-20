@@ -6272,17 +6272,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruned-tx-set" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pruned-TX Set
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#defensive-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7317,17 +7306,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#pruned-tx-set" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pruned-TX Set
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#defensive-mode" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7865,13 +7843,6 @@
 <td>pruner_skipDeletions</td>
 <td>Skip deletion operations during pruning</td>
 </tr>
-<tr>
-<td>UTXOPrunedSetMaxEntries</td>
-<td>int</td>
-<td>10000000</td>
-<td>pruner_utxoPrunedSetMaxEntries</td>
-<td>Soft cap on the in-memory pruned-TX set (0 = built-in 2B default, not unlimited)</td>
-</tr>
 </tbody>
 </table>
 <h3 id="service-control">Service Control<a class="headerlink" href="#service-control" title="Permanent link">&para;</a></h3>
@@ -8108,16 +8079,6 @@ pruning and higher resource usage.</p>
 <code>(workers × chunkGroupLimit) + workers</code> against <code>ConnectionQueueSize × ConnectionPoolWarningThreshold</code>
 and reduces the group limit if it would exceed the threshold. <code>settings.conf</code> deliberately ships a
 group limit of 1: at scale, parallel chunk processing can starve transaction throughput.</p>
-<h3 id="pruned-tx-set">Pruned-TX Set<a class="headerlink" href="#pruned-tx-set" title="Permanent link">&para;</a></h3>
-<p><code>UTXOPrunedSetMaxEntries</code> caps the in-memory <code>PrunedTxSet</code>, which tracks TXIDs pruned across
-sessions so wasteful Aerospike parent updates can be skipped pre-flight. It is held on the service
-struct and reused across prune sessions within a process, never persisted across restarts. The set
-is a sharded two-generation cuckoo filter: when the current generation fills it rotates into the
-previous slot and a fresh one is allocated, so <code>Add</code> keeps succeeding and old entries age out. A
-high <code>utxo_pruner_pruned_set_rotations</code> rate is the signal that the cap is too small.</p>
-<p>The cap is the total entry budget across both generations of all shards, so memory is roughly one
-byte per entry: 10M ≈ 10 MiB, 100M ≈ 100 MiB, and <code>0</code> selects the built-in 2B default ≈ 2 GiB. The
-optimisation is disabled automatically when <code>UTXODefensiveEnabled</code> is true.</p>
 <h3 id="defensive-mode">Defensive Mode<a class="headerlink" href="#defensive-mode" title="Permanent link">&para;</a></h3>
 <p>When <code>UTXODefensiveEnabled</code> is true the pruner verifies that ALL spending children of a parent are
 mined and stable (for at least <code>blockHeightRetention</code> blocks) before deleting the parent, which
@@ -8229,7 +8190,6 @@ automatic uppercasing):</p>
 <li><code>teranode_pruner_skipped_total{reason="block_assembly_timeout"}</code>: Indicates Block Assembly issues</li>
 <li><code>teranode_pruner_errors_total</code>: Indicates database or connectivity issues</li>
 <li><code>utxo_cleanup_batch_duration_seconds</code>: Indicates Aerospike performance</li>
-<li><code>utxo_pruner_pruned_set_rotations</code>: high rate means <code>pruner_utxoPrunedSetMaxEntries</code> is too small</li>
 </ul>
 <h2 id="troubleshooting-configuration-issues">Troubleshooting Configuration Issues<a class="headerlink" href="#troubleshooting-configuration-issues" title="Permanent link">&para;</a></h2>
 <h3 id="pruner-not-starting">Pruner Not Starting<a class="headerlink" href="#pruner-not-starting" title="Permanent link">&para;</a></h3>
