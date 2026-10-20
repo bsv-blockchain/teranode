@@ -185,6 +185,13 @@ test:
 test-heavy:
 	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^TestSortedHashSet_' ./services/blockassembly/subtreeprocessor
 
+# run the Block Validation gap-proof tests (services/blockvalidation/spec.md, Conformance Gaps).
+# Each asserts spec-correct behaviour and is expected to FAIL until its gap is fixed, so this
+# target is not part of `make test`. When a gap is fixed, drop the bvgaps tag from its test file.
+.PHONY: test-bvgaps
+test-bvgaps:
+	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestGapBV' ./model/... ./services/blockvalidation/...
+
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
 longtest:

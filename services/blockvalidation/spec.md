@@ -1126,6 +1126,7 @@ The following items are **defects**: places where the current implementation doe
 *Affects:* BV-INGRESS-005, BV-INGRESS-017.
 The waiting caller is released with nil as soon as the block is placed on the priority queue or diverted to catchup (`Server.go` `addBlockToPriorityQueue`, ~3048). Validation failures are never reported to the caller. This contradicts the `Interface.go` doc comment ("waits for validation to complete").
 *Work required:* hold the reply channel through validation and send the final outcome; return `ERR_SERVICE_ERROR` on a catchup divert.
+*Proof:* confirmed by `TestGapBV001_BlockFoundWaitReturnsAfterValidation`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-002.** Unbounded goroutines on a full block-found buffer.
 *Affects:* BV-INGRESS-006.
@@ -1136,6 +1137,7 @@ The waiting caller is released with nil as soon as the block is placed on the pr
 *Affects:* BV-INGRESS-009.
 The handler returns recoverable errors so that they will be redelivered, but the consumer runs with `kafka.WithLogErrorAndMoveOn()`, which commits every error while the context is live (`Server.go` ~1217; `util/kafka/kafka_consumer.go` ~1038). No existing consumer option can fix this alone: the consumer commits the highest marked offset, so a later success on the same partition commits past an uncommitted failure. Separately, on the unrecoverable path a hash-parse failure leaves the hash nil (`Server.go` ~933), and reporting the peer failure then dereferences it (`blockchain/Client.go` ~2088). That panics, the consumer's panic barrier swallows it, and the message is committed without any peer failure being reported.
 *Work required:* a redelivery mechanism that survives later commits on the same partition (for example, an internal retry queue for recoverable failures), and a guard on the nil hash.
+*Proof:* confirmed by `TestGapBV003_RecoverableKafkaErrorIsRedelivered`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-004.** Go client cannot send `peer_id`.
 *Affects:* BV-INGRESS-010.
@@ -1146,6 +1148,7 @@ The handler returns recoverable errors so that they will be redelivered, but the
 *Affects:* BV-INGRESS-017.
 On the non-unified route, a missing parent diverts to catchup and returns nil. When the catchup channel is full the divert is dropped with only a warning log (`Server.go` ~1800-1817). `processBlockFoundChannel` has the same nil-on-divert behaviour (~1125, ~1157). Legacy treats nil as accepted.
 *Work required:* return `ERR_SERVICE_ERROR` on divert for synchronous callers.
+*Proof:* confirmed by `TestGapBV005_ProcessBlockMissingParentReturnsServiceError`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-006.** Alternative sources are lost when a block is dequeued.
 *Affects:* BV-QUEUE-006.
@@ -1176,6 +1179,7 @@ On the non-unified route, a missing parent diverts to catchup and returns nil. W
 *Affects:* BV-BODY-017, BV-COMMIT-005.
 A transaction already mined in an ancestor is detected during mined-tagging, after AddBlock, when the block may already be the tip (`model/update-tx-mined.go` ~288, ~412). With `utxostore_updateTxMinedStatus = false`, tagging returns early (~208): re-presentation is not detected at all, and `mined_set` is still set although nothing was tagged.
 *Work required:* move the check before AddBlock, or document the post-commit invalidation as the contract (see Open Question 3); with tagging disabled, do not set `mined_set`.
+*Proof:* confirmed by `TestGapBV011_ReincludedTransactionRejectedBeforeAddBlock`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-012.** Some optimistic-path invalidations skip the invalid-block notification.
 *Affects:* BV-VERDICT-009, BV-OPTIMISTIC-005.
@@ -1221,16 +1225,19 @@ On `ERR_CATCHUP_IN_PROGRESS`, `processCatchupChItem` logs "requeueing" but reque
 *Affects:* BV-CATCHUP-008.
 `catchup.go` ~1136 logs a warning. The continuity check (~1272-1294) only requires the first header's parent to be stored locally, and the header-cache build checks linkage among the new headers but not to the ancestor (`catchup/header_chain_cache.go` ~115-121). So a first header whose parent is a *different* stored block proceeds, with heights mis-assigned as ancestor + 1 + index, including for checkpoint matching (~1220).
 *Work required:* abort when the first header's previous hash is not the ancestor's hash.
+*Proof:* confirmed by `TestGapBV020_FirstHeaderMustLinkToCommonAncestor`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-021.** Mined-set clearing runs before the header checks.
 *Affects:* BV-CATCHUP-013.
 Fork-side `mined_set` clearing runs after the fork-depth and secret-mining checks but before the linkage, checkpoint and DAA checks (`catchup.go` ~287 vs ~337). A peer whose header chain later fails still causes canonical blocks to be un-stamped.
 *Work required:* move the clearing after all header-chain checks.
+*Proof:* confirmed by `TestGapBV021_NoMinedSetClearBeforeHeaderChainChecks`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-022.** Circuit breaker never closes again.
 *Affects:* BV-CATCHUP-025.
 Production configures `MaxHalfOpenRequests = 1` and `SuccessThreshold = 2` (`Server.go` ~371). The Open → HalfOpen transition consumes the single half-open slot, and the slot counter is never decremented, so after one successful probe every further call is refused. Two successes are therefore unreachable, and the breaker stays half-open and refusing for that peer for the life of the process (`catchup/circuit_breaker.go` CanCall / RecordSuccess). Unit tests that cover closing use `MaxHalfOpenRequests = 3`. Verified by reading the code.
 *Work required:* release the half-open slot on each recorded outcome, or set the maximum to at least the success threshold. Add a test with the production configuration.
+*Proof:* confirmed by `TestGapBV022_BreakerMustEventuallyCloseWithProductionConfig` (package `catchup`), which fails today (`make test-bvgaps`).
 
 **GAP-BV-023.** Circuit breaker records local faults.
 *Affects:* BV-CATCHUP-026.
@@ -1266,6 +1273,7 @@ After 3 failed `RUN` attempts the node stays in `CATCHINGBLOCKS` (`catchup.go` ~
 *Affects:* BV-QUICK-021.
 `commitBlock` sets `subtrees_set = true` while this block's subtree-file writes are still queued. On a writer failure or cancellation, the queued jobs are counted down without being written, which can leave committed blocks with `subtrees_set` and no subtree file (`quick_validate.go` ~546; `catchup.go` ~1336-1380).
 *Work required:* barrier the block's writes before AddBlock, or add a repair path.
+*Proof:* confirmed by `TestGapBV029_SubtreesSetNotCommittedAheadOfQueuedSubtreeWrites`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-030.** No recovery for outputs left locked.
 *Affects:* BV-QUICK-015.
@@ -1332,6 +1340,7 @@ When the producer cannot be created after its retries (e.g. unreachable broker),
 *Affects:* BV-COMMIT-005, BV-COMMIT-010, BV-INGRESS-013.
 `ProcessBlock` copies any non-zero `block_id` onto the block with no check on route or height (`Server.go` ~1503). Every block with a non-zero ID is then added with `WithMinedSet(true)` (`BlockValidation.go` `buildAddBlockOpts`, ~1658). The function's own comment justifies this only for checkpoint-covered legacy blocks. A `ProcessBlock` call with a non-zero `block_id` above the checkpoint is therefore stored with `mined_set` set and its transactions are never tagged mined, which also skips the post-storage double-spend cross-check. Verified by reading the code. Related to Open Question 7, since the gRPC port is unauthenticated.
 *Work required:* set `mined_set` up front only on the legacy route at or below the highest hardcoded checkpoint; otherwise keep the ID but run mined-tagging.
+*Proof:* confirmed by `TestGapBV039_PreassignedBlockIDStillTagsTransactions`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-040.** `ValidateBlock` relabels ancestor-check failures as invalid.
 *Affects:* BV-REVALIDATE-009, BV-VERDICT-008.
@@ -1352,6 +1361,7 @@ The invalid-block producer close is raced against the stop context, but the bloc
 *Affects:* BV-OPTIMISTIC-005, BV-VERDICT-009.
 The internal revalidation path ends by returning the ancestor-membership check's result without acting on it (`BlockValidation.go` ~3447). An INVALID verdict from that check is retried 3 times (~856), then logged as "retries exhausted". An optimistically added block found invalid this way stays on the chain, and nothing is published. Verified by reading the code.
 *Work required:* invalidate and publish on an INVALID verdict from that check, as the other branches of the same function do.
+*Proof:* confirmed by `TestGapBV043_ReValidateInvalidAncestorVerdictInvalidatesBlock`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-044.** Catchup tries alternatives after an INVALID verdict on an unbound transaction list.
 *Affects:* BV-PEER-005.
@@ -1362,11 +1372,13 @@ When Subtree Validation reports a transaction invalid during catchup and the sub
 *Affects:* BV-BODY-019.
 bitcoin-sv applies `IsFinalTx` to every transaction in a block, coinbase included (`validation.cpp` ~6024-6037, via `ContextualCheckTransaction` ~5934). Teranode's only finality check is in the Validator (`services/validator/Validator.go` ~1496), which never receives a coinbase, and block-level validation has no finality check. A block whose coinbase is non-final is therefore accepted by Teranode and rejected by bitcoin-sv: a chain-split risk. Verified by reading both code bases. Related, outside this service: when `SubmitMiningSolution` omits the coinbase, Block Assembly sets the coinbase's nLockTime to the block time and its input sequence to the nonce (`services/blockassembly/Server.go` ~1947-1953). With a non-zero nonce that coinbase is non-final by bitcoin-sv's rules, so this node may mine blocks bitcoin-sv rejects. Whether production miners use that path is not confirmed.
 *Work required:* add the coinbase finality rule to block validation, on every route; review the Block Assembly coinbase construction.
+*Proof:* confirmed by `TestGapBV045_NonFinalCoinbaseRejected` (package `model`), which fails today (`make test-bvgaps`).
 
 **GAP-BV-046.** A present coinbase with no inputs is classified INCOMPLETE.
 *Affects:* BV-BODY-005.
 Both full and quick validation return `ERR_BLOCK_INCOMPLETE` for a coinbase with no inputs (`BlockValidation.go` ~1778-1791; `quick_validate.go` ~268). Such a coinbase is consensus-invalid (`bad-txns-vin-empty`), so on a bound body it should be INVALID; today it is re-fetched indefinitely and never condemned.
 *Work required:* reserve INCOMPLETE for an absent coinbase.
+*Proof:* confirmed by `TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete` (full and quick paths), which fails today (`make test-bvgaps`).
 
 **GAP-BV-047.** Height- and time-dependent rules are not re-evaluated for reused validations.
 *Affects:* BV-BODY-020, BV-BODY-015.
@@ -1385,13 +1397,15 @@ Teranode does not enforce BIP30 below `BIP0034Height`, and when a coinbase's ID 
 
 **GAP-BV-050.** Future-dated catchup headers are reported malicious.
 *Affects:* BV-CATCHUP-007, BV-HEADER-006.
-A header more than 2 hours ahead of the local clock is treated as a malicious response (`catchup/header_validation.go` ~49). bitcoin-sv attaches no penalty to `time-too-new`, so a node with a fast clock would ban honest peers. On the block path, a future-dated block is rejected with `ERR_BLOCK_INVALID` (`model/Block.go` ~699), and tests pin that code (`model/Block_test.go` ~603, `cheap_header_no_persist_test.go` ~345). Whether an invalid-block notification is published for it has not been verified.
+A header more than 2 hours ahead of the local clock is treated as a malicious response (`catchup/header_validation.go` ~49). bitcoin-sv attaches no penalty to `time-too-new`, so a node with a fast clock would ban honest peers. On the block path, a future-dated block is rejected with `ERR_BLOCK_INVALID` (`model/Block.go` ~699), and tests pin that code (`model/Block_test.go` ~603, `cheap_header_no_persist_test.go` ~345). On the optimistic path the rejection goes through `rejectFinalHeaderVerdict` (`BlockValidation.go` ~2246), which publishes an invalid-block notification and so strikes the peer. The non-optimistic path publishes nothing, because the timestamp check fails before the body is bound.
 *Work required:* abort without a malicious report; give the block-path outcome its own class (the CLOCK-DEFERRED row of BV-VERDICT-001) and assert no notification and no strike.
+*Proof:* confirmed by `TestGapBV050a_FutureDatedCatchupHeaderAbortsWithoutMaliciousReport`, `TestGapBV050b_FutureDatedBlockIsNotPersistedNotifiedNorStruck`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-051.** Every duplicate transaction is classified CORRUPT.
 *Affects:* BV-BODY-004.
 Any duplicate transaction ID yields `ERR_BLOCK_CORRUPT`, including duplicates in a bound body that are not the merkle-duplication pattern. Such a header commits to an invalid block, so it is never condemned and can be re-downloaded repeatedly. Low risk, since CORRUPT never poisons.
 *Work required:* classify non-merkle-duplication duplicates in a bound body as INVALID.
+*Proof:* confirmed by `TestGapBV051_NonMerkleDuplicateInBoundBodyIsInvalid` (package `model`), which fails today (`make test-bvgaps`).
 
 **GAP-BV-052.** The fork-depth limit reports peers malicious and is not surfaced.
 *Affects:* BV-CATCHUP-011.
@@ -1407,26 +1421,31 @@ The PoW ceiling is the looser of `PowLimit` and `PowLimitBits` (`model/BlockHead
 *Affects:* BV-STARTUP-007.
 The only `recover()` in the service is in the block-found workers (`Server.go` ~825). The priority-queue workers (`blockProcessingWorker`, ~2120), the catchup consumer (`processCatchupChItem`, ~2235) and the goroutine started inside the Kafka message handler (~889) have none, so a panic on any of those paths terminates the process. Verified by reading the code.
 *Work required:* recover on each path, report to any waiting caller, and continue.
+*Proof:* confirmed by `TestGapBV054_PriorityWorkerSurvivesPanic`, `TestGapBV054_CatchupConsumerSurvivesPanic`, `TestGapBV054_KafkaHandlerSurvivesPanic`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-055.** The chained create wave can be cancelled mid-call.
 *Affects:* BV-QUICK-018.
 The create-only wave calls `SpendAndCreate` directly under the errgroup context (`quick_validate.go` ~2490), unlike the one-wave and spend waves, which detach in-flight store calls. A sibling failure or shutdown therefore cancels a create that is already running. Verified by reading the code.
 *Work required:* run each create under the same detached, bounded context as the other waves.
+*Proof:* confirmed by `TestGapBV055_ChainedCreateWaveDoesNotCancelInFlightCreate`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-056.** A post-commit error on the quick route deletes a committed block's subtree files.
 *Affects:* BV-QUICK-015, BV-QUICK-021, BV-COMMIT-002.
 `commitBlock` returns an error when unlocking fails after `AddBlock` has committed the block with `subtrees_set` and `mined_set` true (`quick_validate.go` ~540-580). `tryQuickValidation` treats that as a local failure, deletes the `.subtree` files the attempt wrote, and falls through to full validation (`catchup.go` ~2047-2072), which finds the block already stored and does nothing. The block is left committed and marked `subtrees_set` with its subtree files deleted and its outputs locked. Verified by reading the code; not reproduced.
 *Work required:* treat any error after `AddBlock` as post-commit: never delete the block's files, and retry the unlock.
+*Proof:* confirmed by `TestGapBV056_PostCommitUnlockFailureKeepsCommittedBlocksSubtreeFiles`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-057.** Revert failures are swallowed and `mined_set` is still set.
 *Affects:* BV-COMMIT-011.
 When reverting an invalid block's mined tags, `UpdateTxMinedStatus` logs `SetMinedMulti` errors and coverage gaps and returns success (`model/update-tx-mined.go` ~424-427), and missing subtrees are skipped. The caller then sets `mined_set`, so the block is never revisited and its transactions can keep stale tags. `model/update-tx-mined_test.go` ~1396 pins the swallowing. Verified by reading the code.
 *Work required:* return the error on the revert path, so `mined_set` stays false and the sweep retries.
+*Proof:* confirmed by `TestGapBV057_RevertFailureDoesNotSetMinedSet`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-058.** Flag updates are unconditional and can overwrite an invalidation or revalidation.
 *Affects:* BV-COMMIT-005, BV-COMMIT-011, BV-REVALIDATE-003.
 `SetBlockMinedSet` and `SetBlockSubtreesSet` are plain `UPDATE … WHERE hash = $1` (`stores/blockchain/sql/SetBlockMinedSet.go`, `SetBlockSubtreesSet.go`). A tagging run in flight when the block is invalidated or revalidated sets `mined_set = true` after `InvalidateBlock` or `RevalidateBlock` cleared it. The `BlockMinedUnset` notification for a hash already being processed is skipped and not re-queued, and the sweep no longer lists the block. Result: an invalid block with stale tags, or a revalidated block with no tags, both with `mined_set = true`. Derived from the code; not reproduced.
 *Work required:* make the flag write conditional on the block's state at the start of the run (e.g. compare-and-set on `invalid` and a generation counter), and re-queue a skipped unset.
+*Proof:* confirmed by `TestGapBV058_InFlightTaggingDoesNotOverwriteInvalidation`, which fails today (`make test-bvgaps`).
 
 **GAP-BV-059.** The subtrees sweep is not single-flight.
 *Affects:* BV-COMMIT-008.
