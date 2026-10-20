@@ -1759,6 +1759,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#roll-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Roll Back
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Roll Back">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-roll-back-the-teranode-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Roll Back the Teranode Image
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-roll-back-the-operator-if-you-upgraded-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Roll Back the Operator (if you upgraded it)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-verify-the-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Verify the Rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#other-resources" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2380,7 +2430,7 @@
   <span class="md-ellipsis">
     
   
-    Backup Teranode
+    Back Up and Restore Teranode
   
 
     
@@ -6886,6 +6936,56 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#roll-back" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Roll Back
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Roll Back">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-roll-back-the-teranode-image" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Roll Back the Teranode Image
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-roll-back-the-operator-if-you-upgraded-it" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Roll Back the Operator (if you upgraded it)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-verify-the-rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Verify the Rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#other-resources" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7017,7 +7117,7 @@
 
 
 <h1 id="how-to-update-teranode-with-kubernetes-helm">How to Update Teranode with Kubernetes Helm<a class="headerlink" href="#how-to-update-teranode-with-kubernetes-helm" title="Permanent link">&para;</a></h1>
-<p>Last modified: 20-August-2026</p>
+<p>Last modified: 19-October-2026</p>
 <h2 id="introduction">Introduction<a class="headerlink" href="#introduction" title="Permanent link">&para;</a></h2>
 <p>This guide provides instructions for updating Teranode in a Kubernetes environment using Helm.</p>
 <h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
@@ -7068,14 +7168,58 @@
 <li>Review release notes for breaking changes</li>
 <li>Test updates in a staging environment first</li>
 <li>Monitor system during and after update</li>
-<li>Have a rollback plan prepared</li>
+<li>Have a rollback plan prepared (see <a href="#roll-back">Roll Back</a>)</li>
 <li>Changes to the PostgreSQL <code>init.sql</code> ConfigMap do not apply to an existing
   persistent volume. If you provisioned the cluster before Teranode dropped
   superuser from the <code>teranode</code> PostgreSQL role, apply the one-off <code>ALTER ROLE</code>
   in <a href="../minersSecurityBestPractices/#postgresql-role-privileges">PostgreSQL Role Privileges</a></li>
 </ul>
+<h2 id="roll-back">Roll Back<a class="headerlink" href="#roll-back" title="Permanent link">&para;</a></h2>
+<p>Before you roll back, read the release notes of every version between the
+target version and the current version. Look for data-format, schema or
+migration warnings.</p>
+<p>Teranode applies blockchain store schema changes on startup, and it only
+applies them forward. If a release in that range changes data formats, do not
+only change the image version. Restore the backup that you took before the
+upgrade, as described in <a href="../../minersHowToBackup/">How to Back Up and Restore Teranode Data</a>.</p>
+<h3 id="1-roll-back-the-teranode-image">1. Roll Back the Teranode Image<a class="headerlink" href="#1-roll-back-the-teranode-image" title="Permanent link">&para;</a></h3>
+<p>The Teranode image comes from <code>spec.image</code> in the Cluster CR. Set it to the
+previous release tag:</p>
+<div class="language-yaml highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="nt">spec</span><span class="p">:</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ghcr.io/bsv-blockchain/teranode:&lt;previous-version&gt;</span>
+</span></code></pre></div>
+<p>Load the image if your cluster cannot pull it, then apply the CR:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>minikube<span class="w"> </span>image<span class="w"> </span>load<span class="w"> </span>ghcr.io/bsv-blockchain/teranode:&lt;previous-version&gt;
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>kubernetes/teranode/teranode-cr.yaml<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span></code></pre></div>
+<h3 id="2-roll-back-the-operator-if-you-upgraded-it">2. Roll Back the Operator (if you upgraded it)<a class="headerlink" href="#2-roll-back-the-operator-if-you-upgraded-it" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Find the revision before the upgrade</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>helm<span class="w"> </span><span class="nb">history</span><span class="w"> </span>teranode-operator<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Roll back to that revision</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>helm<span class="w"> </span>rollback<span class="w"> </span>teranode-operator<span class="w"> </span>&lt;revision&gt;<span class="w"> </span>-n<span class="w"> </span>teranode-operator
+</span></code></pre></div>
+<p><code>helm rollback</code> does not roll back the CRDs, because the install applies them
+with <code>kubectl apply</code>. If the new operator version changed the CRDs, apply the
+CRDs of the previous operator version:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>--server-side<span class="w"> </span>-f<span class="w"> </span>https://raw.githubusercontent.com/bsv-blockchain/teranode-operator/&lt;previous-operator-version&gt;/deploy/crds.yaml
+</span></code></pre></div>
+<h3 id="3-verify-the-rollback">3. Verify the Rollback<a class="headerlink" href="#3-verify-the-rollback" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># Check that the pods run the previous image</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{range .items[*]}{.metadata.name}{"\t"}{.spec.containers[*].image}{"\n"}{end}'</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="c1"># Check Teranode services are ready</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>kubectl<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--timeout<span class="o">=</span>300s
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="c1"># Check the FSM state</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-it<span class="w"> </span><span class="k">$(</span>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>blockchain<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.items[0].metadata.name}'</span><span class="k">)</span><span class="w"> </span>-n<span class="w"> </span>teranode-operator<span class="w"> </span>--<span class="w"> </span>teranode-cli<span class="w"> </span>getfsmstate
+</span></code></pre></div>
+<p>Then watch the logs, and check that the node follows the network tip and
+accepts new blocks. If block validation rejects blocks that the network
+accepts, restore the pre-upgrade backup.</p>
 <h2 id="other-resources">Other Resources<a class="headerlink" href="#other-resources" title="Permanent link">&para;</a></h2>
 <ul>
+<li><a href="../../minersHowToBackup/">How to Back Up and Restore Teranode Data</a></li>
 <li><a href="../minersHowToInstallation/">How to Install Teranode</a></li>
 <li><a href="../../../../references/thirdPartySoftwareRequirements/">Third Party Reference Documentation</a></li>
 <li><a href="../minersHowToSyncTheNode/">Teranode Sync Guide</a></li>

@@ -3152,7 +3152,7 @@
   <span class="md-ellipsis">
     
   
-    Backup Teranode
+    Back Up and Restore Teranode
   
 
     
@@ -8594,7 +8594,7 @@
 <th>Use Case</th>
 <th>Advantages</th>
 <th>Disadvantages</th>
-<th>Time Required</th>
+<th>Estimated Time</th>
 </tr>
 </thead>
 <tbody>
@@ -8610,17 +8610,19 @@
 <td>Have existing BSV node</td>
 <td>• Faster than P2P<br>• Proven data source<br>• Reduced bandwidth</td>
 <td>• Requires SV Node setup<br>• Additional export steps</td>
-<td>6.5-12.5 hours<br>(assumes SV node<br>already in sync)</td>
+<td>6.5-12.5 hours<br>(assumes SV node<br>already in sync)<br>+ tail sync</td>
 </tr>
 <tr>
 <td><strong>Teranode Data Seeding</strong></td>
 <td>Have existing Teranode</td>
 <td>• Fastest method<br>• Direct data transfer<br>• Minimal processing</td>
 <td>• Requires access to existing data<br>• Version compatibility needed</td>
-<td>3.25-7.25 hours</td>
+<td>3.25-7.25 hours<br>+ tail sync</td>
 </tr>
 </tbody>
 </table>
+<p>All durations in this guide are estimates. None is a measured result on the <a href="../../systemRequirements/">reference hardware</a>. Actual times depend on hardware, bandwidth, peers and the size of recent mainnet blocks.</p>
+<p>The seeding times stop when the node starts after the import. The node must then do a tail sync: it downloads and validates the blocks mined after the snapshot height. The tail-sync time depends on how many blocks the snapshot is behind the tip. See <a href="#recovery-options">Recovery Options</a> for estimates by number of blocks behind.</p>
 <p><img alt="seedingOptions.svg" src="../../img/mermaid/seedingOptions.svg" /></p>
 <blockquote>
 <p><strong>💡 Recommendation:</strong> For production deployments, we recommend using the Legacy SV Node seeding method when possible, as it provides the best balance of speed and data integrity verification.</p>
@@ -8636,7 +8638,7 @@
 <li>✅ Stable internet connection with adequate bandwidth</li>
 </ul>
 <blockquote>
-<p><strong>⚠️ Important:</strong> This method can take around 14 days depending on your network connection and hardware specifications.</p>
+<p><strong>⚠️ Important:</strong> This method takes days. The estimate is 5-8 days (see <a href="#expected-timeline">Expected Timeline</a>), depending on your network connection and hardware specifications.</p>
 </blockquote>
 <h3 id="process-overview">Process Overview<a class="headerlink" href="#process-overview" title="Permanent link">&para;</a></h3>
 <p><img alt="syncStateFlow.svg" src="../../img/mermaid/syncStateFlow.svg" /></p>
@@ -8682,7 +8684,7 @@ checkpoint is refused and leaves an IDLE node parked.</p>
 <thead>
 <tr>
 <th>Phase</th>
-<th>Duration</th>
+<th>Estimated Duration</th>
 <th>Description</th>
 </tr>
 </thead>
@@ -8965,7 +8967,7 @@ the operator configmap before the first start.</p>
 <thead>
 <tr>
 <th>Phase</th>
-<th>Duration</th>
+<th>Estimated Duration</th>
 <th>Description</th>
 </tr>
 </thead>
@@ -8986,8 +8988,13 @@ the operator configmap before the first start.</p>
 <td>Starting services and verifying sync</td>
 </tr>
 <tr>
+<td><strong>Tail Sync</strong></td>
+<td>See <a href="#recovery-options">Recovery Options</a></td>
+<td>Blocks mined after the snapshot height, up to the current tip</td>
+</tr>
+<tr>
 <td><strong>Total</strong></td>
-<td>6.5-12.5 hours</td>
+<td>6.5-12.5 hours + tail sync</td>
 <td>Complete process</td>
 </tr>
 </tbody>
@@ -9083,7 +9090,7 @@ the operator configmap before the first start.</p>
 <thead>
 <tr>
 <th>Phase</th>
-<th>Duration</th>
+<th>Estimated Duration</th>
 <th>Description</th>
 </tr>
 </thead>
@@ -9104,8 +9111,13 @@ the operator configmap before the first start.</p>
 <td>Starting services and verification</td>
 </tr>
 <tr>
+<td><strong>Tail Sync</strong></td>
+<td>See <a href="#recovery-options">Recovery Options</a></td>
+<td>Blocks mined after the snapshot height, up to the current tip</td>
+</tr>
+<tr>
 <td><strong>Total</strong></td>
-<td>3.25-7.25 hours</td>
+<td>3.25-7.25 hours + tail sync</td>
 <td>Complete process</td>
 </tr>
 </tbody>
@@ -9180,7 +9192,7 @@ the operator configmap before the first start.</p>
 <tr>
 <th>Blocks Behind</th>
 <th>Recommended Action</th>
-<th>Expected Time</th>
+<th>Estimated Time</th>
 </tr>
 </thead>
 <tbody>

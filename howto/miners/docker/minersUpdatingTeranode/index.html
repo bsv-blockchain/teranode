@@ -2341,7 +2341,7 @@
   <span class="md-ellipsis">
     
   
-    Backup Teranode
+    Back Up and Restore Teranode
   
 
     
@@ -6939,7 +6939,7 @@
 
 
 <h1 id="update-docker-teranode">Update Docker Teranode<a class="headerlink" href="#update-docker-teranode" title="Permanent link">&para;</a></h1>
-<p>Last modified: 11-August-2026</p>
+<p>Last modified: 19-October-2026</p>
 <p>Docker updates are managed from the
 <a href="https://github.com/bsv-blockchain/teranode-quickstart">teranode-quickstart</a>
 repository. Quickstart keeps the local Teranode image tag in <code>.env</code> as
@@ -6967,7 +6967,10 @@ change pulls the selected image and recreates containers whose image tag changed
 </span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>./start.sh
 </span></code></pre></div>
 <p>Use this for rollback only after checking the release notes for data-format or
-migration warnings.</p>
+migration warnings. Teranode applies blockchain store schema changes on startup,
+and it only applies them forward. To roll back across a release that changes
+data formats, restore the backup that you took before the upgrade. See
+<a href="../../minersHowToBackup/">How to Back Up and Restore Teranode Data</a>.</p>
 <h2 id="update-quickstart-itself">Update Quickstart Itself<a class="headerlink" href="#update-quickstart-itself" title="Permanent link">&para;</a></h2>
 <p><code>./update.sh</code> updates the Teranode version pin, not the quickstart repository.
 To update quickstart scripts and Compose files:</p>
