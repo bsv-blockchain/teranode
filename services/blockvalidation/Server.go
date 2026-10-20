@@ -62,6 +62,21 @@ const (
 	SourceTypeRetry   = "retry"
 	SourceTypeCatchup = "catchup"
 
+	// blockFetchRetryDelay is how long a block waits before it is requeued after a fetch failure.
+	blockFetchRetryDelay = 5 * time.Second
+
+	// blockDeadlineRetryDelay is how long a block waits before it is requeued after its
+	// validation hit a deadline. Longer than the fetch delay: the subtree validation the
+	// deadline cut off is still running server side and cannot be cancelled.
+	blockDeadlineRetryDelay = time.Minute
+
+	// blockRetryAttemptsTTL bounds how long a block's requeue count is kept. It must outlive
+	// MaxRetries attempts that each run into CheckBlockSubtreesTimeout (30 min by default).
+	blockRetryAttemptsTTL = 24 * time.Hour
+
+	// blockRetryAttemptsCapacity bounds the requeue counter cache.
+	blockRetryAttemptsCapacity = 10_000
+
 	// maxCatchupAlternatives bounds how many alternative sources are retained
 	// per block hash in catchupAlternatives. Each element holds a full
 	// deserialized block for up to the cache TTL, and failover only ever walks
@@ -88,6 +103,15 @@ type processBlockFound struct {
 	// errCh receives any errors encountered during block validation and allows
 	// synchronous waiting for validation completion
 	errCh chan error
+
+	// priority and height are the block's class and height in the priority queue, set when
+	// a worker takes it off the queue, so a retry goes back where it was.
+	priority BlockPriority
+	height   uint32
+
+	// parentHash is the block's parent, set when the block is queued. The queue holds the
+	// block back while its parent is still queued or processing.
+	parentHash *chainhash.Hash
 }
 
 // processBlockCatchup contains information needed to process a block during chain catchup
@@ -194,6 +218,11 @@ type Server struct {
 	// pinning a worker and the catchup lock. TTL window only (no touch-on-hit) so the
 	// block can be retried again later if better peers appear.
 	blockCatchupAttempts *ttlcache.Cache[chainhash.Hash, int]
+
+	// blockRetryAttempts counts worker requeues per block hash after a failure that is not
+	// a verdict (fetch error, deadline). Capped by BlockValidation.MaxRetries and cleared
+	// when the block is processed.
+	blockRetryAttempts *ttlcache.Cache[chainhash.Hash, int]
 
 	// peerMaliciousCache is a short-lived cache of IsPeerMalicious verdicts.
 	// Every gossip-driven Kafka message costs two of these checks and each is
@@ -469,6 +498,7 @@ func New(
 			// the TTL. Same reasoning as processBlockNotify above.
 			ttlcache.WithDisableTouchOnHit[chainhash.Hash, []processBlockCatchup](),
 		),
+		blockRetryAttempts: newBlockRetryAttemptsCache(),
 		blockCatchupAttempts: ttlcache.New[chainhash.Hash, int](
 			ttlcache.WithTTL[chainhash.Hash, int](10*time.Minute),
 			// Do not extend the window on reads: the cooldown runs a fixed time from
@@ -796,6 +826,10 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		go u.blockCatchupAttempts.Start()
 	}
 
+	if u.blockRetryAttempts != nil {
+		go u.blockRetryAttempts.Start()
+	}
+
 	if u.peerMaliciousCache != nil {
 		go u.peerMaliciousCache.Start()
 	}
@@ -1111,8 +1145,11 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 			return err
 		}
 
+		// A parent still being validated is not a gap: queue the block behind it.
+		parentInFlight := !parentExists && u.isBlockInFlight(block.Header.HashPrevBlock)
+
 		// If parent doesn't exist, always use catchup
-		if !parentExists {
+		if !parentExists && !parentInFlight {
 			if u.isPeerMalicious(ctx, blockFound.peerID) {
 				u.logger.Warnf("[processBlockFoundChannel][%s] peer %s is malicious, skipping catchup for block with missing parent", blockFound.hash.String(), blockFound.peerID)
 
@@ -1145,14 +1182,15 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 			return nil
 		}
 
-		// Parent exists, classify the block
+		// Parent exists or is in flight, classify the block
 		priority, err := u.blockClassifier.ClassifyBlock(ctx, block)
 		if err != nil {
 			u.logger.Warnf("[processBlockFoundChannel] Failed to classify block %s: %v", blockFound.hash.String(), err)
 			// Continue with normal processing if classification fails
-		} else if priority == PriorityChainExtending {
-			// Chain-extending blocks should NOT go to catchup, process normally
-			u.logger.Debugf("[processBlockFoundChannel] Block %s is chain-extending (queue depth %d), processing normally",
+		} else if priority == PriorityChainExtending || parentInFlight {
+			// Chain-extending blocks, and blocks whose parent is still being validated,
+			// should NOT go to catchup, process normally
+			u.logger.Debugf("[processBlockFoundChannel] Block %s is chain-extending or its parent is in flight (queue depth %d), processing normally",
 				blockFound.hash.String(), queueSize)
 		} else {
 			// Non-chain-extending blocks can go to catchup when behind
@@ -1299,6 +1337,9 @@ func (u *Server) Stop(ctx context.Context) error {
 		u.catchupAlternatives.Stop()
 		if u.blockCatchupAttempts != nil {
 			u.blockCatchupAttempts.Stop()
+		}
+		if u.blockRetryAttempts != nil {
+			u.blockRetryAttempts.Stop()
 		}
 		if u.peerMaliciousCache != nil {
 			u.peerMaliciousCache.Stop()
@@ -2154,11 +2195,8 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 		default:
 			blockFound, status := u.blockPriorityQueue.WaitForBlock(ctx, u.forkManager)
 
+			// The block's processing slot is already claimed by Get.
 			if status != GetOK {
-				continue
-			}
-
-			if !u.forkManager.StartProcessingBlock(blockFound.hash) {
 				continue
 			}
 
@@ -2166,79 +2204,146 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 
 			err := u.processBlockWithPriority(ctx, blockFound)
 
-			u.forkManager.FinishProcessingBlock(blockFound.hash)
-
-			if err != nil {
-				u.logger.Errorf("[BlockProcessing] Worker %d failed to process block %s: %v", workerID, blockFound.hash.String(), err)
-
-				// Note: Failures are not reported here as these are normal block processing failures
-				// Catchup failures are reported by the catchup() function
-
-				// Update processed metric with failure
-				if prometheusBlockPriorityQueueProcessed != nil {
-					// We don't have the priority here, so we'll use "unknown"
-					prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "failure").Inc()
-				}
-
-				// IsBlockCorrupt is tested BEFORE the network/malicious pair (bitcoin-sv/teranode#4692):
-				// IsMaliciousResponseError substring-matches the word "corrupt" in the rendered error
-				// text, so an ERR_BLOCK_CORRUPT error would otherwise always match the malicious branch
-				// and this dedicated corrupt-recovery branch would be dead code.
-				if errors.IsBlockCorrupt(err) {
-					// RUNNING corrupt body (bitcoin-sv/teranode#4692): the serving peer was already struck
-					// inside ValidateBlockWithOptions and nothing was persisted — no invalid=true,
-					// SetBlockExists never set, block never AddBlock'd. Clear the in-flight dedup
-					// marker so the same hash re-announced by an honest peer re-enters validation
-					// instead of being dropped as already-in-progress. Recovery is the natural
-					// re-announcement (many peers hold the honest block in RUNNING); the
-					// already-exists-as-invalid short-circuit never fires because we did not poison.
-					// If the corrupt peer was the sole announcer, no honest peer holds the hash and
-					// it correctly never connects.
-					u.logger.Warnf("[BlockProcessing] Block %s had a corrupt body, cleared for re-download from another peer", blockFound.hash.String())
-					u.processBlockNotify.Delete(*blockFound.hash)
-					// The per-(hash, peerID) corrupt cap (bitcoin-sv/teranode#4692) is accounted inside
-					// processBlockFound (accountCorruptAttempt), which both this worker route and the
-					// direct ProcessBlock route funnel through — so it is counted there exactly once,
-					// not here (which would double-count the worker route and miss the direct route).
-				} else if errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err) {
-					// If the error indicates the block couldn't be fetched (network error, malicious node, etc),
-					// we should retry the block later rather than dropping it completely
-					// TODO: We might want to limit the number of retries per block to avoid infinite loops
-					// For now, we'll just re-queue it with deepFork priority to ensure it gets retried eventually
-					// Note: This could lead to blocks being retried indefinitely if they are always failing to fetch
-					// A more robust solution would involve tracking retry counts and eventually giving up after a threshold
-					u.logger.Warnf("[BlockProcessing] Block %s fetch failed, will retry later", blockFound.hash.String())
-					// Re-add the block to the queue for retry
-					// We need to get the block metadata (height and priority) for re-queuing
-					// For now, we'll use deepFork priority as a safe default for retries
-					go func() {
-						// Add a small delay to avoid tight loops
-						time.Sleep(5 * time.Second)
-						// Create a new blockFound without specific peer info so any peer can provide it
-						retryBlock := processBlockFound{
-							hash:    blockFound.hash,
-							baseURL: SourceTypeRetry, // Special marker for retry attempts
-							peerID:  "",              // Clear peer ID so any peer can be used
-							errCh:   nil,             // No error channel for async retry
-						}
-						u.blockPriorityQueue.RequeueForRetry(retryBlock, PriorityDeepFork, 0)
-						u.logger.Infof("[BlockProcessing] Re-queued block %s for retry from any available peer", blockFound.hash.String())
-					}()
-				}
-			} else {
-				// Update processed metric with success
-				if prometheusBlockPriorityQueueProcessed != nil {
-					prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "success").Inc()
-				}
-
-				// The per-(hash, peerID) corrupt counter (bitcoin-sv/teranode#4692) is cleared on a
-				// genuine validation success inside processBlockFound (accountCorruptAttempt). It is NOT
-				// cleared here: a worker "success" also covers the exists / catchup / cap-exhausted
-				// early returns (which return nil), and clearing on a cap-exhausted skip would reset
-				// the very cooldown the cap just enforced.
-			}
+			u.finishProcessedBlock(workerID, blockFound, err)
 		}
 	}
+}
+
+// finishProcessedBlock handles the outcome of a worker's block and releases its slot.
+func (u *Server) finishProcessedBlock(workerID int, blockFound processBlockFound, err error) {
+	// The slot is released last. A block being retried must already be back on the queue
+	// when the release wakes a worker: in between it is neither queued nor processing, and a
+	// child waiting behind it would be taken and sent to catchup.
+	defer u.forkManager.FinishProcessingBlock(blockFound.hash)
+
+	if err != nil {
+		u.logger.Errorf("[BlockProcessing] Worker %d failed to process block %s: %v", workerID, blockFound.hash.String(), err)
+
+		// Note: Failures are not reported here as these are normal block processing failures
+		// Catchup failures are reported by the catchup() function
+
+		// Update processed metric with failure
+		if prometheusBlockPriorityQueueProcessed != nil {
+			// We don't have the priority here, so we'll use "unknown"
+			prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "failure").Inc()
+		}
+
+		// IsBlockCorrupt is tested BEFORE the network/malicious pair (bitcoin-sv/teranode#4692):
+		// IsMaliciousResponseError substring-matches the word "corrupt" in the rendered error
+		// text, so an ERR_BLOCK_CORRUPT error would otherwise always match the malicious branch
+		// and this dedicated corrupt-recovery branch would be dead code.
+		if errors.IsBlockCorrupt(err) {
+			// RUNNING corrupt body (bitcoin-sv/teranode#4692): the serving peer was already struck
+			// inside ValidateBlockWithOptions and nothing was persisted — no invalid=true,
+			// SetBlockExists never set, block never AddBlock'd. Clear the in-flight dedup
+			// marker so the same hash re-announced by an honest peer re-enters validation
+			// instead of being dropped as already-in-progress. Recovery is the natural
+			// re-announcement (many peers hold the honest block in RUNNING); the
+			// already-exists-as-invalid short-circuit never fires because we did not poison.
+			// If the corrupt peer was the sole announcer, no honest peer holds the hash and
+			// it correctly never connects.
+			u.logger.Warnf("[BlockProcessing] Block %s had a corrupt body, cleared for re-download from another peer", blockFound.hash.String())
+			u.processBlockNotify.Delete(*blockFound.hash)
+			// The per-(hash, peerID) corrupt cap (bitcoin-sv/teranode#4692) is accounted inside
+			// processBlockFound (accountCorruptAttempt), which both this worker route and the
+			// direct ProcessBlock route funnel through — so it is counted there exactly once,
+			// not here (which would double-count the worker route and miss the direct route).
+		} else if delay, retry := u.blockRetryDelay(blockFound.hash, err); retry {
+			u.logger.Warnf("[BlockProcessing] Block %s failed without a verdict, requeueing in %s", blockFound.hash.String(), delay)
+			u.requeueBlock(blockFound, delay)
+		}
+	} else {
+		// Update processed metric with success
+		if prometheusBlockPriorityQueueProcessed != nil {
+			prometheusBlockPriorityQueueProcessed.WithLabelValues("unknown", "success").Inc()
+		}
+
+		u.clearBlockRetryAttempts(blockFound.hash)
+
+		// The per-(hash, peerID) corrupt counter (bitcoin-sv/teranode#4692) is cleared on a
+		// genuine validation success inside processBlockFound (accountCorruptAttempt). It is NOT
+		// cleared here: a worker "success" also covers the exists / catchup / cap-exhausted
+		// early returns (which return nil), and clearing on a cap-exhausted skip would reset
+		// the very cooldown the cap just enforced.
+	}
+}
+
+func newBlockRetryAttemptsCache() *ttlcache.Cache[chainhash.Hash, int] {
+	return ttlcache.New[chainhash.Hash, int](
+		ttlcache.WithTTL[chainhash.Hash, int](blockRetryAttemptsTTL),
+		ttlcache.WithCapacity[chainhash.Hash, int](blockRetryAttemptsCapacity),
+		ttlcache.WithDisableTouchOnHit[chainhash.Hash, int](),
+	)
+}
+
+// blockRetryDelay reports whether a block that failed with err goes back on the queue, and
+// after how long. Only failures that are not a verdict on the block are retried: a fetch
+// failure, and a deadline (the subtree check running past CheckBlockSubtreesTimeout). Each
+// block gets at most BlockValidation.MaxRetries requeues.
+func (u *Server) blockRetryDelay(hash *chainhash.Hash, err error) (time.Duration, bool) {
+	var delay time.Duration
+
+	// The deadline is checked first: IsNetworkError matches substrings such as "timeout"
+	// and "http", which a deadline error's message can contain.
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		delay = blockDeadlineRetryDelay
+	case errors.IsNetworkError(err) || errors.IsMaliciousResponseError(err):
+		delay = blockFetchRetryDelay
+	default:
+		return 0, false
+	}
+
+	if u.blockRetryAttempts == nil {
+		return 0, false
+	}
+
+	attempts := 1
+	if item := u.blockRetryAttempts.Get(*hash); item != nil {
+		attempts = item.Value() + 1
+	}
+
+	if attempts > u.settings.BlockValidation.MaxRetries {
+		u.logger.Warnf("[BlockProcessing] Block %s reached %d retries, not requeueing", hash.String(), u.settings.BlockValidation.MaxRetries)
+		return 0, false
+	}
+
+	u.blockRetryAttempts.Set(*hash, attempts, ttlcache.DefaultTTL)
+
+	return delay, true
+}
+
+func (u *Server) clearBlockRetryAttempts(hash *chainhash.Hash) {
+	if u.blockRetryAttempts != nil {
+		u.blockRetryAttempts.Delete(*hash)
+	}
+}
+
+// requeueBlock puts a failed block back on the queue with the peer that announced it and the
+// class and height it had, held back for delay. Nobody waits on the retry, so the error
+// channel is dropped.
+func (u *Server) requeueBlock(blockFound processBlockFound, delay time.Duration) {
+	blockFound.errCh = nil
+	u.blockPriorityQueue.RequeueAfter(blockFound, blockFound.priority, blockFound.height, delay)
+	u.logger.Infof("[BlockProcessing] Re-queued block %s for retry from %s in %s", blockFound.hash.String(), blockFound.baseURL, delay)
+}
+
+// isBlockInFlight reports whether a block is queued or being validated by a worker. A child
+// whose parent is in flight waits in the queue for it instead of going to catchup, which
+// would move the FSM to CATCHINGBLOCKS and stop mining while the parent is still validating.
+func (u *Server) isBlockInFlight(hash *chainhash.Hash) bool {
+	return u.blockPriorityQueue.Contains(*hash) || u.forkManager.IsProcessingBlock(hash)
+}
+
+// inFlightPriority returns the class of a queued or processing block, so a child queued
+// behind it gets the same class: a child of a chain-extending block extends the chain once
+// its parent is stored. ok is false if the parent finished in the meantime.
+func (u *Server) inFlightPriority(hash *chainhash.Hash) (BlockPriority, bool) {
+	if priority, ok := u.blockPriorityQueue.PriorityOf(hash); ok {
+		return priority, true
+	}
+
+	return u.forkManager.ProcessingPriority(hash)
 }
 
 // logCatchupFSMRefusal selects severity only; the caller uses typed StateError
@@ -2965,7 +3070,9 @@ func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockF
 		return
 	}
 
-	if !parentExists {
+	parentInFlight := !parentExists && u.isBlockInFlight(block.Header.HashPrevBlock)
+
+	if !parentExists && !parentInFlight {
 		u.logger.Infof("[queueFetchedBlock] Parent block %s doesn't exist for block %s, sending to catchup", block.Header.HashPrevBlock.String(), blockFound.hash.String())
 
 		// #1057: bound catchup retries. If this block has exhausted its per-block
@@ -3044,11 +3151,25 @@ func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockF
 		return
 	}
 
-	// Classify the block
-	priority, err := u.blockClassifier.ClassifyBlock(ctx, block)
-	if err != nil {
-		u.logger.Warnf("[queueFetchedBlock] Failed to classify block %s, using deep fork priority: %v", blockFound.hash.String(), err)
-		priority = PriorityDeepFork
+	blockFound.parentHash = block.Header.HashPrevBlock
+
+	var priority BlockPriority
+
+	inherited := false
+
+	if parentInFlight {
+		priority, inherited = u.inFlightPriority(block.Header.HashPrevBlock)
+		u.logger.Infof("[queueFetchedBlock] Parent block %s of block %s is still being validated, queueing behind it", block.Header.HashPrevBlock.String(), blockFound.hash.String())
+	}
+
+	// A parent that finished since the in-flight check has nothing to inherit from: classify.
+	if !inherited {
+		// Classify the block
+		priority, err = u.blockClassifier.ClassifyBlock(ctx, block)
+		if err != nil {
+			u.logger.Warnf("[queueFetchedBlock] Failed to classify block %s, using deep fork priority: %v", blockFound.hash.String(), err)
+			priority = PriorityDeepFork
+		}
 	}
 
 	// Add block to appropriate fork if it's not chain-extending

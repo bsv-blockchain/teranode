@@ -288,6 +288,24 @@ func TestClient_CheckBlockSubtrees_GRPCError(t *testing.T) {
 	mockAPIClient.AssertExpectations(t)
 }
 
+// TestClient_CheckBlockSubtrees_DeadlineExceeded pins that a timed-out call still matches
+// context.DeadlineExceeded. UnwrapGRPC turns it into a plain ERR_ERROR, and only the message
+// text carries it; the block validation worker relies on that to requeue the block.
+func TestClient_CheckBlockSubtrees_DeadlineExceeded(t *testing.T) {
+	ctx := context.Background()
+	client := createTestClient()
+	mockAPIClient := client.apiClient.(*MockSubtreeValidationAPIClient)
+
+	grpcErr := status.Error(codes.DeadlineExceeded, "context deadline exceeded")
+	mockAPIClient.On("CheckBlockSubtrees", ctx, mock.Anything, mock.Anything).Return(nil, grpcErr)
+
+	err := client.CheckBlockSubtrees(ctx, createTestBlock(), "", "http://example.com")
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	mockAPIClient.AssertExpectations(t)
+}
+
 // Helper function to create a test block
 func createTestBlock() *model.Block {
 	// Create valid chainhash.Hash objects

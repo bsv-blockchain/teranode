@@ -18,7 +18,7 @@ loader (0, false and false), so for these keys the two agree. The
 
 | Setting | Type | Default | Environment Variable | Usage |
 |---------|------|---------|---------------------|-------|
-| MaxRetries | int | 3 | blockValidationMaxRetries | General retry behavior |
+| MaxRetries | int | 3 | blockValidationMaxRetries | Requeues per block after a fetch failure or deadline |
 | RetrySleep | time.Duration | 1s | blockValidationRetrySleep | Retry delay timing |
 | GRPCAddress | string | "localhost:8088" | blockvalidation_grpcAddress | Client connection address |
 | GRPCListenAddress | string | ":8088" | blockvalidation_grpcListenAddress | **CRITICAL** - gRPC server binding (service skipped if empty) |

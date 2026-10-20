@@ -71,6 +71,7 @@ func (g *BlockProcessingGuard) Release() {
 		// This prevents double-decrement if CleanupFork already removed it
 		if g.fm.processingBlocks[*g.blockHash] {
 			delete(g.fm.processingBlocks, *g.blockHash)
+			delete(g.fm.processingPriority, *g.blockHash)
 			g.fm.processingCount.Add(-1) // Decrement only if we removed it
 		}
 
@@ -140,6 +141,7 @@ type ForkManager struct {
 	forks               map[string]*ForkBranch
 	blockToFork         map[chainhash.Hash]string
 	processingBlocks    map[chainhash.Hash]bool
+	processingPriority  map[chainhash.Hash]BlockPriority // class each processing block was queued with
 	mu                  sync.RWMutex
 	maxParallelForks    int
 	maxTrackedForks     int
@@ -174,6 +176,7 @@ func NewForkManagerWithConfig(logger ulogger.Logger, tSettings *settings.Setting
 		forks:               make(map[string]*ForkBranch),
 		blockToFork:         make(map[chainhash.Hash]string),
 		processingBlocks:    make(map[chainhash.Hash]bool),
+		processingPriority:  make(map[chainhash.Hash]BlockPriority),
 		maxParallelForks:    maxParallelForks,
 		maxTrackedForks:     maxTrackedForks,
 		cleanupConfig:       cleanupConfig,
@@ -253,7 +256,29 @@ func (fm *ForkManager) GetForkForBlock(blockHash *chainhash.Hash) (string, bool)
 	return forkID, exists
 }
 
-func (fm *ForkManager) CanProcessBlock(ctx context.Context, blockHash *chainhash.Hash) (bool, error) {
+// tipSlotReserved reports whether a block of the given class is kept out of the last free
+// slot. Blocks that do not extend the tip may hold at most maxParallelForks-1 slots, so slow
+// fork blocks can never occupy every worker while a chain-extending block waits. The class
+// is the one recorded at enqueue: a fork block that becomes the tip after a reorg does not
+// get the reserved slot, and two competing blocks at the tip height are both chain-extending.
+// Caller holds fm.mu.
+func (fm *ForkManager) tipSlotReserved(priority BlockPriority) bool {
+	if priority == PriorityChainExtending || fm.maxParallelForks <= 1 {
+		return false
+	}
+
+	nonTip := 0
+
+	for _, p := range fm.processingPriority {
+		if p != PriorityChainExtending {
+			nonTip++
+		}
+	}
+
+	return nonTip >= fm.maxParallelForks-1
+}
+
+func (fm *ForkManager) CanProcessBlock(ctx context.Context, blockHash *chainhash.Hash, priority BlockPriority) (bool, error) {
 	// Fast-path: Check if we've reached max parallel forks without acquiring any locks
 	if int(fm.processingCount.Load()) >= fm.maxParallelForks {
 		return false, nil
@@ -267,6 +292,10 @@ func (fm *ForkManager) CanProcessBlock(ctx context.Context, blockHash *chainhash
 	}
 
 	if len(fm.processingBlocks) >= fm.maxParallelForks {
+		return false, nil
+	}
+
+	if fm.tipSlotReserved(priority) {
 		return false, nil
 	}
 
@@ -327,7 +356,7 @@ func (fm *ForkManager) MarkBlockProcessing(blockHash *chainhash.Hash) (*BlockPro
 }
 
 // StartProcessingBlock marks a block as being processed
-func (fm *ForkManager) StartProcessingBlock(blockHash *chainhash.Hash) bool {
+func (fm *ForkManager) StartProcessingBlock(blockHash *chainhash.Hash, priority BlockPriority) bool {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 
@@ -339,7 +368,12 @@ func (fm *ForkManager) StartProcessingBlock(blockHash *chainhash.Hash) bool {
 		return false
 	}
 
+	if fm.tipSlotReserved(priority) {
+		return false
+	}
+
 	fm.processingBlocks[*blockHash] = true
+	fm.processingPriority[*blockHash] = priority
 	fm.processingCount.Add(1) // Increment atomic counter
 
 	if forkID, exists := fm.blockToFork[*blockHash]; exists {
@@ -361,6 +395,7 @@ func (fm *ForkManager) FinishProcessingBlock(blockHash *chainhash.Hash) {
 
 	if fm.processingBlocks[*blockHash] {
 		delete(fm.processingBlocks, *blockHash)
+		delete(fm.processingPriority, *blockHash)
 		fm.processingCount.Add(-1) // Decrement atomic counter
 	}
 
@@ -384,6 +419,24 @@ func (fm *ForkManager) FinishProcessingBlock(blockHash *chainhash.Hash) {
 	}
 
 	fm.logger.Debugf("Finished processing block %s", blockHash)
+}
+
+// IsProcessingBlock reports whether a worker is currently validating the block.
+func (fm *ForkManager) IsProcessingBlock(blockHash *chainhash.Hash) bool {
+	fm.mu.RLock()
+	defer fm.mu.RUnlock()
+
+	return fm.processingBlocks[*blockHash]
+}
+
+// ProcessingPriority returns the class a block being validated was queued with.
+func (fm *ForkManager) ProcessingPriority(blockHash *chainhash.Hash) (BlockPriority, bool) {
+	fm.mu.RLock()
+	defer fm.mu.RUnlock()
+
+	priority, ok := fm.processingPriority[*blockHash]
+
+	return priority, ok
 }
 
 // GetParallelProcessingCount returns the number of blocks currently being processed
@@ -416,6 +469,7 @@ func (fm *ForkManager) CleanupFork(forkID string) {
 		delete(fm.blockToFork, *blockHash)
 		if fm.processingBlocks[*blockHash] {
 			delete(fm.processingBlocks, *blockHash)
+			delete(fm.processingPriority, *blockHash)
 			fm.processingCount.Add(-1) // Decrement counter to prevent drift
 		}
 	}
@@ -469,6 +523,7 @@ func (fm *ForkManager) CleanupOldForks(heightThreshold uint32) {
 			delete(fm.blockToFork, *blockHash)
 			if fm.processingBlocks[*blockHash] {
 				delete(fm.processingBlocks, *blockHash)
+				delete(fm.processingPriority, *blockHash)
 				fm.processingCount.Add(-1) // Decrement counter to prevent drift
 			}
 		}
@@ -699,6 +754,7 @@ func (fm *ForkManager) removeFork(fork *ForkBranch) {
 			// Also check if this block was being processed and decrement counter
 			if fm.processingBlocks[blockHash] {
 				delete(fm.processingBlocks, blockHash)
+				delete(fm.processingPriority, blockHash)
 				fm.processingCount.Add(-1) // Decrement counter to prevent drift
 			}
 		}

@@ -16,9 +16,17 @@ import (
 // mockBlockProcessor is a test implementation that always allows block processing
 type mockBlockProcessor struct{}
 
-func (m *mockBlockProcessor) CanProcessBlock(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (m *mockBlockProcessor) CanProcessBlock(ctx context.Context, hash *chainhash.Hash, _ BlockPriority) (bool, error) {
 	return true, nil
 }
+
+func (m *mockBlockProcessor) StartProcessingBlock(hash *chainhash.Hash, _ BlockPriority) bool {
+	return true
+}
+
+func (m *mockBlockProcessor) IsProcessingBlock(hash *chainhash.Hash) bool { return false }
+
+func (m *mockBlockProcessor) FinishProcessingBlock(hash *chainhash.Hash) {}
 
 func TestBlockPriorityQueue(t *testing.T) {
 	t.Run("Priority ordering", func(t *testing.T) {
@@ -329,20 +337,20 @@ func TestForkManager(t *testing.T) {
 		hash2, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
 
 		// Should be able to process first block
-		canProcess, err := fm.CanProcessBlock(ctx, hash1)
+		canProcess, err := fm.CanProcessBlock(ctx, hash1, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash1))
+		assert.True(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
 
 		// Should be able to process second block (different fork)
-		canProcess, err = fm.CanProcessBlock(ctx, hash2)
+		canProcess, err = fm.CanProcessBlock(ctx, hash2, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash2))
+		assert.True(t, fm.StartProcessingBlock(hash2, PriorityChainExtending))
 
 		// Should not be able to process third block (max parallel reached)
 		hash3, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000003")
-		canProcess, err = fm.CanProcessBlock(ctx, hash3)
+		canProcess, err = fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.False(t, canProcess)
 
@@ -353,7 +361,7 @@ func TestForkManager(t *testing.T) {
 		assert.Equal(t, 1, fm.GetParallelProcessingCount())
 
 		// Now should be able to process third block
-		canProcess, err = fm.CanProcessBlock(ctx, hash3)
+		canProcess, err = fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
 	})
