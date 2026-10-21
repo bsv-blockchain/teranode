@@ -2659,9 +2659,10 @@ func getParentTxMetaBlockIDs(gCtx context.Context, txMetaStore utxo.Store, paren
 
 // checkParentFreezeRecords rejects the block when any output it spends of this parent
 // carries an alert-system freeze record whose consensus window covers the block's
-// height. It is a verdict every node derives identically from the chain — the record is
-// a property of the outpoint, recorded whether or not the coin was already spent when
-// the alert arrived — which is what makes it safe to persist the block as invalid.
+// height. The record is a property of the outpoint, recorded whether or not the coin was
+// already spent when the alert arrived, so every node holding the alert reaches the same
+// verdict. A node that does not hold it yet accepts the block, so block validation
+// rejects on this verdict without persisting it (issue #1422).
 func checkParentFreezeRecords(parentTxMeta *meta.Data, parentTxStruct missingParentTx, blockHeight uint32) error {
 	if len(parentTxMeta.FreezeRecords) == 0 {
 		return nil

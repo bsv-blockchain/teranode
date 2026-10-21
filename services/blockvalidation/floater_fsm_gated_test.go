@@ -47,6 +47,24 @@ import (
 func buildFloaterBlock(t *testing.T, utxoStore utxostore.Store, subtreeStore blob.Store) (*model.Block, *bt.Tx) {
 	t.Helper()
 
+	return buildBlockSpendingParent(t, utxoStore, subtreeStore, 7, func(ctx context.Context) {
+		// The FLOATER PARENT: in the UTXO store, but created WITHOUT mined-block
+		// info so its BlockIDs stay empty. It is deliberately NOT added to the block.
+		_, _, err := utxoStore.SpendAndCreate(ctx, parentTx, 0, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		parentMeta, err := utxoStore.Get(ctx, parentTx.TxIDChainHash())
+		require.NoError(t, err)
+		require.Empty(t, parentMeta.BlockIDs, "fixture invariant: floater parent must have no recorded block IDs")
+	})
+}
+
+// buildBlockSpendingParent is buildFloaterBlock with the parent stored by seedParent, and
+// a child that spends output vout of parentTx.
+func buildBlockSpendingParent(t *testing.T, utxoStore utxostore.Store, subtreeStore blob.Store, vout uint32,
+	seedParent func(ctx context.Context)) (*model.Block, *bt.Tx) {
+	t.Helper()
+
 	ctx := context.Background()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -64,19 +82,12 @@ func buildFloaterBlock(t *testing.T, utxoStore utxostore.Store, subtreeStore blo
 	_, _, err = utxoStore.SpendAndCreate(ctx, coinbaseTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 
-	// The FLOATER PARENT: in the UTXO store, but created WITHOUT mined-block
-	// info so its BlockIDs stay empty. It is deliberately NOT added to the block.
-	_, _, err = utxoStore.SpendAndCreate(ctx, parentTx, 0, utxostore.WithCreateOnly())
-	require.NoError(t, err)
-
-	parentMeta, err := utxoStore.Get(ctx, parentTx.TxIDChainHash())
-	require.NoError(t, err)
-	require.Empty(t, parentMeta.BlockIDs, "fixture invariant: floater parent must have no recorded block IDs")
+	seedParent(ctx)
 
 	// Child spends the external floater parent. newTx(seed, parentHash) wires a
 	// single input referencing parentTx, so getParentTxMetaBlockIDs resolves to
 	// the unconfirmed parent rather than to an in-block tx via b.txMap.
-	childTx := newTx(7, parentTx.TxIDChainHash())
+	childTx := newTx(vout, parentTx.TxIDChainHash())
 	_, _, err = utxoStore.SpendAndCreate(ctx, childTx, 0, utxostore.WithCreateOnly())
 	require.NoError(t, err)
 

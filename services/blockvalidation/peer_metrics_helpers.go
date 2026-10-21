@@ -465,8 +465,14 @@ func isUnboundTxInvalidVerdict(err error) bool {
 // purpose as the rotation signal: the peer advertises its own DataHubURL, so a peer
 // answering 429 deliberately must not be able to dodge every charge. The announced-block
 // fetch has its own, bounded rule; see reportAnnouncedBlockFetchFailure.
+//
+// ErrUtxoConsensusFrozen is local here as well. Whether a block spends inside an alert
+// system freeze window is decided by the freeze records this node holds, and those
+// depend on when the alert reached it, so the verdict says nothing about the peer that
+// served the block (issue #1422).
 func isLocalCatchupFault(err error) bool {
 	return errors.IsTransientLocalError(err) ||
+		errors.Is(err, errors.ErrUtxoConsensusFrozen) ||
 		errors.Is(err, errors.ErrServiceRateLimited) ||
 		errors.IsContextError(err) ||
 		errors.Is(err, errors.ErrContextCanceled)

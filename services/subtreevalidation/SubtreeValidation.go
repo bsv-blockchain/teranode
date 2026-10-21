@@ -535,10 +535,12 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 	}
 
 	// A consensus-frozen spend is a verdict about the block, not a transient local
-	// condition, and the distinction is load-bearing: block validation persists a block
-	// as invalid on ErrTxInvalid and treats ErrProcessing as infrastructure trouble to
-	// retry, so leaving it as processing makes the rejecting node re-fetch and
-	// re-validate the same block forever instead of failing it once (issue #1422).
+	// condition, and the distinction is load-bearing: block validation rejects a block on
+	// ErrTxInvalid and treats ErrProcessing as infrastructure trouble to retry, so leaving
+	// it as processing makes the rejecting node re-fetch and re-validate the same block in
+	// a loop instead of rejecting it (issue #1422). Block validation does not persist a
+	// freeze verdict or strike the peer for it: the freeze records it rests on depend on
+	// when the alert reached this node.
 	//
 	// Two guards, both required. The error code: only ErrUtxoConsensusFrozen is
 	// height-anchored — ErrFrozen also covers the policy tier and the reassignment
@@ -622,9 +624,9 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 			//
 			// Deliberately NOT NewTxInvalidError, unlike the frozen spend in
 			// blessMissingTransaction. That one is height-anchored — it can only come from
-			// a freeze whose enforceAtHeight window covers this block — so every node
-			// reaches it identically and it is safe to persist the block as invalid. This
-			// sentinel is not: it is the 0xFF spending-data marker, written the moment the
+			// a freeze whose enforceAtHeight window covers this block — so it is a rejection
+			// of the block (never persisted, see blessMissingTransaction). This sentinel is
+			// not: it is the 0xFF spending-data marker, written the moment the
 			// alert reached THIS node, with no window attached by the time it surfaces as a
 			// txid in a conflicting cone. Poisoning a block on it would reintroduce exactly
 			// the gossip-timing split issue #1422 removes, in the opposite direction. Until
