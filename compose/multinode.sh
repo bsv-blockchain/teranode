@@ -20,6 +20,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GEN_DIR="$SCRIPT_DIR/generated"
+BLASTER_DATA_DIR="$REPO_ROOT/data/multinode-blaster"
 COMPOSE_FILE="$GEN_DIR/docker-compose-multinode.yml"
 
 # Chaos primitives run iptables/tc inside the target container's netns via a
@@ -32,7 +33,7 @@ Usage: compose/multinode.sh <command> [args]
 
 Commands:
   up <N> [--build] [-allinone=0|1] [--skip N:svc ...]
-         [--limits svc=cpus[:mem],...] [--retention production|aggressive]
+         [--limits svc=cpus[:mem],...] [--retention production|aggressive|prod-scaling]
                            Generate and start an N-node network (3-10).
                            -allinone=1 (default): one container per node runs
                              all services in a single process.
@@ -142,19 +143,26 @@ assert_known_service() {
 # symptom is remote from the cause - the blaster reports 100% fund errors and
 # logs the reason only to an in-memory buffer headless mode never prints.
 #
-# The DB does not live where you would expect: the coinbase derives its path
-# by prefixing "data/" to the snapshot's directory, so an absolute
-# --snapshot-path yields data/Users/<you>/.../coinbase.db.db and a relative one
-# yields data/data/... Neither is under data/multinode-blaster/, so clean all
-# the shapes rather than guessing which one this blaster build produces.
+# The DB does not live where you would expect. The blaster stores it at
+# sqlite:///<snapshot dir>/coinbase.db, and teranode's sqlite store resolves
+# that by joining DATADIR (./data, relative to the blaster's working
+# directory) with the path minus its leading slash, then appending ".db". With
+# the absolute snapshot path cmd_blast passes and the blaster run from
+# REPO_ROOT, the DB therefore lands at
+# $REPO_ROOT/data$BLASTER_DATA_DIR/coinbase.db.db - data/Users/... on macOS,
+# data/home/... on Linux. Remove exactly that tree, then any parents it leaves
+# empty, rather than anything else under the shared data/ directory.
 clean_blaster_state() {
-  local stale
-  for stale in "$REPO_ROOT/data/Users" "$REPO_ROOT/data/data" "$REPO_ROOT/data/tmp"; do
-    if [[ -d "$stale" ]]; then
-      rm -rf "$stale"
-      echo "cleaned stray coinbase DB: $stale"
-    fi
-  done
+  local stale="$REPO_ROOT/data$BLASTER_DATA_DIR"
+  if [[ -d "$stale" ]]; then
+    rm -rf "$stale"
+    echo "cleaned stray coinbase DB: $stale"
+    local parent
+    parent="$(dirname "$stale")"
+    while [[ "$parent" != "$REPO_ROOT/data" ]] && rmdir "$parent" 2>/dev/null; do
+      parent="$(dirname "$parent")"
+    done
+  fi
 }
 
 compose() {
@@ -188,7 +196,7 @@ cmd_up() {
       --retention=*|-retention=*) retention="${1#*=}"; shift ;;
       --retention|-retention)
         if [[ $# -lt 2 ]]; then
-          echo "error: --retention requires an argument (production|aggressive)" >&2
+          echo "error: --retention requires an argument (production|aggressive|prod-scaling)" >&2
           exit 2
         fi
         retention="$2"; shift 2 ;;
@@ -223,8 +231,8 @@ cmd_up() {
     local entry svc_name
     IFS=',' read -ra _limit_entries <<< "$limits"
     for entry in "${_limit_entries[@]}"; do
-      if [[ ! "$entry" =~ ^([a-z0-9]+)=([0-9.]+)(:[0-9]+[kmgKMG]?)?$ ]]; then
-        echo "error: --limits must be svc=cpus[:mem] (e.g. blockassembly=2:8g), got '$entry'" >&2
+      if [[ ! "$entry" =~ ^([a-z0-9]+)=(([0-9.]+)(:[0-9]+[kmgKMG]?)?|:[0-9]+[kmgKMG]?)$ ]]; then
+        echo "error: --limits must be svc=cpus[:mem] or svc=:mem (e.g. blockassembly=2:8g), got '$entry'" >&2
         exit 2
       fi
       svc_name="${BASH_REMATCH[1]}"
@@ -333,7 +341,7 @@ cmd_down() {
 
   # Wipe blaster local state so a subsequent 'blast' against a fresh chain
   # doesn't try to spend UTXOs that no longer exist.
-  local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
+  local blaster_data_dir="$BLASTER_DATA_DIR"
   clean_blaster_state
   if [[ -d "$blaster_data_dir" ]]; then
     rm -rf "$blaster_data_dir"
@@ -1011,7 +1019,7 @@ cmd_blast() {
   # Control where the blaster writes snapshot + embedded coinbase DB so that
   # 'multinode.sh down' can clean it up alongside the chain state. Only inject
   # our path if the user didn't pass one via '--'.
-  local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
+  local blaster_data_dir="$BLASTER_DATA_DIR"
   local user_snapshot=false
   for arg in ${passthrough[@]+"${passthrough[@]}"}; do
     case "$arg" in
@@ -1070,9 +1078,20 @@ cmd_blast() {
   export rpc_url="${rpc_url:-$rpc_url_default}"
   export rpc_user="${rpc_user:-bitcoin}"
   export rpc_pass="${rpc_pass:-bitcoin}"
+  # Newer blaster builds read coinbase_rpc_* instead; set both so either works.
+  export coinbase_rpc_url="${coinbase_rpc_url:-$rpc_url}"
+  export coinbase_rpc_user="${coinbase_rpc_user:-$rpc_user}"
+  export coinbase_rpc_pass="${coinbase_rpc_pass:-$rpc_pass}"
   echo "monitor rpc: $rpc_url  (embedded coinbase block monitor)"
   echo ""
 
+  # Run from REPO_ROOT so the coinbase DB lands where clean_blaster_state
+  # looks for it, whatever directory this script was invoked from. Skipped
+  # when the user chose the snapshot path, which may be relative to here.
+  if ! $user_snapshot; then
+    [[ "$blaster_bin" == /* ]] || blaster_bin="$PWD/$blaster_bin"
+    cd "$REPO_ROOT"
+  fi
   "$blaster_bin" \
     --propagation-addr "$prop_addrs" \
     --rpc-url "$rpc_url_default" \

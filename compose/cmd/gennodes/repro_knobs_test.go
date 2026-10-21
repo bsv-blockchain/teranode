@@ -200,3 +200,42 @@ func TestRetentionProfiles(t *testing.T) {
 		t.Error("a profile violating unminedTxRetention < blockHeightRetention should fail validate()")
 	}
 }
+
+// TestProdScalingProfile pins that prod-scaling emits its retention values and
+// the block-assembly shape overrides that only it carries, and that the flag
+// value resolves to it.
+func TestProdScalingProfile(t *testing.T) {
+	profile, ok := retentionProfiles["prod-scaling"]
+	if !ok {
+		t.Fatal(`retentionProfiles has no "prod-scaling" entry`)
+	}
+	if err := profile.validate(); err != nil {
+		t.Errorf("prodScalingRetention should be valid: %v", err)
+	}
+
+	_, settings := generateIntoWith(t, 3, false, t.TempDir(), "", profile)
+	for node := 1; node <= 3; node++ {
+		for key, want := range map[string]string{
+			"global_blockHeightRetention":                "6",
+			"utxostore_unminedTxRetention":               "3",
+			"utxostore_parentPreservationBlocks":         "1440",
+			"pruner_blockAssemblyWaitTimeout":            "10m",
+			"initial_merkle_items_per_subtree":           "1048576",
+			"maximum_merkle_items_per_subtree":           "4194304",
+			"blockassembly_useDynamicSubtreeSize":        "false",
+			"blockassembly_onRestartValidateParentChain": "false",
+		} {
+			re := regexp.MustCompile(fmt.Sprintf(`(?m)^%s\.docker\.teranode%d\s*=\s*%s\s*$`,
+				regexp.QuoteMeta(key), node, regexp.QuoteMeta(want)))
+			if !re.MatchString(settings) {
+				t.Errorf("prod-scaling profile: missing %s.docker.teranode%d = %s", key, node, want)
+			}
+		}
+	}
+
+	// The subtree-shape overrides belong to prod-scaling alone.
+	_, aggrSettings := generateIntoWith(t, 3, false, t.TempDir(), "", aggressiveRetention)
+	if strings.Contains(aggrSettings, "initial_merkle_items_per_subtree") {
+		t.Error("aggressive profile should not emit subtree-shape overrides")
+	}
+}

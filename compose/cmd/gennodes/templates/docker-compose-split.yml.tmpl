@@ -197,7 +197,7 @@ services:
   Explicit-offset mappings, for container ports more than one service binds.
   Every split service serves :9091 (pprof + /metrics), so the derived
   arithmetic above would hand them all the same host port. Offsets come from
-  metricsHostOffset in main.go; harness.ServiceMetricsPort mirrors them.
+  metricsHostOffset in main.go.
 */}}
 {{- range $e := $svc.ExtraHostPorts }}
       - "{{ add $node.HostBase $e.HostOffset }}:{{ $e.Container }}"

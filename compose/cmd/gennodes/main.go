@@ -76,7 +76,6 @@ const (
 	// collide with a derived port or with the next node's range.
 	//
 	// Node 1 blockassembly therefore publishes :9091 on host 21911.
-	// harness.ServiceMetricsPort mirrors this — keep the two in sync.
 	metricsHostOffset = 1910
 )
 
@@ -199,9 +198,10 @@ var aggressiveRetention = retentionProfile{
 // retention >= 288". Any node that falls into CATCHINGBLOCKS under load is
 // therefore pruning outside the window its own settings call safe.
 //
-// UnminedTxRetention is left at 0 deliberately: the loader derives it as
-// globalBlockHeightRetention/2 when unset (3 here), which is what production
-// gets. Note the struct tag in settings/utxostore_settings.go advertises
+// UnminedTxRetention is set explicitly to 3, the value the loader would
+// derive (globalBlockHeightRetention/2) and so what production gets. It
+// cannot be left unset: the template emits every field, so 0 would be written
+// and the derivation would never run. Note the struct tag in settings/utxostore_settings.go advertises
 // default 144 while the loader uses global/2 - the tag is wrong, not the code.
 var prodScalingRetention = retentionProfile{
 	Name: "prod-scaling", Emit: true,
@@ -445,8 +445,8 @@ func buildSplitServices() []splitService {
 	// index rather than written into each literal above so the offsets
 	// cannot drift out of step with the service order. core keeps its
 	// derived HostBase+1091 mapping too — publishing one container port on
-	// two host ports is legal, and it keeps ServiceMetricsPort uniform
-	// across all nine services.
+	// two host ports is legal, and it keeps the metrics port mapping
+	// uniform across all nine services.
 	for i := range svcs {
 		svcs[i].ExtraHostPorts = append(svcs[i].ExtraHostPorts, extraHostPort{
 			HostOffset: metricsHostOffset + i,

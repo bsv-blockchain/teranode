@@ -42,8 +42,8 @@ p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeers
 p2p_bootstrap_peers.docker.teranode{{ .Index }}.test           =
 {{- if $.Retention.Emit }}
 # --- retention / pruner profile: {{ $.Retention.Name }} ---
-# ONE PLACE TO CHANGE: compose/cmd/gennodes/main.go, var aggressiveRetention.
-# Production equivalents: 288 / 144 / 1440 / OnBlockPersisted / 10m / 10 / 10s.
+# ONE PLACE TO CHANGE: compose/cmd/gennodes/main.go, var retentionProfiles.
+# settings.conf defaults: 288 / 144 / 1440 / OnBlockPersisted / 10m / 10 / 10s.
 #
 # global_blockHeightRetention is the key that drives the delete-at-height
 # stamp. utxostore_blockHeightRetention is parsed but UNUSED — see
