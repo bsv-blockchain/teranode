@@ -2827,8 +2827,11 @@ func utxoHashForOutput(ctx context.Context, store utxo.Store, txHash *chainhash.
 // freezeWindowFromRPC converts the optional enforceAtHeight arguments of the freeze
 // command into the stored window.
 //
-// Both omitted is the unqualified freeze this command has always issued — enforced at
-// every height, stored as (0, 0). Once either is given, SV Node's interval semantics
+// Both omitted is the unqualified freeze this command has always issued, which keeps the
+// coin out of this node's mempool and templates. It is policy-only: it is stored with the
+// empty window (FreezeWindowNever, FreezeWindowNever), so it never makes a block invalid,
+// the same as a freeze recorded before windows existed. A consensus freeze needs explicit
+// heights. Once either is given, SV Node's interval semantics
 // apply through utxo.NormalizeFreezeWindow: stop is an exclusive end, and stop <= start
 // — an explicit (0, 0) included — is an empty interval that enforces nothing by
 // consensus. A stop given alone starts at genesis; a start given alone has no end,
@@ -2839,7 +2842,7 @@ func utxoHashForOutput(ctx context.Context, store utxo.Store, txHash *chainhash.
 // zero here.
 func freezeWindowFromRPC(start, stop *int) (freezeFrom uint32, freezeUntil uint32, err error) {
 	if start == nil && stop == nil {
-		return 0, 0, nil
+		return utxo.FreezeWindowNever, utxo.FreezeWindowNever, nil
 	}
 
 	var startHeight int

@@ -8,9 +8,9 @@ import (
 )
 
 // TestFreezeWindowFromRPC pins how the freeze command's optional heights map to the
-// stored window: omission is the legacy unqualified freeze, and only an explicit range
-// gets SV Node's interval semantics — so an explicit 0, 0 is an empty interval, not
-// "at every height" (issue #1422).
+// stored window: omission is a policy-only freeze, which never makes a block invalid, and
+// only an explicit range gets SV Node's interval semantics — so an explicit 0, 0 is an
+// empty interval, not "at every height" (issue #1422).
 func TestFreezeWindowFromRPC(t *testing.T) {
 	ip := func(i int) *int { return &i }
 
@@ -21,7 +21,7 @@ func TestFreezeWindowFromRPC(t *testing.T) {
 		wantUntil   uint32
 		wantErr     bool
 	}{
-		{name: "both omitted is the unqualified freeze", wantFrom: 0, wantUntil: 0},
+		{name: "both omitted is a policy-only freeze", wantFrom: utxo.FreezeWindowNever, wantUntil: utxo.FreezeWindowNever},
 		{name: "an explicit zero range is an empty interval", start: ip(0), stop: ip(0), wantFrom: utxo.FreezeWindowNever, wantUntil: utxo.FreezeWindowNever},
 		{name: "stop at start is an empty interval", start: ip(100), stop: ip(100), wantFrom: utxo.FreezeWindowNever, wantUntil: utxo.FreezeWindowNever},
 		{name: "stop below start is an empty interval", start: ip(100), stop: ip(50), wantFrom: utxo.FreezeWindowNever, wantUntil: utxo.FreezeWindowNever},

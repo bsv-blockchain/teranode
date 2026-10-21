@@ -704,8 +704,9 @@ func NewIsBannedCmd(ipOrSubnet string) *IsBannedCmd {
 //
 // EnforceAtHeightStart, EnforceAtHeightStop and PolicyExpiresWithConsensus mirror SV
 // Node's addToConsensusBlacklist: the half-open consensus window [start, stop) and
-// whether the policy tier lifts when it ends. Omitting both heights issues the
-// unqualified freeze this command has always issued — enforced at every height. Once
+// whether the policy tier lifts when it ends. Omitting both heights issues a policy-only
+// freeze: the coin stays out of this node's mempool and templates, and no block is made
+// invalid by it. Once
 // either is given, stop is an exclusive end and stop <= start — an explicit 0, 0
 // included — is an empty interval that enforces nothing by consensus; a stop given
 // alone starts at genesis, a start given alone has no end. The heights carry no

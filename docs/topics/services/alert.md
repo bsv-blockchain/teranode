@@ -63,9 +63,17 @@ The Service features are:
   transaction's pagination records. Spend, freeze, unfreeze and reassign are routed
   through the Lua path whatever `aerospike_use_native_teranode_ops` says, until the
   native dispatcher implements the record.
-- A freeze issued through the admin `freeze` RPC with no interval is enforced at every
-  height — the behaviour of every freeze issued before intervals existed, so no migration
-  is needed.
+- A freeze issued through the admin `freeze` RPC with no interval is policy-only: the coin
+  stays out of this node's mempool and templates, but no block is made invalid by it. A
+  freeze recorded before intervals existed carries no interval and is policy-only too. To
+  enforce a freeze by consensus, issue it again with heights.
+- A block rejected only because it spends inside a freeze interval is not stored as
+  invalid and the serving peer is not penalised: whether a node holds the freeze depends
+  on when the alert reached it. The block is judged again when it is next delivered.
+- Freezing an output already spent by an unmined transaction removes that transaction,
+  and its descendants, from block assembly.
+- A fund naming a transaction the node does not hold yet fails the alert, so the alert
+  system retries it on its processing interval.
 
 ### UTXO Unfreezing
 
@@ -168,25 +176,19 @@ The Alert Service initializes the necessary components and services to start pro
 
 ![alert_unfreeze_utxo.svg](img/plantuml/alert/alert_unfreeze_utxo.svg)
 
-1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist` with a list of funds to potentially unfreeze.
+1. The P2P Alert library initiates the process by calling `AddToConsensusBlacklist`. An unfreeze alert carries each fund with an empty interval (`stop <= start`), usually with `policyExpiresWithConsensus` set.
 
 2. The Alert Service iterates through each fund:
 
-    - It retrieves the transaction data from the UTXO Store.
+    - It retrieves the transaction data from the UTXO Store. A transaction the store does not hold yet fails the alert, so the alert system retries it later.
     - Calculates the UTXO hash.
-    - Checks if the fund is eligible for unfreezing by comparing the EnforceAtHeight.Stop with the current block height.
+    - Converts the interval into the stored window. Nothing is compared against the node's own tip.
 
-3. If the fund is eligible for unfreezing:
+3. The Alert Service records the freeze with that window through `FreezeUTXOs`, exactly as for a freeze. An empty window is never active by consensus. With `policyExpiresWithConsensus` set, the policy tier lifts with it and the coin is released; with it clear, the coin stays out of this node's mempool and templates.
 
-    - The Alert Service calls the UTXO Store to unfreeze the UTXO.
-    - The UTXO Store interacts with the database to mark the UTXO as unfrozen.
-    - Depending on the success of the unfreeze operation, the Alert Service adds the result to either the processed or notProcessed list.
+4. The record is never deleted by an alert, so a deep reorg into an elapsed interval is judged the same everywhere. The admin `unfreeze` RPC is the explicit delete.
 
-4. If the fund is not eligible for unfreezing:
-
-    - The Alert Service adds it to the notProcessed list with a reason.
-
-5. Finally, the Alert Service returns a BlacklistResponse to the P2P network.
+5. Funds whose record could not be written are added to the notProcessed list, and the Alert Service returns a BlacklistResponse to the P2P network.
 
 ### 2.4. UTXO Reassignment
 

@@ -229,8 +229,8 @@ func FreezePolicyActiveAt(from, until uint32, policyExpires bool, blockHeight ui
 //     exclusive;
 //   - otherwise → (start, stop) as is.
 //
-// A caller wanting the legacy "enforce at every height" record — only the admin RPC with
-// no arguments — must bypass this function and store (0, 0) explicitly.
+// Nothing stores (0, 0), "enforced at every height", any more: the admin RPC with no
+// heights stores the empty window, a policy-only freeze.
 func NormalizeFreezeWindow(start, stop uint64) (from, until uint32, enforcesNothing bool) {
 	if stop <= start || start > math.MaxUint32 {
 		return FreezeWindowNever, FreezeWindowNever, true
@@ -929,8 +929,8 @@ type Store interface {
 	//     in-window height.
 	// A repeat freeze for an already-frozen output updates its record; only a repeat
 	// asking for the record already stored reports already-frozen. A (0, 0) window is
-	// enforced at every height, which is what a freeze written before windows existed
-	// means; see NormalizeFreezeWindow for how an alert's interval maps onto this.
+	// enforced at every height; a freeze written before windows existed has no record and
+	// is policy-only. See NormalizeFreezeWindow for how an alert's interval maps onto this.
 	FreezeUTXOs(ctx context.Context, spends []*Spend, tSettings *settings.Settings) error
 
 	// UnFreezeUTXOs removes the policy marker and the consensus record from UTXOs. It
