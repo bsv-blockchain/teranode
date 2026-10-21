@@ -140,14 +140,14 @@ func (s *Store) readFreezeRecords(ctx context.Context, txID *chainhash.Hash, bin
 // number, which Aerospike hands back as map[interface{}]interface{} with int keys; any
 // other shape is storage damage.
 func markedFreezeExtraRecords(bins aerospike.BinMap) ([]int, error) {
-	raw, found := bins[fields.UtxoFreezeRecs.String()]
-	if !found || raw == nil {
+	binValue, found := bins[fields.UtxoFreezeRecs.String()]
+	if !found || binValue == nil {
 		return nil, nil
 	}
 
-	m, ok := raw.(map[interface{}]interface{})
+	m, ok := binValue.(map[interface{}]interface{})
 	if !ok {
-		return nil, errors.NewStorageError(errBinNotMap, fields.UtxoFreezeRecs, raw)
+		return nil, errors.NewStorageError(errBinNotMap, fields.UtxoFreezeRecs, binValue)
 	}
 
 	nums := make([]int, 0, len(m))
@@ -170,14 +170,14 @@ func markedFreezeExtraRecords(bins aerospike.BinMap) ([]int, error) {
 // keyed by absolute output index (baseOffset + map key). The utxoFreezeFrom map's keys
 // are the outputs carrying a record; its presence is the record.
 func collectFreezeRecords(bins aerospike.BinMap, baseOffset int, records map[uint32]meta.FreezeRecord) (map[uint32]meta.FreezeRecord, error) {
-	raw, found := bins[fields.UtxoFreezeFrom.String()]
-	if !found || raw == nil {
+	binValue, found := bins[fields.UtxoFreezeFrom.String()]
+	if !found || binValue == nil {
 		return records, nil
 	}
 
-	fromMap, ok := raw.(map[interface{}]interface{})
+	fromMap, ok := binValue.(map[interface{}]interface{})
 	if !ok {
-		return nil, errors.NewStorageError(errBinNotMap, fields.UtxoFreezeFrom, raw)
+		return nil, errors.NewStorageError(errBinNotMap, fields.UtxoFreezeFrom, binValue)
 	}
 
 	for k := range fromMap {
@@ -214,14 +214,14 @@ func collectFreezeRecords(bins aerospike.BinMap, baseOffset int, records map[uin
 // Aerospike hands map bins back as map[interface{}]interface{} keyed by the integer
 // offset, as the utxoSpendableIn reader in GetSpend already relies on.
 func mapBinEntry(bins aerospike.BinMap, bin fields.FieldName, offset int) (interface{}, bool, error) {
-	raw, found := bins[bin.String()]
-	if !found || raw == nil {
+	binValue, found := bins[bin.String()]
+	if !found || binValue == nil {
 		return nil, false, nil
 	}
 
-	m, ok := raw.(map[interface{}]interface{})
+	m, ok := binValue.(map[interface{}]interface{})
 	if !ok {
-		return nil, false, errors.NewStorageError(errBinNotMap, bin, raw)
+		return nil, false, errors.NewStorageError(errBinNotMap, bin, binValue)
 	}
 
 	v, found := m[offset]

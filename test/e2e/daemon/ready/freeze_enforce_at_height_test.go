@@ -444,8 +444,14 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	errA := nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, blockInside, "legacy", true)
 	requireFreezeRejected(t, nodeA, blockInside, errA)
 
-	errB := nodeB.BlockValidation.ValidateBlock(nodeB.Ctx, blockInside, nodeA.AssetURL, true)
-	requireFreezeRejected(t, nodeB, blockInside, errB)
+	// nodeB judges its own copy of the block (the same spend at the same height) on the
+	// same route as nodeA. It cannot fetch nodeA's: the asset service serves only
+	// validated subtrees, and nodeA rejected this block.
+	_, blockInsideB := nodeB.CreateTestBlock(t, blockBelow, 90002, spendInside)
+	require.Equal(t, windowStart, blockInsideB.Height)
+
+	errB := nodeB.BlockValidation.ValidateBlock(nodeB.Ctx, blockInsideB, "legacy", true)
+	requireFreezeRejected(t, nodeB, blockInsideB, errB)
 
 	requireSameTip(t, "after both nodes rejected a block inside the freeze window")
 
@@ -467,8 +473,11 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	errA = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, forkInside, "legacy", true)
 	requireFreezeRejected(t, nodeA, forkInside, errA)
 
-	errB = nodeB.BlockValidation.ValidateBlock(nodeB.Ctx, forkInside, nodeA.AssetURL, true)
-	requireFreezeRejected(t, nodeB, forkInside, errB)
+	_, forkInsideB := nodeB.CreateTestBlock(t, forkBase, 90004, spendBelow)
+	require.Equal(t, windowStart, forkInsideB.Height)
+
+	errB = nodeB.BlockValidation.ValidateBlock(nodeB.Ctx, forkInsideB, "legacy", true)
+	requireFreezeRejected(t, nodeB, forkInsideB, errB)
 
 	requireSameTip(t, "after both nodes rejected a fork re-mining the below-window spend inside the window")
 }
