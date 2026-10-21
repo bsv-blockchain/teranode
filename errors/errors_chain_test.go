@@ -82,6 +82,59 @@ func TestErrorIsNonErrorTarget(t *testing.T) {
 	require.False(t, head.Is(stderrors.New("not present")))
 }
 
+// fakeDriverError stands in for a concrete driver error (e.g. *pgconn.PgError,
+// *sqlite.Error) whose type identity errors.As must recover from a New-wrapped
+// chain.
+type fakeDriverError struct{ code string }
+
+func (f fakeDriverError) Error() string { return "fake driver error " + f.code }
+
+// TestNewPreservesWrappedForeignError pins the #1913 fix: a trailing non-*Error
+// argument to the New* constructors must survive in the chain with its original
+// type. The historical behaviour flattened it into a synthetic
+// &Error{message}, so errors.As could never classify driver errors wrapped
+// through New — isLockError-style typed checks silently fell back to string
+// matching.
+func TestNewPreservesWrappedForeignError(t *testing.T) {
+	inner := fakeDriverError{code: "40001"}
+
+	head := NewStorageError("failed to insert", inner)
+
+	var recovered fakeDriverError
+	require.True(t, stderrors.As(head, &recovered), "errors.As must recover the driver error type")
+	require.Equal(t, "40001", recovered.code)
+
+	// The chain renders the foreign message directly instead of a synthetic
+	// ERR_UNKNOWN wrapper.
+	require.Contains(t, head.Error(), "fake driver error 40001")
+	require.NotContains(t, head.Error(), "ERR_UNKNOWN")
+
+	// *Error trailing arguments keep the previous behaviour untouched.
+	typed := NewStorageError("failed", NewTxConflictingError("conflict"))
+	require.True(t, Is(typed, ErrTxConflicting))
+	innerTx, ok := typed.WrappedErr().(*Error)
+	require.True(t, ok)
+	require.Equal(t, ERR_TX_CONFLICTING, innerTx.Code())
+}
+
+// TestSetWrappedErrForeignTail pins that appending to a chain whose tail is a
+// foreign (non-*Error) error neither panics — the historical code dereferenced
+// a stale nil lastWrappedErr — nor drops the errors already in the chain.
+func TestSetWrappedErrForeignTail(t *testing.T) {
+	head := NewStorageError("outer", fakeDriverError{code: "40001"})
+	head.SetWrappedErr(NewTxConflictingError("appended"))
+
+	require.True(t, Is(head, ErrStorageError))
+	require.True(t, Is(head, ErrTxConflicting))
+
+	var foreign fakeDriverError
+	require.True(t, stderrors.As(head, &foreign))
+	require.Equal(t, "40001", foreign.code)
+
+	require.Contains(t, head.Error(), "appended")
+	require.Contains(t, head.Error(), "fake driver error 40001")
+}
+
 // TestSetWrappedErrDeepChainAppend pins that appending to an already-deep
 // chain terminates quickly. The walk to the tail used errors.As per link
 // (reflection); building a chain by repeated appends was O(N²).

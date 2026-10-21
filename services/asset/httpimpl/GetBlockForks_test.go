@@ -127,7 +127,7 @@ func TestGetBlockForks(t *testing.T) {
 		require.True(t, errors.As(err, &echoErr))
 
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
-		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash format -> UNKNOWN (0): encoding/hex: invalid byte: U+007A 'z'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid block hash format -> encoding/hex: invalid byte: U+007A 'z'", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
