@@ -113,7 +113,9 @@ type batchSpend struct {
 	ignoreLocked      bool
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
-	requireParentOutput bool
+	requireParentOutput   bool
+	ignorePolicyFreeze    bool
+	ignoreConsensusFreeze bool
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -438,6 +440,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 	useRequireParentOutputs := len(ignoreFlags) > 0 && ignoreFlags[0].RequireParentOutputs
+	useIgnorePolicyFreeze := len(ignoreFlags) > 0 && ignoreFlags[0].IgnorePolicyFreeze
+	useIgnoreConsensusFreeze := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConsensusFreeze
 
 	spends, err = utxo.GetSpends(tx)
 	if err != nil {
@@ -466,12 +470,14 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		}
 
 		item := &batchSpend{
-			spend:               spend,
-			blockHeight:         blockHeight,
-			group:               group,
-			ignoreConflicting:   useIgnoreConflicting,
-			ignoreLocked:        useIgnoreLocked,
-			requireParentOutput: useRequireParentOutputs,
+			spend:                 spend,
+			blockHeight:           blockHeight,
+			group:                 group,
+			ignoreConflicting:     useIgnoreConflicting,
+			ignoreLocked:          useIgnoreLocked,
+			requireParentOutput:   useRequireParentOutputs,
+			ignorePolicyFreeze:    useIgnorePolicyFreeze,
+			ignoreConsensusFreeze: useIgnoreConsensusFreeze,
 		}
 		items[idx] = item
 
@@ -612,7 +618,7 @@ type spendCompletionResult struct {
 
 	// sawUnwinnable records that at least one completed spend failed with an
 	// error class meaning this txid can never win (ErrSpent, ErrTxConflicting,
-	// ErrFrozen, ErrUtxoHashMismatch). When set, it overrides sawTransientLock's
+	// ErrFrozen, ErrUtxoConsensusFrozen, ErrUtxoHashMismatch). When set, it overrides sawTransientLock's
 	// suppression: a concurrent attempt at the SAME txid sees the same
 	// outpoints and hits the same unwinnable failure, so it can never reach
 	// Create either, meaning nobody can be a legitimate owner of the partial
@@ -938,7 +944,8 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			// same outpoints and hits the same unwinnable failure, so nobody
 			// can reach Create either. See rollbackPartialSpends' gate.
 			if errors.Is(spend.Err, errors.ErrSpent) || errors.Is(spend.Err, errors.ErrTxConflicting) ||
-				errors.Is(spend.Err, errors.ErrFrozen) || errors.Is(spend.Err, errors.ErrUtxoHashMismatch) {
+				errors.Is(spend.Err, errors.ErrFrozen) || errors.Is(spend.Err, errors.ErrUtxoConsensusFrozen) ||
+				errors.Is(spend.Err, errors.ErrUtxoHashMismatch) {
 				result.sawUnwinnable = true
 			}
 
@@ -1132,14 +1139,22 @@ func (s *Store) validateSpendItem(bItem *batchSpend) error {
 	return nil
 }
 
-// createSpendMapValue creates the map value for a spend item
+// createSpendMapValue creates the map value for a spend item.
+//
+// The two freeze flags ride in the per-spend map rather than becoming positional
+// arguments to spendMulti deliberately: spendMulti's argument list is a wire contract
+// shared with the server-fork native dispatcher (see native_op.go), so adding a
+// positional argument there would have to be matched outside this repo. Lua reads an
+// absent key as nil, which is the safe default — both tiers of the freeze are enforced.
 func (s *Store) createSpendMapValue(idx int, bItem *batchSpend) aerospike.MapValue {
 	return aerospike.NewMapValue(map[any]any{
-		"idx":          idx,
-		"offset":       s.calculateOffsetForOutput(bItem.spend.Vout),
-		"vOut":         bItem.spend.Vout,
-		"utxoHash":     bItem.spend.UTXOHash[:],
-		"spendingData": bItem.spend.SpendingData.Bytes(),
+		"idx":                   idx,
+		"offset":                s.calculateOffsetForOutput(bItem.spend.Vout),
+		"vOut":                  bItem.spend.Vout,
+		"utxoHash":              bItem.spend.UTXOHash[:],
+		"spendingData":          bItem.spend.SpendingData.Bytes(),
+		"ignorePolicyFreeze":    bItem.ignorePolicyFreeze,
+		"ignoreConsensusFreeze": bItem.ignoreConsensusFreeze,
 	})
 }
 
@@ -1359,6 +1374,8 @@ func (s *Store) createGeneralError(errorCode LuaErrorCode, txID *chainhash.Hash,
 	switch errorCode {
 	case LuaErrorCodeFrozen:
 		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] transaction is frozen, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
+	case LuaErrorCodeConsensusFrozen:
+		return errors.NewUtxoConsensusFrozenError("[SPEND_BATCH_LUA][%s] transaction is consensus-frozen, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
 	case LuaErrorCodeConflicting:
 		return errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, blockHeight %d - %s", txID.String(), thisBlockHeight, message)
 	case LuaErrorCodeLocked:
@@ -1415,6 +1432,9 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 	case LuaErrorCodeFrozen:
 		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] UTXO is frozen, vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
+	case LuaErrorCodeConsensusFrozen:
+		return errors.NewUtxoConsensusFrozenError("[SPEND_BATCH_LUA][%s] UTXO is consensus-frozen, vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+
 	case LuaErrorCodeFrozenUntil:
 		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] UTXO frozen until block, vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
@@ -1426,6 +1446,9 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 
 	case LuaErrorCodeUtxoInvalidSize:
 		return errors.NewUtxoInvalidSize("[SPEND_BATCH_LUA][%s] UTXO invalid size for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+
+	case LuaErrorCodeFreezeRecordDamaged:
+		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] malformed freeze record for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	default:
 		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] error for vout %d (code: %s): %s", txID.String(), batchItem.spend.Vout, errMsg.ErrorCode, errMsg.Message)

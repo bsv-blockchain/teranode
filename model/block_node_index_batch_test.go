@@ -345,7 +345,7 @@ func TestCheckParents_UsesLookups(t *testing.T) {
 
 	txHash := seqHash(10)
 
-	missing, err := block.checkParents(parents, lookups, 5, subtreepkg.Node{Hash: txHash}, &txHash, 0, 5)
+	missing, err := block.checkParents(parents, nil, lookups, 5, subtreepkg.Node{Hash: txHash}, &txHash, 0, 5)
 	require.NoError(t, err)
 	require.Equal(t, []missingParentTx{{parentTxHash: outside, txHash: txHash}}, missing)
 
@@ -353,7 +353,7 @@ func TestCheckParents_UsesLookups(t *testing.T) {
 	parents = []chainhash.Hash{after}
 	lookups = []nodeLookup{{hash: &parents[0], idx: 9, found: true}}
 
-	_, err = block.checkParents(parents, lookups, 5, subtreepkg.Node{Hash: txHash}, &txHash, 0, 5)
+	_, err = block.checkParents(parents, nil, lookups, 5, subtreepkg.Node{Hash: txHash}, &txHash, 0, 5)
 	require.ErrorIs(t, err, errors.ErrBlockInvalid)
 	require.ErrorContains(t, err, "comes before parent transaction")
 }

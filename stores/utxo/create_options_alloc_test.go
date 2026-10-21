@@ -55,6 +55,8 @@ func TestCreateOptionsDoNotAllocate(t *testing.T) {
 		{"WithIgnoreLocked/false", func() { escapeOption(WithIgnoreLocked(false)) }},
 		{"WithIgnoreConflicting", func() { escapeOption(WithIgnoreConflicting(true)) }},
 		{"WithSkipUTXOHashCheck", func() { escapeOption(WithSkipUTXOHashCheck(true)) }},
+		{"WithIgnorePolicyFreeze", func() { escapeOption(WithIgnorePolicyFreeze(true)) }},
+		{"WithIgnoreConsensusFreeze", func() { escapeOption(WithIgnoreConsensusFreeze(true)) }},
 		{"WithSkipExtendedInputs", func() { escapeOption(WithSkipExtendedInputs(false)) }},
 		{"WithLocked", func() { escapeOption(WithLocked(true)) }},
 		{"WithFrozen", func() { escapeOption(WithFrozen(false)) }},

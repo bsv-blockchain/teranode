@@ -763,7 +763,7 @@ func httpStatusForTxError(err error) int {
 		// resource is already in the desired state — surface as success so
 		// clients don't treat idempotent resubmits as failures.
 		return http.StatusOK
-	case errors.Is(err, errors.ErrFrozen):
+	case errors.Is(err, errors.ErrFrozen), errors.Is(err, errors.ErrUtxoConsensusFrozen):
 		return http.StatusForbidden
 	case errors.Is(err, errors.ErrTxInvalidDoubleSpend),
 		errors.Is(err, errors.ErrTxConflicting),

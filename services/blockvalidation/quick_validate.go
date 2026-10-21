@@ -2372,8 +2372,14 @@ func (u *BlockValidation) applyTxsWithRetry(ctx context.Context, block *model.Bl
 						return nil
 					}
 
+					// The first hard failure wins, except that a block-invalid verdict is never
+					// displaced by a later, unrelated failure: ValidateBlock re-queues on
+					// processing errors, which would turn a verdict back into the endless
+					// re-validate loop issue #1422 removes.
 					mu.Lock()
-					hardFail = err
+					if hardFail == nil || (errors.Is(err, errors.ErrBlockInvalid) && !errors.Is(hardFail, errors.ErrBlockInvalid)) {
+						hardFail = err
+					}
 					mu.Unlock()
 				}
 
@@ -2423,10 +2429,19 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 	}
 
 	limit := u.settings.UtxoStore.SpendBatcherSize * u.settings.UtxoStore.SpendBatcherConcurrency * 2
+	ignoreConsensusFreeze := u.ignoreConsensusFreeze(block)
 
 	return u.applyTxsWithRetry(ctx, block, "spendBatchWithRetry", items, limit, func(ctx context.Context, item txApply) error {
 		if _, _, err := u.utxoStore.SpendAndCreate(ctx, item.tx, block.Height, utxo.WithSpendOnly(),
-			utxo.WithIgnoreLocked(true), utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
+			utxo.WithIgnoreLocked(true), utxo.WithIgnorePolicyFreeze(true), utxo.WithIgnoreConsensusFreeze(ignoreConsensusFreeze),
+			utxo.WithSkipUTXOHashCheck(outpointOnly)); err != nil {
+			// Ahead of the retryable test: a multi-input spend joins its inputs' errors, and a
+			// transient error on one input must not turn a consensus verdict on another into a
+			// retry.
+			if verdict := consensusFrozenVerdict(block, item.tx, err); verdict != nil {
+				return verdict
+			}
+
 			if errors.IsRetryableError(err) {
 				return err
 			}
@@ -2463,6 +2478,8 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 		backoff = spendRetryBackoffDefault
 	}
 
+	ignoreConsensusFreeze := u.ignoreConsensusFreeze(block)
+
 	opts := func(txids []chainhash.Hash, subtreeIdxs []int) []utxo.CreateOption {
 		return []utxo.CreateOption{
 			utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height}),
@@ -2471,6 +2488,8 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			utxo.WithBelowCheckpoint(),
 			utxo.WithLocked(lockUTXOs),
 			utxo.WithIgnoreLocked(true),
+			utxo.WithIgnorePolicyFreeze(true),
+			utxo.WithIgnoreConsensusFreeze(ignoreConsensusFreeze),
 			utxo.WithSkipExtendedInputs(outpointOnly),
 			utxo.WithSkipUTXOHashCheck(outpointOnly),
 		}
@@ -2552,6 +2571,10 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 				continue
 			case r.Status == utxo.MultiTxCreated:
 				continue
+			case r.Err != nil && errors.Is(r.Err, errors.ErrUtxoConsensusFrozen):
+				// A verdict, not a failure to repeat: ahead of the retryable case, since a
+				// multi-input spend joins its inputs' errors.
+				return consensusFrozenVerdict(block, txs[i], r.Err)
 			case r.Err != nil && errors.IsRetryableError(r.Err):
 				retryable = r.Err
 			default:
@@ -2662,6 +2685,7 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 	}
 
 	storeCallBound := u.detachedStoreCallBound()
+	ignoreConsensusFreeze := u.ignoreConsensusFreeze(block)
 
 	for i, tx := range txs {
 		var err error
@@ -2685,12 +2709,14 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 				utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height, SubtreeIdx: subtreeIdxs[i]}),
 				utxo.WithLocked(lockUTXOs),
 				utxo.WithIgnoreLocked(true),
+				utxo.WithIgnorePolicyFreeze(true),
+				utxo.WithIgnoreConsensusFreeze(ignoreConsensusFreeze),
 				utxo.WithSkipExtendedInputs(outpointOnly),
 				utxo.WithSkipUTXOHashCheck(outpointOnly))
 
 			cancel()
 
-			if err == nil || !errors.IsRetryableError(err) {
+			if err == nil || errors.Is(err, errors.ErrUtxoConsensusFrozen) || !errors.IsRetryableError(err) {
 				break
 			}
 		}
@@ -2699,12 +2725,38 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 		case err == nil:
 		case errors.Is(err, errors.ErrTxExists):
 			collectExisting(tx)
+		case errors.Is(err, errors.ErrUtxoConsensusFrozen):
+			return consensusFrozenVerdict(block, tx, err)
 		default:
 			return errors.NewProcessingError("[applyOneByOne][%s] failed to apply tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 		}
 	}
 
 	return nil
+}
+
+// ignoreConsensusFreeze reports whether quick validation's spends for block lift the consensus
+// tier of an alert-system freeze as well as the policy tier. The policy tier is always lifted
+// here: it lands whenever the alert reached this node and must never decide a block's validity.
+// The consensus tier is lifted only for a block a HARDCODED checkpoint proves canonical (#1422):
+// no alert may retroactively invalidate such a block or wedge a node catching up. Quick
+// validation also runs above that height under the catchup-checkpoint override (see the I4 note
+// in createAndSpendUTXOsForBatch), and there a spend inside a freeze window is the verdict every
+// node derives from the chain. Nil chain params fail closed, via model.BelowCheckpoint.
+func (u *BlockValidation) ignoreConsensusFreeze(block *model.Block) bool {
+	return u.settings.ChainCfgParams != nil && model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height)
+}
+
+// consensusFrozenVerdict returns the block-invalid verdict for a spend the store rejected under
+// the consensus tier of an alert-system freeze, or nil when err is not that. Reachable only
+// above the hardcoded checkpoint, where the spend enforces the tier: a verdict every node
+// derives identically from the chain, so it is reported as one rather than retried.
+func consensusFrozenVerdict(block *model.Block, tx *bt.Tx, err error) error {
+	if !errors.Is(err, errors.ErrUtxoConsensusFrozen) {
+		return nil
+	}
+
+	return errors.NewBlockInvalidError("[quickValidate][%s] tx %s spends a consensus-frozen utxo at block height %d", block.Hash().String(), tx.TxIDChainHash().String(), block.Height, err)
 }
 
 // sleepUnlessDone waits for d, or until ctx is done if that comes first. The caller checks ctx

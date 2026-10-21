@@ -700,16 +700,34 @@ func NewIsBannedCmd(ipOrSubnet string) *IsBannedCmd {
 	}
 }
 
+// FreezeCmd defines the freeze JSON-RPC command.
+//
+// EnforceAtHeightStart, EnforceAtHeightStop and PolicyExpiresWithConsensus mirror SV
+// Node's addToConsensusBlacklist: the half-open consensus window [start, stop) and
+// whether the policy tier lifts when it ends. Omitting both heights issues the
+// unqualified freeze this command has always issued — enforced at every height. Once
+// either is given, stop is an exclusive end and stop <= start — an explicit 0, 0
+// included — is an empty interval that enforces nothing by consensus; a stop given
+// alone starts at genesis, a start given alone has no end. The heights carry no
+// jsonrpcdefault so that omission stays distinguishable from an explicit zero.
+//
+// UTXOHash is the legacy third positional and is ignored: the hash is derived from the
+// stored output. See issue #1422.
 type FreezeCmd struct {
-	TxID     string
-	Vout     int
-	UTXOHash string
+	TxID                       string
+	Vout                       int
+	UTXOHash                   *string
+	EnforceAtHeightStart       *int
+	EnforceAtHeightStop        *int
+	PolicyExpiresWithConsensus *bool `jsonrpcdefault:"false"`
 }
 
+// UnfreezeCmd defines the unfreeze JSON-RPC command. UTXOHash is the legacy third
+// positional and is ignored: the hash is derived from the stored output.
 type UnfreezeCmd struct {
 	TxID     string
 	Vout     int
-	UTXOHash string
+	UTXOHash *string
 }
 
 type ReassignCmd struct {
