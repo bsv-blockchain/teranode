@@ -82,7 +82,9 @@ func TestValidateTransaction_ReusesInpointsBuffer(t *testing.T) {
 
 		missing, err := block.validateTransaction(context.Background(), nil, validationCtx, params)
 		require.NoError(t, err)
-		require.Empty(t, missing)
+		// The parent is in the block, so it is handed on only for its freeze records,
+		// with the outputs this transaction spends of it.
+		require.Equal(t, []missingParentTx{{parentTxHash: parent, txHash: txs[i], vouts: vouts[i], sameBlock: true}}, missing)
 		require.True(t, params.inputsChecked)
 
 		inpoints = params.inpoints
@@ -99,6 +101,9 @@ func TestValidateTransaction_ReusesInpointsBuffer(t *testing.T) {
 	params := &transactionValidationParams{subtreeMetaSlice: meta, subtreeHash: &parent, run: nop}
 
 	allocs := testing.AllocsPerRun(100, func() {
+		// The edge buffers are per subtree, so each run starts them empty.
+		params.missing, params.vouts = params.missing[:0], params.vouts[:0]
+
 		for i := range txs {
 			params.snIdx, params.subtreeNode = i, subtreepkg.Node{Hash: txs[i]}
 
@@ -107,7 +112,7 @@ func TestValidateTransaction_ReusesInpointsBuffer(t *testing.T) {
 			}
 		}
 	})
-	require.Zero(t, allocs, "a transaction's inputs must go into the reused buffer")
+	require.Zero(t, allocs, "a transaction's inputs and parent edges must go into the reused buffers")
 }
 
 type nopRun struct{}
