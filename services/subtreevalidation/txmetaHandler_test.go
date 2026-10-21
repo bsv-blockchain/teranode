@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -634,4 +636,88 @@ func TestServer_txmetaHandler_V1_CollidesWithV2Magic(t *testing.T) {
 				mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
+}
+
+// TestServer_txmetaHandler_V2_BucketsMismatch builds a well-formed v2 batch
+// whose header BucketsCount differs from this binary's compile-time count.
+// The batch must still be parsed and dispatched - the records are
+// content-valid - and the mismatch must be named in a warning. A second
+// mismatching batch inside the throttle window must dispatch again without
+// emitting a second warning line (the prometheus counter keeps counting).
+func TestServer_txmetaHandler_V2_BucketsMismatch(t *testing.T) {
+	other := uint16(2)
+	for other == txmetacache.BucketsCount { // keep it a genuine mismatch
+		other <<= 1
+	}
+
+	mCache := &mockCache{}
+	mCache.On("SetCacheMultiSequentialWithHashes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	build := func() []byte {
+		payload := []byte("meta")
+		data := make([]byte, 8+8+32+1+4+len(payload))
+		data[0] = txmetacache.WireV2Magic
+		data[1] = txmetacache.WireV2Version
+		binary.LittleEndian.PutUint16(data[txmetacache.WireV2BucketsOffset:], other)
+		binary.LittleEndian.PutUint32(data[4:], 1)
+		off := 8
+		binary.LittleEndian.PutUint64(data[off:], 0xFEEDFACE)
+		off += 8
+		hash := chainhash.Hash{7}
+		copy(data[off:], hash[:])
+		off += 32
+		data[off] = txmetacache.WireActionADD
+		off++
+		binary.LittleEndian.PutUint32(data[off:], uint32(len(payload)))
+		off += 4
+		copy(data[off:], payload)
+		return data
+	}
+
+	// First batch: warning expected exactly once, names both counts.
+	lastBucketsWarnNano.Store(0)
+	mLogger := &mockLogger{}
+	mLogger.On("Warnf", mock.MatchedBy(func(f string) bool {
+		return strings.Contains(f, "BucketsCount")
+	}), []interface{}{other, txmetacache.BucketsCount}).Return().Once()
+
+	server := &Server{logger: mLogger, utxoStore: mCache}
+	require.NoError(t, server.txmetaHandler(context.Background(), &kafka.KafkaMessage{Value: build()}))
+	mLogger.AssertExpectations(t)
+
+	// Second batch right away: dispatched again, swallowed by the throttle
+	// (no Warnf expectation set; an unexpected call panics in mockery).
+	require.NoError(t, server.txmetaHandler(context.Background(), &kafka.KafkaMessage{Value: build()}))
+	mCache.AssertNumberOfCalls(t, "SetCacheMultiSequentialWithHashes", 2)
+}
+
+// TestServer_txmetaHandler_V2_LegacyZeroBucketsHeader confirms that a batch
+// still on the topic from a pre-buckets producer (bytes 2:4 zero) parses as
+// v2 and stays silent - there is nothing to compare against.
+func TestServer_txmetaHandler_V2_LegacyZeroBucketsHeader(t *testing.T) {
+	mLogger := &mockLogger{}
+	mCache := &mockCache{}
+	mCache.On("SetCacheMultiSequentialWithHashes", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	payload := []byte("meta")
+	data := make([]byte, 8+8+32+1+4+len(payload))
+	data[0] = txmetacache.WireV2Magic
+	data[1] = txmetacache.WireV2Version
+	// data[2:4] left zero: pre-buckets producer.
+	binary.LittleEndian.PutUint32(data[4:], 1)
+	off := 8
+	binary.LittleEndian.PutUint64(data[off:], 0xFEEDFACE)
+	off += 8
+	hash := chainhash.Hash{8}
+	copy(data[off:], hash[:])
+	off += 32
+	data[off] = txmetacache.WireActionADD
+	off++
+	binary.LittleEndian.PutUint32(data[off:], uint32(len(payload)))
+	off += 4
+	copy(data[off:], payload)
+
+	server := &Server{logger: mLogger, utxoStore: mCache}
+	require.NoError(t, server.txmetaHandler(context.Background(), &kafka.KafkaMessage{Value: data}))
+	mCache.AssertExpectations(t)
 }

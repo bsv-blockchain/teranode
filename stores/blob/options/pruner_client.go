@@ -9,6 +9,21 @@ import (
 // BlobDeletionScheduler defines the interface for scheduling blob deletions.
 // This interface is satisfied by blockchain.ClientI.
 // It allows blob stores to schedule deletions without directly depending on the blockchain service.
+//
+// Where the promise actually lives, despite the name of THIS file: the
+// deletion queue is owned and executed by the BLOCKCHAIN service
+// (blockchain.ClientI - see ScheduleBlobDeletion there); the pruner does
+// not implement this interface and does not run this queue. The file is
+// named pruner_client.go for historical reasons and renaming it would churn
+// imports for a comment-sized problem (reconciliation notes section 52,
+// open question 30) - so read "pruner" in the filename as "blockchain".
+//
+// The asymmetry this interface exists to make visible: an unwired scheduler
+// makes the write path fail rather than silently dropping the deletion
+// promise, which is the right direction - a refused write is a report, a
+// dropped promise is a slow leak. If you are tracing "who deletes blob
+// files at height H", the answer is Blockchain's queue, not this package
+// and not the pruner service.
 type BlobDeletionScheduler interface {
 	// ScheduleBlobDeletion schedules a blob for deletion at the specified blockchain height.
 	// Parameters:

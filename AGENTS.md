@@ -74,7 +74,9 @@ git fetch upstream && git rebase upstream/main && git push origin <branch>
   PostgreSQL).
 
 Test tags: `testtxmetacache` (small cache for testing), `largetxmetacache`
-(production cache size), `aerospike` (tests requiring Aerospike).
+(production cache size), `aerospike` (gates one native-ops integration test; the
+Aerospike store itself is always compiled and its container-backed tests run untagged,
+skipping when Docker is unavailable — reconciliation notes section 72).
 
 ```bash
 make smoketest TEST_RETRY_COUNT=3                       # retry (smoke/sequential only)

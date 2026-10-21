@@ -4964,20 +4964,27 @@ func (sm *SyncManager) processTXmetaBatchMessage(data []byte) error {
 		isV2       bool
 	)
 
-	// Speculative v2 detection: require the full header signature
-	// (magic + version + reserved bytes) and an entry count that fits in the
-	// remaining buffer at the minimum v2 entry size. Any failure falls
-	// through to v1 — never silently drops a valid v1 message.
+	// Speculative v2 detection: require the header signature (magic +
+	// version + a plausible power-of-two BucketsCount in bytes 2:4) and an
+	// entry count that fits in the remaining buffer at the minimum v2 entry
+	// size. Any failure falls through to v1 — never silently drops a valid
+	// v1 message. A BucketsCount that differs from this binary's compile-time
+	// count is logged: the batch stays valid, but producer and receiver
+	// cache bucket ranges overlap and partition alignment is lost.
 	if len(data) >= txmetacache.WireV2HeaderLen &&
 		data[0] == txmetacache.WireV2Magic &&
-		data[1] == txmetacache.WireV2Version &&
-		data[2] == 0 && data[3] == 0 {
-		candidateCount := binary.LittleEndian.Uint32(data[4:])
-		remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
-		if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
-			entryCount = candidateCount
-			offset = txmetacache.WireV2HeaderLen
-			isV2 = true
+		data[1] == txmetacache.WireV2Version {
+		if wireBuckets := binary.LittleEndian.Uint16(data[txmetacache.WireV2BucketsOffset:]); wireBuckets == 0 || wireBuckets&(wireBuckets-1) == 0 {
+			candidateCount := binary.LittleEndian.Uint32(data[4:])
+			remaining := uint64(len(data) - txmetacache.WireV2HeaderLen)
+			if uint64(candidateCount)*uint64(txmetacache.WireV2MinEntrySize) <= remaining {
+				entryCount = candidateCount
+				offset = txmetacache.WireV2HeaderLen
+				isV2 = true
+				if int(wireBuckets) != txmetacache.BucketsCount {
+					sm.logger.Warnf("txmeta v2 batch from producer with BucketsCount=%d, this receiver compiled with BucketsCount=%d: cache bucket ranges overlap, partitions contend; rebuild both sides with matching txmetacache build tags", wireBuckets, txmetacache.BucketsCount)
+				}
+			}
 		}
 	}
 

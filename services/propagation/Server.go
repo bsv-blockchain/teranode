@@ -433,7 +433,7 @@ func isIPAllowed(ip net.IP, allowedNets []*net.IPNet) bool {
 // Returns:
 //   - error: error if listeners fail to start
 func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Addresses string) error {
-	ps.logger.Infof("Starting UDP6 listeners on %s", ipv6Addresses)
+	ps.logger.Infof("Starting UDP6 listeners on %s (receive-only: no multicast sender exists, transactions leave via gRPC/Kafka - see reconciliation notes section 82)", ipv6Addresses)
 
 	ipv6Interface := ps.settings.Propagation.IPv6Interface
 	if ipv6Interface == "" {

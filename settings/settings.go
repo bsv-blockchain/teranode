@@ -32,7 +32,19 @@ func NewSettings(alternativeContext ...string) *Settings {
 
 	globalBlockHeightRetention := getUint32("global_blockHeightRetention", blocksInADayOnAverage*2, alternativeContext...)
 
-	doubleSpendWindowMillis := getInt("double_spend_window_millis", 0, alternativeContext...)
+	// The double-spend window governs two behaviours: the mining hold-back in
+	// queue eligibility and the time bound of the subtree-processor drain
+	// (see BlockAssembly.DoubleSpendWindow longdesc). This key predates the
+	// blockassembly_* naming convention; the prefixed key is canonical now
+	// and the unprefixed one keeps working as a deprecated alias, so an
+	// operator searching the config for the service name finds it.
+	doubleSpendWindowMillis := getInt("blockassembly_doubleSpendWindowMillis", -1, alternativeContext...)
+	if doubleSpendWindowMillis < 0 {
+		doubleSpendWindowMillis = getInt("double_spend_window_millis", 0, alternativeContext...)
+	}
+	if doubleSpendWindowMillis < 0 {
+		doubleSpendWindowMillis = 0 // milliseconds are never negative; treat as 0
+	}
 	doubleSpendWindow := time.Duration(doubleSpendWindowMillis) * time.Millisecond
 
 	blacklistMap := getMultiStringMap("subtreevalidation_blacklisted_baseurls", "|", []string{}, alternativeContext...)
@@ -197,16 +209,17 @@ func NewSettings(alternativeContext ...string) *Settings {
 			OverloadRetryMaxBackoff:         getDuration("aerospike_overload_retry_max_backoff", 5*time.Second, alternativeContext...),
 		},
 		Alert: AlertSettings{
-			GenesisKeys:              getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
-			P2PPrivateKey:            getString("alert_p2p_private_key", "", alternativeContext...),
-			ProtocolID:               getString("alert_protocol_id", "/bitcoin/alert-system/1.0.0", alternativeContext...),
-			StoreURL:                 getURL("alert_store", "sqlite:///alert", alternativeContext...),
-			TopicName:                getString("alert_topic_name", "bitcoin_alert_system", alternativeContext...),
-			P2PPort:                  getPort("ALERT_P2P_PORT", 9908, alternativeContext...),
-			P2PBootstrapPeer:         getString("alert_p2p_bootstrap_peer", "", alternativeContext...),
-			P2PAllowPrivateIPs:       getBool("alert_p2p_allow_private_ips", false, alternativeContext...),
-			P2PPeerDiscoveryInterval: getDuration("alert_p2p_peer_discovery_interval", 10*time.Minute, alternativeContext...),
-			P2PDHTMode:               getString("alert_p2p_dht_mode", "client", alternativeContext...),
+			GenesisKeys:                            getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
+			P2PPrivateKey:                          getString("alert_p2p_private_key", "", alternativeContext...),
+			ProtocolID:                             getString("alert_protocol_id", "/bitcoin/alert-system/1.0.0", alternativeContext...),
+			StoreURL:                               getURL("alert_store", "sqlite:///alert", alternativeContext...),
+			TopicName:                              getString("alert_topic_name", "bitcoin_alert_system", alternativeContext...),
+			P2PPort:                                getPort("ALERT_P2P_PORT", 9908, alternativeContext...),
+			P2PBootstrapPeer:                       getString("alert_p2p_bootstrap_peer", "", alternativeContext...),
+			P2PAllowPrivateIPs:                     getBool("alert_p2p_allow_private_ips", false, alternativeContext...),
+			P2PPeerDiscoveryInterval:               getDuration("alert_p2p_peer_discovery_interval", 10*time.Minute, alternativeContext...),
+			P2PDHTMode:                             getString("alert_p2p_dht_mode", "client", alternativeContext...),
+			ConfiscationAllowReassignWithoutScript: getBool("alert_confiscationAllowReassignWithoutScript", false, alternativeContext...),
 		},
 		Asset: AssetSettings{
 			APIPrefix:               getString("asset_apiPrefix", "/api/v1", alternativeContext...),

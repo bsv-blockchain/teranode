@@ -155,6 +155,8 @@ func TestConnectionLimiting(t *testing.T) {
 		assert.True(t, limited)
 		assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 		assert.Contains(t, w.Body.String(), "503 Too busy")
+		// A shed refusal must tell a machine caller when to come back.
+		assert.Equal(t, "1", w.Header().Get("Retry-After"))
 	})
 
 	t.Run("increment clients", func(t *testing.T) {

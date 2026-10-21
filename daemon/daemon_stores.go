@@ -412,7 +412,7 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 
 	var err error
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.TXSTORE)
 	if txStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(txStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -454,7 +454,7 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 		return nil, errors.NewConfigurationError("subtreestore config not found")
 	}
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.SUBTREESTORE)
 	if subtreeStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(subtreeStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -527,7 +527,7 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 
 	var err error
 
-	hashPrefix := 0
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.TEMPSTORE)
 	if tempStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(tempStoreURL.Query().Get("hashPrefix"))
 		if err != nil {
@@ -580,7 +580,7 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 
 	var err error
 
-	hashPrefix := -2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.BLOCKSTORE)
 
 	if blockStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
@@ -634,7 +634,7 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 
 	var err error
 
-	hashPrefix := 2
+	hashPrefix := storetypes.DefaultHashPrefix(storetypes.BLOCKPERSISTERSTORE)
 	if blockStoreURL.Query().Get("hashPrefix") != "" {
 		hashPrefix, err = strconv.Atoi(blockStoreURL.Query().Get("hashPrefix"))
 		if err != nil {

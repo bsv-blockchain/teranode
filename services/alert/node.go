@@ -340,14 +340,24 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			// unfreeze
 			if err = n.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
+			} else {
+				n.logger.Infof("[AddToConsensusBlacklist] unfroze %s:%d", fund.TxOut.TxId, fund.TxOut.Vout)
 			}
 		} else {
 			// freeze
 			if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
+			} else {
+				n.logger.Infof("[AddToConsensusBlacklist] froze %s:%d", fund.TxOut.TxId, fund.TxOut.Vout)
 			}
 		}
 	}
+
+	// The response body only ever lists failures, so successes were invisible:
+	// "froze five coins" and "matched nothing" were the same reply. The per-fund
+	// lines above name each outcome; the summary states the split in one glance.
+	n.logger.Infof("[AddToConsensusBlacklist] processed %d funds: %d applied, %d not processed",
+		len(funds), len(funds)-len(response.NotProcessed), len(response.NotProcessed))
 
 	return response, nil
 }
@@ -475,12 +485,25 @@ func (n *Node) AddToConfiscationTransactionWhitelist(ctx context.Context, txs []
 				LockingScript: newLockingScript,                                          // new locking script
 			}
 
-			// Calculate the replacement commitment. ReAssignUTXO does not persist
-			// the replacement script, so changing the owner currently strands
-			// the output for both owners after mandatory re-extension (issue 1725).
+			// Calculate the replacement commitment from the amended output: same
+			// satoshis, new locking script.
 			newUtxoHash, err := util.UTXOHashFromOutput(txIn.PreviousTxIDChainHash(), amendedOutputScript, txIn.PreviousTxOutIndex)
 			if err != nil {
 				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), err)...)
+				continue
+			}
+
+			// An ownership-changing reassignment (the commitment actually moved)
+			// is refused unless explicitly opted in: ReAssignUTXO does not persist
+			// the replacement script on either store, so applying it strands the
+			// output for both owners under the reassigned-UTXO hold (issue 1725).
+			// The refusal keeps the output frozen - unfreezing restores the
+			// previous owner - and names the setting that opts into the old, is
+			// stranding behaviour.
+			if newUtxoHash.String() != oldUtxoHash.String() && !n.settings.Alert.ConfiscationAllowReassignWithoutScript {
+				response.NotProcessed = append(response.NotProcessed, n.getAddToConfiscationTransactionWhitelistResponse(tx.TxIDChainHash().String(), errors.NewError(
+					"confiscation reassignment of %s:%d refused: the replacement locking script is not persisted by the coin store (issue 1725), which strands the output for both owners; unfreeze restores the previous owner, or set alert_confiscationAllowReassignWithoutScript=true to apply it anyway",
+					txIn.PreviousTxIDChainHash().String(), txIn.PreviousTxOutIndex))...)
 				continue
 			}
 

@@ -404,6 +404,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// or the cluster doesn't support the new opcode. See native_op.go.
 	s.initNativeTeranodeOps(ctx)
 
+	// Record utxostore_utxoBatchSize in the namespace on first open and
+	// refuse any later open that disagrees - the value is part of every
+	// coin's stored address. See layout_marker.go.
+	if err := s.enforceLayoutMarker(ctx); err != nil {
+		return nil, err
+	}
+
 	// Ensure index creation/wait is only done once per process
 	if pruner.IndexName != "" {
 		s.indexOnce.Do(func() {

@@ -169,11 +169,9 @@ func (s *Store) ReAssignUTXO(ctx context.Context, utxo *utxostore.Spend, newUtxo
 		return errors.NewUtxoFrozenError("transaction %s:%d is not frozen", utxo.TxID, utxo.Vout)
 	}
 
-	// Use configurable setting if provided, otherwise fall back to constant
-	reassignBlocks := uint32(utxostore.ReAssignedUtxoSpendableAfterBlocks)
-	if tSettings != nil && tSettings.UtxoStore.ReAssignedUtxoSpendableAfterBlocks > 0 {
-		reassignBlocks = tSettings.UtxoStore.ReAssignedUtxoSpendableAfterBlocks
-	}
+	// Resolved through the shared helper so every store applies the same rule:
+	// the setting when set, the constant otherwise.
+	reassignBlocks := utxostore.ReassignedSpendableBlocks(tSettings)
 	spendableIn := s.GetBlockHeight() + reassignBlocks
 
 	// re-assign the UTXO to the new UTXO

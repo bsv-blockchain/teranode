@@ -33,6 +33,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/p2p/peerregistry"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	blobstoreoptions "github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -1086,19 +1087,16 @@ func (b *Blockchain) startSubscriptions() {
 const sendDeadline = 5 * time.Second
 
 // minPeerRegistryTTL is the floor applied to an operator-configured
-// p2p_peer_registry_ttl. A connected peer republishes node_status every
-// nodeStatusPublishInterval (10s, see services/p2p/Server.go), which refreshes
-// LastSeen via Register (services/blockchain/peer_registry.go), and the
-// gossip-handler batcher coalesces those refreshes for up to one minute
-// (registryReassertTTL, services/p2p/peer_registry_batcher.go) before
-// re-asserting. A TTL below this floor risks the cleanup loop expiring an
-// actively-connected peer between its own batched refreshes — the peer then
-// fails IsPeerUnhealthy (services/p2p/handle_catchup_metrics.go), which gates
-// it out of catchup, and drops any not-yet-flushed validated-header progress
-// (RecordValidatedPeerProgress, services/blockchain/peer_registry.go). Five
-// minutes is 5x the batcher's reassert window and 30x the publish interval,
-// comfortably covering a missed beat or two of either.
-const minPeerRegistryTTL = 5 * time.Minute
+// p2p_peer_registry_ttl. It is not restated arithmetic: the number is derived
+// in one place - services/p2p/peerregistry - from the two P2P cadences it
+// exists to cover (node-status publishes every NodeStatusPublishInterval
+// refreshing LastSeen via Register, coalesced by the gossip batcher for up to
+// RegistryReassertTTL). A TTL below the floor risks the cleanup loop expiring
+// an actively-connected peer between its own batched refreshes - the peer
+// then fails IsPeerUnhealthy (services/p2p/handle_catchup_metrics.go), which
+// gates it out of catchup, and drops any not-yet-flushed validated-header
+// progress (RecordValidatedPeerProgress, services/blockchain/peer_registry.go).
+const minPeerRegistryTTL = peerregistry.MinTTL
 
 // resolvePeerRegistryTTL applies the same coercion Server.go has always
 // applied for ttl<=0 (select the 24h default) and adds a floor for a

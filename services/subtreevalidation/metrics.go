@@ -362,3 +362,16 @@ func _initPrometheusMetrics() {
 		},
 	)
 }
+
+// prometheusSubtreeValidationTxMetaBucketsMismatch counts v2 txmeta batches
+// received with a producer BucketsCount different from this binary's
+// compile-time cache count, labelled by the producer's count. Non-zero means
+// producer and receiver cache bucket ranges overlap and the Kafka partition
+// alignment has degraded to lock contention; see txmetaHandler.
+var prometheusSubtreeValidationTxMetaBucketsMismatch = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "subtree_validation_txmeta_buckets_mismatch_total",
+		Help: "Total v2 txmeta batches whose producer BucketsCount differs from this binary's compile-time cache BucketsCount, by producer count",
+	},
+	[]string{"producer_buckets"},
+)

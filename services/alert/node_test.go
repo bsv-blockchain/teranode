@@ -60,6 +60,11 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 		_, err = utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
 
+		// These subtests exercise store-side outcomes; the issue 1725 refusal
+		// guard fires earlier by default, so opt in to the pre-guard posture
+		// and keep the store paths under test.
+		tSettings.Alert.ConfiscationAllowReassignWithoutScript = true
+
 		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
 
 		funds := []models.Fund{{
@@ -207,6 +212,11 @@ func TestNode_getAddToConsensusBlacklistResponse(t *testing.T) {
 
 		_, err = utxoStore.Create(ctx, tx, 101)
 		require.NoError(t, err)
+
+		// These subtests exercise store-side outcomes; the issue 1725 refusal
+		// guard fires earlier by default, so opt in to the pre-guard posture
+		// and keep the store paths under test.
+		tSettings.Alert.ConfiscationAllowReassignWithoutScript = true
 
 		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
 
