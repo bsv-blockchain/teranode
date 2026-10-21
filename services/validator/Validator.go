@@ -1043,6 +1043,16 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
 	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
 
+	// IgnorePolicyFreeze lets a block's spend of a coin this node has frozen through, so
+	// the block is judged on the consensus tier alone. It does not make the coin fit for
+	// this node's own templates: the policy tier is exactly what keeps it out of them. A
+	// block-context transaction kept in assembly (RUNNING) stays there if its block loses a
+	// fork, so one that spends a policy-frozen coin is validated and stored but not handed
+	// to block assembly (issue #1422).
+	if addToBlockAssembly && validationOptions.IgnorePolicyFreeze && v.spendsPolicyFrozenCoin(decoupledCtx, tx, txID) {
+		addToBlockAssembly = false
+	}
+
 	// spend the tx's inputs and create its outputs + metadata in one store
 	// operation; the store reverses the spends if the create fails (except on
 	// ErrTxExists, which leaves the spends in place and is handled below)
@@ -1555,6 +1565,29 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 	}
 
 	return nil
+}
+
+// spendsPolicyFrozenCoin reports whether an input of tx spends an output the policy tier of an
+// alert-system freeze holds at the next height. It is asked before the spend, while a frozen
+// output still reads as frozen. A read that fails is reported as frozen: the transaction then
+// stays out of block assembly, which is the side that cannot put a frozen spend in a template.
+func (v *Validator) spendsPolicyFrozenCoin(ctx context.Context, tx *bt.Tx, txID string) bool {
+	for _, input := range tx.Inputs {
+		resp, err := v.utxoStore.GetSpend(ctx, &utxo.Spend{TxID: input.PreviousTxIDChainHash(), Vout: input.PreviousTxOutIndex})
+		if err != nil {
+			v.logger.Warnf("[Validate][%s] could not read the freeze state of input %s:%d, keeping the transaction out of block assembly: %v", txID, input.PreviousTxIDStr(), input.PreviousTxOutIndex, err)
+
+			return true
+		}
+
+		if resp != nil && resp.Status == int(utxo.Status_FROZEN) {
+			v.logger.Infof("[Validate][%s] spends policy-frozen %s:%d, validated for its block but not added to block assembly", txID, input.PreviousTxIDStr(), input.PreviousTxOutIndex)
+
+			return true
+		}
+	}
+
+	return false
 }
 
 // unlockLockedTxOnExit is the single point that releases a tx's two-phase-commit

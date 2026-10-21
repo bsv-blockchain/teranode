@@ -989,9 +989,11 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 	// IS populated from the request's PreviousBlockHash — see the legacy
 	// branch above for the rationale.
 	// No WithIgnorePolicyFreeze here: this branch has no production caller (legacy
-	// netsync is the only one, and it takes the branch above) and, unlike that branch,
-	// leaves AddTXToBlockAssembly on — so bypassing the policy tier would put a spend of
-	// a frozen coin into this node's own template.
+	// netsync is the only one, and it takes the branch above). Both branches leave
+	// AddTXToBlockAssembly on in RUNNING; where the policy tier is bypassed, the
+	// validator keeps a spend of a policy-frozen coin out of block assembly itself
+	// (Validator.spendsPolicyFrozenCoin), so the bypass cannot put one in this node's
+	// own template.
 	if _, err = u.ValidateSubtreeInternal(
 		ctx,
 		v,
