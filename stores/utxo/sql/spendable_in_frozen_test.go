@@ -4,8 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	utxo2 "github.com/bsv-blockchain/teranode/test/longtest/stores/utxo"
 	"github.com/stretchr/testify/require"
 )
@@ -146,4 +148,50 @@ func TestConsensusFreezeRollsBackSiblingSpends(t *testing.T) {
 	require.Equal(t, int(utxo.Status_OK), resp.Status,
 		"sibling input was left spent by a rejected transaction -- the failed spend did not roll back")
 	require.Empty(t, resp.SpendingData, "sibling input must carry no spending data after the rollback")
+}
+
+// TestConsensusFreezeIsJudgedBeforeSpendableIn pins the order of the alert system's two
+// holds on the spend paths (issue #1422): the consensus freeze is judged before the
+// reassignment-maturity hold (spendableIn), so an output carrying both is the consensus
+// verdict at an in-window height, not the retryable FROZEN_UNTIL-style ErrFrozen. Swapping
+// the two checks in trySendSpendBatchPerRow or trySendSpendBatchBulk fails this test.
+func TestConsensusFreezeIsJudgedBeforeSpendableIn(t *testing.T) {
+	t.Run("per-row", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		store, tx := setup(ctx, t)
+
+		assertConsensusFreezeBeforeSpendableIn(t, ctx, store, tx)
+	})
+
+	t.Run("postgres bulk", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("skipping Postgres integration test in short mode")
+		}
+
+		store, ctx := setupPostgresStore(t)
+		store.settings.UtxoStore.BatchSQLOperations = true
+
+		require.NoError(t, store.Delete(ctx, tests.TXHash))
+
+		assertConsensusFreezeBeforeSpendableIn(t, ctx, store, tests.Tx)
+	})
+}
+
+func assertConsensusFreezeBeforeSpendableIn(t *testing.T, ctx context.Context, store *Store, tx *bt.Tx) {
+	t.Helper()
+
+	_, err := store.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	// A recorded window covering every height, and a maturity hold far above the height
+	// of the spend: both hold the output.
+	_, err = store.db.ExecContext(ctx, `UPDATE outputs SET frozen = TRUE, freezeFrom = 0, spendableIn = 100000
+		WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1) AND idx = 0`, tx.TxIDChainHash()[:])
+	require.NoError(t, err)
+
+	_, err = store.Spend(ctx, utxo2.GetSpendingTx(tx, 0), 100, utxo.IgnoreFlags{IgnorePolicyFreeze: true})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrUtxoConsensusFrozen), "the consensus freeze must decide before the maturity hold, got: %v", err)
 }
