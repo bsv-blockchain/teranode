@@ -52,6 +52,18 @@ func TestLegacyFreezeIsPolicyOnly(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrFrozen, "the policy tier still holds the coin")
 	require.NotErrorIs(t, err, errors.ErrUtxoConsensusFrozen)
 
+	// Re-freezing with a window — the zero window included — is not "already frozen":
+	// it records the window and makes the freeze a consensus rule.
+	require.NoError(t, store.FreezeUTXOs(ctx, []*utxo.Spend{spends[0]}, store.settings))
+
+	_, err = store.Spend(ctx, spendTx, 100, utxo.IgnoreFlags{IgnorePolicyFreeze: true})
+	require.ErrorIs(t, err, errors.ErrUtxoConsensusFrozen, "the recorded window is enforced")
+
+	// Back to the legacy shape: a block spend of it is not a consensus violation.
+	_, err = store.db.ExecContext(ctx, `UPDATE outputs SET freezeFrom = NULL, freezeUntil = NULL, freezePolicyExpires = NULL
+		WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1) AND idx = 0`, tx.TxIDChainHash()[:])
+	require.NoError(t, err)
+
 	_, err = store.Spend(ctx, spendTx, 100, utxo.IgnoreFlags{IgnorePolicyFreeze: true})
 	require.NoError(t, err, "a block spend of a legacy freeze is not a consensus violation")
 }

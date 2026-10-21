@@ -1008,7 +1008,11 @@ function freeze(rec, offset, utxoHash, freezeFrom, freezeUntil, policyExpires)
     -- already stored is reported as ALREADY_FROZEN, which is what the alert system and
     -- the admin RPC have always seen for a re-freeze. A damaged record matches nothing:
     -- the freeze overwrites it, which is how such a record is repaired.
-    if (recordPresent or sentinelPresent) and not storedDamaged
+    --
+    -- A sentinel with no record (a freeze written before the bins existed) matches nothing
+    -- either: it is policy only, and a freeze asking for any window — (0, 0) included —
+    -- records that window, which is how such a freeze is made a consensus rule.
+    if recordPresent and not storedDamaged
         and storedFrom == wantFrom and storedUntil == wantUntil and storedExp == wantExp then
         response[FIELD_STATUS] = STATUS_ERROR
         response[FIELD_ERROR_CODE] = ERROR_CODE_ALREADY_FROZEN

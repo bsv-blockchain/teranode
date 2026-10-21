@@ -54,6 +54,20 @@ func TestLegacyFreezeIsPolicyOnly(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrFrozen, "the policy tier still holds the coin")
 	require.NotErrorIs(t, err, errors.ErrUtxoConsensusFrozen)
 
+	// Re-freezing with a window — the zero window included — is not "already frozen":
+	// it records the window and makes the freeze a consensus rule.
+	require.NoError(t, store.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash0}}, tSettings))
+
+	_, err = store.Spend(ctx, spendTx, 100, utxo.IgnoreFlags{IgnorePolicyFreeze: true})
+	require.ErrorIs(t, err, errors.ErrUtxoConsensusFrozen, "the recorded window is enforced")
+
+	// Back to the legacy shape: a block spend of it is not a consensus violation.
+	_, aErr = client.Operate(nil, key,
+		aerospike.PutOp(aerospike.NewBin(fields.UtxoFreezeFrom.String(), nil)),
+		aerospike.PutOp(aerospike.NewBin(fields.UtxoFreezeUntil.String(), nil)),
+		aerospike.PutOp(aerospike.NewBin(fields.UtxoFreezeExp.String(), nil)))
+	require.NoError(t, aErr)
+
 	_, err = store.Spend(ctx, spendTx, 100, utxo.IgnoreFlags{IgnorePolicyFreeze: true})
 	require.NoError(t, err, "a block spend of a sentinel-only freeze is not a consensus violation")
 }

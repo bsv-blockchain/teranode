@@ -68,9 +68,13 @@ func (r *freezeRow) hasRecord() bool {
 }
 
 // matches reports whether the stored record is exactly the one being asked for, in which
-// case a repeat freeze is a no-op the caller is told about rather than a change.
+// case a repeat freeze is a no-op the caller is told about rather than a change. A row
+// with the marker and no recorded window (frozen before the window columns existed)
+// matches nothing: it is policy only, and a freeze asking for any window — (0, 0)
+// included — records it, which is how such a freeze is made a consensus rule.
 func (r *freezeRow) matches(spend *utxostore.Spend) bool {
-	return nullableHeight(r.freezeFrom) == spend.FreezeFrom &&
+	return r.freezeFrom != nil &&
+		nullableHeight(r.freezeFrom) == spend.FreezeFrom &&
 		nullableHeight(r.freezeUntil) == spend.FreezeUntil &&
 		nullableBool(r.policyExpires) == spend.FreezePolicyExpires
 }
@@ -112,7 +116,10 @@ type queryRower interface {
 // statement is one literal (the static-analysis contract for SQL text). It is NULL-safe
 // on both engines without an engine-specific operator: a nullable height compares
 // through a sentinel no height takes, the nullable flag through the FALSE that NULL
-// means; frozen is NOT NULL.
+// means. frozen is compared plainly. The column is declared nullable (BOOLEAN DEFAULT
+// FALSE, no NOT NULL, on both engines), but nothing ever writes NULL to it, and the
+// SELECT this pins to scans it into a Go bool, which fails on NULL before any UPDATE is
+// reached; so a NULL frozen never gets as far as this comparison.
 func observedFreezeStateArgs(r *freezeRow) []interface{} {
 	return []interface{}{r.frozen, r.freezeFrom, r.freezeUntil, r.policyExpires}
 }
