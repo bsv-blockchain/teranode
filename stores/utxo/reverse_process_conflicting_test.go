@@ -97,8 +97,17 @@ func TestReverseProcessConflicting_RestoresOriginalSpender(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &counterHash, mock.Anything).
 		Return(&meta.Data{Tx: counterTx}, nil).Once()
 
-	// Re-spend parent UTXO with counter.
+	// Re-spend parent UTXO with counter. It restores spends the counter held before, so
+	// neither tier of an alert-system freeze recorded since may wedge the reorg (#1422).
+	var flags IgnoreFlags
+
 	mockStore.On("SpendAndCreate", mock.Anything, counterTx, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			options, err := ParseCreateOptions(args.Get(3).([]CreateOption)...)
+			require.NoError(t, err)
+
+			flags = options.IgnoreFlags
+		}).
 		Return(nil, []*Spend{}, nil).Once()
 
 	// Step 5 — UnmarkConflictingRecursively([counter]) flips counter +
@@ -113,6 +122,8 @@ func TestReverseProcessConflicting_RestoresOriginalSpender(t *testing.T) {
 	require.NotNil(t, touched)
 	require.Contains(t, touched, demotedHash, "demoted tx must be in touched set")
 	require.Contains(t, touched, counterHash, "counter tx must be in touched set")
+	require.True(t, flags.IgnorePolicyFreeze)
+	require.True(t, flags.IgnoreConsensusFreeze)
 	mockStore.AssertExpectations(t)
 }
 
