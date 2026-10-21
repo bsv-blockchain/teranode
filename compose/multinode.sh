@@ -136,7 +136,8 @@ assert_known_service() {
 
 # clean_blaster_state removes the embedded coinbase's sqlite DB.
 #
-# This MUST happen whenever the chain is destroyed. The coinbase records the
+# This MUST happen whenever the chain is destroyed, and only then: 'up' keeps
+# the existing chain, so the DB stays valid across it. The coinbase records the
 # UTXOs it owns in that DB; pointed at a new chain it keeps trying to spend
 # outputs of transactions that chain has never seen, and every funding attempt
 # fails with TX_MISSING_PARENT on a transaction no node can produce. The
@@ -145,10 +146,9 @@ assert_known_service() {
 #
 # The DB does not live where you would expect. The blaster stores it at
 # sqlite:///<snapshot dir>/coinbase.db, and teranode's sqlite store resolves
-# that by joining DATADIR (./data, relative to the blaster's working
-# directory) with the path minus its leading slash, then appending ".db". With
-# the absolute snapshot path cmd_blast passes and the blaster run from
-# REPO_ROOT, the DB therefore lands at
+# that by joining dataFolder with the path minus its leading slash, then
+# appending ".db". With the absolute snapshot path cmd_blast passes and
+# dataFolder pinned to $REPO_ROOT/data, the DB therefore lands at
 # $REPO_ROOT/data$BLASTER_DATA_DIR/coinbase.db.db - data/Users/... on macOS,
 # data/home/... on Linux. Remove exactly that tree, then any parents it leaves
 # empty, rather than anything else under the shared data/ directory.
@@ -231,7 +231,7 @@ cmd_up() {
     local entry svc_name
     IFS=',' read -ra _limit_entries <<< "$limits"
     for entry in "${_limit_entries[@]}"; do
-      if [[ ! "$entry" =~ ^([a-z0-9]+)=(([0-9.]+)(:[0-9]+[kmgKMG]?)?|:[0-9]+[kmgKMG]?)$ ]]; then
+      if [[ ! "$entry" =~ ^([a-z0-9]+)=(([0-9]+(\.[0-9]+)?)(:[0-9]+[kmgKMG]?)?|:[0-9]+[kmgKMG]?)$ ]]; then
         echo "error: --limits must be svc=cpus[:mem] or svc=:mem (e.g. blockassembly=2:8g), got '$entry'" >&2
         exit 2
       fi
@@ -281,11 +281,6 @@ cmd_up() {
   fi
   local topology="all-in-one"
   [[ "$allinone" -eq 0 ]] && topology="split-per-service"
-  # A new stack means a new chain, which invalidates everything the embedded
-  # coinbase recorded about the old one. Clean it here too, not just on 'down',
-  # so an 'up' after a crash or a killed test does not inherit a poisoned DB.
-  clean_blaster_state
-
   echo "generating $n-node stack (topology: $topology, retention: $retention${limits:+, limits: $limits})..."
   (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes \
     -n "$n" -allinone="$allinone" -retention "$retention" -limits "$limits" -o compose/generated)
@@ -1085,12 +1080,13 @@ cmd_blast() {
   echo "monitor rpc: $rpc_url  (embedded coinbase block monitor)"
   echo ""
 
-  # Run from REPO_ROOT so the coinbase DB lands where clean_blaster_state
-  # looks for it, whatever directory this script was invoked from. Skipped
-  # when the user chose the snapshot path, which may be relative to here.
+  # Pin the blaster's dataFolder (a gocore key; the environment wins over
+  # settings.conf) so the coinbase DB lands where clean_blaster_state looks
+  # for it whatever directory this script was invoked from. The blaster keeps
+  # the caller's working directory, so relative passthrough paths such as
+  # --mix-schedule still resolve as typed.
   if ! $user_snapshot; then
-    [[ "$blaster_bin" == /* ]] || blaster_bin="$PWD/$blaster_bin"
-    cd "$REPO_ROOT"
+    export dataFolder="$REPO_ROOT/data"
   fi
   "$blaster_bin" \
     --propagation-addr "$prop_addrs" \

@@ -127,10 +127,14 @@ func TestLimitsApplyOnlyToNamedServices(t *testing.T) {
 // unconstrained container, which would look like "the repro didn't fire".
 func TestLimitsRejectsBadSpecs(t *testing.T) {
 	for _, spec := range []string{
-		"blockassembler=2", // typo'd service name
-		"blockassembly",    // no '='
-		"blockassembly=",   // neither cpus nor mem
-		"blockassembly=:",  // same, with separator
+		"blockassembler=2",   // typo'd service name
+		"blockassembly",      // no '='
+		"blockassembly=",     // neither cpus nor mem
+		"blockassembly=:",    // same, with separator
+		"blockassembly=..",   // cpus Compose rejects
+		"blockassembly=0",    // zero cpus
+		"blockassembly=1.",   // trailing dot
+		"blockassembly=2:8x", // bad mem unit
 	} {
 		if err := applyLimits(buildSplitServices(), spec); err == nil {
 			t.Errorf("applyLimits(%q) should have failed", spec)
@@ -177,6 +181,7 @@ func TestRetentionProfiles(t *testing.T) {
 			"pruner_block_trigger":                   "OnBlockPersisted",
 			"pruner_blockAssemblyWaitTimeout":        "60s",
 			"pruner_skipProcessExpiredPreservations": "false",
+			"pruner_skipDuringCatchup":               "true",
 			"startPruner":                            "true",
 		} {
 			re := regexp.MustCompile(fmt.Sprintf(`(?m)^%s\.docker\.teranode%d\s*=\s*%s\s*$`,
@@ -220,6 +225,7 @@ func TestProdScalingProfile(t *testing.T) {
 			"utxostore_unminedTxRetention":               "3",
 			"utxostore_parentPreservationBlocks":         "1440",
 			"pruner_blockAssemblyWaitTimeout":            "10m",
+			"pruner_skipDuringCatchup":                   "false",
 			"initial_merkle_items_per_subtree":           "1048576",
 			"maximum_merkle_items_per_subtree":           "4194304",
 			"blockassembly_useDynamicSubtreeSize":        "false",

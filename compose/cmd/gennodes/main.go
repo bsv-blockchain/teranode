@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -148,6 +150,10 @@ type retentionProfile struct {
 	BAWaitTimeout            string // -> pruner_blockAssemblyWaitTimeout
 	BlobSafetyWindow         uint32 // -> pruner_blobDeletionSafetyWindow
 	PersistSleep             string // -> blockpersister_persistSleep
+	// SkipDuringCatchup -> pruner_skipDuringCatchup. Its documentation calls
+	// false "only safe with retention >= 288", so a profile below that should
+	// set it unless it is deliberately reproducing that unsafe combination.
+	SkipDuringCatchup bool
 
 	// Block-assembly shape, not retention, but carried here so one profile
 	// describes one environment. Empty/zero means "do not emit", leaving
@@ -186,6 +192,7 @@ var aggressiveRetention = retentionProfile{
 	BAWaitTimeout:            "60s",              // settings.conf ships 10m — see above
 	BlobSafetyWindow:         5,                  // settings.conf ships 10
 	PersistSleep:             "2s",               // settings.conf ships 10s
+	SkipDuringCatchup:        true,               // retention < 288 needs it; see SkipDuringCatchup
 }
 
 // prodScalingRetention mirrors an observed production scaling deployment,
@@ -212,6 +219,10 @@ var prodScalingRetention = retentionProfile{
 	BAWaitTimeout:            "10m",
 	BlobSafetyWindow:         10,
 	PersistSleep:             "10s",
+
+	// false despite retention 6: production runs it that way, and that unsafe
+	// combination is part of what this profile reproduces.
+	SkipDuringCatchup: false,
 
 	InitialSubtreeItems:   1048576, // prod; settings.conf ships 32768
 	MaximumSubtreeItems:   4194304, // prod; settings.conf ships 32768
@@ -460,6 +471,15 @@ func buildSplitServices() []splitService {
 	return svcs
 }
 
+// cpusPattern and memPattern accept the CPU and memory values Compose takes
+// for cpus and mem_limit. Checked here so a malformed value fails generation
+// before anything is written, rather than at 'docker compose up' after the
+// previous bundle has been replaced.
+var (
+	cpusPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
+	memPattern  = regexp.MustCompile(`^[0-9]+[kmgKMG]?$`)
+)
+
 // applyLimits parses a -limits spec ("svc=cpus[:mem][,svc=cpus[:mem]...]")
 // and stamps the caps onto the matching entries of svcs. Unknown service
 // names are rejected rather than silently ignored, so a typo surfaces at
@@ -482,6 +502,14 @@ func applyLimits(svcs []splitService, spec string) error {
 		cpus, mem = strings.TrimSpace(cpus), strings.TrimSpace(mem)
 		if cpus == "" && mem == "" {
 			return errors.NewError("-limits entry %q sets neither cpus nor mem", entry)
+		}
+		if cpus != "" {
+			if v, err := strconv.ParseFloat(cpus, 64); !cpusPattern.MatchString(cpus) || err != nil || v <= 0 {
+				return errors.NewError("-limits entry %q: cpus %q is not a positive number", entry, cpus)
+			}
+		}
+		if mem != "" && !memPattern.MatchString(mem) {
+			return errors.NewError("-limits entry %q: mem %q is not of the form <n>[k|m|g]", entry, mem)
 		}
 
 		idx := slices.IndexFunc(svcs, func(s splitService) bool { return s.Name == name })
