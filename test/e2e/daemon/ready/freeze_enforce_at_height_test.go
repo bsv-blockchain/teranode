@@ -62,57 +62,46 @@ func waitForBestBlock(t *testing.T, td *daemon.TestDaemon, hash *chainhash.Hash,
 	}, 30*time.Second, 200*time.Millisecond, "%s: best block never became %s on %s", context, hash.String(), td.Settings.ClientName)
 }
 
-// requireRecordedInvalid asserts that a block was rejected with a clean block-invalid
-// verdict AND that the node actually recorded the verdict, rather than treating the
-// rejection as transient and queuing the block for another attempt.
+// requireFreezeRejected asserts that a block was rejected with a clean block-invalid
+// verdict naming the consensus freeze, and that the node did NOT record the block as
+// invalid.
 //
-// The distinction is the second half of issue #1422: a frozen spend used to surface as a
+// The verdict half is the first fix of issue #1422: a frozen spend used to surface as a
 // processing error, which block validation classifies as infrastructure trouble, so the
-// rejecting node re-fetched and re-validated the same block forever instead of failing it
-// once. A test that only asserts require.Error cannot tell the two apart.
-func requireRecordedInvalid(t *testing.T, td *daemon.TestDaemon, block *model.Block, err error) {
+// rejecting node re-fetched and re-validated the same block forever instead of rejecting
+// it. A test that only asserts require.Error cannot tell the two apart.
+//
+// The not-recorded half is deliberate. Whether a node holds a freeze depends on when the
+// alert reached it, so a node without the alert accepts the same block; a persisted
+// verdict could only be lifted by an operator RevalidateBlock. The block is rejected and
+// judged again on its next delivery instead.
+func requireFreezeRejected(t *testing.T, td *daemon.TestDaemon, block *model.Block, err error) {
 	t.Helper()
 
 	require.Error(t, err, "a block spending a consensus-frozen utxo must be rejected")
 
-	// The verdict, not merely "an error". Block validation persists a block as invalid
-	// only on ErrBlockInvalid; anything else it reads as infrastructure trouble and
-	// re-queues, which is the endless re-fetch/re-validate loop issue #1422 describes.
-	// Inner ErrProcessing links from intermediate wrapping are fine — what matters is
-	// that the outermost classification is a verdict and that the node acted on it,
-	// which the GetLastNInvalidBlocks poll below proves.
-	require.ErrorIs(t, err, errors.ErrBlockInvalid,
-		"the rejection must be a clean block-invalid verdict, not a retryable error: %v", err)
+	// Block-invalid on the legacy route and on block.Valid's parent check; on a peer route a
+	// verdict raised by subtree validation is a corrupt-body rejection instead, because the
+	// subtree list is not yet bound to the header (bitcoin-sv/teranode#4844). Either is a
+	// rejection, never a retryable error.
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid) || errors.IsBlockCorrupt(err),
+		"the rejection must be a clean verdict, not a retryable error: %v", err)
 	require.ErrorIs(t, err, errors.ErrTxInvalid,
 		"the verdict must name the transaction-level cause so it survives classification: %v", err)
 	require.ErrorIs(t, err, errors.ErrUtxoConsensusFrozen,
 		"the cause must be the height-anchored consensus code, never the policy/maturity one: %v", err)
 
-	require.Eventually(t, func() bool {
-		invalidBlocks, listErr := td.BlockchainClient.GetLastNInvalidBlocks(td.Ctx, 20)
-		if listErr != nil {
-			return false
-		}
+	require.Never(t, func() bool {
+		exists, existsErr := td.BlockchainClient.GetBlockExists(td.Ctx, block.Hash())
 
-		for _, invalid := range invalidBlocks {
-			header, headerErr := model.NewBlockHeaderFromBytes(invalid.BlockHeader)
-			if headerErr != nil {
-				continue
-			}
-
-			if header.Hash().Equal(*block.Hash()) {
-				return true
-			}
-		}
-
-		return false
-	}, 20*time.Second, 200*time.Millisecond,
-		"the rejected block must be recorded as invalid so it is never re-fetched")
+		return existsErr == nil && exists
+	}, 2*time.Second, 200*time.Millisecond,
+		"a block rejected for a consensus freeze must not be stored, as invalid or otherwise")
 }
 
 // TestFreezeEnforceAtHeightBoundary walks a single node across the boundaries of a
 // freeze's enforceAtHeight window and asserts that a block is rejected for exactly the
-// heights inside it — and that the rejection is a clean, recorded block-invalid verdict.
+// heights inside it — and that the rejection is a clean block-invalid verdict.
 //
 // Before issue #1422 a freeze was applied the instant the alert was processed, with no
 // height attached, so the first case below (a block BELOW the freeze's start height)
@@ -215,7 +204,7 @@ func TestFreezeEnforceAtHeightBoundary(t *testing.T) {
 
 	// A block INSIDE the window: a consensus violation every node derives identically.
 	blockInside, err := submitBlockSpending(t, 1, windowStart)
-	requireRecordedInvalid(t, td, blockInside, err)
+	requireFreezeRejected(t, td, blockInside, err)
 
 	// A block AT the stop height: the window is half-open, so enforcement is over.
 	_, err = submitBlockSpending(t, 2, windowStop)
@@ -310,7 +299,7 @@ func TestFreezeSameBlockParentChain(t *testing.T) {
 	require.Equal(t, windowStart, forkInside.Height)
 
 	err = td.BlockValidation.ValidateBlock(td.Ctx, forkInside, "legacy", true)
-	requireRecordedInvalid(t, td, forkInside, err)
+	requireFreezeRejected(t, td, forkInside, err)
 }
 
 // TestFreezeAlertTimingKeepsFleetInAgreement is the multi-node reproduction from issue
@@ -453,10 +442,10 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	require.Equal(t, windowStart, blockInside.Height)
 
 	errA := nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, blockInside, "legacy", true)
-	requireRecordedInvalid(t, nodeA, blockInside, errA)
+	requireFreezeRejected(t, nodeA, blockInside, errA)
 
 	errB := nodeB.BlockValidation.ValidateBlock(nodeB.Ctx, blockInside, nodeA.AssetURL, true)
-	requireRecordedInvalid(t, nodeB, blockInside, errB)
+	requireFreezeRejected(t, nodeB, blockInside, errB)
 
 	requireSameTip(t, "after both nodes rejected a block inside the freeze window")
 
@@ -476,10 +465,10 @@ func TestFreezeAlertTimingKeepsFleetInAgreement(t *testing.T) {
 	require.Equal(t, windowStart, forkInside.Height)
 
 	errA = nodeA.BlockValidation.ValidateBlock(nodeA.Ctx, forkInside, "legacy", true)
-	requireRecordedInvalid(t, nodeA, forkInside, errA)
+	requireFreezeRejected(t, nodeA, forkInside, errA)
 
 	errB = nodeB.BlockValidation.ValidateBlock(nodeB.Ctx, forkInside, nodeA.AssetURL, true)
-	requireRecordedInvalid(t, nodeB, forkInside, errB)
+	requireFreezeRejected(t, nodeB, forkInside, errB)
 
 	requireSameTip(t, "after both nodes rejected a fork re-mining the below-window spend inside the window")
 }
@@ -569,7 +558,7 @@ func TestFreezeReorgRejectsReminedSpend(t *testing.T) {
 	// that never saw blockBelow.
 	_, remined := td.CreateTestBlock(t, competing2, 91004, spendBelow)
 	require.Equal(t, windowStart+1, remined.Height)
-	requireRecordedInvalid(t, td, remined, td.BlockValidation.ValidateBlock(td.Ctx, remined, "legacy", true))
+	requireFreezeRejected(t, td, remined, td.BlockValidation.ValidateBlock(td.Ctx, remined, "legacy", true))
 
 	// And the coin that was never spent is, of course, still frozen.
 	spendOther := td.CreateTransactionWithOptions(t,
@@ -578,7 +567,7 @@ func TestFreezeReorgRejectsReminedSpend(t *testing.T) {
 	)
 
 	_, insideOther := td.CreateTestBlock(t, competing2, 91005, spendOther)
-	requireRecordedInvalid(t, td, insideOther, td.BlockValidation.ValidateBlock(td.Ctx, insideOther, "legacy", true))
+	requireFreezeRejected(t, td, insideOther, td.BlockValidation.ValidateBlock(td.Ctx, insideOther, "legacy", true))
 
 	// Past the window, both spends are valid again.
 	_, filler := td.CreateTestBlock(t, competing2, 91006)
