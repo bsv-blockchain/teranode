@@ -62,6 +62,20 @@ pruner_skipDeletions.docker.teranode{{ .Index }}                   = false
 pruner_blockAssemblyWaitTimeout.docker.teranode{{ .Index }}        = {{ $.Retention.BAWaitTimeout }}
 pruner_blobDeletionSafetyWindow.docker.teranode{{ .Index }}        = {{ $.Retention.BlobSafetyWindow }}
 blockpersister_persistSleep.docker.teranode{{ .Index }}            = {{ $.Retention.PersistSleep }}
+{{- if $.Retention.InitialSubtreeItems }}
+# Block-assembly shape. moveForwardBlock's work scales with subtree size, so
+# these decide how hard a mined block hits block assembly.
+initial_merkle_items_per_subtree.docker.teranode{{ .Index }}       = {{ $.Retention.InitialSubtreeItems }}
+{{- end }}
+{{- if $.Retention.MaximumSubtreeItems }}
+maximum_merkle_items_per_subtree.docker.teranode{{ .Index }}       = {{ $.Retention.MaximumSubtreeItems }}
+{{- end }}
+{{- if $.Retention.DynamicSubtreeSize }}
+blockassembly_useDynamicSubtreeSize.docker.teranode{{ .Index }}    = {{ $.Retention.DynamicSubtreeSize }}
+{{- end }}
+{{- if $.Retention.RestartValidateParent }}
+blockassembly_onRestartValidateParentChain.docker.teranode{{ .Index }} = {{ $.Retention.RestartValidateParent }}
+{{- end }}
 {{- end }}
 # The block persister HTTP listener is loopback by default; both topologies
 # publish its port, so it has to accept connections from outside the container.

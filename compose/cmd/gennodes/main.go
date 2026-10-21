@@ -149,6 +149,19 @@ type retentionProfile struct {
 	BAWaitTimeout            string // -> pruner_blockAssemblyWaitTimeout
 	BlobSafetyWindow         uint32 // -> pruner_blobDeletionSafetyWindow
 	PersistSleep             string // -> blockpersister_persistSleep
+
+	// Block-assembly shape, not retention, but carried here so one profile
+	// describes one environment. Empty/zero means "do not emit", leaving
+	// settings.conf in force.
+	//
+	// These matter for reproducing a block-assembly stall: moveForwardBlock's
+	// work scales with how much a subtree holds, so a rig running the shipped
+	// 32768 items per subtree does far less work per mined block than a
+	// production node running 1048576, and stalls correspondingly less.
+	InitialSubtreeItems   uint32 // -> initial_merkle_items_per_subtree
+	MaximumSubtreeItems   uint32 // -> maximum_merkle_items_per_subtree
+	DynamicSubtreeSize    string // -> blockassembly_useDynamicSubtreeSize ("true"/"false")
+	RestartValidateParent string // -> blockassembly_onRestartValidateParentChain
 }
 
 // productionRetention emits nothing: the stack inherits settings.conf's
@@ -167,19 +180,50 @@ var productionRetention = retentionProfile{Name: "production", Emit: false}
 // observable. Re-run at 10m once a defect reproduces.
 var aggressiveRetention = retentionProfile{
 	Name: "aggressive", Emit: true,
-	BlockHeightRetention:     20,                 // prod 288
-	UnminedTxRetention:       10,                 // prod 144
-	ParentPreservationBlocks: 40,                 // prod 1440
-	BlockTrigger:             "OnBlockPersisted", // prod default; core runs -blockpersister=1
-	BAWaitTimeout:            "60s",              // prod 10m — see above
-	BlobSafetyWindow:         5,                  // prod 10
-	PersistSleep:             "2s",               // prod 10s
+	BlockHeightRetention:     20,                 // settings.conf ships 288
+	UnminedTxRetention:       10,                 // code default is BlockHeightRetention/2
+	ParentPreservationBlocks: 40,                 // settings.conf ships 1440
+	BlockTrigger:             "OnBlockPersisted", // core runs -blockpersister=1
+	BAWaitTimeout:            "60s",              // settings.conf ships 10m — see above
+	BlobSafetyWindow:         5,                  // settings.conf ships 10
+	PersistSleep:             "2s",               // settings.conf ships 10s
+}
+
+// prodScalingRetention mirrors an observed production scaling deployment,
+// so the rig can be run against the configuration
+// the defect is actually reported on rather than an invented one.
+//
+// The headline is BlockHeightRetention = 6. That is ~48x more aggressive
+// than the shipped default of 288, and it matters beyond raw eagerness:
+// pruner_skipDuringCatchup's own documentation states it is "only safe with
+// retention >= 288". Any node that falls into CATCHINGBLOCKS under load is
+// therefore pruning outside the window its own settings call safe.
+//
+// UnminedTxRetention is left at 0 deliberately: the loader derives it as
+// globalBlockHeightRetention/2 when unset (3 here), which is what production
+// gets. Note the struct tag in settings/utxostore_settings.go advertises
+// default 144 while the loader uses global/2 - the tag is wrong, not the code.
+var prodScalingRetention = retentionProfile{
+	Name: "prod-scaling", Emit: true,
+	BlockHeightRetention:     6,
+	UnminedTxRetention:       3, // = BlockHeightRetention/2, as the loader derives
+	ParentPreservationBlocks: 1440,
+	BlockTrigger:             "OnBlockPersisted",
+	BAWaitTimeout:            "10m",
+	BlobSafetyWindow:         10,
+	PersistSleep:             "10s",
+
+	InitialSubtreeItems:   1048576, // prod; settings.conf ships 32768
+	MaximumSubtreeItems:   4194304, // prod; settings.conf ships 32768
+	DynamicSubtreeSize:    "false", // prod; settings.conf ships true
+	RestartValidateParent: "false", // prod; settings.conf ships true
 }
 
 // retentionProfiles maps the -retention flag value to a profile.
 var retentionProfiles = map[string]retentionProfile{
-	"production": productionRetention,
-	"aggressive": aggressiveRetention,
+	"production":   productionRetention,
+	"aggressive":   aggressiveRetention,
+	"prod-scaling": prodScalingRetention,
 }
 
 // validate checks the retention invariant. A profile that emits nothing is
@@ -458,7 +502,7 @@ func main() {
 	out := flag.String("o", "compose/generated", "output directory (relative or absolute)")
 	allInOne := flag.Int("allinone", 1, "1 = single container per node (default), 0 = split per microservice (chaos topology)")
 	limits := flag.String("limits", "", "split-mode per-service resource caps: 'svc=cpus[:mem][,...]' (e.g. 'blockassembly=2:8g,validator=4'); empty = unlimited")
-	retention := flag.String("retention", "production", "pruner/retention profile: production (inherit settings.conf) or aggressive (prune within tens of blocks)")
+	retention := flag.String("retention", "production", "pruner/retention profile: production (inherit settings.conf), aggressive (prune within tens of blocks), or prod-scaling (mirror a production scaling deployment)")
 	flag.Parse()
 
 	if *n < minNodes || *n > maxNodes {
@@ -475,7 +519,7 @@ func main() {
 	}
 	profile, ok := retentionProfiles[*retention]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "-retention must be one of production, aggressive; got %q\n", *retention)
+		fmt.Fprintf(os.Stderr, "-retention must be one of production, aggressive, prod-scaling; got %q\n", *retention)
 		os.Exit(2)
 	}
 	if err := profile.validate(); err != nil {
