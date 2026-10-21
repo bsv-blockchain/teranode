@@ -11,6 +11,21 @@
 
 set -euo pipefail
 
+# RPC_PORTS below is an associative array, which needs bash >= 4. macOS still
+# ships bash 3.2 as /bin/bash, where `declare -A` fails and the script then
+# mines nothing while still exiting 0. Re-exec under a newer bash when one is
+# installed. Mirrors the same guard in compose/multinode.sh.
+if ((BASH_VERSINFO[0] < 4)); then
+  for _newer_bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x "$_newer_bash" ]]; then
+      exec "$_newer_bash" "$0" "$@"
+    fi
+  done
+  echo "error: generate-blocks.sh needs bash >= 4 (found ${BASH_VERSION})." >&2
+  echo "       Install one with 'brew install bash' - no need to change your login shell." >&2
+  exit 2
+fi
+
 RPC_USER="bitcoin"
 RPC_PASS="bitcoin"
 

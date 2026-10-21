@@ -26,8 +26,43 @@ p2p_private_key.docker.teranode{{ .Index }}                    = {{ .PrivateKey 
 # bootstrap peers, and the regtest topic has no matching genesis keys), so keep
 # it off - same as compose/settings_test.conf does for the other docker rigs.
 startAlert.docker.teranode{{ .Index }}                         = false
+{{- /*
+  Static peers must name the container that actually runs p2p. In all-in-one
+  that is "teranodeN"; in split mode there is no such container (a node is
+  nine per-service siblings), so the bare name resolves to nothing and every
+  dial fails with "no good addresses" — the mesh never forms and blocks never
+  propagate. Emit ONE value, not an override later in the file: a duplicate
+  key here is won by the first occurrence.
+*/}}
+{{- if $.AllInOne }}
 p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeers }}
+{{- else }}
+p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeersSplit }}
+{{- end }}
 p2p_bootstrap_peers.docker.teranode{{ .Index }}.test           =
+{{- if $.Retention.Emit }}
+# --- retention / pruner profile: {{ $.Retention.Name }} ---
+# ONE PLACE TO CHANGE: compose/cmd/gennodes/main.go, var aggressiveRetention.
+# Production equivalents: 288 / 144 / 1440 / OnBlockPersisted / 10m / 10 / 10s.
+#
+# global_blockHeightRetention is the key that drives the delete-at-height
+# stamp. utxostore_blockHeightRetention is parsed but UNUSED — see
+# Settings.GetUtxoStoreBlockHeightRetention in settings/interface.go, which
+# computes global + utxostore_blockHeightRetentionAdjustment.
+global_blockHeightRetention.docker.teranode{{ .Index }}            = {{ $.Retention.BlockHeightRetention }}
+utxostore_unminedTxRetention.docker.teranode{{ .Index }}           = {{ $.Retention.UnminedTxRetention }}
+utxostore_parentPreservationBlocks.docker.teranode{{ .Index }}     = {{ $.Retention.ParentPreservationBlocks }}
+startPruner.docker.teranode{{ .Index }}                            = true
+pruner_block_trigger.docker.teranode{{ .Index }}                   = {{ $.Retention.BlockTrigger }}
+pruner_min_block_height.docker.teranode{{ .Index }}                = 0
+pruner_skipDuringCatchup.docker.teranode{{ .Index }}               = false
+pruner_skipPreserveParents.docker.teranode{{ .Index }}             = false
+pruner_skipProcessExpiredPreservations.docker.teranode{{ .Index }} = false
+pruner_skipDeletions.docker.teranode{{ .Index }}                   = false
+pruner_blockAssemblyWaitTimeout.docker.teranode{{ .Index }}        = {{ $.Retention.BAWaitTimeout }}
+pruner_blobDeletionSafetyWindow.docker.teranode{{ .Index }}        = {{ $.Retention.BlobSafetyWindow }}
+blockpersister_persistSleep.docker.teranode{{ .Index }}            = {{ $.Retention.PersistSleep }}
+{{- end }}
 # The block persister HTTP listener is loopback by default; both topologies
 # publish its port, so it has to accept connections from outside the container.
 # No token is set here, so its blob API stays read-only.

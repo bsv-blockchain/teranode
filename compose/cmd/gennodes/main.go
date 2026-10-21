@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -62,6 +63,21 @@ const (
 	aerospikePerNd    = 10 // node 1: 3010/3011/3012, node 10: 3100/3101/3102
 	dashboardContPort = 8090
 	rpcContPort       = 9292
+
+	// metricsContPort is the pprof + /metrics listener every teranode
+	// process binds (PROFILE_PORT in settings.conf).
+	metricsContPort = 9091
+
+	// metricsHostOffset is the first host offset handed out for per-service
+	// metrics ports: service i in buildSplitServices gets
+	// metricsHostOffset + i. 1910 sits above the highest derived offset in
+	// use (container 9906 -> 1906) and leaves room below nodeStride (2000)
+	// for the ten services the split topology allows, so no mapping can
+	// collide with a derived port or with the next node's range.
+	//
+	// Node 1 blockassembly therefore publishes :9091 on host 21911.
+	// harness.ServiceMetricsPort mirrors this — keep the two in sync.
+	metricsHostOffset = 1910
 )
 
 type peerKey struct {
@@ -87,6 +103,12 @@ type node struct {
 	DashboardPort        int
 	RPCPort              int
 	StaticPeers          string // pipe-separated multiaddrs, mesh excluding self
+	// StaticPeersSplit is StaticPeers with the split-topology DNS names
+	// (teranodeN-p2p). In split mode the bare "teranodeN" name does not
+	// resolve — there is no node-level container — so the all-in-one list
+	// would leave every peer undiallable ("no good addresses") and blocks
+	// would never propagate. Emitted only when AllInOne is false.
+	StaticPeersSplit string
 }
 
 type spec struct {
@@ -102,6 +124,97 @@ type spec struct {
 	// source of truth for split-mode service shape — adding a new entry here
 	// adds one container per node end-to-end.
 	SplitServices []splitService
+
+	// Retention selects the pruner/retention overrides emitted into
+	// settings_multinode.conf. Defaults to productionRetention, which emits
+	// nothing and leaves settings.conf's shipped values in force.
+	Retention retentionProfile
+}
+
+// retentionProfile is THE place to change pruning aggressiveness for the
+// generated multinode rig. Swap the values in aggressiveRetention for a
+// production set and regenerate; nothing else needs to change.
+//
+// Invariant, documented in settings.conf and enforced by validate():
+// UnminedTxRetention < BlockHeightRetention < ParentPreservationBlocks.
+type retentionProfile struct {
+	Name string
+	// Emit false means "write no overrides at all" — the stack inherits
+	// settings.conf. Every other field is ignored.
+	Emit                     bool
+	BlockHeightRetention     uint32 // -> global_blockHeightRetention
+	UnminedTxRetention       uint32 // -> utxostore_unminedTxRetention
+	ParentPreservationBlocks uint32 // -> utxostore_parentPreservationBlocks
+	BlockTrigger             string // -> pruner_block_trigger
+	BAWaitTimeout            string // -> pruner_blockAssemblyWaitTimeout
+	BlobSafetyWindow         uint32 // -> pruner_blobDeletionSafetyWindow
+	PersistSleep             string // -> blockpersister_persistSleep
+}
+
+// productionRetention emits nothing: the stack inherits settings.conf's
+// 288 / 144 / 1440 / OnBlockPersisted / 10m. This is the default, so the
+// generator's behaviour is unchanged for every existing caller.
+var productionRetention = retentionProfile{Name: "production", Emit: false}
+
+// aggressiveRetention makes pruning observable within tens of blocks on a
+// fresh regtest chain instead of the 288 a production profile would need.
+// Production equivalents are in the trailing comments.
+//
+// BAWaitTimeout is a deliberate divergence: at the production 10m the pruner
+// parks silently through a block-assembly freeze and the run tells you
+// nothing. At 60s it either proceeds or increments
+// teranode_pruner_skipped_total{reason="block_assembly_timeout"}, which is an
+// observable. Re-run at 10m once a defect reproduces.
+var aggressiveRetention = retentionProfile{
+	Name: "aggressive", Emit: true,
+	BlockHeightRetention:     20,                 // prod 288
+	UnminedTxRetention:       10,                 // prod 144
+	ParentPreservationBlocks: 40,                 // prod 1440
+	BlockTrigger:             "OnBlockPersisted", // prod default; core runs -blockpersister=1
+	BAWaitTimeout:            "60s",              // prod 10m — see above
+	BlobSafetyWindow:         5,                  // prod 10
+	PersistSleep:             "2s",               // prod 10s
+}
+
+// retentionProfiles maps the -retention flag value to a profile.
+var retentionProfiles = map[string]retentionProfile{
+	"production": productionRetention,
+	"aggressive": aggressiveRetention,
+}
+
+// validate checks the retention invariant. A profile that emits nothing is
+// trivially valid.
+func (r retentionProfile) validate() error {
+	if !r.Emit {
+		return nil
+	}
+	if !(r.UnminedTxRetention < r.BlockHeightRetention &&
+		r.BlockHeightRetention < r.ParentPreservationBlocks) {
+		return errors.NewError(
+			"retention profile %q violates unminedTxRetention (%d) < blockHeightRetention (%d) < parentPreservationBlocks (%d)",
+			r.Name, r.UnminedTxRetention, r.BlockHeightRetention, r.ParentPreservationBlocks)
+	}
+	return nil
+}
+
+// extraHostPort publishes a container port on an EXPLICIT host offset rather
+// than the derived (container - 8000) one.
+//
+// HostOffset must be in [metricsHostOffset, nodeStride): above the highest
+// derived offset in use (container 9906 -> offset 1906) and below the
+// per-node stride (2000), so a mapping can collide neither with a derived
+// port inside its own node nor with any port of the next node.
+type extraHostPort struct {
+	HostOffset int
+	Container  int
+}
+
+// resourceLimits is the optional cgroup cap applied to one split-mode
+// container. The zero value means "unlimited" and renders nothing, so a
+// default generation is byte-identical to one without limits support.
+type resourceLimits struct {
+	CPUs     string // compose `cpus:` value, e.g. "2" or "1.5"
+	MemLimit string // compose `mem_limit:` value, e.g. "8g"
 }
 
 // splitService describes one microservice container in the split topology.
@@ -130,6 +243,19 @@ type splitService struct {
 	// (typically a superset of HostPorts — e.g. propagation also exposes
 	// 8833 HTTP for in-cluster proxy use, not mapped to the host).
 	ExposePorts []int
+
+	// ExtraHostPorts publishes container ports on EXPLICIT host offsets
+	// rather than the derived (container - 8000) one. Needed wherever two
+	// services in the same node listen on the same container port: every
+	// split service serves :9091 (pprof + /metrics), but the derived
+	// arithmetic would hand them all HostBase+1091 and compose would refuse
+	// to start. See metricsHostOffset.
+	ExtraHostPorts []extraHostPort
+
+	// Limits caps this container's CPU and memory. Populated only from the
+	// -limits flag; the zero value renders nothing, so default output is
+	// byte-identical to a build without this field.
+	Limits resourceLimits
 
 	// DependsOnBlockchain biases startup ordering (compose `depends_on`).
 	// False only for the blockchain service itself; everything else dials
@@ -184,7 +310,7 @@ type splitService struct {
 // template's host-port arithmetic (HostBase + container - 8000) silently
 // breaks otherwise. See templates/docker-compose-split.yml.tmpl.
 func buildSplitServices() []splitService {
-	return []splitService{
+	svcs := []splitService{
 		{
 			Name:            "blockchain",
 			EntrypointFlags: []string{"-blockchain=1"},
@@ -270,12 +396,69 @@ func buildSplitServices() []splitService {
 			HealthcheckPort:     9292, // RPC; the 6 bundled daemons all expose ports but RPC is the one external tooling probes
 		},
 	}
+
+	// Publish every service's :9091 on its own host offset. Assigned by
+	// index rather than written into each literal above so the offsets
+	// cannot drift out of step with the service order. core keeps its
+	// derived HostBase+1091 mapping too — publishing one container port on
+	// two host ports is legal, and it keeps ServiceMetricsPort uniform
+	// across all nine services.
+	for i := range svcs {
+		svcs[i].ExtraHostPorts = append(svcs[i].ExtraHostPorts, extraHostPort{
+			HostOffset: metricsHostOffset + i,
+			Container:  metricsContPort,
+		})
+		if !slices.Contains(svcs[i].ExposePorts, metricsContPort) {
+			svcs[i].ExposePorts = append(svcs[i].ExposePorts, metricsContPort)
+		}
+	}
+
+	return svcs
+}
+
+// applyLimits parses a -limits spec ("svc=cpus[:mem][,svc=cpus[:mem]...]")
+// and stamps the caps onto the matching entries of svcs. Unknown service
+// names are rejected rather than silently ignored, so a typo surfaces at
+// generation time instead of as a mysteriously unconstrained container.
+func applyLimits(svcs []splitService, spec string) error {
+	if strings.TrimSpace(spec) == "" {
+		return nil
+	}
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, caps, ok := strings.Cut(entry, "=")
+		if !ok {
+			return errors.NewError("-limits entry %q is not of the form svc=cpus[:mem]", entry)
+		}
+		name = strings.TrimSpace(name)
+		cpus, mem, _ := strings.Cut(caps, ":")
+		cpus, mem = strings.TrimSpace(cpus), strings.TrimSpace(mem)
+		if cpus == "" && mem == "" {
+			return errors.NewError("-limits entry %q sets neither cpus nor mem", entry)
+		}
+
+		idx := slices.IndexFunc(svcs, func(s splitService) bool { return s.Name == name })
+		if idx < 0 {
+			known := make([]string, len(svcs))
+			for i, s := range svcs {
+				known[i] = s.Name
+			}
+			return errors.NewError("-limits names unknown service %q (known: %s)", name, strings.Join(known, ", "))
+		}
+		svcs[idx].Limits = resourceLimits{CPUs: cpus, MemLimit: mem}
+	}
+	return nil
 }
 
 func main() {
 	n := flag.Int("n", 0, "number of teranode instances (3-10)")
 	out := flag.String("o", "compose/generated", "output directory (relative or absolute)")
 	allInOne := flag.Int("allinone", 1, "1 = single container per node (default), 0 = split per microservice (chaos topology)")
+	limits := flag.String("limits", "", "split-mode per-service resource caps: 'svc=cpus[:mem][,...]' (e.g. 'blockassembly=2:8g,validator=4'); empty = unlimited")
+	retention := flag.String("retention", "production", "pruner/retention profile: production (inherit settings.conf) or aggressive (prune within tens of blocks)")
 	flag.Parse()
 
 	if *n < minNodes || *n > maxNodes {
@@ -284,6 +467,19 @@ func main() {
 	}
 	if *allInOne != 0 && *allInOne != 1 {
 		fmt.Fprintf(os.Stderr, "-allinone must be 0 or 1, got %d\n", *allInOne)
+		os.Exit(2)
+	}
+	if *limits != "" && *allInOne == 1 {
+		fmt.Fprintln(os.Stderr, "-limits applies to the split topology only; pass -allinone=0")
+		os.Exit(2)
+	}
+	profile, ok := retentionProfiles[*retention]
+	if !ok {
+		fmt.Fprintf(os.Stderr, "-retention must be one of production, aggressive; got %q\n", *retention)
+		os.Exit(2)
+	}
+	if err := profile.validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(2)
 	}
 
@@ -295,6 +491,12 @@ func main() {
 
 	s := buildSpec(keys)
 	s.AllInOne = *allInOne == 1
+	s.Retention = profile
+
+	if err := applyLimits(s.SplitServices, *limits); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(2)
+	}
 
 	if err := writeAll(*out, s); err != nil {
 		fmt.Fprintf(os.Stderr, "write outputs: %v\n", err)
@@ -346,6 +548,7 @@ func buildSpec(keys []peerKey) spec {
 	}
 	for i := range nodes {
 		nodes[i].StaticPeers = meshPeers(keys, i+1)
+		nodes[i].StaticPeersSplit = meshPeersWithSuffix(keys, i+1, "-p2p")
 	}
 	// buildSpec returns an all-in-one spec by default; callers that want
 	// the split topology must flip AllInOne to false after construction.
@@ -355,9 +558,12 @@ func buildSpec(keys []peerKey) spec {
 	// the split template ignores it when AllInOne is true. Populating
 	// here (not in main) means every test/caller gets the slice for free.
 	return spec{
-		NodeCount:     len(nodes),
-		Nodes:         nodes,
-		AllInOne:      true,
+		NodeCount: len(nodes),
+		Nodes:     nodes,
+		AllInOne:  true,
+		// Retention defaults to the production profile, which emits no
+		// overrides — callers that want aggressive pruning set it in main.
+		Retention:     productionRetention,
 		SplitServices: buildSplitServices(),
 	}
 }
@@ -365,12 +571,21 @@ func buildSpec(keys []peerKey) spec {
 // meshPeers returns the pipe-separated static-peers list for node `selfIdx`
 // (1-based), one multiaddr per other node, using the docker DNS name.
 func meshPeers(keys []peerKey, selfIdx int) string {
+	return meshPeersWithSuffix(keys, selfIdx, "")
+}
+
+// meshPeersWithSuffix builds the static-peer list against the container DNS
+// name "teranode<N><suffix>". The all-in-one topology wants "" (the node
+// container is literally teranodeN); the split topology wants "-p2p",
+// because there is no teranodeN container there — only nine per-service
+// siblings — and dialling the bare name fails with "no good addresses".
+func meshPeersWithSuffix(keys []peerKey, selfIdx int, suffix string) string {
 	var parts []string
 	for _, k := range keys {
 		if k.Index == selfIdx {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("/dns/teranode%d/tcp/${P2P_PORT}/p2p/%s", k.Index, k.PeerID))
+		parts = append(parts, fmt.Sprintf("/dns/teranode%d%s/tcp/${P2P_PORT}/p2p/%s", k.Index, suffix, k.PeerID))
 	}
 	return strings.Join(parts, " | ")
 }

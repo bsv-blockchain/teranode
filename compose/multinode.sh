@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This script uses associative arrays (`local -A`), which need bash >= 4.
+# macOS still ships bash 3.2 as /bin/bash, and there `local -A` fails in a way
+# `set -e` does NOT catch: the function aborts but the script exits 0, so
+# `up` silently starts nothing and reports success. Re-exec under a newer
+# bash when one is installed rather than leaving that trap in place.
+if ((BASH_VERSINFO[0] < 4)); then
+  for _newer_bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x "$_newer_bash" ]]; then
+      exec "$_newer_bash" "$0" "$@"
+    fi
+  done
+  echo "error: multinode.sh needs bash >= 4 (found ${BASH_VERSION})." >&2
+  echo "       Install one with 'brew install bash' - no need to change your login shell." >&2
+  exit 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GEN_DIR="$SCRIPT_DIR/generated"
@@ -16,6 +32,7 @@ Usage: compose/multinode.sh <command> [args]
 
 Commands:
   up <N> [--build] [-allinone=0|1] [--skip N:svc ...]
+         [--limits svc=cpus[:mem],...] [--retention production|aggressive]
                            Generate and start an N-node network (3-10).
                            -allinone=1 (default): one container per node runs
                              all services in a single process.
@@ -31,6 +48,17 @@ Commands:
                              specific service. Bring it up later with
                              'chaos start N svc'. blockchain cannot be --skipped
                              because sibling services depend on it.
+                           --limits svc=cpus[:mem]: cap a service's CPU and
+                             memory (split mode only; comma-separated for
+                             several). Use it to put a service under
+                             deterministic pressure rather than relying on
+                             load alone, e.g. --limits blockassembly=2:8g.
+                           --retention aggressive: shrink the pruner retention
+                             windows (288/144/1440 -> 20/10/40) so pruning is
+                             observable within tens of blocks on a fresh
+                             regtest chain. Default 'production' inherits
+                             settings.conf unchanged. Values live in
+                             compose/cmd/gennodes/main.go (aggressiveRetention).
   build                    Build the teranode Docker image
   down                     Stop and remove all containers and volumes
   restart                  Restart all containers (picks up config changes)
@@ -119,10 +147,26 @@ cmd_up() {
   local n=""
   local do_build=false
   local allinone=1
+  local limits=""
+  local retention="production"
   local -a skip_specs=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --build) do_build=true; shift ;;
+      --limits=*|-limits=*) limits="${1#*=}"; shift ;;
+      --limits|-limits)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --limits requires an argument (e.g. --limits blockassembly=2:8g)" >&2
+          exit 2
+        fi
+        limits="$2"; shift 2 ;;
+      --retention=*|-retention=*) retention="${1#*=}"; shift ;;
+      --retention|-retention)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --retention requires an argument (production|aggressive)" >&2
+          exit 2
+        fi
+        retention="$2"; shift 2 ;;
       -allinone=0|--allinone=0) allinone=0; shift ;;
       -allinone=1|--allinone=1) allinone=1; shift ;;
       -allinone=*|--allinone=*)
@@ -143,6 +187,33 @@ cmd_up() {
     echo "error: specify number of nodes, e.g. '$0 up 5'" >&2
     exit 2
   fi
+  # Validate --limits / --retention up front, before we spend time generating.
+  # gennodes re-validates both; these checks just fail faster and with a
+  # message that names the multinode.sh flag the user actually typed.
+  if [[ -n "$limits" ]]; then
+    if [[ "$allinone" -ne 0 ]]; then
+      echo "error: --limits requires -allinone=0; there's no per-service granularity in all-in-one mode" >&2
+      exit 2
+    fi
+    local entry svc_name
+    IFS=',' read -ra _limit_entries <<< "$limits"
+    for entry in "${_limit_entries[@]}"; do
+      if [[ ! "$entry" =~ ^([a-z0-9]+)=([0-9.]+)(:[0-9]+[kmgKMG]?)?$ ]]; then
+        echo "error: --limits must be svc=cpus[:mem] (e.g. blockassembly=2:8g), got '$entry'" >&2
+        exit 2
+      fi
+      svc_name="${BASH_REMATCH[1]}"
+      assert_known_service "$svc_name" "--limits"
+    done
+  fi
+  case "$retention" in
+    production|aggressive) ;;
+    *)
+      echo "error: --retention must be production or aggressive, got '$retention'" >&2
+      exit 2
+      ;;
+  esac
+
   # Validate --skip specs up front, before we spend time generating.
   # Service list must track buildSplitServices() in compose/cmd/gennodes/main.go.
   local -A skip_set=()
@@ -177,8 +248,9 @@ cmd_up() {
   fi
   local topology="all-in-one"
   [[ "$allinone" -eq 0 ]] && topology="split-per-service"
-  echo "generating $n-node stack (topology: $topology)..."
-  (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes -n "$n" -allinone="$allinone" -o compose/generated)
+  echo "generating $n-node stack (topology: $topology, retention: $retention${limits:+, limits: $limits})..."
+  (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes \
+    -n "$n" -allinone="$allinone" -retention "$retention" -limits "$limits" -o compose/generated)
   if [[ "$do_build" == true ]]; then
     cmd_build
   fi
