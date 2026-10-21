@@ -5948,6 +5948,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#private-alert-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Private Alert Network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#development-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6924,6 +6935,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#private-alert-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Private Alert Network
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#development-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -7071,23 +7093,23 @@
 <tr>
 <td>GenesisKeys</td>
 <td>[]string</td>
-<td>[]</td>
+<td>[] (empty: per-network default, see below)</td>
 <td>alert_genesis_keys</td>
-<td><strong>CRITICAL</strong> - Service fails during Init() if empty (pipe-delimited)</td>
+<td>Public keys allowed to sign alerts (pipe-delimited). Empty uses the network default</td>
 </tr>
 <tr>
 <td>P2PPrivateKey</td>
 <td>string</td>
 <td>""</td>
 <td>alert_p2p_private_key</td>
-<td>PEM-format private key. Auto-generates if empty</td>
+<td>Hex-encoded Ed25519 private key (64-byte seed‖pubkey). Auto-generates if empty</td>
 </tr>
 <tr>
 <td>ProtocolID</td>
 <td>string</td>
-<td>"/bitcoin/alert-system/1.0.0"</td>
+<td>"" (empty: per-network default, see below)</td>
 <td>alert_protocol_id</td>
-<td>libp2p protocol identifier</td>
+<td>libp2p protocol identifier. Empty uses the network default</td>
 </tr>
 <tr>
 <td>StoreURL</td>
@@ -7099,9 +7121,9 @@
 <tr>
 <td>TopicName</td>
 <td>string</td>
-<td>"bitcoin_alert_system"</td>
+<td>"" (empty: per-network default, see below)</td>
 <td>alert_topic_name</td>
-<td>P2P pubsub topic (auto-suffixed for testnet/regtest)</td>
+<td>P2P pubsub topic. Empty uses the network default</td>
 </tr>
 <tr>
 <td>P2PPort</td>
@@ -7141,13 +7163,49 @@
 </tbody>
 </table>
 <h2 id="network-specific-behavior">Network-Specific Behavior<a class="headerlink" href="#network-specific-behavior" title="Permanent link">&para;</a></h2>
-<p><strong>Topic Name Suffixing:</strong></p>
-<ul>
-<li>Mainnet: Uses configured <code>TopicName</code> as-is</li>
-<li>Testnet: Auto-suffixed as <code>{TopicName}_testnet</code></li>
-<li>Regtest: Auto-suffixed as <code>{TopicName}_regtest</code></li>
-</ul>
-<p>This behavior cannot be overridden.</p>
+<p><strong>Alert Network Defaults:</strong></p>
+<p><code>GenesisKeys</code>, <code>ProtocolID</code> and <code>TopicName</code> are empty in <code>settings.conf</code>. Each empty setting is
+filled from the configured <code>network</code> when the service starts; a non-empty value is an explicit
+override and is used as-is. The defaults come from go-alert-system's embedded network configs
+(<code>config.NetworkDefaults</code>), resolved in <code>services/alert/network_defaults.go</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Network</th>
+<th>ProtocolID</th>
+<th>TopicName</th>
+<th>GenesisKeys</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mainnet</td>
+<td><code>/bitcoin/alert-system/1.0.0</code></td>
+<td><code>bitcoin_alert_system</code></td>
+<td>mainnet key set</td>
+</tr>
+<tr>
+<td>testnet</td>
+<td><code>/bitcoin-testnet/alert-system/0.0.1</code></td>
+<td><code>bitcoin_alert_system_testnet</code></td>
+<td>testnet key set</td>
+</tr>
+<tr>
+<td>stn</td>
+<td><code>/bitcoin-stn/alert-system/0.0.1</code></td>
+<td><code>bitcoin_alert_system_stn</code></td>
+<td>testnet key set</td>
+</tr>
+<tr>
+<td>others (regtest, teratestnet, tstn)</td>
+<td><code>/bitcoin/alert-system/1.0.0</code></td>
+<td><code>bitcoin_alert_system_{network}</code></td>
+<td>mainnet key set</td>
+</tr>
+</tbody>
+</table>
+<p>Networks without a public alert network fall back to the mainnet keys and protocol on a
+network-suffixed topic, and the service logs a warning. Set all three for a private alert network.</p>
 <p><strong>PORT_PREFIX Support:</strong></p>
 <p>The global <code>PORT_PREFIX</code> environment variable is prepended to <code>P2PPort</code> if set.</p>
 <p>Example: <code>PORT_PREFIX=1</code> with <code>ALERT_P2P_PORT=9908</code> results in port 19908.</p>
@@ -7155,9 +7213,11 @@
 <p><strong>P2P Private Key:</strong></p>
 <ul>
 <li>Triggers only if <code>P2PPrivateKey</code> is empty</li>
-<li>Creates directory: <code>$HOME/.alert-system/</code> (permissions: 0750)</li>
-<li>Creates file: <code>private_key.pem</code></li>
-<li>Sets internal <code>PrivateKeyPath</code> (does not modify Teranode settings)</li>
+<li>Creates directory: <code>$HOME/.bitcoin/</code> (permissions: 0750)</li>
+<li>Sets internal <code>PrivateKeyPath</code> to <code>$HOME/.bitcoin/alert_system_private_key</code> (does not modify Teranode settings)</li>
+<li>Generates a key into that file (permissions: 0600) only if the file is missing or empty; otherwise
+  loads it, so the peer identity is stable across restarts. An unreadable or invalid file fails startup
+  rather than being overwritten</li>
 </ul>
 <h2 id="database-configuration">Database Configuration<a class="headerlink" href="#database-configuration" title="Permanent link">&para;</a></h2>
 <table>
@@ -7288,8 +7348,14 @@
 <tbody>
 <tr>
 <td>GenesisKeys</td>
-<td>Must not be empty</td>
+<td>Must not be empty after network defaults are applied</td>
 <td><code>config.ErrNoGenesisKeys</code></td>
+<td>During <code>Init()</code></td>
+</tr>
+<tr>
+<td>GenesisKeys</td>
+<td>Each key must be a hex-encoded compressed public key (66 hex characters); at least 3 keys (an alert needs 3 distinct signers) and at most 10. Blank entries are dropped and repeated keys (in any case) are kept once</td>
+<td>Configuration error</td>
 <td>During <code>Init()</code></td>
 </tr>
 <tr>
@@ -7315,19 +7381,21 @@
 <h2 id="configuration-examples">Configuration Examples<a class="headerlink" href="#configuration-examples" title="Permanent link">&para;</a></h2>
 <h3 id="production-configuration">Production Configuration<a class="headerlink" href="#production-configuration" title="Permanent link">&para;</a></h3>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nv">alert_store</span><span class="o">=</span>postgres://user:pass@host:5432/alert_db?sslmode<span class="o">=</span>require
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">alert_genesis_keys</span><span class="o">=</span>key1<span class="p">|</span>key2<span class="p">|</span>key3
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nv">ALERT_P2P_PORT</span><span class="o">=</span><span class="m">4001</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="nv">alert_protocol_id</span><span class="o">=</span>/bitcoin/alert-system/1.0.0
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="nv">alert_topic_name</span><span class="o">=</span>bitcoin_alert_system
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nv">ALERT_P2P_PORT</span><span class="o">=</span><span class="m">4001</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># genesis keys, protocol ID and topic follow `network`; no need to set them</span>
+</span></code></pre></div>
+<h3 id="private-alert-network">Private Alert Network<a class="headerlink" href="#private-alert-network" title="Permanent link">&para;</a></h3>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">alert_genesis_keys</span><span class="o">=</span>key1<span class="p">|</span>key2<span class="p">|</span>key3
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">alert_protocol_id</span><span class="o">=</span>/my-net/alert-system/0.0.1
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nv">alert_topic_name</span><span class="o">=</span>my_net_alert_system
 </span></code></pre></div>
 <h3 id="development-configuration">Development Configuration<a class="headerlink" href="#development-configuration" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nv">alert_store</span><span class="o">=</span>sqlite:///alert
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nv">alert_genesis_keys</span><span class="o">=</span>devkey1
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nv">alert_store</span><span class="o">=</span>sqlite:///alert
 </span></code></pre></div>
 <h3 id="auto-generated-private-key">Auto-Generated Private Key<a class="headerlink" href="#auto-generated-private-key" title="Permanent link">&para;</a></h3>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Leave empty to auto-generate</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nv">alert_p2p_private_key</span><span class="o">=</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># File will be created at: $HOME/.alert-system/private_key.pem</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Leave empty to auto-generate</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nv">alert_p2p_private_key</span><span class="o">=</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="c1"># Generated once into $HOME/.bitcoin/alert_system_private_key and reused on restart</span>
 </span></code></pre></div>
 
 
