@@ -333,10 +333,9 @@ var rpcLimited = map[string]struct{}{
 	"getminingcandidate":    {},
 	"submitminingsolution":  {},
 
-	// BSV-specific commands
-	"freeze":   {},
-	"unfreeze": {},
-	"reassign": {},
+	// freeze, unfreeze and reassign are deliberately absent: they change which coins this
+	// node will spend and, through the alert system's consensus freeze, which blocks it
+	// accepts, so they are admin-only.
 }
 
 // builderScript is a convenience function which is used for hard-coded scripts
