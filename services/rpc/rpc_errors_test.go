@@ -32,6 +32,7 @@ import (
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -302,8 +303,14 @@ func (p *plainErrorUtxoStore) FreezeUTXOs(context.Context, []*utxo.Spend, *setti
 	return p.err
 }
 
+// Get fails the same way: freeze reads the parent first, to derive the output's UTXO hash,
+// and that read is where a SQL store says "no rows" for an unknown txid.
+func (p *plainErrorUtxoStore) Get(context.Context, *chainhash.Hash, ...fields.FieldName) (*meta.Data, error) {
+	return nil, p.err
+}
+
 // TestHandleFreeze_StoreErrorTextStaysOffTheWire is the review's reproduction of
-// the fail-open default: a limited user freezing an unknown txid on a SQL-backed
+// the fail-open default: an RPC user freezing an unknown txid on a SQL-backed
 // node was told "sql: no rows in result set".
 func TestHandleFreeze_StoreErrorTextStaysOffTheWire(t *testing.T) {
 	logger := newCapturingLogger()
