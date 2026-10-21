@@ -76,7 +76,7 @@ func assertSpendRechecksFreezeStateUnderTheWrite(t *testing.T, ctx context.Conte
 	require.NoError(t, err)
 
 	t.Run("a freeze landing under the write is enforced, and nothing is written", func(t *testing.T) {
-		// The legacy always-window record: frozen, from 0, no end.
+		// The always-window record: frozen, from 0, no end.
 		store.testBeforeSpendWrite = changeOutput(0, `frozen = TRUE, freezeFrom = 0`)
 		defer func() { store.testBeforeSpendWrite = nil }()
 
@@ -192,5 +192,18 @@ func assertSpendRechecksFreezeStateUnderTheWrite(t *testing.T, ctx context.Conte
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrUtxoConsensusFrozen), "got: %v", err)
 		require.False(t, errors.Is(err, errors.ErrSpent))
+	})
+
+	t.Run("a freeze landing under an idempotent re-spend is the consensus verdict, not a success", func(t *testing.T) {
+		// Output 0 is already spent by spend0 (the admissible-change case above), so this
+		// re-spend reads as idempotent at the SELECT. The freeze landing under the write
+		// must still decide it: the miss is re-read, never a success from the stale read.
+		store.testBeforeSpendWrite = changeOutput(0, `freezeFrom = 0`)
+		defer func() { store.testBeforeSpendWrite = nil }()
+
+		_, err := store.Spend(ctx, spend0, blockHeight)
+		require.NoError(t, hookErr)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrUtxoConsensusFrozen), "got: %v", err)
 	})
 }

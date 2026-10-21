@@ -2868,10 +2868,22 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				validationErrors[i] = errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, existingSpendData)
 				continue
 			}
-			// Idempotent re-spend: same spending data — treat as success without UPDATE.
-			// Record the parent so DAH can still be (re)evaluated and heal NULL DAHs
-			// left by spends that happened before the DAH-on-spend fix landed.
+			// Idempotent re-spend: same spending data. It still goes through the UPDATE,
+			// whose upd_idem / spending_data = v.spending_data branch reports it without
+			// changing the row, so that it is pinned to the freeze state judged above like
+			// any other spend: a freeze landing after the SELECT makes it a miss, re-read
+			// and judged by classifyMissedSpend, never an idempotent success decided from
+			// stale state (issue #1422). Record the parent so DAH can still be
+			// (re)evaluated and heal NULL DAHs left by spends that happened before the
+			// DAH-on-spend fix landed.
 			idempotentParentIDs[r.transactionID] = struct{}{}
+			toUpdate = append(toUpdate, spendUpdateRow{
+				batchIdx:      i,
+				transactionID: r.transactionID,
+				vout:          spend.Vout,
+				spendingData:  spend.SpendingData.Bytes(),
+			})
+
 			continue
 		}
 
@@ -3468,18 +3480,12 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		}
 
 		if affected == 0 {
-			// Idempotent re-spend: same tx spending the same output again.
-			// Still record the parent so DAH can be (re)evaluated — this heals DAHs
-			// that an earlier spend (before the DAH-on-spend fix) failed to set.
-			if len(spendingDataBytes) > 0 && spend.SpendingData != nil && bytes.Equal(spendingDataBytes, spend.SpendingData.Bytes()) {
-				successItems = append(successItems, item)
-				spentParentIDs[transactionID] = struct{}{}
-				continue
-			}
-
-			// The row changed between the SELECT and the UPDATE: spent concurrently, or
-			// its freeze state moved. Re-read it and judge the spend against the row as
-			// it is now.
+			// The UPDATE needs spending_data IS NULL and the freeze state the SELECT
+			// judged, so it misses an idempotent re-spend (same tx spending the same
+			// output again), a concurrent spend, and a freeze that moved. Every miss is
+			// re-read and judged against the row as it is now — an idempotent re-spend
+			// included, so a freeze landing after the SELECT is the verdict rather than an
+			// idempotent success decided from the stale read (issue #1422).
 			current, rereadErr := s.rereadSpendRow(s.ctx, txn, transactionID, spend.Vout)
 			if rereadErr != nil {
 				if errors.Is(rereadErr, sql.ErrNoRows) {
@@ -3499,7 +3505,9 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 				continue
 			}
 
-			// Spent with our exact spending data by someone else: idempotent.
+			// Spent with our exact spending data: idempotent. Still record the parent so
+			// DAH can be (re)evaluated — this heals DAHs that an earlier spend (before the
+			// DAH-on-spend fix) failed to set.
 			successItems = append(successItems, item)
 			spentParentIDs[transactionID] = struct{}{}
 			continue
