@@ -71,10 +71,12 @@ func readFreezeRecord(bins aerospike.BinMap, offset int) (freezeRecord, error) {
 // outputs it has; this read rides on block validation's parent check (see
 // model.getParentTxMetaBlockIDs). Returns nil when no output carries a record.
 //
-// A marked extra record that cannot be read, or freeze data of the wrong shape, is
-// storage damage, not evidence that the output is free — the full UTXO read classifies
-// the same conditions the same way — and this result decides whether a block is valid,
-// so it is an error rather than a skip.
+// A marked extra record the store does not hold carries no freeze record: the freeze UDF
+// refuses a missing record, and markFreezeExtraRecords writes the marker before the
+// freeze without checking the record exists (a check could not be atomic with the write).
+// Any other failure to read a marked extra record, or freeze data of the wrong shape, is
+// storage damage, not evidence that the output is free, and this result decides whether
+// a block is valid, so it is an error rather than a skip.
 //
 // The legacy 0xFF sentinel in the utxos list is deliberately not consulted here. An
 // output frozen before the bins existed carries only the sentinel, and such a freeze is
@@ -111,11 +113,15 @@ func (s *Store) readFreezeRecords(ctx context.Context, txID *chainhash.Hash, bin
 		extraRecord, err := s.client.Get(policy, extraKey,
 			fields.UtxoFreezeFrom.String(), fields.UtxoFreezeUntil.String(), fields.UtxoFreezeExp.String())
 		if err != nil {
+			if isKeyNotFound(err) {
+				continue
+			}
+
 			return nil, errors.NewStorageError("[readFreezeRecords][%s] failed to get extra record %d, which the freeze marker names", txID.String(), recordNum, err)
 		}
 
-		if extraRecord == nil || extraRecord.Bins == nil {
-			return nil, errors.NewStorageError("[readFreezeRecords][%s] extra record %d, which the freeze marker names, has no bins — torn or mis-keyed record", txID.String(), recordNum)
+		if extraRecord == nil {
+			continue
 		}
 
 		var collectErr error
