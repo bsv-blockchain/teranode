@@ -88,6 +88,18 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Block-validation catchup accepts a peer from reputation 20, down from 40.** The
+  catchup health gate (`IsPeerUnhealthy`) now uses the same cut-off as sync-peer
+  eligibility, peer selection and reputation recovery. Before, a peer with one old
+  failed catchup and no success since settled at 20.0 and was refused as a catchup
+  source for good, because recovery only reaches peers below 20. When no alternative
+  can serve a block, catchup now also tries a primary peer that the gate refused only
+  for low reputation or a low success rate. It still refuses a malicious or banned
+  peer. So a node whose only peer ahead has a poor record keeps syncing and no longer
+  stalls. The catchup peer-health-gate counter now records `malicious` for a peer that
+  is both malicious and low on reputation. It used to record `low_reputation`. No
+  action is required. (#2020)
+
 - **This release removes four Aerospike pruner metrics.** External monitoring systems must
   remove queries for `utxo_pruner_parents_skipped_pruned_total`,
   `utxo_pruner_pruned_set_size`, `utxo_pruner_pruned_set_saturated`, and

@@ -659,7 +659,7 @@ func TestIsPeerMalicious_EmptyID(t *testing.T) {
 func TestIsPeerUnhealthy_LowReputation(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
-	// Drive reputation below 40 by recording a malicious event.
+	// Drive reputation below the usable cut-off by recording a malicious event.
 	reg.UpdateMetrics(pid.String(), 0, 0, 0, false, false, true, 0)
 
 	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})

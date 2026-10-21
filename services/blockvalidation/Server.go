@@ -2291,20 +2291,41 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 	}
 
 	// Check if peer is bad or malicious before attempting catchup
-	if bad, badReason := u.isPeerBad(c.peerID); bad || u.isPeerMalicious(ctx, c.peerID) {
-		malicious := !bad
+	bad, badReason := u.isPeerBad(c.peerID)
+	malicious := u.isPeerMalicious(ctx, c.peerID)
+
+	if bad || malicious {
 		reason := classifyPeerRefusalReason(badReason, malicious)
 		prometheusCatchupPeerHealthGate.WithLabelValues(reason).Inc()
 		u.logger.Warnf("[catchup][%s] peer %s (%s) refused as catchup source (%s), trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL, reason)
 
 		// Try alternative peers from P2P service instead of just skipping
-		if !u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
-			blockHash := c.block.Hash()
+		if u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+			return
+		}
+
+		blockHash := c.block.Hash()
+
+		// Fail open for a peer refused only on its health record (low
+		// reputation or success rate), not malicious or banned. When no
+		// alternative can serve the block, refusing it too would stall a node
+		// whose only peer ahead it is, with nothing in the loop able to lift
+		// the record. Alternatives are already tried regardless of reputation
+		// (see tryAlternativePeersForCatchup and the cached-alternative walk
+		// below), so this only stops the primary being the one peer held to a
+		// stricter standard. Falling through, rather than a separate path,
+		// keeps a failure charged to the peer and counted toward
+		// CatchupMaxAttemptsPerBlock. Any other refusal (malicious, banned, or
+		// a peer the registry could not assess) keeps the old refuse-and-clear.
+		if reason != "low_reputation" && reason != "low_success_rate" {
 			u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
 			u.processBlockNotify.Delete(*blockHash)
 			u.catchupAlternatives.Delete(*blockHash)
+
+			return
 		}
-		return
+
+		u.logger.Warnf("[catchup][%s] no alternative peer could serve the block; falling back to peer %s (%s), refused only for %s and not malicious", blockHash.String(), c.peerID, c.baseURL, reason)
 	}
 
 	u.logger.Infof("[catchup] Processing catchup request for block %s from peer %s (%s)", c.block.Hash().String(), c.peerID, c.baseURL)
@@ -2484,8 +2505,10 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		// Try alternative sources for catchup
 		blockHash := c.block.Hash()
 
-		// First, try intelligent peer selection from P2P service
-		if u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
+		// First, try intelligent peer selection from P2P service. Skipped
+		// when the health gate above already walked them this cycle and fell
+		// back to this peer.
+		if !bad && u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID) {
 			// Recovered via an alternative peer — reset the attempt counter.
 			u.clearCatchupAttempts(blockHash)
 			return

@@ -370,8 +370,8 @@ func (ps *PeerSelector) isEligibleBasic(p *blockchain.PeerInfo, criteria Selecti
 	}
 
 	// Check reputation threshold - peers with very low reputation should not be selected
-	if p.ReputationScore < 20.0 {
-		ps.logger.Debugf("[PeerSelector] Peer %s has very low reputation %.2f (below threshold 20.0)", p.ID, p.ReputationScore)
+	if p.ReputationScore < blockchain.MinUsablePeerReputation {
+		ps.logger.Debugf("[PeerSelector] Peer %s has very low reputation %.2f (below threshold %.1f)", p.ID, p.ReputationScore, blockchain.MinUsablePeerReputation)
 		return false
 	}
 
