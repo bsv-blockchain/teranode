@@ -1448,7 +1448,12 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 		return errors.NewUtxoInvalidSize("[SPEND_BATCH_LUA][%s] UTXO invalid size for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	case LuaErrorCodeFreezeRecordDamaged:
-		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] malformed freeze record for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+		// Permanent, so a processing error rather than a storage one: errors.IsRetryableError
+		// treats ERR_STORAGE_ERROR as transient, and a damaged freeze record does not heal
+		// by itself, so a storage class would put the spend back into the retry loops issue
+		// #1422 removes. It is not a verdict on the transaction either: only a fresh freeze
+		// of the output repairs the record.
+		return errors.NewProcessingError("[SPEND_BATCH_LUA][%s] malformed freeze record for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	default:
 		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] error for vout %d (code: %s): %s", txID.String(), batchItem.spend.Vout, errMsg.ErrorCode, errMsg.Message)

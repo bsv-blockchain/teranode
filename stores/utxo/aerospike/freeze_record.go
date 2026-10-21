@@ -231,8 +231,7 @@ func mapBinEntry(bins aerospike.BinMap, bin fields.FieldName, offset int) (inter
 // flag is set and removes the entry otherwise, and the client hands the value back as a Go
 // bool (TestFreezeRecordBins). Anything else is storage damage rather than "true": the
 // entry decides whether the policy tier lifts when the window ends, so damage must not
-// read as permission to lift it. The Lua reader makes the matching fail-safe choice and
-// reads anything but true as "does not expire".
+// read as permission to lift it. The Lua reader refuses it as damage too.
 func mapBinEntryBool(bins aerospike.BinMap, bin fields.FieldName, offset int) (bool, error) {
 	v, found, err := mapBinEntry(bins, bin, offset)
 	if err != nil || !found {
@@ -251,8 +250,10 @@ func mapBinEntryBool(bins aerospike.BinMap, bin fields.FieldName, offset int) (b
 // the uint32 range, the only shape FreezeUTXOs writes. Anything else is storage damage
 // and an error, never a height: a wrapped conversion would turn -1 into
 // FreezeWindowNever and silently disarm a freeze. The Lua reader
-// (freezeHeightValid in teranode.lua) applies the same bound, so the spend path and
-// block validation cannot diverge on a damaged record.
+// (freezeRecordFromMaps in teranode.lua) refuses the same shapes — a height that is not
+// an integer in the uint32 range, a bin that is not a map, a policy-expiry entry that is
+// not a bool — so the spend path and block validation cannot diverge on a damaged
+// record (TestFreezeRecordDamageShapesAgree).
 func mapBinEntryInt(bins aerospike.BinMap, bin fields.FieldName, offset int) (int, bool, error) {
 	v, found, err := mapBinEntry(bins, bin, offset)
 	if err != nil || !found {
