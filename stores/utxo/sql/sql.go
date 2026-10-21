@@ -1890,14 +1890,16 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 
 	if needsFreezeRecordsQuery(bins) {
 		// The freeze record per output, for block validation's out-of-block parent
-		// check (issue #1422). Only rows that carry a record are returned, so an
-		// unfrozen transaction costs nothing here. Mirrored by batchDecorateFreezeRecords.
+		// check (issue #1422). Only rows that carry a recorded window are returned, so an
+		// unfrozen transaction costs nothing here, and a row frozen before the window
+		// columns existed (NULL freezeFrom) is policy only and never a record.
+		// Mirrored by batchDecorateFreezeRecords.
 		q := `
-			SELECT o.idx, o.frozen, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
+			SELECT o.idx, o.freezeFrom, o.freezeUntil, o.freezePolicyExpires
 			FROM transactions as t, outputs as o
 			WHERE t.hash = $1
 			  AND t.id = o.transaction_id
-			  AND (o.frozen OR o.freezeFrom IS NOT NULL)
+			  AND o.freezeFrom IS NOT NULL
 		`
 
 		rows, err := s.db.QueryContext(ctx, q, hash[:])
@@ -1910,13 +1912,12 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		for rows.Next() {
 			var (
 				idx                 uint32
-				frozen              bool
 				freezeFrom          *uint32
 				freezeUntil         *uint32
 				freezePolicyExpires *bool
 			)
 
-			if err = rows.Scan(&idx, &frozen, &freezeFrom, &freezeUntil, &freezePolicyExpires); err != nil {
+			if err = rows.Scan(&idx, &freezeFrom, &freezeUntil, &freezePolicyExpires); err != nil {
 				return nil, err
 			}
 
@@ -2609,15 +2610,22 @@ type spendSelectResult struct {
 // column, always written when a freeze is recorded, because the marker alone is not
 // durable across a block-validation spend the way the record must be (issue #1422).
 func (r *spendSelectResult) hasFreezeRecord() bool {
-	return r.frozen || r.freezeFrom != nil
+	return r.frozen || r.hasConsensusRecord()
+}
+
+// hasConsensusRecord reports whether the output carries a recorded enforceAtHeight
+// window: a non-NULL freezeFrom. A row frozen before the window columns existed has the
+// marker and a NULL freezeFrom; it is policy only, as an Aerospike output carrying only
+// the 0xFF sentinel is, so the two stores cannot reach different verdicts on a block.
+func (r *spendSelectResult) hasConsensusRecord() bool {
+	return r.freezeFrom != nil
 }
 
 // consensusFrozenAt reports whether the alert system's enforceAtHeight window on this
-// output is being enforced for a block at blockHeight. A NULL bound reads as 0, which
-// means "from genesis" / "no end" — the meaning of every freeze written before the
-// window columns existed.
+// output is being enforced for a block at blockHeight. Only a recorded window is judged;
+// a NULL freezeUntil reads as 0, "no end".
 func (r *spendSelectResult) consensusFrozenAt(blockHeight uint32) bool {
-	return r.hasFreezeRecord() && utxo.FreezeWindowActiveAt(nullableHeight(r.freezeFrom), nullableHeight(r.freezeUntil), blockHeight)
+	return r.hasConsensusRecord() && utxo.FreezeWindowActiveAt(nullableHeight(r.freezeFrom), nullableHeight(r.freezeUntil), blockHeight)
 }
 
 // policyFrozenAt reports whether the policy tier of the freeze — this node's mempool and
@@ -4717,7 +4725,7 @@ func (s *Store) batchDecorateBlockIDs(ctx context.Context, ids []int, idToTx map
 // for multiple transactions, for block validation's out-of-block parent check (issue
 // #1422). Only rows that carry a record are returned, so an unfrozen transaction costs
 // nothing beyond the query itself. Mirrors the per-transaction read in getUnbatched: a
-// frozen output with no window reads as the (0, 0) record, enforced at every height.
+// frozen output with no window (NULL freezeFrom) is policy only and carries no record.
 func (s *Store) batchDecorateFreezeRecords(ctx context.Context, ids []int, idToTx map[int]*batchDecorateTxRow) error {
 	idPlaceholders := make([]string, len(ids))
 	idArgs := make([]interface{}, len(ids))
@@ -4727,7 +4735,7 @@ func (s *Store) batchDecorateFreezeRecords(ctx context.Context, ids []int, idToT
 	}
 	inClause := "(" + strings.Join(idPlaceholders, ",") + ")"
 
-	q := `SELECT transaction_id, idx, freezeFrom, freezeUntil, freezePolicyExpires FROM outputs WHERE transaction_id IN ` + inClause + ` AND (frozen OR freezeFrom IS NOT NULL)`
+	q := `SELECT transaction_id, idx, freezeFrom, freezeUntil, freezePolicyExpires FROM outputs WHERE transaction_id IN ` + inClause + ` AND freezeFrom IS NOT NULL`
 
 	rows, err := s.db.QueryContext(ctx, q, idArgs...)
 	if err != nil {
@@ -5937,9 +5945,9 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 	}
 
 	// Add the alert system's enforceAtHeight window to outputs if it doesn't exist
-	// (issue #1422). Nullable with no default: NULL reads back as "from genesis, no end",
-	// which is what every freeze written before the window existed meant, so an upgrade
-	// neither migrates data nor silently unfreezes anything.
+	// (issue #1422). Nullable with no default and no backfill: a row frozen before the
+	// window existed keeps a NULL freezeFrom and stays frozen by policy (this node's mempool
+	// and templates), but carries no consensus window, so it never makes a block invalid.
 	if _, err := db.Exec(`
 		DO $$
 		BEGIN
@@ -6325,9 +6333,9 @@ func createSqliteSchema(db *usql.DB) error {
 	}
 
 	// Add the alert system's enforceAtHeight window to outputs if it doesn't exist
-	// (issue #1422). Nullable with no default: NULL reads back as "from genesis, no end",
-	// which is what every freeze written before the window existed meant, so an upgrade
-	// neither migrates data nor silently unfreezes anything.
+	// (issue #1422). Nullable with no default and no backfill: a row frozen before the
+	// window existed keeps a NULL freezeFrom and stays frozen by policy (this node's mempool
+	// and templates), but carries no consensus window, so it never makes a block invalid.
 	for _, freezeColumn := range []struct{ name, sqlType string }{
 		{"freezeFrom", "BIGINT"},
 		{"freezeUntil", "BIGINT"},

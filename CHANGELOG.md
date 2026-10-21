@@ -106,6 +106,15 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Freezes without an enforceAtHeight window are policy-only.** A coin frozen before
+  upgrading (on SQL, a frozen output with no `freezeFrom`; on Aerospike, the frozen
+  sentinel with no freeze bins) still stays out of this node's mempool and block
+  templates, but it no longer makes a block that spends it invalid, on either store. The
+  same applies to an admin `freeze` RPC call made without enforceAtHeight heights.
+  Previously SQL nodes rejected such a block at every height while Aerospike nodes
+  accepted it. To make a freeze a consensus rule, freeze the output again with its
+  enforceAtHeight window (re-sending the alert, or `freeze` with heights). (#1764)
+
 - **This release removes four Aerospike pruner metrics.** External monitoring systems must
   remove queries for `utxo_pruner_parents_skipped_pruned_total`,
   `utxo_pruner_pruned_set_size`, `utxo_pruner_pruned_set_saturated`, and

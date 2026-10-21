@@ -153,10 +153,13 @@ type Spend struct {
 	// makes a freeze deterministic across the fleet instead of a function of how fast
 	// the alert gossiped to each node (issue #1422).
 	//
-	// FreezeFrom 0 means "from genesis", i.e. always enforced — the behaviour of every
-	// freeze written before this field existed, so a stored window of (0, 0) and an
-	// absent window are the same thing and no migration is needed. FreezeUntil 0 means
-	// the window never ends.
+	// FreezeFrom 0 means "from genesis"; FreezeUntil 0 means the window never ends, so a
+	// stored (0, 0) is enforced at every height. A stored window and an absent one are NOT
+	// the same thing: a freeze written before this field existed has no window (SQL: NULL
+	// freezeFrom; Aerospike: the 0xFF sentinel and no freeze bins) and is policy only on
+	// both stores — it keeps the coin out of this node's mempool and templates but never
+	// makes a block invalid. Nothing migrates such freezes; enforcing one by consensus takes
+	// a new FreezeUTXOs call that carries its window.
 	//
 	// All three are ignored outside FreezeUTXOs; the spend path reads the record back
 	// from the store, never from the caller.
@@ -173,11 +176,14 @@ type Spend struct {
 }
 
 // FreezeWindowNever is the stored bound for a freeze whose consensus window covers no
-// height at all — an empty enforceAtHeight interval on the wire. A window with
-// from == FreezeWindowNever is never active (no block height reaches it), while the
-// policy tier still applies per FreezePolicyExpires. It is deliberately not (0, 0): that
-// stored encoding is what every freeze written before windows existed means, "enforce
-// at every height", so the two must never be confused.
+// height at all — an empty enforceAtHeight interval on the wire, which
+// NormalizeFreezeWindow stores as (FreezeWindowNever, FreezeWindowNever). That window is
+// never active: FreezeWindowActiveAt needs blockHeight >= from, and the one height that
+// reaches from is excluded by until == from. The policy tier still applies per
+// FreezePolicyExpires (an empty window counts as ended, so an expiring one lifts at once).
+// Only the pair is inert: a window with from == FreezeWindowNever and until == 0 ("no end")
+// is active at height FreezeWindowNever itself. It is deliberately not (0, 0), which is
+// enforced at every height, so the two must never be confused.
 const FreezeWindowNever = math.MaxUint32
 
 // FreezeWindowActiveAt reports whether a freeze window [from, until) is being enforced

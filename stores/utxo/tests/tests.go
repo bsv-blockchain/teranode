@@ -373,8 +373,9 @@ func FreezeEnforceAtHeight(t *testing.T, db utxostore.Store) {
 	require.NoError(t, spendAt(t, windowStart, true), "an unfrozen output must be spendable inside the old window")
 	require.NoError(t, spendAt(t, windowStart, false), "an unfrozen output must be spendable outside block validation too")
 
-	// An unqualified freeze — no window, which is every freeze written before the window
-	// existed — is enforced at every height, in both tiers.
+	// A freeze recorded with the zero window (0, 0) — from genesis, no end — is enforced at
+	// every height, in both tiers. (A freeze written before the window existed has no
+	// recorded window at all and is policy only; see the stores' legacy-freeze tests.)
 	unqualified := []*utxostore.Spend{{TxID: TXHash, Vout: 0, UTXOHash: utxoHash0}}
 	require.NoError(t, db.FreezeUTXOs(ctx, unqualified, tSettings))
 

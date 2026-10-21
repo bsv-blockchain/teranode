@@ -260,10 +260,10 @@ local function isFrozen(spendingData)
 end
 
 -- Function to check whether a freeze window [from, until) is being enforced at a block
--- height. from == 0 means "from genesis", until == 0 means "no end", so a freeze written
--- before the window bins existed (sentinel only) reads back as (0, 0) and is enforced at
--- every height. Mirrors utxo.FreezeWindowActiveAt line for line; a one-block disagreement
--- between the two would be a one-block fleet split.
+-- height. from == 0 means "from genesis", until == 0 means "no end". Only a stored freeze
+-- record is judged by it: a freeze written before the window bins existed (sentinel only)
+-- has no window and is policy only. Mirrors utxo.FreezeWindowActiveAt line for line; a
+-- one-block disagreement between the two would be a one-block fleet split.
 local function freezeWindowActiveAt(freezeFrom, freezeUntil, currentBlockHeight)
     if currentBlockHeight < freezeFrom then
         return false
@@ -291,25 +291,41 @@ end
 local MAX_FREEZE_HEIGHT = 4294967295
 
 -- Function to report whether a stored freeze height has the only shape FreezeUTXOs
--- writes: a number in the uint32 range. Anything else is storage damage. The Go reader
--- (mapBinEntryInt in freeze_record.go) applies the same bound, so the spend path and
+-- writes: an integer in the uint32 range. Anything else, a fractional number included, is
+-- storage damage. The Go reader (mapBinEntryInt in freeze_record.go) applies the same rule,
+-- since the client hands a float bin back as a float64 it refuses, so the spend path and
 -- block validation cannot diverge on a damaged record.
 local function freezeHeightValid(h)
-    return type(h) == "number" and h >= 0 and h <= MAX_FREEZE_HEIGHT
+    return type(h) == "number" and h >= 0 and h <= MAX_FREEZE_HEIGHT and math.floor(h) == h
+end
+
+-- Function to report whether a bin value is an Aerospike map. A freeze bin of any other
+-- type is storage damage: indexing a string by offset yields nil in Lua, which would read
+-- as "no record", while the Go reader (mapBinEntry) refuses it.
+local function isMapValue(v)
+    return getmetatable(v) == getmetatable(map())
 end
 
 -- Function to read one output's freeze record out of maps the caller has already read
 -- from the record, so a batch of spends does not re-read the bins per spend. Returns
 -- present, from, until, policyExpires, damaged. Presence is the from entry: it is always
 -- written when a freeze is recorded, whatever its value. policyExpires is the value of the
--- exp entry, not its presence: setFreezeRecord writes true or removes the entry, so
--- anything else is damage and reads as "does not expire" — the reading that keeps the
--- policy tier in force. damaged is set when a present height is not a number in the
--- uint32 range; the heights then read as 0 and the caller must not judge a window by
--- them — the spend path reports FREEZE_RECORD_DAMAGED, as the Go reader reports storage
--- damage, and a freeze overwrites the record rather than reporting it already stored.
+-- exp entry: setFreezeRecord writes true or removes the entry. damaged is set, exactly
+-- where the Go reader (readFreezeRecord in freeze_record.go) reports storage damage, when
+-- a freeze bin is not a map, a present height is not an integer in the uint32 range, or a
+-- present exp entry is not a boolean; the heights then read as 0 and the caller must not
+-- judge a window by them — the spend path reports FREEZE_RECORD_DAMAGED, and a freeze
+-- overwrites the record rather than reporting it already stored.
 local function freezeRecordFromMaps(freezeFromMap, freezeUntilMap, freezeExpMap, offset)
-    if freezeFromMap == nil or freezeFromMap[offset] == nil then
+    if freezeFromMap == nil then
+        return false, 0, 0, false, false
+    end
+
+    if not isMapValue(freezeFromMap) then
+        return true, 0, 0, false, true
+    end
+
+    if freezeFromMap[offset] == nil then
         return false, 0, 0, false, false
     end
 
@@ -317,18 +333,33 @@ local function freezeRecordFromMaps(freezeFromMap, freezeUntilMap, freezeExpMap,
     local damaged = not freezeHeightValid(fromHeight)
 
     local untilHeight = 0
-    if freezeUntilMap ~= nil and freezeUntilMap[offset] ~= nil then
-        untilHeight = freezeUntilMap[offset]
-        if not freezeHeightValid(untilHeight) then
+    if freezeUntilMap ~= nil then
+        if not isMapValue(freezeUntilMap) then
             damaged = true
+        elseif freezeUntilMap[offset] ~= nil then
+            untilHeight = freezeUntilMap[offset]
+            if not freezeHeightValid(untilHeight) then
+                damaged = true
+            end
+        end
+    end
+
+    local policyExpires = false
+    if freezeExpMap ~= nil then
+        if not isMapValue(freezeExpMap) then
+            damaged = true
+        elseif freezeExpMap[offset] ~= nil then
+            if type(freezeExpMap[offset]) ~= "boolean" then
+                damaged = true
+            else
+                policyExpires = freezeExpMap[offset]
+            end
         end
     end
 
     if damaged then
         return true, 0, 0, false, true
     end
-
-    local policyExpires = freezeExpMap ~= nil and freezeExpMap[offset] == true
 
     return true, fromHeight, untilHeight, policyExpires, false
 end
@@ -536,9 +567,11 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         --   the alert arrived. It lands at a different moment on every node, so a caller
         --   validating a block passes ignorePolicyFreeze and sees only the consensus tier.
         --
-        -- The record is read from the freeze bins OR the 0xFF sentinel: a freeze written
-        -- before the bins existed has only the sentinel and means "at every height", and a
-        -- sentinel a block-validation spend overwrote has only the bins.
+        -- The consensus tier is judged from the freeze bins alone. A freeze written before
+        -- the bins existed has only the 0xFF sentinel and no window, so it is policy only:
+        -- it never rejects a block, as on the SQL store, where such a row has a NULL
+        -- freezeFrom. The policy tier reads the bins OR the sentinel, and a sentinel a
+        -- block-validation spend overwrote leaves the bins behind.
         local sentinelPresent = existingSpendingData ~= nil and isFrozen(existingSpendingData)
         local recordPresent, freezeFrom, freezeUntil, policyExpires, freezeDamaged = freezeRecordFromMaps(freezeFromMap, freezeUntilMap, freezeExpMap, offset)
 
@@ -557,7 +590,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         end
 
         if recordPresent or sentinelPresent then
-            if not spend['ignoreConsensusFreeze'] and freezeWindowActiveAt(freezeFrom, freezeUntil, currentBlockHeight) then
+            if recordPresent and not spend['ignoreConsensusFreeze'] and freezeWindowActiveAt(freezeFrom, freezeUntil, currentBlockHeight) then
                 local error = map()
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_CONSENSUS_FROZEN

@@ -77,13 +77,10 @@ func readFreezeRecord(bins aerospike.BinMap, offset int) (freezeRecord, error) {
 // so it is an error rather than a skip.
 //
 // The legacy 0xFF sentinel in the utxos list is deliberately not consulted here. An
-// output frozen before the bins existed carries only the sentinel, but the sentinel also
-// occupies the spending-data slot, so such an output is unspent by construction and every
-// spend of it goes through spendMulti, which reads the sentinel as an always-active
-// record. There is therefore no already-validated spender for this block-level check to
-// catch, and reading the utxos bins of every parent here would put the largest bin on
-// the hottest read in block validation. The one path that overwrites a sentinel without
-// that check is the below-checkpoint bypass, whose block is canonical by definition.
+// output frozen before the bins existed carries only the sentinel, and such a freeze is
+// policy only on both stores: it has no consensus window, so it is never a record for
+// this block-level check (the SQL store likewise skips a frozen row with a NULL
+// freezeFrom), and the Lua spend path holds it by policy alone.
 func (s *Store) readFreezeRecords(ctx context.Context, txID *chainhash.Hash, bins aerospike.BinMap) (map[uint32]meta.FreezeRecord, error) {
 	records, err := collectFreezeRecords(bins, 0, nil)
 	if err != nil {
