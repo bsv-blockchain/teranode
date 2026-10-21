@@ -159,3 +159,23 @@ func TestUnspendCountsNeverAttemptedSpends(t *testing.T) {
 	require.Equal(t, total, failed,
 		"every spend from the abort index onward is still applied and must be counted as dangling")
 }
+
+// TestResolveSpendCompletionsConsensusFrozenIsUnwinnable pins that a spend refused by the
+// consensus tier of an alert-system freeze marks the transaction unwinnable (issue #1422).
+// A batch that also saw a transient lock would otherwise skip the partial-spend rollback,
+// leaving the sibling spends naming a spender that can never be created; a consensus
+// verdict is the same for every attempt at this txid, so the rollback must fire.
+func TestResolveSpendCompletionsConsensusFrozenIsUnwinnable(t *testing.T) {
+	store := &Store{logger: ulogger.TestLogger{}}
+
+	items := []*batchSpend{
+		{spend: &utxo.Spend{TxID: &chainhash.Hash{}, Vout: 0}},
+		{spend: &utxo.Spend{TxID: &chainhash.Hash{}, Vout: 1, Err: errors.NewTxLockedError("locked")}},
+		{spend: &utxo.Spend{TxID: &chainhash.Hash{}, Vout: 2, Err: errors.NewUtxoConsensusFrozenError("frozen at height")}},
+	}
+
+	result := store.resolveSpendCompletions(context.Background(), bt.NewTx(), items, false)
+	require.Len(t, result.spentSpends, 1)
+	require.True(t, result.sawTransientLock)
+	require.True(t, result.sawUnwinnable, "a consensus-frozen spend makes the txid unwinnable, so the sibling rollback fires")
+}
