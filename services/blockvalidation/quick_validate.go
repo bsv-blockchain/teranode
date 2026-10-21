@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
 )
@@ -2438,6 +2439,17 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 	})
 }
 
+// bornMinedCohort returns the cohort option for a transaction created as part of a block. It is
+// mined the moment it is created and its cohort is never consulted, so it gets the born-mined
+// sentinel rather than a wall-clock label (issue 556). Empty when cohort stamping is off.
+func (u *BlockValidation) bornMinedCohort() []utxo.CreateOption {
+	if u.settings == nil || !u.settings.UtxoStore.CohortStamping {
+		return nil
+	}
+
+	return []utxo.CreateOption{utxo.WithCohort(cohort.BornMined)}
+}
+
 // applyList writes a batch's list through SpendAndCreateMulti. A store fault on the whole call
 // repeats the list; a retryable failure of some of its transactions repeats only those, with
 // the children the store failed as ParentFailed beside them and their parents in the list
@@ -2464,7 +2476,7 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 	}
 
 	opts := func(txids []chainhash.Hash, subtreeIdxs []int) []utxo.CreateOption {
-		return []utxo.CreateOption{
+		return append([]utxo.CreateOption{
 			utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height}),
 			utxo.WithSubtreeIdxs(subtreeIdxs),
 			utxo.WithTXIDs(txids),
@@ -2473,7 +2485,7 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			utxo.WithIgnoreLocked(true),
 			utxo.WithSkipExtendedInputs(outpointOnly),
 			utxo.WithSkipUTXOHashCheck(outpointOnly),
-		}
+		}, u.bornMinedCohort()...)
 	}
 
 	total := len(txs)
@@ -2681,12 +2693,14 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 			// combined call cancelled between its spend and its create would leave the
 			// create's outcome unknown.
 			callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeCallBound)
-			_, _, err = u.utxoStore.SpendAndCreate(callCtx, tx, block.Height,
+			createOpts := append([]utxo.CreateOption{
 				utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height, SubtreeIdx: subtreeIdxs[i]}),
 				utxo.WithLocked(lockUTXOs),
 				utxo.WithIgnoreLocked(true),
 				utxo.WithSkipExtendedInputs(outpointOnly),
-				utxo.WithSkipUTXOHashCheck(outpointOnly))
+				utxo.WithSkipUTXOHashCheck(outpointOnly),
+			}, u.bornMinedCohort()...)
+			_, _, err = u.utxoStore.SpendAndCreate(callCtx, tx, block.Height, createOpts...)
 
 			cancel()
 

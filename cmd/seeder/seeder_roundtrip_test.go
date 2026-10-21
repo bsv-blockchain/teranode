@@ -86,7 +86,7 @@ func importSnapshotFile(t *testing.T, path string, store *utxosql.Store) error {
 	for frame := range frameCh {
 		w, err := utxopersister.DecodeUTXOWrapperFrame(frame)
 		if err == nil {
-			err = processUTXO(context.Background(), store, w, nil, false)
+			err = processUTXO(context.Background(), store, w, nil, false, false)
 		}
 
 		if err != nil && processErr == nil {

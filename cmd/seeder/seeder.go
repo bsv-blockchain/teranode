@@ -57,6 +57,7 @@ import (
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/ordishs/gocore"
 	"golang.org/x/sync/errgroup"
 )
@@ -605,6 +606,7 @@ func processUTXOs(ctx context.Context, logger ulogger.Logger, appSettings *setti
 		channelSize:            channelSize,
 		utxoBatchSize:          appSettings.UtxoStore.UtxoBatchSize,
 		skipStore:              gocore.Config().GetBool("skipStore", false),
+		cohortStamping:         appSettings.UtxoStore.CohortStamping,
 		coinbaseTxs:            coinbaseTxs,
 	}
 
@@ -821,6 +823,7 @@ type importOptions struct {
 	channelSize            int
 	utxoBatchSize          int // store outputs-per-record limit; <= 0 imports in one pass
 	skipStore              bool
+	cohortStamping         bool // UtxoStore.CohortStamping; false stamps no cohort label
 	coinbaseTxs            map[chainhash.Hash]*bt.Tx
 }
 
@@ -872,7 +875,7 @@ func importUTXOSet(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 				workerID := i
 
 				pg.Go(func() error {
-					return worker(pCtx, logger, store, workerID, frameCh, opts.coinbaseTxs, opts.skipStore)
+					return worker(pCtx, logger, store, workerID, frameCh, opts.coinbaseTxs, opts.skipStore, opts.cohortStamping)
 				})
 			}
 
@@ -1176,8 +1179,9 @@ func spansMultipleRecords(maxIndex uint32, utxoBatchSize int) bool {
 }
 
 // worker decodes the frames from the channel and stores them in the UTXO store.
+// skipStore and cohortStamping are passed straight through to processUTXO.
 func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
-	id int, frameCh <-chan []byte, coinbaseTxs map[chainhash.Hash]*bt.Tx, skipStore bool) error {
+	id int, frameCh <-chan []byte, coinbaseTxs map[chainhash.Hash]*bt.Tx, skipStore, cohortStamping bool) error {
 	// A plain receive rather than a select on ctx.Done(): with thousands of
 	// workers, locking the shared Done channel on every item dominated CPU. The
 	// reader closes frameCh when it finishes or ctx is cancelled, which wakes
@@ -1195,7 +1199,7 @@ func worker(ctx context.Context, logger ulogger.Logger, store utxo.Store,
 			return errors.NewProcessingError("failed to decode UTXO", err)
 		}
 
-		if err = processUTXO(ctx, store, utxoWrapper, coinbaseTxs, skipStore); err != nil {
+		if err = processUTXO(ctx, store, utxoWrapper, coinbaseTxs, skipStore, cohortStamping); err != nil {
 			logger.Errorf("Worker %d failed to process UTXO: %v", id, err)
 			return err
 		}
@@ -1223,7 +1227,9 @@ func setCoinbaseOption(coinbase bool) utxo.CreateOption {
 // recovered from the V2 utxo-headers file; it may be empty. skipStore builds the
 // transaction but does not write it (a debugging knob, read once by the caller
 // because gocore config lookups are too expensive to run per transaction).
-func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx, skipStore bool) error {
+// cohortStamping carries UtxoStore.CohortStamping: when false no cohort label is
+// stamped at all, so the stored label stays at cohort.Unset.
+func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersister.UTXOWrapper, coinbaseTxs map[chainhash.Hash]*bt.Tx, skipStore, cohortStamping bool) error {
 	if utxoWrapper == nil {
 		return nil
 	}
@@ -1265,14 +1271,24 @@ func processUTXO(ctx context.Context, store utxo.Store, utxoWrapper *utxopersist
 		return nil
 	}
 
-	if _, _, err := store.SpendAndCreate(
-		ctx,
-		tx,
-		utxoWrapper.Height,
+	createOpts := []utxo.CreateOption{
 		utxo.WithCreateOnly(),
 		utxo.WithTXID(&utxoWrapper.TxID),
 		setCoinbaseOption(utxoWrapper.Coinbase),
 		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 0, BlockHeight: utxoWrapper.Height, SubtreeIdx: 0}),
+	}
+
+	// Snapshot imports are born mined and their real creation time is unknown, so
+	// they carry the historical sentinel rather than a wall-clock label. (issue 556)
+	if cohortStamping {
+		createOpts = append(createOpts, utxo.WithCohort(cohort.Historical))
+	}
+
+	if _, _, err := store.SpendAndCreate(
+		ctx,
+		tx,
+		utxoWrapper.Height,
+		createOpts...,
 	); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			return nil

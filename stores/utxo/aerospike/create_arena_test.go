@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
@@ -49,12 +50,12 @@ func assertArenaEqualNoArena(t *testing.T, s *Store, tx *bt.Tx, isCoinbase bool,
 
 	txHash := tx.TxIDChainHash()
 
-	want, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, txHash, isCoinbase, false, false, nil)
+	want, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, txHash, isCoinbase, false, false, cohort.Unset, nil)
 	require.NoError(t, err, "%s: GetBinsToStore(nil arena) failed", name)
 
 	arena := bt.NewArena(0)
 
-	got, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, txHash, isCoinbase, false, false, arena)
+	got, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, txHash, isCoinbase, false, false, cohort.Unset, arena)
 	require.NoError(t, err, "%s: GetBinsToStore(arena) failed", name)
 
 	require.Equal(t, len(want), len(got), "%s: number of bin groups differs", name)

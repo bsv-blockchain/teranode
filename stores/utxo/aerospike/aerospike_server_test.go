@@ -1670,6 +1670,13 @@ func TestSmokeTests(t *testing.T) {
 		tests.SpendAndCreate(t, store)
 	})
 
+	t.Run("aerospike_cohort_round_trip", func(t *testing.T) {
+		err := store.Delete(ctx, tests.TXHash)
+		require.NoError(t, err)
+
+		tests.CohortRoundTrip(t, store)
+	})
+
 	t.Run("aerospike_spend_and_create_create_only", func(t *testing.T) {
 		err := store.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)
