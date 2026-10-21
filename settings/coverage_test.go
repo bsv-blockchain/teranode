@@ -25,22 +25,25 @@ func TestMetadataCoverage(t *testing.T) {
 	require.NotNil(t, registry)
 	require.GreaterOrEqual(t, len(registry.Settings), 600, "Should have at least 600 settings after complete migration")
 
-	// PostgresPool fields document a *PostgresSettings struct as a single
-	// opaque override setting: extractFields only recurses into a nested
-	// struct field when its own key tag is empty, so dropping either tag
-	// below silently stops emitting the struct-level setting and instead
-	// flattens its children into keys that already exist elsewhere - both
-	// changes TestNoMissingTags cannot see, since its walk always descends
-	// into settings-package structs regardless of their own key tag.
+	// PostgresPool is a struct-typed settings GROUP, and #1920 deliberately
+	// stops advertising such groups: gocore reads scalars only, so the opaque
+	// `blockchain_postgres_pool` / `utxostore_postgres_pool` keys could never
+	// be set by an operator (#1811) - advertising an unreadable key is worse
+	// than omitting it. extractFields now skips group fields (isSettingsGroup)
+	// instead of emitting a struct-level setting; the children are exported
+	// once from the unkeyed global instance. The pins below are therefore the
+	// inverse of the former "must keep its key tag" assertion: the tags
+	// themselves stay - TestNoMissingTags and the census below still walk
+	// them - but neither key may reach the registry.
 	exportedKeys := make(map[string]bool, len(registry.Settings))
 	for _, setting := range registry.Settings {
 		exportedKeys[setting.Key] = true
 	}
-	require.True(t, exportedKeys["blockchain_postgres_pool"], "BlockChainSettings.PostgresPool must keep its key tag")
-	require.True(t, exportedKeys["utxostore_postgres_pool"], "UtxoStoreSettings.PostgresPool must keep its key tag")
+	require.False(t, exportedKeys["blockchain_postgres_pool"], "BlockChainSettings.PostgresPool must not be advertised as a settable key (#1811, #1920)")
+	require.False(t, exportedKeys["utxostore_postgres_pool"], "UtxoStoreSettings.PostgresPool must not be advertised as a settable key (#1811, #1920)")
 
-	// The two require.True calls above pin the two known struct-typed
-	// override settings by name, which gives a precise, readable failure
+	// The two require.False calls above pin the two known struct-typed
+	// group settings by name, which gives a precise, readable failure
 	// message when one breaks. But that pair does not maintain itself: a
 	// third *SomeSettings override field added later reopens the hole with
 	// both calls staying green. The obvious generalization - "every
