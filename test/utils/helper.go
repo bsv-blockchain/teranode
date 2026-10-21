@@ -1145,23 +1145,12 @@ func ReassignUtxo(ctx context.Context, testenv *TeranodeTestEnv, firstTx, reassi
 		return err
 	}
 
-	newUtxoHash, err := util.UTXOHashFromOutput(firstTx.TxIDChainHash(), amendedOutputScript, 0)
-	if err != nil {
-		return err
-	}
-
-	newSpend := &utxo.Spend{
-		TxID:     firstTx.TxIDChainHash(),
-		Vout:     0,
-		UTXOHash: newUtxoHash,
-	}
-
 	for _, node := range testenv.Nodes {
 		err = node.UtxoStore.ReAssignUTXO(ctx, &utxo.Spend{
 			TxID:     firstTx.TxIDChainHash(),
 			Vout:     0,
 			UTXOHash: oldUtxoHash,
-		}, newSpend, tSettings)
+		}, amendedOutputScript, tSettings)
 		if err != nil {
 			return err
 		}

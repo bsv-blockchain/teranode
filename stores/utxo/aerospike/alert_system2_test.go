@@ -175,15 +175,6 @@ func TestAlertSystem(t *testing.T) {
 		newUtxoRecTx.Inputs[0].PreviousTxSatoshis = newOutput.Satoshis
 		newUtxoRecTx.Inputs[0].PreviousTxScript = newOutput.LockingScript
 
-		newUtxoHash, _ := util.UTXOHashFromOutput(tx.TxIDChainHash(), newOutput, 0)
-
-		newUtxoRec := &utxo.Spend{
-			TxID:         tx.TxIDChainHash(),
-			Vout:         0,
-			UTXOHash:     newUtxoHash,
-			SpendingData: spendpkg.NewSpendingData(newUtxoRecTx.TxIDChainHash(), 0),
-		}
-
 		// Create a key for the UTXO
 		keySource := uaerospike.CalculateKeySource(utxoRec.TxID, utxoRec.Vout, store.GetUtxoBatchSize())
 		key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), keySource)
@@ -220,7 +211,7 @@ func TestAlertSystem(t *testing.T) {
 		tSettings := test.CreateBaseTestSettings(t)
 
 		// Call ReAssignUTXO - should fail, utxo is not frozen
-		err = store.ReAssignUTXO(ctx, utxoRec, newUtxoRec, tSettings)
+		err = store.ReAssignUTXO(ctx, utxoRec, newOutput, tSettings)
 		require.Error(t, err)
 
 		// Call FreezeUTXO
@@ -228,7 +219,7 @@ func TestAlertSystem(t *testing.T) {
 		require.NoError(t, err)
 
 		// Call ReAssignUTXO
-		err = store.ReAssignUTXO(ctx, utxoRec, newUtxoRec, tSettings)
+		err = store.ReAssignUTXO(ctx, utxoRec, newOutput, tSettings)
 		require.NoError(t, err)
 
 		// Verify the UTXO is re-assigned
@@ -244,7 +235,9 @@ func TestAlertSystem(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, utxoBytes, 32)
 		assert.NotEqual(t, utxoHash0[:], utxoBytes)
-		assert.Equal(t, newUtxoRec.UTXOHash[:], utxoBytes)
+		derivedHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), newOutput, 0)
+		require.NoError(t, err)
+		assert.Equal(t, derivedHash[:], utxoBytes)
 
 		// check the reassignment list
 		reassignment, ok := rec.Bins[fields.Reassignments.String()].([]interface{})
@@ -258,8 +251,15 @@ func TestAlertSystem(t *testing.T) {
 		// check the reassignment record
 		assert.Equal(t, utxoHash0[:], reassignmentMap["utxoHash"])
 		assert.Equal(t, 0, reassignmentMap["offset"])
-		assert.Equal(t, newUtxoRec.UTXOHash[:], reassignmentMap["newUtxoHash"])
+		assert.Equal(t, derivedHash[:], reassignmentMap["newUtxoHash"])
 		assert.Equal(t, 101, reassignmentMap["blockHeight"])
+
+		// check the stored replacement locking script override
+		reassignedScripts, ok := rec.Bins[fields.ReassignedScripts.String()].(map[interface{}]interface{})
+		require.True(t, ok)
+		script, ok := reassignedScripts[0].([]byte)
+		require.True(t, ok)
+		assert.Equal(t, newOutput.LockingScript.Bytes(), script)
 
 		utxoSpendableIn, ok := rec.Bins[fields.UtxoSpendableIn.String()].(map[interface{}]interface{})
 		require.True(t, ok)
