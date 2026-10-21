@@ -29,6 +29,15 @@ import (
 // its parent transactions, block references, and other metadata.
 // The struct fields are ordered for optimal memory layout.
 // IMPORTANT - Do not change order, it has been optimized for size: https://golangprojectstructure.com/how-to-make-go-structs-more-efficient/
+// FreezeRecord is one output's alert-system freeze record as read back from the
+// store: the half-open consensus window [From, Until) — From 0 meaning "from
+// genesis", Until 0 meaning "no end" — and whether the policy tier expires with it.
+type FreezeRecord struct {
+	From          uint32 `json:"from"`
+	Until         uint32 `json:"until"`
+	PolicyExpires bool   `json:"policyExpires"`
+}
+
 type Data struct {
 	// Tx is the full transaction data
 	Tx *bt.Tx `json:"tx"`
@@ -88,6 +97,14 @@ type Data struct {
 	// submission. Relay consumers of the txmeta Kafka topic must not announce
 	// these transactions to peers.
 	InBlock bool `json:"inBlock"`
+
+	// FreezeRecords holds the alert system's freeze record for each of this
+	// transaction's outputs that carries one, keyed by output index. Populated only
+	// when fields.UtxoFreezeFrom is requested. Block validation reads it for every
+	// out-of-block parent so a block spending a consensus-frozen output is judged
+	// identically on every node, even when the spend itself is a transaction the node
+	// already knows and would otherwise not re-validate (issue #1422).
+	FreezeRecords map[uint32]FreezeRecord `json:"freezeRecords,omitempty"`
 
 	// Creating indicates the transaction is still being created (multi-record 2-phase commit)
 	// When true, the transaction is incomplete and should trigger re-processing for auto-recovery

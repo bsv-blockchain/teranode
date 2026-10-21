@@ -407,9 +407,13 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	// - 3: spend tx_double_spend as normal (ignoring the not spendable flag)
 	var tErr *errors.Error
 
+	// WithIgnorePolicyFreeze: the winners are spent because the block being applied
+	// contains them, and only the height-anchored consensus tier of an alert-system freeze
+	// may reject a spend made for a block (issue #1422). A policy freeze recorded on a coin
+	// the loser had spent must not fail the block's application here.
 	for _, tx := range winningTxs {
 		_, spends, spendErr := s.SpendAndCreate(ctx, tx, blockHeight, WithSpendOnly(),
-			WithIgnoreConflicting(true), WithIgnoreLocked(true))
+			WithIgnoreConflicting(true), WithIgnoreLocked(true), WithIgnorePolicyFreeze(true))
 		// Capture per-input partial successes regardless of overall outcome so the rollback
 		// can undo them via Unspend(false) (parents at step 3 entry were unlocked-by-us, so
 		// the unspend MUST NOT relock).
@@ -603,8 +607,13 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 				continue
 			}
 
+			// Both freeze tiers are lifted: this restores spends the counter held before the
+			// demoted block was applied, and a freeze recorded since must not wedge the reorg
+			// half-way. The counter is judged again, freeze included, when a block mines it
+			// (issue #1422).
 			if _, _, spendErr := s.SpendAndCreate(ctx, counterMeta.Tx, blockHeight, WithSpendOnly(),
-				WithIgnoreConflicting(true), WithIgnoreLocked(true)); spendErr != nil {
+				WithIgnoreConflicting(true), WithIgnoreLocked(true),
+				WithIgnorePolicyFreeze(true), WithIgnoreConsensusFreeze(true)); spendErr != nil {
 				return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error spending counter %s", demotedHash.String(), counterHash.String(), spendErr)
 			}
 
@@ -961,8 +970,11 @@ func rollbackProcessConflicting(ctx context.Context, s Store, conflictingTxHashe
 				continue
 			}
 
+			// Both freeze tiers are lifted: the rollback puts back spends that existed before
+			// step 2, and a freeze must not leave the store torn half-way through (issue #1422).
 			if _, _, e := s.SpendAndCreate(ctx, txMeta.Tx, blockHeight, WithSpendOnly(),
-				WithIgnoreConflicting(true), WithIgnoreLocked(true)); e != nil {
+				WithIgnoreConflicting(true), WithIgnoreLocked(true),
+				WithIgnorePolicyFreeze(true), WithIgnoreConsensusFreeze(true)); e != nil {
 				rollbackErr = errors.Join(rollbackErr, errors.NewProcessingError("rollback step 2 (re-spend tx %s) failed", h.String(), e))
 			}
 		}

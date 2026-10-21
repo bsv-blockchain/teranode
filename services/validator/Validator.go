@@ -1043,6 +1043,16 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
 	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
 
+	// IgnorePolicyFreeze lets a block's spend of a coin this node has frozen through, so
+	// the block is judged on the consensus tier alone. It does not make the coin fit for
+	// this node's own templates: the policy tier is exactly what keeps it out of them. A
+	// block-context transaction kept in assembly (RUNNING) stays there if its block loses a
+	// fork, so one that spends a policy-frozen coin is validated and stored but not handed
+	// to block assembly (issue #1422).
+	if addToBlockAssembly && validationOptions.IgnorePolicyFreeze && v.spendsPolicyFrozenCoin(decoupledCtx, tx, txID) {
+		addToBlockAssembly = false
+	}
+
 	// spend the tx's inputs and create its outputs + metadata in one store
 	// operation; the store reverses the spends if the create fails (except on
 	// ErrTxExists, which leaves the spends in place and is handled below)
@@ -1492,6 +1502,46 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 		return errors.NewProcessingError("[Validate][%s] OutpointOnlySpend must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)
 	}
 
+	// Both alert-system freeze bypasses describe a spend made while validating a block, and
+	// no other spend: the policy tier is lifted precisely because the moment this node
+	// processed the alert must not decide a block's validity, and the consensus tier only
+	// for a block a checkpoint already proves canonical. Every producer sets InBlock
+	// alongside them (subtree validation, legacy block sync); a request carrying either
+	// without it would admit a coin this node has frozen into block assembly, so it is
+	// rejected before any store access (issue #1422).
+	//
+	// This catches a misconfigured internal caller; it does not authenticate the request.
+	// InBlock is as caller-asserted as the flags it guards, and on the shipped profile the
+	// gRPC listener is unauthenticated (security_level_grpc = 0) — the footing
+	// SkipScriptValidation, SkipPolicyChecks and InBlock itself already stand on, kept
+	// deliberately when issue 4840 (finding B-022) removed these options from HTTP rather
+	// than from gRPC. A caller who can reach this listener can already skip script
+	// validation outright, which is strictly worse than lifting a policy freeze. The
+	// controls for that surface are the operator's: network isolation of the service mesh,
+	// and security_level_grpc = 3, which requires and verifies a client certificate.
+	if (validationOptions.IgnorePolicyFreeze || validationOptions.IgnoreConsensusFreeze) && !validationOptions.InBlock {
+		return errors.NewProcessingError("[Validate][%s] IgnorePolicyFreeze and IgnoreConsensusFreeze require InBlock", txID)
+	}
+
+	// IgnoreConsensusFreeze lifts the alert system's consensus tier, which is only ever
+	// legitimate for a block a hardcoded checkpoint already proves canonical; gate it the
+	// way OutpointOnlySpend is gated so no other caller can reach it (issue #1422).
+	if validationOptions.IgnoreConsensusFreeze && !validationOptions.SkipScriptValidation {
+		return errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze requires SkipScriptValidation", txID)
+	}
+
+	if validationOptions.IgnoreConsensusFreeze && blockHeight > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		return errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze must not be used above the highest checkpoint (height %d)", txID, blockHeight)
+	}
+
+	// The same tip-derived bound OutpointOnlySpend carries above, for the same reason: the
+	// caller-asserted height is the attacker's lever. Its only producer, legacy block sync's
+	// below-checkpoint path, validates block H while the tip is still below H, so a
+	// legitimate request never sees a tip past the checkpoint (issue 4840, finding B-022).
+	if validationOptions.IgnoreConsensusFreeze && blockState.Height > blockchain.HighestCheckpointHeight(v.settings.ChainCfgParams.Checkpoints) {
+		return errors.NewProcessingError("[Validate][%s] IgnoreConsensusFreeze must not be used once the node's chain tip is past the highest checkpoint (tip height %d)", txID, blockState.Height)
+	}
+
 	// Fail closed on a store that does not support the fast path: OutpointOnlySpend
 	// relies on SkipUTXOHashCheck / SkipExtendedInputs, which such a store ignores —
 	// it would then derive the UTXO hash from absent parent data and hard-error on the
@@ -1515,6 +1565,29 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 	}
 
 	return nil
+}
+
+// spendsPolicyFrozenCoin reports whether an input of tx spends an output the policy tier of an
+// alert-system freeze holds at the next height. It is asked before the spend, while a frozen
+// output still reads as frozen. A read that fails is reported as frozen: the transaction then
+// stays out of block assembly, which is the side that cannot put a frozen spend in a template.
+func (v *Validator) spendsPolicyFrozenCoin(ctx context.Context, tx *bt.Tx, txID string) bool {
+	for _, input := range tx.Inputs {
+		resp, err := v.utxoStore.GetSpend(ctx, &utxo.Spend{TxID: input.PreviousTxIDChainHash(), Vout: input.PreviousTxOutIndex})
+		if err != nil {
+			v.logger.Warnf("[Validate][%s] could not read the freeze state of input %s:%d, keeping the transaction out of block assembly: %v", txID, input.PreviousTxIDStr(), input.PreviousTxOutIndex, err)
+
+			return true
+		}
+
+		if resp != nil && resp.Status == int(utxo.Status_FROZEN) {
+			v.logger.Infof("[Validate][%s] spends policy-frozen %s:%d, validated for its block but not added to block assembly", txID, input.PreviousTxIDStr(), input.PreviousTxOutIndex)
+
+			return true
+		}
+	}
+
+	return false
 }
 
 // unlockLockedTxOnExit is the single point that releases a tx's two-phase-commit
@@ -2113,6 +2186,8 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 
 	opts := []utxo.CreateOption{
 		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+		utxo.WithIgnorePolicyFreeze(validationOptions.IgnorePolicyFreeze),
+		utxo.WithIgnoreConsensusFreeze(validationOptions.IgnoreConsensusFreeze),
 	}
 
 	if validationOptions.OutpointOnlySpend {

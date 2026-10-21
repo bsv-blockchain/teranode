@@ -101,6 +101,10 @@ var (
 		fields.TxInpoints,
 		fields.BlockIDs,
 		fields.UtxoSpendableIn,
+		fields.UtxoFreezeFrom,
+		fields.UtxoFreezeUntil,
+		fields.UtxoFreezeExp,
+		fields.UtxoFreezeRecs,
 		fields.Conflicting,
 	}
 )

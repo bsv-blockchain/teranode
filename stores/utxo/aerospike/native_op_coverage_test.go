@@ -21,17 +21,33 @@ var allSubOps = []uint8{
 }
 
 // TestUseNativeForSubOp_Fencing locks the routing gate: native only when the
-// setting is on, and unspend is always fenced to the UDF path (#899).
+// setting is on, and unspend (#899) plus the four freeze-aware sub-ops (#1422)
+// are always fenced to the UDF path.
 func TestUseNativeForSubOp_Fencing(t *testing.T) {
 	off := &Store{}
 	on := &Store{}
 	on.useNativeTeranodeOps.Store(true)
 
+	// Fenced to the UDF path even when native is on:
+	//   - unspend: the UDF enforces the #766 SpendingData ownership check.
+	//   - spend/spendMulti/freeze/unfreeze/reassign: the alert system's freeze is a
+	//     per-offset record with height-anchored semantics and two per-spend flags, none
+	//     of which the server-fork dispatcher implements. Routing any of them natively
+	//     would let a native-ops node disagree with the fleet about a block, or leave a
+	//     reassigned output carrying the record it was reassigned out of.
+	fenced := map[uint8]bool{
+		subOpUnspend:    true,
+		subOpSpend:      true,
+		subOpSpendMulti: true,
+		subOpFreeze:     true,
+		subOpUnfreeze:   true,
+		subOpReassign:   true,
+	}
+
 	for _, op := range allSubOps {
 		require.Falsef(t, off.useNativeForSubOp(op), "sub-op %d must use UDF when native disabled", op)
 
-		want := op != subOpUnspend // unspend is fenced to UDF even when native is on
-		require.Equalf(t, want, on.useNativeForSubOp(op), "sub-op %d native routing", op)
+		require.Equalf(t, !fenced[op], on.useNativeForSubOp(op), "sub-op %d native routing", op)
 	}
 }
 

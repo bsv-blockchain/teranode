@@ -1,0 +1,279 @@
+package aerospike
+
+import (
+	"context"
+	"math"
+	"sort"
+
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
+)
+
+// errBinNotMap is the storage-damage message for a per-offset map bin of the wrong type.
+const errBinNotMap = "%s bin is %T, want a map"
+
+// freezeRecord is one output's alert-system freeze record as read back from the
+// utxoFreezeFrom/Until/Exp bins. present is the utxoFreezeFrom entry: it is always
+// written when a freeze is recorded, whatever its value, so its presence says "this
+// outpoint carries a freeze record" independently of the 0xFF sentinel in the
+// spending-data slot, which a block-validation spend may legitimately overwrite
+// (issue #1422). Mirrors freezeRecordFromMaps in teranode.lua.
+type freezeRecord struct {
+	present       bool
+	from          uint32
+	until         uint32
+	policyExpires bool
+}
+
+// readFreezeRecord reads output offset's freeze record out of a record's bins. An absent
+// bin or entry reads as "no record"; a record with no until entry has no end; a record
+// with no policy-expiry entry does not expire. A bin or entry of the wrong shape is
+// storage damage and an error: these records decide whether a block is valid and whether
+// a policy freeze lifts, and damage must never read as "not frozen" or as "lifts".
+func readFreezeRecord(bins aerospike.BinMap, offset int) (freezeRecord, error) {
+	from, found, err := mapBinEntryInt(bins, fields.UtxoFreezeFrom, offset)
+	if err != nil {
+		return freezeRecord{}, err
+	}
+
+	if !found {
+		return freezeRecord{}, nil
+	}
+
+	until, _, err := mapBinEntryInt(bins, fields.UtxoFreezeUntil, offset)
+	if err != nil {
+		return freezeRecord{}, err
+	}
+
+	policyExpires, err := mapBinEntryBool(bins, fields.UtxoFreezeExp, offset)
+	if err != nil {
+		return freezeRecord{}, err
+	}
+
+	return freezeRecord{
+		present:       true,
+		from:          uint32(from),  // nolint:gosec // range-checked by mapBinEntryInt
+		until:         uint32(until), // nolint:gosec // range-checked by mapBinEntryInt
+		policyExpires: policyExpires,
+	}, nil
+}
+
+// readFreezeRecords collects every output's freeze record for a transaction into the
+// shape meta.Data carries: the main record's bins, plus the freeze bins of each extra
+// record that the main record's utxoFreezeRecs marker names — a record on a paginated
+// output lives on the extra record that holds that output. Only marked extra records are
+// read, so a transaction with no frozen output costs no extra round trip however many
+// outputs it has; this read rides on block validation's parent check (see
+// model.getParentTxMetaBlockIDs). Returns nil when no output carries a record.
+//
+// A marked extra record the store does not hold carries no freeze record: the freeze UDF
+// refuses a missing record, and markFreezeExtraRecords writes the marker before the
+// freeze without checking the record exists (a check could not be atomic with the write).
+// Any other failure to read a marked extra record, or freeze data of the wrong shape, is
+// storage damage, not evidence that the output is free, and this result decides whether
+// a block is valid, so it is an error rather than a skip.
+//
+// The legacy 0xFF sentinel in the utxos list is deliberately not consulted here. An
+// output frozen before the bins existed carries only the sentinel, and such a freeze is
+// policy only on both stores: it has no consensus window, so it is never a record for
+// this block-level check (the SQL store likewise skips a frozen row with a NULL
+// freezeFrom), and the Lua spend path holds it by policy alone.
+func (s *Store) readFreezeRecords(ctx context.Context, txID *chainhash.Hash, bins aerospike.BinMap) (map[uint32]meta.FreezeRecord, error) {
+	records, err := collectFreezeRecords(bins, 0, nil)
+	if err != nil {
+		return nil, errors.NewStorageError("[readFreezeRecords][%s] malformed freeze record on the main record", txID.String(), err)
+	}
+
+	extraRecordNums, err := markedFreezeExtraRecords(bins)
+	if err != nil {
+		return nil, errors.NewStorageError("[readFreezeRecords][%s] malformed freeze marker on the main record", txID.String(), err)
+	}
+
+	if len(extraRecordNums) == 0 {
+		return records, nil
+	}
+
+	policy := util.GetAerospikeReadPolicy(s.settings)
+
+	for _, recordNum := range extraRecordNums {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		extraKey, err := aerospike.NewKey(s.namespace, s.setName, uaerospike.CalculateKeySourceInternal(txID, uint32(recordNum))) // nolint:gosec
+		if err != nil {
+			return nil, errors.NewProcessingError("failed to create key for extra record", err)
+		}
+
+		extraRecord, err := s.client.Get(policy, extraKey,
+			fields.UtxoFreezeFrom.String(), fields.UtxoFreezeUntil.String(), fields.UtxoFreezeExp.String())
+		if err != nil {
+			if isKeyNotFound(err) {
+				continue
+			}
+
+			return nil, errors.NewStorageError("[readFreezeRecords][%s] failed to get extra record %d, which the freeze marker names", txID.String(), recordNum, err)
+		}
+
+		if extraRecord == nil {
+			continue
+		}
+
+		var collectErr error
+
+		records, collectErr = collectFreezeRecords(extraRecord.Bins, recordNum*s.utxoBatchSize, records)
+		if collectErr != nil {
+			return nil, errors.NewStorageError("[readFreezeRecords][%s] malformed freeze record on extra record %d", txID.String(), recordNum, collectErr)
+		}
+	}
+
+	return records, nil
+}
+
+// markedFreezeExtraRecords returns, in ascending order, the extra record numbers named
+// by the main record's utxoFreezeRecs marker. The marker is a map keyed by record
+// number, which Aerospike hands back as map[interface{}]interface{} with int keys; any
+// other shape is storage damage.
+func markedFreezeExtraRecords(bins aerospike.BinMap) ([]int, error) {
+	binValue, found := bins[fields.UtxoFreezeRecs.String()]
+	if !found || binValue == nil {
+		return nil, nil
+	}
+
+	m, ok := binValue.(map[interface{}]interface{})
+	if !ok {
+		return nil, errors.NewStorageError(errBinNotMap, fields.UtxoFreezeRecs, binValue)
+	}
+
+	nums := make([]int, 0, len(m))
+
+	for k := range m {
+		n, ok := k.(int)
+		if !ok || n <= 0 {
+			return nil, errors.NewStorageError("%s bin holds key %v (%T), want a positive int record number", fields.UtxoFreezeRecs, k, k)
+		}
+
+		nums = append(nums, n)
+	}
+
+	sort.Ints(nums)
+
+	return nums, nil
+}
+
+// collectFreezeRecords adds the freeze records found in one record's bins to records,
+// keyed by absolute output index (baseOffset + map key). The utxoFreezeFrom map's keys
+// are the outputs carrying a record; its presence is the record.
+func collectFreezeRecords(bins aerospike.BinMap, baseOffset int, records map[uint32]meta.FreezeRecord) (map[uint32]meta.FreezeRecord, error) {
+	binValue, found := bins[fields.UtxoFreezeFrom.String()]
+	if !found || binValue == nil {
+		return records, nil
+	}
+
+	fromMap, ok := binValue.(map[interface{}]interface{})
+	if !ok {
+		return nil, errors.NewStorageError(errBinNotMap, fields.UtxoFreezeFrom, binValue)
+	}
+
+	for k := range fromMap {
+		offset, ok := k.(int)
+		if !ok {
+			return nil, errors.NewStorageError("%s bin holds key %v (%T), want an int offset", fields.UtxoFreezeFrom, k, k)
+		}
+
+		rec, err := readFreezeRecord(bins, offset)
+		if err != nil {
+			return nil, err
+		}
+
+		if !rec.present {
+			continue
+		}
+
+		if records == nil {
+			records = make(map[uint32]meta.FreezeRecord)
+		}
+
+		records[uint32(baseOffset+offset)] = meta.FreezeRecord{ // nolint:gosec
+			From:          rec.from,
+			Until:         rec.until,
+			PolicyExpires: rec.policyExpires,
+		}
+	}
+
+	return records, nil
+}
+
+// mapBinEntry returns the entry for offset in a per-offset map bin. An absent bin or
+// entry (or a nil value) is reported as not found; a bin that is not a map is an error.
+// Aerospike hands map bins back as map[interface{}]interface{} keyed by the integer
+// offset, as the utxoSpendableIn reader in GetSpend already relies on.
+func mapBinEntry(bins aerospike.BinMap, bin fields.FieldName, offset int) (interface{}, bool, error) {
+	binValue, found := bins[bin.String()]
+	if !found || binValue == nil {
+		return nil, false, nil
+	}
+
+	m, ok := binValue.(map[interface{}]interface{})
+	if !ok {
+		return nil, false, errors.NewStorageError(errBinNotMap, bin, binValue)
+	}
+
+	v, found := m[offset]
+	if !found || v == nil {
+		return nil, false, nil
+	}
+
+	return v, true, nil
+}
+
+// mapBinEntryBool is mapBinEntry for the policy-expiry bin: an absent entry is false, and
+// a present entry must be a bool — setFreezeRecord in teranode.lua writes true when the
+// flag is set and removes the entry otherwise, and the client hands the value back as a Go
+// bool (TestFreezeRecordBins). Anything else is storage damage rather than "true": the
+// entry decides whether the policy tier lifts when the window ends, so damage must not
+// read as permission to lift it. The Lua reader refuses it as damage too.
+func mapBinEntryBool(bins aerospike.BinMap, bin fields.FieldName, offset int) (bool, error) {
+	v, found, err := mapBinEntry(bins, bin, offset)
+	if err != nil || !found {
+		return false, err
+	}
+
+	b, ok := v.(bool)
+	if !ok {
+		return false, errors.NewStorageError("%s bin entry for offset %d is %T, want a bool", bin, offset, v)
+	}
+
+	return b, nil
+}
+
+// mapBinEntryInt is mapBinEntry for the height bins: a present entry must be an int in
+// the uint32 range, the only shape FreezeUTXOs writes. Anything else is storage damage
+// and an error, never a height: a wrapped conversion would turn -1 into
+// FreezeWindowNever and silently disarm a freeze. The Lua reader
+// (freezeRecordFromMaps in teranode.lua) refuses the same shapes — a height that is not
+// an integer in the uint32 range, a bin that is not a map, a policy-expiry entry that is
+// not a bool — so the spend path and block validation cannot diverge on a damaged
+// record (TestFreezeRecordDamageShapesAgree).
+func mapBinEntryInt(bins aerospike.BinMap, bin fields.FieldName, offset int) (int, bool, error) {
+	v, found, err := mapBinEntry(bins, bin, offset)
+	if err != nil || !found {
+		return 0, false, err
+	}
+
+	n, ok := v.(int)
+	if !ok {
+		return 0, false, errors.NewStorageError("%s bin entry for offset %d is %T, want an int", bin, offset, v)
+	}
+
+	if n < 0 || n > math.MaxUint32 {
+		return 0, false, errors.NewStorageError("%s bin entry for offset %d is %d, outside the uint32 height range", bin, offset, n)
+	}
+
+	return n, true, nil
+}

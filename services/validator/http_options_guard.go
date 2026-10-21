@@ -6,10 +6,11 @@ transport. The HTTP /tx endpoint is unauthenticated (no auth middleware is insta
 in startHTTPServer), so a flag set there is a caller assertion from an arbitrary
 peer, not a trust basis. Consensus-affecting options — SkipScriptValidation,
 OutpointOnlySpend, SkipPolicyChecks, InBlock, the candidate times, an asserted block
-height — are only expressible over the validator's gRPC API. That listener is not
-itself authenticated on the shipped profile (security_level_grpc defaults to 0 and
-no auth interceptor is installed), so this guard removes the HTTP route rather than
-removing the capability from unauthenticated callers.
+height, the alert-system freeze bypasses — are only expressible over the validator's
+gRPC API. That listener is not itself authenticated on the shipped profile
+(security_level_grpc defaults to 0 and no auth interceptor is installed), so this
+guard removes the HTTP route rather than removing the capability from unauthenticated
+callers.
 */
 package validator
 
@@ -88,6 +89,19 @@ func nonDefaultValidationOptions(req *validator_api.ValidateTransactionRequest) 
 
 	if req.OutpointOnlySpend != nil && *req.OutpointOnlySpend {
 		return "outpointOnlySpend"
+	}
+
+	// The alert system's two freeze bypasses (issue #1422). IgnorePolicyFreeze admits a
+	// coin this node has policy-frozen; IgnoreConsensusFreeze lifts the consensus tier
+	// as well. validateInternal guards both (InBlock, and for the consensus tier
+	// SkipScriptValidation plus the checkpoint bounds), but this is what keeps them off
+	// the unauthenticated transport in the first place.
+	if req.IgnorePolicyFreeze != nil && *req.IgnorePolicyFreeze {
+		return "ignorePolicyFreeze"
+	}
+
+	if req.IgnoreConsensusFreeze != nil && *req.IgnoreConsensusFreeze {
+		return "ignoreConsensusFreeze"
 	}
 
 	return ""

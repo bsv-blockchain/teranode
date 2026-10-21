@@ -38,22 +38,17 @@ loop for each fund in funds
     deactivate UTXOStore
 
     AlertService -> AlertService: Calculate UTXO hash
+    AlertService -> AlertService: Convert enforceAtHeight to window\n(stop <= start: empty, never active)
 
-    alt EnforceAtHeight.Stop < current block height
-        AlertService -> UTXOStore: UnFreezeUTXOs(ctx, [spend])
-        activate UTXOStore
-        UTXOStore -> DB: Mark UTXO as unfrozen
-        DB --> UTXOStore: Confirm update
-        UTXOStore --> AlertService: Confirm unfreeze
-        deactivate UTXOStore
+    AlertService -> UTXOStore: FreezeUTXOs(ctx, [spend with window,\npolicyExpiresWithConsensus])
+    activate UTXOStore
+    UTXOStore -> DB: Record freeze window on the output
+    DB --> UTXOStore: Confirm update
+    UTXOStore --> AlertService: Confirm record
+    deactivate UTXOStore
 
-        alt unfreeze successful
-            AlertService -> AlertService: Add to processed list
-        else unfreeze failed
-            AlertService -> AlertService: Add to notProcessed list with error
-        end
-    else
-        AlertService -> AlertService: Add to notProcessed list (not eligible for unfreezing)
+    alt record failed
+        AlertService -> AlertService: Add to notProcessed list with error
     end
 end
 

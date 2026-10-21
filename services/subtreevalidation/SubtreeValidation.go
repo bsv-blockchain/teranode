@@ -534,6 +534,24 @@ func (u *Server) blessMissing(ctx context.Context, blockHash chainhash.Hash, sub
 		err = nil
 	}
 
+	// A consensus-frozen spend is a verdict about the block, not a transient local
+	// condition, and the distinction is load-bearing: block validation rejects a block on
+	// ErrTxInvalid and treats ErrProcessing as infrastructure trouble to retry, so leaving
+	// it as processing makes the rejecting node re-fetch and re-validate the same block in
+	// a loop instead of rejecting it (issue #1422). Block validation does not persist a
+	// freeze verdict or strike the peer for it: the freeze records it rests on depend on
+	// when the alert reached this node.
+	//
+	// Two guards, both required. The error code: only ErrUtxoConsensusFrozen is
+	// height-anchored — ErrFrozen also covers the policy tier and the reassignment
+	// maturity hold, neither of which every node derives identically. And the option:
+	// IgnorePolicyFreeze marks a block-context call; the Kafka subtree-announcement path
+	// validates peers' subtrees at tip+1 without it, and its rejections must keep their
+	// pre-existing processing classification.
+	if err != nil && errors.Is(err, errors.ErrUtxoConsensusFrozen) && validationOptions != nil && validationOptions.IgnorePolicyFreeze {
+		return nil, false, errors.NewTxInvalidError("[blessMissingTransaction][%s/%s][%s] transaction spends a consensus-frozen utxo at block height %d", blockHash.String(), subtreeHash.String(), tx.TxID(), blockHeight, err)
+	}
+
 	if err != nil && !errors.Is(err, errors.ErrTxConflicting) {
 		return nil, false, errors.NewProcessingError("[blessMissingTransaction][%s/%s][%s] failed to validate transaction", blockHash.String(), subtreeHash.String(), tx.TxID(), err)
 	}
@@ -603,6 +621,16 @@ func (u *Server) checkCounterConflictingOnCurrentChain(ctx context.Context, txHa
 	for idx, counterConflictingTxHash := range counterConflictingTxHashes {
 		g.Go(func() error {
 			// if a transaction is frozen, the counter-transaction will be the same as the coinbase placeholder
+			//
+			// Deliberately NOT NewTxInvalidError, unlike the frozen spend in
+			// blessMissingTransaction. That one is height-anchored — it can only come from
+			// a freeze whose enforceAtHeight window covers this block — so it is a rejection
+			// of the block (never persisted, see blessMissingTransaction). This sentinel is
+			// not: it is the 0xFF spending-data marker, written the moment the
+			// alert reached THIS node, with no window attached by the time it surfaces as a
+			// txid in a conflicting cone. Poisoning a block on it would reintroduce exactly
+			// the gossip-timing split issue #1422 removes, in the opposite direction. Until
+			// the cone walk can carry the window, this stays a non-poisoning error.
 			if counterConflictingTxHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
 				return errors.NewProcessingError("[checkCounterConflictingOnCurrentChain][%s] counter conflicting tx is frozen", txHash.String())
 			}

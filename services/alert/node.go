@@ -8,6 +8,8 @@ package alert
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-alert-system/app/config"
@@ -17,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/go-sdk/script"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -284,6 +287,14 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 	// create a response object
 	response := &models.AddToConsensusBlacklistResponse{}
 
+	// A fund whose transaction this node does not hold yet is not a fund that cannot be
+	// frozen: the transaction may still arrive, by sync or in a block, and a freeze silently
+	// dropped here would never be applied. Returning an error leaves the alert unprocessed,
+	// and the alert system retries unprocessed alerts on its processing interval, so the
+	// freeze lands once the transaction does. The other funds are still frozen now; a retry
+	// records them again, which is the same record.
+	var missing []string
+
 	// freeze one-by-one, getting the errors message for each one
 	for _, fund := range funds {
 		txHash, err := chainhash.NewHashFromStr(fund.TxOut.TxId)
@@ -295,6 +306,10 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 		// get the parent tx, to get the utxo hash of the spend
 		parentTxMeta, err := n.utxoStore.Get(ctx, txHash, fields.Tx)
 		if err != nil {
+			if errors.Is(err, errors.ErrTxNotFound) {
+				missing = append(missing, fmt.Sprintf("%s:%d", fund.TxOut.TxId, fund.TxOut.Vout))
+			}
+
 			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
 			continue
 		}
@@ -328,28 +343,149 @@ func (n *Node) AddToConsensusBlacklist(ctx context.Context, funds []models.Fund)
 			continue
 		}
 
-		// create a spend object
-		spend := &utxo.Spend{
-			TxID:     txHash,
-			Vout:     vout,
-			UTXOHash: utxoHash,
+		freezeFrom, freezeUntil, err := enforceAtHeightWindow(fund)
+		if err != nil {
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
+			continue
 		}
 
-		// check the height enforcement, if the height is below our current height, we are unfreezing, otherwise freezing
-		if len(fund.EnforceAtHeight) > 0 && fund.EnforceAtHeight[0].Stop < int(n.utxoStore.GetBlockHeight()) {
-			// unfreeze
-			if err = n.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
-			}
-		} else {
-			// freeze
-			if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
-				response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
-			}
+		// Record the alert exactly as sent — window and policy-expiry flag — and let the
+		// store's predicates do all the timing work at every height from here on. Nothing
+		// is decided against this node's tip at arrival: that is what makes the outcome a
+		// pure function of the alert and the chain, identical on a node that received it
+		// early, late, or on replay (issue #1422).
+		//
+		//   - A window that starts above the tip is recorded and simply does not bite
+		//     until its start height.
+		//   - An elapsed window's consensus tier is already inert; its policy tier stays
+		//     unless the alert set policyExpiresWithConsensus, which is SV Node's meaning.
+		//   - An empty interval (stop <= start, the shape an unfreeze alert takes on this
+		//     RPC) records a window that is never consensus-active; with the flag set the
+		//     policy tier lifts too, so the coin is fully released. With the flag clear it
+		//     stays out of this node's templates, exactly as SV Node keeps its policy
+		//     blacklist — resend with the flag, or use the admin unfreeze RPC, to release.
+		//
+		// Alerts therefore never delete a consensus record: a deep reorg into an elapsed
+		// window must be judged identically everywhere. The admin unfreeze RPC is the
+		// explicit delete.
+		spend := &utxo.Spend{
+			TxID:                txHash,
+			Vout:                vout,
+			UTXOHash:            utxoHash,
+			FreezeFrom:          freezeFrom,
+			FreezeUntil:         freezeUntil,
+			FreezePolicyExpires: fund.PolicyExpiresWithConsensus,
+		}
+
+		if err = n.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, n.settings); err != nil {
+			n.logger.Warnf("[AddToConsensusBlacklist] failed to record freeze of %s:%d for heights [%d, %d) policyExpires=%t: %v", fund.TxOut.TxId, fund.TxOut.Vout, freezeFrom, freezeUntil, fund.PolicyExpiresWithConsensus, err)
+			response.NotProcessed = append(response.NotProcessed, n.getAddToConsensusBlacklistResponse(fund, err)...)
+
+			continue
+		}
+
+		if utxo.FreezePolicyActiveAt(freezeFrom, freezeUntil, fund.PolicyExpiresWithConsensus, n.utxoStore.GetBlockHeight()+1) {
+			n.evictFrozenSpender(ctx, txHash, vout)
 		}
 	}
 
+	if len(missing) > 0 {
+		return response, errors.NewTxNotFoundError("[AddToConsensusBlacklist] %d fund(s) name a transaction this node does not hold yet, the alert will be retried: %s", len(missing), strings.Join(missing, ", "))
+	}
+
 	return response, nil
+}
+
+// evictFrozenSpender takes the transaction spending txHash:vout, and every descendant of it,
+// out of block assembly when that spender is not mined yet.
+//
+// A freeze of an already-spent output is recorded rather than refused, so the coin's freeze
+// is judged at block level for whoever spends it. A spender already in this node's mempool
+// would otherwise stay in its templates, and a block this node mines with it inside the
+// freeze window is one this node and every peer holding the alert reject. The policy tier
+// says the coin stays out of this node's templates, so its spender goes, and its descendants
+// with it: a template holding a child whose parent was removed is not a valid block either.
+//
+// Best effort: the freeze is already recorded, and a failure here is logged, not returned,
+// so the alert is not reprocessed for it.
+func (n *Node) evictFrozenSpender(ctx context.Context, txHash *chainhash.Hash, vout uint32) {
+	if n.blockassemblyClient == nil {
+		return
+	}
+
+	parent, err := n.utxoStore.Get(ctx, txHash, fields.Utxos)
+	if err != nil || parent == nil || uint64(vout) >= uint64(len(parent.SpendingDatas)) {
+		return
+	}
+
+	spendingData := parent.SpendingDatas[vout]
+	if spendingData == nil || spendingData.TxID == nil || spendingData.TxID.Equal(subtree.CoinbasePlaceholderHashValue) {
+		return
+	}
+
+	spender := *spendingData.TxID
+
+	spenderMeta, err := n.utxoStore.Get(ctx, &spender, fields.BlockIDs)
+	if err != nil {
+		n.logger.Warnf("[AddToConsensusBlacklist] frozen %s:%d is spent by %s, which could not be read, so it is not taken out of block assembly: %v", txHash.String(), vout, spender.String(), err)
+		return
+	}
+
+	if len(spenderMeta.BlockIDs) > 0 {
+		// mined: not in block assembly
+		return
+	}
+
+	descendants, err := utxo.GetConflictingChildren(ctx, n.utxoStore, spender, n.settings.UtxoStore.ConflictingChildrenMaxNodes)
+	if err != nil {
+		n.logger.Warnf("[AddToConsensusBlacklist] frozen %s:%d is spent by unmined %s, whose descendants could not be walked; removing it alone from block assembly: %v", txHash.String(), vout, spender.String(), err)
+	}
+
+	// The descendants first: block assembly removes each on its own, and a child must not
+	// outlive its parent in a template.
+	for _, hash := range append(descendants, spender) {
+		if err := n.blockassemblyClient.RemoveTx(ctx, &hash); err != nil {
+			n.logger.Warnf("[AddToConsensusBlacklist] failed to remove %s, a spender of frozen %s:%d, from block assembly: %v", hash.String(), txHash.String(), vout, err)
+		}
+	}
+
+	n.logger.Infof("[AddToConsensusBlacklist] frozen %s:%d was spent by unmined %s; removed it and %d descendant(s) from block assembly", txHash.String(), vout, spender.String(), len(descendants))
+}
+
+// enforceAtHeightWindow converts a fund's enforceAtHeight range into the stored window,
+// via utxo.NormalizeFreezeWindow, which is where SV Node's interval semantics (stop is an
+// exclusive end; stop <= start is an empty interval; "no end" is a stop the chain never
+// reaches) meet the store's encoding.
+//
+// The alert wire format carries exactly one range per fund
+// (go-alert-system app/models/alert_message_freeze_utxo.go: 57 bytes, txid ‖ vout ‖
+// start ‖ stop ‖ policyExpiresWithConsensus), while SV Node's addToConsensusBlacklist
+// JSON permits a list. The union of several ranges is not representable as one window,
+// so more than one range is rejected rather than silently collapsed to the first — a
+// freeze that is quietly enforced over the wrong heights is the failure mode this whole
+// change exists to remove.
+//
+// A fund with no range at all cannot come off the wire (the 57-byte record always
+// carries one); it is treated as an empty interval, never as "enforce at every height".
+func enforceAtHeightWindow(fund models.Fund) (freezeFrom uint32, freezeUntil uint32, err error) {
+	if len(fund.EnforceAtHeight) == 0 {
+		from, until, _ := utxo.NormalizeFreezeWindow(0, 0)
+		return from, until, nil
+	}
+
+	if len(fund.EnforceAtHeight) > 1 {
+		return 0, 0, errors.NewError("enforceAtHeight carries %d ranges; only one is supported", len(fund.EnforceAtHeight))
+	}
+
+	enforce := fund.EnforceAtHeight[0]
+
+	if enforce.Start < 0 || enforce.Stop < 0 {
+		return 0, 0, errors.NewError("enforceAtHeight range [%d, %d) is negative", enforce.Start, enforce.Stop)
+	}
+
+	from, until, _ := utxo.NormalizeFreezeWindow(uint64(enforce.Start), uint64(enforce.Stop))
+
+	return from, until, nil
 }
 
 // getAddToConsensusBlacklistResponse creates a standardized response for failed blacklist operations.

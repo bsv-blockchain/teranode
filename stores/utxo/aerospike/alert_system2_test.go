@@ -81,7 +81,9 @@ func TestAlertSystem(t *testing.T) {
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
 		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
-		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
+		// An unqualified freeze is consensus-active at every height, and that tier is
+		// checked first (#1422).
+		require.ErrorIs(t, spends[0].Err, errors.ErrUtxoConsensusFrozen)
 	})
 
 	t.Run("UnFreezeUTXOs", func(t *testing.T) {
@@ -119,7 +121,9 @@ func TestAlertSystem(t *testing.T) {
 		var tErr *errors.Error
 		require.ErrorAs(t, err, &tErr)
 		require.Equal(t, errors.ERR_UTXO_ERROR, tErr.Code())
-		require.ErrorIs(t, spends[0].Err, errors.ErrFrozen)
+		// An unqualified freeze is consensus-active at every height, and that tier is
+		// checked first (#1422).
+		require.ErrorIs(t, spends[0].Err, errors.ErrUtxoConsensusFrozen)
 
 		tSettings := test.CreateBaseTestSettings(t)
 

@@ -552,6 +552,13 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// remain attributable through the failedPeers drain below.
 			errorType = "local_fsm_refusal"
 			isPeerError = false
+		case errors.Is(*err, errors.ErrUtxoConsensusFrozen):
+			// A spend inside an alert-system freeze window. The verdict follows from the
+			// freeze records this node holds, which depend on when the alert reached it, so
+			// it is not charged to the peer (see isLocalCatchupFault). Must precede the
+			// unbound and corrupt cases, which a subtree-level freeze verdict also matches.
+			errorType = "local_consensus_freeze"
+			isPeerError = false
 		case isUnboundTxInvalidVerdict(*err):
 			// An invalid transaction in an unbound subtree list (bitcoin-sv/teranode#4844): corrupt
 			// on the direct peer path, but on catch-up a consensus rejection, scored exactly like

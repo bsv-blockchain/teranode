@@ -745,11 +745,17 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	//       mempool policy-mode path (substituteUnconfirmedHeights with the
 	//       candidate height ≈ tip+1), so no new class of transaction reaches
 	//       block assembly.
+	//   - WithIgnorePolicyFreeze: every spend here happens because a PoW-checked block
+	//       contains the transaction, so only the height-anchored consensus tier of an
+	//       alert-system freeze may reject it. The policy tier takes effect the moment
+	//       the alert reached THIS node, so honouring it here would let gossip timing
+	//       decide whether a block is valid — the fleet split issue #1422 removes.
 	subtreeValidatorOptions := []validator.Option{
 		validator.WithSkipPolicyChecks(true),
 		validator.WithInBlock(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithIgnorePolicyFreeze(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 		validator.WithUnconfirmedParentsAtCandidateHeight(true),
@@ -1347,6 +1353,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		validator.WithInBlock(true),
 		validator.WithCreateConflicting(true),
 		validator.WithIgnoreLocked(true),
+		validator.WithIgnorePolicyFreeze(true),
 		validator.WithCandidateBlockTime(candidateBlockTime),
 		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
 		validator.WithUnconfirmedParentsAtCandidateHeight(true),

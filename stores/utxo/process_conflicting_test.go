@@ -1126,3 +1126,40 @@ func TestProcessConflicting_CompensationSurvivesDeadContext(t *testing.T) {
 
 	mockStore.AssertExpectations(t)
 }
+
+// The block-driven re-spend of the winners lifts the policy tier of an alert-system freeze and
+// keeps the consensus tier (issue #1422).
+func TestProcessConflicting_WinnerRespendLiftsPolicyFreezeOnly(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &MockUtxostore{}
+
+	conflictingTxHash := createTestHash("conflicting-tx-freeze")
+	testTx := createTestTransaction()
+
+	mockStore.On("Get", mock.Anything, &conflictingTxHash, mock.Anything).Return(&meta.Data{Tx: testTx, Conflicting: true}, nil)
+
+	losingTxHash := createTestHash("losing-tx-freeze")
+	mockStore.On("GetCounterConflicting", mock.Anything, conflictingTxHash).Return([]chainhash.Hash{losingTxHash}, nil)
+
+	affectedSpends := []*Spend{{TxID: &losingTxHash, Vout: 0}}
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, true).Return(affectedSpends, []chainhash.Hash{}, nil)
+	mockStore.On("Unspend", mock.Anything, affectedSpends, mock.Anything).Return(nil)
+
+	var flags IgnoreFlags
+
+	mockStore.On("SpendAndCreate", mock.Anything, testTx, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		options, err := ParseCreateOptions(args.Get(3).([]CreateOption)...)
+		require.NoError(t, err)
+
+		flags = options.IgnoreFlags
+	}).Return(nil, []*Spend{}, nil)
+
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{conflictingTxHash}, false).Return([]*Spend{}, []chainhash.Hash{}, nil)
+	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
+
+	_, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{conflictingTxHash}, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
+	require.NoError(t, err)
+
+	require.True(t, flags.IgnorePolicyFreeze, "a spend made for a block must not be rejected by the policy tier")
+	require.False(t, flags.IgnoreConsensusFreeze, "the consensus tier still applies to the block's own spends")
+}

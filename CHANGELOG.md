@@ -18,6 +18,11 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — action required before upgrading
 
+- **The `freeze`, `unfreeze` and `reassign` RPCs need admin credentials.** Limited RPC
+  users could call them, which let a read-only account freeze any coin. Callers using
+  limited credentials (`rpc_limit_user`) for these commands must switch to the admin
+  user. (#1764)
+
 - **`CheckBlockSubtrees` gRPC errors keep Teranode error codes.** Storage and
   consensus errors include gRPC status metadata. Invalid URLs give `InvalidArgument`
   status. External clients must use `errors.UnwrapGRPC` to read the error chain
@@ -105,6 +110,35 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   first start, with a warning; there is no need to delete `alert.db`. (#1955)
 
 ### Breaking — behaviour changes on upgrade
+
+- **Freezes without an enforceAtHeight window are policy-only.** A coin frozen before
+  upgrading (on SQL, a frozen output with no `freezeFrom`; on Aerospike, the frozen
+  sentinel with no freeze bins) still stays out of this node's mempool and block
+  templates, but it no longer makes a block that spends it invalid, on either store. The
+  same applies to an admin `freeze` RPC call made without enforceAtHeight heights.
+  Previously SQL nodes rejected such a block at every height while Aerospike nodes
+  accepted it. To make a freeze a consensus rule, freeze the output again with its
+  enforceAtHeight window (re-sending the alert, or `freeze` with heights). (#1764)
+
+- **Alert-system coin freezes are anchored to block height.** A freeze alert's
+  `enforceAtHeight` interval is now stored with the output. A block spending the coin is
+  invalid only if its height falls inside the interval, whenever the alert arrived. The
+  policy freeze (the coin stays out of this node's mempool and templates) still starts
+  when the alert is processed. A spend rejected this way carries the new error code
+  `UTXO_CONSENSUS_FROZEN` (78, gRPC `FailedPrecondition`); clients matching on
+  `UTXO_FROZEN` should also handle it. Such a block is rejected but not stored as
+  invalid, and the serving peer is not penalised, so it is judged again on its next
+  delivery. Freezing an output already spent by an unmined transaction removes that
+  transaction and its descendants from block assembly. An alert naming a transaction the
+  node does not hold yet is retried instead of dropped. (#1764)
+
+- **Upgrade the validator, subtree validation and block validation together.** The
+  validator API gains `ignore_policy_freeze` (15) and `ignore_consensus_freeze` (16).
+  While versions are mixed, an old validator still applies a freeze immediately and can
+  reject a peer's block that upgraded nodes accept, so issue no freeze until every
+  service is upgraded. On start-up the SQL store adds the nullable `freezeFrom`,
+  `freezeUntil` and `freezePolicyExpires` columns to `outputs`, and the Aerospike store
+  registers the `teranode_v66` UDF package. (#1764)
 
 - **This release removes four Aerospike pruner metrics.** External monitoring systems must
   remove queries for `utxo_pruner_parents_skipped_pruned_total`,

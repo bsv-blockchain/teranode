@@ -141,6 +141,9 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 
 		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
 
+		// An unfreeze alert on this RPC is an empty enforceAtHeight interval (stop <= start)
+		// with policyExpiresWithConsensus set: the consensus window is never active and the
+		// policy tier lifts with it, so the coin is released (SV Node semantics, #1422).
 		funds := []models.Fund{{
 			TxOut: models.TxOut{
 				TxId: tx.TxIDChainHash().String(),
@@ -149,9 +152,10 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 			EnforceAtHeight: []models.Enforce{
 				{
 					Start: 100,
-					Stop:  100, // below current height
+					Stop:  100,
 				},
 			},
+			PolicyExpiresWithConsensus: true,
 		}}
 
 		response, err := node.AddToConsensusBlacklist(ctx, funds)
@@ -171,13 +175,62 @@ func TestNode_AddToConsensusBlacklist(t *testing.T) {
 		// check that the utxo is unfrozen = 0
 		require.Equal(t, 0, utxoSpend.Status)
 
-		// try again, should return an error
+		// try again: the identical record is already stored, which is reported rather than
+		// silently treated as a change
 		response, err = node.AddToConsensusBlacklist(ctx, funds)
 		require.NoError(t, err)
 
 		// check response
 		require.Equal(t, 1, len(response.NotProcessed))
-		require.Contains(t, response.NotProcessed[0].Reason, "is not frozen")
+		require.Contains(t, response.NotProcessed[0].Reason, "already frozen")
+	})
+
+	t.Run("unfreeze without policyExpiresWithConsensus keeps the policy tier", func(t *testing.T) {
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings(t)
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///test")
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+
+		_ = utxoStore.SetBlockHeight(101)
+		_, err = utxoStore.Create(ctx, tx, 101)
+		require.NoError(t, err)
+
+		utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+		require.NoError(t, err)
+
+		node := NewNodeConfig(ulogger.TestLogger{}, nil, utxoStore, nil, nil, nil, tSettings)
+
+		// An empty interval with the flag CLEAR lifts only the consensus tier: SV Node keeps
+		// the coin on its policy blacklist, and so does this node — out of its mempool and
+		// templates until re-issued with the flag or lifted by the admin unfreeze RPC.
+		response, err := node.AddToConsensusBlacklist(ctx, []models.Fund{{
+			TxOut:           models.TxOut{TxId: tx.TxIDChainHash().String(), Vout: 0},
+			EnforceAtHeight: []models.Enforce{{Start: 0, Stop: 0}},
+		}})
+		require.NoError(t, err)
+		require.Empty(t, response.NotProcessed)
+
+		utxoSpend, err := utxoStore.GetSpend(ctx, &utxo.Spend{TxID: tx.TxIDChainHash(), Vout: 0, UTXOHash: utxoHash})
+		require.NoError(t, err)
+		require.Equal(t, int(utxo.Status_FROZEN), utxoSpend.Status, "the policy tier must still hold the coin")
+
+		// ...but a block at any height may spend it: the consensus window is empty.
+		spendingTx := bt.NewTx()
+		require.NoError(t, spendingTx.FromUTXOs(&bt.UTXO{
+			TxIDHash:      tx.TxIDChainHash(),
+			Vout:          0,
+			LockingScript: tx.Outputs[0].LockingScript,
+			Satoshis:      tx.Outputs[0].Satoshis,
+		}))
+		spendingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00, 0x48, 0x30, 0x45})
+		require.NoError(t, spendingTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", tx.Outputs[0].Satoshis-1))
+
+		_, _, err = utxoStore.SpendAndCreate(ctx, spendingTx, 102, utxo.WithSpendOnly(), utxo.WithIgnorePolicyFreeze(true))
+		require.NoError(t, err, "an empty consensus window must not reject a block")
 	})
 }
 

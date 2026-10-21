@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreatePostgresSchema_Success(t *testing.T) {
@@ -195,12 +196,26 @@ func TestCreatePostgresSchema_ErrorAtPreserveUntilColumnAdd(t *testing.T) {
 	assert.Contains(t, err.Error(), "could not add preserve_until column to transactions table")
 }
 
+func TestCreatePostgresSchema_ErrorAtOutputsFreezeWindowColumns(t *testing.T) {
+	mockDB := CreateMockDBForSchema()
+	defer mockDB.AssertExpectations(t)
+
+	// Setup error at step 12 (outputs freezeFrom/freezeUntil column add)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 12)
+
+	udb := &usql.DB{DB: nil}
+	err := createPostgresSchemaWithMockDB(udb, mockDB)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "could not add freeze window columns to outputs table")
+}
+
 func TestCreatePostgresSchema_ErrorAtBlockIDsConstraintEnsure(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 12 (block_ids FK ensure CASCADE)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 12)
+	// Setup error at step 13 (block_ids FK ensure CASCADE)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 13)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
@@ -213,8 +228,8 @@ func TestCreatePostgresSchema_ErrorAtConflictingChildrenTable(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 13 (conflicting_children table creation)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 13)
+	// Setup error at step 14 (conflicting_children table creation)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 14)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
@@ -227,8 +242,8 @@ func TestCreatePostgresSchema_ErrorAtUnspentByParentIndex(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 14 (px_outputs_unspent_by_parent partial index)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 14)
+	// Setup error at step 15 (px_outputs_unspent_by_parent partial index)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 15)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)
@@ -241,8 +256,8 @@ func TestCreatePostgresSchema_ErrorAtConflictIntentsTable(t *testing.T) {
 	mockDB := CreateMockDBForSchema()
 	defer mockDB.AssertExpectations(t)
 
-	// Setup error at step 15 (conflict_intents table)
-	SetupCreatePostgresSchemaErrorMocks(mockDB, 15)
+	// Setup error at step 16 (conflict_intents table)
+	SetupCreatePostgresSchemaErrorMocks(mockDB, 16)
 
 	udb := &usql.DB{DB: nil}
 	err := createPostgresSchemaWithMockDB(udb, mockDB)

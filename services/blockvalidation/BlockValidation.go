@@ -2200,8 +2200,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] invalid transaction in an unbound subtree list, rejecting without persisting: %s", block.Hash().String(), err)
 
 				// Skip the strike on revalidation (stale announcing-peer ID), mirroring the corrupt
-				// branch above.
-				if !opts.IsRevalidation {
+				// branch above. Skip it too for a spend inside an alert-system freeze window: that
+				// verdict follows from the freeze records this node holds, which depend on when the
+				// alert reached it, so it is no evidence against the peer (issue #1422).
+				if !opts.IsRevalidation && !errors.Is(err, errors.ErrUtxoConsensusFrozen) {
 					u.penalizeCorruptBlockPeer(ctx, opts.PeerID, block, "invalid transaction in an unbound subtree list")
 				}
 
@@ -2217,7 +2219,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				ctxLogger.Warnf("[ValidateBlock][%s] transient missing-data during subtree validation, will retry: %s", block.Hash().String(), err)
 				// Transient LOCAL ordering gap, not the serving peer's fault: mark it so the
 				// catchup penalty path does not demote an honest (possibly sole-source) peer.
-				return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] transient missing-data during subtree validation: %s", block.Hash().String(), err)
+				return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] transient missing-data during subtree validation", block.Hash().String(), err)
 			}
 
 			return err
@@ -2568,13 +2570,25 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 							u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, "floater: parent not in block and not on chain: "+err.Error())
 						}
 
-						return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains a floater (unconfirmed parent not in block): %s", block.Hash().String(), err)
+						return errors.NewBlockInvalidError("[ValidateBlock][%s] block contains a floater (unconfirmed parent not in block)", block.Hash().String(), err)
 					}
 
 					// Transient LOCAL catchup-ordering gap (unabsorbed parent, issue 1031), not
 					// the serving peer's fault: mark it so the catchup penalty path does not
 					// demote an honest (possibly sole-source) ahead peer.
-					return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] block validation hit transient missing-data state: %s", block.Hash().String(), err)
+					return errors.NewBlockIncompleteTransientError("[ValidateBlock][%s] block validation hit transient missing-data state", block.Hash().String(), err)
+				}
+
+				// A spend inside an alert-system freeze window is rejected but never remembered,
+				// and nobody is told the block is invalid. The verdict follows from the freeze
+				// records this node holds, and those depend on when the alert reached it: a node
+				// that had not seen the alert accepts the same block. A persisted verdict could be
+				// lifted only by an operator RevalidateBlock, so the block is re-judged on its
+				// next delivery instead (issue #1422).
+				if errors.Is(err, errors.ErrUtxoConsensusFrozen) {
+					ctxLogger.Warnf("[ValidateBlock][%s] block spends a consensus-frozen utxo, rejecting without persisting: %s", block.Hash().String(), err)
+
+					return errors.NewBlockInvalidError("[ValidateBlock][%s] block spends a consensus-frozen utxo", block.String(), err)
 				}
 
 				// Persist only when THIS Valid invocation bound the body to the header
