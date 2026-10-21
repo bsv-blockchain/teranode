@@ -2542,6 +2542,32 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		return
 	}
 
+	// The bulk UPDATE binds maxBulkSpendParamsPerRow parameters per row, plus one for the
+	// DAH height, against PostgreSQL's 65535 bind-parameter limit, so a batch the
+	// operator sized past that (utxostore_spendBatcherSize; 1024 by default) is written
+	// in chunks that fit rather than failing the statement.
+	if s.settings.UtxoStore.BatchSQLOperations && s.engine == "postgres" && len(batch) > maxBulkSpendRows {
+		for start := 0; start < len(batch); start += maxBulkSpendRows {
+			s.sendSpendBatchChunk(batch[start:min(start+maxBulkSpendRows, len(batch))])
+		}
+
+		return
+	}
+
+	s.sendSpendBatchChunk(batch)
+}
+
+// maxBulkSpendParamsPerRow is how many bind parameters one row of the bulk spend UPDATE
+// takes: the output, its spending data and batch index, and the four freeze-state values
+// that pin the write to the state its verdict was judged by (issue #1422).
+const maxBulkSpendParamsPerRow = 8
+
+// maxBulkSpendRows is the most rows one bulk spend statement may carry under PostgreSQL's
+// 65535 bind-parameter limit, keeping one parameter for the DAH height.
+const maxBulkSpendRows = (65535 - 1) / maxBulkSpendParamsPerRow
+
+// sendSpendBatchChunk writes one chunk of a spend batch, retrying a deadlock.
+func (s *Store) sendSpendBatchChunk(batch []*batchSpend) {
 	const maxRetries = 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		retryable := s.trySendSpendBatch(batch)
@@ -2972,7 +2998,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		// UPDATE can be pinned to it (spendFreezeStateUnchanged): the alert system may
 		// change that state between the read and the write (issue #1422). A row the
 		// UPDATE does not touch is re-read and judged again below.
-		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*8+1)
+		updateArgs := make([]interface{}, 0, len(dedupedUpdate)*maxBulkSpendParamsPerRow+1)
 		pidx := 1
 		for j, u := range dedupedUpdate {
 			if j > 0 {
@@ -2983,7 +3009,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 				pidx, pidx+1, pidx+2, pidx+3, pidx+4, pidx+5, pidx+6, pidx+7))
 			updateArgs = append(updateArgs, u.transactionID, u.vout, u.spendingData, u.batchIdx,
 				observed.frozen, observed.freezeFrom, observed.freezeUntil, observed.freezePolicyExpires)
-			pidx += 8
+			pidx += maxBulkSpendParamsPerRow
 		}
 		if wrapDAH {
 			newDAH := int64(s.GetBlockHeight() + 1 + retention)
