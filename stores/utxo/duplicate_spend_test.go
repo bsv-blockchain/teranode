@@ -53,6 +53,7 @@ func TestFilterConflictingDuplicateSpendClaims(t *testing.T) {
 		func(item *duplicateSpendTestItem, err error) {
 			item.err = err
 		},
+		nil,
 	)
 
 	require.Equal(t, []*duplicateSpendTestItem{winner, idempotentDuplicate}, filtered)
