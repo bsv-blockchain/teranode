@@ -69,7 +69,9 @@ func normalizeMaxTransactionsInMemory(logger ulogger.Logger, limit uint64, sendB
 
 	maxHeld := int64(limit)
 
-	floor := int64(maxBatchesPerIteration)*int64(sendBatchSize) + 1
+	// The floor is never below 2: a sendBatchSize of 0 would otherwise give 1, and the
+	// coinbase placeholder already fills that, so every batch would be refused.
+	floor := max(int64(maxBatchesPerIteration)*int64(sendBatchSize)+1, 2)
 	if maxHeld < floor {
 		logger.Warnf("BlockAssembly.MaxTransactionsInMemory=%d is below one drain pass plus the coinbase placeholder (%d); clamping up to %d", maxHeld, floor, floor)
 		return floor
@@ -101,6 +103,7 @@ type LockFreeQueue struct {
 	maxItems            int64                   // Hard ceiling on published-or-reserved items; <= 0 disables the bound
 	maxHeld             int64                   // Ceiling on transactions held in memory, queued plus already in subtrees; <= 0 disables the bound
 	heldBase            func() int64            // Transactions held outside the queue, counted against maxHeld
+	unsettled           atomic.Int64            // Transactions dequeued but not yet counted by heldBase; see settle
 }
 
 // NewLockFreeQueue creates and initializes a new, unbounded LockFreeQueue instance.
@@ -138,12 +141,43 @@ func (q *LockFreeQueue) setHeldLimit(maxHeld int64, heldBase func() int64) {
 }
 
 // heldTotal returns the transactions held in memory if queued were queued.
+//
+// The total is the queued items, the items dequeued but not yet counted by heldBase, and
+// heldBase itself. The middle term closes the window in which a drain pass has taken
+// batches off the queue but has not yet added them to the subtree count: without it the
+// total under-reads by the size of the pass, up to maxBatchesPerIteration batches, and a
+// producer landing in that window is admitted past the limit.
 func (q *LockFreeQueue) heldTotal(queued int64) int64 {
+	held := queued + q.unsettled.Load()
+
 	if q.heldBase == nil {
-		return queued
+		return held
 	}
 
-	return q.heldBase() + queued
+	return q.heldBase() + held
+}
+
+// settle releases n dequeued items from the unsettled count. Every dequeue adds the size of
+// the batch to it, so every caller of dequeueBatch or dequeueBatchUntil must settle what it
+// took once heldBase accounts for it, or once it has dropped it. A dequeue that is never
+// settled leaves the total over-counting for good, and the limit then refuses for good.
+//
+// The count is released after the items are accounted, never before, so the total can
+// transiently over-count and never under-count.
+func (q *LockFreeQueue) settle(n int64) {
+	q.unsettled.Add(-n)
+}
+
+// heldWouldExceed reports whether admitting n more items would put the transactions held in
+// memory over the limit. It is false when there is no limit. Producers use it to tell a
+// refusal caused by the in-memory limit from one caused by the ingest queue bound.
+func (q *LockFreeQueue) heldWouldExceed(n int64) bool {
+	return q.maxHeld > 0 && q.heldTotal(q.queueLength.Load()+n) > q.maxHeld
+}
+
+// heldCount returns the transactions held in memory right now.
+func (q *LockFreeQueue) heldCount() int64 {
+	return q.heldTotal(q.queueLength.Load())
 }
 
 // length returns the current number of transactions queued, not the number
@@ -307,9 +341,27 @@ func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
 func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	return q.enqueueBatchBounded(nodes, txInpoints, false)
+}
+
+// enqueueBatchInBlockIfRoom is enqueueBatchIfRoom for transactions that arrived inside a block.
+// The in-memory limit does not refuse them, and the ingest queue bound still does.
+//
+// A block is the authority on what is valid, and a refused block transaction that stays
+// outside the template can leave a descendant, validated at a later level of the same block or
+// after a side-chain block unlocked its parent, entering the template without that parent. That
+// template is an invalid block. Admitting them is bounded: the block is already in memory while
+// it validates, and they count toward the total, so mempool ingest sees the node as full.
+func (q *LockFreeQueue) enqueueBatchInBlockIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	return q.enqueueBatchBounded(nodes, txInpoints, true)
+}
+
+// enqueueBatchBounded is the shared body of enqueueBatchIfRoom and enqueueBatchInBlockIfRoom.
+// exemptHeld lifts the in-memory limit for this batch and leaves the ingest queue bound.
+func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool) bool {
 	n := int64(len(nodes)) // gosec:nolint
 
-	if q.maxItems <= 0 && q.maxHeld <= 0 {
+	if q.maxItems <= 0 && (q.maxHeld <= 0 || exemptHeld) {
 		q.enqueueBatch(nodes, txInpoints)
 		return true
 	}
@@ -317,7 +369,7 @@ func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*s
 	after := q.queueLength.Add(n) // reserve
 
 	queueRoom := q.maxItems <= 0 || after <= q.maxItems
-	heldRoom := q.maxHeld <= 0 || q.heldTotal(after) <= q.maxHeld
+	heldRoom := exemptHeld || q.maxHeld <= 0 || q.heldTotal(after) <= q.maxHeld
 
 	if queueRoom && heldRoom {
 		q.publish(nodes, txInpoints) // reservation already accounted
@@ -389,6 +441,7 @@ func (q *LockFreeQueue) dequeueBatch(validFromMillis int64) (*TxBatch, bool) {
 	}
 
 	q.head = next
+	q.unsettled.Add(int64(len(next.nodes)))    // gosec:nolint  count it held before it leaves the queue
 	q.queueLength.Add(-int64(len(next.nodes))) // gosec:nolint
 	q.updateOldestPending()
 
@@ -435,6 +488,7 @@ func (q *LockFreeQueue) dequeueBatchUntil(maxTimeMillis int64) (*TxBatch, bool) 
 	}
 
 	q.head = next
+	q.unsettled.Add(int64(len(next.nodes)))    // gosec:nolint  count it held before it leaves the queue
 	q.queueLength.Add(-int64(len(next.nodes))) // gosec:nolint
 	q.updateOldestPending()
 
