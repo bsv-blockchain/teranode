@@ -8701,11 +8701,11 @@
 <h3 id="running-tnd-tests">Running TND Tests<a class="headerlink" href="#running-tnd-tests" title="Permanent link">&para;</a></h3>
 <h4 id="running-all-tnd-tests">Running All TND Tests<a class="headerlink" href="#running-all-tnd-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnd
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnd
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </span></code></pre></div>
 <h4 id="running-specific-tnd-tests">Running Specific TND Tests<a class="headerlink" href="#running-specific-tnd-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnd
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTND1TestSuite</span>$<span class="s2">/TestTND1_1</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnd
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTND1_1TestSuite</span>$<span class="s2">"</span>
 </span></code></pre></div>
 <h2 id="tne">TNE<a class="headerlink" href="#tne" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the TNE tests verify that nodes correctly validate blocks received from the network and optimize verification processes.</p>
@@ -8752,11 +8752,11 @@
 <h3 id="running-tnf-tests">Running TNF Tests<a class="headerlink" href="#running-tnf-tests" title="Permanent link">&para;</a></h3>
 <h4 id="running-all-tnf-tests">Running All TNF Tests<a class="headerlink" href="#running-all-tnf-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnf
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-tags<span class="w"> </span>test_tnf
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v
 </span></code></pre></div>
 <h4 id="running-specific-tnf-tests">Running Specific TNF Tests<a class="headerlink" href="#running-specific-tnf-tests" title="Permanent link">&para;</a></h4>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="nb">cd</span><span class="w"> </span>/teranode/test/tnf
-</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNFTestSuite</span>$<span class="s2">/TestInvalidateBlock</span>$<span class="s2">"</span><span class="w"> </span>-tags<span class="w"> </span>test_tnf
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>go<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-v<span class="w"> </span>-run<span class="w"> </span><span class="s2">"^TestTNFTestSuite</span>$<span class="s2">/TestInvalidateBlock</span>$<span class="s2">"</span>
 </span></code></pre></div>
 <h2 id="tnj">TNJ<a class="headerlink" href="#tnj" title="Permanent link">&para;</a></h2>
 <p>As outlined in the Functional Requirements for Teranode reference document, the tests in the <code>/test/tnj</code> folder verify that Teranode correctly implements and enforces the standard consensus rules of the Bitcoin protocol.</p>

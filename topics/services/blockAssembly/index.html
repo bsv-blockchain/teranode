@@ -3502,6 +3502,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Reorganization Conflicts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#regression-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regression Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -7479,6 +7496,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Reorganization Conflicts">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#regression-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Regression Tests
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
         
           <li class="md-nav__item">
@@ -8238,8 +8272,19 @@
 <ul>
 <li><strong>Conflicting Transaction Detection</strong>: During reorgs, the service identifies and marks conflicting transactions in affected subtrees</li>
 <li><strong>Transaction Recovery</strong>: Non-conflicting transactions are automatically re-added to new subtrees</li>
-<li><strong>Deep Reorg Protection</strong>: Reorganizations affecting more than the coinbase maturity threshold (typically 100 blocks) trigger a full service reset for safety</li>
+<li><strong>Deep Reorg Protection</strong>: Block Assembly does a full reset, not an in-place reorg, when the deeper side of the reorg reaches the UTXO retention at any height, or reaches coinbase maturity (100 blocks on mainnet) above height 1000 (<code>reorgNeedsReset</code>). It also resets when a moved-back block is invalid, or when the in-place reorg fails. A catch-up with no blocks to move back never resets, however many blocks it moves forward.</li>
 </ul>
+<h5 id="regression-tests">Regression Tests<a class="headerlink" href="#regression-tests" title="Permanent link">&para;</a></h5>
+<p><code>TestProcessNewBlockAnnouncement_CatchupVsReorg</code> (<code>services/blockassembly/block_assembler_catchup_test.go</code>) is the regression test for this routing. It checks which path <code>processNewBlockAnnouncement</code> takes:</p>
+<ul>
+<li>no action when Block Assembly is already at the tip</li>
+<li>a single <code>MoveForwardBlock</code> for a one-block gap</li>
+<li>catch-up for a gap of two or more blocks with nothing to move back, with no reset for a 150-block catch-up</li>
+<li>an in-place reorg for a one-block fork</li>
+<li>a reset for a reorg at coinbase-maturity depth above height 1000, and for a reorg at the UTXO retention below height 1000. These two subtests call <code>handleReorg</code> directly.</li>
+<li>no tip change when catch-up fails: Block Assembly stays at its tip from before the catch-up</li>
+</ul>
+<p>The test replaces the subtree processor with a mock, so it covers the routing decision only. It does not cover reorg handling in <code>services/blockchain</code>, <code>services/blockvalidation</code> or <code>stores/utxo</code>, which need their own regression tests. <code>make test</code> runs it, in the <code>test</code> job of <code>teranode_pr_tests.yaml</code> on every pull request, and in the <code>go-test</code> job of <code>teranode_main_tests.yaml</code> on every push to <code>main</code>, <code>staging</code> or <code>release/*</code> and on every <code>v*</code> tag.</p>
 <h4 id="clock-skew-stopping-block-production">Clock Skew Stopping Block Production<a class="headerlink" href="#clock-skew-stopping-block-production" title="Permanent link">&para;</a></h4>
 <p>Every block's timestamp must be strictly greater than the median timestamp of the previous 11 blocks, and no more than two hours ahead of local time. Block assembly floors each mining candidate at median-time-past+1 so it never hands miners work the network would refuse. When the local clock falls far enough behind the parent chain, that floor rises above the two-hour ceiling and <strong>no</strong> timestamp satisfies both rules.</p>
 <ul>

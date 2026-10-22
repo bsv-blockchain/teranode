@@ -814,6 +814,28 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#test-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Levels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-ci-runs-each-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When CI Runs Each Suite
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#unit-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6760,6 +6782,28 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#test-levels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Levels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-ci-runs-each-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When CI Runs Each Suite
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#unit-tests" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -6913,6 +6957,148 @@
 
 
 <h1 id="running-tests">✔️ Running Tests<a class="headerlink" href="#running-tests" title="Permanent link">&para;</a></h1>
+<h2 id="test-levels">Test Levels<a class="headerlink" href="#test-levels" title="Permanent link">&para;</a></h2>
+<p>Each <code>make</code> target belongs to one test level. The levels are:</p>
+<ul>
+<li><strong>Unit</strong>: one package, with its own dependencies in memory or in a test container.</li>
+<li><strong>Integration</strong>: several components together, without a full running node.</li>
+<li><strong>System (end to end)</strong>: one or more complete Teranode nodes, started in process or in Docker.</li>
+<li><strong>Acceptance</strong>: checks against the functional and non-functional requirements.</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Level</th>
+<th>Target or command</th>
+<th>What it runs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unit</td>
+<td><code>make test</code></td>
+<td>Every package except <code>./test/</code>, with <code>-race</code> and coverage. This also replays the committed seed corpus of each fuzz target.</td>
+</tr>
+<tr>
+<td>Unit</td>
+<td><code>make test-heavy</code></td>
+<td>The <code>TestSortedHashSet_</code> tests in <code>services/blockassembly/subtreeprocessor</code>, without <code>-race</code>.</td>
+</tr>
+<tr>
+<td>Unit</td>
+<td><code>make fuzz</code></td>
+<td>Fuzzes each target in <code>FUZZ_TARGETS</code> for <code>FUZZTIME</code>.</td>
+</tr>
+<tr>
+<td>Integration</td>
+<td><code>make longtest</code></td>
+<td><code>TestLegacyHistoricalTestnetSync</code> (<code>longtest</code> build tag), <code>make test-heavy</code>, and <code>test/longtest/</code>.</td>
+</tr>
+<tr>
+<td>System</td>
+<td><code>make smoketest</code></td>
+<td><code>test/e2e/daemon/ready/</code> with in-process daemons, except the tests in its <code>-skip</code> list. That list holds the tests that <code>make prunertest</code> and <code>make legacy-sync</code> run, and two other tests.</td>
+</tr>
+<tr>
+<td>System</td>
+<td><code>make sequentialtest</code> (and the <code>-sqlite</code>, <code>-postgres</code>, <code>-aerospike</code> and <code>-shard</code> variants)</td>
+<td><code>test/sequentialtest/</code>, one test at a time, with in-process daemons.</td>
+</tr>
+<tr>
+<td>System</td>
+<td><code>make prunertest</code></td>
+<td><code>TestBlobDeletion</code> and <code>TestPruner</code> in <code>test/e2e/daemon/ready/</code>.</td>
+</tr>
+<tr>
+<td>System</td>
+<td><code>make legacy-sync</code></td>
+<td>The legacy-sync tests in <code>test/e2e/daemon/ready/</code>, which run Teranode with SV Node.</td>
+</tr>
+<tr>
+<td>System</td>
+<td><code>make chainintegrity</code></td>
+<td><code>test/e2e/chainintegrity/</code>, a multi-node chain check.</td>
+</tr>
+<tr>
+<td>System</td>
+<td><code>make network-chaos-test</code>, <code>make network-chaos-test-split</code></td>
+<td><code>test/multinode/</code> and <code>test/multinode_split/</code> (<code>network_chaos</code> build tag) against a Docker multi-node stack.</td>
+</tr>
+<tr>
+<td>System</td>
+<td><code>make soaktest</code></td>
+<td><code>TestSoakSteadyLoad</code> in <code>test/soak/</code> (<code>soak</code> build tag).</td>
+</tr>
+<tr>
+<td>System</td>
+<td><code>go test ./test/chaos -run TestScenarioNN</code></td>
+<td>The chaos scenarios in <code>test/chaos/</code>. No <code>make</code> target runs them.</td>
+</tr>
+<tr>
+<td>Acceptance</td>
+<td><code>go test -tags test_tna ./test/tna/</code>, <code>go test -tags test_tec ./test/tec/</code>, <code>go test ./test/tnb/ ./test/tnd/ ./test/tnf/ ./test/tnj/</code></td>
+<td>The functional requirement categories. See <a href="../automatedTestingHowTo/">Automated Testing</a>.</td>
+</tr>
+<tr>
+<td>Acceptance</td>
+<td>The <a href="https://github.com/bsv-blockchain/node-validation">node-validation</a> harness</td>
+<td>Consensus parity with SV Node and the requirement checks of the test plan. It is a separate repository.</td>
+</tr>
+</tbody>
+</table>
+<p><code>make testall</code> runs <code>make test</code>, <code>make longtest</code> and <code>make sequentialtest</code>.</p>
+<p>Gaps in the programme:</p>
+<ul>
+<li>No <code>make</code> target and no CI workflow runs the acceptance categories in <code>test/tna/</code>, <code>test/tec/</code>, <code>test/tnb/</code>, <code>test/tnd/</code>, <code>test/tnf/</code> and <code>test/tnj/</code>.</li>
+<li><code>make test</code> excludes <code>./test/</code>, and no target or workflow runs the tests in <code>test/consensus/</code>, <code>test/fsm/</code> or <code>test/rpc/</code>. <code>make bench-test</code> lists <code>test/consensus/</code>, but it runs benchmarks only (<code>-run='^$'</code>). On 2026-10-17, <code>test/consensus/</code> passed, and <code>test/fsm/</code> and <code>test/rpc/withDaemon/</code> failed.</li>
+</ul>
+<h2 id="when-ci-runs-each-suite">When CI Runs Each Suite<a class="headerlink" href="#when-ci-runs-each-suite" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>When</th>
+<th>Workflow</th>
+<th>Suites</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Every pull request</td>
+<td><code>teranode_pr_tests.yaml</code></td>
+<td><code>golangci-lint</code>, <code>make test</code>, <code>make test-heavy</code>, and the <code>stores/utxo/aerospike</code> tests against an Aerospike server with native operations</td>
+</tr>
+<tr>
+<td>Every pull request that changes files outside <code>docs/</code></td>
+<td><code>teranode_pr_smoketests.yaml</code></td>
+<td><code>make smoketest</code> (3 shards), <code>make prunertest</code>, <code>make legacy-sync</code>, <code>make chainintegrity</code>, and <code>make sequentialtest-shard</code> (7 shards)</td>
+</tr>
+<tr>
+<td>Every pull request that changes <code>fuzz.yaml</code> or the <code>Makefile</code></td>
+<td><code>fuzz.yaml</code></td>
+<td>Each fuzz target for 20 seconds</td>
+</tr>
+<tr>
+<td>Every push to <code>main</code>, <code>staging</code> or <code>release/*</code>, and every <code>v*</code> tag</td>
+<td><code>teranode_main_build.yaml</code>, which calls <code>teranode_main_tests.yaml</code></td>
+<td><code>make test</code>, <code>make smoketest</code> and <code>make prunertest</code></td>
+</tr>
+<tr>
+<td>Every day at 02:00 UTC</td>
+<td><code>nightly_tests.yaml</code></td>
+<td>A three-node chain-integrity run, the <code>test/e2e/daemon/ready/</code> tests, the chaos scenarios, and <code>make soaktest</code> for two hours</td>
+</tr>
+<tr>
+<td>Every day at 04:00 UTC</td>
+<td><code>fuzz.yaml</code></td>
+<td>Each fuzz target for 5 minutes</td>
+</tr>
+<tr>
+<td>Manual dispatch only</td>
+<td><code>long_tests.yaml</code></td>
+<td><code>make testall</code></td>
+</tr>
+</tbody>
+</table>
 <h2 id="unit-tests">Unit Tests<a class="headerlink" href="#unit-tests" title="Permanent link">&para;</a></h2>
 <div class="language-shell highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>make<span class="w"> </span><span class="nb">test</span><span class="w">  </span><span class="c1"># Executes unit tests, excluding the test/ directory.</span>
 </span></code></pre></div>

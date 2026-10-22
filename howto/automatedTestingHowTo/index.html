@@ -7176,9 +7176,7 @@
 <p>Teranode uses build tags to control which tests run:</p>
 <ul>
 <li><code>test_tna</code> - TNA test suite (<code>test/tna/</code>)</li>
-<li><code>test_tec</code> - TEC test suite (<code>test/tec/</code>)</li>
-<li><code>test_tnd</code> - TND test suite (<code>test/tnd/</code>)</li>
-<li><code>test_tnf</code> - TNF test suite (<code>test/tnf/</code>)</li>
+<li><code>test_tec</code> - TEC test suite (<code>test/tec/</code>). Each file in it also has its own tag, from <code>test_tec_blk_2</code> to <code>test_tec_blk_7</code>.</li>
 <li><code>test_smoke</code> - Smoke tests (docker-based e2e)</li>
 <li><code>test_functional</code> - Functional tests (subset of smoke)</li>
 <li><code>test_utxo</code> - UTXO tests (subset of smoke)</li>
@@ -7188,7 +7186,7 @@
 <li><code>debug</code> - Enable debug mode for tests</li>
 </ul>
 <blockquote>
-<p><strong>Note:</strong> The <code>test/tnb/</code> and <code>test/tnj/</code> test directories do not use build tags; run them directly with <code>go test ./test/tnb/</code> and <code>go test ./test/tnj/</code>.</p>
+<p><strong>Note:</strong> The <code>test/tnb/</code>, <code>test/tnd/</code>, <code>test/tnf/</code> and <code>test/tnj/</code> test directories do not use build tags. Run them directly, for example <code>go test ./test/tnd/</code>. No <code>make</code> target or CI workflow runs any of these acceptance categories; see <a href="../runningTests/#test-levels">Running Tests</a>.</p>
 </blockquote>
 <h1 id="other-resources">Other Resources<a class="headerlink" href="#other-resources" title="Permanent link">&para;</a></h1>
 <ul>
