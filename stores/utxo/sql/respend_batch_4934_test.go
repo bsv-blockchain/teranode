@@ -102,3 +102,57 @@ func TestRespendBehindLoserInSameBatchPostgresBulk(t *testing.T) {
 
 	assertRespendBehindLoserInSameBatch(t, ctx, store)
 }
+
+// A stored owner need not be one of the requests in the batch. Both losing
+// requests must name that owner, never each other.
+func TestSpendBatchReportsPersistedOwnerOutsideBatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := setupSharedBatch(ctx, t, "4934-third-owner")
+	require.NoError(t, store.SetBlockHeight(2))
+	parent := twoOutParent(ctx, t, store, "4934-third-owner")
+	owner := spendOf(t, parent, 1, 0)
+	_, err := store.Spend(ctx, owner, 2)
+	require.NoError(t, err)
+	batch := make([]*batchSpend, 0, 2)
+	for _, lockTime := range []uint32{2, 3} {
+		spends, spendErr := utxo.GetSpends(spendOf(t, parent, lockTime, 0))
+		require.NoError(t, spendErr)
+		batch = append(batch, &batchSpend{spend: spends[0], blockHeight: 2, errCh: make(chan error, 1)})
+	}
+	store.sendSpendBatch(batch)
+	for _, item := range batch {
+		err := <-item.errCh
+		require.ErrorIs(t, err, errors.ErrSpent)
+		var data *errors.UtxoSpentErrData
+		require.True(t, errors.AsData(err, &data))
+		require.Equal(t, owner.TxID(), data.SpendingData.TxID.String())
+	}
+}
+
+func TestSpendBatchStorageFailureDoesNotInventConflict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := setupSharedBatch(ctx, t, "4934-read-failure")
+	require.NoError(t, store.SetBlockHeight(2))
+	parent := twoOutParent(ctx, t, store, "4934-read-failure")
+	owner := spendOf(t, parent, 1, 0, 1)
+	_, err := store.Spend(ctx, owner, 2)
+	require.NoError(t, err)
+	loserSpends, err := utxo.GetSpends(spendOf(t, parent, 2, 0))
+	require.NoError(t, err)
+	ownerSpends, err := utxo.GetSpends(owner)
+	require.NoError(t, err)
+	require.NoError(t, store.db.Close())
+	batch := []*batchSpend{
+		{spend: loserSpends[0], blockHeight: 2, errCh: make(chan error, 1)},
+		{spend: ownerSpends[0], blockHeight: 2, errCh: make(chan error, 1)},
+		{spend: ownerSpends[1], blockHeight: 2, errCh: make(chan error, 1)},
+	}
+	store.sendSpendBatch(batch)
+	for _, item := range batch {
+		err := <-item.errCh
+		require.Error(t, err)
+		require.NotErrorIs(t, err, errors.ErrSpent, "storage failure is not evidence of a conflicting owner")
+	}
+}

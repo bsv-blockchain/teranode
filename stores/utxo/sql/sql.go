@@ -2627,95 +2627,19 @@ func readBlockIDs(rows sqlRows) (map[chainhash.Hash][]uint32, error) {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+	utxo.ProcessSpendBatch(batch,
 		func(item *batchSpend) *utxo.Spend {
 			if item == nil {
 				return nil
 			}
 			return item.spend
 		},
-		func(item *batchSpend, err error) {
-			item.errCh <- err
+		func(part []*batchSpend) {
+			s.retrySpendBatch(part, func(part []*batchSpend) bool {
+				return s.trySendSpendBatch(s.ctx, part)
+			})
 		},
-		s.persistedSpenderForFilter(),
 	)
-	if len(batch) == 0 {
-		return
-	}
-
-	s.retrySpendBatch(batch, func(batch []*batchSpend) bool {
-		return s.trySendSpendBatch(s.ctx, batch)
-	})
-}
-
-// persistedSpenderForFilter answers, for the outpoints a batch actually argues
-// over, which transaction the outputs table already names as the spender. Reads
-// go on the pool, not on the batch transaction, which has not begun yet when the
-// filter runs.
-//
-// A lookup that fails answers ok=false rather than guessing, so the filter keeps
-// its #825 first-claim-wins behaviour on unknown state instead of manufacturing a
-// winner. Reads are memoised and taken only for genuinely colliding outpoints, so
-// an ordinary batch pays nothing extra.
-func (s *Store) persistedSpenderForFilter() utxo.PersistedSpender {
-	const q = `
-		SELECT o.spending_data
-		FROM outputs o
-		JOIN transactions t ON o.transaction_id = t.id
-		WHERE t.hash = $1
-		AND o.idx = $2
-	`
-
-	type outpoint struct {
-		txID chainhash.Hash
-		vout uint32
-	}
-	type answer struct {
-		spendingData *spendpkg.SpendingData
-		ok           bool
-	}
-
-	cache := make(map[outpoint]answer)
-
-	return func(txID *chainhash.Hash, vout uint32) (*spendpkg.SpendingData, bool) {
-		if txID == nil {
-			return nil, false
-		}
-
-		key := outpoint{txID: *txID, vout: vout}
-		if cached, found := cache[key]; found {
-			return cached.spendingData, cached.ok
-		}
-
-		var raw []byte
-
-		err := s.db.QueryRowContext(s.ctx, q, txID[:], vout).Scan(&raw)
-
-		var result answer
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-			// No such outpoint: authoritatively unspent, so first claim wins.
-			result = answer{ok: true}
-		case err != nil:
-			s.logger.Debugf("[SPEND] cannot read persisted spender for %s:%d, keeping first-claim order: %v", txID, vout, err)
-			result = answer{ok: false}
-		case len(raw) == 0:
-			// Row exists and is unspent.
-			result = answer{ok: true}
-		default:
-			spendingData, parseErr := spendpkg.NewSpendingDataFromBytes(raw)
-			if parseErr != nil {
-				s.logger.Debugf("[SPEND] cannot parse persisted spender for %s:%d, keeping first-claim order: %v", txID, vout, parseErr)
-				result = answer{ok: false}
-			} else {
-				result = answer{spendingData: spendingData, ok: true}
-			}
-		}
-
-		cache[key] = result
-
-		return result.spendingData, result.ok
-	}
 }
 
 // retrySpendBatch runs try over batch until it reports no lock error, and
