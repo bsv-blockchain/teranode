@@ -79,6 +79,9 @@ var (
 	// prometheusBlockAssemblyQueueShed counts transactions shed because the ingest queue was full past the bounded wait
 	prometheusBlockAssemblyQueueShed prometheus.Counter
 
+	// prometheusBlockAssemblyHeldShed counts the subset of those sheds caused by the in-memory transaction limit rather than the ingest queue bound
+	prometheusBlockAssemblyHeldShed prometheus.Counter
+
 	// prometheusBlockAssemblyQueueWait measures how long an ingest handler waited for queue room before succeeding or shedding
 	prometheusBlockAssemblyQueueWait prometheus.Histogram
 
@@ -543,6 +546,15 @@ func _initPrometheusMetrics() {
 			Name:      "add_directly_batch_seconds",
 			Help:      "Time taken to add all unmined transactions to subtree processor",
 			Buckets:   util.MetricsBucketsSeconds,
+		},
+	)
+
+	prometheusBlockAssemblyHeldShed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "held_limit_shed_total",
+			Help:      "Total transactions shed because block assembly held its configured maximum of transactions in memory. A subset of queue_shed_total. Sustained growth means no block is being produced or the limit is too tight.",
 		},
 	)
 

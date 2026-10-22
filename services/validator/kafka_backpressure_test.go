@@ -59,6 +59,8 @@ type fakeReader struct {
 	windowMillis int64
 	count        int64
 	maxItems     int64
+	heldCount    int64
+	maxHeld      int64
 	err          error
 }
 
@@ -89,6 +91,19 @@ func (f *fakeReader) setFill(count, maxItems, ageMillis int64) {
 	f.mu.Unlock()
 }
 
+// setHeld sets the reported held count, the reported in-memory limit and the reported head age
+// together, with the ingest queue empty and unbounded: the regime the held predicate is for.
+func (f *fakeReader) setHeld(held, maxHeld, ageMillis int64) {
+	f.mu.Lock()
+	f.count = 0
+	f.maxItems = 0
+	f.heldCount = held
+	f.maxHeld = maxHeld
+	f.ageMillis = ageMillis
+	f.err = nil
+	f.mu.Unlock()
+}
+
 func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (blockassembly.QueueStats, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -100,6 +115,8 @@ func (f *fakeReader) GetBlockAssemblyQueueStats(_ context.Context) (blockassembl
 	return blockassembly.QueueStats{
 		Count:             f.count,
 		MaxItems:          f.maxItems,
+		HeldCount:         f.heldCount,
+		MaxHeld:           f.maxHeld,
 		HeadAge:           time.Duration(f.ageMillis) * time.Millisecond,
 		DoubleSpendWindow: time.Duration(f.windowMillis) * time.Millisecond,
 	}, nil
@@ -1233,4 +1250,95 @@ func TestBackpressure_OneItemPauseThresholdRequiresDrainToEmpty(t *testing.T) {
 	c.tick(ctx)
 	require.Equal(t, 1, consumer.resumeCount(), "an empty queue is cool by fill")
 	require.False(t, c.paused.Load())
+}
+
+// The ingest queue reads near empty while the in-memory limit is the bound that is full: nothing
+// is admitted, so nothing queues and the head age is 0. Without a held predicate the controller
+// has no signal and Kafka transactions are validated, written and dropped one by one.
+func TestBackpressure_PausesWhenInMemoryLimitIsFillingAndQueueIsEmpty(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+
+	require.Equal(t, 1, consumer.pauseCount(), "a node near its in-memory limit must pause Kafka consumption")
+	require.True(t, c.paused.Load())
+
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount(), "and it does not flap")
+}
+
+func TestBackpressure_HeldPredicateInertWithoutALimit(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setHeld(10_000_000, 0, 0)
+	c.tick(ctx)
+
+	require.Equal(t, 0, consumer.pauseCount(), "no reported limit means no held signal, so the default behaves as before")
+}
+
+func TestBackpressure_HeldPredicateOffAtZeroPercent(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 0)
+
+	reader.setHeld(1000, 1000, 0)
+	c.tick(ctx)
+
+	require.Equal(t, 0, consumer.pauseCount(), "zero percent opts out of both fill predicates")
+}
+
+func TestBackpressure_HeldResumeNeedsTheHeldCountToFall(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	reader.setHeld(900, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "a young head and an empty queue alone must not resume while the node is still held full")
+	require.True(t, c.paused.Load())
+
+	reader.setHeld(400, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "a block cleared the subtrees and the held count fell to half the pause threshold")
+	require.False(t, c.paused.Load())
+}
+
+func TestBackpressure_HeldAndQueueFillBothMustCoolToResume(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setFill(950, 1000, 10)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	reader.mu.Lock()
+	reader.count = 0
+	reader.heldCount = 900
+	reader.maxHeld = 1000
+	reader.mu.Unlock()
+
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "the queue cooled but the held count has not")
+
+	reader.mu.Lock()
+	reader.heldCount = 100
+	reader.mu.Unlock()
+
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount())
 }
