@@ -7991,6 +7991,11 @@
 <td>Gauge</td>
 <td>Number of subtrees in the subtree exists cache</td>
 </tr>
+<tr>
+<td><code>teranode_blockvalidation_recovered_panics_total</code></td>
+<td>CounterVec</td>
+<td>Panics recovered in block validation, by <code>path</code> label: <code>worker</code>, <code>catchup</code>, <code>kafka</code> or <code>block_found</code>. Each one is a bug in the node. The block hash and stack are in the <code>PANIC</code> log line</td>
+</tr>
 </tbody>
 </table>
 <h3 id="catchup-operation-metrics">Catchup Operation Metrics<a class="headerlink" href="#catchup-operation-metrics" title="Permanent link">&para;</a></h3>

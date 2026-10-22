@@ -7404,14 +7404,14 @@ loader (0, false and false), so for these keys the two agree. The
 <td>int</td>
 <td>3</td>
 <td>blockvalidation_max_corrupt_attempts_per_block</td>
-<td>Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap (0 disables, re-opening the DoS)</td>
+<td>Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap and the worker panic cap (0 disables all three, re-opening the DoS)</td>
 </tr>
 <tr>
 <td>CorruptAttemptCooldown</td>
 <td>time.Duration</td>
 <td>10m</td>
 <td>blockvalidation_corrupt_attempt_cooldown</td>
-<td>Fixed cooldown window after which a capped (hash, peerID) is admitted again, for both caps</td>
+<td>Fixed cooldown window after which a capped (hash, peerID) is admitted again, for the corrupt, local-policy decline and worker panic caps</td>
 </tr>
 <tr>
 <td>IsParentMinedRetryMaxRetry</td>
