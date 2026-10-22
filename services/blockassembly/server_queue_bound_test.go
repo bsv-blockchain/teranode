@@ -294,3 +294,149 @@ func TestIngest_ShedIsNotCountedAsAdded(t *testing.T) {
 		})
 	})
 }
+
+// newHeldLimitedRealServer builds a fully-initialized BlockAssembly server with the in-memory
+// transaction limit set, backed by in-memory stores. The subtree processor is not started, so
+// nothing drains. A sendBatchSize of 1 puts the clamp floor at 65, which is the limit used here.
+func newHeldLimitedRealServer(t *testing.T, limit uint64, wait time.Duration) *BlockAssembly {
+	t.Helper()
+
+	common := testutil.NewCommonTestSetup(t)
+	common.Settings.BlockAssembly.MaxTransactionsInMemory = limit
+	common.Settings.BlockAssembly.QueueFullWaitTimeout = wait
+	common.Settings.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+	common.Settings.BlockAssembly.SendBatchSize = 1
+
+	subtreeStore := testutil.NewMemoryBlobStore()
+
+	ctx, cancel := context.WithCancel(common.Ctx)
+
+	blockchainClient := testutil.NewMemorySQLiteBlockchainClient(common.Logger, common.Settings, t)
+	utxoStore := testutil.NewSQLiteMemoryUTXOStore(ctx, common.Logger, common.Settings, t)
+	_ = utxoStore.SetBlockHeight(123)
+
+	s := New(common.Logger, common.Settings, nil, utxoStore, subtreeStore, blockchainClient)
+	s.SetSkipWaitForPendingBlocks(true)
+	require.NoError(t, s.Init(ctx))
+
+	t.Cleanup(func() {
+		cancel()
+		_ = s.Stop(context.Background())
+
+		if s.blockAssembler != nil {
+			s.blockAssembler.Wait()
+		}
+	})
+
+	return s
+}
+
+func TestIngest_HeldLimitRefusesAtOnceAndMarksTheShed(t *testing.T) {
+	initPrometheusMetrics()
+
+	s := newHeldLimitedRealServer(t, 65, 5*time.Second)
+	require.Equal(t, int64(65), s.blockAssembler.MaxTransactionsInMemory(), "precondition: the enforced limit is what was asked for")
+
+	// The placeholder already holds one, so 64 fills the limit exactly.
+	_, err := s.AddTxBatch(context.Background(), batchReq(64))
+	require.NoError(t, err)
+	require.Equal(t, int64(65), s.blockAssembler.HeldCount())
+
+	heldShedBefore := promtestutil.ToFloat64(prometheusBlockAssemblyHeldShed)
+	queueShedBefore := promtestutil.ToFloat64(prometheusBlockAssemblyQueueShed)
+
+	start := time.Now()
+	_, err = s.AddTxBatch(context.Background(), batchReq(1))
+
+	require.Error(t, err)
+	require.Less(t, time.Since(start), time.Second, "a refusal by the in-memory limit must not poll for the 5s queue wait")
+	require.Equal(t, codes.ResourceExhausted, status.Code(err), "same class as a queue-full shed, so every consumer handles it")
+
+	unwrapped := errors.UnwrapGRPC(err)
+	require.True(t, errors.Is(unwrapped, errors.ErrThresholdExceeded))
+	require.True(t, errors.Is(unwrapped, errors.ErrServiceUnavailable), "the marker the validator reads to skip its retry")
+
+	require.Equal(t, heldShedBefore+1, promtestutil.ToFloat64(prometheusBlockAssemblyHeldShed))
+	require.Equal(t, queueShedBefore+1, promtestutil.ToFloat64(prometheusBlockAssemblyQueueShed), "a held shed is also a shed")
+
+	_, err = s.AddTx(context.Background(), batchReq(1).TxRequests[0])
+	require.Error(t, err, "the unary handler refuses at the limit too")
+
+	_, err = s.AddTxBatchColumnar(context.Background(), columnarReq(1))
+	require.Error(t, err, "so does the columnar handler")
+}
+
+func TestIngest_HeldLimitDoesNotRefuseBlockTransactions(t *testing.T) {
+	initPrometheusMetrics()
+
+	s := newHeldLimitedRealServer(t, 65, 0)
+
+	_, err := s.AddTxBatch(context.Background(), batchReq(64))
+	require.NoError(t, err)
+
+	_, err = s.AddTxBatch(context.Background(), batchReq(1))
+	require.Error(t, err, "precondition: mempool ingest is refused at the limit")
+
+	rowBatch := batchReq(10)
+	rowBatch.InBlock = true
+
+	_, err = s.AddTxBatch(context.Background(), rowBatch)
+	require.NoError(t, err, "a row batch of block transactions is admitted past the limit")
+
+	columnar := columnarReq(10)
+	columnar.InBlock = true
+
+	_, err = s.AddTxBatchColumnar(context.Background(), columnar)
+	require.NoError(t, err, "so is a columnar batch")
+
+	single := batchReq(1).TxRequests[0]
+	single.InBlock = true
+
+	_, err = s.AddTx(context.Background(), single)
+	require.NoError(t, err, "and a unary block transaction")
+
+	require.Equal(t, int64(65+10+10+1), s.blockAssembler.HeldCount(), "block transactions count toward the total")
+
+	_, err = s.AddTxBatch(context.Background(), batchReq(1))
+	require.Error(t, err, "so mempool ingest stays refused")
+
+	stats, err := s.GetBlockAssemblyQueueStats(context.Background(), &blockassembly_api.EmptyMessage{})
+	require.NoError(t, err)
+	require.Equal(t, int64(65+10+10+1), stats.HeldCount)
+	require.Equal(t, int64(65), stats.MaxHeld)
+}
+
+func TestIngest_QueueBoundShedIsNotMarkedAsTheHeldLimit(t *testing.T) {
+	initPrometheusMetrics()
+
+	s := newBoundedRealServer(t, 64, 0, 1)
+
+	_, err := s.AddTxBatch(context.Background(), batchReq(64))
+	require.NoError(t, err)
+
+	heldShedBefore := promtestutil.ToFloat64(prometheusBlockAssemblyHeldShed)
+
+	_, err = s.AddTxBatch(context.Background(), batchReq(1))
+	require.Error(t, err)
+
+	unwrapped := errors.UnwrapGRPC(err)
+	require.True(t, errors.Is(unwrapped, errors.ErrThresholdExceeded))
+	require.False(t, errors.Is(unwrapped, errors.ErrServiceUnavailable), "a queue-full shed clears in milliseconds and keeps its retry")
+	require.Equal(t, heldShedBefore, promtestutil.ToFloat64(prometheusBlockAssemblyHeldShed))
+}
+
+func TestIngest_BlockBatchStillHitsTheQueueBound(t *testing.T) {
+	initPrometheusMetrics()
+
+	s := newBoundedRealServer(t, 64, 0, 1)
+
+	_, err := s.AddTxBatch(context.Background(), batchReq(64))
+	require.NoError(t, err)
+
+	inBlock := batchReq(1)
+	inBlock.InBlock = true
+
+	_, err = s.AddTxBatch(context.Background(), inBlock)
+	require.Error(t, err, "the exemption is from the in-memory limit only; the ingest queue bound still protects the queue")
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
+}
