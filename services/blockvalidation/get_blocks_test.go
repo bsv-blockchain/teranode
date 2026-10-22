@@ -4855,7 +4855,7 @@ func TestFetchAndStoreSubtree_PoisonedResponses(t *testing.T) {
 		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "not a whole number")
-		require.True(t, errors.Is(err, errors.ErrProcessing), "the class must stay ProcessingError")
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the class must stay peer-attributable")
 		require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")
 		require.True(t, isCacheBypassRetryable(err), "a truncated body is the issue-1368 signature and must be retryable")
 	})
@@ -4871,9 +4871,26 @@ func TestFetchAndStoreSubtree_PoisonedResponses(t *testing.T) {
 		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "that hash to")
-		require.True(t, errors.Is(err, errors.ErrProcessing), "the class must stay ProcessingError")
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the class must stay peer-attributable")
 		require.False(t, errors.IsLocalError(err))
 		require.True(t, isCacheBypassRetryable(err))
+	})
+
+	t.Run("EmptyBodyIsAPeerFaultAndCacheBypassRetryable", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server := newServer()
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder("GET", f.subtreeURL, httpmock.NewBytesResponder(200, []byte{}))
+
+		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "empty subtree received")
+		require.True(t, errors.Is(err, errors.ErrNotFound), "the class must stay peer-attributable")
+		require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")
+		require.False(t, isLocalProcessingFault(err), "must not short-circuit the alternative-peer loop")
+		require.True(t, isCacheBypassRetryable(err), "an empty body is the issue-1368 signature and must be retryable")
 	})
 }
 
@@ -4988,7 +5005,7 @@ func TestTryPeerForSubtree_WrongRootSubtreeStrikesOnlyAfterCacheBypass(t *testin
 
 		err := server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 		require.True(t, isCacheBypassRetryable(err))
 
 		mu.Lock()
@@ -6193,7 +6210,7 @@ func TestSubtreeDataWriteFailure_Classification(t *testing.T) {
 				return
 			}
 
-			require.True(t, errors.Is(err, errors.ErrProcessing))
+			require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 			require.Contains(t, err.Error(), peerID, "a peer-attributable error must name the peer")
 		})
 	}
@@ -6356,4 +6373,48 @@ type failingWriter struct{}
 
 func (failingWriter) Write(_ []byte) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+// TestFetchAndStoreSubtreeAndSubtreeData_TruncatedLocalSubtreeIsLocal pins the local exits of the
+// alternative-peer walk. A subtree file already on our disk that does not deserialize fails as a
+// bare ProcessingError, which is local. Every alternative would hit the same file, so none is
+// tried, and the result must not become the External all-peers-failed aggregate, which charges and
+// rotates the primary.
+func TestFetchAndStoreSubtreeAndSubtreeData_TruncatedLocalSubtreeIsLocal(t *testing.T) {
+	ctx := context.Background()
+	primaryURL := "http://primary-peer:8000"
+	primaryID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+	subtreeHash := chainhash.HashH([]byte("truncated-local-subtree"))
+
+	store := memory.New()
+	require.NoError(t, store.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, []byte{0x01, 0x02, 0x03}))
+
+	p2pClient := &subtreeAttributionP2PClient{
+		peers: []*p2p.PeerInfo{{
+			ID:              peer.ID("alternative-peer"),
+			DataHubURL:      "http://alternative-peer:8000",
+			Height:          1000,
+			ReputationScore: 50,
+		}},
+	}
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: store,
+		settings:     test.CreateBaseTestSettings(t),
+		p2pClient:    p2pClient,
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, &subtreeHash, primaryID, primaryURL, nil)
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrExternal), "a local read failure must not become the all-peers-failed aggregate")
+	require.True(t, isLocalCatchupFault(err))
+	require.Zero(t, httpmock.GetTotalCallCount(), "no peer can fix our own file, so none is asked")
+
+	server.reportCatchupFailureForError(ctx, primaryID, err)
+	require.Zero(t, p2pClient.totalCharges(), "our own file must not be charged to any peer")
 }

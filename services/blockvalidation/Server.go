@@ -971,7 +971,7 @@ func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaB
 	// Special case: "legacy" is allowed for blocks from the legacy service
 	if kafkaMsg.URL != "legacy" && baseURL.Scheme != "http" && baseURL.Scheme != "https" {
 		u.logger.Errorf("[BlockFound] Invalid URL scheme '%s' for URL '%s' from peer %s - expected http or https. Possible peer ID/URL field confusion.", baseURL.Scheme, kafkaMsg.URL, kafkaMsg.GetPeerId())
-		return errors.NewProcessingError("[BlockFound] invalid URL scheme '%s' - expected http or https", baseURL.Scheme)
+		return errors.NewNetworkInvalidResponseError("[BlockFound] invalid URL scheme '%s' - expected http or https", baseURL.Scheme)
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -218,7 +218,7 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
 			u.logger.Errorf("[catchup][%s] Invalid baseURL '%s' - must be valid http/https URL, not peer ID. PeerID: %s",
 				blockUpTo.Hash().String(), baseURL, peerID)
-			return errors.NewProcessingError("[catchup][%s] invalid baseURL - not a valid http/https URL", blockUpTo.Hash().String())
+			return errors.NewNetworkInvalidResponseError("[catchup][%s] invalid baseURL - not a valid http/https URL", blockUpTo.Hash().String())
 		}
 	}
 
@@ -393,7 +393,7 @@ func (u *Server) handleNoNewHeaders(ctx context.Context, blockUpTo *model.Block)
 		return errors.NewProcessingError("[catchup][%s] peer returned no new headers and block existence check failed", blockUpTo.Hash().String(), err)
 	}
 	if !exists {
-		return errors.NewProcessingError("[catchup][%s] peer returned no new headers but target block is not known locally - peer may be on a dead fork", blockUpTo.Hash().String())
+		return errors.NewNetworkInvalidResponseError("[catchup][%s] peer returned no new headers but target block is not known locally - peer may be on a dead fork", blockUpTo.Hash().String())
 	}
 	u.logger.Infof("[catchup][%s] no new blocks to fetch - target block already known locally", blockUpTo.Hash().String())
 	return nil
@@ -539,11 +539,6 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// storage case at the top of this switch: errors.Is walks the whole chain, so a
 			// wrapper carrying both codes would otherwise be scored a validation_failure with
 			// reportMalicious set. It sat below the consensus case until this change.
-			//
-			// Deliberately NOT a blanket ErrProcessing case: this switch's own
-			// TestReleaseCatchupLock_DrainChargesPrimaryEvenOnMixedCycle uses a bare
-			// NewProcessingError as its example of a generic PEER error, so suppressing all
-			// processing errors here would stop charging peers that deserve it.
 			errorType = "local_header_context_error"
 			isPeerError = false
 		case errors.Is(*err, errors.ErrStateError):
@@ -637,6 +632,14 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// error lands here. It stays above IsNetworkError, which matches "http"
 			// and "eof" as substrings and would take it.
 			errorType = "local_context_cancelled"
+			isPeerError = false
+		case isLocalProcessingFault(*err):
+			// A ProcessingError with no peer code in its chain is this node's own fault,
+			// e.g. conflict resolution missing a pruned counter-spend record. Below the
+			// context case so that keeps its label, and above IsNetworkError and the
+			// strings.Contains cases, which match on message text and would otherwise
+			// store a processing error carrying a peer URL as the peer's.
+			errorType = "local_processing_fault"
 			isPeerError = false
 		case errors.IsNetworkError(*err):
 			errorType = "network_error"
@@ -862,7 +865,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 // deserves a reputational charge, because a peer that 404s subtree data the pruner
 // removed did nothing wrong.
 func (u *Server) recordCatchupPeerFailure(peerID string, err error) {
-	if peerID == "" || err == nil || errors.IsLocalError(err) {
+	if peerID == "" || err == nil || errors.IsLocalError(err) || isLocalProcessingFault(err) {
 		return
 	}
 
@@ -994,7 +997,7 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	}
 
 	if commonAncestorIndex == -1 {
-		return errors.NewProcessingError("[catchup][%s] no common ancestor found in peer headers", catchupCtx.blockUpTo.Hash().String())
+		return errors.NewNetworkInvalidResponseError("[catchup][%s] no common ancestor found in peer headers", catchupCtx.blockUpTo.Hash().String())
 	}
 
 	// The common ancestor's metadata was already fetched during the walk above.
@@ -1139,7 +1142,7 @@ func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 
 	// Build the cache
 	if err := u.headerChainCache.BuildFromHeaders(catchupCtx.blockHeaders, u.settings.BlockValidation.PreviousBlockHeaderCount); err != nil {
-		return errors.NewProcessingError("[catchup][%s] failed to build header chain cache: %v", catchupCtx.blockUpTo.Hash().String(), err)
+		return errors.NewNetworkInvalidResponseError("[catchup][%s] failed to build header chain cache: %v", catchupCtx.blockUpTo.Hash().String(), err)
 	}
 
 	u.logger.Infof("[catchup][%s] Built header chain cache with %d headers", catchupCtx.blockUpTo.Hash().String(), len(catchupCtx.blockHeaders))
@@ -1243,7 +1246,7 @@ func (u *Server) verifyCheckpointsAgainstHeaders(catchupCtx *CatchupContext) (in
 			headerHash := catchupCtx.blockHeaders[headerIndex].Hash()
 			if !headerHash.IsEqual(checkpoint.Hash) {
 				// CRITICAL: Checkpoint hash mismatch - we're on the wrong chain!
-				return 0, errors.NewProcessingError("[catchup][%s] CHECKPOINT VERIFICATION FAILED: checkpoint at height %d requires hash %s but got %s - stopping catchup", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String(), headerHash.String())
+				return 0, errors.NewNetworkInvalidResponseError("[catchup][%s] CHECKPOINT VERIFICATION FAILED: checkpoint at height %d requires hash %s but got %s - stopping catchup", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String(), headerHash.String())
 			}
 
 			u.logger.Infof("[catchup][%s] Verified checkpoint at height %d with hash %s", catchupCtx.blockUpTo.Hash().String(), checkpointHeight, checkpoint.Hash.String())
@@ -1285,7 +1288,7 @@ func (u *Server) verifyChainContinuity(ctx context.Context, catchupCtx *CatchupC
 	}
 
 	if !parentExists {
-		return errors.NewProcessingError("[catchup][%s] parent block %s not found - cannot establish chain connection", catchupCtx.blockUpTo.Hash().String(), firstBlock.HashPrevBlock.String())
+		return errors.NewNetworkInvalidResponseError("[catchup][%s] parent block %s not found - cannot establish chain connection", catchupCtx.blockUpTo.Hash().String(), firstBlock.HashPrevBlock.String())
 	}
 
 	u.logger.Infof("[catchup][%s] Chain continuity verified, parent %s exists", catchupCtx.blockUpTo.Hash().String(), firstBlock.HashPrevBlock.String())

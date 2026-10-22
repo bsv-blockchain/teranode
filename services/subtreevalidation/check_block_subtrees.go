@@ -341,18 +341,20 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 			copy(nodeHash[:], subtreeNodeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize])
 
 			if nodeHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				// The node list is the peer's response, so a list the tree rejects (the
+				// placeholder anywhere but first) is the peer's fault.
 				if err = subtreeToCheck.AddCoinbaseNode(); err != nil {
-					return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add coinbase node to subtree", subtreeHash.String(), err)
+					return nil, errors.NewNetworkInvalidResponseError("[CheckBlockSubtrees][%s] failed to add coinbase node to subtree", subtreeHash.String(), err)
 				}
 			} else {
 				if err = subtreeToCheck.AddNode(nodeHash, 0, 0); err != nil {
-					return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add node to subtree", subtreeHash.String(), err)
+					return nil, errors.NewNetworkInvalidResponseError("[CheckBlockSubtrees][%s] failed to add node to subtree", subtreeHash.String(), err)
 				}
 			}
 		}
 
 		if !subtreeHash.Equal(*subtreeToCheck.RootHash()) {
-			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree root hash mismatch: %s", subtreeHash.String(), subtreeToCheck.RootHash().String())
+			return nil, errors.NewNetworkInvalidResponseError("[CheckBlockSubtrees][%s] subtree root hash mismatch: %s", subtreeHash.String(), subtreeToCheck.RootHash().String())
 		}
 
 		subtreeBytes, err := subtreeToCheck.Serialize()
@@ -393,7 +395,8 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 	// check. A subtree always carries at least one node, so an empty one here is junk; abort
 	// this subtree's worker so the block never reaches block.Valid with an empty subtree. This
 	// keeps the model-side "emptied first subtree" case reachable only via our own concurrent
-	// node release, not via peer-supplied data.
+	// node release, not via peer-supplied data. Only a blob already on our disk gets here, so the
+	// error is local: it is not the serving peer's response.
 	if subtreeToCheck.Length() == 0 {
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
 	}
@@ -1148,7 +1151,23 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 	// Wait for storage operation to complete
 	storeErr := <-storeDone
 
-	// Check for errors from both operations
+	// The parse is checked first. A failed parse closes the pipe with its error, so the store
+	// fails with it too, and checking storeErr first reported the peer's bad bytes as our own
+	// storage failure. The other way round, a store that refuses or fails closes the pipe, the
+	// tee's write returns io.ErrClosedPipe and the parse fails with it: that is ours, and so is a
+	// cancelled context.
+	if parseErr != nil {
+		if errors.Is(parseErr, io.ErrClosedPipe) || ctx.Err() != nil {
+			if storeErr != nil {
+				return errors.NewProcessingError("[processSubtreeDataStream] failed to store subtree data", storeErr)
+			}
+
+			return errors.NewProcessingError("[processSubtreeDataStream] failed to parse transactions", parseErr)
+		}
+
+		return errors.NewNetworkInvalidResponseError("[processSubtreeDataStream] failed to parse transactions", parseErr)
+	}
+
 	if storeErr != nil {
 		// ErrBlobAlreadyExists is benign HERE, as it is for the subtreeToCheck write above,
 		// when the store refused at the end of the body: a store with an exclusive publish
@@ -1156,10 +1175,10 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 		// refuses only a complete body there, so this writer's whole body has streamed through
 		// the tee and every transaction is parsed, which is what this call is for, and the
 		// file on disk is another writer's complete subtreeData for the same root hash. Only
-		// the parse and count checks below still decide the call. When the key was taken
-		// before this write began, the store refuses before reading, the tee fails, and
-		// parseErr fails the call as before. On the file store without that option a writer
-		// that races past the pre-write check publishes by rename and replaces the file.
+		// the count check below still decides the call. When the key was taken before this
+		// write began, the store refuses before reading, the tee fails, and the parse check
+		// above fails the call as a local fault. On the file store without that option a
+		// writer that races past the pre-write check publishes by rename and replaces the file.
 		if errors.Is(storeErr, errors.ErrBlobAlreadyExists) {
 			u.logger.Warnf("[processSubtreeDataStream][%s] subtreeData was published by another writer while this one streamed; keeping theirs", subtree.RootHash().String())
 		} else {
@@ -1167,13 +1186,9 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 		}
 	}
 
-	if parseErr != nil {
-		return errors.NewProcessingError("[processSubtreeDataStream] failed to parse transactions", parseErr)
-	}
-
 	// Verify transaction count
 	if txCount != subtree.Length() {
-		return errors.NewProcessingError("[processSubtreeDataStream] transaction count mismatch: expected %d, got %d", subtree.Length(), txCount)
+		return errors.NewNetworkInvalidResponseError("[processSubtreeDataStream] transaction count mismatch: expected %d, got %d", subtree.Length(), txCount)
 	}
 
 	u.logger.Debugf("[processSubtreeDataStream] Processed %d transactions from subtree %s (single-pass streaming)",
@@ -1757,11 +1772,11 @@ func validateSubtreeLeafCount(subtreeHash chainhash.Hash, leafCount, policyMax i
 	// guarantee local and stable if that constructor ever changes. A subtree always carries at
 	// least one node.
 	if leafCount == 0 {
-		return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
+		return errors.NewNetworkInvalidResponseError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
 	}
 
 	if leafCount > policyMax {
-		return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree response exceeds policy max %d nodes (got %d)",
+		return errors.NewNetworkInvalidResponseError("[CheckBlockSubtrees][%s] subtree response exceeds policy max %d nodes (got %d)",
 			subtreeHash.String(), policyMax, leafCount)
 	}
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -126,4 +127,59 @@ func TestCheckBlockSubtrees_RejectsZeroNodeFetch(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, errors.UnwrapGRPC(err).Error(), "subtree has zero nodes",
 		"a zero-node subtree fetch must be rejected at the explicit leaf-count check")
+}
+
+// TestCheckBlockSubtrees_ZeroNodeLocalReadIsLocal pins the attribution of the local-read zero-node
+// rejection. Only a blob already on this node's disk reaches that check, since the fetch branch
+// rejects a zero leaf count before it stores anything, so the serving peer is not at fault: the
+// error must carry no peer code.
+func TestCheckBlockSubtrees_ZeroNodeLocalReadIsLocal(t *testing.T) {
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil).Maybe()
+
+	subtreeHash := chainhash.Hash{0x03}
+	require.NoError(t, server.subtreeStore.Set(context.Background(), subtreeHash[:],
+		fileformat.FileTypeSubtreeToCheck, emptySubtreeBlob(subtreeHash)))
+
+	_, err := server.CheckBlockSubtrees(context.Background(), zeroNodeTestBlock(t, &subtreeHash))
+	require.Error(t, err)
+
+	err = errors.UnwrapGRPC(err)
+	require.Contains(t, err.Error(), "subtree has zero nodes")
+	require.True(t, errors.Is(err, errors.ErrProcessing))
+	require.False(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a blob on our own disk is not the serving peer's response")
+}
+
+// TestCheckBlockSubtrees_MisplacedCoinbasePlaceholderIsAPeerFault pins the fetch branch's node
+// construction: a peer whose node list carries the coinbase placeholder after the first node served
+// a malformed response, so the rejection must carry a peer code.
+func TestCheckBlockSubtrees_MisplacedCoinbasePlaceholderIsAPeerFault(t *testing.T) {
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	server, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
+		mock.Anything, mock.Anything, mock.Anything).
+		Return([]uint32{1, 2, 3}, nil).Maybe()
+
+	subtreeHash := chainhash.Hash{0x04}
+
+	first := chainhash.HashH([]byte("first node"))
+	body := append(first[:], subtreepkg.CoinbasePlaceholderHashValue[:]...)
+	httpmock.RegisterResponder("GET",
+		fmt.Sprintf("%s/subtree/%s", testPeerURL, subtreeHash.String()),
+		httpmock.NewBytesResponder(http.StatusOK, body))
+
+	_, err := server.CheckBlockSubtrees(context.Background(), zeroNodeTestBlock(t, &subtreeHash))
+	require.Error(t, err)
+
+	err = errors.UnwrapGRPC(err)
+	require.Contains(t, err.Error(), "failed to add coinbase node")
+	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 }

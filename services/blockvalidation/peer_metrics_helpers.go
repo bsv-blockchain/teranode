@@ -122,6 +122,10 @@ func (u *Server) reportAnnouncedBlockFetchFailure(ctx context.Context, peerID st
 		return false
 	}
 
+	if isLocalProcessingFault(err) {
+		return false
+	}
+
 	u.reportCatchupFailure(ctx, peerID)
 	u.reportCatchupError(ctx, peerID, err.Error())
 
@@ -261,6 +265,10 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 		return
 	}
 
+	if isLocalProcessingFault(err) {
+		return
+	}
+
 	if errors.Is(err, errors.ErrBlockPolicyDeclined) {
 		// A local policy decline (excessiveblocksize) is OUR configuration, so no peer may be charged
 		// for it (bitcoin-sv/teranode#4692). Exempting HERE rather than only at the terminal branch in
@@ -295,11 +303,16 @@ const catchupFailureReportedKey = "catchup_failure_reported"
 // types into message-only links (breaking code matching downstream), so the
 // marker must live in error data on a native link, which keeps the wrapped
 // chain fully intact for errors.Is dispatch. Nil-safe.
+//
+// The wrapper is a NetworkError, not a ProcessingError: every marked failure was
+// charged to the peer at its source, so the wrapper must keep that attribution. A
+// ProcessingError wrapper would make an uncoded peer error read as a local fault
+// (isLocalProcessingFault). A local cause such as a ServiceError stays local.
 func markCatchupFailureReported(err error) error {
 	if err == nil {
 		return nil
 	}
-	wrapped := errors.NewProcessingError("catchup failure reported at source", err)
+	wrapped := errors.NewNetworkError("catchup failure reported at source", err)
 	wrapped.SetData(catchupFailureReportedKey, true)
 	return wrapped
 }
@@ -469,7 +482,43 @@ func isLocalCatchupFault(err error) bool {
 	return errors.IsTransientLocalError(err) ||
 		errors.Is(err, errors.ErrServiceRateLimited) ||
 		errors.IsContextError(err) ||
-		errors.Is(err, errors.ErrContextCanceled)
+		errors.Is(err, errors.ErrContextCanceled) ||
+		isLocalProcessingFault(err)
+}
+
+// isLocalProcessingFault reports whether err is a ProcessingError that carries no
+// peer-attributable code. Such an error is this node's own fault, so it is never
+// charged to a peer: conflict resolution reading a counter-spend record the pruner
+// already removed, the conflicting-walk budget, an internal invariant.
+//
+// The peer codes take precedence because errors.Is matches a code anywhere in the
+// chain and ProcessingError is the common wrapper: blessMissingTransaction wraps a
+// counter-spend already mined in the block's own ancestry, a TxInvalid, in one. A
+// chain carrying both is the peer's. ErrNotFound is a peer code because it is what a
+// peer's HTTP 404 becomes (util.buildHTTPError); ErrTxNotFound is a different code.
+// A block spend rule violation (errors.IsBlockSpendRuleViolation) is a peer code too:
+// subtree validation re-codes it as TxInvalid on the block path, and this keeps it
+// charged on any path that does not. A frozen UTXO and a UTXO hash mismatch are not,
+// so they stay local.
+//
+// A peer fault must therefore be coded as one of these, not as a bare ProcessingError.
+func isLocalProcessingFault(err error) bool {
+	return errors.Is(err, errors.ErrProcessing) && !carriesPeerFaultCode(err)
+}
+
+func carriesPeerFaultCode(err error) bool {
+	return errors.Is(err, errors.ErrTxInvalid) ||
+		errors.Is(err, errors.ErrBlockInvalid) ||
+		errors.IsBlockCorrupt(err) ||
+		errors.Is(err, errors.ErrBlockIncomplete) ||
+		errors.Is(err, errors.ErrExternal) ||
+		errors.Is(err, errors.ErrNotFound) ||
+		errors.Is(err, errors.ErrNetworkError) ||
+		errors.Is(err, errors.ErrNetworkTimeout) ||
+		errors.Is(err, errors.ErrNetworkConnectionRefused) ||
+		errors.Is(err, errors.ErrNetworkInvalidResponse) ||
+		errors.Is(err, errors.ErrNetworkPeerMalicious) ||
+		errors.IsBlockSpendRuleViolation(err)
 }
 
 // reportCatchupMalicious reports malicious behavior to the P2P service.

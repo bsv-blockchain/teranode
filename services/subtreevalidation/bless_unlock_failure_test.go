@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync/atomic"
 	"testing"
@@ -453,4 +454,73 @@ func TestBlessMissingTransactions_QueuesAcceptedParentDespiteBlessError(t *testi
 	stored := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, parent.TxIDChainHash(), stored))
 	require.False(t, stored.Locked, "the accepted parent must still be spendable for the next level")
+}
+
+// spendRuleCauses are the store and validator codes a rejected spend can carry, and whether a
+// block-context bless re-codes them as TxInvalid. A frozen UTXO depends on this node's
+// alert-system state, and a UTXO hash mismatch on this node's own store, so neither is.
+var spendRuleCauses = map[string]struct {
+	cause     error
+	txInvalid bool
+}{
+	"coinbase immature":  {errors.NewTxCoinbaseImmatureError("coinbase is not spendable yet"), true},
+	"non final":          {errors.NewUtxoNonFinalError("transaction is not final"), true},
+	"utxo hash mismatch": {errors.NewUtxoHashMismatchError("utxo hash mismatch"), false},
+	"frozen utxo":        {errors.NewUtxoFrozenError("utxo is frozen"), false},
+}
+
+// TestBlessMissing_BlockSpendRuleViolationIsTxInvalid pins the re-code and its gate. With
+// SkipPolicyChecks set, which only the block paths do, coinbase maturity and finality are measured
+// against the block's own height and parent, so a spend the store rejects for one of them is a
+// verdict on the block. Without it they are measured against this node's tip, so a peer one block
+// ahead is not at fault and the error stays a ProcessingError.
+func TestBlessMissing_BlockSpendRuleViolationIsTxInvalid(t *testing.T) {
+	for name, tc := range spendRuleCauses {
+		for _, blockContext := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/block context %t", name, blockContext), func(t *testing.T) {
+				server, cleanup := setupTestServer(t)
+				defer cleanup()
+
+				tx, err := createTestTransaction("tx1")
+				require.NoError(t, err)
+
+				server.validatorClient = &failingValidator{
+					Interface: server.validatorClient,
+					err:       errors.NewProcessingError("[Validate] error spending utxos", tc.cause),
+				}
+
+				opts := validator.ProcessOptions(validator.WithSkipPolicyChecks(blockContext))
+
+				_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 100, map[uint32]bool{}, opts)
+				require.Error(t, err)
+				require.True(t, errors.Is(err, tc.cause), "the store's code must survive the re-code")
+				require.Equal(t, tc.txInvalid && blockContext, errors.Is(err, errors.ErrTxInvalid))
+			})
+		}
+	}
+}
+
+// TestProcessTransactionsInLevels_BlockSpendRuleViolationFailsTheLevel pins the block path end to
+// end: the level loop's own options set SkipPolicyChecks, so the re-coded TxInvalid fails the
+// level instead of being kept as a processing error.
+func TestProcessTransactionsInLevels_BlockSpendRuleViolationFailsTheLevel(t *testing.T) {
+	for name, tc := range spendRuleCauses {
+		t.Run(name, func(t *testing.T) {
+			server, cleanup := setupTestServer(t)
+			defer cleanup()
+
+			tx, err := createTestTransaction("tx1")
+			require.NoError(t, err)
+
+			server.validatorClient = &failingValidator{
+				Interface: server.validatorClient,
+				err:       errors.NewProcessingError("[Validate] error spending utxos", tc.cause),
+			}
+
+			err = server.processTransactionsInLevels(context.Background(), []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, tc.cause), "the store's code must survive the re-code")
+			require.Equal(t, tc.txInvalid, errors.Is(err, errors.ErrTxInvalid))
+		})
+	}
 }

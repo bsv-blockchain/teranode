@@ -41,7 +41,14 @@ func TestIsRecoverableBlockMessageError(t *testing.T) {
 	require.True(t, isRecoverableBlockMessageError(errors.NewServiceError("x")))
 	require.True(t, isRecoverableBlockMessageError(errors.NewStorageError("x")))
 	require.True(t, isRecoverableBlockMessageError(errors.NewProcessingError("wrapped", errors.NewExternalError("x"))))
-	require.False(t, isRecoverableBlockMessageError(errors.NewProcessingError("x")))
+
+	// A ProcessingError with no peer code is local: retried, and the peer is not blamed.
+	require.True(t, isRecoverableBlockMessageError(errors.NewProcessingError("x")))
+
+	// A peer or consensus code in the chain is the peer's, even under a processing wrapper.
+	require.False(t, isRecoverableBlockMessageError(errors.NewProcessingError("wrapped", errors.NewTxInvalidError("x"))))
+	require.False(t, isRecoverableBlockMessageError(errors.NewBlockInvalidError("x")))
+	require.False(t, isRecoverableBlockMessageError(errors.NewNetworkInvalidResponseError("x")))
 }
 
 // isPending reports whether a retry is in flight for hash, with no side effects.
@@ -268,7 +275,7 @@ func TestRetryBlockMessage_UnrecoverableReportsPeer(t *testing.T) {
 	server := &Server{logger: ulogger.TestLogger{}, blockchainClient: chain}
 	shortenRetryDelays(&server.blockMessageRetries)
 
-	// A non-http URL fails blockHandler with an unrecoverable processing error.
+	// A non-http URL fails blockHandler with an unrecoverable invalid-response error.
 	server.scheduleBlockMessageRetry(context.Background(), &kafkamessage.KafkaBlockTopicMessage{Hash: hash.String(), URL: "ftp://peer", PeerId: "peerA"})
 
 	require.Eventually(t, func() bool { return !server.blockMessageRetries.isPending(hash.String()) }, time.Second, 5*time.Millisecond)

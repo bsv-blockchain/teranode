@@ -128,6 +128,29 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   send these. The bump also bounds how much the wire decoder allocates up front
   for a declared element count. (#1996)
 
+- **A local processing error is no longer charged to a peer.** During catchup and
+  announced-block fetches, a `ProcessingError` with no peer or consensus code in its
+  chain no longer records a reputation failure or a malicious report, and no longer
+  signals a sync-peer rotation. Catchup treats it like other local faults: it clears the
+  block's markers and cached alternative announcers, does not try alternative peers, and
+  counts the attempt toward `blockvalidation_catchup_max_attempts_per_block`. Before, local faults such as a failed conflict-resolution
+  read lowered the serving peer's reputation and could drop it as a sync source. The
+  catchup error type for these is now `local_processing_fault`. Faults that a peer causes
+  are now coded `NETWORK_INVALID_RESPONSE` or `NETWORK_ERROR`, and they are still charged:
+  bytes that do not match the requested hash, headers with no common ancestor, a
+  checkpoint mismatch, and a failed fetch. The catchup dashboard shows these as
+  `network_error`. A checkpoint mismatch was shown as `checkpoint_verification_failed`
+  before. Because these codes count as network errors, more failures now take the
+  existing network-error retry paths. On the announced-block path, a block served for the
+  wrong hash, or a block whose subtrees the peer served with bad bytes, now tries the
+  alternative sources, and the block worker re-queues it. A block whose transaction
+  spends an immature coinbase or is non-final is now rejected as an invalid
+  transaction, not as a processing error. Catchup reports the serving peer malicious
+  for it, the direct block path strikes the peer for a corrupt body, and the legacy
+  route rejects the block as invalid. A block that spends a UTXO this node has frozen,
+  or that hits a UTXO hash mismatch in this node's store, stays a local fault.
+  (#2022)
+
 - **This release removes four Aerospike pruner metrics.** External monitoring systems must
   remove queries for `utxo_pruner_parents_skipped_pruned_total`,
   `utxo_pruner_pruned_set_size`, `utxo_pruner_pruned_set_saturated`, and
