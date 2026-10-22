@@ -221,8 +221,13 @@ type Store struct {
 	externalStore       blob.Store
 	utxoBatchSize       int
 
-	// externalTxCache caches the full externally-stored transaction, as returned
-	// by GetTxFromExternalStore.
+	// externalTxCache caches whatever GetTxFromExternalStore returned for a txid:
+	// the full externally-stored transaction when a .tx blob exists, otherwise the
+	// UTXO-set reconstruction built from the .outputs blob, which has no inputs and
+	// nil entries at every index that was not a live UTXO at snapshot time. Both
+	// shapes are cached under the same key because both are the answer to the same
+	// question — "the transaction as this store has it" — and consumers separate
+	// them with meta.Data.TxIsSerializable, not by which cache they read.
 	externalTxCache *util.ExpiringConcurrentCache[chainhash.Hash, *bt.Tx]
 
 	// externalOutpointsCache caches the outpoint-resolution reconstruction, as

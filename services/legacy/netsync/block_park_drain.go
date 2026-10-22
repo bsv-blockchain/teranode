@@ -339,6 +339,20 @@ func (sm *SyncManager) parkedBlockFailed(entry parkedBlock, err error) bool {
 			entry.parentMissingAt = time.Now()
 		}
 
+		// A missing parent also arrives as a plain ServiceError when block
+		// validation refuses a legacy block whose parent it does not hold
+		// (processBlockFound, bitcoin-sv/teranode#4973). HandleConvertedBlock's own
+		// parent lookup does not need this: it wraps the store's ErrBlockNotFound,
+		// so it reads as parentGone above. The refusal reads as retryLater, which
+		// carries no stamp, so the drain would offer the block again on the very
+		// next turn. errors.Is cannot pick it out of the other ServiceErrors (it
+		// matches on the code), so the condition is re-derived from the chain, as
+		// the proof stamp below does. A lookup that fails stamps nothing: a busy
+		// store must not delay a block whose parent may be perfectly fine.
+		if d.reason == parkDispositionRetryLater.reason && sm.parentAbsentFromChain(entry) {
+			entry.parentMissingAt = time.Now()
+		}
+
 		// The refusal in HandleConvertedBlock arrives as a plain ServiceError, and
 		// errors.Is cannot tell one ServiceError from another (it matches on the
 		// code), so the condition is re-derived here from the same two facts the
@@ -836,6 +850,17 @@ func (sm *SyncManager) sweepParkedBlocks(now time.Time) {
 
 		sm.submitParkCommit(parkCommit{entry: entry, parentHeight: parentHeight})
 	}
+}
+
+// parentAbsentFromChain reports whether a parked block's parent is positively
+// absent from the chain. An error, or a row that exists but is invalid, answers
+// false: only a lookup that found nothing may stamp the missing-parent backoff.
+// One GetBlockHeader on the retry-later refusal path, which already cost a
+// whole commit attempt.
+func (sm *SyncManager) parentAbsentFromChain(entry parkedBlock) bool {
+	exists, _, _, err := sm.parentChainState(entry.prevBlock)
+
+	return err == nil && !exists
 }
 
 // awaitingHeaderProof reports whether a parked block is held back by a missing

@@ -40,8 +40,8 @@ loader (0, false and false), so for these keys the two agree. The
 | ValidationRetrySleep | time.Duration | 5s | blockvalidation_validation_retry_sleep | Validation retry delay |
 | OptimisticMining | bool | true | blockvalidation_optimistic_mining | Optimistic mining behavior (global; every validation path also requires OptimisticMiningPeerBlocks, and catch-up is never optimistic) |
 | OptimisticMiningPeerBlocks | bool | false | blockvalidation_optimistic_mining_peer_blocks | Opt in to optimistic mining on the peer-served path (accepts the invalidate-route tradeoff) |
-| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap (0 disables, re-opening the DoS) |
-| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for both caps |
+| MaxCorruptAttemptsPerBlock | int | 3 | blockvalidation_max_corrupt_attempts_per_block | Ban-score-independent per-(block hash, serving peerID) cap on corrupt re-downloads; also sizes the separate local-policy decline cap and the worker panic cap (0 disables all three, re-opening the DoS) |
+| CorruptAttemptCooldown | time.Duration | 10m | blockvalidation_corrupt_attempt_cooldown | Fixed cooldown window after which a capped (hash, peerID) is admitted again, for the corrupt, local-policy decline and worker panic caps |
 | IsParentMinedRetryMaxRetry | int | 45 | blockvalidation_isParentMined_retry_max_retry | Parent mining check retries |
 | IsParentMinedRetryBackoffMultiplier | int | 4 | blockvalidation_isParentMined_retry_backoff_multiplier | Slope of the linear backoff between parent-mined retries: the wait before retry i, counting from 0, is (multiplier x i + 1) x base |
 | IsParentMinedRetryBackoffDuration | time.Duration | 20ms | blockvalidation_isParentMined_retry_backoff_duration | Parent mining retry backoff base duration |

@@ -183,7 +183,7 @@ test:
 # The PR test job runs it after `make test`.
 .PHONY: test-heavy
 test-heavy:
-	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^TestSortedHashSet_' ./services/blockassembly/subtreeprocessor
+	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$)' ./services/blockassembly/subtreeprocessor
 
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest

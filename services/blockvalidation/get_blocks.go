@@ -1677,7 +1677,20 @@ func (u *Server) fetchAnnouncedBlockFromTipPeers(fetchCtx context.Context, block
 			continue
 		}
 
+		// The blockFoundCh recover counts a panic for the peer that served the bytes, so a peer
+		// at its recovered-panic cap for this hash is skipped here, before the fetch. The
+		// announcer's gate in processBlockFoundChannel cannot see this peer. A skipped peer does
+		// not use one of the alternative slots.
+		if u.panicAttemptsExhausted(blockFound.hash, peerID) {
+			u.logger.Warnf("[fetchAnnouncedBlock][%s] skipping alternative peer %s: recovered-panic cap reached for this block", blockFound.hash.String(), peerID)
+			continue
+		}
+
 		tried++
+
+		// Set before the fetch, so a panic from here on, in the fetch or in the later processing
+		// of the block this peer serves, counts for this peer and not for the announcer.
+		blockFound.setServedBy(peerID)
 
 		block, err := u.fetchSingleBlock(fetchCtx, blockFound.hash, peerID, p.DataHubURL)
 		if err != nil {
@@ -1693,6 +1706,9 @@ func (u *Server) fetchAnnouncedBlockFromTipPeers(fetchCtx context.Context, block
 
 		return block, source, true
 	}
+
+	// No alternative served the block, so the item goes on as the announcer's.
+	blockFound.setServedBy(blockFound.peerID)
 
 	return nil, blockFound, false
 }

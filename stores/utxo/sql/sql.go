@@ -2447,14 +2447,43 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		return
 	}
 
+	s.retrySpendBatch(batch, s.trySendSpendBatch)
+}
+
+// retrySpendBatch runs try over batch until it reports no lock error, and
+// answers every item itself when the retries run out or the store context is
+// cancelled while waiting.
+func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) bool) {
+	// Same budget as Create's lock retry (100ms, 200ms, 400ms). On sqlitememory a
+	// lock error is the engine breaking a cycle with a concurrent create, and a
+	// wave of concurrent creates re-forms that cycle faster than a 10-20ms
+	// backoff lets them finish, so the old 30ms budget failed the spend. On
+	// Postgres the same budget applies to a real deadlock (40P01), and because
+	// the batcher is serialized the spends behind it wait up to ~700ms.
 	const maxRetries = 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		retryable := s.trySendSpendBatch(batch)
+
+	for attempt := 0; ; attempt++ {
+		retryable := try(batch)
 		if !retryable {
 			return
 		}
-		s.logger.Warnf("[Spend] deadlock detected (attempt %d/%d), retrying batch of %d items", attempt+1, maxRetries, len(batch))
-		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+
+		if attempt >= maxRetries {
+			break
+		}
+
+		backoff := time.Duration(100<<attempt) * time.Millisecond
+		s.logger.Warnf("[Spend] deadlock detected (attempt %d/%d), retrying batch of %d items in %v", attempt+1, maxRetries+1, len(batch), backoff)
+
+		select {
+		case <-s.ctx.Done():
+			for _, item := range batch {
+				item.errCh <- errors.NewStorageError("[Spend] deadlock retry cancelled", s.ctx.Err())
+			}
+
+			return
+		case <-time.After(backoff):
+		}
 	}
 	// Exhausted retries — send error to all items
 	for _, item := range batch {

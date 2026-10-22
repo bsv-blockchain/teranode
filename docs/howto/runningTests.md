@@ -1,5 +1,50 @@
 # ✔️ Running Tests
 
+## Test Levels
+
+Each `make` target belongs to one test level. The levels are:
+
+- **Unit**: one package, with its own dependencies in memory or in a test container.
+- **Integration**: several components together, without a full running node.
+- **System (end to end)**: one or more complete Teranode nodes, started in process or in Docker.
+- **Acceptance**: checks against the functional and non-functional requirements.
+
+| Level | Target or command | What it runs |
+|---|---|---|
+| Unit | `make test` | Every package except `./test/`, with `-race` and coverage. This also replays the committed seed corpus of each fuzz target. |
+| Unit | `make test-heavy` | The `TestSortedHashSet_` tests in `services/blockassembly/subtreeprocessor`, without `-race`. |
+| Unit | `make fuzz` | Fuzzes each target in `FUZZ_TARGETS` for `FUZZTIME`. |
+| Integration | `make longtest` | `TestLegacyHistoricalTestnetSync` (`longtest` build tag), `make test-heavy`, and `test/longtest/`. |
+| System | `make smoketest` | `test/e2e/daemon/ready/` with in-process daemons, except the tests in its `-skip` list. That list holds the tests that `make prunertest` and `make legacy-sync` run, and two other tests. |
+| System | `make sequentialtest` (and the `-sqlite`, `-postgres`, `-aerospike` and `-shard` variants) | `test/sequentialtest/`, one test at a time, with in-process daemons. |
+| System | `make prunertest` | `TestBlobDeletion` and `TestPruner` in `test/e2e/daemon/ready/`. |
+| System | `make legacy-sync` | The legacy-sync tests in `test/e2e/daemon/ready/`, which run Teranode with SV Node. |
+| System | `make chainintegrity` | `test/e2e/chainintegrity/`, a multi-node chain check. |
+| System | `make network-chaos-test`, `make network-chaos-test-split` | `test/multinode/` and `test/multinode_split/` (`network_chaos` build tag) against a Docker multi-node stack. |
+| System | `make soaktest` | `TestSoakSteadyLoad` in `test/soak/` (`soak` build tag). |
+| System | `go test ./test/chaos -run TestScenarioNN` | The chaos scenarios in `test/chaos/`. No `make` target runs them. |
+| Acceptance | `go test -tags test_tna ./test/tna/`, `go test -tags test_tec ./test/tec/`, `go test ./test/tnb/ ./test/tnd/ ./test/tnf/ ./test/tnj/` | The functional requirement categories. See [Automated Testing](automatedTestingHowTo.md). |
+| Acceptance | The [node-validation](https://github.com/bsv-blockchain/node-validation) harness | Consensus parity with SV Node and the requirement checks of the test plan. It is a separate repository. |
+
+`make testall` runs `make test`, `make longtest` and `make sequentialtest`.
+
+Gaps in the programme:
+
+- No `make` target and no CI workflow runs the acceptance categories in `test/tna/`, `test/tec/`, `test/tnb/`, `test/tnd/`, `test/tnf/` and `test/tnj/`.
+- `make test` excludes `./test/`, and no target or workflow runs the tests in `test/consensus/`, `test/fsm/` or `test/rpc/`. `make bench-test` lists `test/consensus/`, but it runs benchmarks only (`-run='^$'`). On 2026-10-17, `test/consensus/` passed, and `test/fsm/` and `test/rpc/withDaemon/` failed.
+
+## When CI Runs Each Suite
+
+| When | Workflow | Suites |
+|---|---|---|
+| Every pull request | `teranode_pr_tests.yaml` | `golangci-lint`, `make test`, `make test-heavy`, and the `stores/utxo/aerospike` tests against an Aerospike server with native operations |
+| Every pull request that changes files outside `docs/` | `teranode_pr_smoketests.yaml` | `make smoketest` (3 shards), `make prunertest`, `make legacy-sync`, `make chainintegrity`, and `make sequentialtest-shard` (7 shards) |
+| Every pull request that changes `fuzz.yaml` or the `Makefile` | `fuzz.yaml` | Each fuzz target for 20 seconds |
+| Every push to `main`, `staging` or `release/*`, and every `v*` tag | `teranode_main_build.yaml`, which calls `teranode_main_tests.yaml` | `make test`, `make smoketest` and `make prunertest` |
+| Every day at 02:00 UTC | `nightly_tests.yaml` | A three-node chain-integrity run, the `test/e2e/daemon/ready/` tests, the chaos scenarios, and `make soaktest` for two hours |
+| Every day at 04:00 UTC | `fuzz.yaml` | Each fuzz target for 5 minutes |
+| Manual dispatch only | `long_tests.yaml` | `make testall` |
+
 ## Unit Tests
 
 ```shell

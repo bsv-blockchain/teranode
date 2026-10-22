@@ -565,3 +565,21 @@ func TestSyncManager_ARejectedParkedBlockDropsItsPeerInEveryState(t *testing.T) 
 		require.False(t, unclassified.dropPeer, "an error nobody has classified must not rotate the sync peer")
 	})
 }
+
+// TestParkCommitFailure_AMissingParentRefusalKeepsTheBlock pins how the park reads block
+// validation's refusal of a legacy block whose parent is not stored (processBlockFound,
+// bitcoin-sv/teranode#4973). It used to come back nil and be recorded as accepted; it now
+// comes back as a ServiceError, and after the gRPC hop and netsync ProcessBlock's own wrap
+// that must still read as a local fault: the blob is kept, the hash is not written off and
+// the peer is not blamed.
+func TestParkCommitFailure_AMissingParentRefusalKeepsTheBlock(t *testing.T) {
+	server := errors.NewServiceError("[processBlockFound][hash] legacy block has no stored parent parent-hash")
+	err := errors.NewProcessingError("failed to process block", errors.UnwrapGRPC(errors.WrapGRPC(server)))
+
+	d := parkCommitFailure(err)
+
+	require.Equal(t, parkDispositionRetryLater, d)
+	require.Equal(t, parkBlobKeep, d.blob, "the block is committed again once its parent lands")
+	require.False(t, d.markFailed, "a missing parent says nothing about the block")
+	require.False(t, d.blamePeer, "a missing parent is this node's fault, not the peer's")
+}

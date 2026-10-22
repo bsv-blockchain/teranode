@@ -274,6 +274,16 @@ func (u *Server) reportCatchupFailureForError(ctx context.Context, peerID string
 		return
 	}
 
+	if isConcurrentValidationPanic(err) {
+		// A validation in this catchup waited in runOncePerBlock on a validation of the same block
+		// that panicked on another goroutine (BV-STARTUP-007). The panic is a bug in this node, so
+		// no peer may be charged for it. releaseCatchupLock already scored the cycle local_panic.
+		// The exemption is here, and not only in processCatchupChItem's isLocalCatchupFault branch,
+		// for the reason the policy-decline exemption above gives: tryAlternativePeersForCatchup and
+		// the cached-alternatives loop charge each alternative through this helper.
+		return
+	}
+
 	if catchupFailureAlreadyReported(err) {
 		// The layer where the failure occurred (e.g. the header-fetch stage)
 		// already recorded it; reporting again would let CatchupFailures exceed
@@ -465,11 +475,17 @@ func isUnboundTxInvalidVerdict(err error) bool {
 // purpose as the rotation signal: the peer advertises its own DataHubURL, so a peer
 // answering 429 deliberately must not be able to dodge every charge. The announced-block
 // fetch has its own, bounded rule; see reportAnnouncedBlockFetchFailure.
+//
+// A validation that waited in runOncePerBlock on a validation that panicked on another
+// goroutine (BV-STARTUP-007) is local too. The panic is a bug in this node. Without this the
+// waiter's ERR_PROCESSING error reached processCatchupChItem's peer-failure report and charged
+// the primary.
 func isLocalCatchupFault(err error) bool {
 	return errors.IsTransientLocalError(err) ||
 		errors.Is(err, errors.ErrServiceRateLimited) ||
 		errors.IsContextError(err) ||
-		errors.Is(err, errors.ErrContextCanceled)
+		errors.Is(err, errors.ErrContextCanceled) ||
+		isConcurrentValidationPanic(err)
 }
 
 // reportCatchupMalicious reports malicious behavior to the P2P service.

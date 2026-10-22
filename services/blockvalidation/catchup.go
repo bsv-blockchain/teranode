@@ -71,6 +71,7 @@ type CatchupContext struct {
 	catchupError            error  // Any error encountered during catchup
 	incompleteBlockHash     string // Block hash reported when a peer serves an incomplete block
 	corruptBlockHash        string // Block hash reported when a peer serves a corrupt block body
+	panicked                bool   // Set by the recover in catchup so releaseCatchupLock scores a panic as local
 
 	// failedPeers records the peers that actually failed to serve data during this
 	// catchup cycle, deduplicated by peer ID (last error message wins). Written from
@@ -257,6 +258,21 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 	defer u.releaseCatchupLock(catchupCtx, &err)
+
+	// BV-STARTUP-007: this defer runs before releaseCatchupLock (LIFO). Without it a panic
+	// unwinds with err still nil, and releaseCatchupLock records the cycle as a success: the
+	// health check reads lastCatchupResult true, catchupSuccesses goes up and the duration is
+	// observed with success="true". panicked makes releaseCatchupLock score the error as local,
+	// so the primary peer is not charged for a bug in this node. The re-panic lets the recover
+	// in processCatchupChItem log the stack, count the attempt and clear the markers.
+	defer func() {
+		if r := recover(); r != nil {
+			catchupCtx.panicked = true
+			err = errors.NewProcessingError("[catchup][%s] panic during catchup, see the PANIC log line", blockUpTo.Hash().String())
+
+			panic(r)
+		}
+	}()
 
 	// Step 2: Fetch block headers from peer
 	if err = u.fetchHeaders(ctx, catchupCtx); err != nil {
@@ -470,6 +486,16 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		// TODO: all of these should be using error types, and not checking the strings (!)
 		switch {
+		case ctx.panicked || isConcurrentValidationPanic(*err):
+			// catchup() recovered a panic and set *err only to stop this function from recording
+			// a success (BV-STARTUP-007). Or a validation in this catchup waited in
+			// runOncePerBlock on a validation of the same block that panicked on another
+			// goroutine, and got that panic's error. A panic is a bug in this node, not evidence
+			// against the peer, so no case below may score it. It must come first: the
+			// ERR_PROCESSING error would otherwise fall through to unknown_error with isPeerError
+			// left true.
+			errorType = "local_panic"
+			isPeerError = false
 		case errors.Is(*err, errors.ErrStorageError):
 			// A failed read or write of our own store — a torn, stale or mis-keyed
 			// external transaction blob (issue 1439), a full disk — is this node's

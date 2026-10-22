@@ -40,7 +40,6 @@
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |
 | ExternalStoreConcurrency | int | 16 | utxostore_externalStoreConcurrency | Maximum concurrent external storage operations |
 | VerboseDebug | bool | false | utxostore_verbose_debug | Verbose debug logging |
-| UpdateTxMinedStatus | bool | true | utxostore_updateTxMinedStatus | Transaction mined status updates |
 | MaxMinedRoutines | int | 128 | utxostore_maxMinedRoutines | Max mined transaction routines |
 | MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
 | BlockHeightRetentionAdjustment | int32 | 0 | utxostore_blockHeightRetentionAdjustment | **CRITICAL** - Retention adjustment |

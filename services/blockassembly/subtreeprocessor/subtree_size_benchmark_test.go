@@ -24,6 +24,8 @@ import (
 // This tests the full SubtreeProcessor including queue management and notifications.
 // Compare with TestDirectSubtreeCreationPerformance to isolate SubtreeProcessor overhead.
 func TestSubtreeProcessorSizePerformance(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	if testing.Short() {
 		t.Skip("Skipping performance test in short mode")
 	}
@@ -109,6 +111,8 @@ func TestSubtreeProcessorSizePerformance(t *testing.T) {
 // WITHOUT using the SubtreeProcessor. This isolates the raw go-subtree library performance.
 // Compare with TestSubtreeProcessorSizePerformance to see SubtreeProcessor overhead.
 func TestDirectSubtreeCreationPerformance(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	if testing.Short() {
 		t.Skip("Skipping performance test in short mode")
 	}
@@ -588,6 +592,8 @@ func BenchmarkSubtreeProcessorOverheadBreakdown(b *testing.B) {
 // TestOverheadBreakdownDetailed runs a detailed timing analysis showing
 // exactly where the overhead comes from in SubtreeProcessor vs direct creation.
 func TestOverheadBreakdownDetailed(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	if testing.Short() {
 		t.Skip("Skipping detailed overhead test in short mode")
 	}

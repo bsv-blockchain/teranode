@@ -86,7 +86,96 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   until it is reimaged. No chain state is corrupted. Upgrade Blockchain last, or raise
   `blockchain_maxMedianTimePastHeights` for the duration of the rollout. (#1776)
 
+- **The alert service now picks its network identity by `network`, and validates
+  `alert_genesis_keys`.** `alert_genesis_keys`, `alert_protocol_id` and `alert_topic_name`
+  default to empty, and each empty one takes the go-alert-system default for the
+  configured network: testnet and stn nodes now join their own alert network
+  (`/bitcoin-testnet/alert-system/0.0.1`, testnet genesis keys) instead of the mainnet
+  protocol and keys. Mainnet resolves to the same values as before. Regtest, teratestnet
+  and tstn keep the mainnet keys and protocol on `bitcoin_alert_system_<network>` and log
+  a warning. A non-empty `alert_topic_name` is now honoured on every network.
+
+  Affects testnet/stn nodes and any deployment that sets these keys. Clear values copied
+  from the old mainnet defaults into `settings_local.conf`, helm values or env, or a
+  testnet node stays on the mainnet alert network. An explicit `alert_genesis_keys` must
+  now hold 3 to 10 hex-encoded compressed public keys (blank entries are dropped, repeats
+  kept once), or the alert service fails to start with a configuration error. An alert
+  store that holds only the genesis alert and was seeded with other keys (a testnet or stn
+  store from v0.16.x or earlier) has its active keys reset to the resolved genesis keys on
+  first start, with a warning; there is no need to delete `alert.db`. (#1955)
+
 ### Breaking — behaviour changes on upgrade
+
+- **A failed revert of an invalid block's mined tags now holds block assembly until it
+  succeeds.** When block validation reverts the mined tags of an invalid block and
+  `SetMinedMulti` fails, or a subtree read fails with anything other than not-found, the
+  revert now returns an error instead of logging a warning and marking the block done.
+  The block stays at `mined_set=false`, so block assembly waits for it before it starts,
+  resets or reorgs, exactly as it already does for a valid block whose mined update
+  fails. Reverting the tag is what marks a transaction unmined again, so carrying on
+  would rebuild block assembly without those transactions. The wait lasts as long as the
+  store fault: the setTxMined retry loop increments
+  `teranode_blockvalidation_setmined_retry_total`, a block that still fails after 10
+  attempts logs `manual_intervention_required` and increments
+  `teranode_blockvalidation_setmined_drops_total`, and the mined-not-set sweep then picks
+  it up again. Those alerts can now fire for invalid blocks. Operators who see them should
+  fix the UTXO or subtree store fault; block assembly resumes on the next successful
+  attempt. A subtree that is absent from the store is still skipped. (#2016)
+
+- **`utxostore_updateTxMinedStatus` is removed, and it was live.** Affects only nodes that
+  set it to `false`. Mined-tagging, the step after `AddBlock` that writes a block's ID onto
+  each of its transactions, now always runs. So does the check it carries, which rejects a
+  block that re-includes a transaction an ancestor block already mined. With the key at
+  `false`, neither ran, yet the block was still flagged as mined. The loader does not report
+  unknown keys, so a leftover `false` is ignored without an error and those nodes take on
+  the mined-tagging write load again. Delete the key from your config. (#2019)
+- **`ProcessBlock` refuses a legacy block whose parent is not stored.** Block validation's
+  `ProcessBlock` gRPC call used to answer success for a block with baseURL `legacy` and no stored
+  parent: it handed the block to catch-up and stored nothing. It now returns `ERR_SERVICE_ERROR`.
+  An empty `BaseUrl` defaults to `legacy`, so any external caller that omits it gets the same
+  refusal and must submit the parent first. Legacy sync keeps the block and retries it once the
+  parent commits. Blocks announced by p2p peers still go to catch-up. (#2021)
+- **A panic on the main block validation goroutines no longer stops the node.** The
+  priority-queue block workers and the catchup consumer now recover a panic, as the
+  `blockFoundCh` workers and the Kafka block message handler (#2010) already did. A panic in a goroutine that
+  these start, such as the catchup block fetch and validation workers, still stops the
+  process. Before, the process stopped and restarted, so an alert on a crash loop found it.
+  That alert will not fire now for the covered paths. Monitor the new counter
+  `teranode_blockvalidation_recovered_panics_total` (label `path`: `worker`, `catchup`,
+  `kafka` or `block_found`) and the `PANIC` log line, which has the block hash and the stack.
+  Four more changes come with it:
+    - A Kafka block message that panics is committed and retried in memory, like any
+      other local fault, up to 8 times with backoff. The announcing peer is not blamed.
+      Each attempt that panics counts on `path="kafka"`.
+    - A catchup that panics counts as a failed attempt with the error type `local_panic`. It
+      is not charged to the peer. So is a catchup whose validation waited on a validation of
+      the same block that panicked on another goroutine, also when an alternative peer served
+      that catchup. In that case the node tries no further alternative peer in the cycle. It
+      counts toward
+      `blockvalidation_catchup_max_attempts_per_block` unless it validated at least one block
+      first. In that condition it resets the count, as each other failed catchup that made
+      progress does.
+    - After `blockvalidation_max_corrupt_attempts_per_block` (default 3) worker or
+      `blockFoundCh` panics for one block from one peer, the node stops that peer's
+      announcements and deliveries of the block before it fetches the block, for
+      `blockvalidation_corrupt_attempt_cooldown` (default 10 minutes). The panic counts for
+      the peer that served the attempt that panicked. On the `blockFoundCh` path that is the
+      announcing peer, or the peer that served the block after the announcer answered 429.
+      A capped peer is not fetched from as that 429 fallback either. A block this node has
+      already stored is still answered without error. On the `blockFoundCh` path the cap
+      applies only to blocks announced over Kafka. The `BlockFound` gRPC client sends no peer
+      ID, and a block announced without one is never capped.
+    - The error that a `WaitToComplete` caller gets after a `blockFoundCh` worker panic no
+      longer has the panic value in its text. The panic value is in the `PANIC` log line.
+      (#2012)
+
+- **Legacy peers that send BIP152 messages are no longer disconnected.** go-wire
+  is now v1.4.0, which decodes `cmpctblock`, `getblocktxn` and `blocktxn`. Until
+  now a legacy peer that sent one got a `malformed` reject and was disconnected.
+  Now the message is logged at debug level and ignored, and the peer stays
+  connected. Teranode never sends `sendcmpct`, so a well-behaved peer should not
+  send these. The bump also bounds how much the wire decoder allocates up front
+  for a declared element count. (#1996)
 
 - **This release removes four Aerospike pruner metrics.** External monitoring systems must
   remove queries for `utxo_pruner_parents_skipped_pruned_total`,

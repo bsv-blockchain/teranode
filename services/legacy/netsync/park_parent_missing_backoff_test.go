@@ -122,7 +122,9 @@ func TestParkedBlockFailed_StampsAMissingParent(t *testing.T) {
 	t.Run("a local fault is not stamped, because it says nothing about the parent", func(t *testing.T) {
 		h := newParkWiringHarness(t, true)
 
-		entry := parkedBlock{hash: chainhash.Hash{0x12}, prevBlock: parent, size: 1024, parkedAt: time.Now()}
+		// The parent is in the chain: a retry-later failure is stamped only when the
+		// chain positively lacks the parent (see the missing-parent refusal below).
+		entry := parkedBlock{hash: chainhash.Hash{0x12}, prevBlock: h.genesis, size: 1024, parkedAt: time.Now()}
 
 		require.True(t, h.sm.blockPark.AdoptWritten(entry))
 		entry, ok := h.sm.blockPark.Take(entry.hash)
@@ -134,5 +136,54 @@ func TestParkedBlockFailed_StampsAMissingParent(t *testing.T) {
 		require.True(t, ok)
 		require.True(t, got.parentMissingAt.IsZero(),
 			"a busy store is over in seconds and must not delay a block whose parent may be perfectly fine")
+	})
+
+	// Block validation refuses a legacy block whose parent it does not hold with a
+	// plain ServiceError (processBlockFound, bitcoin-sv/teranode#4973).
+	// parkCommitFailure reads it as retryLater, which on its own carries no stamp, so
+	// the drain offered the block again on the very next turn while its parent was
+	// still missing.
+	refusal := func() error {
+		server := errors.NewServiceError("[processBlockFound][hash] legacy block has no stored parent parent-hash")
+
+		// The shape the park sees: the gRPC round trip, then netsync's own wrap.
+		return errors.NewProcessingError("failed to process block", errors.UnwrapGRPC(errors.WrapGRPC(server)))
+	}
+
+	t.Run("a missing-parent refusal is stamped and is not offered on the next turn", func(t *testing.T) {
+		h := newParkWiringHarness(t, true)
+
+		entry := parkedBlock{hash: chainhash.Hash{0x13}, prevBlock: parent, size: 1024, parkedAt: time.Now()}
+
+		require.True(t, h.sm.blockPark.AdoptWritten(entry))
+		entry, ok := h.sm.blockPark.Take(entry.hash)
+		require.True(t, ok)
+
+		require.Equal(t, parkDispositionRetryLater, parkCommitFailure(refusal()), "precondition: the refusal reads as retry-later")
+		require.False(t, h.sm.parkedBlockFailed(entry, refusal()))
+
+		_, ok = h.sm.blockPark.FirstChildFor(parent)
+		require.False(t, ok, "the next commit turn must pass over a block whose parent is still missing")
+		require.Empty(t, h.sm.blockPark.TakeChildren(parent), "nor may the drain that takes every child hand it out")
+
+		got, ok := h.sm.blockPark.Take(entry.hash)
+		require.True(t, ok, "the block stays parked; it commits once its parent lands")
+		require.False(t, got.parentMissingAt.IsZero(), "the missing-parent backoff is stamped")
+	})
+
+	t.Run("the same refusal with the parent in the chain is not stamped", func(t *testing.T) {
+		h := newParkWiringHarness(t, true)
+
+		entry := parkedBlock{hash: chainhash.Hash{0x14}, prevBlock: h.genesis, size: 1024, parkedAt: time.Now()}
+
+		require.True(t, h.sm.blockPark.AdoptWritten(entry))
+		entry, ok := h.sm.blockPark.Take(entry.hash)
+		require.True(t, ok)
+
+		h.sm.parkedBlockFailed(entry, refusal())
+
+		got, ok := h.sm.blockPark.FirstChildFor(h.genesis)
+		require.True(t, ok, "a parent that has landed since must not cost the block a backoff")
+		require.Equal(t, entry.hash, got.hash)
 	})
 }
