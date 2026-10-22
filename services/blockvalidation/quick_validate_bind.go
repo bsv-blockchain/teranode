@@ -31,6 +31,18 @@ const subtreeKeyMismatchKey = "subtree_key_mismatch"
 // claimed root and therefore cannot detect the blob this route just rejected.
 const subtreeKeyMismatchUnquarantinedKey = "subtree_key_mismatch_unquarantined"
 
+// subtreeWritesNotLandedKey marks a quick-validated block whose queued .subtree writes did
+// not all land, so it was not committed. tryQuickValidation aborts on it: the failing write
+// has already cancelled the catch-up run's shared context, so normal validation cannot
+// succeed and falling through would only bury the cause (bitcoin-sv/teranode#4978).
+const subtreeWritesNotLandedKey = "subtree_writes_not_landed"
+
+// blockCommittedKey marks an error raised when commitBlock's AddBlock stored the block with
+// subtrees_set and mined_set, or may have stored it: AddBlock returned an error and commitBlock
+// could not prove the block absent. tryQuickValidation must neither delete the attempt's .subtree
+// files nor fall through to normal validation on it (bitcoin-sv/teranode#4987).
+const blockCommittedKey = "block_committed"
+
 // markerChainDepth bounds the walk over a wrapped error chain, matching
 // isCacheBypassRetryable.
 const markerChainDepth = 32
@@ -120,13 +132,40 @@ func markUnquarantinedLocalSubtree(err error) error {
 // isUnquarantinedLocalSubtree reports whether err names a key-mismatching blob that
 // could not be confirmed removed from the local store.
 func isUnquarantinedLocalSubtree(err error) bool {
+	return hasErrorMarker(err, subtreeKeyMismatchUnquarantinedKey)
+}
+
+// markSubtreeWritesNotLanded tags err with subtreeWritesNotLandedKey. err must be non-nil.
+func markSubtreeWritesNotLanded(err *errors.Error) error {
+	err.SetData(subtreeWritesNotLandedKey, true)
+	return err
+}
+
+// isSubtreeWritesNotLanded reports whether err carries subtreeWritesNotLandedKey.
+func isSubtreeWritesNotLanded(err error) bool {
+	return hasErrorMarker(err, subtreeWritesNotLandedKey)
+}
+
+// markBlockCommitted tags err with blockCommittedKey. err must be non-nil.
+func markBlockCommitted(err *errors.Error) error {
+	err.SetData(blockCommittedKey, true)
+	return err
+}
+
+// isBlockCommitted reports whether err carries blockCommittedKey.
+func isBlockCommitted(err error) bool {
+	return hasErrorMarker(err, blockCommittedKey)
+}
+
+// hasErrorMarker walks err's wrapped chain, up to markerChainDepth, for a true bool under key.
+func hasErrorMarker(err error, key string) bool {
 	var e *errors.Error
 	if !errors.As(err, &e) {
 		return false
 	}
 
 	for depth := 0; e != nil && depth < markerChainDepth; depth++ {
-		if v, ok := e.GetData(subtreeKeyMismatchUnquarantinedKey).(bool); ok && v {
+		if v, ok := e.GetData(key).(bool); ok && v {
 			return true
 		}
 

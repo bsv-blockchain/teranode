@@ -3,7 +3,9 @@ package blockvalidation
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -20,6 +22,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"golang.org/x/sync/errgroup"
 )
@@ -62,6 +65,20 @@ type SubtreeWriteJob struct {
 	// job constructed without one (existing tests, or a future direct caller of
 	// subtreeWriteWorker) never panics on a nil receiver.
 	Done *sync.WaitGroup
+	// Unwritten, when set, is raised before Done is counted down if this job ends without its
+	// file landing: a serialize or store error in the worker, or the job left in the channel when
+	// the pool tore down (drainWriteJobs). A WaitGroup reaching zero says every job was handled,
+	// not that every write succeeded, so quickValidateBlockAsync reads this flag before it lets
+	// the block be stored with subtrees_set (bitcoin-sv/teranode#4978). Nil-guarded like Done.
+	Unwritten *atomic.Bool
+}
+
+// subtreeWriteBarrier tracks the .subtree writes ONE block queued to the shared async writer:
+// the WaitGroup counts them, and unwritten records whether any of them ended without landing.
+// Scoped to one block's call, never reused across blocks or attempts (bitcoin-sv/teranode#4978).
+type subtreeWriteBarrier struct {
+	sync.WaitGroup
+	unwritten atomic.Bool
 }
 
 // subtreeWriteWorker processes subtree write jobs from a channel.
@@ -87,10 +104,18 @@ func (u *BlockValidation) subtreeWriteWorker(ctx context.Context, writeJobsChan 
 				return nil
 			}
 
-			if err := func() error {
-				if job.Done != nil {
-					defer job.Done.Done()
-				}
+			if err := func() (err error) {
+				// Unwritten is raised BEFORE Done, so a waiter released by Done always sees it
+				// (bitcoin-sv/teranode#4978).
+				defer func() {
+					if err != nil && job.Unwritten != nil {
+						job.Unwritten.Store(true)
+					}
+
+					if job.Done != nil {
+						job.Done.Done()
+					}
+				}()
 
 				if job.AlreadyExists {
 					// Subtree already exists with assembly's finite DAH — no change needed.
@@ -359,8 +384,12 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 }
 
 // quickValidateBlockAsync performs optimized validation with async file writes.
-// Similar to quickValidateBlock but sends subtree file writes to a background channel,
-// allowing the caller to proceed to the next block's UTXO processing while writes continue.
+// Similar to quickValidateBlock but sends subtree file writes to a background channel, so
+// the writes for one batch overlap the UTXO processing of the block's later batches, and
+// the block-ID assignment and coinbase checks. It does not return before this block's own
+// writes have settled: commitBlock stores the block with subtrees_set, so awaitSubtreeWrites
+// waits for them first (bitcoin-sv/teranode#4978). The next block's processing therefore
+// cannot overlap this block's writes, and catch-up pays the write latency of each block's tail.
 //
 // IMPORTANT: The writeJobsChan must be processed by workers in a shared errgroup.
 // If any write fails, the errgroup context is cancelled, which cancels this function's context.
@@ -452,6 +481,9 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 
 	var id uint64
 
+	// Nil when the block carries no subtrees, so nothing was queued to the writer.
+	var barrier *subtreeWriteBarrier
+
 	if len(block.Subtrees) > 0 {
 		// Prove the peer-supplied body hashes to the checkpoint-certified header
 		// BEFORE the pipeline is entered — see quickValidateBlock
@@ -467,7 +499,11 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		if prefetchDepth <= 0 {
 			prefetchDepth = 2 // Default for async mode
 		}
-		_, wg, freshlyWritten, err = u.processBlockSubtreesPipelineAsync(ctx, block, prefetchDepth, writeJobsChan, outpointOnly)
+		_, barrier, freshlyWritten, err = u.processBlockSubtreesPipelineAsync(ctx, block, prefetchDepth, writeJobsChan, outpointOnly)
+		if barrier != nil {
+			wg = &barrier.WaitGroup
+		}
+
 		if err != nil {
 			// Preserve a corrupt-body verdict from validateSubtrees (bitcoin-sv/teranode#4692) instead
 			// of shadowing it with an outer ErrProcessing, so the caller re-downloads a
@@ -496,7 +532,45 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		return wg, freshlyWritten, err
 	}
 
+	// commitBlock stores the block with subtrees_set, which setMined and the P2P announcement
+	// both read as "this block's .subtree files are on disk". So every write this block queued
+	// must have landed first (bitcoin-sv/teranode#4978). Waiting here, last, lets block-ID
+	// assignment and the coinbase checks above overlap the tail of the writes.
+	if err := awaitSubtreeWrites(ctx, block, barrier); err != nil {
+		return wg, freshlyWritten, err
+	}
+
 	return wg, freshlyWritten, u.commitBlock(ctx, block, peerID, "quickValidateBlockAsync")
+}
+
+// awaitSubtreeWrites blocks until every .subtree write in barrier has been handled, and fails if
+// any of them did not land or ctx ends first. Never a bare Wait: a job is only counted down by a
+// worker that receives it, so on a torn-down pool the count can stay non-zero until
+// drainWriteJobs runs at the end of the catch-up run (bitcoin-sv/teranode#4692). The returned
+// error carries the subtreeWritesNotLandedKey marker so tryQuickValidation aborts instead of
+// falling through to normal validation. Nil barrier means nothing was queued.
+func awaitSubtreeWrites(ctx context.Context, block *model.Block, barrier *subtreeWriteBarrier) error {
+	if barrier == nil {
+		return nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		barrier.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return markSubtreeWritesNotLanded(errors.NewStorageError("[quickValidateBlockAsync][%s] context ended before the block's .subtree writes settled", block.Hash().String(), ctx.Err()))
+	}
+
+	if barrier.unwritten.Load() {
+		return markSubtreeWritesNotLanded(errors.NewStorageError("[quickValidateBlockAsync][%s] a .subtree write for this block did not land, not storing it with subtrees_set", block.Hash().String()))
+	}
+
+	return nil
 }
 
 // checkQuickValidationCoinbase enforces model.CoinbaseCommonRuleViolation (bitcoin-sv/teranode#4835)
@@ -546,15 +620,48 @@ func (u *BlockValidation) commitBlock(ctx context.Context, block *model.Block, p
 		options.WithMinedSet(true),
 		options.WithID(uint64(block.ID)),
 	); err != nil {
-		return errors.NewProcessingError("[%s][%s] failed to add block to blockchain", caller, block.Hash().String(), err)
+		// An AddBlock error does not prove the block was not stored: a deadline or cancel can reach
+		// the client after the blockchain server committed it. Treating a stored block as a local
+		// fault would let tryQuickValidation delete the .subtree files of a block recorded as
+		// having them, the corruption of bitcoin-sv/teranode#4978. So ask the store, with retries,
+		// and check a "not stored" answer once more after a short delay.
+		stored, probeErr := u.blockStoredAfterAddBlockError(ctx, block)
+
+		switch {
+		case probeErr != nil:
+			// Every probe attempt failed, so we cannot tell whether the block is stored. Keep the
+			// files and abort. If the block is stored, its outputs stay locked: the residual tracked
+			// in bsv-blockchain/teranode#2015, reached here only once the probe retries run out.
+			return markBlockCommitted(errors.NewServiceError("[%s][%s] AddBlock failed and the block may be stored (probe failed: %v)", caller, block.Hash().String(), probeErr, err))
+		case stored:
+			// Usually this insert committed, with subtrees_set and mined_set. The block can also have
+			// been stored by another route first, so the insert failed as a duplicate: that route then
+			// owns the block's flags. Either way the block is stored, so a sweep is wrong and the
+			// unlock is safe. Finish the commit tail.
+			u.logger.Warnf("[%s][%s] AddBlock returned an error but the block is stored, continuing the commit: %v", caller, block.Hash().String(), err)
+		case ctx.Err() != nil:
+			// The block is not stored yet, but ctx ended, so the server can still be committing it.
+			// Keep the files and abort.
+			return markBlockCommitted(errors.NewServiceError("[%s][%s] AddBlock failed and the block may be stored (not stored yet, but ctx ended)", caller, block.Hash().String(), err))
+		default:
+			return errors.NewProcessingError("[%s][%s] failed to add block to blockchain", caller, block.Hash().String(), err)
+		}
 	}
 
 	prometheusBlockValidationQuickCommitAddBlock.Observe(time.Since(start).Seconds())
 	start = time.Now()
 
 	// Unlock all UTXOs - final commit point (no-op when the lock was never taken; #1103).
-	if err := u.unlockSubtreeTransactionsIfNeeded(ctx, block, caller); err != nil {
-		return err
+	//
+	// AddBlock has committed the block with subtrees_set and mined_set, so from here on a failure
+	// is post-commit (bitcoin-sv/teranode#4987). The unlock is retried rather than rolled back, on
+	// a context detached from ctx, so a cancelled catch-up run does not skip the retries. A failure
+	// that survives the retries is marked so no caller treats it as a local fault: that
+	// would delete the .subtree files of a block now recorded as having them, and fall through to
+	// normal validation, which finds the block stored and does nothing. ServiceError so the legacy
+	// park reads it as retry-later and keeps the block instead of rejecting a committed one.
+	if err := u.unlockSubtreeTransactionsWithRetry(ctx, block, caller); err != nil {
+		return markBlockCommitted(errors.NewServiceError("[%s][%s] block is committed but its UTXOs are still locked", caller, block.Hash().String(), err))
 	}
 
 	prometheusBlockValidationQuickCommitUnlock.Observe(time.Since(start).Seconds())
@@ -952,14 +1059,15 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 //
 // Returns:
 //   - uint64: Existing BlockID if retry detected, 0 otherwise
-//   - *sync.WaitGroup: counts every write job THIS call queued to writeJobsChan; the caller must
-//     wait on it (context-aware, never bare — see tryQuickValidation) before trusting that a
-//     failed attempt's writes have all settled, since the shared write-worker pool outlives this
+//   - *subtreeWriteBarrier: counts every write job THIS call queued to writeJobsChan, and records
+//     whether any of them ended without landing (bitcoin-sv/teranode#4978); the caller must wait
+//     on it (context-aware, never bare — see awaitSubtreeWrites and tryQuickValidation) before
+//     trusting that the writes have all settled, since the shared write-worker pool outlives this
 //     one call (bitcoin-sv/teranode#4692)
 //   - map[chainhash.Hash]map[fileformat.FileType]struct{}: exactly which (hash, fileType) pairs
 //     this call itself freshly wrote, for removeCatchupSubtreeFiles to restrict deletion to
 //   - error: If processing fails or context is cancelled
-func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob, outpointOnly bool) (uint64, *sync.WaitGroup, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
+func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob, outpointOnly bool) (uint64, *subtreeWriteBarrier, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
 	var existingBlockID uint64
@@ -968,7 +1076,7 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 	// Scoped to this one block's call (bitcoin-sv/teranode#4692): wg tracks every write job queued
 	// below, and freshness tracks which (hash, fileType) pairs were freshly written. Neither is
 	// reused across blocks or across attempts.
-	wg := &sync.WaitGroup{}
+	wg := &subtreeWriteBarrier{}
 	freshness := newSubtreeFreshness()
 
 	// Channel for prefetched batches (subtrees read, txs not extended)
@@ -1758,6 +1866,130 @@ func (u *BlockValidation) unlockSubtreeTransactionsIfNeeded(ctx context.Context,
 	}
 
 	return nil
+}
+
+// postCommitUnlockRetries and postCommitUnlockRetryBackoff bound the retries of the unlock
+// commitBlock runs after AddBlock: one attempt plus postCommitUnlockRetries more, with
+// retry.Retry's linear backoff of 1, 3 and 5 times postCommitUnlockRetryBackoff between them.
+// The existence probe after an AddBlock error uses the same backoff.
+//
+// The backoff is a package-level var so tests can shrink it.
+const postCommitUnlockRetries = 3
+
+var postCommitUnlockRetryBackoff = 100 * time.Millisecond
+
+// postCommitTimeout bounds the unlock retries commitBlock runs after AddBlock, on a context
+// detached from the caller's. It only stops a hung store. A shutdown waits for this work, up to
+// this bound, because a block that is already committed must not be left half-finished. A
+// package-level var so tests can shrink it.
+var postCommitTimeout = 5 * time.Minute
+
+// The existence probe after an AddBlock error has its own, shorter bounds. It runs before the block
+// is known to be stored, and a hung blockchain service must not hold a shutdown past a normal
+// grace period.
+//
+// postCommitProbeRetries is the number of retries after the first attempt in one probe pass, and
+// postCommitProbeAttemptTimeout cuts off each attempt. A "not stored" answer is checked by a second
+// pass after postCommitProbeRecheckDelay. postCommitProbeTimeout bounds both passes together,
+// backoff and delay included. Package-level vars so tests can shrink them.
+const postCommitProbeRetries = 3
+
+var (
+	postCommitProbeAttemptTimeout = 3 * time.Second
+	postCommitProbeRecheckDelay   = 250 * time.Millisecond
+	postCommitProbeTimeout        = 15 * time.Second
+)
+
+// unlockSubtreeTransactionsWithRetry retries unlockSubtreeTransactionsIfNeeded. Each attempt
+// re-sends the whole pass: SetLocked(false) is idempotent, and retrying inside the errgroup would
+// not work, since the first failing goroutine cancels the context its siblings share.
+//
+// The retries run on context.WithoutCancel(ctx). ctx is the catch-up errgroup context, which any
+// failure elsewhere in the run cancels, and retry.Retry stops on a cancelled context before its
+// next attempt. On ctx, the first failed unlock would end the retries. When the retries stop
+// because postCommitTimeout ended, the returned error wraps the last store error.
+func (u *BlockValidation) unlockSubtreeTransactionsWithRetry(ctx context.Context, block *model.Block, callerTag string) error {
+	unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postCommitTimeout)
+	defer cancel()
+
+	var lastErr error
+
+	_, err := retry.Retry(unlockCtx, u.logger,
+		func() (struct{}, error) {
+			lastErr = u.unlockSubtreeTransactionsIfNeeded(unlockCtx, block, callerTag)
+			return struct{}{}, lastErr
+		},
+		retry.WithMessage(fmt.Sprintf("[%s][%s] post-commit unlock failed", callerTag, block.Hash().String())),
+		retry.WithRetryCount(postCommitUnlockRetries),
+		retry.WithBackoffDurationType(postCommitUnlockRetryBackoff),
+	)
+
+	if err != nil && lastErr != nil && unlockCtx.Err() != nil {
+		return errors.NewProcessingError("[%s][%s] post-commit unlock stopped: %v", callerTag, block.Hash().String(), err, lastErr)
+	}
+
+	return err
+}
+
+// blockStoredAfterAddBlockError reports whether block is in the blockchain store, after AddBlock
+// returned an error. It runs on a context detached from ctx, since the AddBlock error can itself be
+// ctx ending, bounded by postCommitProbeTimeout.
+//
+// A failed probe is retried. A "not stored" answer is checked again after
+// postCommitProbeRecheckDelay, because the blockchain SQL store serves GetBlockExists from its
+// response cache, and StoreBlock commits the row before it clears that cache. A false cached before
+// the commit can answer in the gap between the two. An error means a probe pass ran out of retries
+// or the total bound ended, so the caller cannot tell whether the block is stored.
+func (u *BlockValidation) blockStoredAfterAddBlockError(ctx context.Context, block *model.Block) (bool, error) {
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postCommitProbeTimeout)
+	defer cancel()
+
+	stored, err := u.probeBlockExistsWithRetry(probeCtx, block)
+	if err != nil || stored {
+		return stored, err
+	}
+
+	select {
+	case <-probeCtx.Done():
+		return false, errors.NewServiceError("[commitBlock][%s] existence probe timed out before its recheck", block.Hash().String(), probeCtx.Err())
+	case <-time.After(postCommitProbeRecheckDelay):
+	}
+
+	stored, err = u.probeBlockExistsWithRetry(probeCtx, block)
+	if err == nil && stored {
+		u.logger.Warnf("[commitBlock][%s] existence probe first said not stored, the recheck found the block stored", block.Hash().String())
+	}
+
+	return stored, err
+}
+
+// probeBlockExistsWithRetry runs one probe pass: GetBlockExists, retried up to
+// postCommitProbeRetries times, each attempt bounded by postCommitProbeAttemptTimeout. When
+// probeCtx ends between attempts, the returned error wraps the last probe error.
+func (u *BlockValidation) probeBlockExistsWithRetry(probeCtx context.Context, block *model.Block) (bool, error) {
+	var lastErr error
+
+	stored, err := retry.Retry(probeCtx, u.logger,
+		func() (bool, error) {
+			attemptCtx, cancel := context.WithTimeout(probeCtx, postCommitProbeAttemptTimeout)
+			defer cancel()
+
+			var exists bool
+
+			exists, lastErr = u.blockchainClient.GetBlockExists(attemptCtx, block.Hash())
+
+			return exists, lastErr
+		},
+		retry.WithMessage(fmt.Sprintf("[commitBlock][%s] existence probe after an AddBlock error failed", block.Hash().String())),
+		retry.WithRetryCount(postCommitProbeRetries),
+		retry.WithBackoffDurationType(postCommitUnlockRetryBackoff),
+	)
+
+	if err != nil && lastErr != nil && probeCtx.Err() != nil {
+		return false, errors.NewServiceError("[commitBlock][%s] existence probe stopped: %v", block.Hash().String(), err, lastErr)
+	}
+
+	return stored, err
 }
 
 // unlockSubtreeTransactions unlocks all transactions in the given subtrees in parallel.
@@ -2776,7 +3008,7 @@ func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *
 //
 // Returns:
 //   - error: If building subtrees fails or context is cancelled
-func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch, writeJobsChan chan<- *SubtreeWriteJob, wg *sync.WaitGroup, freshness *subtreeFreshness) error {
+func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *model.Block, batch *SubtreeProcessingBatch, writeJobsChan chan<- *SubtreeWriteJob, wg *subtreeWriteBarrier, freshness *subtreeFreshness) error {
 	// Build subtrees in parallel (CPU-bound work)
 	buildG, buildCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(u.logger, buildG, u.settings.BlockValidation.SubtreeBatchWriteConcurrency)
@@ -2844,14 +3076,16 @@ func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *m
 		}
 
 		wg.Add(1)
-		job.Done = wg
+		job.Done = &wg.WaitGroup
+		job.Unwritten = &wg.unwritten
 
 		select {
 		case writeJobsChan <- job:
 		case <-ctx.Done():
 			// The job was never handed to a worker, so nothing will ever call Done() for
 			// it — do so here, or a cancelled send would leave the count permanently
-			// non-zero and hang a later Wait().
+			// non-zero and hang a later Wait(). Its file never lands, so flag it first.
+			wg.unwritten.Store(true)
 			wg.Done()
 			return ctx.Err()
 		}

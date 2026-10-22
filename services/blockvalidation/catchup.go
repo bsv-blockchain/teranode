@@ -1386,18 +1386,28 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 }
 
 // drainWriteJobs receives every subtree write job left in ch and counts it down, so a caller blocked
-// in wg.Wait() for a job no worker will ever receive is released (bitcoin-sv/teranode#4692).
+// in wg.Wait() for a job no worker will ever receive is released (bitcoin-sv/teranode#4692). Each
+// drained job was never written, so its Unwritten flag is raised first (bitcoin-sv/teranode#4978).
 //
 // Only safe to call once the producing errgroup has settled, because it relies on the channel being
-// closed to terminate. Nil-safe on both axes: ch is nil when quick validation is disabled (no worker
-// pool, no channel), and job.Done is nil for a job constructed without a barrier.
+// closed to terminate. Nil-safe on every axis: ch is nil when quick validation is disabled (no worker
+// pool, no channel), and job.Done or job.Unwritten is nil for a job constructed without a barrier.
 func drainWriteJobs(ch <-chan *SubtreeWriteJob) {
 	if ch == nil {
 		return
 	}
 
 	for job := range ch {
-		if job != nil && job.Done != nil {
+		if job == nil {
+			continue
+		}
+
+		// Never written, so flag it before releasing the waiter (bitcoin-sv/teranode#4978).
+		if job.Unwritten != nil {
+			job.Unwritten.Store(true)
+		}
+
+		if job.Done != nil {
 			job.Done.Done()
 		}
 	}
@@ -2041,6 +2051,39 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
 					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
 			}
+
+			return false, err
+		}
+
+		// Two outcomes abort here, without a sweep, rather than fall through to the local-fault
+		// branch below. Its sweep and its fall-through are each wrong for both of them.
+		//
+		// The .subtree writes did not all land, so quickValidateBlockAsync refused to commit the
+		// block (bitcoin-sv/teranode#4978). The failing write worker has already cancelled the
+		// shared catch-up context, so normal validation would only fail on that and bury the
+		// storage fault. The block is not stored, so the next catch-up run validates it again from
+		// scratch. Do not sweep, whichever way the barrier failed. When a write failed and the
+		// barrier released, every job had been handled; when the context ended first, jobs may
+		// still be in flight and a delete could race them, as in the ctx.Done branches above.
+		// Leaving the files is harmless either way: the content is honest, every blob carries a
+		// finite DAH, and the next run rewrites it with AllowOverwrite.
+		//
+		// The block IS committed, or may be: AddBlock stored it with subtrees_set and mined_set and
+		// the post-commit unlock still failed after its retries, or AddBlock returned an error and
+		// commitBlock could not prove the block not stored, because every existence probe failed or
+		// ctx had ended (bitcoin-sv/teranode#4987). The files this
+		// attempt wrote can belong to a block recorded as having them, so a sweep can corrupt it,
+		// and normal validation would find the block stored and do nothing. No write can still be
+		// in flight: awaitSubtreeWrites returned nil before commitBlock ran, so no waitDone join is
+		// needed. If the block is stored, its outputs stay locked and nothing unlocks them later
+		// (bsv-blockchain/teranode#2015): the setMined worker skips a block with mined_set, and a
+		// stored block is skipped by catch-up and by processBlockFound.
+		// Quick validation spends locked outputs anyway (WithIgnoreLocked), so a later checkpointed
+		// block that spends them still commits. Only a spend through full validation or the
+		// validator fails, with ErrTxLocked.
+		if isSubtreeWritesNotLanded(err) || isBlockCommitted(err) {
+			u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: aborting without removing this attempt's .subtree files: %v",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
 
 			return false, err
 		}

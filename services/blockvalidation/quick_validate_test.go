@@ -991,6 +991,27 @@ func TestQuickValidate_OutpointOnly_NoDecorate_ZeroFees(t *testing.T) {
 	})
 }
 
+// startTestSubtreeWriteWorker runs one real subtreeWriteWorker over a fresh job channel for the
+// life of the test, so quickValidateBlockAsync's write barrier is released as in production.
+func startTestSubtreeWriteWorker(t *testing.T, bv *BlockValidation) chan<- *SubtreeWriteJob {
+	t.Helper()
+
+	ch := make(chan *SubtreeWriteJob, 16)
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		_ = bv.subtreeWriteWorker(context.Background(), ch)
+	}()
+
+	t.Cleanup(func() {
+		close(ch)
+		<-done
+	})
+
+	return ch
+}
+
 func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 	t.Run("setting off: UTXOs locked then unlocked", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
@@ -999,10 +1020,9 @@ func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 
 		block := buildOneSubtreeBlock(t, suite, 100)
 
-		// Buffered large enough that quickValidateBlockAsync never blocks queuing write
-		// jobs (one job per subtree; the test block has a single subtree), so no consumer
-		// goroutine is needed.
-		writeJobsChan := make(chan *SubtreeWriteJob, 16)
+		// quickValidateBlockAsync waits for the block's queued writes before it commits
+		// (bitcoin-sv/teranode#4978), so a real worker must consume them.
+		writeJobsChan := startTestSubtreeWriteWorker(t, suite.Server.blockValidation)
 
 		_, _, err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
 		require.NoError(t, err)
@@ -1020,10 +1040,9 @@ func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 
 		block := buildOneSubtreeBlock(t, suite, 100)
 
-		// Buffered large enough that quickValidateBlockAsync never blocks queuing write
-		// jobs (one job per subtree; the test block has a single subtree), so no consumer
-		// goroutine is needed.
-		writeJobsChan := make(chan *SubtreeWriteJob, 16)
+		// quickValidateBlockAsync waits for the block's queued writes before it commits
+		// (bitcoin-sv/teranode#4978), so a real worker must consume them.
+		writeJobsChan := startTestSubtreeWriteWorker(t, suite.Server.blockValidation)
 
 		_, _, err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
 		require.NoError(t, err)
@@ -1041,10 +1060,9 @@ func TestQuickValidateBlockAsync_UtxoLockGating(t *testing.T) {
 
 		block := buildOneSubtreeBlock(t, suite, 100)
 
-		// Buffered large enough that quickValidateBlockAsync never blocks queuing write
-		// jobs (one job per subtree; the test block has a single subtree), so no consumer
-		// goroutine is needed.
-		writeJobsChan := make(chan *SubtreeWriteJob, 16)
+		// quickValidateBlockAsync waits for the block's queued writes before it commits
+		// (bitcoin-sv/teranode#4978), so a real worker must consume them.
+		writeJobsChan := startTestSubtreeWriteWorker(t, suite.Server.blockValidation)
 
 		_, _, err := suite.Server.blockValidation.quickValidateBlockAsync(suite.Ctx, block, "test", "", writeJobsChan)
 		require.NoError(t, err)

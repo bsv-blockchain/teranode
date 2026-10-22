@@ -106,6 +106,20 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Catch-up quick validation waits for each block's `.subtree` writes before it commits
+  the block, and a shutdown can wait for post-commit work.** A block was stored with
+  `subtrees_set` while its `.subtree` files could still be in flight, so a failed write
+  left a block recorded as having files it did not have. Each quick-validated block now
+  waits for its own writes to land; a write that fails leaves the block uncommitted for
+  the next catch-up run. Once the block is stored, unlocking its outputs is retried on a
+  context that a cancel does not stop, for up to 5 minutes. When `AddBlock` returns an
+  error, a retried existence check, bounded at 15 seconds, decides whether to finish the
+  commit or retry the block later. The check and the unlock run one after the other, so
+  a pod stopped mid catch-up can take up to about 5 minutes 15 seconds to exit. Nothing
+  to configure; if the blockchain or UTXO store hangs at shutdown, a
+  `terminationGracePeriodSeconds` below 315 ends the pod with the block's outputs still
+  locked (tracked in #2015). (#2011)
+
 - **`utxostore_updateTxMinedStatus` is removed, and it was live.** Affects only nodes that
   set it to `false`. Mined-tagging, the step after `AddBlock` that writes a block's ID onto
   each of its transactions, now always runs. So does the check it carries, which rejects a
