@@ -1130,3 +1130,112 @@ func TestClient_GetBlockAssemblyQueueStats_RoundTrip(t *testing.T) {
 		require.Equal(t, QueueStats{}, stats, "a failed read must not present a partially-populated snapshot")
 	})
 }
+
+func newInBlockTestClient(mockClient *mockBlockAssemblyAPIClient, batchSize int, columnar bool) *Client {
+	client := createTestClient(mockClient, batchSize)
+	client.settings.BlockAssembly.UseColumnarBatch = columnar
+
+	if batchSize > 0 {
+		sendBatch := func(batch []*batchItem) {
+			client.sendBatchToBlockAssembly(context.Background(), batch)
+		}
+		client.inBlockBatcher = batcher.New(batchSize, 100*time.Millisecond, sendBatch, true)
+	}
+
+	return client
+}
+
+func TestContextWithInBlock(t *testing.T) {
+	require.False(t, InBlockFromContext(context.Background()))
+	require.True(t, InBlockFromContext(ContextWithInBlock(context.Background())))
+}
+
+func TestClient_StoreMarksBlockTransactionsInTheirOwnBatch(t *testing.T) {
+	hash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	for _, columnar := range []bool{false, true} {
+		name := "row"
+		if columnar {
+			name = "columnar"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			mockClient := &mockBlockAssemblyAPIClient{}
+			client := newInBlockTestClient(mockClient, 1, columnar)
+
+			var mu sync.Mutex
+
+			var seen []bool
+
+			record := func(inBlock bool) {
+				mu.Lock()
+				defer mu.Unlock()
+
+				seen = append(seen, inBlock)
+			}
+
+			mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					record(args.Get(1).(*blockassembly_api.AddTxBatchRequest).GetInBlock())
+				}).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
+			mockClient.On("AddTxBatchColumnar", mock.Anything, mock.Anything, mock.Anything).
+				Run(func(args mock.Arguments) {
+					record(args.Get(1).(*blockassembly_api.AddTxBatchColumnarRequest).GetInBlock())
+				}).Return(&blockassembly_api.AddTxBatchResponse{}, nil)
+
+			ok, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{})
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			ok, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{})
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			require.Equal(t, []bool{false, true}, seen, "an ingest transaction is sent unmarked and a block transaction is sent marked")
+		})
+	}
+}
+
+func TestClient_StoreUnaryMarksBlockTransactions(t *testing.T) {
+	hash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	mockClient := &mockBlockAssemblyAPIClient{}
+	client := newInBlockTestClient(mockClient, 0, false)
+
+	var seen []bool
+
+	mockClient.On("AddTx", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			seen = append(seen, args.Get(1).(*blockassembly_api.AddTxRequest).GetInBlock())
+		}).Return(&blockassembly_api.AddTxResponse{Ok: true}, nil)
+
+	_, err := client.Store(context.Background(), hash, 1, 250, subtree.TxInpoints{})
+	require.NoError(t, err)
+
+	_, err = client.Store(ContextWithInBlock(context.Background()), hash, 1, 250, subtree.TxInpoints{})
+	require.NoError(t, err)
+
+	require.Equal(t, []bool{false, true}, seen)
+}
+
+func TestBatchIsInBlock(t *testing.T) {
+	require.False(t, batchIsInBlock(nil), "an empty batch is not a block batch")
+	require.False(t, batchIsInBlock([]*batchItem{{req: &blockassembly_api.AddTxRequest{}}}))
+	require.True(t, batchIsInBlock([]*batchItem{{req: &blockassembly_api.AddTxRequest{InBlock: true}}}))
+}
+
+func TestClient_QueueStatsCarriesHeldCount(t *testing.T) {
+	mockClient := &mockBlockAssemblyAPIClient{}
+	client := createTestClient(mockClient, 0)
+
+	mockClient.On("GetBlockAssemblyQueueStats", mock.Anything, mock.Anything, mock.Anything).
+		Return(&blockassembly_api.QueueStatsMessage{QueueCount: 3, HeldCount: 70, MaxHeld: 100}, nil)
+
+	stats, err := client.GetBlockAssemblyQueueStats(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, int64(70), stats.HeldCount)
+	require.Equal(t, int64(100), stats.MaxHeld)
+}

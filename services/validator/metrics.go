@@ -207,7 +207,7 @@ var (
 
 	// prometheusValidatorShedInBlockDroppedTotal counts block-context transactions
 	// accepted without a block-assembly template entry because the ingest queue was
-	// full. The transaction is valid, unlocked and spendable; it is simply not
+	// full. The transaction is valid and stays Locked; it is simply not
 	// mineable by this node until the next unmined reload, which nothing schedules,
 	// so a rising value is the signal that a block-assembly reset would recover
 	// template entries this node is otherwise missing.

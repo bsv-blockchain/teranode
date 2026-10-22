@@ -242,6 +242,24 @@ func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints [
 	return args.Bool(0)
 }
 
+// AddBatchInBlockIfRoom implements Interface.AddBatchInBlockIfRoom
+func (m *MockSubtreeProcessor) AddBatchInBlockIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	args := m.Called(nodes, txInpoints)
+	return args.Bool(0)
+}
+
+// HeldCount implements Interface.HeldCount. It reports nothing held without consulting the
+// mock expectations, like MaxTransactionsInMemory.
+func (m *MockSubtreeProcessor) HeldCount() int64 {
+	return 0
+}
+
+// HeldLimitExceededBy implements Interface.HeldLimitExceededBy. It reports no limit without
+// consulting the mock expectations.
+func (m *MockSubtreeProcessor) HeldLimitExceededBy(_ int) bool {
+	return false
+}
+
 func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
 

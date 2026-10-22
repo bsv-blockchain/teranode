@@ -62,6 +62,27 @@ type Interface interface {
 	//   - bool: true if the batch was enqueued, false if it was refused for room
 	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool
 
+	// AddBatchInBlockIfRoom is AddBatchIfRoom for transactions that arrived inside a block.
+	// The in-memory transaction limit does not refuse them; the ingest queue bound still does.
+	//
+	// Returns:
+	//   - bool: true if the batch was enqueued, false if it was refused for room
+	AddBatchInBlockIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool
+
+	// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted,
+	// and already in subtrees.
+	//
+	// Returns:
+	//   - int64: Transactions held in memory
+	HeldCount() int64
+
+	// HeldLimitExceededBy reports whether admitting n more transactions would put the
+	// transactions held in memory over the limit. It is false when there is no limit.
+	//
+	// Returns:
+	//   - bool: true if the in-memory limit is the bound that would refuse them
+	HeldLimitExceededBy(n int) bool
+
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.
 	// Uses sync.Once internally, so multiple calls are safe (only starts once).

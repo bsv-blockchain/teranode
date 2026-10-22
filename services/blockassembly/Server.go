@@ -1223,6 +1223,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		if err = ba.addTxBatchWithBackpressure(ctx,
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
+			req.GetInBlock(),
 		); err != nil {
 			return nil, err
 		}
@@ -1291,7 +1292,7 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 const queueFullPollInterval = 5 * time.Millisecond
 
 // addTxBatchWithBackpressure enqueues a batch into block assembly under the
-// configured capacity bound. It is the shared body of all three ingest
+// configured capacity bounds. It is the shared body of all three ingest
 // handlers, called only inside the enabled branch.
 //
 // On the fast path there is room and it returns immediately — this is also the
@@ -1302,18 +1303,36 @@ const queueFullPollInterval = 5 * time.Millisecond
 // mapped error; the validator then unwinds its UTXO-store work for the shed
 // transactions (see unwindShed) so a resubmit is an ordinary first submission.
 //
+// When the in-memory transaction limit is what refuses the batch there is no wait.
+// That bound clears when a block connects, not when the dispatcher drains a pass, so
+// polling for it for QueueFullWaitTimeout only adds latency to every refusal. The shed
+// carries a marker the validator uses to skip its own retry for the same reason; see
+// shedHeld.
+//
+// inBlock marks a batch whose transactions arrived inside a block. The in-memory limit does
+// not refuse it, so a block transaction is never left outside the template by that limit.
+//
 // Caller cancellation (ctx.Done) is NOT a shed: it returns a context-cancelled
 // error without incrementing the shed counter and without the resource-exhausted
 // class, whose shed recovery semantics do not apply to a cancelled call.
 //
 // The wait is strictly bounded so it can never wedge the validator, whose
 // block-assembly client honours the caller's context (group.Wait(ctx, 0)).
-func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) error {
-	if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) error {
+	addIfRoom := ba.blockAssembler.AddTxBatchIfRoom
+	if inBlock {
+		addIfRoom = ba.blockAssembler.AddTxBatchInBlockIfRoom
+	}
+
+	if addIfRoom(nodes, txInpoints) {
 		return nil
 	}
 
 	start := time.Now()
+
+	if !inBlock && ba.blockAssembler.HeldLimitExceededBy(len(nodes)) {
+		return ba.shedHeld(start)
+	}
 
 	if ba.settings.BlockAssembly.QueueFullWaitTimeout > 0 {
 		ticker := time.NewTicker(queueFullPollInterval)
@@ -1329,7 +1348,7 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 			case <-timeout:
 				return ba.shed(start)
 			case <-ticker.C:
-				if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+				if addIfRoom(nodes, txInpoints) {
 					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
 					return nil
 				}
@@ -1344,6 +1363,22 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 	}
 
 	return ba.shed(start)
+}
+
+// shedHeld records and returns the shed for a batch the in-memory transaction limit refused. It
+// is the same resource-exhausted class as shed, so every existing consumer handles it, with one
+// extra marker: the error wraps ErrServiceUnavailable. The validator reads that marker to skip
+// the in-place retry that only suits a queue that clears in milliseconds, since this bound holds
+// until a block connects.
+func (ba *BlockAssembly) shedHeld(start time.Time) error {
+	prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+	prometheusBlockAssemblyQueueShed.Inc()
+	prometheusBlockAssemblyHeldShed.Inc()
+
+	return errors.WrapGRPC(errors.NewThresholdExceededError(
+		"block assembly holds %d transactions in memory, limit %d",
+		ba.blockAssembler.HeldCount(), ba.blockAssembler.MaxTransactionsInMemory(),
+		errors.NewServiceUnavailableError("in-memory transaction limit reached")))
 }
 
 // shed records and returns the queue-full shed outcome: a ResourceExhausted-
@@ -1430,7 +1465,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock()); err != nil {
 			return nil, err
 		}
 
@@ -1612,7 +1647,7 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock()); err != nil {
 		return nil, err
 	}
 
@@ -2566,7 +2601,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 //   - _: Empty message request (unused)
 //
 // Returns:
-//   - *blockassembly_api.QueueStatsMessage: Queue depth, head-batch age, the applied double-spend window and the enforced item cap
+//   - *blockassembly_api.QueueStatsMessage: Queue depth, head-batch age, the applied double-spend window, the enforced item cap, and the held count with its limit
 //   - error: Always nil; both queue values are atomic loads that cannot fail
 func (ba *BlockAssembly) GetBlockAssemblyQueueStats(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.QueueStatsMessage, error) {
 	return &blockassembly_api.QueueStatsMessage{
@@ -2574,6 +2609,8 @@ func (ba *BlockAssembly) GetBlockAssemblyQueueStats(_ context.Context, _ *blocka
 		QueueHeadAgeMillis:      ba.blockAssembler.QueueHeadAge().Milliseconds(),
 		DoubleSpendWindowMillis: ba.settings.BlockAssembly.DoubleSpendWindow.Milliseconds(),
 		QueueMaxItems:           ba.blockAssembler.QueueMaxItems(),
+		HeldCount:               ba.blockAssembler.HeldCount(),
+		MaxHeld:                 ba.blockAssembler.MaxTransactionsInMemory(),
 	}, nil
 }
 

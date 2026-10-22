@@ -142,11 +142,13 @@ message AddTxRequest {
   uint32 locktime = 2; // the earliest time a transaction can be mined into a block
   repeated bytes utxos = 5; // the UTXOs consumed by this transaction
   bytes txInpoints = 6; // a serialized list of input outpoints for this transaction
+  bool inBlock = 7; // the transaction arrived inside a block, so the in-memory transaction limit does not refuse it
 }
 
 // Request for adding a batch of transactions to the mining candidate block.
 message AddTxBatchRequest {
   repeated AddTxRequest txRequests = 1; // a batch of transaction requests
+  bool inBlock = 2; // every transaction in the batch arrived inside a block, so the in-memory transaction limit does not refuse the batch
 }
 
 // Request for adding a batch of transactions using columnar format.
@@ -222,6 +224,11 @@ message AddTxBatchColumnarRequest {
   //
   // Assigned a fresh field number (11) — see note on field 10.
   repeated uint32 vout_idxs_tx_offsets = 11;
+
+  // Every transaction in the batch arrived inside a block, so the in-memory
+  // transaction limit does not refuse the batch. A server that predates this
+  // field ignores it and applies the limit, which is the previous behaviour.
+  bool in_block = 12;
 }
 
 // Request for retrieving a mining candidate block template.
@@ -292,6 +299,14 @@ message QueueStatsMessage {
   // settings for the same reason as doubleSpendWindowMillis: the two settings
   // contexts are independent processes.
   int64 queueMaxItems = 4;
+  // The transactions this producer holds in memory, queued plus already in
+  // subtrees. Reported next to the ingest queue depth because the queue alone
+  // reads near empty while the in-memory limit is the bound that is full.
+  int64 heldCount = 5;
+  // The enforced (normalized) in-memory transaction limit, or <= 0 when there is
+  // none. Reported rather than read from the reader's own settings for the same
+  // reason as queueMaxItems.
+  int64 maxHeld = 6;
 }
 
 // Response containing the difficulty required for the next block (not the

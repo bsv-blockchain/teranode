@@ -1096,6 +1096,13 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						dequeueBatches = append(dequeueBatches, batch)
 					}
 
+					// Items taken off the queue stay counted as held until the subtree count
+					// below includes them. See LockFreeQueue.heldTotal.
+					dequeuedItems := int64(0)
+					for _, batch := range dequeueBatches {
+						dequeuedItems += int64(len(batch.nodes))
+					}
+
 					if len(dequeueBatches) == 0 {
 						stp.setCurrentRunningState(StateRunning)
 						// Sleep briefly to avoid busy-wait when queue is empty.
@@ -1125,6 +1132,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 							stp.logger.Errorf("[SubtreeProcessor] error creating new subtree: %s", err)
 							// If we can't create a subtree, we can't process this node.
 							// We should probably retry or abort, but here we skip to avoid crash.
+							stp.queue.settle(dequeuedItems)
+
 							continue
 						}
 						stp.currentSubtree.Store(newSubtree)
@@ -1133,6 +1142,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						// This is the first subtree for this block - we need a coinbase placeholder
 						if err = currentSubtree.AddCoinbaseNode(); err != nil {
 							stp.logger.Errorf("[SubtreeProcessor] error adding coinbase placeholder: %s", err)
+							stp.queue.settle(dequeuedItems)
+
 							continue
 						}
 						addedCount++
@@ -1210,6 +1221,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					if addedCount > 0 {
 						stp.txCount.Add(addedCount)
 					}
+
+					stp.queue.settle(dequeuedItems)
 
 					// No caller waits on dequeued txs: report tx map storage errors
 					// from this pass in the log, as other failures here are.
@@ -1934,9 +1947,13 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	validUntilMillis := stp.clock.Now().UnixMilli()
 
 	for {
-		if _, found := stp.queue.dequeueBatchUntil(validUntilMillis); !found {
+		batch, found := stp.queue.dequeueBatchUntil(validUntilMillis)
+		if !found {
 			break
 		}
+
+		// dropped, so nothing will count it
+		stp.queue.settle(int64(len(batch.nodes)))
 	}
 
 	return nil
@@ -2967,6 +2984,41 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 //   - bool: true if the batch was enqueued, false if it was refused for room
 func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
 	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints)
+}
+
+// AddBatchInBlockIfRoom is AddBatchIfRoom for transactions that arrived inside a block. The
+// in-memory transaction limit does not refuse them; the ingest queue bound still does. See
+// LockFreeQueue.enqueueBatchInBlockIfRoom for why.
+//
+// Parameters:
+//   - nodes: Transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//
+// Returns:
+//   - bool: true if the batch was enqueued, false if it was refused for room
+func (stp *SubtreeProcessor) AddBatchInBlockIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
+	return stp.queue.enqueueBatchInBlockIfRoom(nodes, txInpoints)
+}
+
+// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
+// already in subtrees. It reads atomics only, so a monitoring goroutine can call it.
+//
+// Returns:
+//   - int64: Transactions held in memory
+func (stp *SubtreeProcessor) HeldCount() int64 {
+	return stp.queue.heldCount()
+}
+
+// HeldLimitExceededBy reports whether admitting n more transactions would put the transactions
+// held in memory over the limit. It is false when there is no limit.
+//
+// Parameters:
+//   - n: Number of transactions that would be added
+//
+// Returns:
+//   - bool: true if the in-memory limit is the bound that would refuse them
+func (stp *SubtreeProcessor) HeldLimitExceededBy(n int) bool {
+	return stp.queue.heldWouldExceed(int64(n))
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
@@ -5005,9 +5057,8 @@ func (stp *SubtreeProcessor) checkMarkNotOnLongestChain(ctx context.Context, inv
 // and the queue. This ensures the transaction count remains accurate
 // after chain modifications.
 func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
-	stp.txCount.Store(0)
-
 	var (
+		total      uint64
 		subtreeLen uint64
 		err        error
 	)
@@ -5019,7 +5070,7 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 			continue
 		}
 
-		stp.txCount.Add(subtreeLen)
+		total += subtreeLen
 	}
 
 	currSubtreeLenUint64, err := safeconversion.IntToUint64(stp.currentSubtree.Load().Length())
@@ -5028,7 +5079,9 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 		return
 	}
 
-	stp.txCount.Add(currSubtreeLenUint64)
+	// Stored once, from a local sum. Zeroing the counter and adding to it let a producer reading
+	// it for the in-memory limit see a partial total and be admitted at the limit.
+	stp.txCount.Store(total + currSubtreeLenUint64)
 }
 
 // moveBackBlock processes a block during downward chain movement.
@@ -6551,7 +6604,11 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 		itemsProcessed += int64(len(batch.nodes))
 
 		if chunkItems >= maxItems {
-			if err := fn(chunk); err != nil {
+			err := fn(chunk)
+
+			stp.queue.settle(int64(chunkItems))
+
+			if err != nil {
 				return err
 			}
 
@@ -6560,7 +6617,11 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	}
 
 	if len(chunk) > 0 {
-		return fn(chunk)
+		err := fn(chunk)
+
+		stp.queue.settle(int64(chunkItems))
+
+		return err
 	}
 
 	return nil
