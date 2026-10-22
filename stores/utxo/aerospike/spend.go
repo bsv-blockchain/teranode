@@ -978,14 +978,6 @@ func (s *Store) useExpressionSpend() bool {
 	return s.settings.Aerospike.EnableSpendFilterExpressions && s.utxoBatchSize == 1
 }
 
-// sendSpendBatchLua processes a batch of spend requests via Lua scripts or expressions.
-// The function:
-//  1. Groups spends by transaction
-//  2. Creates batch UDF operations or expression-based operations
-//  3. Executes Lua scripts or expressions
-//  4. Handles responses and errors
-//  5. Manages DAH settings
-//  6. Updates external storage
 // persistedSpenderForFilter answers, for the outpoints a batch argues over,
 // which transaction the store already names as the spender. It reads through
 // GetSpend, which locates the record by primary key, and memoises per outpoint.
@@ -1034,6 +1026,14 @@ func (s *Store) persistedSpenderForFilter() utxo.PersistedSpender {
 	}
 }
 
+// sendSpendBatchLua processes a batch of spend requests via Lua scripts or expressions.
+// The function:
+//  1. Groups spends by transaction
+//  2. Creates batch UDF operations or expression-based operations
+//  3. Executes Lua scripts or expressions
+//  4. Handles responses and errors
+//  5. Manages DAH settings
+//  6. Updates external storage
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	// go-batcher recovers panics in this fn; re-complete every item on panic
 	// (e.g. the unchecked .(int) in processSpendBatchResults) so a crash

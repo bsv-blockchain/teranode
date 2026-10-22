@@ -31,6 +31,10 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Go integrations: `FilterConflictingDuplicateSpendClaims` is replaced by `ProcessSpendBatch`
+  with a `SpendBatchHandler`.** Out-of-tree callers must migrate; omit `SameChecks` to disable
+  local result reuse. The `teranode_aerospike_utxo_spend_batch` and `..._size` histograms now
+  count one batcher batch, however many backend parts it needs. (#2036)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)
