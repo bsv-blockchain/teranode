@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -117,12 +118,21 @@ func TestRespendBehindLoserInSameBatchKeepsLegitimateSpends(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	_, errS0 := store.Spend(ctx, s0, 2)
-	t.Logf("S1 err         : %v", <-errS1)
+	s1Err := <-errS1
+	t.Logf("S1 err         : %v", s1Err)
 	t.Logf("S0 re-spend err: %v", errS0)
 
 	// Defect 1: an idempotent re-spend is a supported path and must succeed.
 	require.NoError(t, errS0,
 		"idempotent re-spend of S0 was rejected -- the in-batch filter handed the outpoint to S1")
+
+	// The #825 guarantee must survive: the genuine double-spend loser is still
+	// refused in the same batch, and is now blamed on S0, the tx that really
+	// holds the outpoint, rather than on itself.
+	require.Error(t, s1Err, "the double-spend attempt on output 0 must still be refused")
+	require.True(t, errors.Is(s1Err, errors.ErrSpent), "expected ErrSpent for the loser, got: %v", s1Err)
+	require.Contains(t, s1Err.Error(), s0.TxID(),
+		"the loser must be blamed on S0, the persisted spender")
 
 	// Defect 2: both outputs must remain spent by S0. Output 1 is the one the
 	// rollback clears, and it is a real consensus-state loss.
@@ -137,9 +147,8 @@ func TestRespendBehindLoserInSameBatchKeepsLegitimateSpends(t *testing.T) {
 
 		require.Equal(t, int(utxo.Status_SPENT), resp.Status,
 			"output %d that S0 legitimately spent went back to unspent", sp.Vout)
-		if resp.SpendingData != nil {
-			require.Equal(t, s0.TxID, resp.SpendingData.TxID.String(),
-				"output %d is owned by %s, not by S0", sp.Vout, resp.SpendingData.TxID)
-		}
+		require.NotNil(t, resp.SpendingData, "output %d must name its spender", sp.Vout)
+		require.Equal(t, s0.TxID(), resp.SpendingData.TxID.String(),
+			"output %d is owned by %s, not by S0", sp.Vout, resp.SpendingData.TxID)
 	}
 }

@@ -986,6 +986,54 @@ func (s *Store) useExpressionSpend() bool {
 //  4. Handles responses and errors
 //  5. Manages DAH settings
 //  6. Updates external storage
+// persistedSpenderForFilter answers, for the outpoints a batch argues over,
+// which transaction the store already names as the spender. It reads through
+// GetSpend, which locates the record by primary key, and memoises per outpoint.
+//
+// A failed read answers ok=false rather than guessing, so the filter keeps its
+// #825 first-claim-wins behaviour on unknown state instead of manufacturing a
+// winner. Collisions are rare, so an ordinary batch pays nothing extra.
+func (s *Store) persistedSpenderForFilter() utxo.PersistedSpender {
+	type outpoint struct {
+		txID chainhash.Hash
+		vout uint32
+	}
+	type answer struct {
+		spendingData *spendpkg.SpendingData
+		ok           bool
+	}
+
+	cache := make(map[outpoint]answer)
+
+	return func(txID *chainhash.Hash, vout uint32) (*spendpkg.SpendingData, bool) {
+		if txID == nil {
+			return nil, false
+		}
+
+		key := outpoint{txID: *txID, vout: vout}
+		if cached, found := cache[key]; found {
+			return cached.spendingData, cached.ok
+		}
+
+		// UTXOHash is deliberately nil: the record is found by primary key, and
+		// GetSpend only re-verifies a hash the caller supplies.
+		resp, err := s.GetSpend(s.ctx, &utxo.Spend{TxID: txID, Vout: vout})
+
+		result := answer{}
+		if err != nil {
+			s.logger.Debugf("[SPEND] cannot read persisted spender for %s:%d, keeping first-claim order: %v", txID, vout, err)
+		} else {
+			// Any non-spent status leaves SpendingData nil, which reads as
+			// authoritatively unspent and so keeps first-claim order.
+			result = answer{spendingData: resp.SpendingData, ok: true}
+		}
+
+		cache[key] = result
+
+		return result.spendingData, result.ok
+	}
+}
+
 func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	// go-batcher recovers panics in this fn; re-complete every item on panic
 	// (e.g. the unchecked .(int) in processSpendBatchResults) so a crash
@@ -1009,6 +1057,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		func(item *batchSpend, err error) {
 			item.complete(err)
 		},
+		s.persistedSpenderForFilter(),
 	)
 	if len(batch) == 0 {
 		return
