@@ -1,7 +1,6 @@
 package aerospike_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -23,10 +22,7 @@ import (
 // with ErrSpent naming the double-spend attempt, which itself was refused by the
 // backend as already spent -- both claims lost, each blamed on the other.
 //
-// Unlike the SQL package, sendSpendBatchLua is unexported here, so the batch is
-// assembled the way this package already does it: a wide batcher window with
-// drain mode off, and the two Spend calls issued a moment apart. Both the Lua and
-// the expression spend paths are exercised.
+// A test-only adapter supplies an exact batch to both backend paths.
 func TestRespendBehindLoserInSameBatch(t *testing.T) {
 	cases := []struct {
 		name              string
@@ -41,8 +37,8 @@ func TestRespendBehindLoserInSameBatch(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.UtxoStore.UtxoBatchSize = tc.utxoBatchSize
-			tSettings.UtxoStore.SpendBatcherSize = 8
-			tSettings.UtxoStore.SpendBatcherDurationMillis = 5000
+			tSettings.UtxoStore.SpendBatcherSize = 1
+			tSettings.UtxoStore.SpendBatcherDurationMillis = 1
 			tSettings.UtxoStore.SpendWaitTimeout = 30 * time.Second
 			tSettings.Aerospike.EnableSpendFilterExpressions = tc.enableExpressions
 
@@ -79,33 +75,16 @@ func TestRespendBehindLoserInSameBatch(t *testing.T) {
 			_, err = store.Spend(storeCtx, respend, 2)
 			require.NoError(t, err, "initial spend must succeed")
 
-			// Loser first, then the re-spend, both inside the 5s window.
-			loserErr := make(chan error, 1)
-			go func() {
-				_, e := store.Spend(context.Background(), loser, 2)
-				loserErr <- e
-			}()
-			time.Sleep(50 * time.Millisecond)
-
-			_, respendErr := store.Spend(storeCtx, respend, 2)
-			lErr := <-loserErr
-			t.Logf("loser err          : %v", lErr)
-			t.Logf("re-spend err        : %v", respendErr)
-
-			// The idempotent re-spend must be accepted.
-			require.NoError(t, respendErr,
-				"idempotent re-spend was refused -- the filter followed batch order, not persisted state")
-
-			// The genuine double-spend is still refused, and blamed on S0.
-			require.Error(t, lErr, "the double-spend attempt must still be refused")
-			require.True(t, errors.Is(lErr, errors.ErrSpent), "expected ErrSpent for the loser, got: %v", lErr)
-			require.Contains(t, lErr.Error(), respend.TxID(),
-				"the loser must be blamed on the persisted spender, not on itself")
-
-			// Both outputs must still be spent by S0.
 			spends, err := utxo.GetSpends(respend)
 			require.NoError(t, err)
 			require.Len(t, spends, 2)
+			loserSpends, err := utxo.GetSpends(loser)
+			require.NoError(t, err)
+			store.SendSpendBatchForTest(t, []*utxo.Spend{loserSpends[0], spends[0], spends[1]}, 2)
+			require.NoError(t, spends[0].Err, "the persisted owner must be accepted")
+			require.NoError(t, spends[1].Err)
+			require.ErrorIs(t, loserSpends[0].Err, errors.ErrSpent)
+			require.Contains(t, loserSpends[0].Err.Error(), respend.TxID())
 
 			for _, sp := range spends {
 				resp, getErr := store.GetSpend(storeCtx, sp)
@@ -118,6 +97,19 @@ func TestRespendBehindLoserInSameBatch(t *testing.T) {
 				require.Equal(t, respend.TxID(), resp.SpendingData.TxID.String(),
 					"output %d is owned by %s, not by S0", sp.Vout, resp.SpendingData.TxID)
 			}
+			// Neither claim matches the stored owner. Both errors must name it.
+			first, err := utxo.GetSpends(spendOf(3, 0))
+			require.NoError(t, err)
+			second, err := utxo.GetSpends(spendOf(4, 0))
+			require.NoError(t, err)
+			store.SendSpendBatchForTest(t, []*utxo.Spend{first[0], second[0]}, 2)
+			for _, sp := range []*utxo.Spend{first[0], second[0]} {
+				require.ErrorIs(t, sp.Err, errors.ErrSpent)
+				var data *errors.UtxoSpentErrData
+				require.True(t, errors.AsData(sp.Err, &data))
+				require.Equal(t, respend.TxID(), data.SpendingData.TxID.String())
+			}
+
 		})
 	}
 }

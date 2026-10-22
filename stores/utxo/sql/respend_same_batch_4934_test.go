@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -81,14 +82,14 @@ func spendOf(t *testing.T, parent *bt.Tx, lockTime uint32, vouts ...uint32) *bt.
 //
 // S0 legitimately spends both of the parent's outputs. A later batch then
 // carries a double-spend attempt S1 on output 0 AHEAD of an idempotent re-spend
-// of S0. FilterConflictingDuplicateSpendClaims awards the outpoint to the first
+// of S0. The former duplicate filter awarded the outpoint to the first
 // claim in the batch without consulting the persisted spender, so S0's
 // idempotent re-spend is rejected with ErrSpent naming S1 -- a transaction that
 // never spent anything. Store.Spend then treats that ErrSpent as an unwinnable
 // failure (hasUnwinnableFailure) and un-spends output 1, which S0 had already
 // re-spent successfully in the same batch.
 //
-// Two independent defects, both pinned here:
+// The test checks both the result and stored state:
 //   - the re-spend must not be rejected (it matches the persisted spender);
 //   - output 1 must stay spent by S0 even if some other input is refused.
 func TestRespendBehindLoserInSameBatchKeepsLegitimateSpends(t *testing.T) {
@@ -107,17 +108,40 @@ func TestRespendBehindLoserInSameBatchKeepsLegitimateSpends(t *testing.T) {
 	_, err := store.Spend(ctx, s0, 2)
 	require.NoError(t, err, "initial S0 spend must succeed")
 
-	// S1 (the loser) and the idempotent re-spend of S0 must reach the store in
-	// one batch, S1 first. S1's Spend blocks until its batch fires, so the 20ms
-	// gap plus the 200ms window puts both claims together.
+	// Capture the public Spend calls at the dispatch boundary. This fixes
+	// batch membership and order without relying on scheduler timing.
+	store.spendBatcher.Close()
+	queued := make(chan *batchSpend, 3)
+	store.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(items []*batchSpend) {
+		queued <- items[0]
+	}, false)
+	next := func() *batchSpend {
+		t.Helper()
+		select {
+		case item := <-queued:
+			return item
+		case <-time.After(5 * time.Second):
+			t.Fatal("Spend did not enqueue its input")
+			return nil
+		}
+	}
 	errS1 := make(chan error, 1)
 	go func() {
-		_, e := store.Spend(context.Background(), s1, 2)
+		_, e := store.Spend(ctx, s1, 2)
 		errS1 <- e
 	}()
-	time.Sleep(20 * time.Millisecond)
-
-	_, errS0 := store.Spend(ctx, s0, 2)
+	loserItem := next()
+	errS0Ch := make(chan error, 1)
+	go func() {
+		_, e := store.Spend(ctx, s0, 2)
+		errS0Ch <- e
+	}()
+	first, second := next(), next()
+	if first.spend.Vout != 0 {
+		first, second = second, first
+	}
+	store.sendSpendBatch([]*batchSpend{loserItem, first, second})
+	errS0 := <-errS0Ch
 	s1Err := <-errS1
 	t.Logf("S1 err         : %v", s1Err)
 	t.Logf("S0 re-spend err: %v", errS0)
