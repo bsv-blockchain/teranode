@@ -106,6 +106,29 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **A mining candidate keeps its coinbase, and a solution without one is mined with it.**
+  Affects miners and pools that use `getminingcandidate` and `submitminingsolution`. As in
+  bitcoin-sv, block assembly now builds a candidate's coinbase once, keeps it on the job,
+  and returns it in the new `coinbase_tx` field of the `MiningCandidate` message. A
+  `submitminingsolution` call with no `coinbase` is mined with that coinbase. Before, block
+  assembly rebuilt one with a fresh random extranonce, so its merkle root was never the one
+  the miner hashed and every such solution failed the proof-of-work check, deleted the job
+  and reset block assembly. A solution's `version` now goes into the header only, no longer
+  into the coinbase as well. `getminingcandidate` with `coinbase=true` returns the kept
+  coinbase: a version 1 transaction paying the configured miner wallet addresses by P2PKH,
+  where it used to return a separately built version 2 transaction with one pay-to-pubkey
+  output that block assembly never saw. Miners that submit their own coinbase are not
+  affected, and neither is a node without `miner_wallet_private_keys`: it still serves
+  candidates, with no coinbase on the job, and refuses only a coinbase-less solution and
+  `coinbase=true`, as it did before. A solution that breaks a consensus rule no longer removes the job, so other
+  miners on the same candidate keep its coinbase and can still submit; the job goes when its
+  TTL lapses or a block is mined. A solution whose hash misses the target is rejected without
+  resetting block assembly, which it used to do. If `miner_wallet_private_keys` is set but
+  cannot build a coinbase, block assembly now logs a warning with the cause, at most once a
+  minute. Upgrade block assembly no later than the RPC service: an RPC service on this
+  build answers `getminingcandidate` with `coinbase=true` with an error while it is talking
+  to an older block assembly, which sends no coinbase. (#2027)
+
 - **A failed revert of an invalid block's mined tags now holds block assembly until it
   succeeds.** When block validation reverts the mined tags of an invalid block and
   `SetMinedMulti` fails, or a subtree read fails with anything other than not-found, the

@@ -333,17 +333,18 @@ func TestSubmitMiningSolution_CoinbaseRulesUseCandidateHeight(t *testing.T) {
 		require.Contains(t, err.Error(), "block height in coinbase tx")
 		h.blockchai.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
-		// The wrong height is the pool's, not assembly's: the job is dropped but assembly is not
-		// reset, since a reset would not stop the same pool doing it again.
-		require.Nil(t, h.server.jobStore.Get(h.id), "the rejected job must be deleted")
+		// The wrong height is the pool's, not assembly's: assembly is not reset, since a reset would
+		// not stop the same pool doing it again, and the job is kept for the other miners on it.
+		require.NotNil(t, h.server.jobStore.Get(h.id), "a consensus-invalid solution must not drop the job")
 		h.requireNoReset(t)
 	})
 }
 
 // TestSubmitMiningSolution_InvalidBlockResetOnlyForLocalFaults pins what submitMiningSolution does
 // with a block that fails Block.Valid. A consensus verdict on data the submitter chose
-// (ErrBlockInvalid) says nothing about local assembly state, so it drops the job without a reset.
-// Any other failure points at the block this node assembled, so it still resets.
+// (ErrBlockInvalid) says nothing about local assembly state, so it keeps the job, which other miners
+// may still be hashing, and does not reset. Any other failure points at the block this node
+// assembled, so it still resets and drops the job.
 func TestSubmitMiningSolution_InvalidBlockResetOnlyForLocalFaults(t *testing.T) {
 	t.Run("a coinbase that overpays is rejected without a reset", func(t *testing.T) {
 		params := chaincfg.RegressionNetParams
@@ -358,7 +359,7 @@ func TestSubmitMiningSolution_InvalidBlockResetOnlyForLocalFaults(t *testing.T) 
 		require.Nil(t, resp)
 		require.Contains(t, err.Error(), "is greater than the fees + block subsidy")
 		h.blockchai.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-		require.Nil(t, h.server.jobStore.Get(h.id), "the rejected job must be deleted")
+		require.NotNil(t, h.server.jobStore.Get(h.id), "a consensus-invalid solution must not drop the job")
 		h.requireNoReset(t)
 	})
 

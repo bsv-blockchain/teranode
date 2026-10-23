@@ -18,7 +18,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -109,6 +111,15 @@ type BlockAssembly struct {
 
 	// jobStore caches mining jobs with TTL
 	jobStore *ttlcache.Cache[chainhash.Hash, *subtreeprocessor.Job]
+
+	// jobCoinbaseMu makes GetMiningCandidate's read of a job's coinbase and its store of the new
+	// job one step, so two polls that share a candidate id cannot each build a coinbase and leave
+	// one miner holding a coinbase the job no longer has.
+	jobCoinbaseMu sync.Mutex
+
+	// lastMinerKeyWarn is when, in Unix nanoseconds, logCoinbaseBuildFailure last warned that the
+	// configured miner keys cannot build a coinbase.
+	lastMinerKeyWarn atomic.Int64
 
 	// blockSubmissionChan handles block submission requests
 	blockSubmissionChan chan *BlockSubmissionRequest
@@ -1668,11 +1679,7 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 
 	id, _ := chainhash.NewHash(miningCandidate.Id)
 
-	ba.jobStore.Set(*id, &subtreeprocessor.Job{
-		ID:              id,
-		Subtrees:        subtrees,
-		MiningCandidate: miningCandidate,
-	}, jobTTL) // create a new job with a TTL, will be cleaned up automatically
+	ba.storeJobWithCoinbase(id, miningCandidate, subtrees)
 
 	if includeSubtreeHashes {
 		miningCandidate.SubtreeHashes = make([][]byte, len(subtrees))
@@ -1689,6 +1696,87 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 	)
 
 	return miningCandidate, nil
+}
+
+// storeJobWithCoinbase gives the candidate its coinbase and stores it as a job with a TTL, after
+// which it is cleaned up automatically. The coinbase is the one a solution without its own is mined
+// with, as bitcoin-sv keeps the candidate block's coinbase, so it must not change under a miner who
+// has been handed it. Candidate ids repeat: the main path hashes the subtree root, parent and time,
+// so polls in the same second share one, and the empty-block path derives its id from the parent
+// alone. A poll for an id whose job is still held therefore reuses that job's coinbase rather than
+// building a new one, provided it pays the same value at the same height.
+//
+// Building the coinbase needs miner_wallet_private_keys, which a pool that submits its own coinbase
+// and generatetoaddress, which pays an explicit address, have never needed. So a coinbase that
+// cannot be built leaves the job without one rather than failing the candidate: only a solution
+// that omits its coinbase, GetCandidateBlock and getminingcandidate with coinbase=true need it,
+// and each of those refuses a job without one.
+func (ba *BlockAssembly) storeJobWithCoinbase(id *chainhash.Hash, miningCandidate *model.MiningCandidate, subtrees []*subtreepkg.Subtree) {
+	ba.jobCoinbaseMu.Lock()
+	defer ba.jobCoinbaseMu.Unlock()
+
+	if held := ba.jobStore.Get(*id); held != nil {
+		prev := held.Value().MiningCandidate
+		if len(prev.CoinbaseTx) > 0 && prev.CoinbaseValue == miningCandidate.CoinbaseValue && prev.Height == miningCandidate.Height {
+			miningCandidate.CoinbaseTx = prev.CoinbaseTx
+		}
+	}
+
+	if len(miningCandidate.CoinbaseTx) == 0 {
+		coinbaseTx, err := miningCandidate.CreateCoinbaseTxCandidate(ba.blockAssembler.settings)
+		if err != nil {
+			ba.logCoinbaseBuildFailure(id, err)
+		} else {
+			miningCandidate.CoinbaseTx = coinbaseTx.Bytes()
+		}
+	}
+
+	ba.jobStore.Set(*id, &subtreeprocessor.Job{
+		ID:              id,
+		Subtrees:        subtrees,
+		MiningCandidate: miningCandidate,
+	}, jobTTL)
+}
+
+// minerKeyWarnInterval is the least time between two warnings that the configured
+// miner_wallet_private_keys cannot build a coinbase, so a misconfigured node polled every second
+// warns once a minute rather than once a poll.
+const minerKeyWarnInterval = time.Minute
+
+// logCoinbaseBuildFailure reports a coinbase that storeJobWithCoinbase could not build. With no
+// miner_wallet_private_keys configured that is expected, since a pool that submits its own coinbase
+// needs none, so it stays at Debug. With keys configured it means a key is unusable, which an
+// operator otherwise only sees as a generic error from getminingcandidate with coinbase=true or a
+// coinbase-less submitminingsolution, so it is a warning carrying the cause.
+func (ba *BlockAssembly) logCoinbaseBuildFailure(id *chainhash.Hash, err error) {
+	if !minerKeysConfigured(ba.blockAssembler.settings.BlockAssembly.MinerWalletPrivateKeys) {
+		ba.logger.Debugf("[GetMiningCandidate][%s] storing the job without a coinbase, so only a solution with its own coinbase can be mined: %v", id.String(), err)
+
+		return
+	}
+
+	now := time.Now().UnixNano()
+	last := ba.lastMinerKeyWarn.Load()
+
+	if now-last < int64(minerKeyWarnInterval) || !ba.lastMinerKeyWarn.CompareAndSwap(last, now) {
+		ba.logger.Debugf("[GetMiningCandidate][%s] storing the job without a coinbase, miner_wallet_private_keys cannot build one: %v", id.String(), err)
+
+		return
+	}
+
+	ba.logger.Warnf("[GetMiningCandidate][%s] miner_wallet_private_keys is set but cannot build a coinbase, so candidates carry none and only solutions with their own coinbase can be mined: %v", id.String(), err)
+}
+
+// minerKeysConfigured reports whether any miner wallet key is set. Blank entries do not count, so
+// an unset variable substituted into miner_wallet_private_keys reads as no keys rather than a bad one.
+func minerKeysConfigured(keys []string) bool {
+	for _, key := range keys {
+		if strings.TrimSpace(key) != "" {
+			return true
+		}
+	}
+
+	return false
 }
 
 // SubmitMiningSolution processes a mining solution submission.
@@ -1934,23 +2022,19 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 			return nil, errors.NewProcessingError("[BlockAssembly][%s] submitted coinbase transaction is not a valid coinbase", jobID)
 		}
 	} else {
-		// recreate coinbase tx here, nothing was passed in
-		coinbaseTx, err = jobItem.Value().MiningCandidate.CreateCoinbaseTxCandidate(ba.blockAssembler.settings)
+		// No coinbase was passed in, so mine the one the job was issued with, which is the one
+		// GetMiningCandidate handed out, as bitcoin-sv falls back to the candidate block's coinbase.
+		// It used to be rebuilt here, with a fresh random extranonce, so its merkle root was never
+		// the one the miner hashed and every such solution failed the proof-of-work check. The
+		// solution's version, time and nonce belong in the header, built from req below, and are not
+		// copied into the coinbase, so it is used exactly as issued.
+		if len(job.MiningCandidate.CoinbaseTx) == 0 {
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] solution has no coinbase and the job has none to mine with, because block assembly could not build one from miner_wallet_private_keys", jobID)
+		}
+
+		coinbaseTx, err = bt.NewTxFromBytes(job.MiningCandidate.CoinbaseTx)
 		if err != nil {
-			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to create coinbase tx", jobID, err)
-		}
-
-		// set the new mining parameters on the coinbase (nonce)
-		if req.Version != nil {
-			coinbaseTx.Version = *req.Version
-		}
-
-		if req.Time != nil {
-			coinbaseTx.LockTime = *req.Time
-		}
-
-		if req.Nonce != 0 {
-			coinbaseTx.Inputs[0].SequenceNumber = req.Nonce
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] job holds no usable coinbase tx", jobID, err)
 		}
 	}
 
@@ -2074,21 +2158,38 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		CoinbaseBUMP:  coinbaseBUMP,
 	}
 
-	// check fully valid, including whether difficulty in header is low enough
+	// A hash that misses the target is the submitter's: the nonce, time and version are the
+	// solution's, and the merkle root is built from the job's subtrees and either the solution's
+	// coinbase or the one the job was issued with. It is checked here because block.Valid reports a
+	// miss as a processing error (HasMetTargetDifficulty returns one with the miss), which below
+	// would reset block assembly and drop the job that every other miner on this candidate is
+	// still hashing. As in bitcoin-sv, which answers a high hash with a rejection and leaves the
+	// candidate alone, the solution is refused and the job kept.
+	if met, _, _ := block.Header.HasMetTargetDifficulty(); !met {
+		ba.logger.Warnf("[BlockAssembly][%s][%s] rejected mining solution, block hash does not meet the target", jobID, block.Hash().String())
+
+		return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] rejected mining solution, block hash does not meet the target", jobID, block.Hash().String())
+	}
+
+	// check fully valid
 	// TODO add more checks to the Valid function, like whether the parent/child relationships are OK
 	if ok, err := block.Valid(ctx, ba.logger, ba.subtreeStore, nil, nil, nil, nil, ba.settings, nil); !ok {
 		// ErrBlockInvalid here means the submission breaks a consensus rule on data the miner
-		// chose: the proof of work, the timestamp, the block version, or the coinbase (its shape,
-		// BIP34 height, transaction rules or reward). Local assembly state did not cause it and a
-		// reset would not stop it recurring, so reject the submission and keep assembly running.
+		// chose: the timestamp, the block version, or the coinbase (its shape, BIP34 height,
+		// transaction rules or reward). The proof of work is checked above. Local assembly state did
+		// not cause it and a reset would not stop it recurring, so reject the submission and keep
+		// assembly running.
 		// Every other failure (corrupt body, duplicate transaction, merkle mismatch, processing or
 		// storage error) points at what this node built, so those still reset.
 		if errors.Is(err, errors.ErrBlockInvalid) {
 			ba.logger.Warnf("[BlockAssembly][%s][%s] rejected mining solution, block breaks a consensus rule: %v", jobID, block.Hash().String(), err)
 
-			// remove the job, the same solution would be rejected again
-			ba.jobStore.Delete(*storeID)
-
+			// Keep the job. Its coinbase is the one every miner on this candidate id was handed, and
+			// the id outlives a single coinbase-less poll (the empty-block id is derived from the
+			// parent alone), so deleting it would make the next poll build a coinbase with a new
+			// extranonce and fail every other miner still hashing the old one, which would delete it
+			// again. As in bitcoin-sv, where an invalid submitminingsolution leaves the candidate
+			// alone, the job goes when its TTL lapses or a block is mined.
 			return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err)
 		}
 
@@ -2290,10 +2391,15 @@ func (ba *BlockAssembly) GetCandidateBlock(ctx context.Context, req *blockassemb
 
 	job := jobItem.Value()
 
-	// Create default coinbase transaction from the mining candidate
-	coinbaseTx, err := job.MiningCandidate.CreateCoinbaseTxCandidate(ba.blockAssembler.settings)
+	// The coinbase the job was issued with, so this block is the one a coinbase-less solution to the
+	// candidate would mine.
+	if len(job.MiningCandidate.CoinbaseTx) == 0 {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[GetCandidateBlock][%s] job has no coinbase, because block assembly could not build one from miner_wallet_private_keys", candidateID))
+	}
+
+	coinbaseTx, err := bt.NewTxFromBytes(job.MiningCandidate.CoinbaseTx)
 	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("[GetCandidateBlock][%s] failed to create coinbase tx", candidateID, err))
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[GetCandidateBlock][%s] job holds no usable coinbase tx", candidateID, err))
 	}
 
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
