@@ -2543,7 +2543,7 @@ func TestSetBlockMinedSet(t *testing.T) {
 	t.Run("error - store returns error", func(t *testing.T) {
 		hash := chainhash.DoubleHashH([]byte("error-case"))
 		mockStore := &mockStoreGetSetBlockIsMined{}
-		mockStore.On("SetBlockMinedSet", mock.Anything, &hash).
+		mockStore.On("SetBlockMinedSet", mock.Anything, &hash, false).
 			Return(errors.NewProcessingError("forced error"))
 
 		server, _ := New(ctx, logger, tSettings, mockStore, nil)
@@ -2561,7 +2561,7 @@ func TestSetBlockMinedSet(t *testing.T) {
 	t.Run("success - block marked as mined", func(t *testing.T) {
 		hash := chainhash.DoubleHashH([]byte("success-case"))
 		mockStore := &mockStoreGetSetBlockIsMined{}
-		mockStore.On("SetBlockMinedSet", mock.Anything, &hash).
+		mockStore.On("SetBlockMinedSet", mock.Anything, &hash, false).
 			Return(nil)
 
 		server, _ := New(ctx, logger, tSettings, mockStore, nil)

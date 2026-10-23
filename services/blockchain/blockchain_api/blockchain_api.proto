@@ -618,6 +618,9 @@ message GetNextWorkRequiredResponse {
 // SetBlockMinedSetRequest marks a block as mined.
 message SetBlockMinedSetRequest {
   bytes blockHash = 1;  // Hash of the mined block
+  // The block's invalid flag when the caller's tagging run started; the write is
+  // refused with ERR_STATE_ERROR if the flag has changed since.
+  bool expectInvalid = 2;
 }
 
 message ClearBlockMinedSetRequest {

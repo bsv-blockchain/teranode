@@ -369,12 +369,14 @@ type Store interface {
 	SetState(ctx context.Context, key string, data []byte) error
 	GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 
-	// SetBlockMinedSet marks a block as mined.
+	// SetBlockMinedSet marks a block as mined, but only while its invalid flag
+	// still equals expectInvalid.
 	// Parameters:
 	//   - ctx: Context for the operation
 	//   - blockHash: Hash of the block to mark
-	// Returns: Any error encountered
-	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	//   - expectInvalid: The block's invalid flag when the caller's tagging run started
+	// Returns: errors.ErrStateError if the invalid flag has changed, else any error encountered
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectInvalid bool) error
 
 	// ClearBlockMinedSet resets the mined_set flag to false for a block,
 	// triggering background job processing to update transaction states.

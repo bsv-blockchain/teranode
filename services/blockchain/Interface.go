@@ -602,10 +602,14 @@ type ClientI interface {
 	// Parameters:
 	// - ctx: Context for the operation with timeout and cancellation support
 	// - blockHash: Hash of the block to mark as mined
+	// - expectInvalid: The block's invalid flag when the caller's tagging run started.
+	//   The write is refused if the flag has changed since, because InvalidateBlock or
+	//   RevalidateBlock cleared mined_set so the block is processed again.
 	//
 	// Returns:
+	// - errors.ErrStateError if the block's invalid flag no longer equals expectInvalid
 	// - Error if the operation fails, nil on success
-	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectInvalid bool) error
 
 	// ClearBlockMinedSet resets the mined_set flag to false for a block.
 	//

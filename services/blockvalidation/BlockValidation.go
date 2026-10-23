@@ -1618,8 +1618,22 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		u.logger.Warnf("[setTxMined][%s] failed closing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
 	}
 
-	// update block mined_set to true
-	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
+	// update block mined_set to true, but only if the block's invalid flag is still the one
+	// this run started from. InvalidateBlock and RevalidateBlock flip that flag and clear
+	// mined_set so the block is processed again; overwriting mined_set here would make the
+	// worker's MinedSet guard and the mined-not-set sweep both skip the block for good,
+	// leaving an invalid block tagged or a revalidated block untagged.
+	startedInvalid := len(unsetMined) > 0 && unsetMined[0]
+	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash, startedInvalid); err != nil {
+		if errors.Is(err, errors.ErrStateError) {
+			// Not a failure of this run: re-queue so the block is processed again under its
+			// new invalid flag, and return nil so the retry counter is not charged.
+			u.logger.Warnf("[setTxMined][%s] block invalid flag changed during the run, re-queueing: %v", blockHash.String(), err)
+			u.enqueueSetMined(blockHash)
+
+			return nil
+		}
+
 		return errors.NewServiceError("[setTxMined][%s] failed to set block mined", block.Hash().String(), err)
 	}
 

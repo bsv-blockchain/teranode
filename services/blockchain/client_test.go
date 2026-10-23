@@ -4365,7 +4365,7 @@ func TestClientSetBlockMinedSet(t *testing.T) {
 			settings: tSettings,
 		}
 
-		err := c.SetBlockMinedSet(ctx, &blockHash)
+		err := c.SetBlockMinedSet(ctx, &blockHash, false)
 		require.NoError(t, err)
 	})
 
@@ -4379,9 +4379,26 @@ func TestClientSetBlockMinedSet(t *testing.T) {
 			settings: tSettings,
 		}
 
-		err := c.SetBlockMinedSet(ctx, &blockHash)
+		err := c.SetBlockMinedSet(ctx, &blockHash, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "grpc error")
+	})
+
+	t.Run("refused write keeps ErrStateError across gRPC", func(t *testing.T) {
+		// setTxMinedStatus re-queues the block only if errors.Is(err, ErrStateError)
+		// still holds after the server's WrapGRPC and the client's UnwrapGRPC
+		c := &Client{
+			client: &mockBlockClient{
+				err: errors.WrapGRPC(errors.NewStateError("invalid flag changed")),
+			},
+			logger:   logger,
+			settings: tSettings,
+		}
+
+		err := c.SetBlockMinedSet(ctx, &blockHash, true)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrStateError), "expected ErrStateError, got %v", err)
+		require.True(t, c.client.(*mockBlockClient).lastSetBlockMinedSetReq.ExpectInvalid, "expectInvalid must reach the request")
 	})
 }
 

@@ -66,7 +66,7 @@ func TestSQL_RevalidateBlock(t *testing.T) {
 		assert.False(t, mined_set) // mined_set is set to false when invalidating to trigger tx unsetting
 
 		// reset the mined_set to true, the revalidation should set it back to false
-		err = s.SetBlockMinedSet(t.Context(), block3.Hash())
+		err = s.SetBlockMinedSet(t.Context(), block3.Hash(), true)
 		require.NoError(t, err)
 
 		err = s.RevalidateBlock(context.Background(), block3.Hash())

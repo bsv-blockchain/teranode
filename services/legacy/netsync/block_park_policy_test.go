@@ -290,7 +290,7 @@ func TestSyncManager_AParkedBlockSurvivesAParentThatIsSlowToBeMarkedMined(t *tes
 
 	// setTxMined finishes for the parent, and the next sweep pass resubmits the
 	// kept block.
-	require.NoError(t, h.chain.SetBlockMinedSet(h.sm.ctx, &parent))
+	require.NoError(t, h.chain.SetBlockMinedSet(h.sm.ctx, &parent, false))
 
 	h.sm.sweepParkedBlocks(time.Now().Add(2*parkStuckThreshold + time.Second))
 

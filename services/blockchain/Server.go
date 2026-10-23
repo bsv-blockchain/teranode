@@ -2978,7 +2978,7 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][SetBlockMinedSet] hash must be %d bytes, got %d", chainhash.HashSize, len(req.BlockHash)))
 	}
 
-	err = b.store.SetBlockMinedSet(ctx, blockHash)
+	err = b.store.SetBlockMinedSet(ctx, blockHash, req.ExpectInvalid)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

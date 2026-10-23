@@ -370,7 +370,7 @@ func TestLocalClient_NilStorePanics(t *testing.T) {
 		{
 			name: "SetBlockMinedSet",
 			fn: func() {
-				_ = client.SetBlockMinedSet(ctx, &blockHash)
+				_ = client.SetBlockMinedSet(ctx, &blockHash, false)
 			},
 		},
 		{

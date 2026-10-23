@@ -1683,12 +1683,15 @@ func (c *Client) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash)
 // Parameters:
 //   - ctx: Context for the operation with timeout and cancellation support
 //   - blockHash: Hash of the block to mark as mined
+//   - expectInvalid: The block's invalid flag when the caller's tagging run started
 //
 // Returns:
-//   - error: Any error encountered during the mining status update operation
-func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+//   - error: errors.ErrStateError if the block's invalid flag has changed, or any
+//     other error encountered during the mining status update operation
+func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectInvalid bool) error {
 	_, err := c.client.SetBlockMinedSet(ctx, &blockchain_api.SetBlockMinedSetRequest{
-		BlockHash: blockHash[:],
+		BlockHash:     blockHash[:],
+		ExpectInvalid: expectInvalid,
 	})
 	if err != nil {
 		return errors.UnwrapGRPC(err)

@@ -388,8 +388,8 @@ func (c *LocalClient) GetBlockIsMined(ctx context.Context, blockHash *chainhash.
 	return c.store.GetBlockIsMined(ctx, blockHash)
 }
 
-func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	return c.store.SetBlockMinedSet(ctx, blockHash)
+func (c *LocalClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectInvalid bool) error {
+	return c.store.SetBlockMinedSet(ctx, blockHash, expectInvalid)
 }
 
 func (c *LocalClient) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
