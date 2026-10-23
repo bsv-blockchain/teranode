@@ -3615,7 +3615,49 @@ func (u *BlockValidation) reValidateBlock(blockData revalidateBlockData) error {
 		return err
 	}
 
-	return u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block)
+	// An INVALID ancestor verdict (a parent tx mined only off this block's chain) is a consensus
+	// verdict on the hash, so it is acted on whatever optimisticallyAdded says. Returning it unacted
+	// left an optimistically added block on-chain, with no invalid-block notification, once the
+	// worker's retries ran out (bitcoin-sv/teranode#4980).
+	//
+	// checkOldBlockIDs answers "is a parent's block on the MAIN chain", not "is it an ancestor of
+	// this block". The two agree only while this block's parent is on the main chain. Otherwise,
+	// on the in-memory chain-check route, an honest block whose chain a reorg moved off the main
+	// chain reads INVALID for any parent mined deeper than the parent-header window. So act only
+	// when the parent is on the main chain, and otherwise return the verdict unacted for the worker
+	// to retry, as before.
+	err = u.checkOldBlockIDs(ctx, oldBlockIDsMap, blockData.block)
+	if errors.Is(err, errors.ErrBlockInvalid) && u.parentOnMainChain(ctx, blockData.block, blockHeadersMeta) {
+		reason := p2pconstants.ReasonInvalidBlock.String()
+		if markErr := u.markBlockAsInvalid(ctx, blockData.block, reason, blockData.peerID, blockData.baseURL); markErr != nil {
+			u.logger.Errorf("[ReValidateBlock][%s][InvalidateBlock] failed to invalidate block: %s", blockData.block.String(), markErr)
+		}
+	}
+
+	return err
+}
+
+// parentOnMainChain reports whether block's parent, blockHeadersMeta[0] as parentHeaderRun returns
+// it, is on the current main chain. When it is, the main chain below block is block's own ancestor
+// chain, so checkOldBlockIDs's main-chain verdict is also an ancestor verdict. A lookup error or a
+// missing parent reads as false, the direction that never invalidates.
+func (u *BlockValidation) parentOnMainChain(ctx context.Context, block *model.Block, blockHeadersMeta []*model.BlockHeaderMeta) bool {
+	if len(blockHeadersMeta) == 0 || blockHeadersMeta[0] == nil {
+		u.logger.Warnf("[ReValidateBlock][%s] no parent header meta, not acting on the INVALID ancestor verdict", block.String())
+		return false
+	}
+
+	onMainChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{blockHeadersMeta[0].ID})
+	if err != nil {
+		u.logger.Errorf("[ReValidateBlock][%s] failed to check whether parent %s is on the main chain, not acting on the INVALID ancestor verdict: %s", block.String(), block.Header.HashPrevBlock.String(), err)
+		return false
+	}
+
+	if !onMainChain {
+		u.logger.Warnf("[ReValidateBlock][%s] parent %s is not on the main chain, so the INVALID ancestor verdict may be a main-chain artefact; not acting on it", block.String(), block.Header.HashPrevBlock.String())
+	}
+
+	return onMainChain
 }
 
 // quickValidateSkipsUtxoLock reports whether quick validation should create UTXOs
