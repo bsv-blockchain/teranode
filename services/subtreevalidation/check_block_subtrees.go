@@ -850,47 +850,48 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 		blockIds[blockID] = true
 	}
 
-	for _, txHash := range conflictingTxHashes {
-		// Same predicate the full-validation path applies via
-		// blessMissingTransaction. Note what that does and does not buy: the two
-		// paths agree on the QUESTION, but they do not start from the same facts.
-		// The fresh path asks it about every transaction the store currently
-		// flags Conflicting; this path can only ask it about the transactions the
-		// trailer names. A transaction that became conflicting after its subtree
-		// was blessed, and whose loser is never mined, never gets a trailer
-		// rewrite — so the cached path can still bless a block the fresh path
-		// would reject. That residual is divergence only: with no trailer entry
-		// there is no promotion, so no confirmed spend is reversed. Closing it
-		// needs the per-transaction conflicting flag, which is a wider change.
-		//
-		// Wrapped as a processing error
-		// rather than forced to tx-invalid: the underlying call returns
-		// ErrTxInvalid only for a genuine ancestry conflict, and errors.Is finds
-		// it through the chain. A walk-budget or store failure stays retryable
-		// instead of permanently marking the block invalid.
-		if err = u.checkCounterConflictingOnCurrentChain(ctx, txHash, blockIds); err != nil {
-			// A trailer names transactions that may have been pruned since the
-			// subtree was blessed — the trailer outlives the records it points
-			// at. The pre-existing caller of this predicate never saw that,
-			// because it had just validated the transaction and so knew the
-			// record existed; reading trailers from cached files removes that
-			// precondition.
-			//
-			// A record we cannot find is not evidence of an ancestor double
-			// spend. Rejecting on it would make one node refuse a block its
-			// peers accept purely because it pruned earlier — a node-local
-			// consensus split caused by housekeeping. Fail open, matching the
-			// same decision in filterAncestryConfirmedLosers, and leave the
-			// store-level guard to catch a real conflict at promotion time.
-			if errors.Is(err, errors.ErrTxNotFound) {
-				u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree conflict: a counter-conflicting record is no longer in the store, skipping",
-					block.Hash().String(), txHash.String())
+	// Same predicate the full-validation path applies via
+	// blessMissingTransaction. Note what that does and does not buy: the two
+	// paths agree on the QUESTION, but they do not start from the same facts.
+	// The fresh path asks it about every transaction the store currently
+	// flags Conflicting; this path can only ask it about the transactions the
+	// trailer names. A transaction that became conflicting after its subtree
+	// was blessed, and whose loser is never mined, never gets a trailer
+	// rewrite — so the cached path can still bless a block the fresh path
+	// would reject. That residual is divergence only: with no trailer entry
+	// there is no promotion, so no confirmed spend is reversed. Closing it
+	// needs the per-transaction conflicting flag, which is a wider change.
+	//
+	// Asked once for all of them, not once per transaction: the transactions
+	// share cones, and the per-transaction loop re-walked them N^2/2 times
+	// (issue 2037).
+	//
+	// Wrapped as a processing error
+	// rather than forced to tx-invalid: the underlying call returns
+	// ErrTxInvalid only for a genuine ancestry conflict, and errors.Is finds
+	// it through the chain. A walk-budget or store failure stays retryable
+	// instead of permanently marking the block invalid.
+	notFound, err := u.checkCounterConflictingOnCurrentChainBatch(ctx, conflictingTxHashes, blockIds)
+	if err != nil {
+		return errors.NewProcessingError("[CheckBlockSubtrees][%s] cached subtree conflicts with the candidate chain", block.Hash().String(), err)
+	}
 
-				continue
-			}
-
-			return errors.NewProcessingError("[CheckBlockSubtrees][%s][%s] cached subtree conflicts with the candidate chain", block.Hash().String(), txHash.String(), err)
-		}
+	// A trailer names transactions that may have been pruned since the
+	// subtree was blessed — the trailer outlives the records it points
+	// at. The pre-existing caller of this predicate never saw that,
+	// because it had just validated the transaction and so knew the
+	// record existed; reading trailers from cached files removes that
+	// precondition.
+	//
+	// A record we cannot find is not evidence of an ancestor double
+	// spend. Rejecting on it would make one node refuse a block its
+	// peers accept purely because it pruned earlier — a node-local
+	// consensus split caused by housekeeping. Fail open, matching the
+	// same decision in filterAncestryConfirmedLosers, and leave the
+	// store-level guard to catch a real conflict at promotion time.
+	for _, txHash := range notFound {
+		u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree conflict: a counter-conflicting record is no longer in the store, skipping",
+			block.Hash().String(), txHash.String())
 	}
 
 	return nil

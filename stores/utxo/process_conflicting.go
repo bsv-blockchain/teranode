@@ -8,6 +8,7 @@ package utxo
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -1257,6 +1258,227 @@ func GetConflictingChildren(ctx context.Context, s Store, hash chainhash.Hash, m
 	}
 
 	return conflictingChildren, nil
+}
+
+// GetConflictingChildrenFromRoots is GetConflictingChildren for many roots at
+// once. It walks each pass of roots in order, as one BFS per pass, on a single
+// visited set shared by every pass, so a transaction reachable from several roots
+// is read once rather than once per root. It returns, per pass, the descendants
+// that pass newly visited: never a root, and never anything an earlier pass
+// visited.
+//
+// maxNodes is the per-root budget of GetConflictingChildren. The walk as a whole
+// may visit maxNodes times the number of distinct roots, which is the aggregate
+// bound of walking each root separately, and fails closed with
+// ERR_UTXO_WALK_LIMIT_EXCEEDED past that. The visited set can therefore reach
+// that many entries, and a single runaway cone is stopped only once the walk has
+// read that many transactions, not maxNodes. A maxNodes <= 0 disables the bound.
+//
+// Two differences from GetConflictingChildren, both deliberate:
+//   - a root equal to the frozen sentinel is skipped rather than walked; the
+//     sentinel is still returned when reached as a child, for the callers'
+//     frozen checks.
+//   - a transaction the store does not hold (ErrTxNotFound, or a nil record) is a
+//     leaf, and the rest of the walk carries on. Any other read error aborts it.
+//
+// The walk histograms get one observation per call, for the whole walk.
+func GetConflictingChildrenFromRoots(ctx context.Context, s Store, passes [][]chainhash.Hash, maxNodes int) ([][]chainhash.Hash, error) {
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetConflictingChildrenFromRoots",
+		tracing.WithHistogram(prometheusUtxoConflictingWalkDuration),
+	)
+
+	defer deferFn()
+
+	roots := distinctWalkRoots(passes)
+
+	w := &multiRootWalk{
+		s:        s,
+		visited:  make(map[chainhash.Hash]struct{}, roots),
+		budget:   multiRootWalkBudget(maxNodes, roots),
+		roots:    roots,
+		maxNodes: maxNodes,
+	}
+
+	results := make([][]chainhash.Hash, len(passes))
+
+	for p, pass := range passes {
+		children, err := w.walkPass(ctx, pass)
+		if err != nil {
+			return nil, err
+		}
+
+		results[p] = children
+	}
+
+	prometheusUtxoConflictingWalkNodes.Observe(float64(len(w.visited)))
+	prometheusUtxoConflictingWalkDepth.Observe(float64(w.depth))
+
+	return results, nil
+}
+
+// distinctWalkRoots counts the distinct real roots across passes: the frozen
+// sentinel is not a record and is never walked.
+func distinctWalkRoots(passes [][]chainhash.Hash) int {
+	roots := make(map[chainhash.Hash]struct{})
+
+	for _, pass := range passes {
+		for _, root := range pass {
+			if !root.Equal(subtree.CoinbasePlaceholderHashValue) {
+				roots[root] = struct{}{}
+			}
+		}
+	}
+
+	return len(roots)
+}
+
+// multiRootWalkBudget is maxNodes per root, or 0 (unbounded) when maxNodes <= 0
+// or the product overflows, since no int budget could be exceeded then.
+func multiRootWalkBudget(maxNodes, roots int) int {
+	if maxNodes <= 0 {
+		return 0
+	}
+
+	perRoot := max(1, roots)
+	if perRoot > math.MaxInt/maxNodes {
+		return 0
+	}
+
+	return maxNodes * perRoot
+}
+
+// multiRootWalk is the state GetConflictingChildrenFromRoots shares across its
+// passes.
+type multiRootWalk struct {
+	s        Store
+	visited  map[chainhash.Hash]struct{}
+	budget   int
+	roots    int
+	maxNodes int
+	depth    int
+}
+
+// add marks hash visited, reporting whether it was new, and fails closed once
+// the walk outgrows its budget.
+func (w *multiRootWalk) add(hash chainhash.Hash) (bool, error) {
+	if _, ok := w.visited[hash]; ok {
+		return false, nil
+	}
+
+	w.visited[hash] = struct{}{}
+
+	if w.budget > 0 && len(w.visited) > w.budget {
+		return false, errors.NewUtxoWalkLimitExceededError("[GetConflictingChildrenFromRoots] conflicting-descendant walk from %d root(s) exceeded %d transactions (%d per root, utxostore_conflictingChildrenMaxNodes)", w.roots, w.budget, w.maxNodes)
+	}
+
+	return true, nil
+}
+
+// walkPass walks one pass of roots breadth first and returns the descendants it
+// newly visited.
+func (w *multiRootWalk) walkPass(ctx context.Context, pass []chainhash.Hash) ([]chainhash.Hash, error) {
+	var children, level []chainhash.Hash
+
+	for _, root := range pass {
+		if root.Equal(subtree.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		added, err := w.add(root)
+		if err != nil {
+			return nil, err
+		}
+
+		if added {
+			level = append(level, root)
+		}
+	}
+
+	for len(level) > 0 {
+		w.depth++
+
+		levelMetas, err := readConflictingWalkLevel(ctx, w.s, level)
+		if err != nil {
+			return nil, err
+		}
+
+		level = nil
+
+		for _, txMeta := range levelMetas {
+			for _, child := range conflictingWalkChildren(txMeta) {
+				added, err := w.add(child)
+				if err != nil {
+					return nil, err
+				}
+
+				if !added {
+					continue
+				}
+
+				children = append(children, child)
+
+				// the frozen sentinel stays in the result for the callers'
+				// frozen checks, but it is not a record and is never read
+				if !child.Equal(subtree.FrozenBytesTxHash) {
+					level = append(level, child)
+				}
+			}
+		}
+	}
+
+	return children, nil
+}
+
+// readConflictingWalkLevel reads one BFS level, index-aligned, at most
+// conflictingWalkFanOut at a time. A transaction the store does not hold is a nil
+// entry, so it becomes a leaf; any other read error fails the level.
+func readConflictingWalkLevel(ctx context.Context, s Store, level []chainhash.Hash) ([]*meta.Data, error) {
+	levelMetas := make([]*meta.Data, len(level))
+
+	g, gCtx := errgroup.WithContext(ctx)
+	g.SetLimit(conflictingWalkFanOut)
+
+	for i := range level {
+		g.Go(func() error {
+			txMeta, err := s.Get(gCtx, &level[i], fields.Utxos, fields.ConflictingChildren)
+			if err != nil {
+				if errors.Is(err, errors.ErrTxNotFound) {
+					return nil
+				}
+
+				return err
+			}
+
+			levelMetas[i] = txMeta
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return levelMetas, nil
+}
+
+// conflictingWalkChildren returns the children the walk follows from one record,
+// conflicting children first, as GetConflictingChildren orders them.
+func conflictingWalkChildren(txMeta *meta.Data) []chainhash.Hash {
+	if txMeta == nil {
+		return nil
+	}
+
+	children := make([]chainhash.Hash, 0, len(txMeta.ConflictingChildren)+len(txMeta.SpendingDatas))
+	children = append(children, txMeta.ConflictingChildren...)
+
+	for _, spendingData := range txMeta.SpendingDatas {
+		if spendingData != nil {
+			children = append(children, *spendingData.TxID)
+		}
+	}
+
+	return children
 }
 
 // GetCounterConflictingTxHashes returns the given transaction plus, for every

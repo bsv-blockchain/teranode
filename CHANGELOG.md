@@ -532,6 +532,41 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   shape. The same collapse on the HTTP blob store's own client and server is fixed
   too; no shipped configuration uses that store. (#1963)
 
+- **A block's conflicting transactions are checked in one walk, and
+  `utxostore_conflictingChildrenMaxNodes` becomes a per-root budget for it.** Subtree
+  validation used to check a block's conflicting transactions one at a time, re-walking
+  the cones they share. A long conflicting chain cost about N²/2 store reads, so a
+  1,788-transaction chain took about five hours. That is far past the 30-minute
+  `subtreevalidation_check_block_subtrees_timeout`, and since each retry started again
+  from zero, the node wedged. `CheckBlockSubtrees` on cached subtrees, and the batched
+  store lookup of fresh subtrees, now walk all of a block's conflicting transactions once
+  on a shared visited set, from N roots (the transactions and their counter-spenders).
+  The walk may visit the setting (default 100000) times N, which is the old aggregate
+  bound of N separate walks, so any block whose every per-transaction walk fit still
+  passes. Two costs change. In the worst case, the visited set can hold N times the
+  setting in memory, where each walk used to peak at the setting. A single runaway cone
+  now fails closed with `ERR_UTXO_WALK_LIMIT_EXCEEDED` after N times the setting in
+  reads, rather than after the setting. Two smaller changes come with it. On the cached
+  path, a counter-conflicting record missing from the store no longer skips that
+  transaction's whole check: the record counts as not mined and the rest is still
+  checked. On the fresh path, a missing record deep in a cone is no longer a retryable
+  error: it is treated the same way.
+
+  The conflicting-walk histograms change meaning on these two paths:
+  `teranode_utxo_conflicting_walk_nodes`, `teranode_utxo_conflicting_walk_depth` and
+  `teranode_utxo_conflicting_walk_duration`.
+  - Before: one sample per per-transaction walk, usually two per conflicting transaction
+    (its counter-spender's walk and its own).
+  - Now: one sample per block-level batch, covering every root. For the same block the
+    sample count drops, and each sample's nodes, depth and duration rise.
+  - A batch sample's nodes can legitimately exceed `utxostore_conflictingChildrenMaxNodes`,
+    up to that budget times the batch's roots. An alert on walk size near the setting
+    reads differently after upgrading.
+  - Blessing a single missing transaction, and conflict processing, still record one
+    sample per walk, so the histograms now mix both kinds.
+
+  (bsv-blockchain/teranode#2037)
+
 ### Not breaking, but worth knowing
 
 - **Mining candidates no longer build on the old tip during a reorg.** While block
