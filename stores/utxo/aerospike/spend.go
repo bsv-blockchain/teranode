@@ -999,38 +999,27 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		})
 	}()
 
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+	utxo.ProcessSpendBatch(batch,
 		func(item *batchSpend) *utxo.Spend {
 			if item == nil {
 				return nil
 			}
 			return item.spend
 		},
-		func(item *batchSpend, err error) {
-			item.complete(err)
+		func(part []*batchSpend) {
+			if s.useExpressionSpend() {
+				s.SpendMultiWithExpressions(s.ctx, part)
+			} else {
+				s.executeLuaSpendBatch(part)
+			}
 		},
 	)
-	if len(batch) == 0 {
-		return
-	}
-
-	// Use expression-based implementation only when each Aerospike record holds a single
-	// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
-	// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which
-	// performs the strict precondition check inside the UDF.
-	if s.useExpressionSpend() {
-		s.SpendMultiWithExpressions(s.ctx, batch)
-		return
-	}
-
-	s.executeLuaSpendBatch(batch)
 }
 
 // executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
 // shared backend used by sendSpendBatchLua's Lua route and by the expression path's
-// retry-through-Lua handler. Callers MUST have already run any duplicate-claim
-// filtering, since this method does not re-run it and assumes every item still expects
-// exactly one response on its errCh.
+// retry-through-Lua handler. Callers must supply a batch without conflicting claims
+// on the same outpoint. This method does not split batches itself.
 func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
 	if len(batch) == 0 {
 		return

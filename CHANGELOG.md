@@ -106,6 +106,21 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **UTXO batch conflicts are now decided by the backend.** SQL and Aerospike
+  process competing claims on the same outpoint in separate, ordered backend
+  batches. A re-submitted spend is accepted when it matches the stored owner,
+  even if an earlier claim in the batch fails. Double-spend errors name the
+  actual owner, including owners absent from the batch. Previously, arrival
+  order could cause a false `UTXO_SPENT` error and rollback of an existing spend
+  when the spending transaction had not yet been created. There is no separate
+  ownership lookup or fallback on a failed lookup. Callers can now see success
+  instead of `UTXO_SPENT` for valid retries. Conflicting batches require extra
+  backend calls; batches without conflicts are unchanged. No configuration
+  change is required. This does not change the general rollback protocol for
+  backend failures or concurrent attempts. Go integrations using
+  `FilterConflictingDuplicateSpendClaims` must migrate to `ProcessSpendBatch`
+  with a synchronous backend callback. (bitcoin-sv/teranode#4934)
+
 - **A failed revert of an invalid block's mined tags now holds block assembly until it
   succeeds.** When block validation reverts the mined tags of an invalid block and
   `SetMinedMulti` fails, or a subtree read fails with anything other than not-found, the

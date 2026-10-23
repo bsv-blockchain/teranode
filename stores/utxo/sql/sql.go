@@ -2432,22 +2432,15 @@ func isDeadlock(err error) bool {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
+	utxo.ProcessSpendBatch(batch,
 		func(item *batchSpend) *utxo.Spend {
 			if item == nil {
 				return nil
 			}
 			return item.spend
 		},
-		func(item *batchSpend, err error) {
-			item.errCh <- err
-		},
+		func(part []*batchSpend) { s.retrySpendBatch(part, s.trySendSpendBatch) },
 	)
-	if len(batch) == 0 {
-		return
-	}
-
-	s.retrySpendBatch(batch, s.trySendSpendBatch)
 }
 
 // retrySpendBatch runs try over batch until it reports no lock error, and
