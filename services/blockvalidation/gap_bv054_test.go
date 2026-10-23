@@ -529,7 +529,7 @@ func TestGapBV054_PanicInValidateReleasesWaiters(t *testing.T) {
 	case err := <-waiterErr:
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrProcessing), "the waiter must get ERR_PROCESSING, got %v", err)
-		require.True(t, isConcurrentValidationPanic(err), "the waiter's error must carry the concurrent-panic marker, got %v", err)
+		require.True(t, isLocalPanic(err), "the waiter's error must carry the local-panic marker, got %v", err)
 		require.NotContains(t, err.Error(), "must not run", "the waiter must get the stored result, not run validate")
 	case r := <-waiterPanic:
 		t.Fatalf("the waiter panicked: %v", r)
@@ -1045,7 +1045,7 @@ func TestGapBV054_BlockFoundChPanicCapStopsFetch(t *testing.T) {
 	require.Equal(t, int32(0), reports.reports.Load(), "no peer failure may be reported for a panic in this node")
 }
 
-// TestGapBV054_ConcurrentPanicErrorIsDistinct checks that isConcurrentValidationPanic matches the
+// TestGapBV054_ConcurrentPanicErrorIsDistinct checks that isLocalPanic matches the
 // waiter error from runOncePerBlock, also when another error wraps it, and matches no other
 // ERR_PROCESSING error. teranode's errors.Is matches on the code, so it cannot tell them apart.
 // An error with the same text but no marker must not match either: the check is by type, not text.
@@ -1055,8 +1055,8 @@ func TestGapBV054_ConcurrentPanicErrorIsDistinct(t *testing.T) {
 	waiterErr := newConcurrentValidationPanicError(&hash)
 
 	require.True(t, errors.Is(waiterErr, errors.ErrProcessing), "the waiter error must still be ERR_PROCESSING")
-	require.True(t, isConcurrentValidationPanic(waiterErr))
-	require.True(t, isConcurrentValidationPanic(errors.NewServiceError("failed block validation", waiterErr)), "a wrapped waiter error must still match")
+	require.True(t, isLocalPanic(waiterErr))
+	require.True(t, isLocalPanic(errors.NewServiceError("failed block validation", waiterErr)), "a wrapped waiter error must still match")
 	require.True(t, isLocalCatchupFault(waiterErr), "the waiter error must be a local catchup fault")
 
 	require.False(t, errors.IsNetworkError(waiterErr), "%v", waiterErr)
@@ -1066,13 +1066,13 @@ func TestGapBV054_ConcurrentPanicErrorIsDistinct(t *testing.T) {
 
 	ordinary := errors.NewProcessingError("terminal generic peer error")
 	require.True(t, errors.Is(ordinary, waiterErr), "setup: teranode errors.Is matches any two ERR_PROCESSING errors")
-	require.False(t, isConcurrentValidationPanic(ordinary), "an ordinary ERR_PROCESSING error must not match")
+	require.False(t, isLocalPanic(ordinary), "an ordinary ERR_PROCESSING error must not match")
 	require.False(t, isLocalCatchupFault(ordinary), "an ordinary ERR_PROCESSING error must stay a peer error")
 
 	sameText := errors.NewProcessingError("%s", waiterErr.Error())
-	require.False(t, isConcurrentValidationPanic(sameText), "an error with the same text but no marker must not match")
+	require.False(t, isLocalPanic(sameText), "an error with the same text but no marker must not match")
 
-	require.False(t, isConcurrentValidationPanic(nil))
+	require.False(t, isLocalPanic(nil))
 }
 
 // TestGapBV054_ConcurrentPanicWaiterIsLocalInReleaseCatchupLock ends a catchup with the waiter

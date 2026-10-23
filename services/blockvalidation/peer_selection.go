@@ -99,12 +99,12 @@ func (u *Server) selectBestPeersForCatchup(ctx context.Context, targetHeight uin
 // It skips the excludePeerID and any peers marked as malicious.
 // succeeded is true if catchup succeeded with any peer.
 //
-// stoppedOnLocalPanic is true if it stopped because an alternative's catchup returned the waiter
-// error of a validation that panicked on another goroutine (isConcurrentValidationPanic,
-// BV-STARTUP-007). That is a bug in this node, the same for every peer, so it tries no further
-// peer and charges none. The caller then ends the cycle as the primary path does for that error:
-// it counts the attempt unless the cycle made progress, clears the markers, and walks no cached
-// alternatives.
+// stoppedOnLocalPanic is true if it stopped because an alternative's catchup returned a
+// local-panic error (isLocalPanic, BV-STARTUP-007): the waiter error of a validation that
+// panicked on another goroutine, or the error of an errgroup goroutine that panicked. That is a
+// bug in this node, the same for every peer, so it tries no further peer and charges none. The
+// caller then ends the cycle as the primary path does for that error: it counts the attempt
+// unless the cycle made progress, clears the markers, and walks no cached alternatives.
 func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model.Block, excludePeerID string) (succeeded, stoppedOnLocalPanic bool) {
 	blockHash := block.Hash()
 	bestPeers, peerErr := u.selectBestPeersForCatchup(ctx, block.Height)
@@ -144,8 +144,8 @@ func (u *Server) tryAlternativePeersForCatchup(ctx context.Context, block *model
 			return true, false
 		}
 
-		if isConcurrentValidationPanic(altErr) {
-			u.logger.Warnf("[catchup] Peer %s: a concurrent validation of block %s panicked in this node; trying no further peers: %v", bestPeer.ID, blockHash.String(), altErr)
+		if isLocalPanic(altErr) {
+			u.logger.Warnf("[catchup] Peer %s: a goroutine panicked in this node validating block %s; trying no further peers: %v", bestPeer.ID, blockHash.String(), altErr)
 			return false, true
 		}
 

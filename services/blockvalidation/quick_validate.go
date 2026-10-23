@@ -717,7 +717,8 @@ func (u *BlockValidation) startPrefetchAndExtendStages(gCtx context.Context, g *
 	numSubtrees := len(block.Subtrees)
 
 	// Stage 1: Reader - prefetch batches from disk
-	g.Go(func() error {
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:prefetch%s][%s]", tagSuffix, block.Hash().String())
 		defer close(prefetchChan)
 		subtreeBatchSize := u.settings.BlockValidation.SubtreeBatchSize
 		for batchStart := 0; batchStart < numSubtrees; batchStart += subtreeBatchSize {
@@ -763,7 +764,8 @@ func (u *BlockValidation) startPrefetchAndExtendStages(gCtx context.Context, g *
 	})
 
 	// Stage 2: Extender - extend transactions (sequential for extendedTxs map)
-	g.Go(func() error {
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:extend%s][%s]", tagSuffix, block.Hash().String())
 		defer close(extendedChan)
 
 		extendedTxs := make(map[chainhash.Hash]*bt.Tx)
@@ -856,8 +858,8 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 	u.startPrefetchAndExtendStages(gCtx, g, block, outpointOnly, prefetchChan, extendedChan, u.logger.Infof, "")
 
 	// Stage 3: Processor - UTXO create+spend AND write files in parallel (per batch)
-	g.Go(func() error {
-
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:process][%s]", block.Hash().String())
 		for batch := range extendedChan {
 			// TERMINAL owner: nothing downstream receives the batch, so the close is
 			// unconditional. This is deliberately NOT the handedOff shape of stages 1
@@ -904,15 +906,17 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 				start := time.Now()
 				var utxoDuration, writeDuration time.Duration
 				batchG, batchCtx := errgroup.WithContext(gCtx)
-				batchG.Go(func() error {
+				batchG.Go(func() (err error) {
+					defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:process][%s] utxo batch %d-%d", block.Hash().String(), batch.batchStart, batch.batchEnd)
 					utxoStart := time.Now()
-					err := u.createAndSpendUTXOsForBatch(batchCtx, block, batch)
+					err = u.createAndSpendUTXOsForBatch(batchCtx, block, batch)
 					utxoDuration = time.Since(utxoStart)
 					return err
 				})
-				batchG.Go(func() error {
+				batchG.Go(func() (err error) {
+					defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:process][%s] write batch %d-%d", block.Hash().String(), batch.batchStart, batch.batchEnd)
 					writeStart := time.Now()
-					err := u.writeSubtreeFilesForBatch(batchCtx, block, batch)
+					err = u.writeSubtreeFilesForBatch(batchCtx, block, batch)
 					writeDuration = time.Since(writeStart)
 					return err
 				})
@@ -997,7 +1001,8 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 
 	// Stage 3: Processor - UTXO create+spend, then queue write jobs (per batch)
 	// Unlike the sync version, we don't wait for writes - just queue them
-	g.Go(func() error {
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:process:async][%s]", block.Hash().String())
 		for batch := range extendedChan {
 			// TERMINAL owner: one unconditional deferred close, replacing the two explicit
 			// calls this loop used to make — one on the batchG.Wait() error branch and one
@@ -1039,16 +1044,18 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 				start := time.Now()
 				var utxoDuration, buildDuration time.Duration
 				batchG, batchCtx := errgroup.WithContext(gCtx)
-				batchG.Go(func() error {
+				batchG.Go(func() (err error) {
+					defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:process:async][%s] utxo batch %d-%d", block.Hash().String(), batch.batchStart, batch.batchEnd)
 					utxoStart := time.Now()
-					err := u.createAndSpendUTXOsForBatch(batchCtx, block, batch)
+					err = u.createAndSpendUTXOsForBatch(batchCtx, block, batch)
 					utxoDuration = time.Since(utxoStart)
 					return err
 				})
-				batchG.Go(func() error {
+				batchG.Go(func() (err error) {
+					defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[pipeline:process:async][%s] build batch %d-%d", block.Hash().String(), batch.batchStart, batch.batchEnd)
 					buildStart := time.Now()
 					// Build subtrees and queue write jobs (doesn't wait for I/O)
-					err := u.buildSubtreeJobsForBatch(batchCtx, block, batch, writeJobsChan, wg, freshness)
+					err = u.buildSubtreeJobsForBatch(batchCtx, block, batch, writeJobsChan, wg, freshness)
 					buildDuration = time.Since(buildStart)
 					return err
 				})
@@ -1789,7 +1796,8 @@ func (u *BlockValidation) unlockSubtreeTransactions(ctx context.Context, subtree
 		nodes := subtree.Nodes
 		start := startIdx
 
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[unlockSubtreeTransactions] subtree %d", subtreeIdx)
 			txHashes := make([]chainhash.Hash, len(nodes)-start)
 			for i := start; i < len(nodes); i++ {
 				txHashes[i-start] = nodes[i].Hash
@@ -2347,6 +2355,16 @@ func (u *BlockValidation) applyTxsWithRetry(ctx context.Context, block *model.Bl
 		// still costs is the calls already in flight, up to limit of them, finishing first.
 		for _, item := range pending {
 			applyG.Go(func() error {
+				// Like every outcome here, a panic is recorded in hardFail and the goroutine
+				// returns nil, so it does not cancel applyCtx under calls already in flight.
+				defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, nil, func(err error) {
+					mu.Lock()
+					if hardFail == nil {
+						hardFail = err
+					}
+					mu.Unlock()
+				}, "[%s][%s] apply wave", stage, block.Hash().String())
+
 				if err := applyCtx.Err(); err != nil {
 					mu.Lock()
 					if hardFail == nil {
@@ -2749,7 +2767,8 @@ func (u *BlockValidation) writeSubtreeFilesForBatch(ctx context.Context, block *
 		carriedFullSubtree := batch.fullSubtrees[localIdx]
 		batch.fullSubtrees[localIdx] = nil
 
-		writeG.Go(func() error {
+		writeG.Go(func() (err error) {
+			defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[writeSubtreeFilesForBatch][%s] subtree %d", block.Hash().String(), globalIdx)
 			return u.writeSubtreeFilesFromTxs(writeCtx, block, globalIdx, subtree, subtreeTxs, subtreeHash, carriedFullSubtree, batch.outpointOnly)
 		})
 	}
@@ -2798,7 +2817,8 @@ func (u *BlockValidation) buildSubtreeJobsForBatch(ctx context.Context, block *m
 		carriedFullSubtree := batch.fullSubtrees[localIdx]
 		batch.fullSubtrees[localIdx] = nil
 
-		buildG.Go(func() error {
+		buildG.Go(func() (err error) {
+			defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, &err, nil, "[buildSubtreeJobsForBatch][%s] subtree %d", block.Hash().String(), globalIdx)
 			job, err := u.buildSubtreeAndQueueWrite(buildCtx, block, globalIdx, subtree, subtreeTxs, subtreeHash, carriedFullSubtree, batch.outpointOnly)
 			if err != nil {
 				return err
@@ -2920,6 +2940,14 @@ func (u *BlockValidation) prefetchSubtreeBatch(
 		hash := block.Subtrees[globalIdx]
 		resultChan := subtreeChannels[localIdx]
 		g.Go(func() error {
+			// A panic before the send below is sent as this reader's result, so the collector
+			// records it as a verdict in place of a "channel closed" error that carries no
+			// marker. It returns nil for the reason given below. The send happens last, so a
+			// panic never follows a completed send, and the single slot is always free.
+			defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, nil, func(err error) {
+				resultChan <- subtreeResult{err: err}
+			}, "[prefetchSubtreeBatch][%s] subtree %d", block.Hash().String(), globalIdx)
+
 			result := u.readSubtree(gCtx, block, globalIdx, hash, subtreeReadWithFullSubtree, "batch")
 
 			// Unconditional send, NOT a select against gCtx.Done(). Exactly one

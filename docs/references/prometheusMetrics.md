@@ -175,7 +175,7 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockvalidation_last_validated_blocks_cache` | Gauge     | Number of blocks in the last validated blocks cache               |
 | `teranode_blockvalidation_block_exists_cache`          | Gauge     | Number of blocks in the block exists cache                        |
 | `teranode_blockvalidation_subtree_exists_cache`        | Gauge     | Number of subtrees in the subtree exists cache                    |
-| `teranode_blockvalidation_recovered_panics_total`      | CounterVec | Panics recovered in block validation, by `path` label: `worker`, `catchup`, `kafka` or `block_found`. Each one is a bug in the node. The block hash and stack are in the `PANIC` log line |
+| `teranode_blockvalidation_recovered_panics_total`      | CounterVec | Panics recovered in block validation, by `path` label: `worker`, `catchup`, `kafka` or `block_found`, or for an errgroup goroutine those start, `catchup_fetch`, `block_validation` or `service`. Each one is a bug in the node. The stack, and on most paths the block hash, are in the `PANIC` log line |
 
 ### Catchup Operation Metrics
 

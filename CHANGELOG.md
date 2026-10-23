@@ -137,13 +137,16 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   parent commits. Blocks announced by p2p peers still go to catch-up. (#2021)
 - **A panic on the main block validation goroutines no longer stops the node.** The
   priority-queue block workers and the catchup consumer now recover a panic, as the
-  `blockFoundCh` workers and the Kafka block message handler (#2010) already did. A panic in a goroutine that
-  these start, such as the catchup block fetch and validation workers, still stops the
-  process. Before, the process stopped and restarted, so an alert on a crash loop found it.
-  That alert will not fire now for the covered paths. Monitor the new counter
-  `teranode_blockvalidation_recovered_panics_total` (label `path`: `worker`, `catchup`,
-  `kafka` or `block_found`) and the `PANIC` log line, which has the block hash and the stack.
-  Four more changes come with it:
+  `blockFoundCh` workers and the Kafka block message handler (#2010) already did. The
+  `errgroup` goroutines that block validation starts recover their own panics too: the
+  catchup fetch and validate pipeline, the parallel stages of quick validation, and the
+  service start and startup sweeps (issue bitcoin-sv/teranode#4993). A panic in a plain
+  `go` statement in block validation still stops the process. Before, the process stopped
+  and restarted, so an alert on a crash loop found it. That alert will not fire now for the
+  covered paths. Monitor the new counter `teranode_blockvalidation_recovered_panics_total`
+  (label `path`: `worker`, `catchup`, `kafka`, `block_found`, or for a goroutine those
+  start, `catchup_fetch`, `block_validation` or `service`) and the `PANIC` log line, which
+  has the stack and, on most paths, the block hash. Five more changes come with it:
     - A Kafka block message that panics is committed and retried in memory, like any
       other local fault, up to 8 times with backoff. The announcing peer is not blamed.
       Each attempt that panics counts on `path="kafka"`.
@@ -167,7 +170,13 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       ID, and a block announced without one is never capped.
     - The error that a `WaitToComplete` caller gets after a `blockFoundCh` worker panic no
       longer has the panic value in its text. The panic value is in the `PANIC` log line.
-      (#2012)
+    - A panic in a goroutine that a validation started is scored like the panics above: a
+      catchup ends as `local_panic` and no peer is charged. On the legacy route it counts
+      toward the per-peer panic cap above. Legacy sync gets `ERR_SERVICE_ERROR`
+      for it, and also for a delivery that the cap then stops, so the parked block is kept
+      and retried rather than rejected. A panic in the
+      Kafka consumer or gRPC server goroutine of the service start stops the service with an
+      error rather than the process with a crash. (#2012, #2035)
 
 - **Legacy peers that send BIP152 messages are no longer disconnected.** go-wire
   is now v1.4.0, which decodes `cmpctblock`, `getblocktxn` and `blocktxn`. Until

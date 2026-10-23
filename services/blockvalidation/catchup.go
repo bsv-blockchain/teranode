@@ -486,14 +486,15 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		// TODO: all of these should be using error types, and not checking the strings (!)
 		switch {
-		case ctx.panicked || isConcurrentValidationPanic(*err):
+		case ctx.panicked || isLocalPanic(*err):
 			// catchup() recovered a panic and set *err only to stop this function from recording
-			// a success (BV-STARTUP-007). Or a validation in this catchup waited in
-			// runOncePerBlock on a validation of the same block that panicked on another
-			// goroutine, and got that panic's error. A panic is a bug in this node, not evidence
-			// against the peer, so no case below may score it. It must come first: the
-			// ERR_PROCESSING error would otherwise fall through to unknown_error with isPeerError
-			// left true.
+			// a success (BV-STARTUP-007). Or an errgroup goroutine in this catchup panicked
+			// and recoverChildPanic returned its error (issue 4993). Or a validation in this
+			// catchup waited in runOncePerBlock on a validation of the same block that panicked
+			// on another goroutine, and got that panic's error. A panic is a bug in this node,
+			// not evidence against the peer, so no case below may score it. It must come first:
+			// the ERR_PROCESSING error would otherwise fall through to unknown_error with
+			// isPeerError left true.
 			errorType = "local_panic"
 			isPeerError = false
 		case errors.Is(*err, errors.ErrStorageError):
@@ -1369,19 +1370,22 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 			numWriteWorkers = 16
 		}
 		for i := 0; i < numWriteWorkers; i++ {
-			errorGroup.Go(func() error {
+			errorGroup.Go(func() (err error) {
+				defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup] subtreeWriteWorker")
 				return u.blockValidation.subtreeWriteWorker(gCtx, writeJobsChan)
 			})
 		}
 	}
 
 	// Start fetching blocks
-	errorGroup.Go(func() error {
+	errorGroup.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup][%s] fetchBlocksConcurrently", catchupCtx.blockUpTo.Hash().String())
 		return u.fetchBlocksConcurrently(gCtx, catchupCtx, validateBlocksChan, &size)
 	})
 
 	// Start validation in parallel
-	errorGroup.Go(func() error {
+	errorGroup.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup][%s] validateBlocksOnChannel", catchupCtx.blockUpTo.Hash().String())
 		if writeJobsChan != nil {
 			defer close(writeJobsChan)
 		}

@@ -93,6 +93,19 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 		return nil
 	}
 
+	// validateBlocksOnChannel ranges over validateBlocksChan, and a range does not see a cancelled
+	// context, so the channel must close on every path or that consumer waits for ever.
+	// orderedDelivery closes it in a defer once it starts. If this function panics before that
+	// (issue 4993), the recover around it in fetchAndValidateBlocks turns the panic into an error,
+	// and this defer closes the channel instead.
+	deliveryStarted := false
+
+	defer func() {
+		if !deliveryStarted {
+			close(validateBlocksChan)
+		}
+	}()
+
 	// Start tracing span for the entire operation
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "fetchBlocksConcurrently",
 		tracing.WithParentStat(u.stats),
@@ -119,18 +132,23 @@ func (u *Server) fetchBlocksConcurrently(ctx context.Context, catchupCtx *Catchu
 	// Start worker pool for parallel subtree data fetching
 	for i := 0; i < numWorkers; i++ {
 		workerID := i
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup][%s] blockWorker %d", blockUpTo.Hash().String(), workerID)
 			return u.blockWorker(gCtx, workerID, workQueue, resultQueue, peerID, baseURL, blockUpTo)
 		})
 	}
 
-	// Start ordered delivery goroutine
-	g.Go(func() error {
+	// Start ordered delivery goroutine. From here orderedDelivery owns closing validateBlocksChan.
+	deliveryStarted = true
+
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup][%s] orderedDelivery", blockUpTo.Hash().String())
 		return u.orderedDelivery(gCtx, resultQueue, validateBlocksChan, len(blockHeaders), blockUpTo, size)
 	})
 
 	// Start batch fetching and work distribution
-	g.Go(func() error {
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup][%s] batchFetchAndDistribute", blockUpTo.Hash().String())
 		defer close(workQueue)
 
 		// In production, commonAncestorMeta is always set during catchup initialization
@@ -468,7 +486,8 @@ func (u *Server) fetchSubtreeDataForBlock(gCtx context.Context, block *model.Blo
 		capturedPeerID := fetchPeerID
 		capturedBaseURL := fetchBaseURL
 
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup:fetchSubtreeDataForBlock][%s] subtree %s", block.Hash().String(), subtreeHashCopy.String())
 			servingPeerID, err := u.fetchAndStoreSubtreeAndSubtreeData(ctx, block, &subtreeHashCopy, capturedPeerID, capturedBaseURL, freshness)
 			if err != nil {
 				return err

@@ -1130,6 +1130,10 @@ func (u *BlockValidation) processSubtreesNotSet(ctx context.Context, g *errgroup
 			block := block
 
 			g.Go(func() error {
+				// A panic is logged and swallowed like every other failure in this sweep, so one
+				// bad block cannot stop the service from starting. Its subtrees_set stays false.
+				defer recoverChildPanic(u.logger, recoveredPanicPathService, nil, nil, "[BlockValidation:start][%s] subtrees_set sweep", block.Hash().String())
+
 				// See subtreeFilesReady for why the sweep, and only the sweep, needs this check.
 				ready, missing, err := u.subtreeFilesReady(ctx, block)
 				if err != nil {
@@ -1720,45 +1724,6 @@ func (u *BlockValidation) runOncePerBlock(blockHash *chainhash.Hash, opts *Valid
 
 	// We're first - run validation
 	return validate(opts)
-}
-
-// concurrentValidationPanicked marks the error that runOncePerBlock gives to the waiters of a
-// validation that panicked on another goroutine (BV-STARTUP-007). The waiter has no panic of its
-// own, so the caller cannot tell from its own state that the failure is a bug in this node. A
-// catchup waiter would score it against the primary peer.
-//
-// It is a Go type and not an error code or an errors-package sentinel. teranode's errors.Is
-// matches on the code, so a sentinel made with NewProcessingError matches each ERR_PROCESSING
-// error. NewProcessingError turns a trailing cause that is not an *Error into a plain message, so the
-// marker goes into the chain with SetWrappedErr. isConcurrentValidationPanic finds it by type
-// with errors.As, which does no text matching. Over gRPC the marker is lost, and the error is a
-// plain ERR_PROCESSING error, as before.
-type concurrentValidationPanicked struct{}
-
-func (*concurrentValidationPanicked) Error() string {
-	return "a concurrent validation of this block panicked"
-}
-
-// newConcurrentValidationPanicError returns the ERR_PROCESSING error that runOncePerBlock stores
-// for the waiters when validate panics. Its text has no word that IsNetworkError,
-// IsMaliciousResponseError or IsContextError matches.
-func newConcurrentValidationPanicError(blockHash *chainhash.Hash) error {
-	err := errors.NewProcessingError("[ValidateBlock][%s] panic during a concurrent validation of this block, see the PANIC log line", blockHash.String())
-	err.SetWrappedErr(&concurrentValidationPanicked{})
-
-	return err
-}
-
-// isConcurrentValidationPanic reports whether err came from a waiter in runOncePerBlock whose
-// validation panicked on another goroutine. Such an error is a local fault, never the peer's.
-func isConcurrentValidationPanic(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	var marker *concurrentValidationPanicked
-
-	return errors.As(err, &marker)
 }
 
 // ValidateBlock performs comprehensive validation of a Bitcoin block.
@@ -3059,6 +3024,12 @@ func (u *BlockValidation) subtreeToCheckPresentBefore(ctx context.Context, block
 		idx, hash := i, *subtreeHash
 
 		g.Go(func() error {
+			// Present until the probe says otherwise, so a probe that panics fails safe like one
+			// that errors. The group's error is discarded, so the panic is only logged and counted.
+			present[idx] = true
+
+			defer recoverChildPanic(u.logger, recoveredPanicPathBlockValidation, nil, nil, "[subtreeToCheckPresentBefore][%s] subtree %s", block.Hash().String(), hash.String())
+
 			_, exists, err := findLocalSubtreeFile(ctx, u.subtreeStore, hash)
 			present[idx] = exists || err != nil
 

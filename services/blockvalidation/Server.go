@@ -1337,9 +1337,10 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// Start Kafka consumer only after the blockchain FSM transitions from IDLE.
 	// This prevents validation processing from starting too early, while still allowing
 	// the gRPC server to accept administrative calls (e.g. RevalidateBlock).
-	g.Go(func() error {
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathService, &err, nil, "[Start] Kafka consumer")
 		// Blocks until the FSM transitions from the IDLE state
-		err := u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
+		err = u.blockchainClient.WaitUntilFSMTransitionFromIdleState(gctx)
 		if err != nil {
 			if errors.IsContextError(err) {
 				u.logger.Infof("[Block Validation Service] Shutting down during FSM wait")
@@ -1373,7 +1374,8 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	})
 
 	// Start gRPC server immediately (blocks until shutdown)
-	g.Go(func() error {
+	g.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathService, &err, nil, "[Start] gRPC server")
 		return util.StartGRPCServer(gctx, u.logger, u.settings, "blockvalidation", u.settings.BlockValidation.GRPCListenAddress, func(server *grpc.Server) {
 			blockvalidation_api.RegisterBlockValidationAPIServer(server, u)
 			closeOnce.Do(func() { close(readyCh) })
@@ -1389,6 +1391,8 @@ func (u *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	// on shutdown (ctx cancelled) we simply leave it pessimistic and return nil
 	// so this goroutine never tears down the service.
 	g.Go(func() error {
+		// A panic is logged, counted and swallowed, for the same reason: the gate stays pessimistic.
+		defer recoverChildPanic(u.logger, recoveredPanicPathService, nil, nil, "[Start] adaptive-fetch arm")
 		if err := u.blockchainClient.WaitForFSMtoTransitionToGivenState(gctx, blockchain.FSMStateRUNNING); err != nil {
 			u.logger.Infof("[BlockValidation] adaptive-fetch staying pessimistic; FSM did not reach RUNNING: %v", err)
 			return nil
@@ -1911,8 +1915,20 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 	// addBlockToPriorityQueue does to classify the block. The error is ERR_PROCESSING. Its text has no word that
 	// IsNetworkError or IsMaliciousResponseError matches, and it has no peerID, so the worker does
 	// not requeue the block, no peer gets a strike, and the hash is not marked invalid.
+	//
+	// Legacy sync reaches this gate too: the unified route counts a quick-validation goroutine
+	// panic for netsync's peer (issue 4993). netsync's parkCommitFailure reads an ERR_PROCESSING
+	// error it does not know as a judgement on the block, and deletes the parked record, blames
+	// the peer and marks the hash failed. So for baseURL "legacy" the gate answers with a
+	// ServiceError, netsync's retry-later row, which keeps the record and blames no one, as the
+	// panic it caps does.
 	if u.panicAttemptsExhausted(hash, peerID) {
 		u.logger.Warnf("[processBlockFound][%s] recovered-panic cap reached for peer %s; suppressing this delivery until the cooldown window expires", hash.String(), peerID)
+
+		if baseURL == "legacy" {
+			return errors.NewServiceError("[processBlockFound][%s] recovered-panic cap reached for this peer; delivery suppressed until the cooldown window expires, retrying later (block not stored)", hash.String())
+		}
+
 		return errors.NewProcessingError("[processBlockFound][%s] recovered-panic cap reached for this peer; delivery suppressed until the cooldown window expires (block not stored)", hash.String())
 	}
 
@@ -2051,6 +2067,20 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		// body was verified against the header at the pipeline sink before the record existed.
 		qErr := u.blockValidation.quickValidateBlock(ctx, block, peerID, baseURL)
 		u.accountCorruptAttempt(hash, peerID, baseURL, qErr)
+
+		// A panic in a quick-validation goroutine comes back as an error (issue 4993), so the
+		// recover in processBlockFoundRecovered never sees it. Count it toward the (hash, peerID)
+		// cap that the panicAttemptsExhausted gate above reads, or a block that panics every time
+		// is validated again on every attempt. Return it as a ServiceError: the legacy caller's
+		// parkCommitFailure reads an ERR_PROCESSING error it does not know as a judgement on the
+		// block, and deletes the parked record, blames the peer and marks the hash failed. A
+		// ServiceError is its retry-later row, which keeps the record and blames no one.
+		if isLocalPanic(qErr) {
+			attempts := u.recordPanicAttempt(hash, peerID)
+			u.logger.Errorf("[processBlockFound][%s] a goroutine panicked quick-validating the block from peer %s (panic %d for this peer in the cooldown window), see the PANIC log line", hash.String(), peerID, attempts)
+
+			return errors.NewServiceError("[processBlockFound][%s] a goroutine panicked in this node during quick validation; retrying later", hash.String(), qErr)
+		}
 
 		// A structure or data file that does not hash to the key it is stored under comes back
 		// as a bare ProcessingError carrying only a data marker, which the legacy caller's table
@@ -2393,8 +2423,8 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 // The panic value goes to the log only, not into the error text: the worker reads its error with
 // IsNetworkError and IsMaliciousResponseError, which match words such as "http" or "timeout" in
 // the text, and a panic value with such a word would requeue the block as a fetch failure.
-// Only this worker's goroutine is covered. A panic in a goroutine that the processing starts
-// (an errgroup worker, for example) is not recovered here.
+// Only this worker's goroutine is covered here. An errgroup goroutine that the processing starts
+// recovers its own panic with recoverChildPanic, which returns a local-panic error (issue 4993).
 //
 // A panic inside a processBlockFound call is recovered one level down, in
 // processBlockFoundRecovered, which knows the peer that served that attempt and counts the panic
@@ -2457,8 +2487,9 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 	// can retry the block, and count the attempt so a block that panics every time stays inside
 	// the #1057 cap. A branch below that already counted this cycle sets attemptRecorded, so a
 	// panic after that count does not count the cycle twice. No peer is reported: a panic is a
-	// bug in this node, not evidence against the peer. Only this goroutine is covered: a panic in
-	// a goroutine that catchup starts (its errgroup workers) is not recovered here.
+	// bug in this node, not evidence against the peer. Only this goroutine is covered here. The
+	// errgroup goroutines that catchup starts recover their own panics with recoverChildPanic, and
+	// catchup gets a local-panic error back (issue 4993).
 	attemptRecorded := false
 
 	// acquireCatchupLock is the only writer of catchupAttempts and the only place that resets
@@ -2519,7 +2550,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		succeeded, localPanic := u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID)
 		if localPanic {
 			attemptRecorded = true
-			u.endCatchupCycleOnConcurrentPanic(c.block.Hash())
+			u.endCatchupCycleOnLocalPanic(c.block.Hash())
 
 			return
 		}
@@ -2545,7 +2576,7 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		succeeded, localPanic := u.tryAlternativePeersForCatchup(ctx, c.block, c.peerID)
 		if localPanic {
 			attemptRecorded = true
-			u.endCatchupCycleOnConcurrentPanic(c.block.Hash())
+			u.endCatchupCycleOnLocalPanic(c.block.Hash())
 
 			return
 		}
@@ -2746,11 +2777,11 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 			return
 		}
 
-		// A concurrent validation panicked in this node. Every cached alternative would wait on
-		// the same bug, so end the cycle here, as the primary path does for that error.
+		// A goroutine panicked in this node. Every cached alternative would hit the same bug,
+		// so end the cycle here, as the primary path does for that error.
 		if localPanic {
 			attemptRecorded = true
-			u.endCatchupCycleOnConcurrentPanic(blockHash)
+			u.endCatchupCycleOnLocalPanic(blockHash)
 
 			return
 		}
@@ -2787,12 +2818,12 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 					u.clearCatchupAttempts(blockHash)
 					catchupSucceeded = true
 					break
-				} else if isConcurrentValidationPanic(altErr) {
-					// A concurrent validation panicked in this node, a bug that is the same for
+				} else if isLocalPanic(altErr) {
+					// A goroutine panicked in this node, a bug that is the same for
 					// every peer. Try no further alternative and charge none. The block below
 					// then counts the attempt unless the cycle made progress and clears the
 					// markers, as the primary path does for this error.
-					u.logger.Warnf("[catchup] Alternative peer %s: a concurrent validation of block %s panicked in this node; trying no further alternatives: %v", alt.peerID, blockHash.String(), altErr)
+					u.logger.Warnf("[catchup] Alternative peer %s: a goroutine panicked in this node validating block %s; trying no further alternatives: %v", alt.peerID, blockHash.String(), altErr)
 
 					break
 				} else {
@@ -2830,14 +2861,15 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 	}
 }
 
-// endCatchupCycleOnConcurrentPanic ends a catchup cycle in which an alternative peer's catchup got
-// the waiter error of a validation that panicked on another goroutine (BV-STARTUP-007). It leaves
-// the same state as the primary path's isLocalCatchupFault branch: the attempt counts toward the
-// #1057 cap unless the cycle made progress, both markers are cleared so a later announcement can
-// retry the block, and no peer is charged or reported.
-func (u *Server) endCatchupCycleOnConcurrentPanic(blockHash *chainhash.Hash) {
+// endCatchupCycleOnLocalPanic ends a catchup cycle in which an alternative peer's catchup got a
+// local-panic error (isLocalPanic, BV-STARTUP-007): the waiter error of a validation that
+// panicked on another goroutine, or the error of an errgroup goroutine that panicked (issue
+// 4993). It leaves the same state as the primary path's isLocalCatchupFault branch: the attempt
+// counts toward the #1057 cap unless the cycle made progress, both markers are cleared so a
+// later announcement can retry the block, and no peer is charged or reported.
+func (u *Server) endCatchupCycleOnLocalPanic(blockHash *chainhash.Hash) {
 	attempts := u.recordCatchupAttemptUnlessProgress(blockHash)
-	u.logger.Warnf("[catchup] A concurrent validation of block %s panicked in this node during an alternative peer's catchup (attempt %d/%d); ending this cycle and clearing markers to allow retry", blockHash.String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
+	u.logger.Warnf("[catchup] A goroutine panicked in this node validating block %s during an alternative peer's catchup (attempt %d/%d); ending this cycle and clearing markers to allow retry", blockHash.String(), attempts, u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
 	u.processBlockNotify.Delete(*blockHash)
 	u.catchupAlternatives.Delete(*blockHash)
 }
@@ -3246,6 +3278,11 @@ const (
 	recoveredPanicPathCatchup    = "catchup"
 	recoveredPanicPathKafka      = "kafka"
 	recoveredPanicPathBlockFound = "block_found"
+
+	// The paths below count panics in errgroup goroutines, recovered by recoverChildPanic.
+	recoveredPanicPathCatchupFetch    = "catchup_fetch"    // catchup's fetch and validate pipeline
+	recoveredPanicPathBlockValidation = "block_validation" // fan-outs inside one block's validation
+	recoveredPanicPathService         = "service"          // service start and startup sweeps
 )
 
 // recoveredPanicErrFormat is the error text a recover on the priority worker or a blockFoundCh
