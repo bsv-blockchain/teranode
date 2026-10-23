@@ -628,6 +628,18 @@ func (s *Store) buildDeleteAtHeightExpressionsFor(newDAH *aerospike.Expression, 
 		isOnLongestChainExp,
 	)
 
+	// A lagging cached tip must not stamp a mined record below its retention window.
+	heightsBin := aerospike.ExpListBin(fields.BlockHeights.String())
+	hasHeights := aerospike.ExpCond(
+		aerospike.ExpBinExists(fields.BlockHeights.String()),
+		aerospike.ExpGreater(aerospike.ExpListSize(heightsBin), aerospike.ExpIntVal(0)),
+		aerospike.ExpBoolVal(false),
+	)
+	minedFloor := aerospike.ExpNumAdd(
+		aerospike.ExpListGetByRank(aerospike.ListReturnTypeValue, aerospike.ExpTypeINT, aerospike.ExpIntVal(-1), heightsBin),
+		aerospike.ExpIntVal(int64(s.settings.GetUtxoStoreBlockHeightRetention())),
+	)
+	newDAH = aerospike.ExpCond(hasHeights, aerospike.ExpMax(newDAH, minedFloor), newDAH)
 	// Build the main conditional expression, in the same order as Lua setDeleteAtHeight.
 	// ExpCond evaluates its conditions lazily and in order, so bins are only read once the
 	// preceding branches have established they exist.
@@ -635,9 +647,10 @@ func (s *Store) buildDeleteAtHeightExpressionsFor(newDAH *aerospike.Expression, 
 		// If preserveUntil is set, no change
 		aerospike.ExpNot(preserveUntilNotSet), aerospike.ExpUnknown(),
 
-		// Conflicting: set DAH if none, otherwise leave it alone
+		// Conflicting: set DAH if absent, or raise it to the mined floor.
 		isConflicting, aerospike.ExpCond(
 			dahNotExists, newDAH,
+			hasHeights, aerospike.ExpCond(aerospike.ExpLess(existingDAH, minedFloor), minedFloor, aerospike.ExpUnknown()),
 			aerospike.ExpUnknown(),
 		),
 
