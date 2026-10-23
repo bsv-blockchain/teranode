@@ -77,6 +77,9 @@ const (
 // completes, so a process kill between any two steps can be detected and the
 // operation replayed on restart. See ProcessConflicting / ReverseProcessConflicting.
 type ConflictIntent struct {
+	// Recovery is the versioned before-image and progress of a forward operation.
+	Recovery *ConflictRecovery `json:"recovery,omitempty"`
+
 	// Kind is the operation direction: forward = ProcessConflicting,
 	// reverse = ReverseProcessConflicting.
 	Kind ConflictIntentKind
@@ -822,6 +825,21 @@ type Store interface {
 	// operation does not create a duplicate. A non-nil error MUST abort the
 	// caller — the operation must not proceed without a durable intent record.
 	BeginConflictIntent(ctx context.Context, intent ConflictIntent) error
+
+	// SaveConflictRecovery atomically publishes the recovery checklist and phase.
+	// The intent must already exist. A failed write must stop state mutation.
+	SaveConflictRecovery(ctx context.Context, intentID chainhash.Hash, recovery *ConflictRecovery) error
+
+	// SetConflictLocks acquires/releases only locks owned by this WAL operation.
+	// Backends whose conflict Unspend never locks parents may implement a no-op.
+	SetConflictLocks(ctx context.Context, intentID chainhash.Hash, parents []chainhash.Hash, locked bool) error
+
+	// LoadConflictRecovery returns nil for an absent or legacy intent.
+	LoadConflictRecovery(ctx context.Context, intentID chainhash.Hash) (*ConflictRecovery, error)
+
+	// RestoreConflictSpends restores only the specified recorded spends. Each
+	// write must reject a different existing spender and accept the same spender.
+	RestoreConflictSpends(ctx context.Context, spends []*Spend, blockHeight uint32) error
 
 	// CompleteConflictIntent deletes the intent record identified by intentID
 	// after the operation's terminal step has committed. Removing an

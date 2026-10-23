@@ -104,6 +104,10 @@ type BlockAssembler struct {
 	// logger provides logging functionality for the assembler
 	logger ulogger.Logger
 
+	// staleTip remembers since when block assembly has differed from the same chain tip, so a
+	// candidate is only reported as stale once the gap outlasts the normal new-block notification delay.
+	staleTip staleTipTracker
+
 	// stats tracks operational statistics for monitoring and debugging
 	stats *gocore.Stat
 
@@ -1435,14 +1439,21 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	// Replay any conflict-resolution WAL intents left behind by a crash mid-
 	// ProcessConflicting / ReverseProcessConflicting (#861), BEFORE chain-tip
 	// reconciliation — loadUnminedTransactions and any reset() rebuild must see a
-	// healed UTXO state. Replay failures are logged + counted, not fatal: an
-	// unrepaired intent is surfaced for alerting and retried on the next restart.
+	// healed UTXO state. Unresolved recovery prevents startup below.
 	b.replayPendingConflictIntents(ctx)
+	if err = b.checkConflictRecoveryReady(ctx); err != nil {
+		return err
+	}
 
 	// Load unmined transactions (this includes cleanup of old unmined transactions first)
 	if err = b.loadUnminedTransactions(ctx, false); err != nil {
 		// we cannot start block assembly if we have not loaded unmined transactions successfully
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
+	}
+
+	recoveredIDs, recoveryErr := b.prepareRecoveredConflictUpdates(ctx)
+	if recoveryErr != nil {
+		return recoveryErr
 	}
 
 	// AddTx is already enqueueing on the gRPC side. If loadUnminedTransactions
@@ -1457,6 +1468,12 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	// (isReload=false): fail, consistent with the load rule.
 	if err = b.drainUnminedDropHashes("drainQueue_startup", false); err != nil {
 		return errors.NewStorageError("[BlockAssembler] failed to flush disk tx map after startup queue drain: %v", err)
+	}
+
+	for _, id := range recoveredIDs {
+		if err = utxo.CompleteConflictIntent(ctx, b.utxoStore, id); err != nil {
+			return err
+		}
 	}
 
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
@@ -1489,10 +1506,8 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 // fully-applied or partially-applied operation converges to the same end-state —
 // so a clean restart heals the UTXO store with no operator action.
 //
-// Replay failures are NOT fatal to startup: a failed replay is logged loudly and
-// counted on a Prometheus metric for alerting, and the intent is left in the WAL
-// to be retried on the next restart. Failing startup outright would wedge the
-// node on a single bad intent.
+// Replay failures are logged and counted. Start checks the remaining WAL before
+// loading transactions and refuses to mine against unresolved recovery.
 func (b *BlockAssembler) replayPendingConflictIntents(ctx context.Context) {
 	if b.utxoStore == nil {
 		return
@@ -1557,7 +1572,7 @@ func (b *BlockAssembler) replayPendingConflictIntents(ctx context.Context) {
 
 			prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("stale_healed").Inc()
 
-			if completeErr := b.utxoStore.CompleteConflictIntent(ctx, intent.IntentID()); completeErr != nil {
+			if completeErr := utxo.CompleteConflictIntent(ctx, b.utxoStore, intent.IntentID()); completeErr != nil {
 				b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] healed stale %s intent %s but failed to clear WAL record (will retry next restart): %v",
 					intent.Kind, intent.IntentID().String(), completeErr)
 			}
@@ -1575,10 +1590,14 @@ func (b *BlockAssembler) replayPendingConflictIntents(ctx context.Context) {
 
 		prometheusBlockAssemblerConflictIntentReplay.WithLabelValues("success").Inc()
 
+		if intent.Kind == utxo.ConflictIntentForward {
+			continue
+		}
+
 		// ProcessConflicting / ReverseProcessConflicting already complete the
 		// intent on success via their own wrapper; this is a belt-and-suspenders
 		// delete (idempotent) so replay is self-contained.
-		if completeErr := b.utxoStore.CompleteConflictIntent(ctx, intent.IntentID()); completeErr != nil {
+		if completeErr := utxo.CompleteConflictIntent(ctx, b.utxoStore, intent.IntentID()); completeErr != nil {
 			b.logger.Errorf("[BlockAssembler][replayPendingConflictIntents] replayed %s intent %s but failed to clear WAL record (will retry next restart): %v",
 				intent.Kind, intent.IntentID().String(), completeErr)
 		}
@@ -1697,28 +1716,30 @@ func (b *BlockAssembler) drainPendingInvalidations(ctx context.Context) {
 
 // replayConflictIntent re-runs a single WAL intent against the UTXO store.
 func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+	if intent.Kind == utxo.ConflictIntentForward {
+		recovery, err := b.utxoStore.LoadConflictRecovery(ctx, intent.IntentID())
+		if err != nil {
+			return err
+		}
+		if recovery == nil {
+			return errors.NewProcessingError("legacy forward conflict intent %s requires manual repair; no recovery checklist", intent.IntentID().String())
+		}
+	}
+
 	switch intent.Kind {
 	case utxo.ConflictIntentForward:
-		// Seed the processed-hashes map with the intent's own hashes so the
-		// ProcessConflicting "tx is not conflicting" guard never fires when
-		// replaying a completed-but-not-tombstoned op (winners already
-		// Conflicting=false). The remaining steps are idempotent re-applications.
-		seeded := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
-		for _, h := range intent.TxHashes {
-			seeded[h] = struct{}{}
-		}
 
 		// Replay is chain-authorised too. The isBlockOnLongestChain gate above
 		// only establishes that the intent's block is still on the main chain; it
 		// says nothing about whether a losing transaction is confirmed on that
 		// block's own ancestry. Without the guard, replaying an intent recorded by
 		// a pre-fix process would re-apply the very corruption this prevents.
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
-			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
+		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, nil,
+			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash), utxo.WithDeferredConflictCompletion(), utxo.WithRecoveryChainGuard(b.currentChainGuard()))
 
 		return err
 	case utxo.ConflictIntentReverse:
-		_, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes)
+		_, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, b.currentChainGuard())
 
 		return err
 	default:
@@ -1732,35 +1753,21 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 // operation torn with no recovery path — the exact failure class this WAL exists
 // to prevent.
 //
-//   - stale forward (block now off-chain): undo it — ReverseProcessConflicting
-//     demotes the winners and restores their counters, then unlock the parents
-//     the forward locked at step 2 (the step-5 unlock a crash may have skipped;
-//     SetLocked(false) is a no-op when already unlocked).
-//   - stale reverse (block now back on-chain): re-apply the forward via
-//     ProcessConflicting, which manages its own step-2 lock / step-5 unlock. The
-//     processed-hashes map is seeded so the "tx is not conflicting" guard does
-//     not fire on an already-applied winner.
+// A stale forward restores its durable before-image. A stale reverse starts a
+// forward operation and retains its WAL until caller updates are acknowledged.
 func (b *BlockAssembler) healStaleConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	switch intent.Kind {
 	case utxo.ConflictIntentForward:
-		if _, _, err := utxo.ReverseProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes); err != nil {
-			return err
-		}
-
-		return b.unlockConflictParents(ctx, intent.TxHashes)
+		return utxo.RollbackConflictIntent(ctx, b.utxoStore, intent, b.currentChainGuard())
 	case utxo.ConflictIntentReverse:
-		seeded := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
-		for _, h := range intent.TxHashes {
-			seeded[h] = struct{}{}
-		}
 
 		// Replay is chain-authorised too. The isBlockOnLongestChain gate above
 		// only establishes that the intent's block is still on the main chain; it
 		// says nothing about whether a losing transaction is confirmed on that
 		// block's own ancestry. Without the guard, replaying an intent recorded by
 		// a pre-fix process would re-apply the very corruption this prevents.
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
-			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
+		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, nil,
+			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash), utxo.WithDeferredConflictCompletion(), utxo.WithRecoveryChainGuard(b.currentChainGuard()))
 
 		return err
 	default:
@@ -2137,6 +2144,28 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	baBestBlockHeader, baBestBlockHeight := b.CurrentBlock()
 	if baBestBlockHeader == nil {
 		return nil, nil, errors.NewError("best block header is not available")
+	}
+
+	// Block assembly is idle but behind the chain: a failed catch-up or move-forward left it on an
+	// older tip, and nothing is moving it forward (issue 4991). A candidate built on that tip is an
+	// orphan, and its transaction set grows without bound because mined transactions are never
+	// removed. Hand out an empty block on the chain tip instead, as for the in-motion states. If
+	// the chain tip cannot be read, fall through: a transient error must not stop mining.
+	chainTipHeader, chainTipMeta, tipErr := b.blockchainClient.GetBestBlockHeader(ctx)
+
+	if tipErr != nil {
+		b.logger.Warnf("[GetMiningCandidate] could not read the blockchain tip to check for a stale block assembly tip: %v", tipErr)
+	} else if behind, sustained := b.staleTip.check(chainTipHeader.Hash(), chainTipMeta.Height, baBestBlockHeader.Hash(), baBestBlockHeight, time.Now()); behind {
+		if sustained {
+			prometheusBlockAssemblyStaleTipCandidates.Inc()
+			b.logger.Warnf("[GetMiningCandidate] block assembly tip %s (height %d) is behind the blockchain tip %s (height %d), returning empty block template on the blockchain tip",
+				baBestBlockHeader.Hash(), baBestBlockHeight, chainTipHeader.Hash(), chainTipMeta.Height)
+		} else {
+			b.logger.Debugf("[GetMiningCandidate] block assembly tip %s is catching up to the blockchain tip %s, returning empty block template on the blockchain tip",
+				baBestBlockHeader.Hash(), chainTipHeader.Hash())
+		}
+
+		return b.generateEmptyBlockCandidate(ctx, chainTipHeader, chainTipMeta.Height)
 	}
 
 	// Get pre-computed data (atomic read, no locks, no channel sync)
@@ -4229,4 +4258,127 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 // This is primarily used in test environments to prevent blocking on pending blocks.
 func (b *BlockAssembler) SetSkipWaitForPendingBlocks(skip bool) {
 	b.skipWaitForPendingBlocks = skip
+}
+
+// checkConflictRecoveryReady prevents mining against an unresolved recovery.
+// Only finished forward intents awaiting caller acknowledgement may remain.
+func (b *BlockAssembler) checkConflictRecoveryReady(ctx context.Context) error {
+	intents, err := b.utxoStore.PendingConflictIntents(ctx)
+	if err != nil {
+		return err
+	}
+	for _, intent := range intents {
+		r, err := b.utxoStore.LoadConflictRecovery(ctx, intent.IntentID())
+		if err != nil {
+			return err
+		}
+		if intent.Kind != utxo.ConflictIntentForward || r == nil || r.Phase != utxo.ConflictRecoveryFinished {
+			return errors.NewProcessingError("conflict recovery %s is unresolved; BlockAssembly cannot start", intent.IntentID().String())
+		}
+		onChain, err := b.isBlockOnLongestChain(ctx, intent.BlockHash)
+		if err != nil {
+			return err
+		}
+		if !onChain {
+			return errors.NewProcessingError("conflict recovery %s is stale; BlockAssembly cannot start", intent.IntentID().String())
+		}
+	}
+	return nil
+}
+
+// prepareRecoveredConflictUpdates is called after loading unmined transactions
+// and before the startup queue drain. Return IDs only after subtree updates succeed.
+func (b *BlockAssembler) prepareRecoveredConflictUpdates(ctx context.Context) ([]chainhash.Hash, error) {
+	intents, err := b.utxoStore.PendingConflictIntents(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []chainhash.Hash
+	for _, intent := range intents {
+		if intent.Kind != utxo.ConflictIntentForward {
+			continue
+		}
+		r, err := b.utxoStore.LoadConflictRecovery(ctx, intent.IntentID())
+		if err != nil {
+			return nil, err
+		}
+		if r == nil || r.Phase != utxo.ConflictRecoveryFinished {
+			continue
+		}
+		onChain, err := b.isBlockOnLongestChain(ctx, intent.BlockHash)
+		if err != nil {
+			return nil, err
+		}
+		if !onChain {
+			continue
+		}
+		if err = b.subtreeProcessor.MarkRecoveredConflicts(ctx, r.Losers); err != nil {
+			return nil, err
+		}
+		if b.unminedDropHashes == nil {
+			b.unminedDropHashes = make(map[chainhash.Hash]struct{})
+		}
+		for _, h := range r.Losers {
+			b.unminedDropHashes[h] = struct{}{}
+		}
+		ids = append(ids, intent.IntentID())
+	}
+	return ids, nil
+}
+
+// currentChainGuard protects transactions confirmed on the current chain during conflict recovery.
+// It resolves block IDs so a forward rollback accepts the winners' own block.
+func (b *BlockAssembler) currentChainGuard() utxo.CurrentChainGuard {
+	return utxo.NewCurrentChainGuard(b.blockchainClient.CheckBlockIsInCurrentChain).WithBlockID(func(ctx context.Context, hash chainhash.Hash) (uint32, error) {
+		_, meta, err := b.blockchainClient.GetBlockHeader(ctx, &hash)
+		if err != nil {
+			return 0, err
+		}
+
+		return meta.ID, nil
+	})
+}
+
+// staleTipGrace is how long block assembly may differ from one blockchain tip before the gap counts as a stall.
+// A healthy node differs for the short delay between a block reaching the Blockchain service and block assembly
+// hearing about it.
+const staleTipGrace = 10 * time.Second
+
+type staleTipTracker struct {
+	mu    sync.Mutex
+	tip   chainhash.Hash
+	since time.Time
+}
+
+// sustained records that block assembly differs from chainTip at now. It reports whether the difference has
+// lasted longer than staleTipGrace for this same chain tip.
+func (s *staleTipTracker) sustained(chainTip chainhash.Hash, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.since.IsZero() || s.tip != chainTip {
+		s.tip = chainTip
+		s.since = now
+	}
+
+	return now.Sub(s.since) >= staleTipGrace
+}
+
+func (s *staleTipTracker) clear() {
+	s.mu.Lock()
+	s.since = time.Time{}
+	s.mu.Unlock()
+}
+
+// check compares the two tips. behind is true when block assembly sits on a different tip that is not ahead
+// of the chain. A tip ahead of the chain, for example after the chain tip was invalidated back to its parent,
+// is not a stall: a candidate on the chain tip would be refused at submission as stale. sustained is true once
+// a behind gap has outlasted staleTipGrace.
+func (s *staleTipTracker) check(chainTip *chainhash.Hash, chainHeight uint32, baTip *chainhash.Hash, baHeight uint32, now time.Time) (behind, sustained bool) {
+	if chainTip.IsEqual(baTip) || chainHeight < baHeight {
+		s.clear()
+		return false, false
+	}
+
+	return true, s.sustained(*chainTip, now)
 }

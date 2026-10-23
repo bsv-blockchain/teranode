@@ -368,3 +368,7 @@ func (m *MockSubtreeProcessor) ReconcileCoinbases(ctx context.Context, gapBlocks
 	args := m.Called(ctx, gapBlocks)
 	return args.Error(0)
 }
+
+func (m *MockSubtreeProcessor) MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error {
+	return m.Called(ctx, hashes).Error(0)
+}

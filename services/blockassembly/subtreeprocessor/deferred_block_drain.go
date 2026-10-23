@@ -9,6 +9,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
 // deferredBlockDrain is the end of a moveForwardBlock that the caller runs
@@ -71,6 +72,12 @@ func (stp *SubtreeProcessor) runDeferredBlockDrain(ctx context.Context, block *m
 	// The clear is moveForwardBlock's commit point, so a storage error from it
 	// keeps the label it had when the clear ran inside moveForwardBlock.
 	stp.drainAndLogDiskTxMapErr("moveForwardBlock_commit")
+	if !stp.drainResetRequested.Load() && len(drain.conflictingHashes) > 0 {
+		if err := utxo.CompleteConflictIntentsForBlock(ctx, stp.utxoStore, *block.Hash()); err != nil {
+			stp.logger.Errorf("[SubtreeProcessor] conflict WAL acknowledgement failed: %v", err)
+			stp.drainResetRequested.Store(true)
+		}
+	}
 }
 
 // drainQueueAfterBlock drains the queue as dequeueDuringBlockMovement does -

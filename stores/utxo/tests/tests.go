@@ -549,6 +549,15 @@ func crashSpender(t *testing.T, ctx context.Context, db utxostore.Store, parent 
 // Runs against a bare store (no BlockAssembler), so it covers SQLite, Postgres
 // and Aerospike via the shared backend test suites.
 func ConflictWALCrashRecovery(t *testing.T, db utxostore.Store) {
+	t.Run("journal_confirmed_winner", func(t *testing.T) { ConflictRecoveryConfirmedWinner(t, db) })
+	t.Run("journal_related_winners", func(t *testing.T) { ConflictRecoveryRelatedWinners(t, db) })
+	t.Run("journal_unexpected_owner", func(t *testing.T) { ConflictRecoveryUnexpectedOwner(t, db) })
+	t.Run("journal_persistence", func(t *testing.T) { ConflictRecoveryPersistence(t, db) })
+	t.Run("journal_descendant_retry", func(t *testing.T) { ConflictRecoveryDescendants(t, db) })
+	t.Run("journal_failure_boundaries", func(t *testing.T) { ConflictRecoveryFailures(t, db) })
+	t.Run("journal_forward_own_block", func(t *testing.T) { ConflictRecoveryForwardOwnBlock(t, db) })
+	t.Run("journal_foreign_lock", func(t *testing.T) { ConflictRecoveryForeignLock(t, db) })
+
 	ctx := context.Background()
 	require.NoError(t, db.SetBlockHeight(20))
 
@@ -623,17 +632,14 @@ func ConflictWALCrashRecovery(t *testing.T, db utxostore.Store) {
 			intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentForward, BlockHeight: 20, TxHashes: []chainhash.Hash{*txW.TxIDChainHash()}, StartedAt: 1}
 			require.NoError(t, db.BeginConflictIntent(ctx, intent))
 
-			// Replay: seed the processed-hashes map exactly as BlockAssembler does.
-			seeded := map[chainhash.Hash]struct{}{*txW.TxIDChainHash(): {}}
-			_, _, err = utxostore.ProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txW.TxIDChainHash()}, seeded, utxostore.NoAncestryGuard)
+			// Legacy intents have no before-image. Do not guess spend or lock
+			// ownership from the partial state; preserve the record for repair.
+			_, _, err = utxostore.ProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txW.TxIDChainHash()}, nil, utxostore.NoAncestryGuard)
+			require.ErrorContains(t, err, "no recovery checklist")
+			pending, err := db.PendingConflictIntents(ctx)
 			require.NoError(t, err)
+			require.NotEmpty(t, pending)
 			require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
-
-			require.False(t, crashConflicting(t, ctx, db, txW.TxIDChainHash()), "winner must not be conflicting after replay")
-			require.True(t, crashConflicting(t, ctx, db, txL.TxIDChainHash()), "loser must remain conflicting after replay")
-			require.NotNil(t, crashSpender(t, ctx, db, parent))
-			require.Equal(t, txW.TxIDChainHash().String(), crashSpender(t, ctx, db, parent).String(), "parent[0] must be spent by the winner")
-			require.False(t, crashLocked(t, ctx, db, parent.TxIDChainHash()), "parent must be unlocked after replay")
 		})
 	}
 

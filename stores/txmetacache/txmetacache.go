@@ -1460,3 +1460,16 @@ func (t *TxMetaCache) PreserveTransactions(ctx context.Context, txIDs []chainhas
 func (t *TxMetaCache) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	return t.utxoStore.ProcessExpiredPreservations(ctx, currentHeight)
 }
+
+func (t *TxMetaCache) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return t.utxoStore.LoadConflictRecovery(ctx, id)
+}
+func (t *TxMetaCache) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return t.utxoStore.SaveConflictRecovery(ctx, id, r)
+}
+func (t *TxMetaCache) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return t.utxoStore.RestoreConflictSpends(ctx, spends, height)
+}
+func (t *TxMetaCache) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return t.utxoStore.SetConflictLocks(ctx, id, parents, locked)
+}

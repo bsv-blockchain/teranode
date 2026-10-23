@@ -499,3 +499,17 @@ func (m *MockUtxostore) expects(method string) bool {
 
 	return false
 }
+
+func (m *MockUtxostore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *ConflictRecovery) error {
+	return nil
+}
+func (m *MockUtxostore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockUtxostore) RestoreConflictSpends(ctx context.Context, spends []*Spend, height uint32) error {
+	return nil
+}
+
+func (m *MockUtxostore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}

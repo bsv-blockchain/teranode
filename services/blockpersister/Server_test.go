@@ -1995,3 +1995,16 @@ func TestStart_ProcessingLoopStopsDuringPersistSleep(t *testing.T) {
 		})
 	}
 }
+
+func (m *MockUTXOStore) SaveConflictRecovery(context.Context, chainhash.Hash, *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockUTXOStore) LoadConflictRecovery(context.Context, chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) RestoreConflictSpends(context.Context, []*utxo.Spend, uint32) error {
+	return nil
+}
+func (m *MockUTXOStore) SetConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash, bool) error {
+	return nil
+}

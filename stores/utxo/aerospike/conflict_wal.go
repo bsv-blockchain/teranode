@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -68,7 +69,7 @@ func decodeIntentHashes(buf []byte) ([]chainhash.Hash, error) {
 // BeginConflictIntent durably records an intent before the operation's first
 // state mutation. The default write policy uses RecordExistsAction=UPDATE and
 // TTLDontExpire, so re-recording the same deterministic intent id is an
-// idempotent overwrite (never a duplicate, never expires).
+// idempotent insert (preserves the existing checklist and never expires).
 func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	intentID := intent.IntentID()
 
@@ -87,7 +88,18 @@ func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictInt
 		aerospike.NewBin(walBinStartedAt, int(intent.StartedAt)),
 	}
 
-	if err := s.client.PutBins(util.GetAerospikeWritePolicy(s.settings, 0), key, bins...); err != nil {
+	if intent.Recovery != nil {
+		if intent.Recovery.Phase != utxo.ConflictRecoveryPlanning {
+			return errors.NewStorageError("Begin requires a planning checklist")
+		}
+		bins = append(bins, aerospike.NewBin("recoveryPhase", utxo.ConflictRecoveryPlanning))
+	}
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.RecordExistsAction = aerospike.CREATE_ONLY
+	if err := s.client.PutBins(policy, key, bins...); err != nil {
+		if err.Matches(types.KEY_EXISTS_ERROR) {
+			return nil
+		}
 		return errors.NewStorageError("[BeginConflictIntent] failed to record intent %s", intentID.String(), err)
 	}
 
@@ -97,6 +109,10 @@ func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictInt
 // CompleteConflictIntent removes the intent record once the terminal step
 // committed. Deleting an absent key is idempotent (no error).
 func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	if err := s.deleteRecoveryChunks(ctx, intentID); err != nil {
+		return err
+	}
+
 	key, err := aerospike.NewKey(s.namespace, s.conflictWALSet(), intentID[:])
 	if err != nil {
 		return errors.NewStorageError("[CompleteConflictIntent] failed to build key for intent %s", intentID.String(), err)
@@ -114,7 +130,7 @@ func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.H
 // is acceptable.
 func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
 	stmt := aerospike.NewStatement(s.namespace, s.conflictWALSet())
-	stmt.BinNames = []string{walBinKind, walBinBlockHeight, walBinBlockHash, walBinTxHashes, walBinStartedAt}
+	stmt.BinNames = []string{walBinKind, walBinBlockHeight, walBinBlockHash, walBinTxHashes, walBinStartedAt, "recoveryDone"}
 
 	queryPolicy := aerospike.NewQueryPolicy()
 	queryPolicy.MaxRetries = 3
@@ -183,5 +199,28 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 		})
 	}
 
-	return intents, nil
+	live := intents[:0]
+	for _, intent := range intents {
+		r, err := s.LoadConflictRecovery(ctx, intent.IntentID())
+		if err != nil {
+			return nil, err
+		}
+		// Load also completes interrupted chunk deletion. An absent root is
+		// excluded rather than exposed as a new legacy operation.
+		id := intent.IntentID()
+		key, err := aerospike.NewKey(s.namespace, s.conflictWALSet(), id.CloneBytes())
+		if err != nil {
+			return nil, err
+		}
+		exists, err := s.client.Exists(nil, key)
+		if err != nil {
+			return nil, err
+		}
+		if !exists {
+			continue
+		}
+		intent.Recovery = r
+		live = append(live, intent)
+	}
+	return live, nil
 }

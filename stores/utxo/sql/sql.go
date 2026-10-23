@@ -3470,7 +3470,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	q2 := `
 		UPDATE transactions
 		SET
-			locked = $2
+			locked = $2, conflict_owner = NULL
 		WHERE id = $1
 	`
 
@@ -3774,7 +3774,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 2)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				   ,unmined_since = NULL
 				   ,delete_at_height = CASE
 				        WHEN preserve_until IS NOT NULL THEN delete_at_height
@@ -3797,7 +3797,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false, unmined_since = NULL
+				SET conflict_owner = NULL, locked = false, unmined_since = NULL
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -3828,7 +3828,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -3860,7 +3860,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -4980,7 +4980,7 @@ func (s *Store) setLockedPipelined(ctx context.Context, txHashes []chainhash.Has
 		pgxConn := driverConn.(*stdlib.Conn).Conn()
 
 		batch := &pgx.Batch{}
-		q := `UPDATE transactions SET locked = true, delete_at_height = NULL WHERE hash = $1`
+		q := `UPDATE transactions SET conflict_owner = NULL, locked = true, delete_at_height = NULL WHERE hash = $1`
 		for i := range txHashes {
 			batch.Queue(q, txHashes[i][:])
 		}
@@ -5007,7 +5007,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 		// SQLite: sequential updates
 		q := `
 			UPDATE transactions
-			SET locked = true, delete_at_height = NULL
+			SET conflict_owner = NULL, locked = true, delete_at_height = NULL
 			WHERE hash = $1
 		`
 		for _, txHash := range txHashes {
@@ -5050,7 +5050,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 
 	q := `
 		UPDATE transactions
-		SET locked = false
+		SET conflict_owner = NULL, locked = false
 		WHERE hash = $1
 		RETURNING id
 	`
@@ -5102,7 +5102,7 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 		if retention == 0 {
 			// No DAH needed — simple bulk unlock
 			inClause, args := buildINClause(hashBytes, 1)
-			q := fmt.Sprintf(`UPDATE transactions SET locked = false WHERE hash IN %s`, inClause)
+			q := fmt.Sprintf(`UPDATE transactions SET conflict_owner = NULL, locked = false WHERE hash IN %s`, inClause)
 			if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
 				return errors.NewStorageError("failed to bulk unlock transactions", err)
 			}
@@ -5133,7 +5133,7 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 					WHERE t.hash IN %s
 				)
 				UPDATE transactions t
-				SET locked = false,
+				SET conflict_owner = NULL, locked = false,
 				    delete_at_height = CASE
 				        WHEN s.has_preserve THEN t.delete_at_height
 				        WHEN s.conflicting AND t.delete_at_height IS NULL THEN $1
@@ -5644,6 +5644,13 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not create conflict_intents table - [%+v]", err)
 	}
 
+	if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS conflict_owner BYTEA`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN IF NOT EXISTS recovery BYTEA`); err != nil {
+		return errors.NewStorageError("could not add conflict recovery column", err)
+	}
+
 	return nil
 }
 
@@ -5955,6 +5962,25 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create conflict_intents table - [%+v]", err)
+	}
+
+	var ownerColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('transactions') WHERE name = 'conflict_owner'`).Scan(&ownerColumns); err != nil {
+		return err
+	}
+	if ownerColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN conflict_owner BLOB`); err != nil {
+			return err
+		}
+	}
+	var recoveryColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('conflict_intents') WHERE name = 'recovery'`).Scan(&recoveryColumns); err != nil {
+		return err
+	}
+	if recoveryColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN recovery BLOB`); err != nil {
+			return errors.NewStorageError("could not add conflict recovery column", err)
+		}
 	}
 
 	return nil

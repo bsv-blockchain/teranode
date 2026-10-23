@@ -341,3 +341,17 @@ func (m *NullStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.
 func (m *NullStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
 	return nil
 }
+
+func (m *NullStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *NullStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *NullStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *NullStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}

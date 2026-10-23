@@ -39,6 +39,7 @@ import (
 // into efficient subtree structures and maintaining consistency during blockchain
 // state changes.
 type Interface interface {
+	MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error
 	// AddBatch adds a batch of transaction nodes to the subtree processor for processing.
 	// The transactions will be organized into appropriate subtrees based on
 	// their dependencies and relationships with other transactions. This path is

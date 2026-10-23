@@ -45,15 +45,23 @@ func decodeIntentHashes(buf []byte) ([]chainhash.Hash, error) {
 // same intent is a no-op rather than a duplicate-key error.
 func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	intentID := intent.IntentID()
+	var recoveryData []byte
+	if intent.Recovery != nil {
+		var err error
+		recoveryData, err = utxo.EncodeConflictRecovery(intent.Recovery)
+		if err != nil {
+			return err
+		}
+	}
 
 	var q string
 	if s.engine == "postgres" {
-		q = `INSERT INTO conflict_intents (intent_id, kind, block_height, block_hash, tx_hashes, started_at)
-		     VALUES ($1, $2, $3, $4, $5, $6)
+		q = `INSERT INTO conflict_intents (intent_id, kind, block_height, block_hash, tx_hashes, started_at, recovery)
+		     VALUES ($1, $2, $3, $4, $5, $6, $7)
 		     ON CONFLICT (intent_id) DO NOTHING`
 	} else {
-		q = `INSERT OR IGNORE INTO conflict_intents (intent_id, kind, block_height, block_hash, tx_hashes, started_at)
-		     VALUES ($1, $2, $3, $4, $5, $6)`
+		q = `INSERT OR IGNORE INTO conflict_intents (intent_id, kind, block_height, block_hash, tx_hashes, started_at, recovery)
+		     VALUES ($1, $2, $3, $4, $5, $6, $7)`
 	}
 
 	if _, err := s.db.ExecContext(ctx, q,
@@ -63,6 +71,7 @@ func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictInt
 		intent.BlockHash[:],
 		encodeIntentHashes(intent.TxHashes),
 		intent.StartedAt,
+		recoveryData,
 	); err != nil {
 		return errors.NewStorageError("[BeginConflictIntent] failed to record intent %s", intentID.String(), err)
 	}
@@ -82,7 +91,7 @@ func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.H
 
 // PendingConflictIntents returns every begun-but-not-completed intent.
 func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT kind, block_height, block_hash, tx_hashes, started_at FROM conflict_intents`)
+	rows, err := s.db.QueryContext(ctx, `SELECT kind, block_height, block_hash, tx_hashes, started_at, recovery FROM conflict_intents`)
 	if err != nil {
 		return nil, errors.NewStorageError("[PendingConflictIntents] query failed", err)
 	}
@@ -92,14 +101,15 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 
 	for rows.Next() {
 		var (
-			kind        string
-			blockHeight int64
-			blockHash   []byte
-			txHashes    []byte
-			startedAt   int64
+			kind         string
+			blockHeight  int64
+			blockHash    []byte
+			txHashes     []byte
+			startedAt    int64
+			recoveryData []byte
 		)
 
-		if err := rows.Scan(&kind, &blockHeight, &blockHash, &txHashes, &startedAt); err != nil {
+		if err := rows.Scan(&kind, &blockHeight, &blockHash, &txHashes, &startedAt, &recoveryData); err != nil {
 			return nil, errors.NewStorageError("[PendingConflictIntents] scan failed", err)
 		}
 
@@ -113,7 +123,12 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 			return nil, errors.NewStorageError("[PendingConflictIntents] corrupt intent row (kind=%s height=%d startedAt=%d)", kind, blockHeight, startedAt, err)
 		}
 
+		recovery, err := utxo.DecodeConflictRecovery(recoveryData)
+		if err != nil {
+			return nil, err
+		}
 		intents = append(intents, utxo.ConflictIntent{
+			Recovery:    recovery,
 			Kind:        utxo.ConflictIntentKind(kind),
 			BlockHeight: uint32(blockHeight),
 			BlockHash:   *bh,
