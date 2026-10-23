@@ -18,7 +18,7 @@ Tag scheme:
 - Beta: `vX.Y.Z-beta-N` (e.g. `v0.15.0-beta-1`). Tagged on `release/vX.Y`. Immutable. The `release/vX.Y` branch is cut from `main` at the start of the minor's beta phase so all betas of that minor live on the same branch.
 - Stable: `vX.Y.Z`. Targets the SHA of the validated beta (never the branch tip — a hotfix landing after soak would otherwise get silently promoted).
 
-Canonical state source: **GitHub Releases page**. Don't maintain a separate doc — the `status` mode below renders it live.
+Canonical state source: **GitHub Releases page**. Don't maintain a separate doc — the `status` mode below renders it live. The human-readable release process, including the checklist and the go/no-go record, is `docs/howto/releaseProcess.md`.
 
 ## Modes
 
@@ -108,10 +108,20 @@ Steps:
 If all pass:
 1. **Resolve the beta SHA**: `git rev-parse vX.Y.Z-beta-N`. This is what gets tagged — never the branch tip.
 2. **Verify nothing has landed on top of the beta**: `git rev-parse release/vX.Y` must equal the beta SHA. If they differ, **refuse to tag**: a hotfix landed after the beta soak and that commit hasn't been validated. Tell the user; require a fresh beta cut.
-3. Build release notes from the range `<prev-stable-tag>..<beta-tag>` (never `..HEAD`).
-4. `gh release create vX.Y.Z --target <beta-sha> --title vX.Y.Z --notes-file <path>`. Explicit SHA target — bypasses branch-tip resolution entirely.
-5. Return tag URL.
-6. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
+3. **Write the release checklist.** Copy `docs/releases/checklist-template.md` to `docs/releases/vX.Y.Z-checklist.md` on a branch from `main`, and fill in every item with its evidence (see `docs/howto/releaseProcess.md`):
+   - the seven gate answers above, with the beta tag, the nodes and soak durations, and the sync-from-zero and mid-sync-upgrade nodes
+   - the `teranode_main_build.yaml` run URL at the beta SHA and the results of its `test_and_lint` jobs (Go test, smoketest, prunertest), from `gh run list --workflow teranode_main_build.yaml --commit <beta-sha>`
+   - the node-validation run in full mode against the beta SHA (or the immutable image digest built from it), for a release with consensus-affecting scope, or N/A and the reason. The stable tag does not exist yet, so never require a run against `vX.Y.Z`
+   - the open bug-labelled issues, from `gh issue list --label bug --state open`
+   - every open Critical or High finding, each closed or with a waiver (owner, date, reason, close-by date)
+   - the miner feedback register counts and location
+   - the security and architecture items, or "none" with the reason
+4. **Record the decision.** Ask the user which maintainer approves, and the date. Set `**Decision:** Go` only when every item has evidence and every open Critical or High finding is closed or waived. Otherwise leave `**Decision:** No-Go`, name the failed criterion, and **refuse to tag**.
+5. **Merge the checklist to `main`** through a pull request, before the tag. The `release-checklist` job in `teranode_main_build.yaml` fails a stable tag build when the file is not on `main` or does not record `**Decision:** Go`.
+6. Build release notes from the range `<prev-stable-tag>..<beta-tag>` (never `..HEAD`). Link the checklist in the notes.
+7. `gh release create vX.Y.Z --target <beta-sha> --title vX.Y.Z --notes-file <path>`. Explicit SHA target — bypasses branch-tip resolution entirely.
+8. Return tag URL.
+9. Offer to draft an Announcements discussion post (see "Discussion announcement" section below). Don't post automatically — show the draft, let user edit, confirm before publishing.
 
 ### `minor` — propose a minor version bump
 
@@ -163,6 +173,8 @@ Use `gh api graphql` to create the discussion if the user approves. The category
 **GitHub:** https://github.com/bsv-blockchain/teranode/releases/tag/vX.Y.Z
 **Container:** ghcr.io/bsv-blockchain/teranode:vX.Y.Z
 
+**Release checklist:** https://github.com/bsv-blockchain/teranode/blob/main/docs/releases/vX.Y.Z-checklist.md
+
 ## Upgrade priority
 <Critical | Recommended | Optional> — <one-sentence reason>.
 
@@ -171,8 +183,14 @@ Use `gh api graphql` to create the discussion if the user approves. The category
 - <Top change> (#PR)
 - <Top change> (#PR)
 
+## For miners
+<Required for a consensus-level or behaviour-affecting change: what a miner must verify before and after upgrading.>
+
+## For node operators
+<Required for a consensus-level or behaviour-affecting change: what a non-mining node operator must verify before and after upgrading.>
+
 ## Known issues
-<None | bulleted list with workarounds>
+<Every open bug-labelled issue that affects this build, with its number and any workaround; every waiver from the checklist; every open non-code item (such as an open governance item from miner feedback) with its timeline or deferral reason. "None" only when all of these are empty.>
 
 [Full changelog](https://github.com/bsv-blockchain/teranode/releases/tag/vX.Y.Z)
 ```
@@ -185,6 +203,9 @@ Use `gh api graphql` to create the discussion if the user approves. The category
   - *Critical* — fixes a known prod incident class or consensus correctness issue
   - *Recommended* — meaningful operational fixes, no known prod impact
   - *Optional* — perf or features only
+  - A release with a consensus correctness change that is not rated *Critical* must say why in the reason.
+- **Audiences**: a release with a consensus-level or behaviour-affecting change must have both "For miners" and "For node operators". Omit both only when there is no such change.
+- **Known issues**: check `gh issue list --label bug --state open` at tag time. "None" is correct only when nothing open affects the build.
 - **No node naming.** "mainnet/testnet/teratestnet" is fine; specific hostnames leak fleet topology.
 - **Theme line in title** is a tight summary — "operational fixes", "UTXO conflict-state hardening", "new minor: performance + consensus", etc. Avoid generic "bug fixes".
 

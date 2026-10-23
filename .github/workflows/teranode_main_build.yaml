@@ -22,6 +22,18 @@ jobs:
       pull-requests: read
     secrets: inherit
 
+  # A stable vX.Y.Z tag builds only when its completed release checklist, with a
+  # Go decision, is on main. Branches and beta tags pass. See docs/howto/releaseProcess.md.
+  release-checklist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+      - name: Fetch main
+        run: git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+      - name: Check the release checklist
+        run: ./scripts/check-release-checklist.sh "${{ github.ref_type }}" "${{ github.ref_name }}" origin/main
+
   # Calculate version information
   calculate-version:
     runs-on: ubuntu-latest
@@ -40,7 +52,7 @@ jobs:
 
   # Run remote build and deploy workflow
   build-and-deploy:
-    needs: calculate-version
+    needs: [calculate-version, release-checklist]
     uses: bsv-blockchain/teranode-shared-workflows/.github/workflows/build_and_deploy.yaml@main
     permissions:
       contents: read
