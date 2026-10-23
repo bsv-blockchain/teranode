@@ -231,3 +231,161 @@ func TestSetTxMinedStatus_RevertFailureLeavesMinedSetFalse(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, stillTagged.BlockIDs, blockMeta.ID, "precondition for the next sweep: T still carries the tag the revert owes")
 }
+
+// minedFailingStore wraps a real UTXO store and fails SetMinedMulti on the MINED
+// (not unset) path — how model.UpdateTxMinedStatus's store write fails on the
+// normal valid-block path.
+type minedFailingStore struct {
+	utxostore.Store
+
+	minedCalls int
+}
+
+func (s *minedFailingStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, info utxostore.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
+	if !info.UnsetMined {
+		s.minedCalls++
+
+		return nil, errors.NewStorageError("injected SetMinedMulti failure on the mined path")
+	}
+
+	return s.Store.SetMinedMulti(ctx, hashes, info)
+}
+
+// TestSetTxMinedStatus_ValidPathReleasesSubtreesOnError is the regression for #2029.
+//
+// On the valid-block path setTxMinedStatus loads the block's subtrees and only releases them after a
+// successful UpdateTxMinedStatus. Before the fix the error returns (ErrBlockInvalid,
+// ErrBlockParentNotMined, the generic update error, and the GetBlockHeaderIDs failure) skipped that
+// release, so a block owned by this call kept its mmap-backed subtrees mapped — one leaked set of
+// mappings and temp files per attempt, and the setTxMined retry loop runs up to 10 times. A
+// UTXO-store decorator fails the mined SetMinedMulti so the generic error path is taken; the block's
+// subtrees must still come back released, which ReleaseSubtreeNodes records by nil-ing the
+// SubtreeSlices entries.
+func TestSetTxMinedStatus_ValidPathReleasesSubtreesOnError(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	blockChainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///gap2029")
+	require.NoError(t, err)
+
+	realUtxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	subtreeStore := blobmemory.New()
+	txStore := blobmemory.New()
+
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	privateKey, err := bec.NewPrivateKey()
+	require.NoError(t, err)
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	fundingTx := bt.NewTx()
+	require.NoError(t, fundingTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	fundingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'F', 'u', 'n', 'd'})
+	require.NoError(t, fundingTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
+
+	txT := bt.NewTx()
+	require.NoError(t, txT.FromUTXOs(&bt.UTXO{
+		TxIDHash:      fundingTx.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: fundingTx.Outputs[0].LockingScript,
+		Satoshis:      fundingTx.Outputs[0].Satoshis,
+	}))
+	require.NoError(t, txT.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000))
+	require.NoError(t, txT.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
+
+	_, _, err = realUtxoStore.SpendAndCreate(ctx, fundingTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	_, _, err = realUtxoStore.SpendAndCreate(ctx, txT, 0, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*txT.TxIDChainHash(), uint64(txT.Size()), 0)) //nolint:gosec
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(txT))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	const blockHeight = uint32(1)
+
+	coinbaseTx := coinbaseAtHeight(t, blockHeight)
+
+	replicated := subtree.Duplicate()
+	replicated.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+
+	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, replicated.RootHash())
+
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
+		uint64(subtree.Length()), uint64(coinbaseTx.Size()+txT.Size()), blockHeight, 0) //nolint:gosec
+	require.NoError(t, err)
+
+	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+
+	bv := &BlockValidation{
+		logger:                        logger,
+		settings:                      tSettings,
+		blockchainClient:              blockchainClient,
+		subtreeStore:                  subtreeStore,
+		txStore:                       txStore,
+		utxoStore:                     realUtxoStore,
+		subtreeValidationClient:       subtreeValidationClient,
+		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
+		setMinedChan:                  make(chan *chainhash.Hash, 1),
+		revalidateBlockChan:           make(chan revalidateBlockData, 1),
+		stats:                         gocore.NewStat("blockvalidation"),
+	}
+	defer bv.StopCaches()
+
+	// Validate and store the block; this caches it in lastValidatedBlocks with its subtrees loaded.
+	require.NoError(t, bv.ValidateBlock(ctx, block, "test"))
+
+	// Hold the exact block object setTxMinedStatus will use, with subtrees loaded, so the release is
+	// observable. setTxMinedStatus removes it from the cache and takes ownership.
+	cached, ok := bv.lastValidatedBlocks.Get(*block.Hash())
+	require.True(t, ok, "precondition: the validated block is cached")
+	require.True(t, bv.hasValidSubtrees(cached), "precondition: the cached block has its subtrees loaded")
+	require.NotEmpty(t, cached.SubtreeSlices, "precondition: there is a loaded subtree to leak")
+
+	// The mined update now fails, driving setTxMinedStatus down the generic error return.
+	failing := &minedFailingStore{Store: realUtxoStore}
+	bv.utxoStore = failing
+
+	err = bv.setTxMinedStatus(ctx, block.Hash())
+	require.Positive(t, failing.minedCalls, "precondition: the mined SetMinedMulti was reached")
+	require.Error(t, err, "#2029: the injected mined-update failure must surface")
+
+	// Despite the error, the owned block's subtrees were released: ReleaseSubtreeNodes nils the
+	// SubtreeSlices entries. Before the fix the else branch had no defer, so the success-only release
+	// was skipped and the entries stayed non-nil (leaked mappings/temp files).
+	for i, s := range cached.SubtreeSlices {
+		require.Nil(t, s, "#2029: subtree slice %d must be released (nil) after a failed valid-path update", i)
+	}
+}
