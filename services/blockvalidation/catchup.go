@@ -1030,6 +1030,21 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		return errors.NewBlockInvalidError("[catchup][%s] common ancestor %s at height %d is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
 	}
 
+	// The first header after the ancestor must name the ancestor as its parent. Every later step
+	// assigns heights as ancestor+1+index, so a first header built on some other stored block would
+	// be validated at the wrong heights (checkpoint matching included). The header cache only checks
+	// links among the new headers, and verifyChainContinuity only that the parent exists somewhere.
+	// This runs here, before step 5.5, so a mis-linked offer cannot un-stamp our own blocks for a
+	// fork that is then rejected (issue #1145). ProcessingError, as for the "chain broken" defect
+	// one link later in HeaderChainCache.validateChain: a generic peer fault, not proof of malice,
+	// since a peer that reorged between header iterations can serve a seam like this honestly.
+	if commonAncestorIndex+1 < len(peerHeaders) {
+		firstNewHeader := peerHeaders[commonAncestorIndex+1]
+		if !firstNewHeader.HashPrevBlock.IsEqual(commonAncestorHash) {
+			return errors.NewProcessingError("[catchup][%s] first header %s after common ancestor %s does not link to common ancestor: its parent is %s", catchupCtx.blockUpTo.Hash().String(), firstNewHeader.Hash().String(), commonAncestorHash.String(), firstNewHeader.HashPrevBlock.String())
+		}
+	}
+
 	// Calculate fork depth
 	forkDepth := uint32(0)
 	if commonAncestorMeta.Height < currentHeight {
@@ -1155,11 +1170,12 @@ func (u *Server) filterHeaders(ctx context.Context, catchupCtx *CatchupContext) 
 func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 6: Building header chain cache", catchupCtx.blockUpTo.Hash().String())
 
-	// Verify first header connects to common ancestor
+	// Verify first header connects to common ancestor. findCommonAncestor already rejects a
+	// mis-linked offer; this guards the cache against being built from headers that bypassed it.
 	if len(catchupCtx.blockHeaders) > 0 {
 		firstHeaderParent := catchupCtx.blockHeaders[0].HashPrevBlock
 		if !firstHeaderParent.IsEqual(catchupCtx.commonAncestorHash) {
-			u.logger.Warnf("[catchup][%s] first header parent %s doesn't match common ancestor %s", catchupCtx.blockUpTo.Hash().String(), firstHeaderParent.String(), catchupCtx.commonAncestorHash.String())
+			return errors.NewProcessingError("[catchup][%s] first header parent %s does not link to common ancestor %s", catchupCtx.blockUpTo.Hash().String(), firstHeaderParent.String(), catchupCtx.commonAncestorHash.String())
 		}
 	}
 

@@ -503,8 +503,11 @@ func TestCatchup_ContextStateConsistency(t *testing.T) {
 			currentHeight:      1000,
 			blockHeaders:       testHeaders[1:],
 			headersFetchResult: &catchup.Result{
-				Headers: testHeaders[1:], // Headers to be filtered
+				// Peer headers start at the common ancestor (index 0), as a real fetch returns them,
+				// so filterHeaders keeps testHeaders[1:], whose first parent is the ancestor.
+				Headers: testHeaders,
 			},
+			commonAncestorIndex: 0,
 		}
 
 		// Verify context consistency after various operations
