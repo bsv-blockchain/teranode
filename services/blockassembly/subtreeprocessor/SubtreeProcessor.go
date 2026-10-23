@@ -1858,13 +1858,27 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 					// postProcess). Any in-flight tx whose parent gets cascaded here
 					// is dropped by that drain regardless of cascade discovery, so
 					// the per-block transient set is not needed here.
-					losingTxHashesMap, _, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
-						utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block))
+					//
+					// Nodes the store already shows resolved for this block are kept
+					// out of ProcessConflicting here too; see alreadyResolvedConflictingNodes.
+					conflictingNodes, resolvedLosers, err := stp.alreadyResolvedConflictingNodes(ctx, block, conflictingNodes)
 					if err != nil {
-						return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
+						return err
 					}
 
-					if losingTxHashesMap.Length() > 0 {
+					var losingTxHashesMap txmap.TxMap
+
+					if len(conflictingNodes) > 0 {
+						losingTxHashesMap, _, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
+							utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block))
+						if err != nil {
+							return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
+						}
+					}
+
+					losingTxHashesMap, _ = mergeResolvedLosers(losingTxHashesMap, nil, resolvedLosers)
+
+					if losingTxHashesMap != nil && losingTxHashesMap.Length() > 0 {
 						// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
 						if err = stp.markConflictingTxsInSubtrees(ctx, losingTxHashesMap); err != nil {
 							return errors.NewProcessingError("[moveForwardBlock][%s] error marking conflicting transactions", block.String(), err)
@@ -5583,20 +5597,35 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 			block.Height = blockHeaderMeta.Height
 		}
 
-		var allMarkedConflicting []chainhash.Hash
-		if losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
-			utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block)); err != nil {
-			return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+		// Nodes the store already shows resolved for this block are not handed to
+		// ProcessConflicting, whose guard would refuse them; see
+		// alreadyResolvedConflictingNodes for why they exist and why they cannot
+		// be re-run.
+		var resolvedLosers []chainhash.Hash
+
+		conflictingNodes, resolvedLosers, err = stp.alreadyResolvedConflictingNodes(ctx, block, conflictingNodes)
+		if err != nil {
+			return nil, nil, err
 		}
 
-		if len(allMarkedConflicting) > 0 {
-			conflictingSet = make(map[chainhash.Hash]struct{}, len(allMarkedConflicting))
-			for _, h := range allMarkedConflicting {
-				conflictingSet[h] = struct{}{}
+		if len(conflictingNodes) > 0 {
+			var allMarkedConflicting []chainhash.Hash
+			if losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
+				utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block)); err != nil {
+				return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+			}
+
+			if len(allMarkedConflicting) > 0 {
+				conflictingSet = make(map[chainhash.Hash]struct{}, len(allMarkedConflicting))
+				for _, h := range allMarkedConflicting {
+					conflictingSet[h] = struct{}{}
+				}
 			}
 		}
 
-		if losingTxHashesMap.Length() > 0 {
+		losingTxHashesMap, conflictingSet = mergeResolvedLosers(losingTxHashesMap, conflictingSet, resolvedLosers)
+
+		if losingTxHashesMap != nil && losingTxHashesMap.Length() > 0 {
 			// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
 			if err = stp.markConflictingTxsInSubtrees(ctx, losingTxHashesMap); err != nil {
 				return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error marking conflicting transactions", block.String(), err)

@@ -1699,10 +1699,37 @@ func (b *BlockAssembler) drainPendingInvalidations(ctx context.Context) {
 func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	switch intent.Kind {
 	case utxo.ConflictIntentForward:
+		// A winner the store already shows resolved (not conflicting, and the
+		// recorded spender of its inputs) is left alone. Re-running its
+		// resolution is not idempotent: the loser walk starts from the parents'
+		// recorded spender, which is now the winner itself, so a re-run demotes
+		// the winner's own descendants. That is what the replay of a leftover
+		// intent did to mainnet on every restart from 2026-10-19: the intent came
+		// from a resolution refused at step 0 with nothing mutated, and every
+		// replay demoted the mined children of 38 already-resolved winners.
+		pending := make([]chainhash.Hash, 0, len(intent.TxHashes))
+
+		for _, h := range intent.TxHashes {
+			applied, err := utxo.ForwardResolutionApplied(ctx, b.utxoStore, h)
+			if err != nil {
+				return err
+			}
+
+			if !applied {
+				pending = append(pending, h)
+			}
+		}
+
+		if len(pending) == 0 {
+			b.logger.Infof("[replayPendingConflictIntents][%s] forward intent for %d transaction(s) is already applied, clearing it without re-running", intent.BlockHash.String(), len(intent.TxHashes))
+
+			return nil
+		}
+
 		// Seed the processed-hashes map with the intent's own hashes so the
-		// ProcessConflicting "tx is not conflicting" guard never fires when
-		// replaying a completed-but-not-tombstoned op (winners already
-		// Conflicting=false). The remaining steps are idempotent re-applications.
+		// ProcessConflicting "tx is not conflicting" guard never fires on a
+		// winner whose step 4 ran but whose spends did not all land. The
+		// remaining steps are idempotent re-applications.
 		seeded := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
 		for _, h := range intent.TxHashes {
 			seeded[h] = struct{}{}
@@ -1713,7 +1740,7 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 		// says nothing about whether a losing transaction is confirmed on that
 		// block's own ancestry. Without the guard, replaying an intent recorded by
 		// a pre-fix process would re-apply the very corruption this prevents.
-		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
+		_, _, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, pending, seeded,
 			utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
 
 		return err

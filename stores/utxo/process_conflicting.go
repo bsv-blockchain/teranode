@@ -172,23 +172,17 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 		return nil, nil, errors.NewProcessingError("[ProcessConflicting] failed to record WAL intent before processing", beginErr)
 	}
 
-	// Registered before the rollback defer below, so it runs AFTER it (LIFO) and
-	// observes the final err (including a rollback-failure escalation). Only a
-	// genuinely successful operation removes the intent; otherwise it persists for
-	// replay. Completion is best-effort: a failed delete just leaves an intent
-	// that replays idempotently on the next restart.
-	defer func() {
-		if err == nil {
-			_ = s.CompleteConflictIntent(ctx, walIntent.IntentID())
-		}
-	}()
-
 	// State for the deferred compensating rollback. Each commit phase flips a flag; the
 	// deferred block reads them on the way out and undoes whatever happened — see #4561.
 	// allMarkedHashes mirrors the allMarkedConflicting named return but is read by the
 	// deferred block; a `return nil, nil, err` in the error paths clobbers the named
 	// return before the deferred runs, so we keep a parallel copy that survives.
 	var (
+		// mutationStarted is set just before step 1 runs. Step 1 commits one
+		// cascade level per SetConflicting call, so a failure inside it can leave
+		// earlier levels committed with step1Committed still false; only this flag
+		// says that nothing was touched.
+		mutationStarted       bool
 		step1Committed        bool
 		step2Committed        bool
 		step4Committed        bool
@@ -198,6 +192,22 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 		step3SuccessfulSpends []*Spend
 		allMarkedHashes       []chainhash.Hash
 	)
+
+	// Registered before the rollback defer below, so it runs AFTER it (LIFO) and
+	// observes the final err (including a rollback-failure escalation). A
+	// successful operation removes the intent, and so does a failure before step 1
+	// starts, while nothing has been touched: there is nothing for a replay to
+	// recover, and an intent left behind by a step-0 refusal would be replayed
+	// with the refusal bypassed, as happened on mainnet on 2026-10-19 against
+	// winners that were already resolved. Any failure after step 1 starts keeps
+	// the intent for replay, including one inside step 1 after some of its
+	// levels committed. Completion is best-effort: a failed delete just leaves an
+	// intent that replays on the next restart.
+	defer func() {
+		if err == nil || !mutationStarted {
+			_ = s.CompleteConflictIntent(ctx, walIntent.IntentID())
+		}
+	}()
 
 	defer func() {
 		if err == nil || !step1Committed {
@@ -360,6 +370,8 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively.
 	//   allMarkedConflicting is the BFS expansion: every hash now flagged Conflicting=true. Forwarded to callers so
 	//   the block-assembly conflictingMap can include the cascaded descendants (not just the immediate losers).
+	mutationStarted = true
+
 	affectedParentSpends, allMarkedHashes, err = MarkConflictingRecursively(ctx, s, losingTxHashes)
 	if err != nil {
 		return nil, nil, err
@@ -634,6 +646,63 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 	}
 
 	return cascadedToConflicting, allTouched, nil
+}
+
+// ForwardResolutionApplied reports whether the store already holds the end state
+// of a forward resolution for winner W: W is not Conflicting, and W is the
+// recorded spender of every one of its inputs. That is the state ProcessConflicting
+// leaves after its step 4, and the only state in which a transaction that was once
+// a block's conflicting node can be found not conflicting.
+//
+// Callers use it to recognise a resolution that ran but was not recorded by the
+// caller's own checkpoint: a forward intent left in the WAL after a kill, or a
+// block re-applied by block assembly after a catch-up that did not reach its
+// checkpoint. Such a resolution must not be re-run: GetCounterConflicting finds
+// losers through the parents' recorded spender, which is now W itself, so a
+// re-run walks and demotes W's own descendants.
+//
+// Returns false (no error) when W is still Conflicting, when W or one of its
+// parents is unknown, or when any input's recorded spender is missing or not W.
+// Only the parents' spenders decide: a W that is not conflicting but not the
+// spender of an input is not a state this code can explain, and callers hand it
+// to ProcessConflicting, whose guard refuses it. An error is surfaced for any Get
+// failure, which is a store problem rather than a state question.
+func ForwardResolutionApplied(ctx context.Context, s Store, winner chainhash.Hash) (bool, error) {
+	winnerMeta, err := s.Get(ctx, &winner, fields.TxInpoints, fields.Conflicting)
+	if err != nil {
+		return false, errors.NewProcessingError("[ForwardResolutionApplied][%s] error getting winner meta", winner.String(), err)
+	}
+
+	if winnerMeta == nil || winnerMeta.Conflicting {
+		return false, nil
+	}
+
+	parents := make(map[chainhash.Hash]*meta.Data)
+
+	for _, inpoint := range winnerMeta.TxInpoints.GetTxInpoints() {
+		parentMeta, seen := parents[inpoint.Hash]
+		if !seen {
+			parentHash := inpoint.Hash
+
+			parentMeta, err = s.Get(ctx, &parentHash, fields.Utxos)
+			if err != nil {
+				return false, errors.NewProcessingError("[ForwardResolutionApplied][%s] error getting parent %s meta", winner.String(), parentHash.String(), err)
+			}
+
+			parents[inpoint.Hash] = parentMeta
+		}
+
+		if parentMeta == nil || int(inpoint.Index) >= len(parentMeta.SpendingDatas) {
+			return false, nil
+		}
+
+		sd := parentMeta.SpendingDatas[inpoint.Index]
+		if sd == nil || sd.TxID == nil || !sd.TxID.IsEqual(&winner) {
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 // isReverseFullyApplied returns true iff every input of the demoted tx D has
