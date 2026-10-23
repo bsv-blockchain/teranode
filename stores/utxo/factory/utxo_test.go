@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
@@ -65,6 +66,8 @@ func (m *MockUTXOStore) GetBlockState() utxo.BlockState {
 		MedianTime: m.GetMedianBlockTime(),
 	}
 }
+
+func (m *MockUTXOStore) Stamper() pruner.Stamper { return pruner.NoStamp }
 
 // Implement remaining interface methods as no-ops for testing
 func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
@@ -466,4 +469,9 @@ func TestAvailableDatabases_GlobalVariable(t *testing.T) {
 	// Clean up
 	delete(availableDatabases, "test")
 	assert.Equal(t, initialLen, len(availableDatabases))
+}
+
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockUTXOStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
 }

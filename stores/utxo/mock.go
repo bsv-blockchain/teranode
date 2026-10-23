@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -417,6 +418,13 @@ func (m *MockUtxostore) GetBlockState() BlockState {
 	return args.Get(0).(BlockState)
 }
 
+// Stamper returns pruner.NoStamp without consulting the mock's expectations: the mock stands in
+// for a store with nothing to stamp, and every test that holds one would otherwise have to set up
+// a call it never cares about.
+func (m *MockUtxostore) Stamper() pruner.Stamper {
+	return pruner.NoStamp
+}
+
 // QueryOldUnminedTransactions mocks the querying of old unmined transactions before a cutoff height.
 // Returns the configured mock response for old unmined transaction queries.
 func (m *MockUtxostore) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeight uint32) ([]chainhash.Hash, error) {
@@ -487,6 +495,16 @@ func (m *MockConsistencyScanIterator) Err() error {
 func (m *MockConsistencyScanIterator) Close() error {
 	args := m.Called()
 	return args.Error(0)
+}
+
+// SpendsMadeBy mocks the lookup of the coins a transaction consumed.
+func (m *MockUtxostore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*Spend, error) {
+	args := m.Called(ctx, txHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*Spend), args.Error(1)
 }
 
 // expects reports whether the test set an expectation for method.

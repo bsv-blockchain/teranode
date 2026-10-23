@@ -35,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
@@ -379,6 +380,12 @@ func (s *Server) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // configuration settings are missing or network setup fails.
 func (s *Server) Init(ctx context.Context) error {
 	var err error
+
+	// A store that nets below the checkpoint takes those blocks only through quick
+	// validation, so a legacy route that sends them to full validation stops the sync.
+	if err = model.CheckNettedRouteLegacySettings(s.settings, s.utxoStore); err != nil {
+		return err
+	}
 
 	wire.SetLimits(maxWireBlockPayload)
 

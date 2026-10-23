@@ -21,6 +21,13 @@ type unifiedRouteStore struct {
 
 func (s *unifiedRouteStore) SupportsOutpointOnlySpend() bool { return s.supports }
 
+// nettingUnifiedRouteStore is unifiedRouteStore on a store that nets below the checkpoint.
+type nettingUnifiedRouteStore struct {
+	unifiedRouteStore
+}
+
+func (s *nettingUnifiedRouteStore) NetsBelowCheckpoint() bool { return true }
+
 func newUnifiedRouteSettings(t *testing.T, unified, outpointOnly bool, checkpointHeight int32) *settings.Settings {
 	t.Helper()
 
@@ -55,6 +62,7 @@ func TestServer_legacyUnifiedRoute(t *testing.T) {
 		unified      bool
 		outpointOnly bool
 		supports     bool
+		nets         bool
 		baseURL      string
 		height       uint32
 		headerProven bool
@@ -71,15 +79,28 @@ func TestServer_legacyUnifiedRoute(t *testing.T) {
 		{name: "store unsupported", unified: true, outpointOnly: true, supports: false, baseURL: "legacy", height: 1000, headerProven: true, want: false, wantEligible: false},
 		{name: "non-legacy source", unified: true, outpointOnly: true, supports: true, baseURL: "http://peer:8090", height: 1000, headerProven: true, want: false, wantEligible: false},
 		{name: "height 0", unified: true, outpointOnly: true, supports: true, baseURL: "legacy", height: 0, headerProven: true, want: false, wantEligible: false},
+		// On a netting store this service's copy of the unified flag is not read: full
+		// validation cannot take such a block, and the legacy service refuses to start with its
+		// own copy off. Every other conjunct still holds the route closed.
+		{name: "netting, unified flag off, proven", unified: false, outpointOnly: true, supports: true, nets: true, baseURL: "legacy", height: 1000, headerProven: true, want: true, wantEligible: true},
+		{name: "netting, unified flag off, unproven", unified: false, outpointOnly: true, supports: true, nets: true, baseURL: "legacy", height: 1000, headerProven: false, want: false, wantEligible: true},
+		{name: "netting, unified flag off, above checkpoint", unified: false, outpointOnly: true, supports: true, nets: true, baseURL: "legacy", height: 2001, headerProven: true, want: false, wantEligible: false},
+		{name: "netting, unified flag off, non-legacy source", unified: false, outpointOnly: true, supports: true, nets: true, baseURL: "http://peer:8090", height: 1000, headerProven: true, want: false, wantEligible: false},
+		{name: "netting, both flags off", unified: false, outpointOnly: false, supports: true, nets: true, baseURL: "legacy", height: 1000, headerProven: true, want: false, wantEligible: false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tSettings := newUnifiedRouteSettings(t, tt.unified, tt.outpointOnly, cp)
 
+			var store utxo.Store = &unifiedRouteStore{supports: tt.supports}
+			if tt.nets {
+				store = &nettingUnifiedRouteStore{unifiedRouteStore{supports: tt.supports}}
+			}
+
 			u := &Server{
 				settings:  tSettings,
-				utxoStore: &unifiedRouteStore{supports: tt.supports},
+				utxoStore: store,
 			}
 
 			block := &model.Block{Height: tt.height}

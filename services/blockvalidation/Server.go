@@ -810,6 +810,16 @@ func (u *Server) Init(ctx context.Context) (err error) {
 		return errors.NewConfigurationError("could not get utxostore URL", err)
 	}
 
+	// A store that nets below the checkpoint takes those blocks only through quick
+	// validation, so settings that keep catch-up from quick validating them stop the sync.
+	if err = model.CheckNettedRouteCatchupSettings(u.settings, u.utxoStore); err != nil {
+		return err
+	}
+
+	if window := model.NettedRouteCatchupWindow(u.settings, u.utxoStore); window != u.settings.BlockValidation.CatchupMaxAccumulatedHeaders {
+		u.logger.Infof("[Init] the UTXO store nets the blocks below the checkpoint, so each catch-up window holds %d headers, one checkpoint gap plus the common ancestor, instead of blockvalidation_max_accumulated_headers %d", window, u.settings.BlockValidation.CatchupMaxAccumulatedHeaders)
+	}
+
 	// Only create a new BlockValidation if one wasn't already set (for testing).
 	// Pass the P2P client through the variadic opts so block-validation can strike the peer
 	// that served a corrupt block body (bitcoin-sv/teranode#4692) with correct attribution to
@@ -2073,6 +2083,13 @@ func (u *Server) processBlockFound(ctx context.Context, hash *chainhash.Hash, pe
 		return qErr
 	}
 
+	if u.blockValidation.mustStayOnQuickValidation(block) {
+		// Below the checkpoint a netting UTXO store may already hold part of this block
+		// without spend-journal rows, which full validation would read. Wait for the header
+		// proof that sends the block to quick validation instead.
+		return errors.NewServiceError("[processBlockFound][%s] block at height %d is below the hardcoded checkpoint on a netting UTXO store and can only be quick validated; it has no header proof yet", hash.String(), block.Height)
+	}
+
 	// validate the block
 	u.logger.Infof("[processBlockFound][%s] validate block from %s", hash.String(), baseURL)
 
@@ -2150,9 +2167,20 @@ func (u *Server) legacyUnifiedRoute(block *model.Block, baseURL string, headerPr
 // unified route, and the shared eligibility gate holds (store capability +
 // hardcoded checkpoint boundary via model.OutpointOnlyEligible, never the
 // operator catchup override). It says nothing about which chain the block is on;
-// legacyUnifiedRoute adds that.
+// legacyUnifiedRoute adds that. The parent-missing guard in processBlockFound
+// reads this one on purpose, so an unproven legacy orphan is refused rather than
+// diverted to catch-up.
+//
+// On a store that nets below the checkpoint (model.NettedRouteAt) this service's own copy of
+// blockvalidation_legacy_unified_below_checkpoint is not read: full validation of such a block
+// is not possible, so a false copy here, with legacy's copy true (per-service overrides or split
+// pods), would leave every below-checkpoint legacy block waiting for a header proof that legacy
+// already sent. The legacy service refuses to start with its own copy false on such a store
+// (model.CheckNettedRouteLegacySettings), so that copy decides.
 func (u *Server) legacyUnifiedEligible(block *model.Block, baseURL string) bool {
-	if !u.settings.BlockValidation.LegacyUnifiedBelowCheckpoint {
+	// The return below requires model.OutpointOnlyEligible, so "the store nets" alone here is
+	// model.NettedRouteAt.
+	if !u.settings.BlockValidation.LegacyUnifiedBelowCheckpoint && !utxo.NetsBelowCheckpoint(u.utxoStore) {
 		return false
 	}
 

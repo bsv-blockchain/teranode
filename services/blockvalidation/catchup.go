@@ -290,6 +290,13 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
+	// Step 3.1: Refuse a fork below the checkpoint on the netted route, at any depth, before the
+	// fork-depth check scores a deep one as a local fault and before the mined_set clear below
+	// un-stamps this node's own blocks for a fork this route can never take.
+	if err = u.refuseNettedRouteFork(catchupCtx); err != nil {
+		return err
+	}
+
 	// Step 4: Validate fork depth against coinbase maturity
 	if err = u.validateForkDepth(catchupCtx); err != nil {
 		return err
@@ -373,7 +380,11 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	// Header-fetch validation only checks each header's PoW against its own nBits; this
 	// recomputes the DAA-required nBits from the header chain and rejects a peer that
 	// supplied a self-consistent low-difficulty chain.
-	if err = u.validateCatchupHeaderDifficulty(ctx, catchupCtx); err != nil {
+	//
+	// Step 9.6: On the netted route, refuse a window with no verified checkpoint above its first
+	// block, before any block body is fetched. It runs after the DAA check, so a self-consistent
+	// low-difficulty chain in such a window is still reported as malicious.
+	if err = u.validateHeaderWindow(ctx, catchupCtx); err != nil {
 		return err
 	}
 
@@ -577,6 +588,14 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// not an error to store against the peer. Earlier data-serving failures
 			// remain attributable through the failedPeers drain below.
 			errorType = "local_fsm_refusal"
+			isPeerError = false
+		case isLocalCatchupFault(*err) && strings.Contains(errorMsg, "checkpoint"):
+			// A local refusal that names the checkpoint: the netted route has no verified
+			// checkpoint in this window, or a quick validation there is retried. Server.go scores
+			// it local through isLocalCatchupFault. Matched by code above every text-matched case,
+			// because the wrapped cause of a retried quick validation can contain "eof", "http"
+			// or "connection", and those cases charge the peer.
+			errorType = "local_no_verified_checkpoint"
 			isPeerError = false
 		case isUnboundTxInvalidVerdict(*err):
 			// An invalid transaction in an unbound subtree list (bitcoin-sv/teranode#4844): corrupt
@@ -1221,9 +1240,107 @@ func (u *Server) verifyCheckpointsInHeaderChain(catchupCtx *CatchupContext) erro
 	if checkpointsChecked > 0 {
 		u.logger.Infof("[catchup][%s] Successfully verified %d checkpoint(s) in header chain", catchupCtx.blockUpTo.Hash().String(), checkpointsChecked)
 		catchupCtx.useQuickValidation = true // enabled: BlockAssembly sync check added in tryQuickValidation
+
+		u.trimWindowToVerifiedCheckpoint(catchupCtx)
 	}
 
 	return nil
+}
+
+// validateHeaderWindow runs the checks on the fetched header window that need no block body, in
+// sequence: the DAA (difficulty adjustment algorithm) check, which reports a peer that serves a
+// low-difficulty chain, and then the netted-route refusal of a window without a verified
+// checkpoint, which is a local fault and reports no peer.
+func (u *Server) validateHeaderWindow(ctx context.Context, catchupCtx *CatchupContext) error {
+	if err := u.validateCatchupHeaderDifficulty(ctx, catchupCtx); err != nil {
+		return err
+	}
+
+	return u.refuseNettedRouteWindowWithoutCheckpoint(catchupCtx)
+}
+
+// nettedRouteFirstBlock reports whether the first block after the common ancestor is on the
+// netted route (mustStayOnQuickValidationAt), and that block's height.
+func (u *Server) nettedRouteFirstBlock(catchupCtx *CatchupContext) (uint32, bool) {
+	if u.blockValidation == nil || catchupCtx.commonAncestorMeta == nil {
+		return 0, false
+	}
+
+	first := catchupCtx.commonAncestorMeta.Height + 1
+
+	return first, u.blockValidation.mustStayOnQuickValidationAt(first)
+}
+
+// refuseNettedRouteFork refuses a fork whose first block is on the netted route, as the peer's
+// fault (a ProcessingError). verifyCheckpointsInHeaderChain does not check a fork, so none of its
+// blocks can be quick validated, and on this route no block can take another route. The fork is
+// off the checkpointed chain: on this route each block this node holds below the checkpoint was
+// written through quick validation under a verified checkpoint at or above it, or through the
+// legacy route under a header proof that ends at a checkpoint, so a different block at the same
+// height is not an ancestor of that checkpoint. Refused before the mined_set clear and before any
+// block body is fetched.
+func (u *Server) refuseNettedRouteFork(catchupCtx *CatchupContext) error {
+	if catchupCtx.forkDepth == 0 {
+		return nil
+	}
+
+	first, netted := u.nettedRouteFirstBlock(catchupCtx)
+	if !netted {
+		return nil
+	}
+
+	return errors.NewProcessingError("[catchup][%s] peer serves a fork of depth %d from height %d, below the hardcoded checkpoint, and a netting UTXO store takes those blocks only on the checkpointed chain", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, first)
+}
+
+// refuseNettedRouteWindowWithoutCheckpoint refuses a window on the netted route whose first block
+// has no verified checkpoint at or above it, as a local fault (a ServiceError). An honest peer
+// that is still syncing, or a blockUpTo below the next checkpoint, gives such a window, so no
+// peer is charged, and the per-block attempt cap bounds the retries. tryQuickValidation makes the
+// same refusal for each block; this one stops the catch-up before a block body is fetched.
+func (u *Server) refuseNettedRouteWindowWithoutCheckpoint(catchupCtx *CatchupContext) error {
+	if catchupCtx.forkDepth > 0 || len(catchupCtx.blockHeaders) == 0 {
+		return nil
+	}
+
+	first, netted := u.nettedRouteFirstBlock(catchupCtx)
+	if !netted {
+		return nil
+	}
+
+	if catchupCtx.useQuickValidation && catchupCtx.highestCheckpointHeight >= first {
+		return nil
+	}
+
+	return errors.NewServiceError("[catchup][%s] block at height %d is below the hardcoded checkpoint on a netting UTXO store and can only be quick validated, but this catch-up window holds no verified checkpoint above it", catchupCtx.blockUpTo.Hash().String(), first)
+}
+
+// trimWindowToVerifiedCheckpoint ends the catch-up window at its highest verified checkpoint
+// when the blocks after it can only be quick validated: a store that nets below the hardcoded
+// checkpoint holds them, and they are at or below it. Quick validation needs a verified
+// checkpoint at or above each block (tryQuickValidation), so those blocks would be refused in
+// this window, and the refusal would be charged to the peer that served them. The next window
+// starts at the checkpoint and holds the next one, because the catch-up window on this store is
+// at least one checkpoint gap plus the common ancestor (model.NettedRouteCatchupWindow), and its
+// locator starts at the tip, not at a trailing UTXO height (locatorCapApplies).
+func (u *Server) trimWindowToVerifiedCheckpoint(catchupCtx *CatchupContext) {
+	verified := catchupCtx.highestCheckpointHeight
+	if verified == 0 || verified <= catchupCtx.commonAncestorMeta.Height {
+		return
+	}
+
+	if !u.blockValidation.mustStayOnQuickValidationAt(verified + 1) {
+		return
+	}
+
+	keep := int(verified - catchupCtx.commonAncestorMeta.Height)
+	if keep >= len(catchupCtx.blockHeaders) {
+		return
+	}
+
+	u.logger.Infof("[catchup][%s] window ends at verified checkpoint %d: %d headers after it wait for the next window, because the netting UTXO store takes blocks below the hardcoded checkpoint only through quick validation",
+		catchupCtx.blockUpTo.Hash().String(), verified, len(catchupCtx.blockHeaders)-keep)
+
+	catchupCtx.blockHeaders = catchupCtx.blockHeaders[:keep]
 }
 
 // verifyCheckpointsAgainstHeaders verifies checkpoints against the fetched headers
@@ -1892,6 +2009,15 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 
 	// If block is not eligible for quick validation, use normal validation
 	if !canUseQuickValidation {
+		// A ServiceError, not a ProcessingError: the window holds no verified checkpoint above this
+		// block, which an honest peer that is still syncing, or a blockUpTo below the next
+		// checkpoint, also produces. The terminal handler scores a ServiceError as a local fault
+		// (isLocalCatchupFault), so no peer is charged and the per-block attempt cap still bounds
+		// the retries.
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			return false, errors.NewServiceError("[tryQuickValidation][%s] block at height %d is below the hardcoded checkpoint on a netting UTXO store and can only be quick validated, but this catch-up window holds no verified checkpoint above it", block.Hash().String(), block.Height)
+		}
+
 		return true, nil
 	}
 
@@ -1906,6 +2032,10 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		block.Height,
 		u.settings.BlockValidation.MaxBlocksBehindBlockAssembly,
 	); err != nil {
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			return false, errors.NewServiceError("[tryQuickValidation][%s] block assembly not ready for a block that can only be quick validated; retry", block.Hash().String(), err)
+		}
+
 		u.logger.Warnf("[tryQuickValidation][%s] block assembly not ready, falling back to normal validation: %v",
 			block.Hash().String(), err)
 		return true, nil // Fall back to normal validation
@@ -2095,6 +2225,12 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
 				catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
 		}
+		if u.blockValidation.mustStayOnQuickValidation(block) {
+			// Normal validation would read spend-journal rows the netting store did not
+			// write for the part of this block it applied. Retry quick validation instead.
+			return false, errors.NewServiceError("[tryQuickValidation][%s] quick validation of a block below the checkpoint on a netting UTXO store failed; it is retried, not validated another way", block.Hash().String(), err)
+		}
+
 		// Quick validation failed, try normal validation
 		return true, nil
 	}

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -82,7 +83,9 @@ func TestProcessConflictingTransactions(t *testing.T) {
 	_ = losingTxMap.Put(conflictingTx2, 1)
 
 	mockUtxoStore.On("ProcessConflicting", mock.Anything, conflictingNodes).Return(losingTxMap, nil)
-	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true}, nil)
+	// The winner comes back with a body: promotion spends its inputs, and a winner with no
+	// body is refused (TestProcessConflicting_WinnerWithNoBodyIsRefusedBeforeAnythingChanges).
+	mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Tx: bt.NewTx(), Conflicting: true}, nil)
 	mockUtxoStore.On("GetCounterConflicting", mock.Anything, mock.Anything).Return([]chainhash.Hash{conflictingTx1, conflictingTx2}, nil)
 	mockUtxoStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
 	mockUtxoStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)

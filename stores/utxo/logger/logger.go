@@ -25,6 +25,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
@@ -135,9 +136,18 @@ func (s *Store) GetBlockState() utxo.BlockState {
 	return blockState
 }
 
+func (s *Store) Stamper() pruner.Stamper {
+	return s.store.Stamper()
+}
+
 // SupportsOutpointOnlySpend delegates to the wrapped store.
 func (s *Store) SupportsOutpointOnlySpend() bool {
 	return s.store.SupportsOutpointOnlySpend()
+}
+
+// NetsBelowCheckpoint forwards the wrapped store's answer.
+func (s *Store) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(s.store)
 }
 
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
@@ -419,6 +429,15 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	s.logger.Debugf("[UTXOStore][logger][ProcessExpiredPreservations] currentHeight %d err %v : %s", currentHeight, err, caller())
 
 	return err
+}
+
+// SpendsMadeBy passes through, with the record count logged. The records themselves are not
+// logged: undoing a conflict on a wide transaction would produce thousands.
+func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	spends, err := s.store.SpendsMadeBy(ctx, txHash)
+	s.logger.Debugf("[UTXOStore][logger][SpendsMadeBy] %s returned %d spends, err %v", txHash.String(), len(spends), err)
+
+	return spends, err
 }
 
 // Unwrap returns the wrapped store.

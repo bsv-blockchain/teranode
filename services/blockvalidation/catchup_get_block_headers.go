@@ -14,6 +14,25 @@ import (
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
+// locatorCapApplies reports whether catch-up builds its block locator from the UTXO store height
+// instead of the blockchain tip: the UTXO height trails the tip, and the next block is not on the
+// netted route.
+//
+// On the netted route the cap is skipped. There each window must hold the next checkpoint, and
+// model.NettedRouteCatchupWindow sizes the window as one checkpoint gap plus the common ancestor,
+// counted from the tip. A locator from a trailing UTXO height spends one header of that window
+// on each block of lag that this node already holds, so the window stops short of the checkpoint
+// and every block in it is refused. The lag has no bound during a bulk sync, so slack in the
+// window would not close this. The cap decides nothing on that route: the common ancestor is
+// found at the tip either way (see the comment at the call site).
+func (u *Server) locatorCapApplies(tipHeight, utxoHeight uint32) bool {
+	if tipHeight <= utxoHeight {
+		return false
+	}
+
+	return !model.NettedRouteAt(u.settings, u.utxoStore, tipHeight+1)
+}
+
 // catchupGetBlockHeaders fetches block headers from a peer for catchup synchronization.
 // This function iteratively requests headers using the headers_from_common_ancestor endpoint,
 // which returns headers from the common ancestor onwards in ascending order, up to a specified limit.
@@ -153,7 +172,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// decision.
 	if u.utxoStore != nil {
 		utxoHeight := u.utxoStore.GetBlockHeight()
-		if bestBlockMeta.Height > utxoHeight {
+		if u.locatorCapApplies(bestBlockMeta.Height, utxoHeight) {
 			u.logger.Infof("[catchup][%s] blockchain height %d ahead of UTXO height %d, capping locator",
 				blockUpTo.Hash().String(), bestBlockMeta.Height, utxoHeight)
 
@@ -196,7 +215,9 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 	// iteration variables
 	iteration := 0
-	maxAccumulatedHeaders := u.settings.BlockValidation.CatchupMaxAccumulatedHeaders
+	// On a store that nets below the checkpoint the window is raised to hold one checkpoint gap
+	// (model.NettedRouteCatchupWindow); elsewhere this is the setting.
+	maxAccumulatedHeaders := model.NettedRouteCatchupWindow(u.settings, u.utxoStore)
 	totalHeadersFetched := 0
 	reachedTarget := false
 	stopReason := ""

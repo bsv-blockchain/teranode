@@ -142,11 +142,13 @@ func TestReplayPendingConflictIntents_LoadErrorIsNotFatal(t *testing.T) {
 	require.Empty(t, spy.completed)
 }
 
-// TestReplayPendingConflictIntents_ReverseReplayCompletes drives a reverse
-// intent through replay. The demoted tx resolves to a record with a nil body,
-// so ReverseProcessConflicting treats it as already-resolved (a no-op success)
-// and the intent is cleared from the WAL.
-func TestReplayPendingConflictIntents_ReverseReplayCompletes(t *testing.T) {
+// TestReplayPendingConflictIntents_ReverseReplayKeepsUnresolvableIntent drives a
+// reverse intent through replay when the demoted tx resolves to a record with
+// neither stored inpoints nor a body. Its parents cannot be named, so
+// ReverseProcessConflicting refuses rather than treating it as spending nothing
+// (spentOutpoints / counterConflictingInpoints), and the intent must stay in the
+// WAL for the operator instead of being cleared as if it had been replayed.
+func TestReplayPendingConflictIntents_ReverseReplayKeepsUnresolvableIntent(t *testing.T) {
 	demoted := chainhash.HashH([]byte("replay-demoted"))
 
 	intent := utxo.ConflictIntent{
@@ -157,8 +159,7 @@ func TestReplayPendingConflictIntents_ReverseReplayCompletes(t *testing.T) {
 	}
 
 	mockStore := &utxo.MockUtxostore{}
-	// Demoted tx resolves with a nil body → ReverseProcessConflicting skips it
-	// (nothing to restore) and returns success.
+	// Demoted tx resolves with neither inpoints nor a body.
 	mockStore.On("Get", mock.Anything, &demoted, mock.Anything).
 		Return(&meta.Data{}, nil)
 
@@ -168,7 +169,7 @@ func TestReplayPendingConflictIntents_ReverseReplayCompletes(t *testing.T) {
 
 	b.replayPendingConflictIntents(context.Background())
 
-	require.Contains(t, spy.completed, intent.IntentID(), "successful replay must clear the intent from the WAL")
+	require.NotContains(t, spy.completed, intent.IntentID(), "a replay that could not name the demoted tx's parents must not clear the intent")
 }
 
 // TestReplayPendingConflictIntents_StaleForwardHealed covers the exact gap the
