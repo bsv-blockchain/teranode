@@ -1731,6 +1731,9 @@ func TestRewind_DeletesUTXOPersisterMarker(t *testing.T) {
 			_, err = Rewind(ctx, logger(), tSettings, Options{
 				TargetHeight: 4,
 				AssumeYes:    true,
+				// Opt in to the marker reset so the above-target case deletes;
+				// at/below target the flag is inert (the marker is kept either way).
+				ResetUTXOPersister: true,
 				Stores: &Stores{
 					Blockchain: bcStore,
 					UTXO:       utxoStore,
@@ -1776,8 +1779,8 @@ func TestResolveStores_BlockStoreDeletesTheMarkerThePersisterWrote(t *testing.T)
 		require.NoError(t, stores.Block.Close(ctx))
 	})
 
-	e := &env{logger: logger(), blockStore: stores.Block}
-	// Marker 123 is above the target, so it is deleted.
+	// Marker 123 is above the target; with the opt-in flag it is deleted.
+	e := &env{logger: logger(), blockStore: stores.Block, opts: Options{ResetUTXOPersister: true}}
 	pf := &preflightResult{target: 4}
 	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, pf))
 	require.NoFileExists(t, markerPath)
@@ -1826,13 +1829,24 @@ func TestDeleteUTXOPersisterLastProcessed_LogsWhatHappened(t *testing.T) {
 	require.Contains(t, log.infoText(), "leaving it untouched")
 	require.Empty(t, log.warnText())
 
-	// Marker above the target is deleted, reported at Warn, and the operator is
-	// told it means a rebuild from genesis.
+	// Marker above the target, WITHOUT --reset-utxo-persister: left in place and
+	// the operator is warned to re-run with the flag (deleting by default would
+	// stall a seeded node, which the tool cannot rule out).
 	writeLastProcessed(t, ctx, blockStore, "7")
 	log = &capturingLogger{}
 	e = &env{logger: log, blockStore: blockStore}
 	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
+	require.True(t, lastProcessedExists(t, ctx, blockStore), "default: a marker above target is left until --reset-utxo-persister")
+	require.Contains(t, log.warnText(), "--reset-utxo-persister")
+	require.NotContains(t, log.infoText(), "deleted the utxo-persister lastProcessed marker")
+
+	// Marker above the target WITH --reset-utxo-persister: deleted, reported at
+	// Info (a routine rewind outcome, not a Warn that trips alerting), and the
+	// operator is told it means a rebuild from genesis.
+	log = &capturingLogger{}
+	e = &env{logger: log, blockStore: blockStore, opts: Options{ResetUTXOPersister: true}}
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, &preflightResult{target: 4}))
 	require.False(t, lastProcessedExists(t, ctx, blockStore))
-	require.Contains(t, log.warnText(), "deleted the utxo-persister lastProcessed marker")
-	require.Contains(t, log.warnText(), "genesis")
+	require.Contains(t, log.infoText(), "deleted the utxo-persister lastProcessed marker")
+	require.Contains(t, log.infoText(), "genesis")
 }
