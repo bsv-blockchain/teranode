@@ -30,7 +30,7 @@ In the early stages of Bitcoin's development, a block size limit of 1 megabyte p
 
 Teranode, the next evolution of the BSV node software, and developed by the BSV Association, addresses the challenges of vertical scaling by instead spreading the workload across multiple machines. This horizontal scaling approach, coupled with an unbound block size, enables network capacity to grow with increasing demand through the addition of cluster nodes, allowing for Bitcoin scaling to be truly unbounded.
 
-Teranode provides a robust node processing system for Bitcoin that can consistently handle over 1M transactions per second, while strictly adhering to the Bitcoin whitepaper.
+Teranode provides a robust node processing system for Bitcoin designed to handle over 1M transactions per second, while strictly adhering to the Bitcoin whitepaper.
 
 Teranode is responsible for:
 
@@ -58,7 +58,7 @@ While BTC relies on vertical scalingâ€”increasing the power of individual nodesâ
 2. **Transaction Processing**:
 
     - BTC: Limited to ~7 transactions per second due to 1MB block size and 10-minute block time.
-    - Teranode: Capable of processing over 1 million transactions per second, with potential for further increase.
+    - Teranode: Designed to process over 1 million transactions per second, with potential for further increase.
 
 3. **Resource Utilization**:
 
@@ -100,7 +100,7 @@ Unlike the fixed 1MB block size in the original Bitcoin implementation, Teranode
 | **SubTrees**                          | Not used.                                                                                                                                                                                      | A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots.  <br/><br/> Each subtree contains 1 million transactions. Subtrees are broadcast every second. <br/><br/>Broadcast frequently for faster and continuous data propagation. |
 | **Blocks**                            | Transactions are grouped into blocks. Direct transaction data is stored in the block. Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain. | In the BSV blockchain, Bitcoin blocks are stored and propagated using an abstraction using subtrees of transaction IDs. This method significantly streamlines the validation process and synchronization among miners, optimizing the overall efficiency of the network.              |
 | **Block Size**                        | Originally capped at 1MB (1 Megabyte), restricting transactions per block.                                                                                                                     | Current BSV expands to 4GB (4 Gigabytes), increasing transaction capacity. <br/><br/>Teranode removes the size limit, enabling limitless transactions per block.                                                                                                                      |
-| **Processed Transactions per second** | 3.3 to 7 transactions per second.                                                                                                                                                              | Guarantees a minimum of **1 million transactions per second** (100,000 x faster than BTC).                                                                                                                                                                                           |
+| **Processed Transactions per second** | 3.3 to 7 transactions per second.                                                                                                                                                              | Designed for a minimum of **1 million transactions per second** (100,000 x faster than BTC).                                                                                                                                                                                           |
 | **Scalability Approach**              | Vertical scaling: Increases processing power of individual nodes. Limited by hardware capabilities of single machines. Monolithic architecture makes updates challenging.                      | Horizontal scaling: Distributes workload across multiple machines using a microservices architecture. Allows independent scaling of specific functions (e.g., transaction validation, transaction propagation). More cost-effective and flexible, with higher resilience to node failures.     |
 
 ## 3. System Architecture Overview
@@ -170,7 +170,7 @@ The main differences can be seen in the table below:
 | **SubTrees** | Not used. | Not used. Traditional block propagation. | A novel concept in Teranode, serving as an intermediary for holding transaction IDs and their Merkle roots. <br/><br/> Each subtree contains 1 million transactions. Subtrees are broadcast every second. <br/><br/>Broadcast frequently for faster and continuous data propagation. |
 | **Blocks** | Transactions are grouped into blocks. Direct transaction data is stored in the block. Each block is linked to the previous one by a cryptographic hash, forming a secure, chronological chain. | Same as BTC, with increased block size capacity. | In the BSV blockchain, Bitcoin blocks are stored and propagated using an abstraction using subtrees of transaction IDs. This method significantly streamlines the validation process and synchronization among miners, optimizing the overall efficiency of the network. |
 | **Block Size** | Originally capped at 1MB (1 Megabyte), restricting transactions per block. | Increased to 2GB, then to 4GB block size limit. | Current BSV expands to 4GB (4 Gigabytes), increasing transaction capacity. <br/><br/>Teranode removes the size limit, enabling limitless transactions per block. |
-| **Processed Transactions per second** | 3.3 to 7 transactions per second. | Up to several thousand transactions per second. | Guarantees a minimum of **1 million transactions per second** (100,000 x faster than BTC). |
+| **Processed Transactions per second** | 3.3 to 7 transactions per second. | Up to several thousand transactions per second. | Designed for a minimum of **1 million transactions per second** (100,000 x faster than BTC). |
 | **Mempool** | Maintains a memory pool of unconfirmed transactions waiting to be included in blocks. Size limited by node memory. | Similar to BTC, but with larger capacity due to increased memory limits. | No traditional mempool. Transactions are immediately processed and organized into subtrees. Continuous validation and subtree creation replaces mempool functionality. |
 
 &nbsp;

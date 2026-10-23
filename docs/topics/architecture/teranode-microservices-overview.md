@@ -33,7 +33,7 @@
 
 ## 1. Introduction
 
-Teranode is designed as a collection of microservices that work together to provide a horizontally scalable and highly efficient blockchain network. The microservices architecture enables Teranode to achieve exceptional throughput exceeding 1 million transactions per second by distributing processing across multiple machines and allowing most services to scale independently based on demand.
+Teranode is designed as a collection of microservices that work together to provide a horizontally scalable and highly efficient blockchain network. The microservices architecture is designed to let Teranode reach a throughput above 1 million transactions per second by distributing processing across multiple machines and allowing most services to scale independently based on demand.
 
 This architectural approach provides several key advantages:
 
