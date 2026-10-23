@@ -121,9 +121,9 @@ var readOnlyMethodsByField = map[string]map[string]bool{
 	"syncCoordinator":  {},
 	"peerSelector":     {},
 	"banChan":          {},
-	"banStatusCache":   {},
+	"bannedPeers":      {},
 	"reputationCache":  {},
-	"ipBanCache":       {},
+	"liveConns":        {},
 	"blockPeerMap":     {},
 	"subtreePeerMap":   {},
 	"localHeightCache": {},
@@ -391,13 +391,13 @@ func (s *Server) helper()              { s.peerRegistry.RemovePeer(nil, "id") }
 func (s *Server) writeViaFreeFunc()    { freeWriter(s) }
 func freeWriter(s *Server)             { s.peerRegistry.RemovePeer(nil, "id") }
 func (s *Server) writeViaBatcher()     { s.registryBatcher.enqueue("id") }
-func (s *Server) writeViaCache()       { s.banStatusCache.Store("id", true) }
+func (s *Server) writeViaCache()       { s.bannedPeers.add("id", now) }
 func (s *Server) writeViaChannel()     { s.banChan <- BanEvent{} }
 func (s *Server) writeInGoroutine()    { go func() { s.peerRegistry.RemovePeer(nil, "id") }() }
 func (s *Server) writeViaMethodValue() { f := s.peerRegistry.RemovePeer; _ = f }
 func (s *Server) replacesField()       { s.banList = nil }
 func (s *Server) escapesAsArgument()   { sink(s.peerRegistry) }
-func (s *Server) escapesViaPointer()   { sink(&s.banStatusCache) }
+func (s *Server) escapesViaPointer()   { sink(&s.bannedPeers) }
 func (s *Server) aliasesIntoLocal()    { reg := s.peerRegistry; _ = reg }
 func (v Server) valueReceiverWrite()   { v.peerRegistry.RemovePeer(nil, "id") }
 func sink(any interface{})             {}
