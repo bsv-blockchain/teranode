@@ -241,7 +241,7 @@ type Service struct {
 	fieldDeleteAtHeight, fieldTotalExtraRecs, fieldUnminedSince, fieldBlockHeights string
 	fieldConflicting                                                               string
 
-	// batchOperateFn overrides the batch calls of the unmined guard; tests only.
+	// batchOperateFn overrides the batch calls of the unmined guard and the cleanup flush; tests only.
 	batchOperateFn func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error
 
 	// readMastersFn overrides readMasters; tests only.
@@ -1934,6 +1934,10 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 	// update that fails inside the combined batch leaves the child deleted
 	// with no replay marker. See #1701; ordering this path like the
 	// defensive one is open follow-up work.
+	if !s.settings.Pruner.SkipDeletions {
+		dropParentUpdatesOfDeletedRecords(parentUpdates, deletions)
+	}
+
 	if s.defensiveEnabled {
 		if len(parentUpdates) > 0 {
 			if err := s.executeBatchParentUpdates(ctx, parentUpdates); err != nil {
@@ -1962,6 +1966,38 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 	}
 
 	return nil
+}
+
+// dropParentUpdatesOfDeletedRecords removes from updates every parent whose
+// record is in deletions. Chained transactions (A→B→C pruned together) make a
+// record both a parent being updated and a child being deleted in the same
+// chunk. Its deletedChildren marker goes with the record, so the update is
+// wasted work, and in the combined path it puts the same key in one
+// BatchOperate twice, as a UDF and as a delete, which Aerospike runs in no
+// fixed order. Keys are compared by digest: records returned by the partition
+// query carry no user key.
+func dropParentUpdatesOfDeletedRecords(updates map[string]*parentUpdateInfo, deletions []*aerospike.Key) {
+	if len(updates) == 0 || len(deletions) == 0 {
+		return
+	}
+
+	deleted := make(map[string]struct{}, len(deletions))
+	for _, key := range deletions {
+		deleted[string(key.Digest())] = struct{}{}
+	}
+
+	dropped := 0
+
+	for parentKey, info := range updates {
+		if _, ok := deleted[string(info.key.Digest())]; ok {
+			delete(updates, parentKey)
+			dropped++
+		}
+	}
+
+	if dropped > 0 {
+		prometheusUtxoParentsUpdatedSkipped.Add(float64(dropped))
+	}
 }
 
 // buildParentUpdateRecords builds the addDeletedChildren parent-update batch
@@ -2072,7 +2108,7 @@ func (s *Service) executeBatchCleanupCombined(ctx context.Context, updates map[s
 	default:
 	}
 
-	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchRecords); err != nil {
 		if parentUsesModTeranode {
 			s.reportNativeOpError(err)
 		}
@@ -2170,7 +2206,7 @@ func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[
 	default:
 	}
 
-	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchRecords); err != nil {
 		s.reportNativeOpError(err)
 		s.logger.Errorf("Batch parent update failed: %v", err)
 
@@ -2478,7 +2514,7 @@ func (s *Service) executeBatchParentUpdatesBatchWrite(ctx context.Context, updat
 	// No reportNativeOpError here: this is the plain MapPutItems fallback, whose
 	// records never travelled the native path, so its failures say nothing about
 	// native-op support.
-	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchRecords); err != nil {
 		s.logger.Errorf("Batch parent update failed: %v", err)
 
 		return errors.NewStorageError("batch parent update failed", err)
@@ -2541,7 +2577,7 @@ func (s *Service) executeBatchDeletions(ctx context.Context, keys []*aerospike.K
 	}
 
 	// Execute batch
-	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchRecords); err != nil {
 		s.logger.Errorf("Batch deletion failed for %d records: %v", len(keys), err)
 		return errors.NewStorageError("batch deletion failed", err)
 	}
