@@ -280,7 +280,8 @@ func New(
 
 		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, bucketType)
 		if err != nil {
-			logger.Errorf("Failed to create tx meta cache: %v", err)
+			// carrying on would leave the service with a nil store
+			return nil, errors.NewServiceError("failed to create tx meta cache", err)
 		}
 	} else {
 		u.utxoStore = utxoStore

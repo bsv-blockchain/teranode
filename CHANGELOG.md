@@ -106,6 +106,28 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Blocks whose cached subtrees hold a tx the store flags conflicting are now rejected.**
+  Subtree validation used to bless a block whose subtrees it had already cached on
+  that cache alone, so a tx demoted to conflicting after caching could still pass.
+  It now binds the block body to its header whenever any subtree is cached, and
+  reads each such tx's `Conflicting` flag from the UTXO store, in RUNNING too. The
+  extra reads scale with transactions per block and are counted in
+  `teranode_subtreevalidation_cached_subtree_conflict_probes_total`. (#1938)
+
+  To keep the txmeta cache honest, block assembly and the validator now publish
+  DELETEs on the txmeta topic for every tx they demote to conflicting. **When
+  `kafka_txmetaConfig` is set, block assembly now connects to that topic at startup**
+  (creating it if missing) and exits if the broker stays unreachable, so its pod needs
+  produce access to the topic. Dropped DELETEs are counted in
+  `teranode_subtreeprocessor_txmeta_delete_dropped_total`, and late writes the cache
+  refused in `teranode_tx_meta_cache_tombstoned_writes_evicted_total`. The new
+  `subtreevalidation_txMetaTombstoneWindow` (default `30m`) sets how long a DELETE
+  keeps a tx out of the cache; it must exceed the worst txmeta consumer lag.
+
+  Subtree validation now refuses to start when the txmeta cache cannot be built
+  (including a non-positive `subtreevalidation_txMetaTombstoneWindow`). It used to
+  log the failure and run with no store, then panic on first use.
+
 - **A failed revert of an invalid block's mined tags now holds block assembly until it
   succeeds.** When block validation reverts the mined tags of an invalid block and
   `SetMinedMulti` fails, or a subtree read fails with anything other than not-found, the

@@ -1136,7 +1136,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 						// NOTE: cascaded descendants may still be in the subtree processor's in-memory template
 						// until the next reset/reload — this path has no subtreeProcessor handle to evict them.
 						if !txMetaData.Conflicting {
-							if _, _, setErr := utxo.MarkConflictingRecursively(decoupledCtx, v.utxoStore, []chainhash.Hash{*tx.TxIDChainHash()}); setErr != nil {
+							_, marked, setErr := utxo.MarkConflictingRecursively(decoupledCtx, v.utxoStore, []chainhash.Hash{*tx.TxIDChainHash()})
+
+							// subtree validation's txmeta cache holds these as non-conflicting.
+							// Evict on failure too: the tx is conflicting in the store by then,
+							// so a revalidation skips this branch and never evicts it.
+							v.sendTxMetaDeletesToKafka(marked)
+
+							if setErr != nil {
 								err = errors.NewProcessingError("[Validate][%s] failed to mark existing tx as conflicting", txID, setErr)
 								span.RecordError(err)
 
@@ -1847,6 +1854,30 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 	return nil
 }
 
+// sendTxMetaDeletesToKafka publishes txmeta DELETEs so subtree validation evicts
+// cached entries for txs this validator has just marked conflicting. A no-op when
+// the txmeta topic is not configured.
+func (v *Validator) sendTxMetaDeletesToKafka(hashes []chainhash.Hash) {
+	if v.txmetaKafkaProducerClient == nil || len(hashes) == 0 {
+		return
+	}
+
+	items := make([]*txmetaBatchItem, len(hashes))
+	for i := range hashes {
+		items[i] = &txmetaBatchItem{hash: &hashes[i], isDelete: true}
+	}
+
+	if v.txmetaKafkaBatcher != nil {
+		for _, item := range items {
+			v.txmetaKafkaBatcher.Put(item)
+		}
+
+		return
+	}
+
+	v.sendTxMetaBatch(items)
+}
+
 // sendTxMetaBatch serializes and publishes a batch of TxMeta items to Kafka.
 //
 // The Kafka message key is set to the first item's tx hash. With franz-go's default
@@ -1864,17 +1895,78 @@ func (v *Validator) sendTxMetaBatch(batch []*txmetaBatchItem) {
 		return
 	}
 
-	if v.settings.Validator.TxMetaWireFormat == "v2" {
-		v.sendTxMetaBatchV2(batch)
-		return
+	// A batch has no size limit of its own (validator_txmeta_kafka_batchSize, or
+	// a whole demotion cascade), so it goes out as records of bounded size. In
+	// v1 every record of the batch keeps the batch's key, and so its partition.
+	key := *batch[0].hash // copied: the producer reads the key after this returns
+
+	for _, chunk := range splitTxMetaBatch(batch) {
+		if v.settings.Validator.TxMetaWireFormat == "v2" {
+			v.sendTxMetaBatchV2(chunk)
+
+			continue
+		}
+
+		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+			Key:   key[:],
+			Value: serializeTxMetaBatch(chunk),
+		})
+	}
+}
+
+// maxTxMetaRecordBytes bounds one txmeta record, leaving headroom under Kafka's
+// default 1 MiB message limit.
+const maxTxMetaRecordBytes = 768 * 1024
+
+// splitTxMetaBatch cuts batch into consecutive chunks whose serialised size, in
+// either wire format, stays under maxTxMetaRecordBytes (an item larger than that
+// goes alone), and none of which is txmetacache.V2LookalikeCount items long:
+// that v1 count encodes as the v2 header signature, and a receiver can read
+// such a record as v2 and drop every entry in it.
+func splitTxMetaBatch(batch []*txmetaBatchItem) [][]*txmetaBatchItem {
+	var chunks [][]*txmetaBatchItem
+
+	start, size := 0, txmetacache.WireV2HeaderLen
+
+	for i := 0; i < len(batch); i++ {
+		entry := txMetaEntrySize(batch[i])
+
+		if i > start && size+entry > maxTxMetaRecordBytes {
+			end := i
+			if end-start == txmetacache.V2LookalikeCount {
+				end-- // the item moved out starts the next chunk
+			}
+
+			chunks = append(chunks, batch[start:end])
+			start, size = end, txmetacache.WireV2HeaderLen
+
+			// Size the next chunk again from its first item, so an item carried
+			// out by the 767 adjustment is checked against the cap like any other.
+			i = end - 1
+
+			continue
+		}
+
+		size += entry
 	}
 
-	value := serializeTxMetaBatch(batch)
+	switch rest := batch[start:]; {
+	case len(rest) == txmetacache.V2LookalikeCount:
+		chunks = append(chunks, rest[:len(rest)-1], rest[len(rest)-1:])
+	case len(rest) > 0:
+		chunks = append(chunks, rest)
+	}
 
-	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-		Key:   batch[0].hash[:],
-		Value: value,
-	})
+	return chunks
+}
+
+// txMetaEntrySize is item's size on the v2 wire, the larger of the two formats.
+func txMetaEntrySize(item *txmetaBatchItem) int {
+	if item.isDelete {
+		return txmetacache.WireV2MinEntrySize
+	}
+
+	return txmetacache.WireV2MinEntrySize + len(item.metaBytes)
 }
 
 // serializeTxMetaBatch serializes a batch of TxMeta items to raw bytes.

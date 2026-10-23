@@ -353,6 +353,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_errors` | Counter   | Number of errors setting tx meta cache from kafka |
 | `teranode_subtreevalidation_kafka_malformed_messages_total` | Counter   | Malformed Kafka subtree messages dropped, labelled by `reason` (`nil_message`, `too_short`, `unmarshal_failure`, `bad_hash`, `bad_url`) |
 | `teranode_subtreevalidation_subtree_already_exists_skipped_total` | Counter | Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead |
+| `teranode_subtreevalidation_cached_subtree_conflict_probes_total` | Counter | Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing. Scales with transactions per block |
 | `teranode_subtreevalidation_peer_subtree_admission_wait` | Histogram | Seconds a peer subtree waited for a `subtreevalidation_peerSubtreeConcurrency` slot |
 | `teranode_subtreevalidation_peer_subtree_admission_waiting` | Gauge | Peer subtrees waiting for a `subtreevalidation_peerSubtreeConcurrency` slot |
 
@@ -413,6 +414,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_tx_meta_cache_current_gen_entries`  | Gauge | Number of entries in the current generation of the tx meta cache |
 | `teranode_tx_meta_cache_previous_gen_entries` | Gauge | Number of valid entries from the previous generation in the tx meta cache |
 | `teranode_tx_meta_cache_lane_waits`           | Gauge | Number of times a `lockfree` cache writer found every lane busy; should stay 0 |
+| `teranode_tx_meta_cache_tombstoned_writes_evicted_total` | Counter | Writes of a tx demoted to conflicting that were dropped, or evicted right after landing when the demotion arrived during the write: a txmeta ADD consumed after the demotion's DELETE (they travel on different partitions), or a read-through write whose store read raced the demotion. Non-zero means the race happened and was absorbed |
 
 ## Aerospike Service Metrics
 
@@ -476,3 +478,4 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_subtreeprocessor_dynamic_subtree_size`         | Gauge     | Size of the dynamic subtree in the subtree processor              |
 | `teranode_subtreeprocessor_current_state`                | Gauge     | Current state of the subtree processor                           |
 | `teranode_subtreeprocessor_oversize_batch_admitted_total` | Counter  | Number of client batches that exceeded the normalized `blockassembly_maxQueueItems` and were admitted alone onto an empty queue, so the ceiling is transiently exceeded by one batch rather than that client wedging forever. **Any** non-zero value means a client's batch size is above this pod's normalized cap and the cross-pod sizing guidance in the `blockassembly_maxQueueItems` longdesc has not been applied |
+| `teranode_subtreeprocessor_txmeta_delete_dropped_total` | Counter | Txmeta cache DELETEs for txs demoted to conflicting that block assembly dropped because the txmeta producer buffer was full or stopped. Each one can leave subtree validation caching that tx as non-conflicting until the cache rotates it out, so alert on any increase |

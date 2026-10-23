@@ -3850,8 +3850,14 @@ func TestBlockValidation_OptimisticMining_CorruptBody_InvalidateRoute(t *testing
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil)
 	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
-	txMetaStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	txMetaStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
+
+	// Let subtree validation pass so the corrupt verdict comes from the background block.Valid.
+	// The real service binds a cached body to its header up front and would reject this one
+	// synchronously, before the optimistic AddBlock this test pins.
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, txMetaStore, nil, subtreeValidationClient)
 
@@ -3904,12 +3910,16 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 
 	httpmock.RegisterResponder("GET", `=~^/subtree/[a-z0-9]+\z`, httpmock.NewBytesResponder(200, nodeBytes))
 
+	// The header commits to the body, so the only thing wrong with this block is its timestamp.
+	merkleRoot, err := subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size()))
+	require.NoError(t, err)
+
 	nBits, _ := model.NewNBitFromString("207fffff")
 	// Timestamp three hours in the future — past the two-hour bound.
 	blockHeader := &model.BlockHeader{
 		Version:        1,
 		HashPrevBlock:  tSettings.ChainCfgParams.GenesisHash,
-		HashMerkleRoot: &chainhash.Hash{},
+		HashMerkleRoot: merkleRoot,
 		Timestamp:      uint32(time.Now().Add(3 * time.Hour).Unix()), //nolint:gosec
 		Bits:           *nBits,
 		Nonce:          0,
@@ -3934,8 +3944,8 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 
 	mockBlockchain := &blockchain.Mock{}
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil)
-	// No AddBlock at all is expected: a contextual header failure is a FINAL verdict on the header,
-	// reached before the body is bound to it, so nothing is persisted (bitcoin-sv/teranode#4844) —
+	// No AddBlock at all is expected: a contextual header failure is a FINAL verdict on the header
+	// alone, whatever the body, so nothing is persisted (bitcoin-sv/teranode#4844) —
 	// and the accept-path AddBlock must never fire either. Registered so a regression surfaces as
 	// the assertion below rather than a missing-mock panic.
 	mockBlockchain.On("AddBlock", mock.Anything, block, mock.Anything, mock.Anything).Return(nil).Maybe()

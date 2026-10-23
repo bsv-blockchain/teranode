@@ -38,6 +38,13 @@ var (
 	// in storage, which is a common optimization operation.
 	prometheusSubtreeValidationCheckSubtree prometheus.Histogram
 
+	// prometheusSubtreeValidationCachedConflictProbes counts transactions whose
+	// conflicting flag was read from the UTXO store while blessing a block's
+	// already-cached subtrees. This is the cost the cached path took on to stop
+	// depending on the ConflictingNodes trailer (issue #1742), and it scales with
+	// transactions per block, so it is worth being able to see rather than infer.
+	prometheusSubtreeValidationCachedConflictProbes prometheus.Counter
+
 	// prometheusSubtreeValidationValidateSubtree tracks the duration of complete subtree validation operations.
 	// This is the primary metric for monitoring the core validation functionality,
 	// measuring end-to-end validation time including all sub-operations.
@@ -167,6 +174,15 @@ func _initPrometheusMetrics() {
 			Name:      "check_subtree",
 			Help:      "Duration of calls to checkSubtree endpoint",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationCachedConflictProbes = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "cached_subtree_conflict_probes_total",
+			Help:      "Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing",
 		},
 	)
 

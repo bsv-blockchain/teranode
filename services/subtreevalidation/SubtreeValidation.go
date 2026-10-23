@@ -251,6 +251,30 @@ func (u *Server) DelTxMetaCache(ctx context.Context, hash *chainhash.Hash) error
 	return nil
 }
 
+// txMetaDemotionOps is implemented by txmetacache.TxMetaCache.
+type txMetaDemotionOps interface {
+	DeleteDemoted(hashes []chainhash.Hash)
+}
+
+// DelTxMetaCacheDemoted evicts txs demoted to conflicting and, on a
+// txmetacache.TxMetaCache, keeps later writes from caching them again (see
+// TxMetaCache.DeleteDemoted). Other caching stores get a plain delete.
+func (u *Server) DelTxMetaCacheDemoted(ctx context.Context, hashes []chainhash.Hash) error {
+	if cache, ok := u.utxoStore.(txMetaDemotionOps); ok {
+		cache.DeleteDemoted(hashes)
+
+		return nil
+	}
+
+	for i := range hashes {
+		if err := u.DelTxMetaCache(ctx, &hashes[i]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // DelTxMetaCacheMulti removes multiple transaction metadata entries from the cache.
 func (u *Server) DelTxMetaCacheMulti(ctx context.Context, hash *chainhash.Hash) error {
 	if cache, ok := u.utxoStore.(*txmetacache.TxMetaCache); ok {

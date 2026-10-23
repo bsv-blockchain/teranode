@@ -402,6 +402,10 @@ type SubtreeProcessor struct {
 	// txMapDirs, when non-empty, enables disk-backed DiskTxMap across these directories.
 	txMapDirs []string
 
+	// txMetaEvictor publishes txmeta DELETEs for txs this processor's conflict
+	// processing marks conflicting. Nil when the txmeta topic is not configured.
+	txMetaEvictor *TxMetaEvictor
+
 	// diskTxMap is the ACTIVE disk-backed tx map (non-nil when txMapDirs is set).
 	// It is the half currently installed as currentTxMap, and therefore the one
 	// UpdateSubtreeIndex bookkeeping must address.
@@ -1858,8 +1862,13 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 					// postProcess). Any in-flight tx whose parent gets cascaded here
 					// is dropped by that drain regardless of cascade discovery, so
 					// the per-block transient set is not needed here.
-					losingTxHashesMap, _, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
+					losingTxHashesMap, allMarkedConflicting, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
 						utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block))
+
+					// the store now says these are conflicting; subtree validation's txmeta cache must
+					// forget them. On error this is what the failed run may have flipped.
+					stp.txMetaEvictor.Evict(allMarkedConflicting)
+
 					if err != nil {
 						return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
 					}
@@ -4497,6 +4506,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 
 			cascadedConflicting, touched, reverseErr := utxostore.ReverseProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), reverseInputs)
 			if reverseErr != nil {
+				// what the failed reverse may have flipped to conflicting
+				stp.txMetaEvictor.Evict(cascadedConflicting)
+
 				return errors.NewProcessingError("[reorgBlocks][%s] error reversing conflict resolution from moved-back block", block.String(), reverseErr)
 			}
 
@@ -4511,6 +4523,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 			for _, hash := range cascadedConflicting {
 				reverseCascadedConflictingSet[hash] = struct{}{}
 			}
+
+			// The reverse flipped these to conflicting in the store: the demoted
+			// winners were non-conflicting while their block was on chain, so subtree
+			// validation's txmeta cache may hold them as non-conflicting.
+			stp.txMetaEvictor.Evict(cascadedConflicting)
 
 			// Evict each newly-conflicting tx from block assembly's in-memory
 			// subtree state. moveBackBlockCreateNewSubtrees has already
@@ -5584,8 +5601,14 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 		}
 
 		var allMarkedConflicting []chainhash.Hash
-		if losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
-			utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block)); err != nil {
+		losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
+			utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block))
+
+		// the store now says these are conflicting; subtree validation's txmeta cache must
+		// forget them. On error this is what the failed run may have flipped.
+		stp.txMetaEvictor.Evict(allMarkedConflicting)
+
+		if err != nil {
 			return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
 		}
 
