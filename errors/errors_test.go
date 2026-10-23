@@ -2554,6 +2554,39 @@ func TestPublicCauseSurfacing(t *testing.T) {
 	})
 }
 
+// TestWrapGRPC_PlainWrappedErrorDoesNotHang is the regression for #2007: when a
+// teranode *Error wraps a plain Go error (neither an *Error nor a gRPC status),
+// WrapGRPC's chain walk used to never advance past the plain link and spun
+// forever at 100% CPU, hanging the gRPC handler. It must return, reconstruct the
+// outer code, and keep the plain error's message as a detail.
+func TestWrapGRPC_PlainWrappedErrorDoesNotHang(t *testing.T) {
+	e := NewProcessingError("outer")
+	e.SetWrappedErr(errors.New("raw plain error")) // stdlib: a plain, non-*Error, non-status error
+
+	done := make(chan error, 1)
+	go func() { done <- WrapGRPC(e) }()
+
+	var result error
+	select {
+	case result = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("WrapGRPC did not return within 5s on an *Error wrapping a plain error (issue #2007 regression)")
+	}
+
+	require.NotNil(t, result)
+
+	// The outer code is still reconstructable through the gRPC round-trip.
+	unwrapped := UnwrapGRPC(result)
+	require.NotNil(t, unwrapped)
+	require.Equal(t, ERR_PROCESSING, unwrapped.code)
+
+	// Two details survive: the outer *Error, and the plain error carried as an
+	// ERR_ERROR detail so its message stays visible to the caller.
+	st, ok := status.FromError(result)
+	require.True(t, ok, "WrapGRPC result should be a gRPC status error")
+	require.Len(t, st.Details(), 2)
+}
+
 // TestWrapGRPCPublic tests the WrapGRPCPublic function for proper gRPC wrapping without internal details.
 func TestWrapGRPCPublic(t *testing.T) {
 	t.Run("nil error returns nil", func(t *testing.T) {
