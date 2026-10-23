@@ -1564,6 +1564,22 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		if err != nil {
 			return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
 		}
+
+		// Release the subtrees on EVERY exit, not just the success path below.
+		// This block is owned by this call (fetched fresh, or taken from and
+		// deleted out of lastValidatedBlocks), and an mmap-backed subtree has no
+		// finalizer. The UpdateTxMinedStatus error returns (ErrBlockInvalid ->
+		// markBlockAsInvalid, ErrBlockParentNotMined -> nil, the generic error)
+		// and the GetBlockHeaderIDs failure all skip the explicit release below;
+		// without this defer each failed attempt leaks one set of mmap mappings
+		// and temp files, and setTxMined retries up to 10 times (issue #2029). On
+		// success the explicit release below has already run and this finds only
+		// nil entries, mirroring the unset-mined reload path above.
+		defer func() {
+			if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+				u.logger.Warnf("[setTxMined][%s] failed closing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
+			}
+		}()
 	}
 
 	// Get recent ancestor block IDs for fast-path double-spend checking
