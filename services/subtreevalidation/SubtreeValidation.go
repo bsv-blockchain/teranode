@@ -1304,6 +1304,18 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 	txMetaSlice []metaSliceItem, blockHeight uint32, blockIds map[uint32]bool, validationOptions ...validator.Option) (err error) {
 	u.logger.Debugf("[validateSubtree][%s] blessing %d missing txs", subtreeHash.String(), len(missingTxs))
 
+	// Reject a nil transaction up front, before anything spawns a goroutine. A
+	// nil check inside the per-level loop (after earlier iterations have already
+	// called g.Go) returns without g.Wait(), leaking the goroutines already
+	// started for that level: they keep validating, spending and creating in the
+	// UTXO store and writing txMetaSlice/lockedHashes after this function — and
+	// ValidateSubtreeInternal — have returned (issue #1974).
+	for _, mt := range missingTxs {
+		if mt.tx == nil {
+			return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
+		}
+	}
+
 	var (
 		mTx          missingTx
 		missingCount atomic.Uint32
@@ -1350,9 +1362,8 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 			tx := mTx.tx
 			txIdx := mTx.idx
 
-			if tx == nil {
-				return errors.NewProcessingError("[validateSubtree][%s] missing transaction is nil", subtreeHash.String())
-			}
+			// A nil tx is rejected up front, before any goroutine starts (see the
+			// pre-pass above), so the leak path through a mid-level return is gone.
 
 			// process each transaction in the background, since the transactions are all batched into the utxo store
 			g.Go(func() error {
