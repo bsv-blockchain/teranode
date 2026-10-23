@@ -165,6 +165,7 @@ nav:
           - Kafka Message Format: references/kafkaMessageFormat.md
           - Proto Versioning Policy: references/protoVersioning.md
           - Network Consensus Rules: references/networkConsensusRules.md
+          - Requirements Sources Register: references/requirementsSources.md
           - Protobuf API:
               - Alert Proto: references/protobuf_docs/alertProto.md
               - Asset Proto: references/protobuf_docs/assetProto.md
