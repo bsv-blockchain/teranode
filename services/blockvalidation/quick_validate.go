@@ -518,6 +518,13 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 // This is defence-in-depth, not a commonly-reachable path: quick validation only runs for blocks at
 // or below the highest hash-verified checkpoint for this catchup run (catchup.go,
 // tryQuickValidation).
+//
+// It also enforces model.CoinbaseFinalityViolation (bitcoin-sv/teranode#4981), after bad-cb-length as
+// in Valid. This route has no ancestor headers to compute the parent's median time past from, so
+// from CSV onwards a time-based coinbase nLockTime is not evaluated; the sequence-number rule, a
+// height-based nLockTime, and a pre-CSV time-based nLockTime (measured against the block's own
+// header time) are. The skipped case is a block below a hash-verified checkpoint, which the network
+// already accepted.
 func (u *BlockValidation) checkQuickValidationCoinbase(block *model.Block, caller string) error {
 	if reason := model.CoinbaseCommonRuleViolation(block.CoinbaseTx, block.Height, u.settings.ChainCfgParams); reason != "" {
 		return errors.NewBlockInvalidError("[%s][%s] coinbase breaks a transaction rule: %s", caller, block.Hash().String(), reason)
@@ -525,6 +532,10 @@ func (u *BlockValidation) checkQuickValidationCoinbase(block *model.Block, calle
 
 	if !model.CoinbaseScriptSigLengthInBounds(block.CoinbaseTx, u.settings.ChainCfgParams) {
 		return errors.NewBlockInvalidError("[%s][%s] bad coinbase length", caller, block.Hash().String())
+	}
+
+	if reason := model.CoinbaseFinalityViolation(block.CoinbaseTx, block.Header.Timestamp, block.Height, u.settings.ChainCfgParams, 0); reason != "" {
+		return errors.NewBlockInvalidError("[%s][%s] coinbase is not final: %s", caller, block.Hash().String(), reason)
 	}
 
 	return nil

@@ -132,8 +132,7 @@ type Block struct {
 	// firstRootMemo caches subtree 0's coinbase-substituted root from the early
 	// binding check, so CheckMerkleRoot does not recompute it for the same
 	// subtree (a full merkle store over up to 1M leaves).
-	firstRootMemo   atomic.Pointer[firstRootMemo]
-	medianTimestamp uint32
+	firstRootMemo atomic.Pointer[firstRootMemo]
 	// nodeAllocator, if non-nil, supplies pooled backing slices for the
 	// per-subtree Node arrays during GetAndValidateSubtrees. Only the
 	// blockvalidation service sets this (via SetNodeAllocator); model-internal
@@ -696,14 +695,25 @@ func (b *Block) MedianTimeWindow(currentChain []*BlockHeader) ([]*BlockHeader, e
 // When currentChain is empty the median-time-past rule is skipped (same as Valid()). Returns nil
 // when the header passes.
 func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *settings.Settings, logger ulogger.Logger) error {
+	_, err := b.checkHeaderContextual(currentChain, settings, logger)
+
+	return err
+}
+
+// checkHeaderContextual is CheckHeaderContextual, and additionally returns the parent's median time
+// past it measured the rule against, or 0 when currentChain is empty and the rule was skipped. Valid
+// needs that value again for the coinbase finality check.
+func (b *Block) checkHeaderContextual(currentChain []*BlockHeader, settings *settings.Settings, logger ulogger.Logger) (uint32, error) {
+	var parentMedianTimePast uint32
+
 	// 2. Check that the block timestamp is not more than two hours in the future.
 	twoHoursToTheFutureTimestampUint32, err := safeconversion.Int64ToUint32(time.Now().Add(2 * time.Hour).Unix())
 	if err != nil {
-		return errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
+		return 0, errors.NewProcessingError("[BLOCK][%s] failed to convert two hours to the future timestamp to uint32", b.String(), err)
 	}
 
 	if b.Header.Timestamp > twoHoursToTheFutureTimestampUint32 {
-		return errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.String())
+		return 0, errors.NewBlockInvalidError("[BLOCK][%s] block timestamp is more than two hours in the future", b.String())
 	}
 
 	// 3. Check that the block's timestamp is strictly after the median timestamp of the 11
@@ -713,7 +723,7 @@ func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *set
 	if len(currentChain) > 0 {
 		lastTimeStamps, err := b.MedianTimeWindow(currentChain)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		pruneLength := len(lastTimeStamps)
@@ -726,19 +736,19 @@ func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *set
 		// calculate the median timestamp
 		medianTimestamp, err := CalculateMedianTimestamp(prevTimeStamps)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
-		b.medianTimestamp, err = safeconversion.Int64ToUint32(medianTimestamp.Unix())
+		parentMedianTimePast, err = safeconversion.Int64ToUint32(medianTimestamp.Unix())
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		// validate that the block's timestamp is after the median timestamp
-		if b.Header.Timestamp <= b.medianTimestamp {
+		if b.Header.Timestamp <= parentMedianTimePast {
 			// if we're not on a chain that allows blocks to be generated quickly then return an error
 			if !settings.ChainCfgParams.GenerateSupported {
-				return errors.NewBlockInvalidError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
+				return 0, errors.NewBlockInvalidError("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
 			}
 			// otherwise just warn
 			logger.Warnf("block timestamp %d is not after median time past of last %d blocks %d", b.Header.Timestamp, pruneLength, medianTimestamp.Unix())
@@ -749,10 +759,10 @@ func (b *Block) CheckHeaderContextual(currentChain []*BlockHeader, settings *set
 	// Parity with bitcoin-sv ContextualCheckBlockHeader; must run before body/coinbase checks to
 	// match svnode's bad-version error priority.
 	if err := CheckBlockVersion(b.Header.Version, b.Height, settings.ChainCfgParams); err != nil {
-		return errors.NewBlockInvalidError("[BLOCK][%s] outdated block version", b.String(), err)
+		return 0, errors.NewBlockInvalidError("[BLOCK][%s] outdated block version", b.String(), err)
 	}
 
-	return nil
+	return parentMedianTimePast, nil
 }
 
 // Valid runs this function's consensus checks over the block — the header's own proof of work, the
@@ -807,7 +817,8 @@ func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, sub
 	// must be evaluated at block-receipt time rather than only in the background Valid() goroutine
 	// where time.Now() has drifted past receipt. Factored into CheckHeaderContextual so the
 	// optimistic path can run them synchronously before AddBlock (issue #1149).
-	if err := b.CheckHeaderContextual(currentChain, settings, logger); err != nil {
+	parentMedianTimePast, err := b.checkHeaderContextual(currentChain, settings, logger)
+	if err != nil {
 		return false, false, err
 	}
 
@@ -1021,6 +1032,17 @@ func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, sub
 	// can enforce the identical rule instead of carrying its own copy.
 	if !CoinbaseScriptSigLengthInBounds(b.CoinbaseTx, settings.ChainCfgParams) {
 		return false, merkleRootChecked, bindErr("[BLOCK][%s] bad coinbase length", b.String())
+	}
+
+	// 4c. Check that the coinbase is final (bitcoin-sv/teranode#4981). bitcoin-sv's
+	// ContextualCheckBlock applies IsFinalTx to every transaction, coinbase included, ahead of its
+	// bad-cb-height check; the coinbase never reaches the validator, so it is checked here. Same
+	// binding-aware classification as the coinbase checks either side of it. With no ancestor
+	// headers (block assembly passes none) the parent's median time past is unknown, so from CSV
+	// onwards a time-based nLockTime is not evaluated, as the median-time-past rule above is
+	// skipped; the block is checked again with headers when block validation receives it.
+	if reason := CoinbaseFinalityViolation(b.CoinbaseTx, b.Header.Timestamp, b.Height, settings.ChainCfgParams, parentMedianTimePast); reason != "" {
+		return false, merkleRootChecked, bindErr("[BLOCK][%s] coinbase is not final: %s", b.String(), reason)
 	}
 
 	// BIP34 (https://en.bitcoin.it/wiki/BIP_0034) forces miners to encode the block height in the

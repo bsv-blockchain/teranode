@@ -1940,23 +1940,42 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 			return nil, errors.NewProcessingError("[BlockAssembly][%s] failed to create coinbase tx", jobID, err)
 		}
 
-		// set the new mining parameters on the coinbase (nonce)
 		if req.Version != nil {
 			coinbaseTx.Version = *req.Version
 		}
 
-		if req.Time != nil {
-			coinbaseTx.LockTime = *req.Time
-		}
-
-		if req.Nonce != 0 {
-			coinbaseTx.Inputs[0].SequenceNumber = req.Nonce
-		}
+		// The solution's time and nonce belong in the header, which is built from req below, as
+		// bitcoin-sv's submitminingsolution puts them. They used to be copied into the coinbase as
+		// well, as its nLockTime and input sequence, and that made the coinbase non-final for any
+		// non-zero nonce: bitcoin-sv rejects such a block as bad-txns-nonfinal
+		// (bitcoin-sv/teranode#4981). CreateCoinbaseTxCandidate's coinbase is final as built. The
+		// version copy above has no bitcoin-sv counterpart either, but it does not affect
+		// finality and is left as it was.
 	}
 
 	// Final validation: ensure coinbase is valid (defense-in-depth)
 	if err = validateCoinbaseForSubmission(jobID, coinbaseTx); err != nil {
 		return nil, err
+	}
+
+	// The coinbase must be final (bitcoin-sv/teranode#4981). block.Valid below applies the rule too,
+	// but with no ancestor headers it cannot evaluate a time-based nLockTime from CSV onwards, and
+	// this block goes from here straight to AddBlock, never through block validation. So when the
+	// verdict depends on the parent's median time past, fetch it, and refuse the solution if it
+	// cannot be established rather than add a block every peer may reject.
+	var parentMedianTimePast uint32
+
+	if model.CoinbaseFinalityNeedsMedianTimePast(coinbaseTx, job.MiningCandidate.Height, ba.blockAssembler.settings.ChainCfgParams) {
+		parentMedianTimePast, err = ba.blockAssembler.ParentMedianTimePast(ctx, hashPrevBlock)
+		if err != nil {
+			return nil, errors.NewProcessingError("[BlockAssembly][%s] cannot check that the coinbase is final: its time-based nLockTime needs the parent's median time past", jobID, err)
+		}
+	}
+
+	if reason := model.CoinbaseFinalityViolation(coinbaseTx, nTime, job.MiningCandidate.Height, ba.blockAssembler.settings.ChainCfgParams, parentMedianTimePast); reason != "" {
+		// A consensus verdict on the miner's coinbase, so the same class block.Valid gives it. The
+		// lookup failure above is this node's problem and stays a processing error.
+		return nil, errors.NewBlockInvalidError("[BlockAssembly][%s] coinbase is not final: %s", jobID, reason)
 	}
 
 	coinbaseTxIDHash := coinbaseTx.TxIDChainHash()
