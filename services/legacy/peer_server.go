@@ -1120,11 +1120,12 @@ func (sp *serverPeer) OnTx(_ *peer.Peer, msg *wire.MsgTx) {
 	iv := wire.NewInvVect(wire.InvTypeTx, tx.Hash())
 	sp.AddKnownInventory(iv)
 
-	// Queue the transaction up to be handled by the sync manager and
-	// intentionally block further receives until the transaction is fully
-	// processed and known good or bad.  This helps prevent a malicious peer
-	// from queuing up a bunch of bad transactions before disconnecting (or
-	// being disconnected) and wasting memory.
+	// Queue the transaction up to be handled by the sync manager. This does NOT
+	// wait for the transaction to be processed: no reply channel is passed, and
+	// waiting would hold this peer's read loop, which also carries its blocks.
+	// What stops a peer flooding the node with transactions is the sync
+	// manager's relay bound (maxConcurrentRelayedTxs), which drops a
+	// transaction that arrives with every slot taken.
 	sp.server.syncManager.QueueTx(tx, sp.Peer, nil)
 }
 

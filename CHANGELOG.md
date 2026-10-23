@@ -106,6 +106,19 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **The legacy service now drops relayed transactions over a fixed bound.** At most 256
+  transactions relayed by legacy peers are validated at once. A transaction that arrives
+  with all 256 in progress is dropped, not queued, and the drop is logged only at debug
+  level (`[QueueTx] dropping relayed tx`). The node relies on getting it again from
+  another peer or in the block that mines it. Transaction announcements (`inv` items) are
+  also checked against the UTXO store no more than 1024 at a time, across every peer, and
+  are no longer checked at all outside the RUNNING state, where they were already
+  discarded. Neither limit is a setting. Before this, each relayed transaction and each
+  announced item got its own goroutine with no ceiling, and on 2026-10-19 that reached
+  223,118 goroutines and got the node killed for exceeding its memory limit. Operators who
+  rely on legacy peers relaying a heavy transaction stream should expect some of it to be
+  dropped under load; there is nothing to configure. (#2045)
+
 - **A failed revert of an invalid block's mined tags now holds block assembly until it
   succeeds.** When block validation reverts the mined tags of an invalid block and
   `SetMinedMulti` fails, or a subtree read fails with anything other than not-found, the
