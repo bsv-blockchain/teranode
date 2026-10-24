@@ -1144,8 +1144,8 @@ func ErrorCodeToGRPCCode(code ERR) codes.Code {
 	// submitter equally, so it is a statement about the chain state, not about who
 	// asked. The HTTP layer answers 403 for the same error and the two maps are
 	// independent by design; see httpStatusForTxError in services/propagation.
-	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED, ERR_TX_CREATING,
-		ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT:
+	case ERR_TX_INVALID_DOUBLE_SPEND, ERR_TX_CONFLICTING, ERR_TX_REJECTED_CONFLICTING, ERR_UTXO_SPENT, ERR_TX_LOCKED,
+		ERR_TX_CREATING, ERR_UTXO_FROZEN, ERR_TX_MISSING_PARENT:
 		return codes.FailedPrecondition
 	// ERR_TX_UNLOCK_FAILED is not in the family above: the transaction WAS accepted
 	// (spent, created, delivered to block assembly) and only the post-acceptance

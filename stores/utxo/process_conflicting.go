@@ -131,7 +131,9 @@ var step5RetryDelays = []time.Duration{0, 50 * time.Millisecond, 200 * time.Mill
 //     in BFS order — losers + every descendant the cascade reached. Callers
 //     (notably block assembly) need this superset to populate a conflictingMap
 //     so the queue→subtree dequeue path can reject children of conflicting
-//     parents that arrive after the cascade has run.
+//     parents that arrive after the cascade has run. On error it lists every
+//     hash step 1 may have flipped, rolled back or not, for txmeta cache
+//     eviction only.
 // compensationTimeout bounds the deferred unwind of a failed ProcessConflicting.
 // It runs on its own context rather than the caller's (see the rollback call site),
 // so it needs a budget of its own: long enough to re-spend and unflag a whole
@@ -198,6 +200,17 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 		step3SuccessfulSpends []*Spend
 		allMarkedHashes       []chainhash.Hash
 	)
+
+	// Registered before the rollback defer so it runs after it. A step 1 that
+	// failed partway is never rolled back, and a rollback can fail, so on error
+	// the caller still gets every hash step 1 may have flipped and evicts it from
+	// the txmeta cache. Evicting a hash the rollback restored costs one cache miss.
+	defer func() {
+		if err != nil {
+			losingTxHashesMap = nil
+			allMarkedConflicting = allMarkedHashes
+		}
+	}()
 
 	defer func() {
 		if err == nil || !step1Committed {
@@ -483,7 +496,8 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 //   - cascadedToConflicting: every hash whose Conflicting flag this call flipped
 //     to true (the demoted txs + their spending descendants). Callers feed
 //     this into the moveForward dequeue path so the queue evicts the
-//     unmined-side cascade.
+//     unmined-side cascade. On error it lists every hash the call may have
+//     flipped, for txmeta cache eviction only; allTouched is then nil.
 //   - allTouched: union of cascadedToConflicting and the un-cascade hashes
 //     whose flag flipped back to false (counter + descendants). Callers
 //     feed this into processedConflictingHashesMap so the subsequent
@@ -525,6 +539,21 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 
 	cascadedConflictingSet := make(map[chainhash.Hash]struct{}, 2*len(demotedTxHashes))
 	touchedSet := make(map[chainhash.Hash]struct{}, 2*len(demotedTxHashes))
+
+	// Nothing rolls a failed reverse back, so whatever it flipped stays
+	// conflicting in the store: hand it to the caller for txmeta cache eviction.
+	defer func() {
+		if err == nil {
+			return
+		}
+
+		allTouched = nil
+		cascadedToConflicting = make([]chainhash.Hash, 0, len(cascadedConflictingSet))
+
+		for h := range cascadedConflictingSet {
+			cascadedToConflicting = append(cascadedToConflicting, h)
+		}
+	}()
 
 	for i := range demotedTxHashes {
 		demotedHash := demotedTxHashes[i]
@@ -572,13 +601,14 @@ func ReverseProcessConflicting(ctx context.Context, s Store, blockHeight uint32,
 
 		// Step 2: re-mark D + descendants Conflicting=true.
 		_, markedOrder, markErr := MarkConflictingRecursively(ctx, s, []chainhash.Hash{demotedHash})
-		if markErr != nil {
-			return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error marking demoted tx + descendants conflicting", demotedHash.String(), markErr)
-		}
 
 		for _, h := range markedOrder {
 			cascadedConflictingSet[h] = struct{}{}
 			touchedSet[h] = struct{}{}
+		}
+
+		if markErr != nil {
+			return nil, nil, errors.NewProcessingError("[ReverseProcessConflicting][%s] error marking demoted tx + descendants conflicting", demotedHash.String(), markErr)
 		}
 
 		// Step 3: unspend D's input spends so parent.SpendingDatas[vout]
@@ -1025,6 +1055,10 @@ func setLockedWithRetry(ctx context.Context, s Store, hashes []chainhash.Hash, v
 //     including the input hashes and every descendant reached via BFS. Insertion
 //     order is BFS order (input level first, then each descendant level) — callers
 //     can rely on this for deterministic logs, traces, and eviction ordering.
+//     On error it is still returned and lists every hash the call may have
+//     flipped: the levels already written plus the level whose write failed.
+//     Those stay conflicting in the store, so callers evict them from the txmeta
+//     cache on error too; a retry may never re-flip them.
 //   - An error if any issues occur during the process.
 func MarkConflictingRecursively(ctx context.Context, s Store, hashes []chainhash.Hash) ([]*Spend, []chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "MarkConflictingRecursively")
@@ -1046,7 +1080,7 @@ func MarkConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 	for len(toProcess) > 0 {
 		affectedParentSpends, spendingChildTxs, err := s.SetConflicting(ctx, toProcess, true)
 		if err != nil {
-			return nil, nil, err
+			return nil, markedOrder, err
 		}
 
 		allAffectedSpends = append(allAffectedSpends, affectedParentSpends...)

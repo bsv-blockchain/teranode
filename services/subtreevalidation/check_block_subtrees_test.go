@@ -91,43 +91,9 @@ func TestCheckBlockSubtrees(t *testing.T) {
 			mock.Anything).
 			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
 
-		// Create test transactions
-		tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
-		require.NoError(t, err)
-
-		tx2, err := createTestTransaction("6359f0868171b1d194cbee1af2f16ea598ae8fad666d9b012c8ed2b79a236ec4")
-		require.NoError(t, err)
-
-		// Create subtree with test transactions
-		subtreeHash := chainhash.Hash{}
-		copy(subtreeHash[:], []byte("test_subtree_hash_32_bytes_long!"))
-
-		// Store subtreeData containing the transactions
-		subtreeData := bytes.Buffer{}
-		// Write transactions in the format expected by readTransactionsFromSubtreeDataStream
-		subtreeData.Write(tx1.Bytes())
-		subtreeData.Write(tx2.Bytes())
-
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtreeData, subtreeData.Bytes())
-		require.NoError(t, err)
-
-		// Mark the subtree as already validated to avoid calling ValidateSubtreeInternal
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
-		require.NoError(t, err)
-
-		// Create a block with subtrees using proper model construction
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{},
-			Nonce:          0,
-		}
-
-		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
-		require.NoError(t, err)
+		// A validated subtree in a block the header commits to: a cached subtree is
+		// only probed once the body is bound.
+		block := storeBoundCachedBlock(t, server, 1)
 
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
@@ -913,25 +879,9 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 			mock.Anything).
 			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
 
-		// Create a subtree hash and store it so it "exists"
-		subtreeHash := chainhash.Hash{}
-		copy(subtreeHash[:], []byte("quorum_test_subtree_exists__"))
-
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
-		require.NoError(t, err)
-
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{},
-			Nonce:          0,
-		}
-
-		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
-		require.NoError(t, err)
+		// Store a subtree so it "exists", in a block the header commits to: a
+		// cached subtree is only probed once the body is bound.
+		block := storeBoundCachedBlock(t, server, 1)
 
 		blockBytes, err := block.Bytes()
 		require.NoError(t, err)
@@ -1155,8 +1105,17 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 			mock.Anything).
 			Return(testHeaders[0], &model.BlockHeaderMeta{}, nil)
 
-		subtreeHash := chainhash.Hash{}
-		copy(subtreeHash[:], []byte("quorum_test_inflight_race___"))
+		// A real subtree the header commits to: a cached subtree is only probed
+		// once the body is bound.
+		st, err := subtreepkg.NewTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, st.AddCoinbaseNode())
+		require.NoError(t, st.AddNode(chainhash.HashH([]byte("inflight-tx")), 1, 1))
+
+		stBytes, err := st.Serialize()
+		require.NoError(t, err)
+
+		subtreeHash := *st.RootHash()
 
 		// Pre-create lock file to simulate in-flight handler
 		lockFilePath := filepath.Join(quorumDir, subtreeHash.String()+".lock")
@@ -1166,24 +1125,11 @@ func TestCheckBlockSubtrees_WithQuorum(t *testing.T) {
 		// and release the lock file. TryLockIfNotExistsWithTimeout will retry and see exists=true.
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
+			_ = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, stBytes)
 			os.Remove(lockFilePath)
 		}()
 
-		header := &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{},
-			Nonce:          0,
-		}
-
-		coinbaseTx := &bt.Tx{Version: 1}
-		block, err := model.NewBlock(header, coinbaseTx, []*chainhash.Hash{&subtreeHash}, 2, 500, 0, 0)
-		require.NoError(t, err)
-
-		blockBytes, err := block.Bytes()
+		blockBytes, err := boundBlock(t, st, &subtreeHash).Bytes()
 		require.NoError(t, err)
 
 		request := &subtreevalidation_api.CheckBlockSubtreesRequest{
@@ -2181,41 +2127,9 @@ func TestCheckBlockSubtrees_ConcurrentProcessing(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
 
-	// Create multiple subtrees that don't exist in store
-	var subtreeHashes []*chainhash.Hash
-	for i := 0; i < 5; i++ {
-		subtreeHash := chainhash.Hash{}
-		copy(subtreeHash[:], []byte(fmt.Sprintf("subtree_hash_%d_32_bytes_long__!", i)))
-		subtreeHashes = append(subtreeHashes, &subtreeHash)
-
-		// Store subtree data for each
-		tx, err := createTestTransaction(fmt.Sprintf("tx%d", i))
-		require.NoError(t, err)
-
-		subtreeData := bytes.Buffer{}
-		subtreeData.Write(tx.Bytes())
-
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtreeData, subtreeData.Bytes())
-		require.NoError(t, err)
-
-		// Mark as validated to avoid HTTP calls
-		err = server.subtreeStore.Set(context.Background(), subtreeHash[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
-		require.NoError(t, err)
-	}
-
-	// Create a block with multiple subtrees
-	header := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  &chainhash.Hash{},
-		HashMerkleRoot: &chainhash.Hash{},
-		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-
-	coinbaseTx := &bt.Tx{Version: 1}
-	block, err := model.NewBlock(header, coinbaseTx, subtreeHashes, 5, 1000, 0, 0)
-	require.NoError(t, err)
+	// Multiple validated subtrees, in a block the header commits to: a cached
+	// subtree is only probed once the body is bound.
+	block := storeBoundCachedBlock(t, server, 5)
 
 	blockBytes, err := block.Bytes()
 	require.NoError(t, err)
@@ -2787,9 +2701,13 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 			tx, err := createTestTransaction(baseTxStr)
 			require.NoError(t, err)
 
-			// Add to subtree
-			err = subtree.AddNode(*tx.TxIDChainHash(), 1, uint64(j+1))
-			require.NoError(t, err)
+			// Add to subtree. Leaf hashes are unique so every subtree is distinct:
+			// a repeated subtree list is rejected before the cached-subtree probe.
+			if i == 0 && j == 0 {
+				require.NoError(t, subtree.AddCoinbaseNode())
+			} else {
+				require.NoError(t, subtree.AddNode(chainhash.HashH([]byte(fmt.Sprintf("large-%d-%d", i, j))), 1, uint64(j+1)))
+			}
 
 			// Add to subtreeData
 			subtreeData.Write(tx.Bytes())
@@ -2802,7 +2720,10 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 			require.NoError(t, err)
 
 			// Mark the subtree as already validated to avoid HTTP fetching
-			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, blessedSubtreeBytes(t))
+			serialized, err := subtree.Serialize()
+			require.NoError(t, err)
+
+			err = server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtree, serialized)
 			require.NoError(t, err)
 		}
 
@@ -2810,19 +2731,8 @@ func TestCheckBlockSubtrees_LargeBlock_MemoryConsumption(t *testing.T) {
 		allSubtrees = append(allSubtrees, subtree)
 	}
 
-	// Create block with all subtrees
-	header := &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  &chainhash.Hash{},
-		HashMerkleRoot: &chainhash.Hash{},
-		Timestamp:      uint32(time.Now().Unix()),
-		Bits:           model.NBit{},
-		Nonce:          0,
-	}
-
-	coinbaseTx := &bt.Tx{Version: 1}
-	block, err := model.NewBlock(header, coinbaseTx, allSubtreeHashes, 1, 250, 0, 0)
-	require.NoError(t, err)
+	// Create block with all subtrees, committed to by its header
+	block := boundBlock(t, allSubtrees[0], allSubtreeHashes...)
 
 	blockBytes, err := block.Bytes()
 	require.NoError(t, err)

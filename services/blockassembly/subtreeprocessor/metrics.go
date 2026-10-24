@@ -50,6 +50,11 @@ var (
 	// treat an error as "not applied" from state that already reflects it); the
 	// "where" label identifies the reporting site for troubleshooting.
 	prometheusSubtreeProcessorDiskTxMapErrors *prometheus.CounterVec
+
+	// prometheusTxMetaDeleteDropped counts txmeta DELETEs TxMetaEvictor could not
+	// publish. Each one leaves subtree validation caching a demoted tx as
+	// non-conflicting until the cache rotates it out.
+	prometheusTxMetaDeleteDropped prometheus.Counter
 )
 
 var (
@@ -274,6 +279,15 @@ func _initPrometheusMetrics() {
 			Help:      "Number of disk tx map storage errors reported after their operation's commit point",
 		},
 		[]string{"where"},
+	)
+
+	prometheusTxMetaDeleteDropped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "txmeta_delete_dropped_total",
+			Help:      "Txmeta cache DELETEs for txs demoted to conflicting that were dropped because the txmeta producer buffer was full or stopped",
+		},
 	)
 }
 

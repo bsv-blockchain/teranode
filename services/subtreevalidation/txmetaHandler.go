@@ -234,12 +234,19 @@ func (u *Server) txmetaHandler(ctx context.Context, msg *kafka.KafkaMessage) err
 		prometheusSubtreeValidationSetTXMetaCacheKafkaCount.Add(float64(len(bufs.keys)))
 	}
 
-	for i := range bufs.deletes {
-		if err := u.DelTxMetaCache(ctx, &bufs.deletes[i]); err != nil {
+	// A DELETE is a demotion to conflicting. The cache keeps it out against a
+	// late ADD from another partition and against read-through writes (see
+	// TxMetaCache.DeleteDemoted).
+	if len(bufs.deletes) > 0 {
+		if err := u.DelTxMetaCacheDemoted(ctx, bufs.deletes); err != nil {
 			prometheusSubtreeValidationSetTXMetaCacheKafkaErrors.Inc()
-			u.logger.Errorf("[txmetaHandler][%s] failed to delete tx meta data: %v", bufs.deletes[i], err)
+			u.logger.Errorf("[txmetaHandler] failed to delete %d demoted tx meta entries: %v", len(bufs.deletes), err)
 		}
-		prometheusSubtreeValidationDelTXMetaCacheKafka.Observe(float64(time.Since(enqueuedAt).Microseconds()) / 1_000_000)
+
+		elapsed := float64(time.Since(enqueuedAt).Microseconds()) / 1_000_000
+		for range bufs.deletes {
+			prometheusSubtreeValidationDelTXMetaCacheKafka.Observe(elapsed)
+		}
 	}
 
 	return nil

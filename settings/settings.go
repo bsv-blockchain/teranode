@@ -733,7 +733,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlocksOnly:                                getBool("subtreevalidation_blocks_only", false, alternativeContext...),
 			TxPolicyRejectedCacheEnabled:              getBool("subtreevalidation_txPolicyRejectedCacheEnabled", true, alternativeContext...),
 			TxPolicyRejectedCacheMaxMB:                getInt("subtreevalidation_txPolicyRejectedCacheMaxMB", 64, alternativeContext...),
+			KeptAsideMaxBytesPerSubtree:               getInt("subtreevalidation_keptAsideMaxBytesPerSubtree", 16*1024*1024, alternativeContext...),
 			CheckBlockSubtreesTimeout:                 getDuration("subtreevalidation_check_block_subtrees_timeout", 30*time.Minute, alternativeContext...),
+			TxMetaTombstoneWindow:                     getDuration("subtreevalidation_txMetaTombstoneWindow", 30*time.Minute, alternativeContext...),
 			MaxIncomingSubtreeBytes:                   int64(getInt("subtreevalidation_max_incoming_subtree_bytes", 128*1024*1024, alternativeContext...)),
 		},
 		// Adaptive subtreeData fetch gate. Defaults here mirror the struct

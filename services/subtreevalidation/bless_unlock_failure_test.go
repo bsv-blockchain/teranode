@@ -160,6 +160,20 @@ func TestBlessMissingTransaction_UnlockFailureStillRejectsRealFailures(t *testin
 	require.False(t, errors.Is(err, errors.ErrTxUnlockFailed))
 }
 
+// TestBlessMissingTransaction_NilMetaWithoutErrorRendersCleanly pins that a validator
+// answering (nil, nil) gives a plain "tx meta is nil" error, without a stray nil argument
+// rendered into the message.
+func TestBlessMissingTransaction_NilMetaWithoutErrorRendersCleanly(t *testing.T) {
+	server, _, txs, _ := newUnlockFailureServer(t, true, alwaysFail)
+
+	server.validatorClient = &failingValidator{Interface: server.validatorClient}
+
+	_, err := server.blessMissingTransaction(context.Background(), chainhash.Hash{}, chainhash.Hash{}, txs[1], 2, map[uint32]bool{}, validator.ProcessOptions())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tx meta is nil")
+	require.NotContains(t, err.Error(), "%!")
+}
+
 type failingValidator struct {
 	validator.Interface
 	err error
@@ -183,7 +197,7 @@ func TestBlessMissingTransactions_ChildOfUnlockFailedParentIsBlessed(t *testing.
 	missing := []missingTx{{tx: parent, idx: 0}, {tx: child, idx: 1}}
 	txMetaSlice := make([]metaSliceItem, len(missing))
 
-	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{})
+	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, true)
 	require.NoError(t, err, "a child of an accepted parent must not fail because the parent's unlock timed out")
 
 	for i, tx := range []*bt.Tx{parent, child} {
@@ -208,7 +222,7 @@ func TestBlessMissingTransactions_LevelUnlockFailureLeavesParentLocked(t *testin
 	missing := []missingTx{{tx: parent, idx: 0}, {tx: child, idx: 1}}
 	txMetaSlice := make([]metaSliceItem, len(missing))
 
-	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{})
+	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, true)
 	require.Error(t, err)
 	require.True(t, txMetaSlice[0].isSet, "the parent was accepted")
 	require.False(t, txMetaSlice[1].isSet, "the child could not spend a locked parent")
@@ -422,7 +436,7 @@ func TestBlessMissingTransactions_InvalidSiblingDoesNotSkipUnlock(t *testing.T) 
 	missing := []missingTx{{tx: accepted, idx: 0}, {tx: sibling, idx: 1}}
 	txMetaSlice := make([]metaSliceItem, len(missing))
 
-	err = server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 100, map[uint32]bool{})
+	err = server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 100, map[uint32]bool{}, true)
 	require.Error(t, err, "the invalid sibling still fails the subtree")
 
 	store.AssertCalled(t, "SetLocked", mock.Anything, []chainhash.Hash{*accepted.TxIDChainHash()}, false)
@@ -446,7 +460,7 @@ func TestBlessMissingTransactions_QueuesAcceptedParentDespiteBlessError(t *testi
 	missing := []missingTx{{tx: parent, idx: 0}}
 	txMetaSlice := make([]metaSliceItem, 1)
 
-	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{})
+	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, true)
 	require.Error(t, err, "the bless still fails: the accepted metadata could not be read")
 	require.False(t, txMetaSlice[0].isSet, "no metadata is recorded for a read that failed")
 
