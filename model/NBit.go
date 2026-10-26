@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"math/big"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -39,10 +40,19 @@ func (b NBit) MarshalJSON() ([]byte, error) {
 	return []byte(`"` + b.String() + `"`), nil
 }
 
-func (b NBit) UnmarshalJSON(data []byte) error {
-	nBits, err := util.DecodeAndReverseHexString(string(data))
+func (b *NBit) UnmarshalJSON(data []byte) error {
+	var nBitStr string
+	if err := json.Unmarshal(data, &nBitStr); err != nil {
+		return err
+	}
+
+	nBits, err := util.DecodeAndReverseHexString(nBitStr)
 	if err != nil {
 		return err
+	}
+
+	if len(nBits) != 4 {
+		return errors.NewInvalidArgumentError("nBits should be 4 bytes long")
 	}
 
 	copy(b[:], nBits)
