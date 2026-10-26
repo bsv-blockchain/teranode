@@ -5,6 +5,7 @@
 //	<outdir>/settings_multinode.conf
 //	<outdir>/postgres/init-multinode.sql
 //	<outdir>/aerospike/aerospike-{1..N}.conf
+//	<outdir>/chaostest/inventory.json (chaos-test fleet description; see chaostest.go)
 //
 // Bring it up with:
 //
@@ -710,7 +711,7 @@ func writeAll(outDir string, s spec) error {
 			return err
 		}
 	}
-	return nil
+	return writeChaosTestInventory(outDir, s)
 }
 
 func renderToFile(tmplPath, dst string, data any) error {
