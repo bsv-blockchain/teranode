@@ -90,6 +90,15 @@ Chaos:
   chaos slow <node> <ms>          Add network latency (split mode: -p2p only)
   chaos unslow <node>             Remove added latency
 
+chaos-test scenarios (github.com/galt-tr/chaos-test, checkout in ../chaos-test
+or CHAOS_TEST_DIR):
+  sim up [--build]                Start the scenario orchestrator + UI on :8600
+                                  (SIM_HOST_PORT) against this stack. Builds the
+                                  image on first use; --build rebuilds it.
+  sim run <scenario> [--step]     Run a scenario and follow it to completion
+  sim status | logs | down        Orchestrator state, logs, or remove it
+                                  (also removed by 'down')
+
 Examples:
   compose/multinode.sh up 5
   compose/multinode.sh up 3 -allinone=0          # split-services topology
@@ -104,6 +113,7 @@ Examples:
   compose/multinode.sh chaos slow 2 500
   compose/multinode.sh logs 2
   compose/multinode.sh logs 2-validator          # split mode service log
+  compose/multinode.sh sim up && compose/multinode.sh sim run multinode-smoke
   compose/multinode.sh down
 EOF
   exit 2
@@ -319,6 +329,9 @@ cmd_up() {
 
 cmd_down() {
   require_stack
+  # The orchestrator is attached to the stack's network; remove it first or
+  # compose cannot remove the network.
+  sim_down
   compose down -v --remove-orphans
 
   # 'compose down -v' removes named volumes but NOT bind mounts. Aerospike
@@ -1094,6 +1107,212 @@ cmd_blast() {
     ${passthrough[@]+"${passthrough[@]}"}
 }
 
+# ---- chaos-test simulator --------------------------------------------------
+#
+# Runs galt-tr/chaos-test's orchestrator (scenario engine + UI) against this
+# stack. gennodes writes generated/chaostest/inventory.json describing the
+# nodes; sim_up adds the private bits at start time (minerWIF = PK1, and
+# chaos-test's own dev keys.json) into data/multinode-chaostest/config/, which
+# is gitignored, so no key is ever written into the generated tree.
+#
+# The orchestrator joins the stack's compose network, so it reaches nodes by
+# DNS name and consumes the Kafka verdict topics (rejectedtx-*, invalid-blocks-*)
+# that scenario 'event' checks match on.
+
+SIM_CONTAINER="chaos-orchestrator-multinode"
+SIM_IMAGE="${CHAOS_TEST_IMAGE:-chaos-orchestrator:multinode}"
+SIM_PORT="${SIM_HOST_PORT:-8600}"
+SIM_DATA_DIR="$REPO_ROOT/data/multinode-chaostest"
+SIM_SCENARIOS_DIR="${SCENARIOS_DIR:-$SCRIPT_DIR/chaostest/scenarios}"
+
+chaos_test_dir() {
+  local dir="${CHAOS_TEST_DIR:-$REPO_ROOT/../chaos-test}"
+  if [[ ! -f "$dir/sim/Dockerfile" ]]; then
+    echo "error: chaos-test checkout not found at $dir" >&2
+    echo "       git clone https://github.com/galt-tr/chaos-test \"$dir\"" >&2
+    echo "       or set CHAOS_TEST_DIR to an existing checkout" >&2
+    exit 1
+  fi
+  (cd "$dir" && pwd)
+}
+
+sim_running() {
+  [[ "$(docker inspect -f '{{.State.Running}}' "$SIM_CONTAINER" 2>/dev/null)" == "true" ]]
+}
+
+sim_build() {
+  local dir
+  dir=$(chaos_test_dir)
+  echo "building $SIM_IMAGE from $dir ($(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo 'unknown ref'))..."
+  docker build -t "$SIM_IMAGE" --build-arg UI="${SIM_UI:-1}" -f "$dir/sim/Dockerfile" "$dir"
+}
+
+sim_up() {
+  local build=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --build) build=true; shift ;;
+      *) echo "error: sim up: unknown flag '$1'" >&2; exit 2 ;;
+    esac
+  done
+  require_stack
+
+  local inv="$GEN_DIR/chaostest/inventory.json"
+  if [[ ! -f "$inv" ]]; then
+    echo "error: $inv not found; this stack predates chaos-test support. Run '$0 down' and '$0 up <N>' again." >&2
+    exit 1
+  fi
+
+  local dir
+  dir=$(chaos_test_dir)
+  if $build || ! docker image inspect "$SIM_IMAGE" >/dev/null 2>&1; then
+    sim_build
+  fi
+
+  # The coinbase pays PK1 (miner_wallet_private_keys.docker, output 0), so
+  # chaos-test's 'miner' key must be PK1 for coinbase spends to sign.
+  local pk1="${PK1:-}"
+  if [[ -z "$pk1" ]]; then
+    pk1=$(sed -nE 's/^PK1[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$REPO_ROOT/settings.conf" | head -1)
+  fi
+  if [[ -z "$pk1" ]]; then
+    echo "error: could not read PK1 from settings.conf; set PK1 in the environment" >&2
+    exit 1
+  fi
+
+  local cfg="$SIM_DATA_DIR/config"
+  mkdir -p "$cfg" "$SIM_DATA_DIR/data"
+  # The key is passed through the environment, not argv, so it never shows in ps.
+  MINER_WIF="$pk1" python3 -I -c '
+import json, os, sys
+inv = json.load(open(sys.argv[1]))
+inv["minerWIF"] = os.environ["MINER_WIF"]
+with open(sys.argv[2], "w") as f:
+    json.dump(inv, f, indent=2)
+' "$inv" "$cfg/inventory.json"
+  cp "$dir/bsv-regtest/config/keys.json" "$cfg/keys.json"
+  chmod 600 "$cfg/inventory.json" "$cfg/keys.json"
+
+  local network
+  network=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["networks"]["chaosnetName"])' "$inv")
+
+  docker rm -f "$SIM_CONTAINER" >/dev/null 2>&1 || true
+  echo "starting $SIM_CONTAINER on $network..."
+  # -walletd= turns the wallet feature off; the env var cannot, because an
+  # empty WALLETD_URL falls back to bsv-regtest's walletd address.
+  # host.docker.internal lets scenarios reach host-side tools (the blaster).
+  docker run -d --name "$SIM_CONTAINER" \
+    --network "$network" \
+    --add-host host.docker.internal:host-gateway \
+    -p "$SIM_PORT:8600" \
+    -e KAFKA_BROKERS=kafka-shared:9092 \
+    -e SCENARIOS=/scenarios,/scenarios-multinode \
+    -v "$cfg:/config:ro" \
+    -v "$SIM_SCENARIOS_DIR:/scenarios-multinode:ro" \
+    -v "$SIM_DATA_DIR/data:/data" \
+    -v "${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock" \
+    "$SIM_IMAGE" -walletd= >/dev/null
+
+  local deadline=$((SECONDS + 30))
+  until curl -sf -m 2 "http://localhost:$SIM_PORT/api/inventory" >/dev/null 2>&1; do
+    if ! sim_running || ((SECONDS > deadline)); then
+      echo "error: orchestrator did not come up; last log lines:" >&2
+      docker logs --tail 30 "$SIM_CONTAINER" >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
+  echo "chaos-test UI: http://localhost:$SIM_PORT"
+  echo "run a scenario: $0 sim run multinode-smoke"
+}
+
+sim_down() {
+  if docker inspect "$SIM_CONTAINER" >/dev/null 2>&1; then
+    docker rm -f "$SIM_CONTAINER" >/dev/null
+    echo "removed $SIM_CONTAINER (runs kept in ${SIM_DATA_DIR#"$REPO_ROOT"/}/data/runs)"
+  fi
+}
+
+sim_status() {
+  if ! sim_running; then
+    echo "chaos-test orchestrator: not running ('$0 sim up' to start)"
+    return
+  fi
+  echo "chaos-test orchestrator: running  ui=http://localhost:$SIM_PORT"
+  curl -sf -m 5 "http://localhost:$SIM_PORT/api/scenarios" | python3 -I -c '
+import json, sys
+for s in json.load(sys.stdin):
+    print("  " + s["id"])
+' || echo "  (scenario list unavailable)"
+}
+
+# sim_run starts a scenario and follows it to completion, printing each step
+# as it finishes. Exit status: 0 passed (findings are printed, not fatal),
+# 1 failed or aborted.
+sim_run() {
+  local id="${1:?usage: sim run <scenario-id> [--step]}"
+  local mode="auto"
+  [[ "${2:-}" == "--step" ]] && mode="step"
+  sim_running || { echo "error: orchestrator not running; '$0 sim up' first" >&2; exit 1; }
+
+  local base="http://localhost:$SIM_PORT/api"
+  local run_id
+  run_id=$(curl -sf -m 10 -X POST -H 'Content-Type: application/json' \
+    -d "{\"mode\":\"$mode\"}" "$base/scenarios/$id/run" \
+    | python3 -I -c 'import json, sys; print(json.load(sys.stdin)["id"])') || {
+    echo "error: could not start '$id' (unknown scenario, or another run is active)" >&2
+    exit 1
+  }
+  echo "run $run_id: $id ($mode)  ui=http://localhost:$SIM_PORT"
+  [[ "$mode" == "step" ]] && echo "step mode: release each step from the UI or POST $base/runs/$run_id/next"
+
+  local printed=0 status
+  while true; do
+    status=$(curl -sf -m 10 "$base/runs/$run_id" | python3 -I -c '
+import json, sys
+run = json.load(sys.stdin)
+done = [s for s in run.get("steps") or [] if s.get("status") not in (None, "", "pending", "running")]
+skip = int(sys.argv[1])
+for s in done[skip:]:
+    err = (" - " + s["error"]) if s.get("error") else ""
+    print("STEP %-7s %s%s" % (s.get("status"), s.get("name"), err))
+print("COUNT %d" % len(done))
+print("STATUS %s" % run.get("status"))
+for f in run.get("findings") or []:
+    print("FINDING %s" % (f if isinstance(f, str) else json.dumps(f)))
+' "$printed") || { sleep 3; continue; }
+    while IFS= read -r line; do
+      case "$line" in
+        STEP*) echo "  ${line#STEP }" ;;
+        COUNT*) printed="${line#COUNT }" ;;
+      esac
+    done <<<"$status"
+    local st
+    st=$(sed -n 's/^STATUS //p' <<<"$status")
+    if [[ "$st" != "running" && "$st" != "paused" ]]; then
+      grep '^FINDING' <<<"$status" | sed 's/^FINDING /  finding: /' || true
+      echo "run $run_id: $st"
+      [[ "$st" == "passed" ]]
+      return
+    fi
+    sleep 3
+  done
+}
+
+cmd_sim() {
+  local sub="${1:-}"
+  [[ $# -gt 0 ]] && shift
+  case "$sub" in
+    up)     sim_up "$@" ;;
+    down)   sim_down ;;
+    build)  sim_build ;;
+    status) sim_status ;;
+    logs)   docker logs -f "$SIM_CONTAINER" ;;
+    run)    sim_run "$@" ;;
+    *)      echo "usage: $0 sim up [--build] | down | build | status | logs | run <scenario> [--step]" >&2; exit 2 ;;
+  esac
+}
+
 [[ $# -eq 0 ]] && usage
 
 command="$1"
@@ -1110,6 +1329,7 @@ case "$command" in
   generate)   cmd_generate "$@" ;;
   blast)      cmd_blast "$@" ;;
   chaos)      cmd_chaos "$@" ;;
+  sim)        cmd_sim "$@" ;;
   help|-h)    usage ;;
   *)          echo "error: unknown command '$command'" >&2; usage ;;
 esac

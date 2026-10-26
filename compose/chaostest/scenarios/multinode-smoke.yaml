@@ -1,0 +1,101 @@
+id: multinode-smoke
+name: Multinode smoke - mine, spend, pause a node, reconverge
+description: >
+  Checks that chaos-test is wired to the multinode stack end to end: RPC mining, coinbase lookup
+  through the asset API, signing with the miner key (PK1), submitting straight to a node, mempool
+  and UTXO checks, and container chaos through the Docker socket. B is paused while A mines, then
+  unpaused; the fleet must reconverge on A's chain. Run this first after `multinode.sh sim up`.
+requires: [regtest]
+roles:
+  A: teranode1   # mines and receives the spend
+  B: teranode2   # paused while A mines
+  C: teranode3   # bystander
+params:
+  fee: 500
+  pausedBlocks: 3
+steps:
+  - name: converge - mine on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    assert:
+      - check: same_tip
+        with: { nodes: [A, B, C] }
+        timeout: 90s
+        message: fleet converged on A's chain
+
+  - name: fund - mine to coinbase maturity on A
+    action: mine
+    with: { node: A, blocks: 101 }
+    as: fund
+    timeout: 10m
+    assert:
+      - check: same_tip
+        with: { nodes: [A, B, C] }
+        timeout: 120s
+
+  - name: recipient key
+    action: newkey
+    with: { name: "smoke-${fund.last}" }
+    as: recipient
+
+  - name: a mature coinbase (pays the miner key)
+    action: coinbase
+    with: { node: A, height: "${tip(A) - 100}" }
+    as: cb
+
+  - name: spend it to the recipient
+    action: spend
+    with: { node: A, txid: "${cb.txid}", vout: 0, key: miner, to: "${recipient.name}", fee: "${fee}" }
+    as: tx
+
+  - name: submit to A
+    action: submit
+    with: { target: A, tx: "${tx}" }
+    as: submitted
+    assert:
+      - check: expr
+        with: { left: "${submitted.accepted}", right: "true" }
+        message: A accepted the spend
+      - check: mempool_has
+        with: { node: C, txid: "${tx.txid}" }
+        timeout: 60s
+        message: the spend propagated to C
+
+  - name: mine the spend on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    assert:
+      - check: same_tip
+        with: { nodes: [A, B, C] }
+        timeout: 60s
+      - check: utxo_status
+        with: { node: C, txid: "${tx.txid}", vout: 0, status: OK }
+        timeout: 60s
+
+  - name: pause B
+    action: chaos
+    with: { node: B, action: pause }
+
+  - name: remember B's height
+    action: set
+    with: { pausedAt: "${tip(A)}" }
+
+  - name: A mines while B is frozen
+    action: mine
+    with: { node: A, blocks: "${pausedBlocks}" }
+    assert:
+      - check: same_tip
+        with: { nodes: [A, C] }
+        timeout: 60s
+
+  - name: unpause B
+    action: chaos
+    with: { node: B, action: unpause }
+    assert:
+      - check: height
+        with: { node: B, equals: "${pausedAt + pausedBlocks}" }
+        timeout: 120s
+        message: B caught up on the blocks it missed while paused
+      - check: same_tip
+        with: { nodes: [A, B, C] }
+        timeout: 120s

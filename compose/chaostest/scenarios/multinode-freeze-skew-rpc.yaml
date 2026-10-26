@@ -1,0 +1,198 @@
+id: multinode-freeze-skew-rpc
+name: Immediate RPC freeze on one node - rejection handling (multinode, no arcade)
+description: >
+  An immediate freeze driven over the admin `freeze` RPC in its 3-parameter form (txid, vout,
+  utxoHash). Without heights the freeze is stored as (0, 0), "enforced at every height", i.e. the
+  legacy immediate consensus freeze - so node A must reject the block that unaware node B mines
+  spending the coin, and the fleet splits by the operator's intent. What this scenario compares is
+  HOW A rejects it, which is where teranode builds differ. On a build with the height-anchored
+  freeze fix (0 findings): one block-invalid verdict on Kafka naming the frozen output, the block
+  validated once, B's next block rejected immediately as the child of an invalid parent, no
+  re-fetch. On a build without it (findings): no verdict at all (SERVICE_ERROR only) and, once B
+  builds on the block, a catch-up loop that re-fetches and re-validates it every few seconds. Pin a
+  different image for node A with TERANODE_IMAGE_1=... in bsv-regtest/.env (plus `make reset`) to
+  compare two builds; this scenario delivers the freeze over RPC so it needs no shared alert
+  network. The height-anchored behaviour itself (fleet agreement below the window, clean rejection
+  inside it) is freeze-timing-skew.
+
+  Multinode variant of chaos-test's freeze-skew-rpc: the stack has no arcade, so the parent tx is
+  submitted straight to node A (asset POST /tx) instead. Every other step is unchanged.
+requires: [regtest]
+roles:
+  A: teranode1   # receives the freeze (over RPC; works even when its alert service is offline)
+  B: teranode2   # never told; mines the block spending the coin, then builds on it
+  C: teranode3   # bystander, follows B
+params:
+  fee: 500
+steps:
+  - name: converge - mine two blocks on A so any node left on a fork by an earlier run reorgs to the honest chain
+    action: mine
+    with: { node: A, blocks: 2 }
+    as: converge
+    assert:
+      - check: same_tip
+        with: { nodes: [A, B, C] }
+        timeout: 90s
+        message: fleet converged on A's chain
+
+  - name: fund - mine to maturity on A
+    action: mine
+    with: { node: A, blocks: 101 }
+    as: fund
+    timeout: 10m
+    assert:
+      - check: same_tip
+        with: { nodes: [A, B, C] }
+        timeout: 120s
+
+  - name: victim key
+    action: newkey
+    with: { name: "victim-${fund.last}", note: "holds the frozen coin" }
+    as: victim
+
+  - name: coinbase of the first block mined by this run (100 confirmations, unfrozen, pays the miner key)
+    action: coinbase
+    with: { node: A, height: "${tip(A) - 100}" }
+    as: cb
+
+  - name: parent tx - two victim outputs
+    action: spend
+    with: { node: A, txid: "${cb.txid}", vout: 0, key: miner, to: "${victim.name}", outputs: 2, fee: "${fee}" }
+    as: parent
+
+  - name: broadcast parent to A
+    action: submit
+    with: { target: A, tx: "${parent}" }
+    as: parentSubmit
+    assert:
+      - check: expr
+        with: { left: "${parentSubmit.accepted}", right: "true" }
+        message: A accepted the parent tx
+      - check: mempool_has
+        with: { node: C, txid: "${parent.txid}" }
+        timeout: 60s
+
+  - name: mine parent block on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    as: parentBlock
+    assert:
+      - check: same_tip
+        with: { nodes: [A, B, C] }
+        timeout: 60s
+      - check: utxo_status
+        with: { node: C, txid: "${parent.txid}", vout: 0, status: OK }
+        timeout: 60s
+
+  - name: freeze victim output 0 on A only (admin RPC, no heights = immediate, enforced at every height)
+    action: rpc_freeze
+    with: { node: A, txid: "${parent.txid}", vout: 0 }
+    assert:
+      - check: utxo_status
+        with: { node: A, txid: "${parent.txid}", vout: 0, status: FROZEN }
+        timeout: 30s
+      - check: utxo_status
+        with: { node: B, txid: "${parent.txid}", vout: 0, status: OK }
+        message: B must not have the freeze
+      - check: utxo_status
+        with: { node: C, txid: "${parent.txid}", vout: 0, status: OK }
+        message: C must not have the freeze
+
+  - name: spendBelow - a spend of victim output 0
+    action: spend
+    with: { node: A, txid: "${parent.txid}", vout: 0, key: "${victim.name}", fee: "${fee}" }
+    as: spendBelow
+
+  - name: policy tier - A refuses spendBelow into its mempool
+    action: submit
+    with: { target: A, tx: "${spendBelow}" }
+    as: spendBelowOnA
+    assert:
+      - check: expr
+        with: { left: "${spendBelowOnA.status}", right: "403" }
+        message: A rejects the frozen spend at the policy tier
+      - check: expr
+        with: { left: "${spendBelowOnA.body}", right: "FROZEN", op: contains }
+
+  - name: B (unaware) accepts spendBelow into its mempool
+    action: submit
+    with: { target: B, tx: "${spendBelow}" }
+    as: spendBelowOnB
+    assert:
+      - check: expr
+        with: { left: "${spendBelowOnB.accepted}", right: "true" }
+      - check: mempool_has
+        with: { node: B, txid: "${spendBelow.txid}" }
+        timeout: 30s
+
+  - name: remember the tip before B's block
+    action: set
+    with: { beforeBlock: "${tip(A)}" }
+
+  - name: B mines blockBelow containing spendBelow - A must reject it; how?
+    action: mine
+    with: { node: B, blocks: 1 }
+    as: blockBelow
+    assert:
+      - check: height
+        with: { node: B, equals: "${beforeBlock + 1}" }
+        timeout: 20s
+      - check: event
+        with: { kind: invalid_block, node: A, contains: "${blockBelow.last}" }
+        timeout: 45s
+        should: true
+        message: "A publishes a block-invalid verdict (Kafka invalid-blocks) for the block spending its frozen coin; upstream main only logs SERVICE_ERROR and publishes nothing"
+      - check: event
+        with: { kind: invalid_block, node: A, pattern: "(?i)frozen" }
+        timeout: 5s
+        should: true
+        message: the verdict names the frozen output
+      - check: log_count
+        with: { node: A, pattern: "\\[ValidateBlock\\]\\[${blockBelow.last}\\] validating block from", max: 3 }
+        timeout: 15s
+        should: true
+        message: A validates the announced block a bounded number of times
+      - check: height
+        with: { node: A, equals: "${beforeBlock}" }
+        message: A refuses the block (an immediate freeze is consensus-effective on this node)
+      - check: same_tip
+        with: { nodes: [B, C] }
+        timeout: 30s
+        message: C (no freeze) follows B
+
+  - name: mark the moment before B builds on the rejected block
+    action: mark
+    as: afterBlock
+
+  - name: B extends its chain by one block on top of blockBelow
+    action: mine
+    with: { node: B, blocks: 1 }
+    as: extend
+    assert:
+      - check: log_count
+        with: { node: A, pattern: "\\[ValidateBlock\\]\\[${blockBelow.last}\\] validating block from", since: "${afterBlock.at}", max: 1 }
+        timeout: 60s
+        should: true
+        message: "A does not re-fetch and re-validate the rejected block when B builds on it (a build without the fix re-validated it in a catch-up loop, 16 times in 75 s)"
+      - check: event
+        with: { kind: invalid_block, node: A, contains: "${extend.last}" }
+        timeout: 15s
+        should: true
+        message: A rejects the child block at once as building on an invalid parent
+      - check: height
+        with: { node: A, equals: "${beforeBlock}" }
+        message: A still refuses the chain
+      - check: height
+        with: { node: B, equals: "${beforeBlock + 2}" }
+        timeout: 20s
+      - check: same_tip
+        with: { nodes: [B, C] }
+        timeout: 30s
+
+  - name: A's view of the coin
+    action: note
+    with: { message: "A never accepted the spend; the output stays frozen there" }
+    assert:
+      - check: utxo_status
+        with: { node: A, txid: "${parent.txid}", vout: 0, status: FROZEN }
+        should: true

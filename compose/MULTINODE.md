@@ -40,6 +40,7 @@ compose/multinode.sh down
 | `dashboards` | Open all node dashboards in the browser |
 | `generate <node,count> ...` | Generate blocks on specific nodes |
 | `blast [nodes] [--build] [--auto-mine[=N]] [-- args]` | Run the coinbase blaster against the stack |
+| `sim up [--build]` / `sim run <scenario> [--step]` / `sim status\|logs\|down` | Run chaos-test scenarios against the stack. See [chaos-test scenarios](#chaos-test-scenarios). |
 
 ### Blaster
 
@@ -111,6 +112,31 @@ compose/multinode.sh chaos start 4
 ```
 
 The `isolate`/`heal`/`slow`/`unslow` commands inject `iptables` and `tc` rules into the target container's network namespace via a short-lived `nicolaka/netshoot` sidecar that shares the netns (`docker run --net=container:teranodeN --cap-add=NET_ADMIN ...`). Rules persist in the target's netns after the sidecar exits. No `sudo`, `nsenter`, or `iproute2` on the host — works identically on Linux and macOS (Docker Desktop). The sidecar image (~200MB) is pulled on first use and cached. Override with `NETSHOOT_IMAGE=...` if you need a different tag or mirror. The `kill`/`start`/`pause`/`unpause` commands are pure Docker operations with no extra dependencies.
+
+## chaos-test scenarios
+
+[chaos-test](https://github.com/galt-tr/chaos-test) is a scenario engine with a web UI. A scenario is a YAML file of ordered steps (mine, spend, submit, freeze, pause a node, ...) with polled assertions (same tip, UTXO status, Kafka verdict events, container-log counts). A failed assertion either aborts the run or, with `should: true`, is recorded as a finding. `sim` runs its orchestrator against this stack.
+
+```bash
+git clone https://github.com/galt-tr/chaos-test ../chaos-test   # once; or set CHAOS_TEST_DIR
+
+compose/multinode.sh up 3
+compose/multinode.sh sim up                        # builds the image on first use; UI on http://localhost:8600
+compose/multinode.sh sim run multinode-smoke       # follows the run, exits 0 on pass
+compose/multinode.sh sim run multinode-freeze-skew-rpc --step   # pause before each step
+compose/multinode.sh sim down                      # 'down' also removes it
+```
+
+How it fits together:
+
+- `make gen-multinode` / `up` writes `generated/chaostest/inventory.json` (nodes, in-network and host URLs, Kafka verdict topics, containers) alongside the compose file.
+- `sim up` copies it to `data/multinode-chaostest/config/`, adding the miner key (`PK1`, which the coinbase pays) and chaos-test's development `keys.json`. Keys never land in `generated/`.
+- The orchestrator joins the stack's compose network, so it reaches nodes by name and consumes the `rejectedtx-*` / `invalid-blocks-*` topics that `event` checks match on. It uses the Docker socket (`CONTAINER_SOCKET`, default `/var/run/docker.sock`) for pause/stop and container-log checks.
+- Scenarios load from the image's bundled examples plus [`chaostest/scenarios/`](chaostest/scenarios/) (override with `SCENARIOS_DIR`). Bundled scenarios are baked into the image, so pick up new ones with `sim up --build`; ours are mounted live and load on the next `sim up`. Run records are kept in `data/multinode-chaostest/data/runs/`.
+
+Supported on this stack: mining, coinbase spends, `submit` to a node, `rpc_freeze`, container chaos and every node, Kafka and log check. Not available: arcade, the alert hub (`build_alert`/`push_alert`), the wallet, and SV nodes, which every bundled scenario uses at least one of. `partition` needs chaos-test's iptables partition mode, because this stack has a single network. Until then, use `chaos isolate`/`heal`. See [`chaostest/scenarios/README.md`](chaostest/scenarios/README.md).
+
+The blaster runs alongside: start `blast` in another terminal and run a scenario while it loads the network.
 
 ## Split topology
 
