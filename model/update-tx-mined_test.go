@@ -752,6 +752,30 @@ func TestUpdateTxMinedStatus_MissingSubtree(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing subtree")
 	})
+
+	t.Run("should join started goroutines when a later subtree is missing", func(t *testing.T) {
+		// A valid subtree ahead of the missing one spawns a goroutine before the
+		// !unsetMined nil return. The caller releases SubtreeSlices (closing
+		// mmap-backed Nodes) on this error, so updateTxMinedStatus must g.Wait the
+		// in-flight goroutine first; otherwise it still reads &Nodes[idx].Hash. Run
+		// under -race to catch a regression.
+		mockStore := &utxo.MockUtxostore{}
+		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
+			Return(realMinedReturn(15), nil).Maybe()
+
+		block := &Block{}
+		block.Height = 100
+		block.Subtrees = []*chainhash.Hash{newTx(1).TxIDChainHash(), newTx(2).TxIDChainHash()}
+		block.SubtreeSlices = []*subtree.Subtree{
+			{Nodes: []subtree.Node{{Hash: *newTx(1).TxIDChainHash()}}},
+			nil, // missing subtree after a valid one
+		}
+
+		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "missing subtree")
+	})
 }
 
 // Test_updateTxMinedStatus_Internal tests the internal updateTxMinedStatus function directly

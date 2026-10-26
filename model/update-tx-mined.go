@@ -233,6 +233,14 @@ func updateTxMinedStatus(ctx context.Context, logger ulogger.Logger, tSettings *
 				continue
 			}
 
+			// Join the goroutines already started for earlier subtrees before
+			// returning. The caller (blockvalidation.setTxMinedStatus) releases
+			// block.SubtreeSlices on this error, closing mmap-backed Nodes; a
+			// goroutine still in flight here reads &subtree.Nodes[idx].Hash and
+			// would race that release or read an unmapped region. g.Wait's own
+			// error is discarded in favour of the specific missing-subtree error.
+			_ = g.Wait()
+
 			return errors.NewProcessingError("[UpdateTxMinedStatus][%s] missing subtree %d of %d", block.String(), subtreeIdx, len(block.Subtrees))
 		}
 

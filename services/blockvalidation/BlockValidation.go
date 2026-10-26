@@ -1515,6 +1515,30 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		}
 	}
 
+	// The block is owned by this call: a cached block was Deleted from
+	// lastValidatedBlocks above, a fresh one was fetched just now. Release its
+	// subtrees on every exit with one defer, registered here before the first
+	// return that could own loaded subtrees.
+	//
+	// A cached block arrives with its subtrees already loaded — mmap-backed when
+	// it reached lastValidatedBlocks through the catchup quick-validate
+	// local-failure fallback with blockvalidation_subtreeMmapDir set. The
+	// GetBlockHeader and CheckBlockIsInCurrentChain returns below run before any
+	// later release, so a failure there (for example during a blockchain service
+	// restart) would otherwise strand that one mmap mapping and its temp backing
+	// file until process exit — an mmap-backed subtree has no finalizer. A
+	// freshly fetched block has no subtrees yet, so here the defer is a no-op
+	// until the valid path's heap-only GetSubtrees, or the unset path's reload,
+	// loads them. ReleaseSubtreeNodes on a nil or already-released slice is a
+	// no-op, so this one defer covers the success path and every error return,
+	// replacing the former per-branch defers and the explicit success-path
+	// release (issue #2029).
+	defer func() {
+		if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+			u.logger.Warnf("[setTxMined][%s] failed releasing subtrees: %v", block.Hash().String(), releaseErr)
+		}
+	}()
+
 	_, blockHeaderMeta, err = u.blockchainClient.GetBlockHeader(ctx, blockHash)
 	if err != nil {
 		return errors.NewServiceError("[setTxMined][%s] failed to get block header from blockchain", blockHash.String(), err)
@@ -1529,17 +1553,16 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		u.logger.Warnf("[setTxMined][%s] block is marked as invalid, will attempt to unset tx mined", block.Hash().String())
 
 		// A block taken from lastValidatedBlocks arrives here with its subtrees
-		// still loaded. Overwriting SubtreeSlices below drops the only reference
-		// to them, and an mmap-backed subtree has no finalizer — its mapping and
-		// its temp backing file would survive until process exit. Release first.
-		//
-		// A full release, unlike the reload in model.GetAndValidateSubtrees which
-		// closes only mmap-backed subtrees. The difference is ownership, not
-		// oversight: this block is exclusively ours. It reached the cache only
-		// after its validation finished, so the SubtreeWriteJobs that shared
-		// quick_validate's subtrees have all been drained, and blockassembly's
-		// blocks never enter this cache. Gutting the heap-backed nodes here is
-		// the point — it returns the memory of a block being discarded.
+		// still loaded. reloadSubtreesForInvalidBlock swaps in a fresh set with
+		// ReplaceSubtreeSlices, dropping the only reference to these — and an
+		// mmap-backed subtree has no finalizer — so release them here, before the
+		// swap. The deferred release above then only ever closes the reloaded
+		// set. This is a full release, unlike the reload in
+		// model.GetAndValidateSubtrees which closes only mmap-backed subtrees:
+		// the difference is ownership, not oversight. This block is exclusively
+		// ours — it reached the cache only after its validation finished, so the
+		// SubtreeWriteJobs that shared quick_validate's subtrees have all been
+		// drained, and blockassembly's blocks never enter this cache.
 		if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
 			u.logger.Warnf("[setTxMined][%s] failed closing subtrees before unset-mined reload: %v", block.Hash().String(), releaseErr)
 		}
@@ -1547,39 +1570,15 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		if err = u.reloadSubtreesForInvalidBlock(ctx, block); err != nil {
 			return err
 		}
-
-		// The reloaded subtrees belong to this call alone, so release them on
-		// every exit. The revert can now fail, and each retry reloads them; an
-		// early return that skipped the release below would leak one set of
-		// mmap mappings and temp files per attempt. On success the explicit
-		// release below has already run and this one finds only nil entries.
-		defer func() {
-			if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
-				u.logger.Warnf("[setTxMined][%s] failed closing reloaded subtrees after unset-mined revert: %v", block.Hash().String(), releaseErr)
-			}
-		}()
 	} else {
-		// All subtrees should already be available for fully processed blocks
+		// All subtrees should already be available for fully processed blocks.
+		// This load is heap-only (getAndValidateSubtrees ->
+		// DeserializeFromReaderWithAllocator); the deferred release above returns
+		// its memory on every exit, including this partial-load error return.
 		_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, u.settings.Block.GetAndValidateSubtreesConcurrency)
 		if err != nil {
 			return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
 		}
-
-		// Release the subtrees on EVERY exit, not just the success path below.
-		// This block is owned by this call (fetched fresh, or taken from and
-		// deleted out of lastValidatedBlocks), and an mmap-backed subtree has no
-		// finalizer. The UpdateTxMinedStatus error returns (ErrBlockInvalid ->
-		// markBlockAsInvalid, ErrBlockParentNotMined -> nil, the generic error)
-		// and the GetBlockHeaderIDs failure all skip the explicit release below;
-		// without this defer each failed attempt leaks one set of mmap mappings
-		// and temp files, and setTxMined retries up to 10 times (issue #2029). On
-		// success the explicit release below has already run and this finds only
-		// nil entries, mirroring the unset-mined reload path above.
-		defer func() {
-			if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
-				u.logger.Warnf("[setTxMined][%s] failed closing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
-			}
-		}()
 	}
 
 	// Get recent ancestor block IDs for fast-path double-spend checking
@@ -1622,17 +1621,12 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
-	// Close mmap-backed subtrees and clear to free memory. Routed through
-	// ReleaseSubtreeNodes so the entries are nil-ed under the block's subtree
-	// mutex: this block may still be reachable via lastValidatedBlocks, whose
-	// TTL cleaner runs the same release concurrently. Nodes are not pooled here
-	// (put is nil): a block fetched fresh from the blockchain has no node
-	// allocator, so its slices never came from the pool. A block taken from
-	// lastValidatedBlocks does carry pool-allocated slices — recycling those is
-	// a possible improvement, not a requirement, and is left out of this change.
-	if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
-		u.logger.Warnf("[setTxMined][%s] failed closing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
-	}
+	// Subtrees are released by the deferred ReleaseSubtreeNodes registered above,
+	// which runs after this on return. Nodes are not pooled (put is nil): a block
+	// fetched fresh from the blockchain has no node allocator, so its slices never
+	// came from the pool; a block taken from lastValidatedBlocks does carry
+	// pool-allocated slices, and recycling those is a possible improvement left
+	// out of this change.
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {

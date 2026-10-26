@@ -1,6 +1,7 @@
 package blockvalidation
 
 import (
+	"bytes"
 	"context"
 	"net/url"
 	"os"
@@ -251,17 +252,21 @@ func (s *minedFailingStore) SetMinedMulti(ctx context.Context, hashes []*chainha
 	return s.Store.SetMinedMulti(ctx, hashes, info)
 }
 
-// TestSetTxMinedStatus_ValidPathReleasesSubtreesOnError is the regression for #2029.
+// TestSetTxMinedStatus_ValidPathReleasesMmapSubtreesOnMinedUpdateError is one of
+// two regressions for #2029 (the other is
+// TestSetTxMinedStatus_CachedBlockReleasesMmapSubtreesWhenHeaderFetchFails).
 //
-// On the valid-block path setTxMinedStatus loads the block's subtrees and only releases them after a
-// successful UpdateTxMinedStatus. Before the fix the error returns (ErrBlockInvalid,
-// ErrBlockParentNotMined, the generic update error, and the GetBlockHeaderIDs failure) skipped that
-// release, so a block owned by this call kept its mmap-backed subtrees mapped — one leaked set of
-// mappings and temp files per attempt, and the setTxMined retry loop runs up to 10 times. A
-// UTXO-store decorator fails the mined SetMinedMulti so the generic error path is taken; the block's
-// subtrees must still come back released, which ReleaseSubtreeNodes records by nil-ing the
-// SubtreeSlices entries.
-func TestSetTxMinedStatus_ValidPathReleasesSubtreesOnError(t *testing.T) {
+// On the valid (non-unset) path setTxMinedStatus took a cached block that already
+// holds mmap-backed subtrees, and before the fix released them only after a
+// successful UpdateTxMinedStatus. The error returns (ErrBlockInvalid,
+// ErrBlockParentNotMined, the generic update error, and the GetBlockHeaderIDs
+// failure) skipped that release, so the one owned mmap mapping and its temp
+// backing file leaked, and the setTxMined retry loop runs up to 10 times. Here a
+// UTXO-store decorator fails the mined SetMinedMulti so the generic error return
+// is taken; the block's mmap-backed subtree must still come back released, which
+// is observable as its backing file being gone. A nil-entry check would miss it:
+// the pinned release path nils entries without closing.
+func TestSetTxMinedStatus_ValidPathReleasesMmapSubtreesOnMinedUpdateError(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -345,6 +350,10 @@ func TestSetTxMinedStatus_ValidPathReleasesSubtreesOnError(t *testing.T) {
 
 	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
 
+	// mmap-backed subtrees make a leaked (unreleased) subtree observable: each
+	// leaves a backing file in this directory until it is closed.
+	mmapDir := t.TempDir()
+
 	bv := &BlockValidation{
 		logger:                        logger,
 		settings:                      tSettings,
@@ -353,6 +362,7 @@ func TestSetTxMinedStatus_ValidPathReleasesSubtreesOnError(t *testing.T) {
 		txStore:                       txStore,
 		utxoStore:                     realUtxoStore,
 		subtreeValidationClient:       subtreeValidationClient,
+		mmapDir:                       mmapDir,
 		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
 		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
 		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
@@ -367,12 +377,24 @@ func TestSetTxMinedStatus_ValidPathReleasesSubtreesOnError(t *testing.T) {
 	// Validate and store the block; this caches it in lastValidatedBlocks with its subtrees loaded.
 	require.NoError(t, bv.ValidateBlock(ctx, block, "test"))
 
-	// Hold the exact block object setTxMinedStatus will use, with subtrees loaded, so the release is
-	// observable. setTxMinedStatus removes it from the cache and takes ownership.
+	// Hold the exact block object setTxMinedStatus will use and swap its loaded
+	// subtree for an mmap-backed one built from the same bytes, reproducing a
+	// block cached by the catchup quick-validate fallback with
+	// blockvalidation_subtreeMmapDir set. setTxMinedStatus removes it from the
+	// cache and takes ownership. getAndValidateSubtrees' "already loaded" check
+	// reuses this mmap subtree (non-nil, Nodes present) rather than reloading it.
 	cached, ok := bv.lastValidatedBlocks.Get(*block.Hash())
 	require.True(t, ok, "precondition: the validated block is cached")
 	require.True(t, bv.hasValidSubtrees(cached), "precondition: the cached block has its subtrees loaded")
-	require.NotEmpty(t, cached.SubtreeSlices, "precondition: there is a loaded subtree to leak")
+
+	mmapSubtree, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(subtreeBytes), mmapDir)
+	require.NoError(t, err)
+	require.True(t, mmapSubtree.IsMmapBacked(), "precondition: the swapped-in subtree is mmap-backed")
+	cached.ReplaceSubtreeSlices([]*subtreepkg.Subtree{mmapSubtree})
+
+	entries, err := os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "precondition: the cached block holds an mmap backing file to leak")
 
 	// The mined update now fails, driving setTxMinedStatus down the generic error return.
 	failing := &minedFailingStore{Store: realUtxoStore}
@@ -382,10 +404,100 @@ func TestSetTxMinedStatus_ValidPathReleasesSubtreesOnError(t *testing.T) {
 	require.Positive(t, failing.minedCalls, "precondition: the mined SetMinedMulti was reached")
 	require.Error(t, err, "#2029: the injected mined-update failure must surface")
 
-	// Despite the error, the owned block's subtrees were released: ReleaseSubtreeNodes nils the
-	// SubtreeSlices entries. Before the fix the else branch had no defer, so the success-only release
-	// was skipped and the entries stayed non-nil (leaked mappings/temp files).
-	for i, s := range cached.SubtreeSlices {
-		require.Nil(t, s, "#2029: subtree slice %d must be released (nil) after a failed valid-path update", i)
+	// Despite the error, the owned block's mmap-backed subtree was released: its
+	// backing file is gone. Before the fix the else branch's only release was on
+	// the success path, so the generic error return skipped it and the mapping and
+	// temp file leaked.
+	entries, err = os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.Empty(t, entries, "#2029: a failed valid-path update must still release the owned block's mmap subtrees")
+}
+
+// TestSetTxMinedStatus_CachedBlockReleasesMmapSubtreesWhenHeaderFetchFails covers
+// the case #2029 leaves open today: a block taken from lastValidatedBlocks with
+// mmap-backed subtrees already loaded, whose GetBlockHeader fetch fails before the
+// valid-path subtree load. The release defer must be registered as soon as the
+// block is owned (its cache entry deleted), not after the unset/valid branch, or
+// that one mmap mapping and its temp backing file leak until process exit.
+func TestSetTxMinedStatus_CachedBlockReleasesMmapSubtreesWhenHeaderFetchFails(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	var txHash chainhash.Hash
+	txHash[0] = 0x11
+	require.NoError(t, subtree.AddNode(txHash, 100, 0))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	mmapDir := t.TempDir()
+	mmapSubtree, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(subtreeBytes), mmapDir)
+	require.NoError(t, err)
+	require.True(t, mmapSubtree.IsMmapBacked(), "precondition: the cached subtree is mmap-backed")
+
+	coinbaseTx := coinbaseAtHeight(t, 1)
+	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, subtree.RootHash())
+
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
+		uint64(subtree.Length()), uint64(coinbaseTx.Size()), 1, 0) //nolint:gosec
+	require.NoError(t, err)
+	block.ReplaceSubtreeSlices([]*subtreepkg.Subtree{mmapSubtree})
+
+	failing := &headerFailingClient{fail: true}
+
+	bv := &BlockValidation{
+		logger:              logger,
+		settings:            tSettings,
+		blockchainClient:    failing,
+		mmapDir:             mmapDir,
+		lastValidatedBlocks: expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExistsCache:    expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		subtreeExistsCache:  expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		stats:               gocore.NewStat("blockvalidation"),
 	}
+	defer bv.StopCaches()
+
+	bv.lastValidatedBlocks.Set(*block.Hash(), block)
+	require.True(t, bv.hasValidSubtrees(block), "precondition: the cached block has its mmap subtree loaded")
+
+	entries, err := os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "precondition: the cached block holds an mmap backing file to leak")
+
+	err = bv.setTxMinedStatus(ctx, block.Hash())
+	require.Positive(t, failing.headerCalls, "precondition: GetBlockHeader was reached")
+	require.Error(t, err, "#2029: the GetBlockHeader failure must surface")
+
+	entries, err = os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.Empty(t, entries,
+		"#2029: a cached mmap-backed block must release its subtrees when GetBlockHeader fails before the valid-path load")
+}
+
+// headerFailingClient fails GetBlockHeader on demand. On the cached-block path
+// only GetBlockHeader is reached before the failure, so the embedded nil ClientI
+// is never called.
+type headerFailingClient struct {
+	blockchain.ClientI
+
+	fail        bool
+	headerCalls int
+}
+
+func (c *headerFailingClient) GetBlockHeader(_ context.Context, _ *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	if c.fail {
+		c.headerCalls++
+		return nil, nil, errors.NewServiceError("injected GetBlockHeader failure (blockchain service restart)")
+	}
+
+	return nil, nil, errors.NewServiceError("headerFailingClient: GetBlockHeader called with fail=false")
 }
