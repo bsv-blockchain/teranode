@@ -941,6 +941,30 @@ func TestConfirmPrompt(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "--assume-yes")
 	})
+
+	// #1864: the reset line is keyed on utxoMarkerStale (above target OR
+	// unparseable), not on a resolved hash, so an unparseable / above-the-tip
+	// marker that resets with no hash is still shown at confirmation.
+	t.Run("prints the reset line when the marker is stale", func(t *testing.T) {
+		stalePf := &preflightResult{tip: 1749337, target: 1749330, utxoMarkerStale: true}
+
+		var withFlag bytes.Buffer
+		e := newEnv("y\n", &withFlag)
+		e.opts.ResetUTXOPersister = true
+		require.NoError(t, e.confirmPrompt(stalePf))
+		require.Contains(t, withFlag.String(), "WILL BE RESET")
+
+		var withoutFlag bytes.Buffer
+		require.NoError(t, newEnv("y\n", &withoutFlag).confirmPrompt(stalePf))
+		require.Contains(t, withoutFlag.String(), "left as-is")
+	})
+
+	t.Run("prints no marker line when the marker is not stale", func(t *testing.T) {
+		var out bytes.Buffer
+		require.NoError(t, newEnv("y\n", &out).confirmPrompt(pf))
+		require.NotContains(t, out.String(), "utxo-persister marker",
+			"a nil/at-or-below-target marker must not print a line")
+	})
 }
 
 // setPersisterHeight seeds state["BlockPersisterHeight"] with an LE uint32,
@@ -1787,6 +1811,97 @@ func TestResolveStores_BlockStoreDeletesTheMarkerThePersisterWrote(t *testing.T)
 
 	// A second run finds nothing to delete and is still not an error.
 	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, pf))
+}
+
+// #1864: Phase 3's stale-utxo-set cleanup must address the files where the
+// persister wrote them — sharded under the daemon's block-store hashPrefix
+// (-2). The tool used to open the block store with no prefix, so the Del
+// resolved a flat path, silently missed the sharded files (file-backend Del
+// returns nil on a miss), and leaked the multi-GB utxo-set.
+func TestResolveStores_CleanupStaleUTXOSetDeletesTheShardedFiles(t *testing.T) {
+	ctx := context.Background()
+	tSettings, _ := newFileStoreSettings(t, "")
+
+	utxoSetFiles := []fileformat.FileType{
+		fileformat.FileTypeUtxoSet, fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders,
+	}
+
+	var markerHash chainhash.Hash
+	markerHash[0], markerHash[31] = 0xab, 0xcd
+
+	// Written through a store opened the daemon's way (hashPrefix -2): the stale
+	// marker (above target) and the utxo-set trio for the old marker block.
+	nodeStore, err := blob.NewStore(logger(), tSettings.Block.BlockStore, options.WithHashPrefix(-2))
+	require.NoError(t, err)
+	writeLastProcessed(t, ctx, nodeStore, "123")
+	for _, ft := range utxoSetFiles {
+		require.NoError(t, nodeStore.Set(ctx, markerHash[:], ft, []byte("payload")))
+		exists, err := nodeStore.Exists(ctx, markerHash[:], ft)
+		require.NoError(t, err)
+		require.True(t, exists, "fixture: %s is written at the sharded path", ft)
+	}
+	require.NoError(t, nodeStore.Close(ctx))
+
+	stores, _, err := resolveStores(ctx, logger(), tSettings, Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, stores.Subtree.Close(ctx))
+		require.NoError(t, stores.Block.Close(ctx))
+	})
+
+	e := &env{logger: logger(), blockStore: stores.Block, opts: Options{ResetUTXOPersister: true}}
+	pf := &preflightResult{target: 4, utxoMarkerStale: true, utxoMarkerHash: &markerHash}
+	require.NoError(t, e.deleteUTXOPersisterLastProcessed(ctx, pf))
+
+	// Check with an independent store at the known-correct -2 prefix: if the tool
+	// had opened the block store flat, its Del would miss and these would survive.
+	check, err := blob.NewStore(logger(), tSettings.Block.BlockStore, options.WithHashPrefix(-2))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, check.Close(ctx)) })
+	for _, ft := range utxoSetFiles {
+		exists, err := check.Exists(ctx, markerHash[:], ft)
+		require.NoError(t, err)
+		require.False(t, exists, "#1864: Phase 3 must delete the stale %s at the sharded path, not miss it on a flat one", ft)
+	}
+}
+
+// #1864: the old marker block's hash is resolved through the main chain
+// (GetBlockHeadersByHeight), not from deleteList — which spans all branches and
+// could return a fork block at the same height. An unparseable marker is stale
+// too (it blocks the persister's next start) but resolves no hash.
+func TestReportUTXOPersisterPlan_ResolvesMainChainHashAndStaleFlag(t *testing.T) {
+	ctx := context.Background()
+	bcStore, _, _, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	blocks := buildLinearChain(t, ctx, bcStore, 10, bits, tSettings.ChainCfgParams.GenesisHash)
+
+	blockStore := memory.New()
+	e := &env{logger: logger(), blockchainStore: bcStore, blockStore: blockStore}
+
+	t.Run("above target resolves the main-chain hash and is stale", func(t *testing.T) {
+		writeLastProcessed(t, ctx, blockStore, "7")
+		stale, hash := e.reportUTXOPersisterPlan(ctx, 4)
+		require.True(t, stale)
+		require.NotNil(t, hash)
+		require.Equal(t, blocks[6].Hash().String(), hash.String(),
+			"marker height 7 must resolve to the height-7 block on the main chain")
+	})
+
+	t.Run("unparseable marker is stale with no hash", func(t *testing.T) {
+		writeLastProcessed(t, ctx, blockStore, "banana")
+		stale, hash := e.reportUTXOPersisterPlan(ctx, 4)
+		require.True(t, stale)
+		require.Nil(t, hash)
+	})
+
+	t.Run("marker at or below target is not stale", func(t *testing.T) {
+		writeLastProcessed(t, ctx, blockStore, "3")
+		stale, hash := e.reportUTXOPersisterPlan(ctx, 4)
+		require.False(t, stale)
+		require.Nil(t, hash)
+	})
 }
 
 // Opening the block store is best-effort: without it the rewind still runs and

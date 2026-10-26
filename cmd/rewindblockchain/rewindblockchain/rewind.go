@@ -167,17 +167,49 @@ func resolveStores(ctx context.Context, logger ulogger.Logger, s *settings.Setti
 	}, true, nil
 }
 
-// newBlockStore opens the block blob store at the node's configured URL. The
-// tool only uses it for the UTXO persister's lastProcessed marker, which is
-// read and written with options.WithNoHashPrefix(), so the hashPrefix the node
-// applies to block files does not affect it; the daemon's block-height tracker
-// and deletion scheduler are not needed while the node is stopped.
+// defaultBlockHashPrefix matches daemon.GetBlockStore's default
+// (daemon/daemon_stores.go): a block store URL with no ?hashPrefix sharded
+// -2, i.e. a two-character hash SUFFIX (<store>/<last2>/<hash>.<ext>). Negative
+// because the file backend reads a negative HashPrefix as a suffix shard.
+const defaultBlockHashPrefix = -2
+
+// blockHashPrefix resolves the hash prefix for the block store, mirroring
+// daemon.GetBlockStore: default -2, overridden by ?hashPrefix= on the URL.
+func blockHashPrefix(blockStoreURL *url.URL) (int, error) {
+	v := blockStoreURL.Query().Get("hashPrefix")
+	if v == "" {
+		return defaultBlockHashPrefix, nil
+	}
+
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, errors.NewConfigurationError("blockstore hashPrefix config error", err)
+	}
+
+	return parsed, nil
+}
+
+// newBlockStore opens the block blob store at the node's configured URL, with
+// the same hash prefix the daemon applies (daemon.GetBlockStore). The UTXO
+// persister's lastProcessed marker is read and written with
+// options.WithNoHashPrefix(), so that per-call option overrides the store
+// prefix for the marker regardless — but Phase 3's stale utxo-set cleanup Dels
+// by block hash, and those files were written by the persister under the
+// daemon's prefix, so the store must carry it or the Del resolves a flat path,
+// silently misses the sharded file (the file backend's Del returns nil on a
+// miss), and leaks the multi-GB set. The daemon's block-height tracker and
+// deletion scheduler are not needed while the node is stopped.
 func newBlockStore(logger ulogger.Logger, s *settings.Settings) (blob.Store, error) {
 	if s.Block.BlockStore == nil {
 		return nil, errors.NewConfigurationError("blockstore config not found")
 	}
 
-	blockStore, err := blob.NewStore(logger, s.Block.BlockStore)
+	hashPrefix, err := blockHashPrefix(s.Block.BlockStore)
+	if err != nil {
+		return nil, err
+	}
+
+	blockStore, err := blob.NewStore(logger, s.Block.BlockStore, options.WithHashPrefix(hashPrefix))
 	if err != nil {
 		return nil, errors.NewConfigurationError("failed to open block store", err)
 	}
