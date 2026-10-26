@@ -50,6 +50,12 @@ const (
 	// notFoundBodyLimit bounds how much of a 404 body is read to compare it with NotFoundMsg.
 	// It is longer than the body it looks for, so a longer body cannot be cut down to a match.
 	notFoundBodyLimit = 64
+
+	// MissHeader is the response header the blob server sets on every path that answers a
+	// miss (404). A HEAD response carries no body, so Exists cannot check NotFoundMsg; this
+	// header lets it tell the server's own miss from a wrong base URL or a proxy 404, which
+	// a bare 404 cannot distinguish. GET prefers it too, falling back to the body.
+	MissHeader = "X-Blob-Miss"
 )
 
 // HTTPStore implements the blob.Store interface by making HTTP requests to a remote
@@ -70,6 +76,11 @@ type HTTPStore struct {
 	logger ulogger.Logger
 	// options contains configuration options for the HTTP blob store
 	options *options.Options
+	// requireMissHeader, when set, makes Exists treat a 404 that lacks MissHeader as a
+	// storage error rather than a miss. Off by default so a mixed fleet still works with
+	// servers that predate the header; enable (?requireMissHeader=true on the store URL)
+	// once every blob server sends it.
+	requireMissHeader bool
 }
 
 // refuseBlobRedirect refuses every redirect. A blob server does not redirect, so a redirect
@@ -143,6 +154,10 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 		return nil, errors.NewConfigurationError("blob http store URL must not carry an authToken query parameter - set blob_httpAuthToken or pass options.WithHTTPAuthToken")
 	}
 
+	// Read before the query is stripped below. Opt-in and default off: until every blob
+	// server sends MissHeader, a bare HEAD 404 must still read as a miss for compatibility.
+	requireMissHeader := storeURL.Query().Get("requireMissHeader") == "true"
+
 	// baseURL is formatted into "%s/blob/%s?%s", so it must carry no query of its own -
 	// otherwise every request URL comes out malformed. Strip query and fragment.
 	base := *storeURL
@@ -159,8 +174,9 @@ func New(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) 
 			Timeout:       30 * time.Second,
 			CheckRedirect: refuseBlobRedirect,
 		},
-		logger:  logger,
-		options: storeOpts,
+		logger:            logger,
+		options:           storeOpts,
+		requireMissHeader: requireMissHeader,
 	}, nil
 }
 
@@ -227,6 +243,24 @@ func (s *HTTPStore) Exists(ctx context.Context, key []byte, fileType fileformat.
 	case http.StatusOK:
 		return true, nil
 	case http.StatusNotFound:
+		// The blob server marks its own miss with MissHeader on every miss path. A HEAD
+		// has no body, so unlike GET this cannot fall back to NotFoundMsg - the header is
+		// the only signal that tells the server's miss from a wrong base URL or a proxy
+		// answering 404.
+		if resp.Header.Get(MissHeader) != "" {
+			return false, nil
+		}
+
+		s.logger.Warnf("[HTTPStore] Exists %s %s: %s answered 404 without %s", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL, MissHeader) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
+
+		if s.requireMissHeader {
+			// Error text never names the server (the asset service surfaces it); the address
+			// is in the Warn above. A bare 404 is a fault, as a wrong status is below.
+			return false, errors.NewStorageError("[HTTPStore] Exists failed: 404 without %s (wrong base URL or a proxy?)", MissHeader)
+		}
+
+		// Mixed-fleet compatibility: an old server sends no header, so keep reading a bare
+		// 404 as a miss until requireMissHeader is set.
 		return false, nil
 	default:
 		s.logger.Warnf("[HTTPStore] Exists %s %s: %s answered status code %d", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL, resp.StatusCode) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
@@ -309,14 +343,23 @@ func (s *HTTPStore) GetIoReader(ctx context.Context, key []byte, fileType filefo
 	case http.StatusOK:
 		return resp.Body, nil
 	case http.StatusNotFound:
-		miss := isBlobServerMiss(resp)
+		// Prefer the server's miss header, set on every miss path; fall back to the
+		// NotFoundMsg body for a server that predates it.
+		miss := resp.Header.Get(MissHeader) != ""
+		if miss {
+			// The header already decided it. Drain the small 404 body (bounded) so the
+			// transport can reuse the connection, as the body-check path below does.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, notFoundBodyLimit))
+		} else {
+			miss = isBlobServerMiss(resp)
+		}
 		resp.Body.Close()
 
 		if miss {
 			return nil, errors.NewNotFoundError("[HTTPStore] %s %s not found", fileType, util.ReverseAndHexEncodeSlice(key))
 		}
 
-		s.logger.Warnf("[HTTPStore] GetIoReader %s %s: %s answered 404 without the blob server's not-found body", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
+		s.logger.Warnf("[HTTPStore] GetIoReader %s %s: %s answered 404 without %s or the blob server's not-found body", fileType, util.ReverseAndHexEncodeSlice(key), s.redactedBaseURL, MissHeader) // urlsafe: redactedBaseURL is base.Redacted() output, set in New
 
 		return nil, errors.NewStorageError("[HTTPStore] GetIoReader failed with status code 404 without the blob server's not-found body")
 	default:
