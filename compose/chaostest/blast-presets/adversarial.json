@@ -1,0 +1,9 @@
+{
+  "description": "A bit of everything at once: invalid signatures, double-spend storms, orphans and fan-outs over a P2PKH base.",
+  "mix": {
+    "Weights": [70, 0, 5, 5, 0, 0, 10, 0, 0, 0, 0, 0, 5, 5, 0, 0],
+    "invalid_mode": "bad-sig",
+    "ds_strategy": 4,
+    "orphan_delay_ms": 500
+  }
+}

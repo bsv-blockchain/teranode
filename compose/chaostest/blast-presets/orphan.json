@@ -1,0 +1,7 @@
+{
+  "description": "10% child-before-parent pairs, the parent sent 500 ms later.",
+  "mix": {
+    "Weights": [90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0],
+    "orphan_delay_ms": 500
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "skill_name": "chaos-stack",
+  "notes": "Needs Docker, a teranode:latest image and a chaos-test checkout at ../chaos-test. Baseline = no skill. Assertions check that the agent uses chaosctl.sh, respects the one-stack rule and asks before destroying state.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "bring-up-galts-fleet",
+      "prompt": "Bring up galt's chaos-test fleet so I can run his scenarios.",
+      "expected_output": "Checks status, brings up Stack B with chaosctl.sh stack up b (asking before --switch if Stack A is running), waits for convergence and reports the fleet, image and orchestrator URL.",
+      "assertions": [
+        "Runs chaosctl.sh stack status before acting",
+        "Uses chaosctl.sh stack up b rather than hand-written make/docker commands",
+        "If Stack A is running, asks before bringing it down (or the user already said to switch)",
+        "Reports whether the fleet converged and the orchestrator URL"
+      ],
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "split-after-freeze",
+      "prompt": "stack status says SPLIT and teranode1 is one block behind on a different tip after the freeze scenario. What do I do?",
+      "expected_output": "Explains that the freeze holder refuses the other chain and mining cannot heal it; recommends stack reset and asks before wiping the chain.",
+      "assertions": [
+        "Identifies the split as the expected result of a freeze scenario, not a sync lag",
+        "Recommends chaosctl.sh stack reset",
+        "Asks for confirmation before resetting (it deletes the chain)"
+      ],
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "which-stack",
+      "prompt": "I want to see how the pruner behaves under split-mode service kills while running a scenario. Which stack?",
+      "expected_output": "Stack A (split mode, pruner rigs, multinode.sh chaos); explains Stack B lacks split mode and Aerospike.",
+      "assertions": [
+        "Chooses Stack A",
+        "Mentions -allinone=0 (split mode)",
+        "Does not start or stop anything without being asked"
+      ],
+      "files": []
+    }
+  ]
+}

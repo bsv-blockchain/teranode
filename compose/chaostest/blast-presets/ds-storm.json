@@ -1,0 +1,7 @@
+{
+  "description": "15% double-spend storms: one conflicting transaction per node, sent at once.",
+  "mix": {
+    "Weights": [85, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "ds_strategy": 4
+  }
+}

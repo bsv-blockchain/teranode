@@ -1,0 +1,7 @@
+{
+  "description": "Chronicle relaxation probes (non-push and unclean-stack unlocking scripts) on version 2 transactions. Only meaningful where Chronicle is active.",
+  "mix": {
+    "Weights": [60, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 10],
+    "tx_version": 2
+  }
+}

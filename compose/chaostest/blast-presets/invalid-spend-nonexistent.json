@@ -1,0 +1,7 @@
+{
+  "description": "10% transactions spending a random txid. Record whether nodes reject them or hold them as orphans.",
+  "mix": {
+    "Weights": [90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0],
+    "invalid_mode": "spend-nonexistent"
+  }
+}

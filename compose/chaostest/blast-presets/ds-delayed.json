@@ -1,0 +1,8 @@
+{
+  "description": "15% double spends, the second half 500 ms after the first.",
+  "mix": {
+    "Weights": [85, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "ds_strategy": 3,
+    "ds_delay_ms": 500
+  }
+}

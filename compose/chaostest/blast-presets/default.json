@@ -1,0 +1,6 @@
+{
+  "description": "The blaster's default mix: mostly P2PKH with some fan-out, OP_RETURN, long chains, double spends and multisig.",
+  "mix": {
+    "Weights": [80, 0, 5, 5, 0, 5, 2, 0, 3, 0, 0, 0, 0, 0, 0, 0]
+  }
+}

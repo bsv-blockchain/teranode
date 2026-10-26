@@ -1,0 +1,8 @@
+{
+  "description": "Half fan-outs to 1000 outputs, half consolidations of 100 inputs: UTXO-store I/O pressure.",
+  "mix": {
+    "Weights": [0, 0, 50, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "FanOutN": 1000,
+    "ConsolidateN": 100
+  }
+}

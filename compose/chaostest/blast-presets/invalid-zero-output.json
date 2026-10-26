@@ -1,0 +1,7 @@
+{
+  "description": "10% transactions with a zero-satoshi output (policy rejection).",
+  "mix": {
+    "Weights": [90, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10, 0, 0, 0],
+    "invalid_mode": "zero-output"
+  }
+}

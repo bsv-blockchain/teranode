@@ -138,6 +138,10 @@ Supported on this stack: mining, coinbase spends, `submit` to a node, `rpc_freez
 
 The blaster runs alongside: start `blast` in another terminal and run a scenario while it loads the network.
 
+### chaosctl: both stacks, the blaster and scenarios in one tool
+
+`compose/chaostest/chaosctl.sh` wraps all of this: `stack up a|b [--switch]`, `stack status|reset|down`, `blast start <preset> | status | stop` (presets in `compose/chaostest/blast-presets/`), and `scenario run <id>... [--under-load [preset]] [--reset]`, which records each result in `data/chaosctl/runs/` and compares it with the previous run. The Claude Code skills `chaos-stack`, `chaos-blast` and `chaos-scenario` (`.claude/skills/`) drive it.
+
 ### Blasting chaos-test's own fleet
 
 chaos-test's bundled scenarios need services this stack does not run (arcade, the alert hub, SV nodes, the wallet). To run them unchanged under load, run chaos-test's `bsv-regtest` fleet with our image and point the blaster at it:
