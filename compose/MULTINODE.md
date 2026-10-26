@@ -39,7 +39,7 @@ compose/multinode.sh down
 | `logs [node[-svc]]` | Tail logs for all nodes, a specific node, or one split-mode service (e.g. `logs 2-validator`) |
 | `dashboards` | Open all node dashboards in the browser |
 | `generate <node,count> ...` | Generate blocks on specific nodes |
-| `blast [nodes] [--build] [--auto-mine[=N]] [-- args]` | Run the coinbase blaster against the stack |
+| `blast [nodes] [--build] [--auto-mine[=N]] [--fresh] [--target multinode\|bsv-regtest] [-- args]` | Run the coinbase blaster against the stack, or against chaos-test's fleet |
 | `sim up [--build]` / `sim run <scenario> [--step]` / `sim status\|logs\|down` | Run chaos-test scenarios against the stack. See [chaos-test scenarios](#chaos-test-scenarios). |
 
 ### Blaster
@@ -137,6 +137,28 @@ How it fits together:
 Supported on this stack: mining, coinbase spends, `submit` to a node, `rpc_freeze`, container chaos and every node, Kafka and log check. Not available: arcade, the alert hub (`build_alert`/`push_alert`), the wallet, and SV nodes, which every bundled scenario uses at least one of. `partition` needs chaos-test's iptables partition mode, because this stack has a single network. Until then, use `chaos isolate`/`heal`. See [`chaostest/scenarios/README.md`](chaostest/scenarios/README.md).
 
 The blaster runs alongside: start `blast` in another terminal and run a scenario while it loads the network.
+
+### Blasting chaos-test's own fleet
+
+chaos-test's bundled scenarios need services this stack does not run (arcade, the alert hub, SV nodes, the wallet). To run them unchanged under load, run chaos-test's `bsv-regtest` fleet with our image and point the blaster at it:
+
+```bash
+# once: run our image, publish propagation gRPC, run amd64-only images under Rosetta
+printf 'TERANODE_IMAGE_%s=teranode:latest\n' 1 2 3 > ../chaos-test/bsv-regtest/.env
+cp compose/chaostest/bsv-regtest.override.yaml ../chaos-test/bsv-regtest/compose.override.yaml
+make -C ../chaos-test/bsv-regtest RUNTIME=docker build-tools build-alert-system build-walletd up wait
+make -C ../chaos-test RUNTIME=docker sim-build sim-up              # UI on http://localhost:8600
+
+# terminal 1: load
+compose/multinode.sh blast --target bsv-regtest --fresh --auto-mine -- --workers 10
+# terminal 2 (or the UI): a scenario under that load
+curl -X POST -d '{"mode":"auto"}' localhost:8600/api/scenarios/freeze-skew-rpc/run
+```
+
+- The blaster funds itself from **PK2**, the coinbase's second output. chaos-test scenarios spend the first output (PK1), so the two never spend the same coins.
+- That fleet runs teranode on SQLite, where this stack runs Aerospike, so the same scenario can behave differently on the two (an RPC freeze, for one, takes effect there and not here). With the default 100 workers and a block every second it sustained about 250 tx/s, but the other teranodes fell up to 50 blocks behind and needed about 40 s to catch up once mining slowed. Use `--workers 10` and the default 5 s auto-mine when a scenario needs the fleet converged; use this stack for high throughput.
+- chaos-test's `make reset` wipes the chain: stop the blaster first, and restart it with `--fresh`. Funding resumes once 100 blocks have been mined while it runs (`--auto-mine` does this).
+- Only one stack can run at a time: both publish the same host ports.
 
 ## Split topology
 

@@ -69,14 +69,17 @@ Commands:
   dashboards               Open all dashboards in the browser
   generate <n,count> ...   Generate blocks on specific nodes
                            e.g. generate 1,10 3,5
-  blast [nodes] [--build] [--auto-mine[=N]] [-- args]
+  blast [nodes] [--build] [--auto-mine[=N]] [--fresh] [--target T] [-- args]
                            Run the coinbase blaster against the stack.
                            'nodes' is a comma/space-separated list (default: all
                            running). --build rebuilds the blaster first.
                            --auto-mine spawns a background miner on node N
                            (default: first target) every 5s; override with
-                           BLAST_AUTO_MINE_INTERVAL=<seconds>. Flags after '--'
-                           are passed to blaster.
+                           BLAST_AUTO_MINE_INTERVAL=<seconds>. --fresh wipes the
+                           blaster's saved state first. --target bsv-regtest
+                           blasts chaos-test's fleet instead of this stack
+                           (funds from PK2 so chaos-test scenarios keep PK1).
+                           Flags after '--' are passed to blaster.
 
 Chaos:
   chaos isolate <node>            Block peer traffic (RPC still works).
@@ -107,6 +110,7 @@ Examples:
   compose/multinode.sh blast              # blast all running nodes (TUI)
   compose/multinode.sh blast --build --auto-mine  # rebuild, mine on node 1
   compose/multinode.sh blast 1,3 -- --headless --max-tps 50
+  compose/multinode.sh blast --target bsv-regtest --fresh --auto-mine -- --workers 10
   compose/multinode.sh chaos isolate 3
   compose/multinode.sh chaos kill 2 validator    # split mode: only validator
   compose/multinode.sh chaos heal
@@ -162,8 +166,11 @@ assert_known_service() {
 # $REPO_ROOT/data$BLASTER_DATA_DIR/coinbase.db.db - data/Users/... on macOS,
 # data/home/... on Linux. Remove exactly that tree, then any parents it leaves
 # empty, rather than anything else under the shared data/ directory.
+#
+# $1 is the blaster state directory, default $BLASTER_DATA_DIR ('blast
+# --target bsv-regtest' keeps its own).
 clean_blaster_state() {
-  local stale="$REPO_ROOT/data$BLASTER_DATA_DIR"
+  local stale="$REPO_ROOT/data${1:-$BLASTER_DATA_DIR}"
   if [[ -d "$stale" ]]; then
     rm -rf "$stale"
     echo "cleaned stray coinbase DB: $stale"
@@ -845,8 +852,6 @@ cmd_generate() {
 }
 
 cmd_blast() {
-  require_stack
-
   local -a nodes=()
   local -a passthrough=()
   local sawDashDash=false
@@ -854,6 +859,8 @@ cmd_blast() {
   local auto_mine_node=""
   local auto_mine_interval="${BLAST_AUTO_MINE_INTERVAL:-5}"
   local do_build=false
+  local fresh=false
+  local target="multinode"
   while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--" ]]; then
       sawDashDash=true
@@ -879,6 +886,18 @@ cmd_blast() {
         auto_mine_node="${1#--auto-mine=}"
         shift
         ;;
+      --fresh)
+        fresh=true
+        shift
+        ;;
+      --target)
+        target="${2:?--target needs multinode or bsv-regtest}"
+        shift 2
+        ;;
+      --target=*)
+        target="${1#--target=}"
+        shift
+        ;;
       *)
         IFS=', ' read -ra items <<< "$1"
         for item in "${items[@]}"; do
@@ -888,6 +907,46 @@ cmd_blast() {
         ;;
     esac
   done
+
+  # Target fleet. Both use the same host port scheme (node N: base
+  # 20000 + (N-1)*2000; RPC base+1292, propagation gRPC base+84), so only the
+  # container naming, funding key and state directory differ.
+  #
+  # bsv-regtest is chaos-test's fleet (CHAOS_TEST_DIR/bsv-regtest). There the
+  # blaster funds itself from PK2, the coinbase's second output: chaos-test
+  # scenarios spend the first (PK1), and sharing a key would make the two
+  # double-spend each other's coins.
+  local ctr_re ctr_fmt blaster_data_dir
+  case "$target" in
+    multinode)
+      require_stack
+      ctr_re='^teranode([0-9]+)(-[a-z0-9]+)?-multinode$'
+      ctr_fmt='teranode%s-multinode'
+      blaster_data_dir="$BLASTER_DATA_DIR"
+      ;;
+    bsv-regtest)
+      ctr_re='^bsv-regtest-teranode([0-9]+)$'
+      ctr_fmt='bsv-regtest-teranode%s'
+      blaster_data_dir="$REPO_ROOT/data/bsv-regtest-blaster"
+      local pk2
+      pk2=$(sed -nE 's/^PK2[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$REPO_ROOT/settings.conf" | head -1)
+      if [[ -z "$pk2" ]]; then
+        echo "error: PK2 not found in settings.conf" >&2
+        exit 1
+      fi
+      export coinbase_wallet_private_key="$pk2"
+      ;;
+    *)
+      echo "error: --target must be multinode or bsv-regtest, got '$target'" >&2
+      exit 2
+      ;;
+  esac
+
+  if $fresh; then
+    rm -rf "$blaster_data_dir"
+    clean_blaster_state "$blaster_data_dir"
+    echo "wiped blaster state: $blaster_data_dir"
+  fi
 
   if $do_build; then
     if [[ -n "${BLASTER_BIN:-}" ]]; then
@@ -939,31 +998,43 @@ cmd_blast() {
     declare -A seen_nodes=()
     while read -r name; do
       [[ -z "$name" ]] && continue
-      if [[ "$name" =~ ^teranode([0-9]+)(-[a-z0-9]+)?-multinode$ ]]; then
+      if [[ "$name" =~ $ctr_re ]]; then
         local idx="${BASH_REMATCH[1]}"
         if [[ -z "${seen_nodes[$idx]:-}" ]]; then
           seen_nodes[$idx]=1
           nodes+=("$idx")
         fi
       fi
-    done < <(docker ps --filter "name=-multinode" --format '{{.Names}}' | sort -V)
+    done < <(docker ps --filter "name=teranode" --format '{{.Names}}' | sort -V)
   fi
 
   if [[ ${#nodes[@]} -eq 0 ]]; then
-    echo "error: no running teranode containers. Start the stack with '$0 up <N>' first." >&2
+    if [[ "$target" == "bsv-regtest" ]]; then
+      echo "error: no running bsv-regtest teranodes. Start chaos-test's fleet (make up && make wait in CHAOS_TEST_DIR) first." >&2
+    else
+      echo "error: no running teranode containers. Start the stack with '$0 up <N>' first." >&2
+    fi
     exit 1
   fi
 
   # Verify propagation port is exposed (older stacks generated before 8084 was added won't have it).
   local first="${nodes[0]}"
   local first_prop=$((20000 + (first - 1) * 2000 + 84))
-  local prop_ctr="teranode${first}-multinode"
-  if is_split_mode "$first"; then
+  local prop_ctr
+  # shellcheck disable=SC2059 # ctr_fmt is a fixed format chosen above
+  prop_ctr=$(printf "$ctr_fmt" "$first")
+  if [[ "$target" == "multinode" ]] && is_split_mode "$first"; then
     prop_ctr="teranode${first}-propagation-multinode"
   fi
   if ! docker ps --filter "name=${prop_ctr}" --format '{{.Ports}}' | grep -q ":${first_prop}->8084"; then
     echo "error: propagation port not exposed on ${prop_ctr} (expected host port ${first_prop})." >&2
-    echo "Regenerate the stack: '$0 down && $0 up <N>'" >&2
+    if [[ "$target" == "bsv-regtest" ]]; then
+      echo "chaos-test's fleet does not publish it by default. Apply our override and restart it:" >&2
+      echo "  cp $SCRIPT_DIR/chaostest/bsv-regtest.override.yaml \$CHAOS_TEST_DIR/bsv-regtest/compose.override.yaml" >&2
+      echo "  make -C \$CHAOS_TEST_DIR/bsv-regtest up" >&2
+    else
+      echo "Regenerate the stack: '$0 down && $0 up <N>'" >&2
+    fi
     exit 1
   fi
 
@@ -1012,8 +1083,9 @@ cmd_blast() {
     # any of the 9 service containers; all-in-one: the single teranodeN
     # container). Without this the background mining loop silently does
     # nothing and the user is left wondering why funding stalls.
-    if ! docker ps --filter "status=running" --format '{{.Names}}' \
-         | grep -qE "^teranode${auto_mine_node}(-[a-z0-9]+)?-multinode$"; then
+    local mine_re="^teranode${auto_mine_node}(-[a-z0-9]+)?-multinode$"
+    [[ "$target" == "bsv-regtest" ]] && mine_re="^bsv-regtest-teranode${auto_mine_node}$"
+    if ! docker ps --filter "status=running" --format '{{.Names}}' | grep -qE "$mine_re"; then
       echo "error: auto-mine target teranode${auto_mine_node} is not running" >&2
       exit 1
     fi
@@ -1025,9 +1097,8 @@ cmd_blast() {
   fi
 
   # Control where the blaster writes snapshot + embedded coinbase DB so that
-  # 'multinode.sh down' can clean it up alongside the chain state. Only inject
-  # our path if the user didn't pass one via '--'.
-  local blaster_data_dir="$BLASTER_DATA_DIR"
+  # 'multinode.sh down' (or --fresh) can clean it up alongside the chain state.
+  # Only inject our path if the user didn't pass one via '--'.
   local user_snapshot=false
   for arg in ${passthrough[@]+"${passthrough[@]}"}; do
     case "$arg" in
@@ -1044,11 +1115,17 @@ cmd_blast() {
   fi
 
   echo "blaster:     $blaster_bin"
+  echo "target:      $target"
   echo "nodes:       ${nodes[*]}"
   echo "propagation: $prop_addrs"
   echo "rpc:         $rpc_url_default  (funding source for embedded coinbase)"
   if ! $user_snapshot; then
-    echo "snapshot:    $snapshot_path  (wiped by '$0 down')"
+    if [[ "$target" == "bsv-regtest" ]]; then
+      echo "snapshot:    $snapshot_path  (pass --fresh after chaos-test's 'make reset')"
+      echo "funding:     PK2 (coinbase output 1; chaos-test scenarios spend output 0)"
+    else
+      echo "snapshot:    $snapshot_path  (wiped by '$0 down')"
+    fi
     echo "logs:        $blaster_data_dir/blaster.log  (blaster writes service logs here in TUI mode)"
   fi
   if $auto_mine_enabled; then
@@ -1058,9 +1135,16 @@ cmd_blast() {
 
   local miner_pid=""
   if $auto_mine_enabled; then
+    local mine_rpc="http://localhost:$((20000 + (auto_mine_node - 1) * 2000 + 1292))"
     (
       while true; do
-        "$GEN_DIR/generate-blocks.sh" "${auto_mine_node},1" >/dev/null 2>&1 || true
+        if [[ "$target" == "bsv-regtest" ]]; then
+          # No generated helper script for chaos-test's fleet; mine over RPC.
+          curl -sf --max-time 30 -u bitcoin:bitcoin -H 'Content-Type: application/json' \
+            -d '{"method":"generate","params":[1]}' "$mine_rpc" >/dev/null 2>&1 || true
+        else
+          "$GEN_DIR/generate-blocks.sh" "${auto_mine_node},1" >/dev/null 2>&1 || true
+        fi
         sleep "$auto_mine_interval"
       done
     ) &
