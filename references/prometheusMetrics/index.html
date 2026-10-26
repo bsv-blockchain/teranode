@@ -8739,6 +8739,11 @@
 <td>Subset of <code>bless_unlock_failed</code> that the per-level unlock retry made spendable</td>
 </tr>
 <tr>
+<td><code>teranode_subtreevalidation_conflicting_kept_aside</code></td>
+<td>Counter</td>
+<td>Transactions of peer subtrees kept aside because they conflict with accepted transactions, until a block references them, counted per validation pass</td>
+</tr>
+<tr>
 <td><code>teranode_subtreevalidation_bless_unlock_retry_failed_batches</code></td>
 <td>Counter</td>
 <td>Unlock retry calls that returned an error; counted per call, not per transaction, because the store reports no per-record result</td>
@@ -8772,6 +8777,11 @@
 <td><code>teranode_subtreevalidation_subtree_already_exists_skipped_total</code></td>
 <td>Counter</td>
 <td>Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead</td>
+</tr>
+<tr>
+<td><code>teranode_subtreevalidation_cached_subtree_conflict_probes_total</code></td>
+<td>Counter</td>
+<td>Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing. Scales with transactions per block</td>
 </tr>
 <tr>
 <td><code>teranode_subtreevalidation_peer_subtree_admission_wait</code></td>
@@ -9047,6 +9057,11 @@
 <td>Gauge</td>
 <td>Number of times a <code>lockfree</code> cache writer found every lane busy; should stay 0</td>
 </tr>
+<tr>
+<td><code>teranode_tx_meta_cache_tombstoned_writes_evicted_total</code></td>
+<td>Counter</td>
+<td>Writes of a tx demoted to conflicting that were dropped, or evicted right after landing when the demotion arrived during the write: a txmeta ADD consumed after the demotion's DELETE (they travel on different partitions), or a read-through write whose store read raced the demotion. Non-zero means the race happened and was absorbed</td>
+</tr>
 </tbody>
 </table>
 <h2 id="aerospike-service-metrics">Aerospike Service Metrics<a class="headerlink" href="#aerospike-service-metrics" title="Permanent link">&para;</a></h2>
@@ -9304,6 +9319,11 @@
 <td><code>teranode_subtreeprocessor_oversize_batch_admitted_total</code></td>
 <td>Counter</td>
 <td>Number of client batches that exceeded the normalized <code>blockassembly_maxQueueItems</code> and were admitted alone onto an empty queue, so the ceiling is transiently exceeded by one batch rather than that client wedging forever. <strong>Any</strong> non-zero value means a client's batch size is above this pod's normalized cap and the cross-pod sizing guidance in the <code>blockassembly_maxQueueItems</code> longdesc has not been applied</td>
+</tr>
+<tr>
+<td><code>teranode_subtreeprocessor_txmeta_delete_dropped_total</code></td>
+<td>Counter</td>
+<td>Txmeta cache DELETEs for txs demoted to conflicting that block assembly dropped because the txmeta producer buffer was full or stopped. Each one can leave subtree validation caching that tx as non-conflicting until the cache rotates it out, so alert on any increase</td>
 </tr>
 </tbody>
 </table>

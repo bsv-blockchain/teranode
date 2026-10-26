@@ -8079,9 +8079,9 @@
 </tr>
 <tr>
 <td><code>tx-policy-rejected</code> (<code>KAFKA_TX_POLICY_REJECTED</code> → <code>tx-policy-rejected</code>)</td>
-<td>Validator service</td>
+<td>Validator service <strong>and</strong> Subtree Validation service</td>
 <td>Subtree Validation service (<code>subtreevalidation.&lt;client&gt;.&lt;random&gt;</code>)</td>
-<td>Full raw transaction bytes for txs that are consensus-valid but fail local mining policy (e.g. zero-fee) — cached but not "blessed", still fully validated on use</td>
+<td>Full raw transaction bytes for txs that are consensus-valid but fail local mining policy (e.g. zero-fee), txs the validator rejected as conflicting (<code>conflicting</code> set), and txs subtree validation kept aside from a peer subtree after context-free checks only (<code>keptAside</code> set) — cached but not "blessed", still fully validated on use</td>
 <td>Not set by default (<code>kafka_txPolicyRejectedConfig</code> has no default URL, so the topic is disabled unless explicitly configured); recommended 10-30 min when enabled</td>
 </tr>
 <tr>
@@ -8097,7 +8097,7 @@
 <ul>
 <li>The <code>blocks-final</code> topic is <strong>not</strong> consumed via the <code>getKafkaBlocksFinalConsumerGroup</code> helper in <code>daemon/daemon_kafka.go</code> — that function exists but is commented out/unused. Its only real Kafka consumer is the Legacy P2P service. The Block Persister does <strong>not</strong> consume this topic either — it polls the Blockchain service over gRPC (<code>GetBlocksNotPersisted</code>) on a <code>blockpersister_persistSleep</code> interval (default 10s); see the Blockchain section below. Block Assembly gets finalized-block notifications via a direct gRPC subscription (<code>blockchainClient.Subscribe</code>) to the Blockchain service, not Kafka.</li>
 <li><code>invalid-blocks</code> and <code>invalid-subtrees</code> are both produced and consumed for peer reputation/banning purposes in P2P — Block Validation and Subtree Validation are the producers, P2P is the sole consumer of each.</li>
-<li><code>tx-policy-rejected</code> was previously undocumented; it is real and wired in <code>daemon/daemon_kafka.go</code> (<code>getKafkaTxPolicyRejectedAsyncProducer</code> / <code>getKafkaTxPolicyRejectedConsumerGroup</code>), <code>services/validator/Validator.go</code> (producer), and <code>services/subtreevalidation/Server.go</code> (consumer).</li>
+<li><code>tx-policy-rejected</code> was previously undocumented; it is real and wired in <code>daemon/daemon_kafka.go</code> (<code>getKafkaTxPolicyRejectedAsyncProducer</code> / <code>getKafkaTxPolicyRejectedConsumerGroup</code>), <code>services/validator/Validator.go</code> (producer), and <code>services/subtreevalidation/Server.go</code> (consumer, and producer of kept-aside txs). With topic ACLs, Subtree Validation needs write access to it too.</li>
 </ul>
 <h3 id="propagation-service">Propagation Service<a class="headerlink" href="#propagation-service" title="Permanent link">&para;</a></h3>
 <p>After initial sanity check tests, the propagation service endorses transactions to the validator. When <code>kafka_validatortxsConfig</code> is configured, this is done by publishing a transaction notification to that topic. The topic is empty in the committed <code>settings.conf</code> defaults and populated only in the <code>.operator</code> context; when it is empty, no producer and no consumer group are created and Propagation invokes the Validator directly instead. With <code>useLocalValidator = true</code> — also the committed default — that direct invocation is an in-process call into an embedded <code>*Validator</code>, not a network hop. See <a href="../../architecture/teranode-microservices-overview/#61-choosing-grpc-vs-kafka-for-a-new-communication-path">§6.1 Choosing gRPC vs. Kafka for a New Communication Path</a>.</p>
@@ -8167,9 +8167,9 @@
 </ul>
 <h4 id="policy-rejected-transactions">Policy-Rejected Transactions<a class="headerlink" href="#policy-rejected-transactions" title="Permanent link">&para;</a></h4>
 <ul>
-<li><strong>kafka_tx_policy_rejected</strong> (<code>KAFKA_TX_POLICY_REJECTED</code> in settings, topic <code>tx-policy-rejected</code>): Distributes raw bytes for transactions that are consensus-valid but rejected by local mining policy (e.g. zero-fee)<ul>
-<li><strong>Purpose</strong>: Lets Subtree Validation resolve a missing transaction referenced by a subtree from a policy-rejected cache instead of re-fetching it from the originating peer; cached transactions still undergo full validation before use</li>
-<li><strong>Producer</strong>: Validator service</li>
+<li><strong>kafka_tx_policy_rejected</strong> (<code>KAFKA_TX_POLICY_REJECTED</code> in settings, topic <code>tx-policy-rejected</code>): Distributes raw bytes for transactions that are consensus-valid but rejected by local mining policy (e.g. zero-fee), rejected as conflicting, or kept aside from a peer subtree<ul>
+<li><strong>Purpose</strong>: Lets Subtree Validation resolve a missing transaction referenced by a subtree from a policy-rejected cache instead of re-fetching it from the originating peer, and keep a conflicting transaction and its descendants aside instead of writing them to the UTXO store; cached transactions still undergo full validation before use</li>
+<li><strong>Producers</strong>: Validator service (policy and conflicting rejections) and Subtree Validation service (kept-aside transactions, flagged <code>keptAside</code>; these passed context-free checks only and go to a separate cache)</li>
 <li><strong>Consumer</strong>: Subtree Validation service (consumer group <code>subtreevalidation.&lt;client&gt;.&lt;random&gt;</code>)</li>
 <li><strong>Disabled by default</strong>: <code>kafka_txPolicyRejectedConfig</code> has no default URL in <code>settings.conf</code> and must be explicitly configured to activate this topic</li>
 <li><strong>Also gated by</strong>: <code>subtreevalidation_txPolicyRejectedCacheEnabled</code> (default <code>true</code>) on the consumer — the consumer only starts when both the Kafka client and the cache are non-nil; on the producer side, <code>publishPolicyRejectedTx</code> stays silent while the FSM is <code>CATCHINGBLOCKS</code>, skips transactions above <code>validator_kafka_maxMessageBytes</code>, and drops the message (non-blocking) rather than stalling validation when its producer buffer is full — all of which fall back to the ordinary HTTP fetch path on a cache miss</li>
