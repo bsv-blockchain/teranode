@@ -7468,6 +7468,13 @@
 <td>utxostore_disableDAHCleaner</td>
 <td><strong>CRITICAL</strong> - DAH cleaner process control</td>
 </tr>
+<tr>
+<td>ConflictingChildrenMaxNodes</td>
+<td>int</td>
+<td>100000</td>
+<td>utxostore_conflictingChildrenMaxNodes</td>
+<td>Fail-closed node budget per root of a conflicting-descendant walk (&lt;=0 = unlimited). Subtree validation walks a block's conflicting transactions as one batch from N roots (the transactions and their counter-spenders) and allows N × this budget: the old aggregate bound of N separate walks. Worst case, the visited set reaches N × this budget entries, and a single runaway cone fails after N × this budget reads rather than this budget</td>
+</tr>
 </tbody>
 </table>
 <h3 id="postgresql-connection-pool-postgrespool">PostgreSQL Connection Pool (PostgresPool)<a class="headerlink" href="#postgresql-connection-pool-postgrespool" title="Permanent link">&para;</a></h3>
