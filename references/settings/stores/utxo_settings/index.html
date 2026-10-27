@@ -7473,7 +7473,7 @@
 <td>int</td>
 <td>100000</td>
 <td>utxostore_conflictingChildrenMaxNodes</td>
-<td>Fail-closed node budget per root of a conflicting-descendant walk (&lt;=0 = unlimited). Subtree validation walks a block's conflicting transactions as one batch from N roots (the transactions and their counter-spenders) and allows N × this budget: the old aggregate bound of N separate walks. Worst case, the visited set reaches N × this budget entries, and a single runaway cone fails after N × this budget reads rather than this budget</td>
+<td>Fail-closed node budget per root of a conflicting-descendant walk (&lt;=0 = unlimited). Subtree validation walks a block's conflicting transactions as one batch from N roots (the transactions and their counter-spenders) and allows N × this budget: the old aggregate bound of N separate walks. Worst case, the visited set reaches N × this budget entries, and a single runaway cone fails after N × this budget reads rather than this budget. A walk that stops on the budget still rejects the block with <code>TX_INVALID</code> if it already reached a transaction mined on the candidate chain; otherwise the block fails with <code>UTXO_WALK_LIMIT_EXCEEDED</code> and is retried</td>
 </tr>
 </tbody>
 </table>
