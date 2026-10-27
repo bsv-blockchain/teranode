@@ -9311,6 +9311,11 @@
 <td>Size of the dynamic subtree in the subtree processor</td>
 </tr>
 <tr>
+<td><code>teranode_subtreeprocessor_blockmaxsize_resizes</code></td>
+<td>Counter</td>
+<td>Number of times the queued subtrees were re-chunked because the first one exceeded <code>blockmaxsize</code>. A resize lasts for one block, so a count that rises every block means the queue is rebuilt and stored again each block</td>
+</tr>
+<tr>
 <td><code>teranode_subtreeprocessor_current_state</code></td>
 <td>Gauge</td>
 <td>Current state of the subtree processor</td>
