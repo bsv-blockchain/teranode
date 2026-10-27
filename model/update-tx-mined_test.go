@@ -757,11 +757,29 @@ func TestUpdateTxMinedStatus_MissingSubtree(t *testing.T) {
 		// A valid subtree ahead of the missing one spawns a goroutine before the
 		// !unsetMined nil return. The caller releases SubtreeSlices (closing
 		// mmap-backed Nodes) on this error, so updateTxMinedStatus must g.Wait the
-		// in-flight goroutine first; otherwise it still reads &Nodes[idx].Hash. Run
-		// under -race to catch a regression.
+		// in-flight goroutine first; otherwise it still reads &Nodes[idx].Hash.
+		//
+		// The worker is held inside SetMinedMulti until the test releases it, so the
+		// test can prove the call has not returned while the worker is in flight. With
+		// the g.Wait removed it returns within microseconds and the not-returned check
+		// fails, without -race. The check is a bounded window, not a proof: a caller
+		// descheduled for the whole window would slip past it, so it can miss a
+		// regression but never fails a correct implementation.
+		started := make(chan struct{})
+		release := make(chan struct{})
+
+		var releaseOnce sync.Once
+
+		releaseWorker := func() { releaseOnce.Do(func() { close(release) }) }
+		defer releaseWorker() // a failed assertion must not leave the worker, and so the caller, blocked
+
 		mockStore := &utxo.MockUtxostore{}
 		mockStore.On("SetMinedMulti", mock.Anything, mock.Anything, mock.Anything).
-			Return(realMinedReturn(15), nil).Maybe()
+			Run(func(mock.Arguments) {
+				close(started)
+				<-release
+			}).
+			Return(realMinedReturn(15), nil).Once()
 
 		block := &Block{}
 		block.Height = 100
@@ -771,10 +789,35 @@ func TestUpdateTxMinedStatus_MissingSubtree(t *testing.T) {
 			nil, // missing subtree after a valid one
 		}
 
-		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+		result := make(chan error, 1)
 
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "missing subtree")
+		go func() {
+			result <- updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, map[uint32]bool{}, true, nil, false)
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the worker for the valid subtree never reached SetMinedMulti")
+		}
+
+		select {
+		case err := <-result:
+			t.Fatalf("updateTxMinedStatus returned (%v) while a worker was still inside SetMinedMulti: the goroutines are not joined", err)
+		case <-time.After(250 * time.Millisecond):
+		}
+
+		releaseWorker()
+
+		select {
+		case err := <-result:
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "missing subtree")
+		case <-time.After(5 * time.Second):
+			t.Fatal("updateTxMinedStatus did not return after the worker was released")
+		}
+
+		mockStore.AssertExpectations(t)
 	})
 }
 

@@ -413,6 +413,183 @@ func TestSetTxMinedStatus_ValidPathReleasesMmapSubtreesOnMinedUpdateError(t *tes
 	require.Empty(t, entries, "#2029: a failed valid-path update must still release the owned block's mmap subtrees")
 }
 
+// TestSetTxMinedStatus_ReleasesMmapSubtreesBeforeSettingMinedSet pins the order on the
+// success path: the block's subtrees are released before SetBlockMinedSet is called, not
+// left to the deferred release that runs on return. Holding them across that RPC extends
+// their residency by however long it takes, and publishing mined_set lets child validation
+// proceed before this block's cleanup has finished. The deferred release alone would pass
+// every other test here, because they check the directory only after the function returns.
+func TestSetTxMinedStatus_ReleasesMmapSubtreesBeforeSettingMinedSet(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	blockChainStore, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+
+	blockchainClient, err := blockchain.NewLocalClient(logger, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///gap2029order")
+	require.NoError(t, err)
+
+	realUtxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	subtreeStore := blobmemory.New()
+	txStore := blobmemory.New()
+
+	subtreeValidationClient := &subtreevalidation.MockSubtreeValidation{}
+	subtreeValidationClient.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	privateKey, err := bec.NewPrivateKey()
+	require.NoError(t, err)
+	address, err := bscript.NewAddressFromPublicKey(privateKey.PubKey(), true)
+	require.NoError(t, err)
+
+	fundingTx := bt.NewTx()
+	require.NoError(t, fundingTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+	fundingTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, 0x64, 0x00, 0x00, 0x00, '/', 'F', 'u', 'n', 'd'})
+	require.NoError(t, fundingTx.AddP2PKHOutputFromAddress(address.AddressString, 50*100000000))
+
+	txT := bt.NewTx()
+	require.NoError(t, txT.FromUTXOs(&bt.UTXO{
+		TxIDHash:      fundingTx.TxIDChainHash(),
+		Vout:          0,
+		LockingScript: fundingTx.Outputs[0].LockingScript,
+		Satoshis:      fundingTx.Outputs[0].Satoshis,
+	}))
+	require.NoError(t, txT.AddP2PKHOutputFromAddress(address.AddressString, 49*100000000))
+	require.NoError(t, txT.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
+
+	_, _, err = realUtxoStore.SpendAndCreate(ctx, fundingTx, 0, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 0, BlockHeight: 0}), utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	_, _, err = realUtxoStore.SpendAndCreate(ctx, txT, 0, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+	require.NoError(t, subtree.AddNode(*txT.TxIDChainHash(), uint64(txT.Size()), 0)) //nolint:gosec
+
+	subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
+	require.NoError(t, subtreeMeta.SetTxInpointsFromTx(txT))
+
+	subtreeBytes, err := subtree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtree, subtreeBytes))
+
+	subtreeMetaBytes, err := subtreeMeta.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, subtree.RootHash()[:], fileformat.FileTypeSubtreeMeta, subtreeMetaBytes))
+
+	const blockHeight = uint32(1)
+
+	coinbaseTx := coinbaseAtHeight(t, blockHeight)
+
+	replicated := subtree.Duplicate()
+	replicated.ReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) //nolint:gosec
+
+	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, replicated.RootHash())
+
+	block, err := model.NewBlock(hdr, coinbaseTx, []*chainhash.Hash{subtree.RootHash()},
+		uint64(subtree.Length()), uint64(coinbaseTx.Size()+txT.Size()), blockHeight, 0) //nolint:gosec
+	require.NoError(t, err)
+
+	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+
+	// mmap-backed subtrees make a leaked (unreleased) subtree observable: each
+	// leaves a backing file in this directory until it is closed.
+	mmapDir := t.TempDir()
+
+	bv := &BlockValidation{
+		logger:                        logger,
+		settings:                      tSettings,
+		blockchainClient:              blockchainClient,
+		subtreeStore:                  subtreeStore,
+		txStore:                       txStore,
+		utxoStore:                     realUtxoStore,
+		subtreeValidationClient:       subtreeValidationClient,
+		mmapDir:                       mmapDir,
+		lastValidatedBlocks:           expiringmap.New[chainhash.Hash, *model.Block](2 * time.Minute),
+		blockExistsCache:              expiringmap.New[chainhash.Hash, bool](120 * time.Minute),
+		subtreeExistsCache:            expiringmap.New[chainhash.Hash, bool](10 * time.Minute),
+		blockHashesCurrentlyValidated: txmap.NewSwissMap(0),
+		blocksCurrentlyValidating:     txmap.NewSyncedMap[chainhash.Hash, *validationResult](),
+		setMinedChan:                  make(chan *chainhash.Hash, 1),
+		revalidateBlockChan:           make(chan revalidateBlockData, 1),
+		stats:                         gocore.NewStat("blockvalidation"),
+	}
+	defer bv.StopCaches()
+
+	// Validate and store the block; this caches it in lastValidatedBlocks with its subtrees loaded.
+	require.NoError(t, bv.ValidateBlock(ctx, block, "test"))
+
+	// Hold the exact block object setTxMinedStatus will use and swap its loaded
+	// subtree for an mmap-backed one built from the same bytes, reproducing a
+	// block cached by the catchup quick-validate fallback with
+	// blockvalidation_subtreeMmapDir set. setTxMinedStatus removes it from the
+	// cache and takes ownership. getAndValidateSubtrees' "already loaded" check
+	// reuses this mmap subtree (non-nil, Nodes present) rather than reloading it.
+	cached, ok := bv.lastValidatedBlocks.Get(*block.Hash())
+	require.True(t, ok, "precondition: the validated block is cached")
+	require.True(t, bv.hasValidSubtrees(cached), "precondition: the cached block has its subtrees loaded")
+
+	mmapSubtree, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(subtreeBytes), mmapDir)
+	require.NoError(t, err)
+	require.True(t, mmapSubtree.IsMmapBacked(), "precondition: the swapped-in subtree is mmap-backed")
+	cached.ReplaceSubtreeSlices([]*subtreepkg.Subtree{mmapSubtree})
+
+	entries, err := os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "precondition: the cached block holds an mmap backing file to leak")
+
+	// Observe the mmap directory at the instant SetBlockMinedSet is called. Wrapped
+	// only now, after ValidateBlock, so the probe sees setTxMinedStatus's call alone.
+	probe := &minedSetProbeClient{ClientI: blockchainClient, mmapDir: mmapDir}
+	bv.blockchainClient = probe
+
+	require.NoError(t, bv.setTxMinedStatus(ctx, block.Hash()))
+	require.Equal(t, 1, probe.calls, "precondition: SetBlockMinedSet was reached on the success path")
+	require.NoError(t, probe.readErr)
+
+	// Publishing mined_set lets child validation proceed, so the block's subtrees
+	// must already be released: their backing files gone before the RPC, not only by
+	// the time the function returns.
+	require.Empty(t, probe.filesAtMinedSet, "#2029: the owned block's mmap subtrees must be released before SetBlockMinedSet is called")
+
+	entries, err = os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.Empty(t, entries, "#2029: the subtrees stay released once setTxMinedStatus returns")
+
+	// The explicit release and the deferred one both ran. A third is still a clean
+	// no-op: every released entry is nilled, so no mapping is closed twice.
+	require.NoError(t, cached.ReleaseSubtreeNodes(nil))
+}
+
+// minedSetProbeClient records the contents of the mmap directory when SetBlockMinedSet is
+// called, so a test can tell a release before the RPC from one after it.
+type minedSetProbeClient struct {
+	blockchain.ClientI
+
+	mmapDir         string
+	calls           int
+	filesAtMinedSet []os.DirEntry
+	readErr         error
+}
+
+func (c *minedSetProbeClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+	c.calls++
+	c.filesAtMinedSet, c.readErr = os.ReadDir(c.mmapDir)
+
+	return c.ClientI.SetBlockMinedSet(ctx, blockHash)
+}
+
 // TestSetTxMinedStatus_CachedBlockReleasesMmapSubtreesWhenHeaderFetchFails covers
 // the case #2029 leaves open today: a block taken from lastValidatedBlocks with
 // mmap-backed subtrees already loaded, whose GetBlockHeader fetch fails before the

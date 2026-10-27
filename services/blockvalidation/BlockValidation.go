@@ -1621,12 +1621,18 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		return errors.NewProcessingError("[setTxMined][%s] error updating tx mined status", block.Hash().String(), err)
 	}
 
-	// Subtrees are released by the deferred ReleaseSubtreeNodes registered above,
-	// which runs after this on return. Nodes are not pooled (put is nil): a block
-	// fetched fresh from the blockchain has no node allocator, so its slices never
-	// came from the pool; a block taken from lastValidatedBlocks does carry
-	// pool-allocated slices, and recycling those is a possible improvement left
-	// out of this change.
+	// Release the subtrees now, before SetBlockMinedSet. Their Nodes are no longer
+	// needed, and holding them across that RPC extends their residency by however long
+	// it takes, while publishing mined_set lets child validation proceed before this
+	// block's cleanup has finished. The deferred release registered above stays for
+	// the error returns; on a slice already released it is a no-op. Nodes are not
+	// pooled (put is nil): a block fetched fresh from the blockchain has no node
+	// allocator, so its slices never came from the pool; a block taken from
+	// lastValidatedBlocks does carry pool-allocated slices, and recycling those is a
+	// possible improvement left out of this change.
+	if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+		u.logger.Warnf("[setTxMined][%s] failed releasing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
+	}
 
 	// update block mined_set to true
 	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
