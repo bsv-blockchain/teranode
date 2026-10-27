@@ -8953,7 +8953,8 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <h5 id="parallel-fork-processing">Parallel Fork Processing<a class="headerlink" href="#parallel-fork-processing" title="Permanent link">&para;</a></h5>
 <p>The fork manager enforces limits on concurrent fork processing to prevent resource exhaustion:</p>
 <ul>
-<li><strong>maxParallelForks</strong>: Maximum number of forks that can be processed simultaneously (default: 4, configurable via <code>blockvalidation_maxParallelForks</code>)</li>
+<li><strong>maxParallelForks</strong>: Maximum number of forks that can be processed simultaneously (default: 4, configurable via <code>blockvalidation_max_parallel_forks</code>)</li>
+<li><strong>Tip slot</strong>: Blocks that do not extend the current tip may hold at most <code>maxParallelForks - 1</code> slots, so slow fork blocks cannot occupy every worker while a chain-extending block waits. The class is the one recorded when the block was queued. With <code>maxParallelForks = 1</code> there is no reserved slot</li>
 <li><strong>maxTrackedForks</strong>: Maximum total number of forks to track (default: 1000, configurable via <code>blockvalidation_maxTrackedForks</code>)</li>
 <li><strong>BlockProcessingGuard</strong>: Automatic cleanup mechanism using Go finalizers to ensure processing locks are always released</li>
 </ul>
@@ -9018,19 +9019,23 @@ unaffected as long as ranges continue to span checkpoints.</p>
 <p><strong>Retrieving Blocks:</strong></p>
 <p>The <code>WaitForBlock()</code> method:</p>
 <ol>
-<li>Checks fork manager to ensure processing limits not exceeded</li>
-<li>Selects highest priority block that can be processed</li>
+<li>Skips blocks that are still in their retry delay</li>
+<li>Skips blocks whose parent is still being fetched, queued or validated. Validating a child before its parent is stored would find no parent and send it to catchup, moving the FSM to CATCHINGBLOCKS and stopping mining. This gate applies whatever the block's priority, so skip and age promotions cannot bypass it</li>
+<li>Checks fork manager to ensure processing limits, including the tip slot, are not exceeded</li>
+<li>Selects highest priority block that can be processed, claiming its processing slot before removing it from the queue, so the block is always visible as either queued or processing</li>
 <li>Returns block to worker for validation</li>
 <li>Blocks waiting if no blocks available (with timeout)</li>
 </ol>
+<p>When a block is announced and its parent is not stored yet but is being fetched, queued or validated, it is queued behind the parent instead of going to catchup. A parent validated outside the queue (by catchup, a gRPC <code>ProcessBlock</code> call or legacy sync) holds no worker slot, so the check also asks block validation whether the parent is still validating, and the queue is woken when that validation ends. If the parent is then the best block, its queued children take the chain-extending class. Below the checkpoint, the quick-validation paths of legacy sync and catchup skip this check. It takes the parent's class when the parent is queued or validating. A parent still being fetched has no class yet, so the child is classified on its own and takes the parent's class when the parent finishes.</p>
 <h5 id="retry-mechanism">Retry Mechanism<a class="headerlink" href="#retry-mechanism" title="Permanent link">&para;</a></h5>
-<p>When block validation fails due to transient errors:</p>
+<p>Only failures that are not a verdict on the block are retried. The worker puts the block back on the queue (<code>RequeueAfter()</code>) before releasing its processing slot, held back for a fixed delay:</p>
 <ol>
-<li><strong>RequeueForRetry()</strong>: Adds block back to queue with incremented retry count</li>
-<li><strong>Exponential Backoff</strong>: Each retry waits longer before reprocessing</li>
-<li><strong>Retry Limits</strong>: Maximum retries configurable (default: 3)</li>
-<li><strong>Alternative Sources</strong>: After failures, attempts to fetch from different peers</li>
+<li><strong>Failed fetch</strong> (network or malicious-response error): retried after 5 seconds</li>
+<li><strong>Deadline</strong> (validation running past a timeout such as <code>subtreevalidation_check_block_subtrees_timeout</code>): retried after 1 minute</li>
+<li><strong>Retry Limits</strong>: At most <code>blockValidationMaxRetries</code> requeues per block hash (default: 3). The count resets when the block validates successfully. <code>0</code> disables these retries</li>
+<li><strong>Same Source</strong>: The requeued block keeps the peer that announced it, with its original class and height</li>
 </ol>
+<p>Invalid blocks are never retried.</p>
 <h5 id="alternative-source-handling">Alternative Source Handling<a class="headerlink" href="#alternative-source-handling" title="Permanent link">&para;</a></h5>
 <p>The <code>GetAlternativeSource()</code> method:</p>
 <ul>
