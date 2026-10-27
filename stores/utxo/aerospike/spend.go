@@ -114,6 +114,9 @@ type batchSpend struct {
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
 	requireParentOutput bool
+	// err is the answer complete stored. Only the batcher goroutine reads it,
+	// because the caller may rewrite spend.Err once the group completes.
+	err error
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -132,6 +135,7 @@ type batchSpend struct {
 // the slot write) would NOT establish that happens-before edge.
 func (b *batchSpend) complete(err error) {
 	if b.completed.CompareAndSwap(false, true) {
+		b.err = err
 		b.spend.Err = err
 		b.published.Store(true)
 		b.group.Done()
@@ -999,21 +1003,44 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		})
 	}()
 
-	utxo.ProcessSpendBatch(batch,
-		func(item *batchSpend) *utxo.Spend {
+	_, _, deferFn := tracing.Tracer("aerospike").Start(s.ctx, "sendSpendBatch",
+		tracing.WithHistogram(prometheusUtxoSpendBatch),
+	)
+	defer func() {
+		prometheusUtxoSpendBatchSize.Observe(float64(len(batch)))
+		deferFn()
+	}()
+
+	// The breaker and the batch metrics count one batcher batch, however many
+	// parts ProcessSpendBatch sends.
+	var outcome spendBreakerOutcome
+
+	utxo.ProcessSpendBatch(batch, utxo.SpendBatchHandler[*batchSpend]{
+		Spend: func(item *batchSpend) *utxo.Spend {
 			if item == nil {
 				return nil
 			}
 			return item.spend
 		},
-		func(part []*batchSpend) {
+		Process: func(part []*batchSpend) {
 			if s.useExpressionSpend() {
-				s.SpendMultiWithExpressions(s.ctx, part)
+				s.SpendMultiWithExpressions(s.ctx, part, &outcome)
 			} else {
 				s.executeLuaSpendBatch(part)
 			}
 		},
-	)
+		Result: func(item *batchSpend) (error, bool) {
+			if item == nil || !item.published.Load() {
+				return nil, false
+			}
+			return item.err, true
+		},
+		Reject: func(item *batchSpend, err error) {
+			item.complete(err)
+		},
+	})
+
+	outcome.record(s.spendCircuitBreaker)
 }
 
 // executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
@@ -1045,13 +1072,8 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 
 	ctx, _, deferFn := tracing.Tracer("aerospike").Start(parentCtx, "sendSpendBatchLua",
 		tracing.WithParentStat(stat),
-		tracing.WithHistogram(prometheusUtxoSpendBatch),
 	)
-
-	defer func() {
-		prometheusUtxoSpendBatchSize.Observe(float64(len(batch)))
-		deferFn()
-	}()
+	defer deferFn()
 
 	batchID := s.batchID.Add(1)
 	s.logSpendBatchStart(batchID, len(batch))

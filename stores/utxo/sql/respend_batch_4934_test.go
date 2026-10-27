@@ -156,3 +156,74 @@ func TestSpendBatchStorageFailureDoesNotInventConflict(t *testing.T) {
 		require.NotErrorIs(t, err, errors.ErrSpent, "storage failure is not evidence of a conflicting owner")
 	}
 }
+
+// Alternating claims on one unspent outpoint: the first claim wins in the
+// store, and every competing claim is refused naming it.
+func TestSpendBatchAlternatingClaimsNameTheWinner(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := setupSharedBatch(ctx, t, "4934-alternating")
+	require.NoError(t, store.SetBlockHeight(2))
+	parent := twoOutParent(ctx, t, store, "4934-alternating")
+	winnerSpends, err := utxo.GetSpends(spendOf(t, parent, 1, 0))
+	require.NoError(t, err)
+	loserSpends, err := utxo.GetSpends(spendOf(t, parent, 2, 0))
+	require.NoError(t, err)
+
+	winners := make([]*batchSpend, 0, 4)
+	losers := make([]*batchSpend, 0, 4)
+	batch := make([]*batchSpend, 0, 8)
+	for range 4 {
+		winner := &batchSpend{spend: winnerSpends[0], blockHeight: 2, errCh: make(chan error, 1)}
+		loser := &batchSpend{spend: loserSpends[0], blockHeight: 2, errCh: make(chan error, 1)}
+		winners, losers = append(winners, winner), append(losers, loser)
+		batch = append(batch, winner, loser)
+	}
+	store.sendSpendBatch(batch)
+
+	for _, item := range winners {
+		require.NoError(t, <-item.errCh)
+	}
+	for _, item := range losers {
+		err := <-item.errCh
+		require.ErrorIs(t, err, errors.ErrSpent)
+		var data *errors.UtxoSpentErrData
+		require.True(t, errors.AsData(err, &data))
+		require.Equal(t, winnerSpends[0].SpendingData.Bytes(), data.SpendingData.Bytes())
+	}
+}
+
+// A panic in the first part must still answer every claim, including the
+// claims of parts that never ran, exactly once.
+func TestSpendBatchPanicAnswersEveryClaim(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := setupSharedBatch(ctx, t, "4934-panic")
+	require.NoError(t, store.SetBlockHeight(2))
+	parent := twoOutParent(ctx, t, store, "4934-panic")
+	firstSpends, err := utxo.GetSpends(spendOf(t, parent, 1, 0))
+	require.NoError(t, err)
+	laterSpends, err := utxo.GetSpends(spendOf(t, parent, 2, 0))
+	require.NoError(t, err)
+
+	batch := []*batchSpend{
+		{spend: firstSpends[0], blockHeight: 2, errCh: make(chan error, 1)},
+		{blockHeight: 2, errCh: make(chan error, 1)},
+		{spend: laterSpends[0], blockHeight: 2, errCh: make(chan error, 1)},
+	}
+	require.NotPanics(t, func() { store.sendSpendBatch(batch) })
+
+	for _, item := range batch {
+		select {
+		case err := <-item.errCh:
+			require.ErrorIs(t, err, errors.ErrProcessing)
+		default:
+			t.Fatal("a claim got no answer after the panic")
+		}
+		require.Empty(t, item.errCh, "a claim was answered twice")
+	}
+
+	spent, err := store.Spend(ctx, spendOf(t, parent, 1, 0), 2)
+	require.NoError(t, err, "the panicked part must not leave output 0 spent")
+	require.Len(t, spent, 1)
+}

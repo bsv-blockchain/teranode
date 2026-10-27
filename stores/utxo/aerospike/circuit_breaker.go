@@ -270,3 +270,20 @@ func (cb *circuitBreaker) reset() {
 	cb.halfOpenAttempts = 0
 	cb.consecutiveSuccess = 0
 }
+
+// spendBreakerOutcome collects the expression-path breaker result over all parts
+// of one batcher batch, so a split batch counts once.
+type spendBreakerOutcome struct {
+	success bool
+	failure bool
+}
+
+func (o *spendBreakerOutcome) record(cb *circuitBreaker) {
+	if o.success {
+		cb.RecordSuccess()
+	}
+
+	if o.failure {
+		cb.RecordFailure()
+	}
+}
