@@ -5,11 +5,13 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,4 +65,51 @@ func TestSpendSplitCompletesAllClaimsOnBackendFailure(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A batch split three ways during an Aerospike outage is one batcher batch: it
+// records one breaker failure and one batch metric sample, not three.
+func TestSpendSplitRecordsBreakerAndMetricsOncePerBatch(t *testing.T) {
+	s := newTestStoreForGet(t)
+	s.utxoBatchSize = 1
+	s.settings.Aerospike.EnableSpendFilterExpressions = true
+	s.spendCircuitBreaker = newCircuitBreaker(2, 1, time.Minute)
+
+	group := completion.NewGroup(3)
+	parent, hash := chainhash.Hash{1}, chainhash.Hash{2}
+	batch := make([]*batchSpend, 3)
+	for i := range batch {
+		spender := chainhash.Hash{byte(i + 3)}
+		batch[i] = &batchSpend{spend: &utxo.Spend{
+			TxID: &parent, UTXOHash: &hash,
+			SpendingData: spendpkg.NewSpendingData(&spender, 0),
+		}, blockHeight: 100, group: group}
+	}
+
+	calls := 0
+	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		calls++
+		for _, record := range records {
+			record.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+		}
+		return nil
+	}
+
+	samplesBefore := spendBatchSizeSamples(t)
+	s.sendSpendBatchLua(batch)
+	requireGroupCompleted(t, group, time.Second)
+
+	require.Equal(t, 3, calls, "a failure without an owner sends each competing claim to the backend")
+	require.Equal(t, cbStateClosed, s.spendCircuitBreaker.state, "one batch must not trip a breaker with threshold 2")
+	require.Equal(t, 1, s.spendCircuitBreaker.consecutiveFailures)
+	require.Equal(t, samplesBefore+1, spendBatchSizeSamples(t))
+}
+
+func spendBatchSizeSamples(t *testing.T) uint64 {
+	t.Helper()
+
+	var metric dto.Metric
+	require.NoError(t, prometheusUtxoSpendBatchSize.Write(&metric))
+
+	return metric.GetHistogram().GetSampleCount()
 }
