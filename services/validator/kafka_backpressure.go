@@ -96,6 +96,14 @@ type kafkaBackpressureController struct {
 	queueCount    int64
 	queueMaxItems int64
 
+	// heldCount and maxHeld carry the transactions block assembly holds in memory and its
+	// enforced limit on them, from the same read. They are the terms of a second fill predicate:
+	// the ingest queue reads near empty while that limit is the bound that is full, so the queue
+	// terms alone leave the controller blind to it. Written only by tick and read only by
+	// evaluate.
+	heldCount int64
+	maxHeld   int64
+
 	// lastReportedWindow and windowMismatchLogged bound the mismatch warning to
 	// one line per distinct reported value, so a persistent misconfiguration
 	// cannot spam at the poll cadence.
@@ -254,6 +262,8 @@ func (c *kafkaBackpressureController) tick(ctx context.Context) {
 	c.reportedWindow = c.observeReportedWindow(stats.DoubleSpendWindow)
 	c.queueCount = stats.Count
 	c.queueMaxItems = stats.MaxItems
+	c.heldCount = stats.HeldCount
+	c.maxHeld = stats.MaxHeld
 
 	c.evaluate(stats.HeadAge)
 }
@@ -392,6 +402,24 @@ func (c *kafkaBackpressureController) fillThresholds() (pause, resume int64) {
 	return pause, pause / 2
 }
 
+// heldThresholds returns the pause and resume counts for the transactions block assembly holds
+// in memory, or 0, 0 when there is no usable signal. It applies the same percentage and the same
+// half-way resume as fillThresholds, and is inert in the same cases: no reported limit, or the
+// percentage set to 0. With the default blockassembly_maxTransactionsInMemory=0 the controller
+// behaves exactly as it did before.
+func (c *kafkaBackpressureController) heldThresholds() (pause, resume int64) {
+	if c.maxHeld <= 0 || c.cfg.PauseQueueFillPercent <= 0 {
+		return 0, 0
+	}
+
+	pause = c.maxHeld * int64(c.cfg.PauseQueueFillPercent) / 100
+	if pause < 1 {
+		pause = 1
+	}
+
+	return pause, pause / 2
+}
+
 // evaluate applies the hysteresis decision to a freshly-read queue-head age and
 // queue fill.
 //
@@ -413,8 +441,12 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	}
 
 	fillPause, fillResume := c.fillThresholds()
-	hotByFill := fillPause > 0 && c.queueCount >= fillPause
-	coolByFill := fillPause == 0 || c.queueCount <= fillResume
+	heldPause, heldResume := c.heldThresholds()
+	hotByHeld := heldPause > 0 && c.heldCount >= heldPause
+	coolByHeld := heldPause == 0 || c.heldCount <= heldResume
+
+	hotByFill := (fillPause > 0 && c.queueCount >= fillPause) || hotByHeld
+	coolByFill := (fillPause == 0 || c.queueCount <= fillResume) && coolByHeld
 
 	// A genuine drain means BOTH predicates are cool, and it means the same thing
 	// everywhere it is used: it is what resumes a pause, and it is what clears a
@@ -478,8 +510,8 @@ func (c *kafkaBackpressureController) pause(age time.Duration, byFill bool, fill
 	prometheusKafkaBackpressurePauseTotal.Inc()
 
 	if byFill {
-		c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (queue fill %d/%d >= %d items, queue-head age %s still below pause watermark %s)",
-			c.queueCount, c.queueMaxItems, fillPause, age, c.cfg.PauseQueueAge)
+		c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (queue fill %d/%d >= %d items, held %d/%d, queue-head age %s still below pause watermark %s)",
+			c.queueCount, c.queueMaxItems, fillPause, c.heldCount, c.maxHeld, age, c.cfg.PauseQueueAge)
 
 		return
 	}

@@ -47,9 +47,26 @@
 | ParallelSetIfNotExistsThreshold      | int           | 10000            | blockassembly_parallelSetIfNotExistsThreshold      | Threshold for parallelizing conditional writes                                       |
 | StoreTxInpointsForSubtreeMeta        | bool          | true             | blockassembly_storeTxInpointsForSubtreeMeta        | Store transaction input points in subtree metadata (required for checkblocktemplate) |
 | IdleSleepDuration                    | time.Duration | 10ms             | blockassembly_idle_sleep_duration                  | Sleep duration when subtree processor queue is empty                                 |
+| MaxTransactionsInMemory              | uint64        | 0                | blockassembly_maxTransactionsInMemory              | Refuse ingest while this many transactions are held in memory (subtrees plus queue); block transactions are not refused; 0 = off |
 | CoinbaseRecoveryMaxGapBlocks         | int           | 200              | blockassembly_coinbaseRecoveryMaxGapBlocks         | Startup scan window below the tip, and the largest coinbase gap auto-repair will fix |
 | CoinbaseRecoveryConsecutiveGood      | int           | 6                | blockassembly_coinbaseRecoveryConsecutiveGood      | Consecutive present coinbases proving the gap floor during walk-back                 |
 | CoinbaseRecoveryMaxAttempts          | int           | 3                | blockassembly_coinbaseRecoveryMaxAttempts          | Automatic coinbase-recovery attempts before raising an operator alert                |
+
+## In-Memory Transaction Limit
+
+`blockassembly_maxTransactionsInMemory` caps the transactions block assembly holds in RAM, counted as those already placed in subtrees plus those queued for ingest. It is checked where every transaction enters block assembly, the ingest queue reservation, so it applies to all ingress paths, including the validator's gRPC and HTTP listeners.
+
+A batch that would cross the limit is refused with the same resource-exhausted status as a full ingest queue (`blockassembly_maxQueueItems`):
+
+| Caller | Outcome |
+|--------|---------|
+| Synchronous submitter (gRPC, HTTP) | Told to retry; the validator undoes the work it did for the transaction |
+| Kafka ingest | Dropped at once, with no in-place retry, because this bound clears when a block connects; alert on `teranode_validator_shed_dropped_total`. Enable `validator_kafkaBackpressureEnabled` so the backlog waits in Kafka |
+| Transaction inside a block (block validation, subtree validation, legacy sync) | Not refused by this limit. It is admitted and counted. `blockassembly_maxQueueItems` still applies to it |
+
+The limit is soft. The count includes transactions dequeued but not yet placed in a subtree, so it does not under-read while a drain pass runs. Transactions inside a block are admitted past the limit, and the overshoot is bounded by the blocks being validated. A batch larger than the whole limit is admitted alone while the node is below it. The clamp floor comes from this pod's `blockassembly_sendBatchSize`, but validator pods fill batches from their own config. The unmined-transaction reload at startup or reset, and transactions re-added from a reorged block, bypass the queue and are not limited: a node that restarts holding more than the limit loads them all and then refuses new ingest until blocks drain it.
+
+A value below one drain pass plus the coinbase placeholder is clamped up with a warning. Budget roughly 1KB of RAM per transaction when sizing.
 
 ## Coinbase Divergence Recovery
 

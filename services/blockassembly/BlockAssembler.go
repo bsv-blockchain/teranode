@@ -413,6 +413,15 @@ func (b *BlockAssembler) QueueMaxItems() int64 {
 	return b.subtreeProcessor.QueueMaxItems()
 }
 
+// MaxTransactionsInMemory returns the enforced limit on transactions held in
+// memory, or a value <= 0 when there is no limit.
+//
+// Returns:
+//   - int64: The enforced limit (<= 0 when unlimited)
+func (b *BlockAssembler) MaxTransactionsInMemory() int64 {
+	return b.subtreeProcessor.MaxTransactionsInMemory()
+}
+
 // QueueHeadAge returns how long the oldest queued batch has been waiting.
 // It is a diagnostic gauge for dispatcher-stall visibility and returns 0 when
 // the queue is empty.
@@ -1993,6 +2002,40 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 //   - bool: true if the batch was enqueued, false if it was refused for room
 func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
 	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints)
+}
+
+// AddTxBatchInBlockIfRoom is AddTxBatchIfRoom for transactions that arrived inside a block. The
+// in-memory transaction limit does not refuse them; the ingest queue bound still does.
+//
+// Parameters:
+//   - nodes: Transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//
+// Returns:
+//   - bool: true if the batch was enqueued, false if it was refused for room
+func (b *BlockAssembler) AddTxBatchInBlockIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+	return b.subtreeProcessor.AddBatchInBlockIfRoom(nodes, txInpoints)
+}
+
+// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
+// already in subtrees.
+//
+// Returns:
+//   - int64: Transactions held in memory
+func (b *BlockAssembler) HeldCount() int64 {
+	return b.subtreeProcessor.HeldCount()
+}
+
+// HeldLimitExceededBy reports whether admitting n more transactions would put the transactions
+// held in memory over the limit. It is false when there is no limit.
+//
+// Parameters:
+//   - n: Number of transactions that would be added
+//
+// Returns:
+//   - bool: true if the in-memory limit is the bound that would refuse them
+func (b *BlockAssembler) HeldLimitExceededBy(n int) bool {
+	return b.subtreeProcessor.HeldLimitExceededBy(n)
 }
 
 // RemoveTx removes a transaction from the block assembler.
