@@ -7188,6 +7188,13 @@
 <td>How long a txmeta DELETE (a tx demoted to conflicting) keeps that tx out of the txmeta cache, against late ADDs and read-through writes; entries live one to two windows, about 60 MB per million demoted txs. Must exceed the worst txmeta consumer lag; must be positive</td>
 </tr>
 <tr>
+<td>SkippedSubtreeBackfillMax</td>
+<td>int</td>
+<td>4096</td>
+<td>subtreevalidation_skippedSubtreeBackfillMax</td>
+<td>Peer subtrees announced while catching up that are kept and validated once the node is RUNNING again (deduplicated by hash, oldest dropped when full, replayed with at most half the peer-subtree slots). 0 or less turns the backfill off</td>
+</tr>
+<tr>
 <td>ProcessTxMetaUsingCacheMissingTxThreshold</td>
 <td>int</td>
 <td>1</td>
