@@ -1137,7 +1137,35 @@ func (s *Store) QueryOldUnminedTransactions(ctx context.Context, cutoffBlockHeig
 // - Multiple preservation attempts with same preserveUntil are idempotent
 // - Batch operations handle per-record failures independently
 // - Returns nil even if some transactions aren't found (partial success is OK)
+//
+// BATCH SIZE: txIDs are sent preserveTransactionsChunkSize at a time, one chunk after another.
+// The pruner passes every parent of every old unmined transaction in one call, hundreds of
+// thousands of them while a node syncs. As a single BatchOperate that outlives a short client
+// TotalTimeout, and each client retry sends the whole batch again while the server is still
+// working through the first. The first failing chunk ends the call; the caller then skips the
+// deletion phase and the next cycle starts over.
 func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+	for start := 0; start < len(txIDs); start += preserveTransactionsChunkSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		end := min(start+preserveTransactionsChunkSize, len(txIDs))
+
+		if err := s.preserveTransactionsChunk(ctx, txIDs[start:end], preserveUntilHeight); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// preserveTransactionsChunkSize bounds how many records one PreserveTransactions BatchOperate
+// touches. A var so tests can shrink it.
+var preserveTransactionsChunkSize = 10_000
+
+// preserveTransactionsChunk preserves one chunk of PreserveTransactions' txIDs.
+func (s *Store) preserveTransactionsChunk(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
 	if len(txIDs) == 0 {
 		return nil
 	}
@@ -1192,7 +1220,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	}
 
 	// Execute batch operation
-	err := s.client.BatchOperate(batchPolicy, batchRecords)
+	err := s.batchOperate(batchPolicy, batchRecords)
 	if err != nil {
 		return errors.NewStorageError("failed to preserve %d transactions: %s", len(txIDs), err.Error(), err)
 	}

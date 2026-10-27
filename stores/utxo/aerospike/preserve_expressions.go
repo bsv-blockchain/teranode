@@ -61,7 +61,7 @@ func (s *Store) PreserveTransactionsWithExpressions(ctx context.Context, txIDs [
 		return nil
 	}
 
-	if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
 		return errors.NewStorageError("failed to preserve transactions", err)
 	}
 

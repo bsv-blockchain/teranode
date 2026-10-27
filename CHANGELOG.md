@@ -700,6 +700,16 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **The Aerospike pruner skips parent updates for records it deletes in the same batch.**
+  When a parent and its child are pruned in the same chunk, the parent no longer gets
+  an `addDeletedChildren` update, because its record is deleted in the same step.
+  `utxo_pruner_parents_updated_skipped_total` now counts these dropped updates, and
+  `utxo_pruner_parents_updated_total` is lower by the same amount. Phase 1 parent
+  preservation (`PreserveTransactions`) now sends at most 10,000 records per Aerospike
+  batch, one batch after another, instead of one batch for every parent. On a node
+  syncing from genesis, phase 1 can take longer, but each batch is short enough to
+  finish within the client timeout. No action is required. (#2025)
+
 - **Mining candidates no longer build on the old tip during a reorg.** While block
   assembly is in the `reorging`, `reconciling` or `resetting` state, it can still
   hold the tip from before the reorg. `GetMiningCandidate` built candidates on that
