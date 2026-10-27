@@ -13,6 +13,8 @@ under "Not breaking, but worth knowing" where they look alarming but are not.
 
 ## [Unreleased]
 
+- **Draft: validation tolerates some missing spender records.** For operators, this changes block-validation outcomes under narrowly gated dangling-reference conditions and adds a tolerance counter. Block assembly still fails closed on the same reference; this is not complete node recovery. Do not deploy this draft until the recovery and pruning-safety acceptance criteria are met. Aerospike reads also treat absent block-height metadata as empty; the shared-reader policy remains under review. Recovery split of PR #1681 (replacement #2008).
+
 Entries marked "shipped in v0.16.0" were already in the v0.16.0 release (2026-10-05).
 Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier release, they apply in full.
 

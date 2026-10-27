@@ -45,7 +45,7 @@ func TestGetCounterConflictingTxHashesAsksForOutpointsNotTheWholeTx(t *testing.T
 	mockStore.On("Get", mock.Anything, &parentTxHash, mock.Anything).
 		Return(nil, errors.NewProcessingError("stop here"))
 
-	_, _ = GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	_, _ = GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 0)
 
 	require.Contains(t, askedFor, fields.TxInpoints)
 	require.NotContains(t, askedFor, fields.Tx,
@@ -64,7 +64,7 @@ func TestGetCounterConflictingTxHashesErrorsOnMissingRecord(t *testing.T) {
 
 	mockStore.On("Get", mock.Anything, &txHash, mock.Anything).Return(nil, nil)
 
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 0)
 
 	require.Nil(t, result)
 	require.Error(t, err)
@@ -145,7 +145,7 @@ func TestGetCounterConflictingTxHashesWithoutTransactionBody(t *testing.T) {
 	mockStore.On("Get", mock.Anything, &parentTxHash, mock.Anything).
 		Return(&meta.Data{SpendingDatas: []*spend.SpendingData{nil}}, nil)
 
-	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+	result, err := GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 0)
 
 	require.NoError(t, err)
 	require.Equal(t, []chainhash.Hash{txHash}, result)
@@ -182,7 +182,7 @@ func TestGetCounterConflictingTxHashesErrorsOnMissingParentRecord(t *testing.T) 
 	)
 
 	require.NotPanics(t, func() {
-		result, err = GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0)
+		result, err = GetCounterConflictingTxHashes(ctx, mockStore, txHash, 0, 0)
 	})
 
 	require.Nil(t, result)

@@ -1289,13 +1289,15 @@ func processBlockIDs(bins aerospike.BinMap) ([]uint32, error) {
 // Returns:
 //   - []uint32: Array of block heights containing this transaction
 //   - error: Any error encountered during processing, including:
-//   - Missing block height data
 //   - Invalid data format or type conversion errors
-//   - Empty block height arrays (when not expected)
+//
+// A missing bin is not an error: it yields no heights, as processBlockIDs does.
 func processBlockHeights(bins aerospike.BinMap) ([]uint32, error) {
 	blockHeights, ok := bins[fields.BlockHeights.String()].([]interface{})
 	if !ok {
-		return nil, errors.NewStorageError("missing block heights")
+		// a record from an older node version or a snapshot restore may lack the
+		// bin; like processBlockIDs, report no heights instead of failing the read
+		return nil, nil
 	}
 
 	if len(blockHeights) == 0 {
