@@ -708,6 +708,36 @@ func WrapGRPC(err error) error {
 
 					wrappedErrDetails = append(wrappedErrDetails, details)
 					currWrappedErr = err.wrappedErr
+				} else {
+					// currWrappedErr is a plain error with no *Error at or below
+					// it (errors.As walks the whole remaining chain), so there is
+					// nothing more to extract. Emit its message as an ERR_ERROR
+					// detail so the caller still sees it, then stop. Without this
+					// the loop never advances currWrappedErr and spins forever at
+					// 100% CPU, hanging the gRPC handler (issue #2007).
+					plainDetails, plainPbError := anypb.New(&TError{
+						Code:    ERR_ERROR,
+						Message: currWrappedErr.Error(),
+					})
+					if plainPbError != nil {
+						pc, file, line, _ := runtime.Caller(1)
+						fn := runtime.FuncForPC(pc)
+						parts := strings.Split(fn.Name(), "/")
+
+						return &Error{
+							// TODO: add grpc construction error type
+							code:       ERR_ERROR,
+							message:    "error serializing TError to protobuf Any",
+							file:       file,
+							line:       line,
+							function:   parts[len(parts)-1],
+							wrappedErr: currWrappedErr,
+						}
+					}
+
+					wrappedErrDetails = append(wrappedErrDetails, plainDetails)
+
+					break
 				}
 			}
 		}
