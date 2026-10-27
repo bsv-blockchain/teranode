@@ -17,6 +17,7 @@
 | checksum | bool | true | File backend parameter | Writes a `<blob>.sha256` sidecar alongside every blob. No read path verifies it, so this is a write-cost parameter, not an integrity one. Accepted values are `true`/`1`/`yes`/`on`/`enabled` and `false`/`0`/`no`/`off`/`disabled`; anything else fails at startup |
 | fsyncMode | string | full | File backend parameter | `full` fsyncs the temp file and then the parent directory after the rename. `data` skips the parent-directory fsync, so a freshly published filename can be lost across a crash while already-published content survives. `none` skips both |
 | header | string | "" | File backend parameter | Custom header prepended to blobs |
+| requireMissHeader | bool | false | `http://` store parameter (`storeURL.Query().Get("requireMissHeader") == "true"`) | Makes `Exists` read a 404 as "not held" only when it carries the blob server's `X-Blob-Miss` header. A 404 without it (a wrong base URL, a proxy) is returned as a storage error instead of a miss. Default `false` keeps a bare 404 a miss, for blob servers that predate the header: enable it once every blob server in the deployment has been upgraded. `Get`, `GetIoReader` and `Del` already accept the header and fall back to the server's not-found body |
 
 ## Settings
 

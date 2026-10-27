@@ -655,6 +655,66 @@ func TestHTTPStore_ExistsUsesMissHeader(t *testing.T) {
 	})
 }
 
+// TestHTTPStore_MissHeaderAloneDecidesAMiss pins that MissHeader on its own marks a 404 as the
+// blob server's miss on the GET and DELETE paths, whatever the body says. The server also sends
+// NotFoundMsg, and that fallback would hide a header branch that never fires, so these answers
+// carry the header with a body that is not NotFoundMsg.
+func TestHTTPStore_MissHeaderAloneDecidesAMiss(t *testing.T) {
+	key := []byte{0x01, 0x02, 0xab}
+
+	headerForeignBody := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(MissHeader, "1")
+		http.Error(w, "an unrelated body", http.StatusNotFound)
+	}
+	foreignBodyNoHeader := func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "an unrelated body", http.StatusNotFound)
+	}
+
+	t.Run("GetIoReader: header with a foreign body is a miss", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(headerForeignBody))
+		t.Cleanup(server.Close)
+
+		rc, err := newStoreFor(t, server).GetIoReader(context.Background(), key, fileformat.FileTypeTx)
+		require.Nil(t, rc)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.NotErrorIs(t, err, errors.ErrStorageError)
+	})
+
+	t.Run("Get: header with a foreign body is a miss", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(headerForeignBody))
+		t.Cleanup(server.Close)
+
+		_, err := newStoreFor(t, server).Get(context.Background(), key, fileformat.FileTypeTx)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.NotErrorIs(t, err, errors.ErrStorageError)
+	})
+
+	t.Run("GetIoReader: a foreign body without the header is a store fault", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(foreignBodyNoHeader))
+		t.Cleanup(server.Close)
+
+		rc, err := newStoreFor(t, server).GetIoReader(context.Background(), key, fileformat.FileTypeTx)
+		require.Nil(t, rc)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.NotErrorIs(t, err, errors.ErrNotFound)
+	})
+
+	t.Run("Del: header with a foreign body is a miss, nothing to delete", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(headerForeignBody))
+		t.Cleanup(server.Close)
+
+		require.NoError(t, newStoreFor(t, server).Del(context.Background(), key, fileformat.FileTypeTx))
+	})
+
+	t.Run("Del: a foreign body without the header is a store fault", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(foreignBodyNoHeader))
+		t.Cleanup(server.Close)
+
+		err := newStoreFor(t, server).Del(context.Background(), key, fileformat.FileTypeTx)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+	})
+}
+
 // newStoreRequiringMissHeader builds a store with ?requireMissHeader=true on its URL.
 func newStoreRequiringMissHeader(t *testing.T, server *httptest.Server) *HTTPStore {
 	t.Helper()
