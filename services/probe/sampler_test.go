@@ -220,11 +220,17 @@ func TestFailingCollectorMarksNoData(t *testing.T) {
 	require.Equal(t, uint32(100), stale.Tip)
 	require.Equal(t, []uint32{7}, stale.Chain.BlocksWaiting)
 
-	blank := snapshot.NewSnapshot("n")
-	require.Equal(t, blank.Assembly, stale.Assembly)
-	require.Equal(t, blank.Ingress, stale.Ingress)
-	require.Equal(t, blank.Flow(snapshot.FlowBlocks).Rate, stale.Flow(snapshot.FlowBlocks).Rate)
-	require.Equal(t, blank.Validator.ErrorsPerSec, stale.Validator.ErrorsPerSec)
+	nodata := snapshot.Reading{Status: snapshot.StatusNoData}
+	require.Equal(t, snapshot.AssemblyStage{
+		Paused: nodata, TipLagBlocks: nodata, QueueHeadAgeSec: nodata, IngestQueueFill: nodata, SubtreeFill: nodata,
+	}, stale.Assembly)
+	require.Equal(t, snapshot.IngressStage{
+		PropagationTxPerSec: nodata, SubtreeIntakePerSec: nodata, Peers: nodata,
+		RejectedPerSec: nodata, SubtreeQueue: nodata, SubtreeQueueOldestSec: nodata,
+	}, stale.Ingress)
+	require.Equal(t, nodata, stale.Flow(snapshot.FlowBlocks).Rate)
+	require.Equal(t, nodata, stale.Validator.ErrorsPerSec)
+	require.Equal(t, nodata, stale.Stores.Postgres.SizeGB)
 
 	require.GreaterOrEqual(t, dead.Calls(), 2)
 }
@@ -345,6 +351,83 @@ func TestHistoryWindow(t *testing.T) {
 
 	s.fastTick(context.Background())
 	require.Len(t, s.History(10*time.Minute), 1)
+}
+
+func TestHistoryWindowHoldsTenMinutesUnderTriggers(t *testing.T) {
+	clock := newFakeClock()
+	fastEvery := 2 * time.Second
+	triggerStep := 200 * time.Millisecond
+
+	s := NewSampler(nil, nil, fastEvery, 15*time.Second, "n", WithClock(clock.Now))
+
+	steps := int(12 * time.Minute / triggerStep)
+
+	for i := 1; i <= steps; i++ {
+		clock.Advance(triggerStep)
+		s.fastTick(context.Background())
+
+		if i%int(fastEvery/triggerStep) == 0 {
+			s.fastTick(context.Background())
+		}
+	}
+
+	now := clock.Now()
+
+	all := s.History(10 * time.Minute)
+	require.Len(t, all, int(10*time.Minute/fastEvery)+1)
+	require.False(t, all[0].Time.Before(now.Add(-10*time.Minute)))
+	require.LessOrEqual(t, all[0].Time.Sub(now.Add(-10*time.Minute)), fastEvery)
+	require.Equal(t, now, all[len(all)-1].Time)
+
+	for i := 1; i < len(all); i++ {
+		gap := all[i].Time.Sub(all[i-1].Time)
+		require.LessOrEqual(t, gap, fastEvery, i)
+
+		if i < len(all)-1 {
+			require.GreaterOrEqual(t, gap, fastEvery-triggerStep, i)
+		}
+	}
+
+	require.Len(t, s.History(time.Minute), int(time.Minute/fastEvery)+1)
+	require.LessOrEqual(t, s.historyLen(), int(10*time.Minute/fastEvery)+1)
+}
+
+func TestHistoryKeepsEveryRegularTickDespiteJitter(t *testing.T) {
+	clock := newFakeClock()
+	fastEvery := 2 * time.Second
+	start := clock.Now()
+
+	s := NewSampler(nil, nil, fastEvery, 15*time.Second, "n", WithClock(clock.Now))
+
+	var ticks []time.Time
+
+	for k := 1; k <= 400; k++ {
+		jitter := time.Duration(k%3-1) * 30 * time.Millisecond
+		at := start.Add(time.Duration(k)*fastEvery + jitter)
+		clock.Advance(at.Sub(clock.Now()))
+		s.fastTick(context.Background())
+
+		ticks = append(ticks, at)
+	}
+
+	now := clock.Now()
+
+	for _, d := range []time.Duration{time.Minute, 5 * time.Minute} {
+		var want []time.Time
+
+		for _, at := range ticks {
+			if !at.Before(now.Add(-d)) {
+				want = append(want, at)
+			}
+		}
+
+		got := s.History(d)
+		require.Len(t, got, len(want), d)
+
+		for i := range want {
+			require.Equal(t, want[i], got[i].Time, d)
+		}
+	}
 }
 
 func TestNoGoroutinePileUpWithHungCollector(t *testing.T) {
@@ -701,6 +784,48 @@ func goroutinesSettleTo(limit int, within time.Duration) bool {
 	}
 
 	return runtime.NumGoroutine() <= limit
+}
+
+func TestNoReadingEverHasEmptyStatus(t *testing.T) {
+	dead := newFake("dead", func(context.Context, int) (snapshot.Patch, error) {
+		return nil, errors.NewServiceError("never up")
+	})
+	partial := newFake("partial", okPatch(func(s *snapshot.Snapshot) {
+		s.Cache.HitRate = snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}
+	}))
+
+	cases := map[string][]Collector{
+		"no collectors":       nil,
+		"never succeeded":     {dead},
+		"one partial success": {dead, partial},
+	}
+
+	for name, fast := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := NewSampler(fast, nil, time.Hour, time.Hour, "n")
+			startSampler(t, s)
+
+			published := waitForUpdate(t, s, 2*time.Second, anyUpdate)
+
+			count := 0
+
+			published.EachReading(func(key string, r *snapshot.Reading) {
+				count++
+
+				require.NotEmpty(t, r.Status, key)
+
+				if key != "cache.hitRate" || len(fast) < 2 {
+					require.Equal(t, snapshot.StatusNoData, r.Status, key)
+				}
+			})
+
+			require.Equal(t, 47, count)
+
+			if len(fast) == 2 {
+				require.Equal(t, snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}, published.Cache.HitRate)
+			}
+		})
+	}
 }
 
 func TestSamplerLatestBeforeFirstTick(t *testing.T) {
