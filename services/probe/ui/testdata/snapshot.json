@@ -23,6 +23,7 @@
     "hitRate": {"v": 0.61, "st": "crit", "normal": 0.96},
     "missesPerSec": {"v": 4300, "st": "crit"},
     "evictionsPerSec": {"v": 2900, "st": "warn"},
+    "insertionsPerSec": {"v": 1200, "st": "ok"},
     "fill": {"v": 0.92, "st": "warn"},
     "currentGenFrac": {"v": 0.36, "st": "ok"},
     "previousGenFrac": {"v": 0.64, "st": "warn"},

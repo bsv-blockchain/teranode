@@ -124,7 +124,7 @@ When a source fails, every value from that source goes grey with the age of its 
 |-------|----------|--------|
 | Ingress | Propagation tx/s, subtree intake/s, peers, rejected tx/s, subtree queue, age of the oldest queued subtree | Propagation, Subtree Validation and P2P metrics |
 | Validator | Validated tx/s, latency p99, queue fill, spend batch fill, errors/s | Validator metrics (see the note below the table), Aerospike spend batch metrics |
-| Tx meta cache | Hit rate, misses/s, evictions/s, fill, current and previous generation share, entries, size, capacity | Tx meta cache metrics |
+| Tx meta cache | Hit rate, misses/s, evictions/s, inserts/s, fill, current and previous generation share, entries, size, capacity | Tx meta cache metrics |
 | Block Assembly | State (running or paused), tip lag in blocks, age of the oldest queued transaction, ingest queue fill, subtree fill | Block Assembly metrics |
 | Blockchain | FSM state, tip height, best peer height, fork depth, blocks not yet persisted, dropped subscribers, heights of queued blocks | Blockchain gRPC, P2P gRPC (best peer height), Block Validation and Blockchain metrics |
 | Data stores | Aerospike and PostgreSQL disk fill, size, read latency, operations/s, commits/s | Aerospike info protocol, PostgreSQL statistics views, UTXO store metrics |
