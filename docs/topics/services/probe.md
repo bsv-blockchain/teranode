@@ -116,6 +116,8 @@ Colour shows only status:
 - Red: a critical alarm is active.
 - Grey: no data. The panel shows the age of the last good sample.
 
+When a source fails, every value from that source goes grey with the age of its last good sample. This includes the FSM chip and the tip chip (Blockchain source), the best peer height (P2P source), the Kafka lag on the flow strips (Kafka source) and the Aerospike and PostgreSQL tanks.
+
 ### 4.1 The Six Stages
 
 | Stage | Readings | Source |
@@ -129,6 +131,7 @@ Colour shows only status:
 
 A reading shows `no data` when its metric does not exist on this node. For example, the Data stores stage shows no data for a store that the node does not use.
 The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit.
+The Blockchain panel shows the count of waiting blocks and the lowest three heights. A "+N more" marker shows how many waiting blocks the panel does not list.
 The probe reads the peer heights from the P2P service as its own `p2p` source. When that call fails, the best peer height goes grey with its age, and the tip chip turns grey. The FSM state, the tip and the backlog stay live. After 90 seconds the Blockchain stage raises its source alarm.
 
 The validated tx/s reading comes from `teranode_validator_transactions_validate`. This histogram also counts the transactions that block validation checks and the transactions that fail validation. The reading carries the note "includes block-validation checks and rejected transactions". During catch-up the reading shows block-validation work. The latency p99 covers the script and policy checks only. It does not include the parent reads and the UTXO spend.
@@ -151,6 +154,7 @@ A group that has subscribed but has not committed an offset shows the full topic
 ### 4.3 Drain Time
 
 The probe adds the queued blocks and the subtree queue to get one backlog.
+The block part is the full count of waiting blocks, not only the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the best peer height and the tip.
 It fits a line through the backlog samples of the last 5 minutes. The drain time is the backlog divided by the drain rate.
 When the backlog grows, the dashboard shows "growing" and no time.
 
@@ -211,8 +215,12 @@ For `cache.hitRate`, a value below the floor is bad. For all other keys, a value
 | `ingress.subtreeQueueOldestSec` | seconds |
 | `chain.persisterBehind` | blocks |
 
-The probe refuses to start when an entry is not in the `metric=value` format, has a value that is not a finite number, or names a key twice.
-The probe does not check the key name. A key that is not in this table has no effect.
+The node refuses to start when a floor entry has one of these faults:
+
+- It is not in the `metric=value` format.
+- Its value is not a finite number.
+- It names a key twice.
+- Its key is not in this table.
 
 ### 5.4 Cause Chains and Start of Chain
 
@@ -261,14 +269,14 @@ The probe refuses to start when the directory of the state file cannot be create
 
 ### 7.1 Aerospike
 
-The probe reads Aerospike from `probe_aerospikeURL`. When that setting is empty and the UTXO store is Aerospike, the probe uses the UTXO store URL.
+The probe reads Aerospike from `probe_aerospikeURL`. When that setting is empty and the UTXO store is Aerospike, the probe uses the UTXO store URL. The probe then connects with the node's own read-write credentials. It sends only info commands, but we recommend a read-only user in `probe_aerospikeURL`.
 The probe sends info commands to every node of the cluster. It adds the size of all nodes, and it shows the highest disk fill and the highest read latency.
 
 Read latency p99 needs `enable-benchmarks-read true` on the namespace. Without it, the read latency reading shows no data.
 
 ### 7.2 PostgreSQL
 
-The probe reads PostgreSQL from `probe_postgresURL`. When that setting is empty and the blockchain store is PostgreSQL, the probe uses the blockchain store URL.
+The probe reads PostgreSQL from `probe_postgresURL`. When that setting is empty and the blockchain store is PostgreSQL, the probe uses the blockchain store URL. The probe then connects with the node's own read-write credentials. It uses only `READ ONLY` transactions, but we recommend a read-only role in `probe_postgresURL`.
 
 - PostgreSQL cannot report the size of its disk through SQL. Set `probe_postgresDiskCapacityGB` to see the disk fill. When it is 0, disk fill shows "disk capacity not set".
 - PostgreSQL has no p99 latency without extensions. With `pg_stat_statements`, the probe shows the mean execution time over the sample interval, labelled "mean". Without it, the reading shows "needs pg_stat_statements".
@@ -300,6 +308,7 @@ A fault in the probe never stops the node.
 
 - The probe recovers every panic in its own goroutines and logs it.
 - A slow or hung source times out. It cannot stop a sampling tick.
+- When a source fails, the probe logs one warning line with the cause. Credentials in URLs are masked. When the source works again, the probe logs one line. The probe does not repeat the warning on every sample.
 - A WebSocket client that does not read cannot block the sampler or other clients.
 - After five consecutive panics, the probe stops itself. Only the probe stops. The node keeps running.
 - When the probe stops itself, it logs one error line. Its health check still returns `200` with the message "probe stopped after repeated failures; the node must be restarted to resume probe monitoring; the node itself is not affected".
