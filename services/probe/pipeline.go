@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,6 +75,28 @@ func kafkaHosts(raw string) []string {
 	}
 
 	return hosts
+}
+
+func kafkaInMemory(k settings.KafkaSettings) bool {
+	memory, real := k.Scheme == "memory", false
+
+	for _, u := range []*url.URL{
+		k.ValidatorTxsConfig, k.TxMetaConfig, k.LegacyInvConfig, k.BlocksFinalConfig, k.RejectedTxConfig,
+		k.InvalidBlocksConfig, k.InvalidSubtreesConfig, k.TxPolicyRejectedConfig, k.SubtreesConfig, k.BlocksConfig,
+	} {
+		if u == nil {
+			continue
+		}
+
+		switch u.Scheme {
+		case "memory":
+			memory = true
+		case "kafka":
+			real = true
+		}
+	}
+
+	return memory && !real
 }
 
 func checkWritable(dir string) error {
@@ -240,7 +263,9 @@ func (s *Server) defaultCollectors(ctx context.Context, rec guard.Recorder) coll
 		s.logger.Warnf("[Probe] chain collector disabled: blockchain or p2p client missing")
 	}
 
-	if hosts := kafkaHosts(s.settings.Kafka.Hosts); len(hosts) > 0 {
+	if kafkaInMemory(s.settings.Kafka) {
+		s.logger.Infof("[Probe] kafka collector disabled: the node uses in-memory Kafka")
+	} else if hosts := kafkaHosts(s.settings.Kafka.Hosts); len(hosts) > 0 {
 		k, err := collect.NewKafka(hosts, collect.TopicsFromSettings(s.settings.Kafka), collectorTimeout)
 		if err != nil {
 			s.logger.Warnf("[Probe] kafka collector disabled: %s", oneLine(err))
