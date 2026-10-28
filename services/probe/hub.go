@@ -40,13 +40,19 @@ type Hub struct {
 
 	mu      sync.Mutex
 	clients map[*wsClient]struct{}
-	latest  []byte
+	latest  wsMessage
+	seq     uint64
 	closed  bool
+}
+
+type wsMessage struct {
+	seq uint64
+	raw []byte
 }
 
 type wsClient struct {
 	conn *websocket.Conn
-	send chan []byte
+	send chan wsMessage
 	done chan struct{}
 	once sync.Once
 }
@@ -82,7 +88,11 @@ func (h *Hub) Run(ctx context.Context) {
 }
 
 func (h *Hub) runOnce(ctx context.Context) (done bool) {
-	defer guard.Recover(h.faults, "websocket hub")
+	seq := h.currentSeq()
+
+	defer guard.Recover(guard.RecorderFunc(func(component string, value any) {
+		h.faults.failedAt(seq, component, value)
+	}), "websocket hub")
 
 	for {
 		select {
@@ -91,7 +101,7 @@ func (h *Hub) runOnce(ctx context.Context) (done bool) {
 
 			return true
 		case snap := <-h.updates:
-			h.faults.settle()
+			seq = h.nextSeq()
 			h.fault(faultHub)
 
 			raw, err := json.Marshal(snap)
@@ -101,19 +111,35 @@ func (h *Hub) runOnce(ctx context.Context) (done bool) {
 				continue
 			}
 
-			h.broadcast(raw)
+			h.broadcast(wsMessage{seq: seq, raw: raw})
 		}
 	}
 }
 
-func (h *Hub) broadcast(raw []byte) {
+func (h *Hub) nextSeq() uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.latest = raw
+	h.seq++
+
+	return h.seq
+}
+
+func (h *Hub) currentSeq() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	return h.seq
+}
+
+func (h *Hub) broadcast(msg wsMessage) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.latest = msg
 
 	for c := range h.clients {
-		c.enqueue(raw)
+		c.enqueue(msg)
 	}
 }
 
@@ -138,20 +164,28 @@ func (h *Hub) register(conn *websocket.Conn) (*wsClient, bool) {
 		return nil, false
 	}
 
-	c := &wsClient{conn: conn, send: make(chan []byte, wsQueueSize), done: make(chan struct{})}
+	c := &wsClient{conn: conn, send: make(chan wsMessage, wsQueueSize), done: make(chan struct{})}
 	h.clients[c] = struct{}{}
 
-	if h.latest != nil {
+	if h.latest.raw != nil {
 		c.enqueue(h.latest)
 	}
+
+	var current uint64
 
 	go func() {
 		defer guard.Recover(guard.RecorderFunc(func(component string, value any) {
 			h.remove(c)
-			h.faults.Panicked(component, value)
+
+			seq := current
+			if seq == 0 {
+				seq = h.currentSeq()
+			}
+
+			h.faults.failedAt(seq, component, value)
 		}), "websocket client writer")
 
-		h.writeLoop(c)
+		h.writeLoop(c, &current)
 	}()
 
 	return c, true
@@ -190,7 +224,7 @@ func (h *Hub) closeAll() {
 	}
 }
 
-func (h *Hub) writeLoop(c *wsClient) {
+func (h *Hub) writeLoop(c *wsClient, current *uint64) {
 	ticker := time.NewTicker(h.pingEvery)
 	defer ticker.Stop()
 
@@ -198,7 +232,8 @@ func (h *Hub) writeLoop(c *wsClient) {
 		select {
 		case <-c.done:
 			return
-		case raw := <-c.send:
+		case msg := <-c.send:
+			*current = msg.seq
 			h.fault(faultClientWrite)
 
 			if err := c.conn.SetWriteDeadline(time.Now().Add(h.writeWait)); err != nil {
@@ -207,11 +242,13 @@ func (h *Hub) writeLoop(c *wsClient) {
 				return
 			}
 
-			if err := c.conn.WriteMessage(websocket.TextMessage, raw); err != nil {
+			if err := c.conn.WriteMessage(websocket.TextMessage, msg.raw); err != nil {
 				h.remove(c)
 
 				return
 			}
+
+			h.faults.succeededAt(msg.seq)
 		case <-ticker.C:
 			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(h.writeWait)); err != nil {
 				h.remove(c)
@@ -246,9 +283,9 @@ func (h *Hub) readLoop(c *wsClient) {
 	}
 }
 
-func (c *wsClient) enqueue(raw []byte) {
+func (c *wsClient) enqueue(msg wsMessage) {
 	select {
-	case c.send <- raw:
+	case c.send <- msg:
 		return
 	default:
 	}
@@ -259,7 +296,7 @@ func (c *wsClient) enqueue(raw []byte) {
 	}
 
 	select {
-	case c.send <- raw:
+	case c.send <- msg:
 	default:
 	}
 }
