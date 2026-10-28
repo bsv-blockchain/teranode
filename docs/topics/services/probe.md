@@ -66,7 +66,7 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -probe=1
 
 In Kubernetes, run the probe as its own service with `-all=0 -probe=1`.
 A probe in its own pod cannot see the metrics registry of the other pods. Set `probe_metricsTargets` to the metrics endpoint of each service, for example `blockvalidation:9091|validator:9091`.
-The probe scrapes a `host:port` entry at `http://host:port/metrics`. It uses an entry with a scheme, such as `https://validator:9091/metrics`, as given.
+The probe scrapes a `host:port` entry at `http://host:port/metrics` and a `host:port/path` entry at `http://host:port/path`. It uses an entry with a scheme, such as `https://validator:9091/metrics`, as given. It ignores empty entries. A node with a custom metrics path needs the path or a full URL.
 The probe also needs the Blockchain and P2P gRPC addresses from the normal settings.
 
 ## 3. Security
@@ -121,15 +121,17 @@ Colour shows only status:
 | Stage | Readings | Source |
 |-------|----------|--------|
 | Ingress | Propagation tx/s, subtree intake/s, peers, rejected tx/s, subtree queue, age of the oldest queued subtree | Propagation, Subtree Validation and P2P metrics |
-| Validator | Validated tx/s, latency p99, queue fill, spend batch fill, errors/s | Validator metrics (`teranode_validator_transactions_validate` for validated tx/s and latency), Aerospike spend batch metrics |
+| Validator | Validated tx/s, latency p99, queue fill, spend batch fill, errors/s | Validator metrics (see the note below the table), Aerospike spend batch metrics |
 | Tx meta cache | Hit rate, misses/s, evictions/s, fill, current and previous generation share, entries, size, capacity | Tx meta cache metrics |
 | Block Assembly | State (running or paused), tip lag in blocks, age of the oldest queued transaction, ingest queue fill, subtree fill | Block Assembly metrics |
-| Blockchain | FSM state, tip height, highest peer height, fork depth, blocks not yet persisted, dropped subscribers, heights of queued blocks | Blockchain and P2P gRPC, Block Validation and Blockchain metrics |
+| Blockchain | FSM state, tip height, best peer height, fork depth, blocks not yet persisted, dropped subscribers, heights of queued blocks | Blockchain gRPC, P2P gRPC (best peer height), Block Validation and Blockchain metrics |
 | Data stores | Aerospike and PostgreSQL disk fill, size, read latency, operations/s, commits/s | Aerospike info protocol, PostgreSQL statistics views, UTXO store metrics |
 
 A reading shows `no data` when its metric does not exist on this node. For example, the Data stores stage shows no data for a store that the node does not use.
 The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit.
-The probe reads the peer heights from the P2P service in the background. When that call fails, the probe shows no peer height. The FSM state, the tip and the backlog stay live.
+The probe reads the peer heights from the P2P service as its own `p2p` source. When that call fails, the best peer height goes grey with its age, and the tip chip turns grey. The FSM state, the tip and the backlog stay live. After 90 seconds the Blockchain stage raises its source alarm.
+
+The validated tx/s reading comes from `teranode_validator_transactions_validate`. This histogram also counts the transactions that block validation checks and the transactions that fail validation. The reading carries the note "includes block-validation checks and rejected transactions". During catch-up the reading shows block-validation work. The latency p99 covers the script and policy checks only. It does not include the parent reads and the UTXO spend.
 
 ### 4.2 Kafka Flow Strips and Consumer Lag
 
@@ -227,7 +229,7 @@ While the node catches up, the "Node is catching up" alarm is first in the catch
 
 ### 5.5 Source Alarms
 
-The probe tracks the health of each of its sources: `metrics`, `chain`, `kafka`, `aerospike` and `postgres`.
+The probe tracks the health of each of its sources: `metrics`, `chain`, `p2p`, `kafka`, `aerospike` and `postgres`. The `p2p` source feeds the Blockchain stage.
 When a source has no fresh data for more than 60 seconds, the readings of its stages go grey. After 30 more seconds, the probe raises an amber "source has no data" alarm for each stage that the source feeds.
 In a test, an unreachable PostgreSQL URL raised this alarm after about 94 seconds. The node kept on processing blocks.
 
@@ -278,7 +280,7 @@ The probe connects to the brokers in `KAFKA_HOSTS` (`kafka_hosts`) and reads con
 The probe user needs permission to describe topics and groups and to read offsets.
 
 The probe client does not use TLS or SASL. A cluster that requires either shows no Kafka data.
-When the node uses in-memory Kafka (`KAFKA_SCHEMA = memory`, or `memory://` Kafka config URLs and no `kafka://` URL), the probe does not connect to `kafka_hosts`. Kafka is then not configured for the probe. The flow strips show no lag, and no Kafka source alarm is raised.
+The probe treats Kafka as in-memory when `KAFKA_SCHEMA` is `memory` or a Kafka config URL uses `memory://`, and no Kafka config URL uses `kafka://`. Then the probe does not connect to `kafka_hosts`. Kafka is then not configured for the probe. The flow strips show no lag, and no Kafka source alarm is raised.
 
 ### 7.4 Tx Meta Cache
 
@@ -330,7 +332,7 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | `probe_baselineWarmup` | duration | `30m` | Minimum learning time before a baseline is ready |
 | `probe_snoozeDefault` | duration | `15m` | Snooze length when the request gives no duration |
 | `probe_alarmLogRetention` | duration | `168h` | Age after which the probe removes alarm log entries |
-| `probe_metricsTargets` | []string | empty | Pipe-separated metrics endpoints. A `host:port` entry is scraped at `http://host:port/metrics`. An entry with a scheme is used as given. Empty means the registry of the probe process |
+| `probe_metricsTargets` | []string | empty | Pipe-separated metrics endpoints. A `host:port` entry is scraped at `http://host:port/metrics`, a `host:port/path` entry at `http://host:port/path`. An entry with a scheme is used as given. Empty entries are ignored. Empty means the registry of the probe process |
 | `probe_statePath` | string | empty | Path of the state file. Empty means `probe_state.json` in the working directory |
 | `probe_aerospikeURL` | url | empty | Aerospike URL. Empty means the UTXO store URL when it is Aerospike |
 | `probe_postgresURL` | url | empty | PostgreSQL URL. Empty means the blockchain store URL when it is PostgreSQL |
@@ -355,13 +357,14 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | The login form says the token is wrong | The token does not match `probe_authToken` | Check the setting. Leading and trailing spaces are removed from the setting |
 | All service readings are grey on a probe in its own pod | `probe_metricsTargets` is empty or points to the wrong endpoints | Set the metrics `host:port` or URL of each service |
 | The FSM and the tip are grey | The probe cannot reach the Blockchain service | Check the Blockchain gRPC address |
-| The top bar shows no peer height | The probe cannot reach the P2P service, or the node has no peers | Check the P2P gRPC address. FSM and tip stay live without P2P |
+| The tip chip is grey and says "peer no data" | The probe cannot reach the P2P service | Check the P2P gRPC address. FSM and tip stay live without P2P |
+| The tip chip is grey and says "no peers" | The P2P service has no peers | Check the peer connections of the node |
 | Aerospike read latency is grey | Read benchmarks are off | Set `enable-benchmarks-read true` on the namespace |
 | PostgreSQL disk fill says "disk capacity not set" | `probe_postgresDiskCapacityGB` is 0 | Set the volume size in GB |
 | An alarm stays after the node changed for good | The baseline is frozen while the alarm is active | Snooze the alarm, set a floor, or reset the baselines (see [5.2](#52-learned-baselines)) |
 | The log shows `state file was corrupt; moved it to ...` | The state file was not valid JSON | No action needed. The old file stays next to the new one |
 | The health check says "probe stopped after repeated failures" | Five consecutive panics stopped the probe | Collect the log, then restart the node |
-| A sixth or later browser tab gets no data, and the API returns `503` on `/ws` | More than 16 WebSocket clients | Close unused tabs |
+| A 17th or later browser tab gets no data, and the API returns `503` on `/ws` | More than 16 WebSocket clients | Close unused tabs |
 
 ## 13. Directory Structure and Main Files
 
