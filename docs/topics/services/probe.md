@@ -127,12 +127,20 @@ When a source fails, every value from that source goes grey with the age of its 
 | Tx meta cache | Hit rate, misses/s, evictions/s, inserts/s, fill, current and previous generation share, entries, size, capacity | Tx meta cache metrics |
 | Block Assembly | State (running or paused), tip lag in blocks, age of the oldest queued transaction, ingest queue fill, subtree fill | Block Assembly metrics |
 | Blockchain | FSM state, tip height, best peer height, fork depth, blocks not yet persisted, dropped subscribers, heights of queued blocks | Blockchain gRPC, P2P gRPC (best peer height), Block Validation and Blockchain metrics |
-| Data stores | Aerospike and PostgreSQL disk fill, size, read latency, operations/s, commits/s | Aerospike info protocol, PostgreSQL statistics views, UTXO store metrics |
+| Data stores | Aerospike and PostgreSQL disk fill, size, read latency, reads/s, writes/s, PostgreSQL commits/s | Aerospike info protocol, PostgreSQL statistics views, UTXO store metrics |
 
 A reading shows `no data` when its metric does not exist on this node. For example, the Data stores stage shows no data for a store that the node does not use.
 The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit.
 The Blockchain panel shows the count of waiting blocks and the lowest three heights. A "+N more" marker shows how many waiting blocks the panel does not list.
 The probe reads the peer heights from the P2P service as its own `p2p` source. When that call fails, the best peer height goes grey with its age, and the tip chip turns grey. The FSM state, the tip and the backlog stay live. After 90 seconds the Blockchain stage raises its source alarm.
+
+The Data stores tanks show reads and writes on separate lines:
+
+- Aerospike reads are the sum of the rates of `teranode_aerospike_txmeta_get`, `teranode_aerospike_txmeta_get_multi_n` and `teranode_aerospike_utxo_get`.
+- Aerospike writes are the sum of the rates of `teranode_aerospike_utxo_store`, `teranode_aerospike_utxo_spend`, `teranode_aerospike_txmeta_set_mined_batch_n`, `teranode_aerospike_utxo_reset` and `teranode_aerospike_utxo_delete`.
+- PostgreSQL reads are rows returned and fetched (`tup_returned + tup_fetched` in `pg_stat_database`). PostgreSQL writes are rows inserted, updated and deleted. Both show no data on the first sample, because a rate needs two samples.
+
+When a tank has more notes than fit below it, the last note line says how many more notes the stage detail view shows.
 
 The validated tx/s reading comes from `teranode_validator_transactions_validate`. This histogram also counts the transactions that block validation checks and the transactions that fail validation. The reading carries the note "includes block-validation checks and rejected transactions". During catch-up the reading shows block-validation work. The latency p99 covers the script and policy checks only. It does not include the parent reads and the UTXO spend.
 
