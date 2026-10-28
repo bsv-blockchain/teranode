@@ -1026,7 +1026,7 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			if s.useExpressionSpend() {
 				s.SpendMultiWithExpressions(s.ctx, part, &outcome)
 			} else {
-				s.executeLuaSpendBatch(part)
+				s.executeLuaSpendBatch(part, &outcome)
 			}
 		},
 		Result: func(item *batchSpend) (error, bool) {
@@ -1047,13 +1047,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 // shared backend used by sendSpendBatchLua's Lua route and by the expression path's
 // retry-through-Lua handler. Callers must supply a batch without conflicting claims
 // on the same outpoint. This method does not split batches itself.
-func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
-	s.executeLuaSpendBatchContext(s.ctx, batch)
+func (s *Store) executeLuaSpendBatch(batch []*batchSpend, outcome *spendBreakerOutcome) {
+	s.executeLuaSpendBatchContext(s.ctx, batch, outcome)
 }
 
 // executeLuaSpendBatchContext keeps recovery writes synchronous and bounds the network request
 // by the compensation deadline. Recovery always uses the conditional Lua writer.
-func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*batchSpend) {
+func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*batchSpend, outcome *spendBreakerOutcome) {
 	// Recovery dispatches directly, outside go-batcher. Preserve completion on a client
 	// or response-parser panic just as the normal spend dispatch does.
 	defer func() {
@@ -1089,7 +1089,7 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 		return
 	}
 
-	s.processSpendBatchResults(ctx, batchRecords, batchRecordKeys, batchesByKey, batch, batchID)
+	s.processSpendBatchResults(ctx, batchRecords, batchRecordKeys, batchesByKey, batch, batchID, outcome)
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
@@ -1220,7 +1220,7 @@ func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aer
 }
 
 // processSpendBatchResults processes the results of the batch operation
-func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batchRecordKeys []keyIgnoreLocked, batchesByKey map[keyIgnoreLocked][]aerospike.MapValue, batch []*batchSpend, batchID uint64) {
+func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batchRecordKeys []keyIgnoreLocked, batchesByKey map[keyIgnoreLocked][]aerospike.MapValue, batch []*batchSpend, batchID uint64, outcome *spendBreakerOutcome) {
 	for batchIdx, batchRecord := range batchRecords {
 		key := batchRecordKeys[batchIdx]
 		batchByKey, ok := batchesByKey[key]
@@ -1230,7 +1230,7 @@ func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aer
 		}
 
 		txID := batch[batchByKey[0]["idx"].(int)].spend.TxID
-		s.processSingleBatchResult(ctx, batchRecord, batchByKey, batch, txID, key.blockHeight, batchID)
+		s.processSingleBatchResult(ctx, batchRecord, batchByKey, batch, txID, key, batchID, outcome)
 	}
 
 	if s.settings.UtxoStore.VerboseDebug {
@@ -1239,10 +1239,17 @@ func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aer
 }
 
 // processSingleBatchResult processes a single batch record result
-func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerospike.BatchRecordIfc, batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64) {
+func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerospike.BatchRecordIfc, batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, key keyIgnoreLocked, batchID uint64, outcome *spendBreakerOutcome) {
+	thisBlockHeight := key.blockHeight
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
 		s.handleBatchError(batchByKey, batch, thisBlockHeight, batchID, batchErr)
+		// Only infrastructure failures count toward the circuit breaker. Per-record
+		// data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing parents during
+		// catch-up sync) must not trip it — issue #953.
+		if isInfrastructureFailure(batchErr) {
+			outcome.luaRecord(key, false)
+		}
 		return
 	}
 
@@ -1267,6 +1274,7 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	switch res.Status {
 	case LuaStatusOK:
 		s.handleSuccessfulSpends(batchByKey, batch)
+		outcome.luaRecord(key, true)
 	case LuaStatusError:
 		s.handleErrorSpends(res, batchByKey, batch, txID, thisBlockHeight, batchID)
 	}
@@ -1292,12 +1300,6 @@ func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batch
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].complete(errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err))
-	}
-	// Only count infrastructure failures toward the circuit breaker.
-	// Per-record data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing
-	// parents during catch-up sync) must not trip the breaker — issue #953.
-	if s.spendCircuitBreaker != nil && isInfrastructureFailure(err) {
-		s.spendCircuitBreaker.RecordFailure()
 	}
 }
 
@@ -1350,10 +1352,6 @@ func (s *Store) handleSuccessfulSpends(batchByKey []aerospike.MapValue, batch []
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].complete(nil)
-	}
-	// Record successful batch operation for circuit breaker
-	if s.spendCircuitBreaker != nil {
-		s.spendCircuitBreaker.RecordSuccess()
 	}
 }
 

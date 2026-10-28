@@ -523,6 +523,6 @@ func (s *Store) processSpendBatchResultsExpressions(
 		prometheusUtxoSpendExpressionLuaRetry.Inc()
 		prometheusUtxoSpendExpressionLuaRetryN.Add(float64(len(retryThroughLua)))
 
-		s.executeLuaSpendBatch(retryThroughLua)
+		s.executeLuaSpendBatch(retryThroughLua, outcome)
 	}
 }
