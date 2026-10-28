@@ -1,7 +1,9 @@
 package probe
 
 import (
+	"strconv"
 	"sync"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -17,6 +19,8 @@ const (
 	groupPipeline   = "pipeline"
 	groupHub        = "websocket hub"
 	groupCollectors = "collectors"
+
+	hubLogEvery = time.Second
 )
 
 type stopSignal struct {
@@ -62,14 +66,25 @@ type faultCounter struct {
 	logger ulogger.Logger
 	signal *stopSignal
 
+	now func() time.Time
+
 	mu         sync.Mutex
 	streak     int
+	haveSeen   bool
+	newestSeq  uint64
 	haveFailed bool
 	failedSeq  uint64
+	resetSeq   uint64
+	resetPrev  int
+	haveReset  bool
+	haveLogged bool
+	loggedSeq  uint64
+	lastLog    time.Time
+	suppressed int
 }
 
 func newFaultCounter(group string, logger ulogger.Logger, signal *stopSignal) *faultCounter {
-	return &faultCounter{group: group, logger: logger, signal: signal}
+	return &faultCounter{group: group, logger: logger, signal: signal, now: time.Now}
 }
 
 func (f *faultCounter) Panicked(component string, value any) {
@@ -96,33 +111,92 @@ func (f *faultCounter) reset() {
 	f.streak = 0
 }
 
-func (f *faultCounter) failedAt(seq uint64, component string, value any) {
-	f.logger.Errorf("[Probe] %s panicked: %s", component, oneLine(value))
-
-	f.mu.Lock()
-
-	if f.haveFailed && seq <= f.failedSeq {
-		f.mu.Unlock()
-
-		return
+func (f *faultCounter) observeLocked(seq uint64) bool {
+	if f.haveSeen && seq < f.newestSeq {
+		return false
 	}
 
-	f.haveFailed = true
-	f.failedSeq = seq
-	f.streak++
-	streak := f.streak
+	f.haveSeen = true
+	f.newestSeq = seq
+
+	return true
+}
+
+func (f *faultCounter) logSuffixLocked(seq uint64) (string, bool) {
+	now := f.now()
+
+	if f.haveLogged && (seq == f.loggedSeq || now.Sub(f.lastLog) < hubLogEvery) {
+		f.suppressed++
+
+		return "", false
+	}
+
+	suffix := ""
+	if f.suppressed > 0 {
+		suffix = "; suppressed " + strconv.Itoa(f.suppressed) + " earlier hub panic lines"
+	}
+
+	f.haveLogged = true
+	f.loggedSeq = seq
+	f.lastLog = now
+	f.suppressed = 0
+
+	return suffix, true
+}
+
+func (f *faultCounter) failedAt(seq uint64, component string, value any) {
+	f.mu.Lock()
+
+	suffix, logIt := f.logSuffixLocked(seq)
+	counted := false
+	streak := 0
+
+	if f.observeLocked(seq) && (!f.haveFailed || seq != f.failedSeq) {
+		f.haveFailed = true
+		f.failedSeq = seq
+
+		if f.haveReset && f.resetSeq == seq {
+			f.streak = f.resetPrev + 1
+			f.haveReset = false
+		} else {
+			f.streak++
+		}
+
+		counted = true
+		streak = f.streak
+	}
+
 	f.mu.Unlock()
 
-	f.check(streak)
+	if logIt {
+		f.logger.Errorf("[Probe] %s panicked: %s%s", component, oneLine(value), suffix)
+	}
+
+	if counted {
+		f.check(streak)
+	}
 }
 
 func (f *faultCounter) succeededAt(seq uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if !f.haveFailed || seq > f.failedSeq {
-		f.streak = 0
+	if !f.observeLocked(seq) {
+		return
 	}
+
+	if f.haveFailed && f.failedSeq == seq {
+		return
+	}
+
+	if f.haveReset && f.resetSeq == seq {
+		return
+	}
+
+	f.resetPrev = f.streak
+	f.resetSeq = seq
+	f.haveReset = true
+	f.streak = 0
 }
 
 func (f *faultCounter) fatal() guard.Recorder {
@@ -137,6 +211,12 @@ type faults struct {
 	pipeline   *faultCounter
 	hub        *faultCounter
 	collectors *faultCounter
+}
+
+func (f *faults) setClock(now func() time.Time) {
+	for _, c := range []*faultCounter{f.pipeline, f.hub, f.collectors} {
+		c.now = now
+	}
 }
 
 func newFaults(logger ulogger.Logger) *faults {

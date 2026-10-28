@@ -40,6 +40,7 @@ func TestPersistentHubPanicSelfStopsAfterFive(t *testing.T) {
 	logger := &captureLogger{}
 
 	srv := newProbe(t, probeOpts{logger: logger})
+	srv.logClock = stepClock()
 	srv.setFaultHook(panicAt(faultHub, -1))
 	require.NoError(t, srv.Init(context.Background()))
 
