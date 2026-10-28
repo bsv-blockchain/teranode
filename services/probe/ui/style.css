@@ -525,6 +525,15 @@ svg.stage {
 }
 
 .stage-view .alarm-list { max-width: calc(var(--u) * 900); }
+.stage-view .alarm .al-title { font-size: calc(var(--u) * 13); }
+.stage-view .al-raised { font-size: calc(var(--u) * 10.5); }
+.stage-view .sev { font-size: calc(var(--u) * 11); }
+.stage-view .chain-tag, .stage-view .snooze-tag { font-size: calc(var(--u) * 10.5); }
+.stage-view .btn { height: calc(var(--u) * 24); font-size: calc(var(--u) * 11); }
+.stage-view .al-empty { font-size: calc(var(--u) * 12); }
+
+.readings .c-val, .readings .c-norm { font-variant-numeric: tabular-nums; }
+.readings tr[data-marker] .c-val { color: var(--muted); font-weight: 400; font-size: calc(var(--u) * 12); }
 
 @media (prefers-reduced-motion: reduce) {
   .stage-host { transition: none; }
