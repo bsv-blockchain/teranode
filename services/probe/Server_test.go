@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -21,8 +22,14 @@ func newTestServer(t *testing.T, token string) *Server {
 	s := settings.NewSettings()
 	s.Probe.HTTPListenAddress = "localhost:0"
 	s.Probe.AuthToken = token
+	s.Probe.StatePath = filepath.Join(t.TempDir(), "probe_state.json")
 
-	return New(ulogger.TestLogger{}, s, nil, nil)
+	srv := New(ulogger.TestLogger{}, s, nil, nil)
+	srv.collectors = func(context.Context) collectorSet {
+		return collectorSet{fast: []Collector{newFake("metrics", okPatch(healthyPatch))}}
+	}
+
+	return srv
 }
 
 func startServer(t *testing.T, srv *Server) (context.CancelFunc, chan error) {
