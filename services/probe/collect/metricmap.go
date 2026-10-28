@@ -15,7 +15,7 @@ const (
 	metricSubtreeIntake      = "teranode_subtreevalidation_validate_subtree_handler"
 	metricSubtreeWaiting     = "teranode_subtreevalidation_peer_subtree_admission_waiting"
 
-	metricValidatorTx      = "teranode_validator_transactions_validate_total"
+	metricValidatorTx      = "teranode_validator_transactions_validate"
 	metricValidatorInvalid = "teranode_validator_invalid_transactions"
 	metricSpendBatchSize   = "teranode_aerospike_utxo_spend_batch_size"
 
