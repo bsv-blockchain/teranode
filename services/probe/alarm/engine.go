@@ -3,7 +3,6 @@ package alarm
 import (
 	"math"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,7 +27,6 @@ const (
 	keyCacheHitRate   = "cache.hitRate"
 	keyCacheFill      = "cache.fill"
 	keyCachePrevGen   = "cache.previousGenFrac"
-	flowsPrefix       = "flows."
 
 	noteWarming     = "Warming"
 	noteCalibrating = "Calibrating"
@@ -45,6 +43,28 @@ func WithLogRetention(d time.Duration) EngineOption {
 
 func WithNow(now func() time.Time) EngineOption {
 	return func(e *Engine) { e.now = now }
+}
+
+var SourceStages = map[string][]string{
+	"metrics":   {"ingress", "validator", "cache", "assembly"},
+	"chain":     {"chain"},
+	"kafka":     {"ingress"},
+	"aerospike": {"stores"},
+	"postgres":  {"stores"},
+}
+
+func WithSourceStages(m map[string][]string) EngineOption {
+	return func(e *Engine) { e.sourceStages = copyStages(m) }
+}
+
+func copyStages(m map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(m))
+
+	for name, stages := range m {
+		out[name] = append([]string(nil), stages...)
+	}
+
+	return out
 }
 
 type ruleState struct {
@@ -69,6 +89,7 @@ type Engine struct {
 	now           func() time.Time
 	states        map[string]*ruleState
 	samples       map[string]int
+	sourceStages  map[string][]string
 	lastSave      time.Time
 	lastPrune     time.Time
 	err           error
@@ -85,6 +106,7 @@ func NewEngine(rules []Rule, b *Baseline, st *Store, floors map[string]float64, 
 		now:           time.Now,
 		states:        map[string]*ruleState{},
 		samples:       map[string]int{},
+		sourceStages:  copyStages(SourceStages),
 	}
 
 	for k, v := range floors {
@@ -138,11 +160,11 @@ func (e *Engine) Evaluate(now time.Time, s *snapshot.Snapshot) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	stale := staleStages(s)
+	down := e.unreachableStages(s)
 
 	for _, r := range e.rules {
 		if r.Reading == "" {
-			e.advance(now, r, e.state(r.ID), stale[r.Stage], false)
+			e.advance(now, r, e.state(r.ID), down[r.Stage], false)
 			continue
 		}
 
@@ -207,8 +229,13 @@ func (e *Engine) judgeReading(now time.Time, r Rule, s *snapshot.Snapshot) {
 		return
 	}
 
-	e.baseline.Observe(r.ID, rd.Value, now)
 	mean, tol, ready := e.baseline.Normal(r.ID)
+	warn, crit := e.breach(r, rd.Value, mean, tol, ready)
+
+	if !warn && !st.active && st.warnSince.IsZero() && st.critSince.IsZero() {
+		e.baseline.Observe(r.ID, rd.Value, now)
+		mean, _, ready = e.baseline.Normal(r.ID)
+	}
 
 	if ready {
 		m := mean
@@ -225,7 +252,6 @@ func (e *Engine) judgeReading(now time.Time, r Rule, s *snapshot.Snapshot) {
 		}
 	}
 
-	warn, crit := e.breach(r, rd.Value, mean, tol, ready)
 	e.advance(now, r, st, warn, crit)
 
 	if st.active {
@@ -258,6 +284,8 @@ func (e *Engine) breach(r Rule, v, mean, tol float64, ready bool) (warn, crit bo
 	}
 
 	if ready {
+		tol = math.Max(tol, r.MinTolerance)
+
 		dev := v - mean
 		if r.BadWhenLow {
 			dev = mean - v
@@ -329,14 +357,11 @@ func (e *Engine) noData(now time.Time, st *ruleState) {
 		st.nodataSince = now
 	}
 
-	if !st.active {
-		st.warnSince = time.Time{}
-		st.critSince = time.Time{}
+	st.warnSince = time.Time{}
+	st.critSince = time.Time{}
+	st.normalSince = time.Time{}
 
-		return
-	}
-
-	if now.Sub(st.nodataSince) >= nodataGrace {
+	if st.active && now.Sub(st.nodataSince) >= nodataGrace {
 		*st = ruleState{}
 	}
 }
@@ -359,18 +384,18 @@ func (e *Engine) judgeCatchup(now time.Time, catching bool) {
 	e.log(catchupRule, st)
 }
 
-func staleStages(s *snapshot.Snapshot) map[string]bool {
+func (e *Engine) unreachableStages(s *snapshot.Snapshot) map[string]bool {
 	out := map[string]bool{}
 
-	s.EachReading(func(key string, r *snapshot.Reading) {
-		if strings.HasPrefix(key, flowsPrefix) || r.Status != snapshot.StatusNoData || r.AgeSec <= staleAgeSec {
-			return
+	for _, src := range s.Sources {
+		if src.OK || src.AgeSec <= staleAgeSec {
+			continue
 		}
 
-		if stage, _, found := strings.Cut(key, "."); found {
+		for _, stage := range e.sourceStages[src.Name] {
 			out[stage] = true
 		}
-	})
+	}
 
 	return out
 }

@@ -83,6 +83,7 @@ type Sampler struct {
 	slotStart  time.Time
 	fastPanics int
 	slowPanics int
+	started    time.Time
 }
 
 func NewSampler(fast, slow []Collector, fastEvery, slowEvery time.Duration, node string, opts ...Option) *Sampler {
@@ -115,6 +116,7 @@ func NewSampler(fast, slow []Collector, fastEvery, slowEvery time.Duration, node
 		s.logger = ulogger.New("probe")
 	}
 
+	s.started = s.now()
 	s.latest = snapshot.NewSnapshot(node)
 	normalise(&s.latest)
 
@@ -203,6 +205,10 @@ func (s *Sampler) Trigger(ch <-chan struct{}) {
 
 func (s *Sampler) Run(ctx context.Context) {
 	defer s.stopOnce.Do(func() { close(s.stopped) })
+
+	s.mu.Lock()
+	s.started = s.now()
+	s.mu.Unlock()
 
 	var loops sync.WaitGroup
 
@@ -525,9 +531,33 @@ func (s *Sampler) build() (snapshot.Snapshot, bool) {
 
 	snap.Time = now
 	snap.Node = s.node
+	snap.Sources = s.sourceHealth(now)
 	normalise(&snap)
 
 	return snap, panicked
+}
+
+func (s *Sampler) sourceHealth(now time.Time) []snapshot.SourceHealth {
+	out := make([]snapshot.SourceHealth, 0, len(s.fast)+len(s.slow))
+
+	for _, group := range [][]*entry{s.fast, s.slow} {
+		for _, e := range group {
+			h := snapshot.SourceHealth{Name: e.name, OK: e.good != nil && !e.stale}
+
+			if !h.OK {
+				since := s.started
+				if !e.goodAt.IsZero() {
+					since = e.goodAt
+				}
+
+				h.AgeSec = max(now.Sub(since).Seconds(), 0)
+			}
+
+			out = append(out, h)
+		}
+	}
+
+	return out
 }
 
 func (s *Sampler) record(snap snapshot.Snapshot) {
@@ -611,6 +641,10 @@ func normalise(snap *snapshot.Snapshot) {
 		snap.Chain.BlocksWaiting = []uint32{}
 	}
 
+	if snap.Sources == nil {
+		snap.Sources = []snapshot.SourceHealth{}
+	}
+
 	for i := range snap.Alarms {
 		if snap.Alarms[i].Drilldowns == nil {
 			snap.Alarms[i].Drilldowns = []snapshot.Link{}
@@ -643,6 +677,7 @@ func cloneSnapshot(src snapshot.Snapshot) snapshot.Snapshot {
 	}
 
 	dst.Chain.BlocksWaiting = append(make([]uint32, 0, len(src.Chain.BlocksWaiting)), src.Chain.BlocksWaiting...)
+	dst.Sources = append(make([]snapshot.SourceHealth, 0, len(src.Sources)), src.Sources...)
 
 	if src.DrainSeconds != nil {
 		v := *src.DrainSeconds
