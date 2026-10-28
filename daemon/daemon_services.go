@@ -1272,7 +1272,6 @@ func (d *Daemon) startPrunerService(ctx context.Context, appSettings *settings.S
 	))
 }
 
-// startProbeService initializes and adds the Probe service to the ServiceManager.
 func (d *Daemon) startProbeService(ctx context.Context, appSettings *settings.Settings,
 	createLogger func(string) ulogger.Logger) error {
 	blockchainClient, err := d.daemonStores.GetBlockchainClient(

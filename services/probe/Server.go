@@ -1,4 +1,3 @@
-// Package probe provides the read-only Probe service that serves a live operator dashboard.
 package probe
 
 import (
@@ -68,6 +67,10 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	var closeOnce sync.Once
 
 	defer closeOnce.Do(func() { close(readyCh) })
+
+	if s.settings.Probe.AuthToken == "" {
+		return errors.NewConfigurationError("probe_authToken must be set; the probe refuses to start without a token")
+	}
 
 	ln, err := net.Listen("tcp", s.settings.Probe.HTTPListenAddress)
 	if err != nil {
