@@ -17,6 +17,7 @@ import {
   sparkline,
   parseRoute,
   normalizeHistory,
+  stageReadings,
   STAGES,
 } from './view.js';
 
@@ -437,7 +438,64 @@ test('popover shows the highest severity alarm that is not snoozed', () => {
 const STAGE_KEYS = ['ingress', 'validator', 'cache', 'assembly', 'chain', 'stores'];
 const READING_COUNTS = { ingress: 6, validator: 5, cache: 9, assembly: 5, chain: 3, stores: 5 };
 const allAttrs = (node) => walk(node).flatMap((n) => Object.entries(n.attrs || {}));
-const dataRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-key']);
+const dataRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-key'] && !n.attrs['data-marker']);
+const markerRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-marker']);
+
+function nest(depth, leaf) {
+  let o = leaf;
+  for (let i = depth; i >= 1; i--) o = { [`l${i}`]: o };
+  return o;
+}
+
+test('panelStatus and the table use the same readings', () => {
+  for (const depth of [1, 3, 7, 8, 20]) {
+    const s = snap();
+    s.validator = { ok: { v: 1, st: 'ok' }, ...nest(depth, { deep: { v: 9, st: 'crit' } }) };
+    assert.equal(panelStatus(s.validator), 'r', `depth ${depth}`);
+    const walked = stageReadings(s.validator, 'validator').filter((r) => !r.marker);
+    assert.equal(walked.length, 2);
+    const rows = dataRows(renderStage(s, 'validator', null, NOW));
+    assert.equal(rows.length, walked.length);
+    const key = `validator.${Array.from({ length: depth }, (_, i) => `l${i + 1}`).join('.')}.deep`;
+    assert.ok(rows.some((r) => r.attrs['data-key'] === key), key);
+    assert.equal(one(renderStage(s, 'validator', null, NOW), 'data-role', 'stage-led').attrs['data-st'], 'r');
+  }
+
+  const cyclic = { a: { v: 1, st: 'warn' } };
+  cyclic.self = cyclic;
+  assert.equal(panelStatus(cyclic), 'a');
+  assert.equal(stageReadings(cyclic, 'x').filter((r) => !r.marker).length, 1);
+
+  const absurd = nest(5000, { deep: { v: 1, st: 'crit' } });
+  assert.doesNotThrow(() => panelStatus(absurd));
+  assert.equal(panelStatus(absurd), stageReadings(absurd, 'x').some((r) => !r.marker) ? 'r' : 'n');
+
+  for (const key of STAGE_KEYS) {
+    const stage = snap()[key];
+    const fromWalker = stageReadings(stage, key).filter((r) => !r.marker).map((r) => r.reading.st);
+    const worst = fromWalker.reduce((w, st) => ({ nodata: 0, idle: 0, ok: 1, warn: 2, crit: 3 }[st] > w ? { nodata: 0, idle: 0, ok: 1, warn: 2, crit: 3 }[st] : w), 0);
+    assert.equal(panelStatus(stage), ['n', 'g', 'a', 'r'][worst], key);
+  }
+});
+
+test('stage view shows a not configured row for an unconfigured store', () => {
+  const view = renderStage(snap(), 'stores', null, NOW);
+  const markers = markerRows(view);
+  assert.equal(markers.length, 1);
+  assert.equal(markers[0].attrs['data-key'], 'stores.postgres');
+  assert.equal(markers[0].attrs['data-st'], 'n');
+  const cells = walk(markers[0]).filter((n) => n.tag === 'th' || n.tag === 'td');
+  assert.equal(cells[0].text, 'Postgres');
+  assert.equal(cells[1].text, 'not configured');
+  assert.equal(walk(markers[0]).filter((n) => n.tag === 'svg').length, 0);
+  assert.equal(dataRows(view).length, 5);
+
+  const s = snap();
+  s.stores.aerospike.configured = false;
+  assert.deepEqual(markerRows(renderStage(s, 'stores', null, NOW)).map((r) => walk(r).find((n) => n.tag === 'th').text), ['Aerospike', 'Postgres']);
+  assert.equal(panelStatus(snap().stores), 'r');
+  assert.equal(panelStatus({ postgres: { configured: false, x: { v: 1, st: 'crit' } } }), 'n');
+});
 const coords = (d) => [...d.matchAll(/[ML]\s*([-\d.]+)\s+([-\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
 
 function pt(minAgo, v, st = 'ok') {

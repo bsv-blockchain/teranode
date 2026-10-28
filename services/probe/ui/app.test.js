@@ -204,6 +204,7 @@ const histPayload = (stage = 'cache', v = 0.6) => ({
 function historyHarness({ token = 'tok', handler } = {}) {
   const calls = [];
   const intervals = [];
+  const timeouts = [];
   const storage = new FakeStorage();
   if (token) storage.setItem(TOKEN_KEY, token);
   const sockets = [];
@@ -218,14 +219,14 @@ function historyHarness({ token = 'tok', handler } = {}) {
       close() { this.closed = true; }
     },
     storage,
-    setTimeout: () => 0,
-    clearTimeout: () => {},
+    setTimeout: (fn, ms) => { timeouts.push({ fn, ms, cleared: false }); return timeouts.length - 1; },
+    clearTimeout: (id) => { if (timeouts[id]) timeouts[id].cleared = true; },
     setInterval: (fn, ms) => { intervals.push({ fn, ms, cleared: false }); return intervals.length - 1; },
     clearInterval: (id) => { if (intervals[id]) intervals[id].cleared = true; },
     location: { protocol: 'http:', host: 'probe.local:8094' },
   });
   client.start();
-  return { client, calls, intervals, storage, sockets };
+  return { client, calls, intervals, timeouts, storage, sockets };
 }
 
 const okJson = (payload) => async () => ({ ok: true, status: 200, json: async () => payload });
@@ -368,4 +369,104 @@ test('history waits for a token before fetching', async () => {
   assert.equal(h.calls.length, 1);
   assert.equal(h.calls[0].init.headers.Authorization, 'Bearer late');
   assert.equal(h.intervals.length, 1);
+});
+
+function hangingHandler(first) {
+  const pending = [];
+  const handler = (url, init, n) => {
+    if (n === 1 && first) return first();
+    return new Promise((resolve, reject) => {
+      pending.push({ resolve, reject, signal: init.signal });
+      init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+  };
+  return { handler, pending };
+}
+
+test('hung history request is aborted after 8 seconds and polling continues', async () => {
+  const { handler, pending } = hangingHandler(okJson(histPayload('cache', 0.6)));
+  const h = historyHarness({ handler });
+  h.client.openStage('cache');
+  await flush();
+  const good = h.client.state.history.data;
+  assert.ok(good);
+
+  h.intervals[0].fn();
+  assert.equal(h.calls.length, 2);
+  assert.ok(h.calls[1].init.signal);
+  const timeout = h.timeouts[h.timeouts.length - 1];
+  assert.equal(timeout.ms, 8000);
+  assert.equal(pending[0].signal.aborted, false);
+
+  h.intervals[0].fn();
+  assert.equal(h.calls.length, 2);
+
+  timeout.fn();
+  await flush();
+  assert.equal(pending[0].signal.aborted, true);
+  assert.equal(h.client.state.history.error, true);
+  assert.equal(h.client.state.history.data, good);
+  assert.equal(h.storage.getItem(TOKEN_KEY), 'tok');
+
+  h.intervals[0].fn();
+  assert.equal(h.calls.length, 3);
+  assert.equal(h.intervals[0].cleared, false);
+});
+
+test('leaving the view aborts the in-flight history request', async () => {
+  const { handler, pending } = hangingHandler();
+  const h = historyHarness({ handler });
+  h.client.openStage('cache');
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].signal.aborted, false);
+  h.client.closeStage();
+  assert.equal(pending[0].signal.aborted, true);
+  assert.equal(h.timeouts[0].cleared, true);
+  await flush();
+  assert.equal(h.client.state.history, null);
+
+  h.client.openStage('cache');
+  assert.equal(pending.length, 2);
+  h.client.openStage('stores');
+  assert.equal(pending[1].signal.aborted, true);
+  assert.equal(pending.length, 3);
+  assert.equal(pending[2].signal.aborted, false);
+  assert.equal(h.calls[2].url, '/api/history?stage=stores&minutes=10');
+  await flush();
+  assert.equal(h.client.state.history.stage, 'stores');
+  assert.equal(h.client.state.history.error, false);
+});
+
+test('late response after abort is ignored', async () => {
+  const { handler, pending } = hangingHandler(okJson(histPayload('cache', 0.6)));
+  const h = historyHarness({ handler });
+  h.client.openStage('cache');
+  await flush();
+  const good = h.client.state.history.data;
+
+  h.intervals[0].fn();
+  h.timeouts[h.timeouts.length - 1].fn();
+  await flush();
+  assert.equal(h.client.state.history.error, true);
+
+  h.intervals[0].fn();
+  assert.equal(h.calls.length, 3);
+
+  pending[0].resolve({ ok: true, status: 200, json: async () => histPayload('cache', 0.99) });
+  await flush();
+  assert.equal(h.client.state.history.error, true);
+  assert.equal(h.client.state.history.data, good);
+
+  pending[1].resolve({ ok: true, status: 200, json: async () => histPayload('cache', 0.7) });
+  await flush();
+  assert.equal(h.client.state.history.error, false);
+  assert.equal(h.client.state.history.data.get('cache.hitRate')[0].v, 0.7);
+
+  const stale = hangingHandler();
+  const g = historyHarness({ handler: stale.handler });
+  g.client.openStage('cache');
+  g.client.closeStage();
+  stale.pending[0].resolve({ ok: true, status: 200, json: async () => histPayload('cache') });
+  await flush();
+  assert.equal(g.client.state.history, null);
 });

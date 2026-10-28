@@ -293,22 +293,34 @@ export function formatReading(key, reading) {
   return { text: formatValue(r.v, unit), word: note || STATUS_WORDS[status] || '', st, normal, nodata: false };
 }
 
-function collectStatuses(o, out) {
-  if (!o || typeof o !== 'object' || Array.isArray(o)) return;
+const MAX_WALK_DEPTH = 64;
+
+function walkReadings(o, key, depth, ancestors, out) {
+  if (!o || typeof o !== 'object' || Array.isArray(o) || depth > MAX_WALK_DEPTH || ancestors.has(o)) return;
   if (typeof o.st === 'string') {
-    out.push(o.st);
+    out.push({ key, reading: o, marker: false });
     return;
   }
-  if (o.configured === false) return;
-  for (const v of Object.values(o)) collectStatuses(v, out);
+  if (o.configured === false) {
+    out.push({ key, reading: null, marker: true });
+    return;
+  }
+  ancestors.add(o);
+  for (const [k, v] of Object.entries(o)) walkReadings(v, key ? `${key}.${k}` : k, depth + 1, ancestors, out);
+  ancestors.delete(o);
+}
+
+export function stageReadings(stage, key) {
+  const out = [];
+  walkReadings(stage, typeof key === 'string' ? key : '', 0, new Set(), out);
+  return out;
 }
 
 export function panelStatus(stage) {
-  const statuses = [];
-  collectStatuses(stage, statuses);
   let worst = 'n';
-  for (const s of statuses) {
-    const letter = STATUS_LETTERS[s] || 'n';
+  for (const entry of stageReadings(stage, '')) {
+    if (entry.marker) continue;
+    const letter = STATUS_LETTERS[entry.reading.st] || 'n';
     if (RANK[letter] > RANK[worst]) worst = letter;
   }
   return worst;
@@ -921,7 +933,6 @@ export const MAX_SERIES = 64;
 export const MAX_POINTS = 600;
 const MAX_SERIES_SCANNED = 1024;
 const MAX_KEY_LENGTH = 96;
-const MAX_DEPTH = 6;
 const SPARK = { w: 120, h: 28, padX: 2, padY: 3 };
 const VALUE_LIMIT = 1e15;
 const HISTORY_STATUSES = ['ok', 'warn', 'crit', 'idle', 'nodata'];
@@ -936,22 +947,6 @@ export function parseRoute(hash) {
 function stageTitle(key) {
   const found = STAGES.find((s) => s.key === key);
   return found ? found.title : '';
-}
-
-function collectReadings(o, key, depth, out) {
-  if (!o || typeof o !== 'object' || Array.isArray(o) || depth > MAX_DEPTH) return;
-  if (typeof o.st === 'string') {
-    out.push({ key, reading: o });
-    return;
-  }
-  if (o.configured === false) return;
-  for (const [k, v] of Object.entries(o)) collectReadings(v, `${key}.${k}`, depth + 1, out);
-}
-
-export function stageReadings(snapshot, stageKey) {
-  const out = [];
-  if (snapshot && typeof snapshot === 'object' && stageTitle(stageKey)) collectReadings(snapshot[stageKey], stageKey, 0, out);
-  return out;
 }
 
 function rowLabel(key) {
@@ -1077,7 +1072,19 @@ function noteText(reading, fr) {
   return [note, age].filter(Boolean).join(', ');
 }
 
+function markerRow(entry) {
+  return h('tr', { 'data-key': entry.key, 'data-st': 'n', 'data-marker': 'true' }, [
+    h('th', { scope: 'row', class: 'c-label' }, rowLabel(entry.key)),
+    h('td', { class: 'c-val' }, 'not configured'),
+    statusCell('nodata'),
+    h('td', { class: 'c-norm' }, ''),
+    h('td', { class: 'c-note' }, ''),
+    h('td', { class: 'c-spark' }, [sparkDash()]),
+  ]);
+}
+
 function readingRow(entry, series, nowMs) {
+  if (entry.marker) return markerRow(entry);
   const { key, reading } = entry;
   const fr = formatReading(key, reading);
   const label = rowLabel(key);
@@ -1115,7 +1122,7 @@ export function renderStage(snapshot, stageKey, history, nowMs, notice) {
   }
   const data = history && history.data instanceof Map ? history.data : null;
   const now = typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : Date.parse(snapshot.time);
-  const rows = stageReadings(snapshot, stageKey).map((e) => readingRow(e, data ? data.get(e.key) : null, now));
+  const rows = stageReadings(snapshot[stageKey], stageKey).map((e) => readingRow(e, data ? data.get(e.key) : null, now));
   const head = ['Reading', 'Value', 'Status', 'Normal', 'Note', `Last ${HISTORY_MINUTES} minutes`];
   return h('div', { class: 'stage-view' }, [
     stageHeader(stageKey, panelStatus(snapshot[stageKey])),
