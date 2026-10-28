@@ -2,6 +2,7 @@ package alarm
 
 import (
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -591,14 +592,22 @@ func TestNodataDoesNotFlapAnActiveAlarm(t *testing.T) {
 	s = r.eval(gap.Add(sec(59)), nil)
 	require.NotNil(t, find(s, "validator-latency-p99"))
 
-	s = r.eval(gap.Add(sec(60)), bad)
+	back := gap.Add(sec(60))
+	s = r.eval(back, bad)
 	a := find(s, "validator-latency-p99")
 	require.NotNil(t, a)
 	require.Equal(t, e0.Add(sec(30)), a.RaisedAt)
-	require.Equal(t, "crit", a.Severity)
+	require.Equal(t, "warn", a.Severity)
+	require.Len(t, r.st.AlarmsSince(time.Time{}), 1)
+
+	s = r.run(back.Add(tick), back.Add(sec(58)), bad)
+	require.Equal(t, "warn", find(s, "validator-latency-p99").Severity)
+
+	s = r.eval(back.Add(sec(60)), bad)
+	require.Equal(t, "crit", find(s, "validator-latency-p99").Severity)
 	require.Len(t, r.st.AlarmsSince(time.Time{}), 2)
 
-	gap2 := gap.Add(sec(62))
+	gap2 := back.Add(sec(62))
 	s = r.run(gap2, gap2.Add(sec(58)), nil)
 	require.NotNil(t, find(s, "validator-latency-p99"))
 
@@ -606,15 +615,87 @@ func TestNodataDoesNotFlapAnActiveAlarm(t *testing.T) {
 	require.Nil(t, find(s, "validator-latency-p99"))
 }
 
+func TestNodataResetsEscalationAndClearTimers(t *testing.T) {
+	t.Run("red timer restarts after a gap", func(t *testing.T) {
+		r := newRig(t, map[string]float64{keyLatency: 2.0})
+
+		bad := map[string]float64{keyLatency: 3.0}
+		s := r.run(e0, e0.Add(sec(30)), bad)
+		require.Equal(t, "warn", find(s, "validator-latency-p99").Severity)
+
+		r.run(e0.Add(sec(32)), e0.Add(sec(50)), nil)
+
+		resume := e0.Add(sec(52))
+		s = r.run(resume, resume.Add(sec(58)), bad)
+		require.Equal(t, "warn", find(s, "validator-latency-p99").Severity)
+
+		s = r.eval(resume.Add(sec(59)), bad)
+		require.Equal(t, "warn", find(s, "validator-latency-p99").Severity)
+
+		s = r.eval(resume.Add(sec(60)), bad)
+		require.Equal(t, "crit", find(s, "validator-latency-p99").Severity)
+	})
+
+	t.Run("clear timer restarts after a gap", func(t *testing.T) {
+		r := newRig(t, map[string]float64{keyLatency: 2.0})
+
+		good := map[string]float64{keyLatency: 1.0}
+		r.run(e0, e0.Add(sec(30)), map[string]float64{keyLatency: 3.0})
+
+		normal := e0.Add(sec(32))
+		r.run(normal, normal.Add(sec(10)), good)
+
+		gap := normal.Add(sec(12))
+		s := r.run(gap, gap.Add(sec(54)), nil)
+		require.NotNil(t, find(s, "validator-latency-p99"))
+
+		after := gap.Add(sec(55))
+		require.GreaterOrEqual(t, after.Sub(normal), sec(60))
+
+		s = r.eval(after, good)
+		require.NotNil(t, find(s, "validator-latency-p99"))
+
+		s = r.run(after.Add(tick), after.Add(sec(58)), good)
+		require.NotNil(t, find(s, "validator-latency-p99"))
+
+		s = r.eval(after.Add(sec(60)), good)
+		require.Nil(t, find(s, "validator-latency-p99"))
+	})
+}
+
+func health(sources ...snapshot.SourceHealth) *snapshot.Snapshot {
+	s := blank("RUNNING")
+	s.Sources = sources
+
+	return s
+}
+
+func down(name string, age float64) snapshot.SourceHealth {
+	return snapshot.SourceHealth{Name: name, OK: false, AgeSec: age}
+}
+
+func up(name string) snapshot.SourceHealth {
+	return snapshot.SourceHealth{Name: name, OK: true}
+}
+
+func sourceAlarms(s *snapshot.Snapshot) []string {
+	var out []string
+
+	for _, a := range s.Alarms {
+		if strings.HasPrefix(a.ID, SourceUnreachableID) {
+			out = append(out, a.ID)
+		}
+	}
+
+	return out
+}
+
 func TestSourceUnreachableAlarmPerStage(t *testing.T) {
 	r := newRig(t, nil)
 
 	stale := func(age float64) *snapshot.Snapshot {
-		s := blank("RUNNING")
-		reading(t, s, keyHitRate).AgeSec = age
-		reading(t, s, keyFill).AgeSec = age
-		reading(t, s, "stores.aerospike.opsPerSec").AgeSec = age
-		reading(t, s, "ingress.peers").AgeSec = 60
+		s := health(down("aerospike", age), down("chain", age), down("kafka", 60), up("metrics"), up("postgres"))
+		reading(t, s, "ingress.peers").AgeSec = 500
 		s.Flow(snapshot.FlowTxInput).Rate.AgeSec = 500
 
 		return s
@@ -632,30 +713,75 @@ func TestSourceUnreachableAlarmPerStage(t *testing.T) {
 	require.Empty(t, s.Alarms)
 
 	s = r.evalSnap(e0.Add(sec(30)), stale(91))
-	require.Len(t, s.Alarms, 2)
+	require.Equal(t, []string{SourceUnreachableID + "chain", SourceUnreachableID + "stores"}, sourceAlarms(s))
 
-	for _, stage := range []string{"cache", "stores"} {
+	for _, stage := range []string{"chain", "stores"} {
 		a := find(s, SourceUnreachableID+stage)
-		require.NotNil(t, a, stage)
 		require.Equal(t, "warn", a.Severity)
 		require.Equal(t, stage, a.Stage)
 		require.False(t, a.StartOfChain)
 		require.NotEmpty(t, a.Title)
 	}
 
-	require.Nil(t, find(s, SourceUnreachableID+"ingress"))
-
 	recovered := e0.Add(sec(32))
 
 	for at := recovered; !at.After(recovered.Add(sec(58))); at = at.Add(tick) {
-		s = r.evalSnap(at, snap("RUNNING", map[string]float64{keyHitRate: 0.97, keyFill: 0.9}))
+		s = r.evalSnap(at, health(up("aerospike"), up("chain")))
 	}
 
-	require.NotNil(t, find(s, SourceUnreachableID+"cache"))
+	require.NotNil(t, find(s, SourceUnreachableID+"stores"))
 
-	s = r.evalSnap(recovered.Add(sec(60)), snap("RUNNING", nil))
-	require.Nil(t, find(s, SourceUnreachableID+"cache"))
-	require.Nil(t, find(s, SourceUnreachableID+"stores"))
+	s = r.evalSnap(recovered.Add(sec(60)), health(up("aerospike"), up("chain")))
+	require.Empty(t, sourceAlarms(s))
+}
+
+func TestNeverReachableSourceRaisesAlarm(t *testing.T) {
+	r := newRig(t, nil)
+
+	var s *snapshot.Snapshot
+
+	for at := e0; !at.After(e0.Add(sec(28))); at = at.Add(tick) {
+		s = r.evalSnap(at, health(down("aerospike", 61+at.Sub(e0).Seconds())))
+	}
+
+	require.Empty(t, sourceAlarms(s))
+
+	s = r.evalSnap(e0.Add(sec(29)), health(down("aerospike", 90)))
+	require.Empty(t, sourceAlarms(s))
+
+	s = r.evalSnap(e0.Add(sec(30)), health(down("aerospike", 91)))
+	require.Equal(t, []string{SourceUnreachableID + "stores"}, sourceAlarms(s))
+}
+
+func TestSourceMappedToTwoStagesAlarmsBoth(t *testing.T) {
+	t.Run("custom map", func(t *testing.T) {
+		r := newRig(t, nil, WithSourceStages(map[string][]string{"x": {"cache", "stores"}}))
+
+		var s *snapshot.Snapshot
+
+		for at := e0; !at.After(e0.Add(sec(30))); at = at.Add(tick) {
+			s = r.evalSnap(at, health(down("x", 100), down("aerospike", 100)))
+		}
+
+		require.Equal(t, []string{SourceUnreachableID + "cache", SourceUnreachableID + "stores"}, sourceAlarms(s))
+	})
+
+	t.Run("default map", func(t *testing.T) {
+		r := newRig(t, nil)
+
+		var s *snapshot.Snapshot
+
+		for at := e0; !at.After(e0.Add(sec(30))); at = at.Add(tick) {
+			s = r.evalSnap(at, health(down("metrics", 100), down("kafka", 100)))
+		}
+
+		got := sourceAlarms(s)
+		sort.Strings(got)
+		require.Equal(t, []string{
+			SourceUnreachableID + "assembly", SourceUnreachableID + "cache",
+			SourceUnreachableID + "ingress", SourceUnreachableID + "validator",
+		}, got)
+	})
 }
 
 func TestFarOutsideToleranceGoesRed(t *testing.T) {
@@ -920,4 +1046,167 @@ func TestFlushStateReportsStoreErrors(t *testing.T) {
 	reopened, err := OpenStore(r.path)
 	require.NoError(t, err)
 	require.Len(t, reopened.AlarmsSince(time.Time{}), 1)
+}
+
+func noisyBaseline(b *Baseline, id string, mean, noise float64, end time.Time) {
+	i := 0
+
+	for at := end.Add(-warmup); !at.After(end); at = at.Add(tick) {
+		v := mean + noise
+		if i%2 == 1 {
+			v = mean - noise
+		}
+
+		b.Observe(id, v, at)
+		i++
+	}
+}
+
+func TestSustainedFiveTimesFaultStaysCritAndNeverClears(t *testing.T) {
+	r := newRig(t, nil)
+	noisyBaseline(r.b, "validator-latency-p99", 1.0, 0.05, e0)
+
+	start := e0.Add(tick)
+	fault := map[string]float64{keyLatency: 5.0}
+
+	for at := start; !at.After(start.Add(15 * time.Minute)); at = at.Add(tick) {
+		s := r.eval(at, fault)
+		elapsed := at.Sub(start)
+
+		a := find(s, "validator-latency-p99")
+
+		switch {
+		case elapsed < sec(30):
+			require.Nil(t, a, elapsed)
+		case elapsed < sec(60):
+			require.Equal(t, "warn", a.Severity, elapsed)
+		default:
+			require.NotNil(t, a, elapsed)
+			require.Equal(t, "crit", a.Severity, elapsed)
+			require.Equal(t, snapshot.StatusCrit, reading(t, s, keyLatency).Status)
+		}
+	}
+}
+
+func TestTwoTimesFaultGoesRed(t *testing.T) {
+	r := newRig(t, nil)
+	noisyBaseline(r.b, "validator-latency-p99", 1.0, 0.1, e0)
+
+	mean, tol, ready := r.b.Normal("validator-latency-p99")
+	require.True(t, ready)
+	require.InDelta(t, 1.0, mean, 0.1)
+	require.LessOrEqual(t, tol, 0.3)
+	require.Less(t, mean+3*tol, 2.0)
+
+	start := e0.Add(tick)
+	fault := map[string]float64{keyLatency: 2.0}
+
+	s := r.run(start, start.Add(sec(58)), fault)
+	require.Equal(t, "warn", find(s, "validator-latency-p99").Severity)
+
+	s = r.eval(start.Add(sec(59)), fault)
+	require.Equal(t, "warn", find(s, "validator-latency-p99").Severity)
+
+	s = r.eval(start.Add(sec(60)), fault)
+	require.Equal(t, "crit", find(s, "validator-latency-p99").Severity)
+
+	s = r.run(start.Add(sec(62)), start.Add(10*time.Minute), fault)
+	require.Equal(t, "crit", find(s, "validator-latency-p99").Severity)
+}
+
+func TestBaselineNotFedWhileAlarmActive(t *testing.T) {
+	r := newRig(t, map[string]float64{keyHitRate: 0.9})
+	noisyBaseline(r.b, "validator-latency-p99", 1.0, 0.05, e0)
+
+	mean, tol, ready := r.b.Normal("validator-latency-p99")
+	require.True(t, ready)
+
+	count := r.b.State().Metrics["validator-latency-p99"].Count
+
+	start := e0.Add(tick)
+	s := r.run(start, start.Add(10*time.Minute), map[string]float64{keyLatency: 5.0, keyHitRate: 0.5, keyFill: 0.05})
+	require.Equal(t, "crit", find(s, "validator-latency-p99").Severity)
+	require.Equal(t, "Warming", reading(t, s, keyHitRate).Note)
+
+	gotMean, gotTol, gotReady := r.b.Normal("validator-latency-p99")
+	require.True(t, gotReady)
+	require.Equal(t, mean, gotMean)
+	require.Equal(t, tol, gotTol)
+	require.Equal(t, count, r.b.State().Metrics["validator-latency-p99"].Count)
+	require.Equal(t, mean, *reading(t, s, keyLatency).Normal)
+
+	_, learned := r.b.State().Metrics["cache-hit-rate"]
+	require.False(t, learned)
+
+	r2 := newRig(t, nil)
+	noisyBaseline(r2.b, "validator-latency-p99", 1.0, 0.05, e0)
+	count2 := r2.b.State().Metrics["validator-latency-p99"].Count
+	mean2, _, _ := r2.b.Normal("validator-latency-p99")
+
+	r2.run(start, start.Add(sec(20)), map[string]float64{keyLatency: 1.2})
+	r2.eval(start.Add(sec(22)), map[string]float64{keyLatency: 1.0})
+	require.Equal(t, count2, r2.b.State().Metrics["validator-latency-p99"].Count)
+
+	gotMean2, _, _ := r2.b.Normal("validator-latency-p99")
+	require.Equal(t, mean2, gotMean2)
+
+	r2.eval(start.Add(sec(24)), map[string]float64{keyLatency: 1.0})
+	require.Equal(t, count2+1, r2.b.State().Metrics["validator-latency-p99"].Count)
+}
+
+func TestZeroMeanCountRuleToleratesOneBlock(t *testing.T) {
+	r := newRig(t, nil)
+	readyBaseline(r.b, "assembly-tip-lag", 0, e0)
+
+	mean, tol, ready := r.b.Normal("assembly-tip-lag")
+	require.True(t, ready)
+	require.Equal(t, 0.0, mean)
+	require.Less(t, tol, 1e-6)
+
+	start := e0.Add(tick)
+	s := r.run(start, start.Add(10*time.Minute), map[string]float64{keyTipLag: 1})
+	require.Nil(t, find(s, "assembly-tip-lag"))
+	require.Equal(t, snapshot.StatusOK, reading(t, s, keyTipLag).Status)
+
+	r2 := newRig(t, nil)
+	readyBaseline(r2.b, "assembly-tip-lag", 0, e0)
+
+	s = r2.run(start, start.Add(sec(28)), map[string]float64{keyTipLag: 5})
+	require.Nil(t, find(s, "assembly-tip-lag"))
+
+	s = r2.eval(start.Add(sec(30)), map[string]float64{keyTipLag: 5})
+	require.Equal(t, "warn", find(s, "assembly-tip-lag").Severity)
+
+	s = r2.run(start.Add(sec(32)), start.Add(sec(60)), map[string]float64{keyTipLag: 5})
+	require.Equal(t, "crit", find(s, "assembly-tip-lag").Severity)
+}
+
+func TestMinToleranceAppliesToRedThreshold(t *testing.T) {
+	r := newRig(t, nil)
+	readyBaseline(r.b, "assembly-tip-lag", 0, e0)
+
+	start := e0.Add(tick)
+	s := r.run(start, start.Add(5*time.Minute), map[string]float64{keyTipLag: 3})
+	require.Equal(t, "warn", find(s, "assembly-tip-lag").Severity)
+
+	r2 := newRig(t, nil)
+	readyBaseline(r2.b, "assembly-tip-lag", 0, e0)
+
+	s = r2.run(start, start.Add(sec(58)), map[string]float64{keyTipLag: 3.5})
+	require.Equal(t, "warn", find(s, "assembly-tip-lag").Severity)
+
+	s = r2.eval(start.Add(sec(60)), map[string]float64{keyTipLag: 3.5})
+	require.Equal(t, "crit", find(s, "assembly-tip-lag").Severity)
+
+	want := map[string]float64{
+		"assembly-tip-lag":        1,
+		"persister-behind":        2,
+		"assembly-queue-head-age": 5,
+		"validator-queue-fill":    0.05,
+		"subtree-queue-age":       5,
+	}
+
+	for _, rule := range DefaultRules {
+		require.Equal(t, want[rule.ID], rule.MinTolerance, rule.ID)
+	}
 }

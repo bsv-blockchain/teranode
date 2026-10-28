@@ -127,6 +127,12 @@ type Calibration struct {
 	Fraction float64   `json:"fraction"`
 }
 
+type SourceHealth struct {
+	Name   string  `json:"name"`
+	OK     bool    `json:"ok"`
+	AgeSec float64 `json:"age,omitempty"`
+}
+
 type Snapshot struct {
 	Time         time.Time      `json:"time"`
 	Node         string         `json:"node"`
@@ -144,6 +150,7 @@ type Snapshot struct {
 	Calibration  Calibration    `json:"calibration"`
 	DrainSeconds *float64       `json:"drainSeconds,omitempty"`
 	DrainGrowing bool           `json:"drainGrowing"`
+	Sources      []SourceHealth `json:"sources"`
 }
 
 type Patch func(*Snapshot)
@@ -163,7 +170,7 @@ func NewSnapshot(node string) Snapshot {
 		{FlowBlockWrites, "chain", "stores"},
 	}
 
-	s := Snapshot{Node: node, Flows: make([]Flow, len(flows))}
+	s := Snapshot{Node: node, Flows: make([]Flow, len(flows)), Sources: []SourceHealth{}}
 
 	for i, f := range flows {
 		s.Flows[i] = Flow{ID: f.id, From: f.from, To: f.to, Label: f.id, Rate: Reading{Status: StatusNoData}}

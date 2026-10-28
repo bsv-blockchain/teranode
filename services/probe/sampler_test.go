@@ -493,6 +493,63 @@ func TestHungCollectorServesStalePatchWithAge(t *testing.T) {
 	require.Equal(t, 2, src.Calls())
 }
 
+func TestSourcesReportHealthPerCollector(t *testing.T) {
+	clock := newFakeClock()
+	t0 := clock.Now()
+
+	healthy := newFake("a", okPatch(func(*snapshot.Snapshot) {}))
+	failing := newFake("b", func(context.Context, int) (snapshot.Patch, error) {
+		return nil, errors.NewProcessingError("down")
+	})
+	flaky := newFake("d", func(_ context.Context, call int) (snapshot.Patch, error) {
+		if call == 1 {
+			return func(*snapshot.Snapshot) {}, nil
+		}
+
+		return nil, errors.NewProcessingError("down")
+	})
+	slow := newFake("c", okPatch(func(*snapshot.Snapshot) {}))
+
+	s := NewSampler([]Collector{healthy, failing, flaky}, []Collector{slow}, 100*time.Millisecond, time.Hour, "n", WithClock(clock.Now))
+	startSampler(t, s)
+
+	require.Eventually(t, func() bool { return slow.Calls() == 1 && flaky.Calls() >= 2 }, 2*time.Second, 10*time.Millisecond)
+
+	clock.Advance(10 * time.Second)
+
+	snap := waitForUpdate(t, s, 2*time.Second, func(snap snapshot.Snapshot) bool {
+		return snap.Time.Equal(t0.Add(10*time.Second)) && len(snap.Sources) == 4 && snap.Sources[3].OK
+	})
+
+	require.Equal(t, []snapshot.SourceHealth{
+		{Name: "a", OK: true},
+		{Name: "b", OK: false, AgeSec: 10},
+		{Name: "d", OK: false, AgeSec: 10},
+		{Name: "c", OK: true},
+	}, snap.Sources)
+	require.Equal(t, 1, slow.Calls())
+}
+
+func TestNeverSucceededSourceAgesFromStart(t *testing.T) {
+	clock := newFakeClock()
+	t0 := clock.Now()
+
+	failing := newFake("aerospike", func(context.Context, int) (snapshot.Patch, error) {
+		return nil, errors.NewProcessingError("refused")
+	})
+
+	s := NewSampler([]Collector{failing}, nil, 100*time.Millisecond, time.Hour, "n", WithClock(clock.Now))
+	startSampler(t, s)
+
+	first := waitForUpdate(t, s, 2*time.Second, anyUpdate)
+	require.Equal(t, []snapshot.SourceHealth{{Name: "aerospike", OK: false}}, first.Sources)
+
+	clock.Advance(61 * time.Second)
+
+	snap := waitForUpdate(t, s, 2*time.Second, func(snap snapshot.Snapshot) bool { return snap.Time.Equal(t0.Add(61 * time.Second)) })
+	require.Equal(t, []snapshot.SourceHealth{{Name: "aerospike", OK: false, AgeSec: 61}}, snap.Sources)
+}
+
 func TestSlicesNeverNull(t *testing.T) {
 	withAlarm := newFake("alarm", okPatch(func(s *snapshot.Snapshot) {
 		s.Alarms = []snapshot.Alarm{{ID: "a1", Stage: "cache"}}
@@ -528,6 +585,7 @@ func TestSlicesNeverNull(t *testing.T) {
 
 				if fast == nil {
 					require.Contains(t, js, `"alarms":[]`, view)
+					require.Contains(t, js, `"sources":[]`, view)
 				} else {
 					require.Contains(t, js, `"drilldowns":[]`, view)
 				}
@@ -616,6 +674,7 @@ func TestLatestReturnsDeepCopy(t *testing.T) {
 		snap.Alarms[0].ID = "mutated"
 		snap.Alarms[0].Drilldowns[0].Path = "/mutated"
 		*snap.DrainSeconds = 99
+		snap.Sources[0].Name = "mutated"
 	}
 
 	mutate(s.Latest())
@@ -631,8 +690,10 @@ func TestLatestReturnsDeepCopy(t *testing.T) {
 	require.Equal(t, "a1", got.Alarms[0].ID)
 	require.Equal(t, "/p", got.Alarms[0].Drilldowns[0].Path)
 	require.Equal(t, drain, *got.DrainSeconds)
+	require.Equal(t, []snapshot.SourceHealth{{Name: "c", OK: true}}, got.Sources)
 
 	hist := s.History(time.Minute)[0]
+	require.Equal(t, "c", hist.Sources[0].Name)
 	require.Equal(t, "a1", hist.Alarms[0].ID)
 	require.Equal(t, normal, *hist.Cache.HitRate.Normal)
 }
