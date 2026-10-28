@@ -65,8 +65,8 @@ SETTINGS_CONTEXT=dev.[YOUR_CONTEXT] go run . -probe=1
 ```
 
 In Kubernetes, run the probe as its own service with `-all=0 -probe=1`.
-A probe in its own pod cannot see the metrics registry of the other pods. Set `probe_metricsTargets` to the metrics URL of each service, for example `http://blockvalidation:9091/metrics|http://validator:9091/metrics`.
-Each entry must be a full URL with the `http://` scheme. A `host:port` entry without a scheme fails, and the metrics source shows no data.
+A probe in its own pod cannot see the metrics registry of the other pods. Set `probe_metricsTargets` to the metrics endpoint of each service, for example `blockvalidation:9091|validator:9091`.
+The probe scrapes a `host:port` entry at `http://host:port/metrics`. It uses an entry with a scheme, such as `https://validator:9091/metrics`, as given.
 The probe also needs the Blockchain and P2P gRPC addresses from the normal settings.
 
 ## 3. Security
@@ -121,7 +121,7 @@ Colour shows only status:
 | Stage | Readings | Source |
 |-------|----------|--------|
 | Ingress | Propagation tx/s, subtree intake/s, peers, rejected tx/s, subtree queue, age of the oldest queued subtree | Propagation, Subtree Validation and P2P metrics |
-| Validator | Validated tx/s, latency p99, queue fill, spend batch fill, errors/s | Validator metrics, Aerospike spend batch metrics |
+| Validator | Validated tx/s, latency p99, queue fill, spend batch fill, errors/s | Validator metrics (`teranode_validator_transactions_validate` for validated tx/s and latency), Aerospike spend batch metrics |
 | Tx meta cache | Hit rate, misses/s, evictions/s, fill, current and previous generation share, entries, size, capacity | Tx meta cache metrics |
 | Block Assembly | State (running or paused), tip lag in blocks, age of the oldest queued transaction, ingest queue fill, subtree fill | Block Assembly metrics |
 | Blockchain | FSM state, tip height, highest peer height, fork depth, blocks not yet persisted, dropped subscribers, heights of queued blocks | Blockchain and P2P gRPC, Block Validation and Blockchain metrics |
@@ -129,6 +129,7 @@ Colour shows only status:
 
 A reading shows `no data` when its metric does not exist on this node. For example, the Data stores stage shows no data for a store that the node does not use.
 The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit.
+The probe reads the peer heights from the P2P service in the background. When that call fails, the probe shows no peer height. The FSM state, the tip and the backlog stay live.
 
 ### 4.2 Kafka Flow Strips and Consumer Lag
 
@@ -277,7 +278,7 @@ The probe connects to the brokers in `KAFKA_HOSTS` (`kafka_hosts`) and reads con
 The probe user needs permission to describe topics and groups and to read offsets.
 
 The probe client does not use TLS or SASL. A cluster that requires either shows no Kafka data.
-The probe uses `kafka_hosts` also when the node uses in-memory Kafka (`memory://`). In that case nothing listens on the broker address. The Kafka readings stay grey, and the Ingress stage raises a source alarm after about 90 seconds. Snooze that alarm on such a node.
+When the node uses in-memory Kafka (`KAFKA_SCHEMA = memory`, or `memory://` Kafka config URLs and no `kafka://` URL), the probe does not connect to `kafka_hosts`. Kafka is then not configured for the probe. The flow strips show no lag, and no Kafka source alarm is raised.
 
 ### 7.4 Tx Meta Cache
 
@@ -329,7 +330,7 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | `probe_baselineWarmup` | duration | `30m` | Minimum learning time before a baseline is ready |
 | `probe_snoozeDefault` | duration | `15m` | Snooze length when the request gives no duration |
 | `probe_alarmLogRetention` | duration | `168h` | Age after which the probe removes alarm log entries |
-| `probe_metricsTargets` | []string | empty | Pipe-separated metrics URLs, for example `http://validator:9091/metrics`. Empty means the registry of the probe process |
+| `probe_metricsTargets` | []string | empty | Pipe-separated metrics endpoints. A `host:port` entry is scraped at `http://host:port/metrics`. An entry with a scheme is used as given. Empty means the registry of the probe process |
 | `probe_statePath` | string | empty | Path of the state file. Empty means `probe_state.json` in the working directory |
 | `probe_aerospikeURL` | url | empty | Aerospike URL. Empty means the UTXO store URL when it is Aerospike |
 | `probe_postgresURL` | url | empty | PostgreSQL URL. Empty means the blockchain store URL when it is PostgreSQL |
@@ -352,8 +353,9 @@ The probe accepts at most 16 WebSocket clients at the same time. A further clien
 | The node does not start, and the log says `probe_authToken must be set` | The probe is enabled without a token | Set `probe_authToken`, or disable the probe |
 | The browser shows nothing at `http://<host>:8100/` | The probe binds to `localhost` by default | Use an SSH tunnel, or set `probe_httpListenAddress` and put a TLS reverse proxy in front |
 | The login form says the token is wrong | The token does not match `probe_authToken` | Check the setting. Leading and trailing spaces are removed from the setting |
-| All service readings are grey on a probe in its own pod | `probe_metricsTargets` is empty or has entries without `http://` | Set full metrics URLs |
-| The FSM and the tip are grey | The probe cannot reach the Blockchain or the P2P service | Check both gRPC addresses. The chain source needs both services |
+| All service readings are grey on a probe in its own pod | `probe_metricsTargets` is empty or points to the wrong endpoints | Set the metrics `host:port` or URL of each service |
+| The FSM and the tip are grey | The probe cannot reach the Blockchain service | Check the Blockchain gRPC address |
+| The top bar shows no peer height | The probe cannot reach the P2P service, or the node has no peers | Check the P2P gRPC address. FSM and tip stay live without P2P |
 | Aerospike read latency is grey | Read benchmarks are off | Set `enable-benchmarks-read true` on the namespace |
 | PostgreSQL disk fill says "disk capacity not set" | `probe_postgresDiskCapacityGB` is 0 | Set the volume size in GB |
 | An alarm stays after the node changed for good | The baseline is frozen while the alarm is active | Snooze the alarm, set a floor, or reset the baselines (see [5.2](#52-learned-baselines)) |
