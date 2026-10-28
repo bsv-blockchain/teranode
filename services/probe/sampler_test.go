@@ -97,6 +97,20 @@ func (l *recordingLogger) Errorf(format string, args ...interface{}) {
 	l.lines = append(l.lines, fmt.Sprintf(format, args...))
 }
 
+func (l *recordingLogger) Warnf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.lines = append(l.lines, "WARN "+fmt.Sprintf(format, args...))
+}
+
+func (l *recordingLogger) Infof(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.lines = append(l.lines, "INFO "+fmt.Sprintf(format, args...))
+}
+
 func (l *recordingLogger) Lines() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -973,4 +987,43 @@ func TestRunStopsWaitingForAHungCallAfterTheBound(t *testing.T) {
 
 	require.GreaterOrEqual(t, waited, shutdownWait)
 	require.Less(t, waited, shutdownWait+2*time.Second)
+}
+
+func TestSourceFailureLoggedOncePerStateChange(t *testing.T) {
+	logger := &recordingLogger{}
+
+	flaky := newFake("flaky", func(_ context.Context, call int) (snapshot.Patch, error) {
+		if call >= 3 && call <= 6 {
+			return nil, errors.NewServiceError("dial postgres://probe:secretpw@db:5432/teranode refused\nretry later")
+		}
+
+		return okPatch(func(s *snapshot.Snapshot) {
+			s.Cache.HitRate = snapshot.Reading{Value: 0.8, Status: snapshot.StatusOK}
+		})(context.Background(), call)
+	})
+
+	s := NewSampler([]Collector{flaky}, nil, 20*time.Millisecond, time.Hour, "n", WithLogger(logger))
+	startSampler(t, s)
+
+	require.Eventually(t, func() bool { return flaky.Calls() >= 10 }, 5*time.Second, 5*time.Millisecond)
+
+	var warns, infos []string
+
+	for _, line := range logger.Lines() {
+		require.NotContains(t, line, "\n")
+		require.NotContains(t, line, "secretpw")
+
+		switch {
+		case strings.HasPrefix(line, "WARN "):
+			warns = append(warns, line)
+		case strings.HasPrefix(line, "INFO "):
+			infos = append(infos, line)
+		}
+	}
+
+	require.Len(t, warns, 1)
+	require.Contains(t, warns[0], "flaky")
+	require.Contains(t, warns[0], "refused")
+	require.Len(t, infos, 1)
+	require.Contains(t, infos[0], "flaky")
 }
