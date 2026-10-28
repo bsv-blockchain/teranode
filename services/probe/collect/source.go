@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -96,9 +97,25 @@ type httpSource struct {
 	scrapeFn func(ctx context.Context, target string) (MetricSet, error)
 }
 
+func metricsTargetURL(target string) string {
+	target = strings.TrimSpace(target)
+
+	if strings.Contains(target, "://") {
+		return target
+	}
+
+	return "http://" + target + "/metrics"
+}
+
 func NewHTTPSource(targets []string, timeout time.Duration) MetricSource {
+	urls := make([]string, 0, len(targets))
+
+	for _, target := range targets {
+		urls = append(urls, metricsTargetURL(target))
+	}
+
 	s := &httpSource{
-		targets: append([]string(nil), targets...),
+		targets: urls,
 		timeout: timeout,
 		client:  &http.Client{Timeout: timeout},
 	}

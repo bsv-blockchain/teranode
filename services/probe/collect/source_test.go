@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,4 +153,55 @@ func TestSumHistogramUsesSampleSum(t *testing.T) {
 	v, ok = set.Sum("u")
 	require.True(t, ok)
 	require.Equal(t, 5.0, v)
+}
+
+func TestHTTPSourceAcceptsHostPortAndFullURL(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		paths []string
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+
+		if r.URL.Path != "/metrics" {
+			http.NotFound(w, r)
+			return
+		}
+
+		_, _ = w.Write([]byte("# TYPE beta gauge\nbeta 7\n"))
+	}))
+	defer srv.Close()
+
+	hostPort := strings.TrimPrefix(srv.URL, "http://")
+
+	for _, target := range []string{hostPort, srv.URL + "/metrics"} {
+		set, err := NewHTTPSource([]string{target}, time.Second).Gather(context.Background())
+		require.NoError(t, err, target)
+
+		v, ok := set.Sum("beta")
+		require.True(t, ok, target)
+		require.Equal(t, 7.0, v, target)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.Equal(t, []string{"/metrics", "/metrics"}, paths)
+}
+
+func TestMetricsTargetURL(t *testing.T) {
+	cases := map[string]string{
+		"validator:9091":                   "http://validator:9091/metrics",
+		" validator:9091 ":                 "http://validator:9091/metrics",
+		"http://validator:9091/metrics":    "http://validator:9091/metrics",
+		"https://validator:9091/metrics":   "https://validator:9091/metrics",
+		"http://validator:9091/other/path": "http://validator:9091/other/path",
+	}
+
+	for in, want := range cases {
+		require.Equal(t, want, metricsTargetURL(in), in)
+	}
 }
