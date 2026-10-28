@@ -58,7 +58,7 @@ type probeRun struct {
 	wg      sync.WaitGroup
 	closers []func()
 	logger  ulogger.Logger
-	faults  *faultTracker
+	faults  *faults
 
 	once sync.Once
 	err  error
@@ -74,7 +74,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, bc blockchain.Clie
 		wsAuthTimeout:    defaultWSAuthTimeout,
 		wsWriteWait:      defaultWSWriteWait,
 		flushEvery:       defaultFlushEvery,
-		rename:           os.Rename,
+		rename:           moveAside,
 		listen:           net.Listen,
 	}
 
@@ -168,14 +168,14 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return s.selfStop(nil, stopReason)
 	}
 
-	faults := newFaultTracker(s.logger)
+	f := newFaults(s.logger)
 	runCtx, cancel := context.WithCancel(ctx)
-	set := s.collectors(runCtx, faults)
+	set := s.collectors(runCtx, f.collectors)
 
-	pipe, err := newPipeline(s, set, store, faults)
+	pipe, err := newPipeline(s, set, store, f)
 	if err != nil {
 		cancel()
-		closeAll(set.closers, faults)
+		closeAll(set.closers, f.pipeline)
 
 		if closeErr := store.Close(); closeErr != nil {
 			s.logger.Warnf("[Probe] could not close the state store: %s", oneLine(closeErr))
@@ -192,7 +192,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 			s.logger.Warnf("[Probe] could not close the state store: %s", oneLine(closeErr))
 		}
 
-		closeAll(set.closers, faults)
+		closeAll(set.closers, f.pipeline)
 
 		return errors.NewServiceError("probe failed to listen on %s", s.settings.Probe.HTTPListenAddress, err)
 	}
@@ -200,7 +200,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	hub := NewHub(pipe.out)
 	hub.logger = s.logger
 	hub.writeWait = s.wsWriteWait
-	hub.faults = faults
+	hub.faults = f.hub
 	hub.fault = s.fault
 
 	run := &probeRun{
@@ -209,7 +209,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		cancel:  cancel,
 		closers: set.closers,
 		logger:  s.logger,
-		faults:  faults,
+		faults:  f,
 		httpSrv: &http.Server{
 			Handler:           s.newRouter(),
 			ReadHeaderTimeout: readHeaderTimeout,
@@ -231,7 +231,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	serveErr := make(chan error, 1)
 
 	go func() {
-		defer guard.Recover(faults.fatal(), "http server")
+		defer guard.Recover(f.pipeline.fatal(), "http server")
 
 		serveErr <- run.httpSrv.Serve(ln)
 	}()
@@ -245,8 +245,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return s.selfStop(run, "probe http server failed: "+oneLine(err))
 	case <-ctx.Done():
 		return run.stop()
-	case <-faults.failed:
-		return s.selfStop(run, probeStoppedMessage)
+	case <-f.signal.failed:
+		return s.selfStop(run, f.signal.Reason())
 	}
 }
 
@@ -276,21 +276,21 @@ func (r *probeRun) launch(ctx context.Context, triggers []<-chan struct{}) {
 	r.wg.Add(3)
 
 	go func() {
-		defer guard.Recover(r.faults.fatal(), "sampler")
+		defer guard.Recover(r.faults.pipeline.fatal(), "sampler")
 		defer r.wg.Done()
 
 		r.pipe.sampler.Run(ctx)
 	}()
 
 	go func() {
-		defer guard.Recover(r.faults.fatal(), "pipeline")
+		defer guard.Recover(r.faults.pipeline.fatal(), "pipeline")
 		defer r.wg.Done()
 
 		r.pipe.run(ctx)
 	}()
 
 	go func() {
-		defer guard.Recover(r.faults.fatal(), "websocket hub")
+		defer guard.Recover(r.faults.hub.fatal(), "websocket hub")
 		defer r.wg.Done()
 
 		r.hub.Run(ctx)
@@ -315,7 +315,7 @@ func (r *probeRun) stop() error {
 		r.wg.Wait()
 
 		r.closeState()
-		closeAll(r.closers, r.faults)
+		closeAll(r.closers, r.faults.pipeline)
 
 		if len(errs) > 0 {
 			r.err = errors.Join(errs...)
@@ -326,7 +326,7 @@ func (r *probeRun) stop() error {
 }
 
 func (r *probeRun) closeState() {
-	defer guard.Recover(r.faults, "state close")
+	defer guard.Recover(r.faults.pipeline, "state close")
 
 	if err := r.pipe.close(); err != nil {
 		r.logger.Warnf("[Probe] could not save probe state on shutdown: %s", oneLine(err))
