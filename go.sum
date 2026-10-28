@@ -145,8 +145,6 @@ github.com/bsv-blockchain/go-safe-conversion v1.2.0 h1:HwLWaxqm2OyU5/2BRQ8kwdn25
 github.com/bsv-blockchain/go-safe-conversion v1.2.0/go.mod h1:62Eq2980j4BygfqJhd/ObGRHET8ubEy2rBdGi4k6nsw=
 github.com/bsv-blockchain/go-sdk v1.7.3 h1:U4NuOoJcn3NPgzGyc0GPrGQygya6stRDxlfJC8ksUx0=
 github.com/bsv-blockchain/go-sdk v1.7.3/go.mod h1:hLPo1JjumHrtPrRwwVMO1y5ukIUx7+CzkelDxDm+7H4=
-github.com/bsv-blockchain/go-subtree v1.6.3 h1:75dwSs1tQsXRIRBImEsGFTlROXXQF192fA2UjjJQT8M=
-github.com/bsv-blockchain/go-subtree v1.6.3/go.mod h1:q7YXgbNQnqZSKTaP8lMQyCApQzrKJdYsF64OMyVYT0k=
 github.com/bsv-blockchain/go-subtree v1.6.4 h1:y9RQ54Fq1v2N0kryC69DHTmlYHKXJIcEPFM5LBxAU0A=
 github.com/bsv-blockchain/go-subtree v1.6.4/go.mod h1:okzxCUWjNdOxNec5zjpsN+J+fs276A9k0DdWwPFpik8=
 github.com/bsv-blockchain/go-tx-map v1.5.1 h1:cFvgwBNQ+51e+KGgF/tZLrEOyEknhHiNBmT965a7oec=
