@@ -378,6 +378,31 @@ test('top bar chips follow the snapshot', () => {
   assert.ok(texts(b3).includes('No alarms'));
 });
 
+test('tip chip follows the p2p peer height reading', () => {
+  const s = snap();
+  s.tip = 900;
+  s.peerTip = 950;
+
+  s.chain.peerHeight = { v: 950, st: 'ok' };
+  let bar = renderTopBar(s);
+  assert.ok(texts(bar).includes('Tip 900, peer 950'));
+  assert.equal(one(bar, 'data-chip', 'tip').attrs['data-st'], 'a');
+
+  s.chain.peerHeight = { v: 900, st: 'ok' };
+  bar = renderTopBar(s);
+  assert.equal(one(bar, 'data-chip', 'tip').attrs['data-st'], 'g');
+
+  s.chain.peerHeight = { v: 950, st: 'nodata', age: 45 };
+  bar = renderTopBar(s);
+  assert.ok(texts(bar).includes('Tip 900, peer no data, 45 s ago'));
+  assert.equal(one(bar, 'data-chip', 'tip').attrs['data-st'], 'n');
+
+  s.chain.peerHeight = { v: 0, st: 'ok', note: 'no peers' };
+  bar = renderTopBar(s);
+  assert.ok(texts(bar).includes('Tip 900, no peers'));
+  assert.equal(one(bar, 'data-chip', 'tip').attrs['data-st'], 'n');
+});
+
 test('drilldown path outside the stage allowlist renders as text', () => {
   const bad = [
     'javascript:alert(1)',

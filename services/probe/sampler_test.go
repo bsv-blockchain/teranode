@@ -176,7 +176,7 @@ func TestFailingCollectorMarksNoData(t *testing.T) {
 	failErr := newFake("fail-err", func(_ context.Context, call int) (snapshot.Patch, error) {
 		if call == 1 {
 			return func(s *snapshot.Snapshot) {
-				s.Cache.HitRate = snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}
+				s.Cache.HitRate = snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK, Note: "live note"}
 				s.Flow(snapshot.FlowTxMeta).Rate = snapshot.Reading{Value: 5, Status: snapshot.StatusOK}
 				s.FSM = "RUNNING"
 				s.Tip = 100
@@ -206,7 +206,7 @@ func TestFailingCollectorMarksNoData(t *testing.T) {
 
 	first := waitForUpdate(t, s, 2*time.Second, anyUpdate)
 	require.Equal(t, t0, first.Time)
-	require.Equal(t, snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}, first.Cache.HitRate)
+	require.Equal(t, snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK, Note: "live note"}, first.Cache.HitRate)
 	require.Equal(t, snapshot.Reading{Value: 0.4, Status: snapshot.StatusWarn}, first.Validator.QueueFill)
 
 	clock.Advance(30 * time.Second)
@@ -880,7 +880,7 @@ func TestNoReadingEverHasEmptyStatus(t *testing.T) {
 				}
 			})
 
-			require.Equal(t, 47, count)
+			require.Equal(t, 48, count)
 
 			if len(fast) == 2 {
 				require.Equal(t, snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}, published.Cache.HitRate)

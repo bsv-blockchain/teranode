@@ -97,25 +97,35 @@ type httpSource struct {
 	scrapeFn func(ctx context.Context, target string) (MetricSet, error)
 }
 
-func metricsTargetURL(target string) string {
-	target = strings.TrimSpace(target)
-
-	if strings.Contains(target, "://") {
-		return target
-	}
-
-	return "http://" + target + "/metrics"
-}
-
-func NewHTTPSource(targets []string, timeout time.Duration) MetricSource {
+func MetricsTargetURLs(targets []string) []string {
 	urls := make([]string, 0, len(targets))
 
 	for _, target := range targets {
-		urls = append(urls, metricsTargetURL(target))
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+
+		if strings.Contains(target, "://") {
+			urls = append(urls, target)
+			continue
+		}
+
+		hostPort, path, found := strings.Cut(target, "/")
+		if !found || path == "" {
+			urls = append(urls, "http://"+hostPort+"/metrics")
+			continue
+		}
+
+		urls = append(urls, "http://"+target)
 	}
 
+	return urls
+}
+
+func NewHTTPSource(targets []string, timeout time.Duration) MetricSource {
 	s := &httpSource{
-		targets: urls,
+		targets: MetricsTargetURLs(targets),
 		timeout: timeout,
 		client:  &http.Client{Timeout: timeout},
 	}

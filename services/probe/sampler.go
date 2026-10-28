@@ -545,6 +545,7 @@ func (s *Sampler) build() (snapshot.Snapshot, bool) {
 				if r, found := snap.Lookup(key); found {
 					r.Status = snapshot.StatusNoData
 					r.AgeSec = age
+					r.Note = ""
 				}
 			}
 		}

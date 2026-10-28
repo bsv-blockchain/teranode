@@ -55,7 +55,7 @@ func TestSnapshotJSONContract(t *testing.T) {
 		`"cache":{"hitRate":{"v":0.9,"st":"ok","normal":0.5,"note":"Warming","age":4},` +
 		st("missesPerSec", "evictionsPerSec", "fill", "currentGenFrac", "previousGenFrac", "entriesMillions", "sizeGB", "capacityGB") + `},` +
 		`"assembly":{` + st("paused", "tipLagBlocks", "queueHeadAgeSec", "ingestQueueFill", "subtreeFill") + `},` +
-		`"chain":{` + st("forkDepth", "persisterBehind", "subscribersDropped") + `,"blocksWaiting":[1,2]},` +
+		`"chain":{` + st("forkDepth", "persisterBehind", "subscribersDropped", "peerHeight") + `,"blocksWaiting":[1,2]},` +
 		`"stores":{"aerospike":` + strings.Replace(store, "%C", "true", 1) + `,"postgres":` + strings.Replace(store, "%C", "false", 1) + `},` +
 		`"flows":[{"id":"f","from":"a","to":"b","label":"l","rate":{"v":0,"st":""},"lag":3}],` +
 		`"alarms":[{"id":"a1","stage":"cache","title":"t","body":"b","textId":"x","severity":"warn","raisedAt":"2026-10-28T10:00:00Z","startOfChain":true,"snoozed":true,"drilldowns":[{"label":"l","path":"/p"}]}],` +
@@ -137,7 +137,7 @@ func TestLookupResolvesFlowRates(t *testing.T) {
 func TestEachReadingVisitsEveryReading(t *testing.T) {
 	s := NewSnapshot("n")
 
-	stageReadings := 6 + 5 + 9 + 5 + 3
+	stageReadings := 6 + 5 + 9 + 5 + 4
 	storeReadings := 2 * 5
 	flowReadings := len(s.Flows)
 

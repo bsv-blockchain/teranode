@@ -77,6 +77,10 @@ func kafkaHosts(raw string) []string {
 	return hosts
 }
 
+func usesLocalMetrics(targets []string) bool {
+	return len(collect.MetricsTargetURLs(targets)) == 0
+}
+
 func kafkaInMemory(k settings.KafkaSettings) bool {
 	memory, real := k.Scheme == "memory", false
 
@@ -247,7 +251,7 @@ func (s *Server) defaultCollectors(ctx context.Context, rec guard.Recorder) coll
 
 	var src collect.MetricSource
 
-	if targets := s.settings.Probe.MetricsTargets; len(targets) == 0 {
+	if targets := s.settings.Probe.MetricsTargets; usesLocalMetrics(targets) {
 		src = collect.NewLocalSource()
 	} else {
 		src = collect.NewHTTPSource(targets, metricsScrapeTimeout)
@@ -255,12 +259,18 @@ func (s *Server) defaultCollectors(ctx context.Context, rec guard.Recorder) coll
 
 	set.fast = append(set.fast, collect.NewMetricsCollector(src, collect.NewRates(), s.settings))
 
-	if s.blockchainClient != nil && s.p2pClient != nil {
-		chain := collect.NewChain(s.blockchainClient, s.p2pClient)
+	if s.blockchainClient != nil {
+		chain := collect.NewChain(s.blockchainClient)
 		set.fast = append(set.fast, chain)
 		set.triggers = append(set.triggers, chain.Events(ctx, rec))
 	} else {
-		s.logger.Warnf("[Probe] chain collector disabled: blockchain or p2p client missing")
+		s.logger.Warnf("[Probe] chain collector disabled: blockchain client missing")
+	}
+
+	if s.p2pClient != nil {
+		set.fast = append(set.fast, collect.NewPeers(s.p2pClient))
+	} else {
+		s.logger.Warnf("[Probe] p2p collector disabled: p2p client missing")
 	}
 
 	if kafkaInMemory(s.settings.Kafka) {
