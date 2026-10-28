@@ -1056,7 +1056,19 @@ func TestStaleChainFieldsCarryTheSourceAge(t *testing.T) {
 	s := NewSampler([]Collector{chain}, []Collector{kafka}, 20*time.Millisecond, 20*time.Millisecond, "n", WithClock(clock.Now))
 	startSampler(t, s)
 
-	waitForUpdate(t, s, 2*time.Second, func(snap snapshot.Snapshot) bool { return snap.FSM == "RUNNING" })
+	sourceMap := func(snap snapshot.Snapshot) map[string]snapshot.SourceHealth {
+		out := map[string]snapshot.SourceHealth{}
+		for _, src := range snap.Sources {
+			out[src.Name] = src
+		}
+
+		return out
+	}
+
+	waitForUpdate(t, s, 2*time.Second, func(snap snapshot.Snapshot) bool {
+		h := sourceMap(snap)
+		return snap.FSM == "RUNNING" && snap.Flow(snapshot.FlowBlocks).Lag != nil && !h["chain"].OK && !h["kafka"].OK
+	})
 
 	clock.Advance(45 * time.Second)
 
@@ -1064,10 +1076,7 @@ func TestStaleChainFieldsCarryTheSourceAge(t *testing.T) {
 		return snap.Time.Equal(clock.Now())
 	})
 
-	health := map[string]snapshot.SourceHealth{}
-	for _, src := range stale.Sources {
-		health[src.Name] = src
-	}
+	health := sourceMap(stale)
 
 	require.False(t, health["chain"].OK)
 	require.InDelta(t, 45, health["chain"].AgeSec, 0.001)
