@@ -2,12 +2,12 @@ package probe
 
 import (
 	"encoding/xml"
-	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/probe/ui"
 	"github.com/stretchr/testify/require"
 )

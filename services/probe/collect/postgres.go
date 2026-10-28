@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	stderrors "errors"
 	"net/url"
 	"strconv"
 	"strings"
@@ -407,5 +406,5 @@ func statementsTimeColumn(ctx context.Context, tx pgx.Tx) (string, error) {
 func isPostgresServerError(err error) bool {
 	var pgErr *pgconn.PgError
 
-	return stderrors.As(err, &pgErr)
+	return errors.As(err, &pgErr)
 }

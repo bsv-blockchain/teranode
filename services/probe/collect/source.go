@@ -3,12 +3,12 @@ package collect
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -129,7 +129,7 @@ func (s *httpSource) Gather(ctx context.Context) (MetricSet, error) {
 
 			families, err := s.scrapeFn(ctx, target)
 			if err != nil {
-				err = fmt.Errorf("scrape %s: %w", target, err)
+				err = errors.NewServiceError("scrape %s", target, err)
 			}
 
 			out <- scrapeResult{index: i, families: families, err: err}
@@ -183,7 +183,7 @@ func (s *httpSource) scrape(ctx context.Context, target string) (map[string]*dto
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %s", resp.Status)
+		return nil, errors.NewServiceError("unexpected status %s", resp.Status)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes+1))
@@ -192,7 +192,7 @@ func (s *httpSource) scrape(ctx context.Context, target string) (map[string]*dto
 	}
 
 	if len(body) > maxBodyBytes {
-		return nil, fmt.Errorf("response body exceeds %d bytes", maxBodyBytes)
+		return nil, errors.NewServiceError("response body exceeds %d bytes", maxBodyBytes)
 	}
 
 	parser := expfmt.NewTextParser(model.UTF8Validation)

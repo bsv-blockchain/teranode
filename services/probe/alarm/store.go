@@ -2,20 +2,19 @@ package alarm
 
 import (
 	"encoding/json"
-	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 )
 
 const writeInterval = time.Second
 
-var ErrCorruptStore = errors.New("probe store is corrupt")
+var ErrCorruptStore = errors.NewProcessingError("probe store is corrupt")
 
 type storeFile struct {
 	Baseline *BaselineState       `json:"baseline,omitempty"`
@@ -59,7 +58,7 @@ func OpenStore(path string, opts ...StoreOption) (*Store, error) {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("probe store: create directory: %w", err)
+		return nil, errors.NewStorageError("probe store: create directory", err)
 	}
 
 	raw, err := os.ReadFile(path)
@@ -67,10 +66,10 @@ func OpenStore(path string, opts ...StoreOption) (*Store, error) {
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 	case err != nil:
-		return nil, fmt.Errorf("probe store: read %s: %w", path, err)
+		return nil, errors.NewStorageError("probe store: read %s", path, err)
 	case len(raw) > 0:
 		if err := json.Unmarshal(raw, &s.data); err != nil {
-			return nil, fmt.Errorf("probe store: %s: %w: %w", path, ErrCorruptStore, err)
+			return nil, errors.NewProcessingError("probe store: %s is corrupt", path, err)
 		}
 	}
 
@@ -286,7 +285,7 @@ func (s *Store) persistLocked() error {
 
 	raw, err := json.Marshal(s.data)
 	if err != nil {
-		return fmt.Errorf("probe store: encode: %w", err)
+		return errors.NewStorageError("probe store: encode", err)
 	}
 
 	if err := s.writeAtomic(raw); err != nil {
@@ -306,7 +305,7 @@ func (s *Store) writeAtomic(raw []byte) error {
 
 	tmp, err := os.CreateTemp(dir, filepath.Base(s.path)+".*.tmp")
 	if err != nil {
-		return fmt.Errorf("probe store: create temp file: %w", err)
+		return errors.NewStorageError("probe store: create temp file", err)
 	}
 
 	tmpName := tmp.Name()
@@ -315,7 +314,7 @@ func (s *Store) writeAtomic(raw []byte) error {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 
-		return fmt.Errorf("probe store: write %s: %w", s.path, err)
+		return errors.NewStorageError("probe store: write %s", s.path, err)
 	}
 
 	if err := tmp.Chmod(0o600); err != nil {
@@ -332,18 +331,18 @@ func (s *Store) writeAtomic(raw []byte) error {
 
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("probe store: write %s: %w", s.path, err)
+		return errors.NewStorageError("probe store: write %s", s.path, err)
 	}
 
 	if s.beforeRename != nil {
 		if err := s.beforeRename(); err != nil {
-			return fmt.Errorf("probe store: write %s: %w", s.path, err)
+			return errors.NewStorageError("probe store: write %s", s.path, err)
 		}
 	}
 
 	if err := os.Rename(tmpName, s.path); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("probe store: rename into %s: %w", s.path, err)
+		return errors.NewStorageError("probe store: rename into %s", s.path, err)
 	}
 
 	if d, err := os.Open(dir); err == nil {
