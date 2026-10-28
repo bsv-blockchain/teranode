@@ -381,6 +381,14 @@ test('formats numbers by unit', () => {
   assert.equal(f('stores.postgres.sizeGB', 214), '214 GB');
   assert.equal(f('stores.aerospike.sizeGB', 1840), '1.84 TB');
   assert.equal(f('stores.aerospike.sizeGB', 0.25), '0.25 GB');
+  assert.equal(f('cache.sizeGB', 0.000343962), '344 KB');
+  assert.equal(f('cache.sizeGB', 0.0042), '4.2 MB');
+  assert.equal(f('cache.sizeGB', 0.01), '0.01 GB');
+  assert.equal(f('cache.sizeGB', 0), '0 MB');
+  assert.equal(f('cache.entriesMillions', 0.003546), '3,546');
+  assert.equal(f('cache.entriesMillions', 0.25), '250k');
+  assert.equal(f('cache.entriesMillions', 1.5), '1.5M');
+  assert.equal(f('cache.entriesMillions', 0), '0');
   assert.equal(f('assembly.tipLagBlocks', 3), '3 blocks');
   assert.equal(f('assembly.tipLagBlocks', 1), '1 block');
   assert.equal(f('chain.subscribersDropped', 0), '0');

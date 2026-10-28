@@ -224,10 +224,18 @@ function formatGB(v) {
   if (v >= 1000) return `${trim((v / 1000).toFixed(2))} TB`;
   if (v >= 100) return `${Math.round(v)} GB`;
   if (v >= 1) return `${trim(v.toFixed(1))} GB`;
-  return `${trim(v.toFixed(2))} GB`;
+  if (v >= 0.01) return `${trim(v.toFixed(2))} GB`;
+  const mb = v * 1000;
+  if (mb >= 1) return `${trim(mb.toFixed(1))} MB`;
+  const kb = mb * 1000;
+  if (kb >= 1) return `${Math.round(kb)} KB`;
+  return '0 MB';
 }
 
 function formatMillions(v) {
+  const n = v * 1e6;
+  if (n < 10000) return group(Math.round(n));
+  if (n < 1e6) return `${Math.round(n / 1000)}k`;
   if (v >= 100) return `${Math.round(v)}M`;
   if (v >= 10) return `${trim(v.toFixed(1))}M`;
   return `${trim(v.toFixed(2))}M`;
