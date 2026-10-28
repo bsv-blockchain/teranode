@@ -208,3 +208,65 @@ func TestQuantileBucketLayoutChangeNotOK(t *testing.T) {
 	require.True(t, ok)
 	require.InDelta(t, 0.375, got, 1e-9)
 }
+
+func gaugeSet(name string, values ...float64) MetricSet {
+	family := &dto.MetricFamily{Name: proto.String(name), Type: dto.MetricType_GAUGE.Enum()}
+
+	for _, v := range values {
+		family.Metric = append(family.Metric, &dto.Metric{Gauge: &dto.Gauge{Value: proto.Float64(v)}})
+	}
+
+	return MetricSet{name: family}
+}
+
+func TestPerSecCumulativeGauge(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(100, 0)
+	r.Observe(start, gaugeSet("g", 1000))
+	r.Observe(start.Add(2*time.Second), gaugeSet("g", 1900))
+
+	got, ok := r.PerSec("g")
+	require.True(t, ok)
+	require.InDelta(t, 450.0, got, 1e-9)
+
+	r.Observe(start.Add(4*time.Second), gaugeSet("g", 10))
+
+	_, ok = r.PerSec("g")
+	require.False(t, ok)
+}
+
+func TestMeanFromSumAndCountDeltas(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(100, 0)
+	r.Observe(start, histSet("h", 10, 500, []float64{1000}, []uint64{10}))
+	r.Observe(start.Add(2*time.Second), histSet("h", 20, 1280, []float64{1000}, []uint64{20}))
+
+	got, ok := r.Mean("h")
+	require.True(t, ok)
+	require.InDelta(t, 78.0, got, 1e-9)
+}
+
+func TestMeanNotOK(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(100, 0)
+	r.Observe(start, histSet("h", 10, 500, []float64{1000}, []uint64{10}))
+
+	_, ok := r.Mean("h")
+	require.False(t, ok)
+
+	r.Observe(start.Add(2*time.Second), histSet("h", 10, 500, []float64{1000}, []uint64{10}))
+
+	_, ok = r.Mean("h")
+	require.False(t, ok)
+
+	r.Observe(start.Add(4*time.Second), histSet("h", 2, 30, []float64{1000}, []uint64{2}))
+
+	_, ok = r.Mean("h")
+	require.False(t, ok)
+
+	r.Observe(start.Add(6*time.Second), counterSet("h", 5))
+	r.Observe(start.Add(8*time.Second), counterSet("h", 9))
+
+	_, ok = r.Mean("h")
+	require.False(t, ok)
+}

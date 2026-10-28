@@ -22,15 +22,15 @@ type seriesSample struct {
 	buckets   []bucketSample
 }
 
-type snapshot struct {
+type observation struct {
 	at     time.Time
 	series map[string]seriesSample
 }
 
 type Rates struct {
 	mu   sync.Mutex
-	prev *snapshot
-	curr *snapshot
+	prev *observation
+	curr *observation
 }
 
 func NewRates() *Rates {
@@ -38,11 +38,11 @@ func NewRates() *Rates {
 }
 
 func (r *Rates) Observe(now time.Time, m MetricSet) {
-	snap := &snapshot{at: now, series: make(map[string]seriesSample, len(m))}
+	snap := &observation{at: now, series: make(map[string]seriesSample, len(m))}
 
 	for name, family := range m {
 		switch family.GetType() {
-		case dto.MetricType_COUNTER:
+		case dto.MetricType_COUNTER, dto.MetricType_GAUGE:
 			if value, ok := m.Sum(name); ok {
 				snap.series[name] = seriesSample{value: value}
 			}
@@ -58,6 +58,13 @@ func (r *Rates) Observe(now time.Time, m MetricSet) {
 
 	r.prev = r.curr
 	r.curr = snap
+}
+
+func (r *Rates) frozen() *Rates {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return &Rates{prev: r.prev, curr: r.curr}
 }
 
 func histogramSample(family *dto.MetricFamily) (seriesSample, bool) {
@@ -123,6 +130,22 @@ func (r *Rates) PerSec(name string) (float64, bool) {
 	}
 
 	return delta / elapsed.Seconds(), true
+}
+
+func (r *Rates) Mean(histName string) (float64, bool) {
+	prev, curr, _, ok := r.pair(histName)
+	if !ok || !prev.histogram || !curr.histogram {
+		return 0, false
+	}
+
+	count := curr.count - prev.count
+	sum := curr.sum - prev.sum
+
+	if count <= 0 || sum < 0 {
+		return 0, false
+	}
+
+	return sum / count, true
 }
 
 func (r *Rates) Quantile(histName string, q float64) (float64, bool) {
