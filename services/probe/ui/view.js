@@ -357,18 +357,26 @@ function pulse(st) {
   return st === 'r' ? 'pulse' : null;
 }
 
+const READOUT_ROOM = 118;
+const READOUT_NOTE_CHARS = 30;
+const READOUT_NOTE_LINES = 3;
+const TANK_NOTE_LINES = 5;
+
 function readout(y, label, fr, key) {
   let size = fr.text.length > 10 ? 12 : 15;
   const wordW = fr.word ? textWidth(fr.word, 9.5, 0.52) : 0;
   if (fr.word && textWidth(fr.text, size, 0.6) + wordW > 108) size = 12;
   const c = COLORS[fr.st];
+  const inWell = !fr.word || textWidth(fr.text, size, 0.6) + wordW <= READOUT_ROOM;
+  const below = inWell ? [] : wrapWords(fr.word, READOUT_NOTE_CHARS).slice(0, READOUT_NOTE_LINES);
   return h('g', { 'data-key': key }, [
     h('text', { x: 12, y, class: 'lb' }, label),
     h('rect', { x: 12, y: y + 6, width: 146, height: 26, rx: 4, class: 'well' }),
     h('rect', { x: 12, y: y + 6, width: 3, height: 26, rx: 1.5, fill: c }),
     h('circle', { cx: 27, cy: y + 19, r: 3.5, fill: c, filter: 'url(#glow)', class: pulse(fr.st) }),
-    h('text', { x: 36, y: y + 22.5, class: 'wd' }, fr.word),
+    h('text', { x: 36, y: y + 22.5, class: 'wd' }, inWell ? fr.word : ''),
     h('text', { x: 152, y: y + 24, 'text-anchor': 'end', class: 'val', 'font-size': size }, fr.text),
+    h('g', {}, below.map((l, i) => h('text', { x: 12, y: y + 43 + i * 11, class: 'wd' }, l))),
   ]);
 }
 
@@ -413,7 +421,7 @@ function tank(y, label, pct, st, lines, notes, attrs) {
     h('text', { x: 80, y: top + 36, class: 'tx' }, lines[1] || ''),
     h('text', { x: 80, y: top + 52, class: 'tx' }, lines[2] || ''),
     h('text', { x: 80, y: top + 68, class: 'lb' }, lines[3] || ''),
-    h('g', {}, noteLines.slice(0, 3).map((l, i) => h('text', { x: 12, y: bot + 22 + i * 14, class: 'wd' }, l))),
+    h('g', {}, noteLines.slice(0, TANK_NOTE_LINES).map((l, i) => h('text', { x: 12, y: bot + 22 + i * 14, class: 'wd' }, l))),
   ]);
 }
 
@@ -657,7 +665,8 @@ function strip(flow, place, kafkaOutage) {
   const fr = formatReading(`flows.${flow.id}.rate`, rate);
   const v = finite(rate.v);
   const d = `M${x + 7} ${y + 13} H${x + w - 7}`;
-  const path = stalled
+  const still = stalled || !(v > 0);
+  const path = still
     ? h('path', { d, stroke: COLORS.n, 'stroke-width': 3, 'stroke-dasharray': '2 8', 'stroke-linecap': 'round', fill: 'none' })
     : h('path', {
       d, class: `flow ${flowSpeed(v)}`.trim(), stroke: COLORS[fr.st], 'stroke-width': Math.min(7, 3 + Math.log10(v + 1)),
@@ -669,7 +678,7 @@ function strip(flow, place, kafkaOutage) {
   const hasLag = typeof flow.lag === 'number' && Number.isFinite(flow.lag);
   const lag = !hasLag ? '' : kafkaOutage ? `lag ${kafkaOutage}` : `lag ${group(flow.lag)}`;
   const sub = [ageText, lag].filter(Boolean);
-  return h('g', { 'data-flow': flow.id, 'data-gap': place.gap, 'data-st': stalled ? 'n' : fr.st }, [
+  return h('g', { 'data-flow': flow.id, 'data-gap': place.gap, 'data-st': still ? 'n' : fr.st }, [
     h('text', { x: x + w / 2, y, 'text-anchor': 'middle', class: 'lb' }, typeof flow.label === 'string' ? flow.label : flow.id),
     h('rect', { x, y: y + 5, width: w, height: 16, rx: 8, class: 'well' }),
     path,
