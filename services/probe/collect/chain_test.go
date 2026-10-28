@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,17 +25,43 @@ import (
 
 type fakePeers struct {
 	p2p.ClientI
+
+	mu    sync.Mutex
 	peers []*p2p.PeerInfo
+	err   error
+	hang  bool
 }
 
-func (f *fakePeers) GetPeers(context.Context) ([]*p2p.PeerInfo, error) {
-	return f.peers, nil
+func (f *fakePeers) set(peers []*p2p.PeerInfo, err error, hang bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.peers, f.err, f.hang = peers, err, hang
+}
+
+func (f *fakePeers) GetPeers(ctx context.Context) ([]*p2p.PeerInfo, error) {
+	f.mu.Lock()
+	peers, err, hang := f.peers, f.err, f.hang
+	f.mu.Unlock()
+
+	if hang {
+		<-ctx.Done()
+
+		return nil, ctx.Err()
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return peers, nil
 }
 
 type chainRig struct {
 	bc    blockchain.ClientI
 	tip   *chainhash.Hash
 	chain *Chain
+	peers *fakePeers
 }
 
 func newChainRig(t *testing.T, peers []*p2p.PeerInfo) *chainRig {
@@ -48,8 +75,8 @@ func newChainRig(t *testing.T, peers []*p2p.PeerInfo) *chainRig {
 	bc, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
 	require.NoError(t, err)
 
-	rig := &chainRig{bc: bc, tip: tSettings.ChainCfgParams.GenesisHash}
-	rig.chain = NewChain(bc, &fakePeers{peers: peers})
+	rig := &chainRig{bc: bc, tip: tSettings.ChainCfgParams.GenesisHash, peers: &fakePeers{peers: peers}}
+	rig.chain = NewChain(bc, rig.peers)
 
 	return rig
 }
@@ -181,6 +208,20 @@ func TestNoPeersLeavesPeerTipZero(t *testing.T) {
 	require.Equal(t, uint32(0), s.PeerTip)
 }
 
+func eventuallyPeerTip(t *testing.T, c *Chain, want uint32) snapshot.Snapshot {
+	t.Helper()
+
+	var s snapshot.Snapshot
+
+	require.Eventually(t, func() bool {
+		s = collectSnapshot(t, c)
+
+		return s.PeerTip == want
+	}, 3*time.Second, 10*time.Millisecond)
+
+	return s
+}
+
 func TestPeerTipIsMaxPeerHeight(t *testing.T) {
 	rig := newChainRig(t, []*p2p.PeerInfo{
 		{Height: 10, AdvertisedHeight: 50},
@@ -188,9 +229,7 @@ func TestPeerTipIsMaxPeerHeight(t *testing.T) {
 		{Height: 20, AdvertisedHeight: 30},
 	})
 
-	s := collectSnapshot(t, rig.chain)
-
-	require.Equal(t, uint32(70), s.PeerTip)
+	eventuallyPeerTip(t, rig.chain, 70)
 }
 
 func TestEventsSignalsOnBlock(t *testing.T) {
@@ -225,6 +264,49 @@ func TestEventsSignalsOnBlock(t *testing.T) {
 			return false
 		}
 	}, 3*time.Second, 10*time.Millisecond)
+}
+
+func TestP2PFailureKeepsFSMAndTip(t *testing.T) {
+	rig := newChainRig(t, []*p2p.PeerInfo{{Height: 70}})
+	rig.addBlock(t, 1)
+	rig.addBlock(t, 2)
+
+	eventuallyPeerTip(t, rig.chain, 70)
+
+	rig.peers.set(nil, errors.NewServiceError("p2p unavailable"), false)
+
+	s := eventuallyPeerTip(t, rig.chain, 0)
+
+	require.Equal(t, "RUNNING", s.FSM)
+	require.Equal(t, uint32(2), s.Tip)
+	require.Equal(t, uint32(0), s.PeerTip)
+	require.NotNil(t, s.Chain.BlocksWaiting)
+	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
+}
+
+func TestHungP2PDoesNotBlankChain(t *testing.T) {
+	rig := newChainRig(t, nil)
+	rig.addBlock(t, 1)
+	rig.peers.set(nil, nil, true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	start := time.Now()
+	patch, err := rig.chain.Collect(ctx)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	require.NotNil(t, patch)
+	require.Less(t, elapsed, time.Second)
+
+	var s snapshot.Snapshot
+
+	patch(&s)
+
+	require.Equal(t, "RUNNING", s.FSM)
+	require.Equal(t, uint32(1), s.Tip)
+	require.Equal(t, uint32(0), s.PeerTip)
 }
 
 func TestCollectFailureReturnsErrorAndNilPatch(t *testing.T) {
