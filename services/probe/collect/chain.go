@@ -30,6 +30,12 @@ type Chain struct {
 	lastAt     time.Time
 	lastWait   []uint32
 	lastBehind snapshot.Reading
+
+	peerMu   sync.Mutex
+	rec      guard.Recorder
+	peerBusy bool
+	peerOK   bool
+	peerTop  uint32
 }
 
 func NewChain(bc blockchain.ClientI, p2pc p2p.ClientI) *Chain {
@@ -45,17 +51,14 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 		return nil, err
 	}
 
+	peerTip := c.cachedPeerTip()
+
 	fsm, err := c.fsmState(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	tip, err := c.tipHeight(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	peerTip, err := c.peerTip(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +110,53 @@ func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, error)
 	return append([]uint32{}, c.lastWait...), behind, nil
 }
 
+func (c *Chain) cachedPeerTip() uint32 {
+	c.peerMu.Lock()
+	defer c.peerMu.Unlock()
+
+	if !c.peerBusy {
+		c.peerBusy = true
+
+		rec := c.rec
+
+		go func() {
+			defer guard.Recover(rec, "chain peer tip")
+
+			c.refreshPeerTip()
+		}()
+	}
+
+	if !c.peerOK {
+		return 0
+	}
+
+	return c.peerTop
+}
+
+func (c *Chain) refreshPeerTip() {
+	defer c.peerDone()
+
+	tip, err := c.peerTip(context.Background())
+
+	c.peerMu.Lock()
+	defer c.peerMu.Unlock()
+
+	c.peerOK = err == nil
+	c.peerTop = tip
+}
+
+func (c *Chain) peerDone() {
+	c.peerMu.Lock()
+	defer c.peerMu.Unlock()
+
+	c.peerBusy = false
+}
+
 func (c *Chain) Events(ctx context.Context, rec guard.Recorder) <-chan struct{} {
+	c.peerMu.Lock()
+	c.rec = rec
+	c.peerMu.Unlock()
+
 	out := make(chan struct{}, 1)
 
 	notifications, err := c.bc.Subscribe(ctx, blockchain.SubscriberProbe)
