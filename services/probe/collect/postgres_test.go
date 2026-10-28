@@ -226,6 +226,115 @@ func TestRepeatedFailedPostgresCollectsDoNotLeakGoroutines(t *testing.T) {
 	hung.Close()
 }
 
+func sslURL(query string) *url.URL {
+	return &url.URL{Scheme: "postgres", User: url.UserPassword("u", "p"), Host: "db.example:5432", Path: "/db", RawQuery: query}
+}
+
+func TestSslmodeNotForcedWhenAbsent(t *testing.T) {
+	p, err := NewPostgres(sslURL(""), time.Second, 0)
+	require.NoError(t, err)
+
+	require.NotContains(t, p.connString, "sslmode")
+
+	cfg := p.connConfig()
+	require.NotNil(t, cfg.TLSConfig)
+	require.True(t, cfg.TLSConfig.InsecureSkipVerify)
+	require.Len(t, cfg.Fallbacks, 1)
+	require.Nil(t, cfg.Fallbacks[0].TLSConfig)
+}
+
+func TestSslmodePassedThrough(t *testing.T) {
+	p, err := NewPostgres(sslURL("sslmode=require"), time.Second, 0)
+	require.NoError(t, err)
+
+	cfg := p.connConfig()
+	require.NotNil(t, cfg.TLSConfig)
+	require.True(t, cfg.TLSConfig.InsecureSkipVerify)
+	require.Empty(t, cfg.Fallbacks)
+
+	p, err = NewPostgres(sslURL("sslmode=verify-full"), time.Second, 0)
+	require.NoError(t, err)
+
+	cfg = p.connConfig()
+	require.NotNil(t, cfg.TLSConfig)
+	require.False(t, cfg.TLSConfig.InsecureSkipVerify)
+	require.Equal(t, "db.example", cfg.TLSConfig.ServerName)
+	require.Empty(t, cfg.Fallbacks)
+
+	p, err = NewPostgres(sslURL("sslmode=disable"), time.Second, 0)
+	require.NoError(t, err)
+	require.Nil(t, p.connConfig().TLSConfig)
+}
+
+func TestTLSParametersPassedThrough(t *testing.T) {
+	missing := "/nonexistent/probe-test"
+
+	for _, key := range []string{"sslrootcert", "sslcert", "sslkey"} {
+		q := url.Values{"sslmode": {"verify-full"}, key: {missing}}
+
+		_, err := NewPostgres(sslURL(q.Encode()), time.Second, 0)
+		require.Error(t, err, key)
+	}
+
+	p, err := NewPostgres(sslURL("connect_timeout=2&application_name=my%20app&ignored=1"), 5*time.Second, 0)
+	require.NoError(t, err)
+
+	require.Contains(t, p.connString, "application_name='my app'")
+	require.NotContains(t, p.connString, "ignored")
+
+	cfg := p.connConfig()
+	require.Equal(t, 2*time.Second, cfg.ConnectTimeout)
+	require.Equal(t, "my app", cfg.RuntimeParams["application_name"])
+	require.Equal(t, "on", cfg.RuntimeParams["default_transaction_read_only"])
+
+	p, err = NewPostgres(sslURL("connect_timeout=60"), 5*time.Second, 0)
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Second, p.connConfig().ConnectTimeout)
+}
+
+func TestQueuedCollectGetsItsOwnTimeout(t *testing.T) {
+	addr := acceptAndHold(t)
+
+	const timeout = 500 * time.Millisecond
+
+	p, err := NewPostgres(&url.URL{Scheme: "postgres", User: url.UserPassword("u", "p"), Host: addr, Path: "/db"}, timeout, 0)
+	require.NoError(t, err)
+
+	defer p.Close()
+
+	type outcome struct {
+		patch   snapshot.Patch
+		err     error
+		elapsed time.Duration
+	}
+
+	results := make(chan outcome, 2)
+	start := time.Now()
+
+	run := func() {
+		patch, cerr := p.Collect(context.Background())
+		results <- outcome{patch: patch, err: cerr, elapsed: time.Since(start)}
+	}
+
+	go run()
+
+	time.Sleep(50 * time.Millisecond)
+
+	go run()
+
+	first := <-results
+	second := <-results
+
+	for _, r := range []outcome{first, second} {
+		require.Error(t, r.err)
+		require.Nil(t, r.patch)
+	}
+
+	require.GreaterOrEqual(t, first.elapsed, timeout-50*time.Millisecond)
+	require.GreaterOrEqual(t, second.elapsed, first.elapsed+timeout-100*time.Millisecond)
+	require.Less(t, second.elapsed, first.elapsed+timeout+2*time.Second)
+}
+
 func TestCollectAfterCloseFails(t *testing.T) {
 	p, err := NewPostgres(&url.URL{Scheme: "postgres", Host: "127.0.0.1:1", Path: "/db"}, 200*time.Millisecond, 0)
 	require.NoError(t, err)
