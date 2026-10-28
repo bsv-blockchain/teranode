@@ -43,6 +43,7 @@ type Server struct {
 	rename        func(oldPath, newPath string) error
 	listen        func(network, address string) (net.Listener, error)
 	hook          atomic.Pointer[func(point string)]
+	logClock      func() time.Time
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -110,6 +111,14 @@ func (s *Server) Addr() string {
 	return s.listener.Addr().String()
 }
 
+func (s *Server) faultClock() func() time.Time {
+	if s.logClock != nil {
+		return s.logClock
+	}
+
+	return s.now
+}
+
 func (s *Server) nodeName() string {
 	name, err := os.Hostname()
 	if err != nil || name == "" {
@@ -169,6 +178,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	}
 
 	f := newFaults(s.logger)
+	f.setClock(s.faultClock())
 	runCtx, cancel := context.WithCancel(ctx)
 	set := s.collectors(runCtx, f.collectors)
 

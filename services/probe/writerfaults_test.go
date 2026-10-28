@@ -90,6 +90,7 @@ func TestPersistentWriterPanicWithSlowReconnectSelfStops(t *testing.T) {
 	logger := &captureLogger{}
 
 	srv := newProbe(t, probeOpts{logger: logger})
+	srv.logClock = stepClock()
 	srv.setFaultHook(panicAt(faultClientWrite, -1))
 	require.NoError(t, srv.Init(context.Background()))
 
@@ -112,6 +113,7 @@ func TestPersistentClientWriterPanicSelfStopsAfterFive(t *testing.T) {
 	logger := &captureLogger{}
 
 	srv := newProbe(t, probeOpts{logger: logger})
+	srv.logClock = stepClock()
 	srv.setFaultHook(panicAt(faultClientWrite, -1))
 	require.NoError(t, srv.Init(context.Background()))
 
@@ -136,6 +138,7 @@ func TestBroadcastToZeroClientsIsNeutral(t *testing.T) {
 	var hits atomic.Int64
 
 	srv := newProbe(t, probeOpts{logger: logger})
+	srv.logClock = stepClock()
 	srv.setFaultHook(func(point string) {
 		if point != faultHub {
 			return
@@ -163,6 +166,7 @@ func TestSuccessfulClientWriteResetsStreak(t *testing.T) {
 	interval := 100 * time.Millisecond
 
 	srv := newProbe(t, probeOpts{logger: logger, sampleInterval: interval})
+	srv.logClock = stepClock()
 	errCh := runProbe(t, srv)
 
 	conn := authedWS(t, srv)
@@ -221,7 +225,7 @@ func TestManyWritersPanickingOnOneSnapshotCountOnce(t *testing.T) {
 	armed.Store(true)
 
 	require.Eventually(t, func() bool {
-		return srv.hubClients() == 0 && countLines(logger.Lines(), "websocket client writer panicked") == maxConsecutivePanics
+		return srv.hubClients() == 0 && countLines(logger.Lines(), "websocket client writer panicked") == 1
 	}, 5*time.Second, 5*time.Millisecond)
 	require.Equal(t, 1, hubStreak(srv))
 
@@ -229,6 +233,10 @@ func TestManyWritersPanickingOnOneSnapshotCountOnce(t *testing.T) {
 }
 
 func TestMoveAsideReportsRealError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src")
 	locked := filepath.Join(dir, "locked")
