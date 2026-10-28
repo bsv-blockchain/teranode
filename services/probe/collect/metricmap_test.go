@@ -2,6 +2,9 @@ package collect
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -64,10 +67,22 @@ func testSettings() *settings.Settings {
 func applyTwo(t *testing.T, first, second MetricSet, cfg *settings.Settings) snapshot.Snapshot {
 	t.Helper()
 
+	return applyGap(t, first, second, 2*time.Second, cfg)
+}
+
+func applyOverWindow(t *testing.T, first, second MetricSet, cfg *settings.Settings) snapshot.Snapshot {
+	t.Helper()
+
+	return applyGap(t, first, second, cacheRateWindow, cfg)
+}
+
+func applyGap(t *testing.T, first, second MetricSet, gap time.Duration, cfg *settings.Settings) snapshot.Snapshot {
+	t.Helper()
+
 	r := NewRates()
 	start := time.Unix(1000, 0)
 	r.Observe(start, first)
-	r.Observe(start.Add(2*time.Second), second)
+	r.Observe(start.Add(gap), second)
 
 	s := snapshot.NewSnapshot("node")
 	Apply(&s, second, r, cfg)
@@ -95,15 +110,15 @@ func cacheSet(hits, misses float64) MetricSet {
 }
 
 func TestCacheHitRate(t *testing.T) {
-	s := applyTwo(t, cacheSet(1000, 500), cacheSet(1900, 600), testSettings())
+	s := applyOverWindow(t, cacheSet(1000, 500), cacheSet(1900, 600), testSettings())
 
 	requireOK(t, 0.9, s.Cache.HitRate)
-	requireOK(t, 50, s.Cache.MissesPerSec)
-	requireOK(t, 500, s.Flow(snapshot.FlowLookups).Rate)
+	requireOK(t, 10, s.Cache.MissesPerSec)
+	requireOK(t, 100, s.Flow(snapshot.FlowLookups).Rate)
 }
 
 func TestCacheHitRateNoLookups(t *testing.T) {
-	s := applyTwo(t, cacheSet(1000, 500), cacheSet(1000, 500), testSettings())
+	s := applyOverWindow(t, cacheSet(1000, 500), cacheSet(1000, 500), testSettings())
 
 	require.Equal(t, snapshot.StatusNoData, s.Cache.HitRate.Status)
 	require.Equal(t, "no data", s.Cache.HitRate.Note)
@@ -122,12 +137,49 @@ func TestCacheHitRateFirstSampleAndResetGiveNoData(t *testing.T) {
 	require.Equal(t, snapshot.StatusNoData, s.Cache.HitRate.Status)
 	require.Equal(t, "no data", s.Cache.HitRate.Note)
 
-	s = applyTwo(t, cacheSet(1000, 500), cacheSet(10, 1), testSettings())
+	s = applyOverWindow(t, cacheSet(1000, 500), cacheSet(10, 1), testSettings())
 
 	require.Equal(t, snapshot.StatusNoData, s.Cache.HitRate.Status)
 	require.Equal(t, "no data", s.Cache.HitRate.Note)
 	requireNoData(t, s.Cache.MissesPerSec)
 	requireNoData(t, s.Flow(snapshot.FlowLookups).Rate)
+}
+
+func publishedCacheSet(at time.Duration) MetricSet {
+	published := float64(int(at.Seconds()) / 5 * 5)
+
+	return join(
+		gaugeSet(metricCacheHits, 900*published),
+		gaugeSet(metricCacheMisses, 100*published),
+		gaugeSet(metricCacheEvictions, 50*published),
+	)
+}
+
+func TestCacheRatesStableAcrossPublishCadence(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(1000, 0)
+
+	for at := time.Duration(0); at <= 60*time.Second; at += 2 * time.Second {
+		set := publishedCacheSet(at)
+		r.Observe(start.Add(at), set)
+
+		s := snapshot.NewSnapshot("node")
+		Apply(&s, set, r, testSettings())
+
+		if at < cacheRateWindow {
+			require.Equal(t, snapshot.StatusNoData, s.Cache.HitRate.Status, at)
+			requireNoData(t, s.Cache.MissesPerSec)
+			requireNoData(t, s.Cache.EvictionsPerSec)
+			requireNoData(t, s.Flow(snapshot.FlowLookups).Rate)
+
+			continue
+		}
+
+		requireOK(t, 0.9, s.Cache.HitRate)
+		requireOK(t, 100, s.Cache.MissesPerSec)
+		requireOK(t, 50, s.Cache.EvictionsPerSec)
+		requireOK(t, 1000, s.Flow(snapshot.FlowLookups).Rate)
+	}
 }
 
 func TestCacheFillUsesSettingCapacity(t *testing.T) {
@@ -144,13 +196,13 @@ func TestCacheFillUsesSettingCapacity(t *testing.T) {
 		gaugeSet(metricCacheEvictions, 2100),
 	)
 
-	s := applyTwo(t, set, next, testSettings())
+	s := applyOverWindow(t, set, next, testSettings())
 
 	requireOK(t, 2, s.Cache.CapacityGB)
 	requireOK(t, 1.5, s.Cache.EntriesMillions)
 	requireOK(t, 0.4, s.Cache.CurrentGenFrac)
 	requireOK(t, 0.6, s.Cache.PreviousGenFrac)
-	requireOK(t, 1000, s.Cache.EvictionsPerSec)
+	requireOK(t, 200, s.Cache.EvictionsPerSec)
 
 	// The cache exports entry counts only. Entry size varies with the parent hashes
 	// and block IDs each entry holds, so no bytes estimate exists: fill and size stay nodata.
@@ -159,7 +211,7 @@ func TestCacheFillUsesSettingCapacity(t *testing.T) {
 
 	cfg := testSettings()
 	cfg.SubtreeValidation.TxMetaCacheMaxMB = 0
-	s = applyTwo(t, set, next, cfg)
+	s = applyOverWindow(t, set, next, cfg)
 
 	requireNoData(t, s.Cache.CapacityGB)
 }
@@ -385,7 +437,7 @@ func TestApplyKeepsNormal(t *testing.T) {
 
 	r := NewRates()
 	r.Observe(time.Unix(1000, 0), cacheSet(1000, 500))
-	r.Observe(time.Unix(1002, 0), cacheSet(1900, 600))
+	r.Observe(time.Unix(1010, 0), cacheSet(1900, 600))
 	Apply(&s, cacheSet(1900, 600), r, testSettings())
 
 	require.NotNil(t, s.Cache.HitRate.Normal)
@@ -410,16 +462,24 @@ func (g *sequenceGatherer) Gather() ([]*dto.MetricFamily, error) {
 	return families, g.err
 }
 
+func steppingClock(step time.Duration) func() time.Time {
+	now := time.Unix(1000, 0)
+
+	return func() time.Time {
+		now = now.Add(step)
+		return now
+	}
+}
+
 func TestMetricsCollectorReturnsPatch(t *testing.T) {
 	g := &sequenceGatherer{sets: []MetricSet{cacheSet(1000, 500), cacheSet(1900, 600)}}
 	c := NewMetricsCollector(newLocalSource(g), NewRates(), testSettings())
+	c.now = steppingClock(cacheRateWindow)
 
 	require.Equal(t, "metrics", c.Name())
 
 	_, err := c.Collect(context.Background())
 	require.NoError(t, err)
-
-	time.Sleep(10 * time.Millisecond)
 
 	patch, err := c.Collect(context.Background())
 	require.NoError(t, err)
@@ -427,23 +487,19 @@ func TestMetricsCollectorReturnsPatch(t *testing.T) {
 	s := snapshot.NewSnapshot("node")
 	patch(&s)
 
-	require.Equal(t, snapshot.StatusOK, s.Cache.HitRate.Status)
-	require.InDelta(t, 0.9, s.Cache.HitRate.Value, 1e-9)
+	requireOK(t, 0.9, s.Cache.HitRate)
 }
 
 func TestMetricsCollectorPatchKeepsItsInterval(t *testing.T) {
 	g := &sequenceGatherer{sets: []MetricSet{cacheSet(1000, 500), cacheSet(1900, 600), cacheSet(1900, 600)}}
 	c := NewMetricsCollector(newLocalSource(g), NewRates(), testSettings())
+	c.now = steppingClock(cacheRateWindow)
 
 	_, err := c.Collect(context.Background())
 	require.NoError(t, err)
 
-	time.Sleep(10 * time.Millisecond)
-
 	patch, err := c.Collect(context.Background())
 	require.NoError(t, err)
-
-	time.Sleep(10 * time.Millisecond)
 
 	_, err = c.Collect(context.Background())
 	require.NoError(t, err)
@@ -464,19 +520,55 @@ func TestMetricsCollectorTotalGatherFailureReturnsNoPatch(t *testing.T) {
 	require.Nil(t, patch)
 }
 
-func TestMetricsCollectorPartialGatherKeepsData(t *testing.T) {
-	gatherErr := errors.NewServiceError("one target down")
-	g := &sequenceGatherer{sets: []MetricSet{gaugeSet(metricPeers, 12)}, err: gatherErr}
-	c := NewMetricsCollector(newLocalSource(g), NewRates(), testSettings())
+func counterTarget(t *testing.T, values []float64, failOn int) *httptest.Server {
+	t.Helper()
+
+	calls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		call := calls
+		calls++
+
+		if call == failOn {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		_, _ = fmt.Fprintf(w, "# TYPE %s counter\n%s %g\n", metricPropagationInvalid, metricPropagationInvalid, values[call])
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+func TestPartialGatherDoesNotObserveAndNoSpikeAfterRecovery(t *testing.T) {
+	a := counterTarget(t, []float64{100, 300, 500}, -1)
+	b := counterTarget(t, []float64{1000, 0, 1400}, 1)
+
+	c := NewMetricsCollector(NewHTTPSource([]string{a.URL, b.URL}, 5*time.Second), NewRates(), testSettings())
+	clock := time.Unix(1000, 0)
+	c.now = func() time.Time { return clock }
+
+	_, err := c.Collect(context.Background())
+	require.NoError(t, err)
+
+	clock = clock.Add(2 * time.Second)
 
 	patch, err := c.Collect(context.Background())
-	require.ErrorIs(t, err, gatherErr)
+	require.Error(t, err)
+	require.Nil(t, patch)
+
+	clock = clock.Add(2 * time.Second)
+
+	patch, err = c.Collect(context.Background())
+	require.NoError(t, err)
 	require.NotNil(t, patch)
 
 	s := snapshot.NewSnapshot("node")
 	patch(&s)
 
-	requireOK(t, 12, s.Ingress.Peers)
+	// A rose 400 and B rose 400 between the first and third gathers, 4 s apart.
+	requireOK(t, 200, s.Ingress.RejectedPerSec)
 }
 
 func TestMetricsCollectorCancelledContext(t *testing.T) {
