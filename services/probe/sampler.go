@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -61,6 +62,7 @@ type entry struct {
 	goodAt    time.Time
 	touched   []string
 	stale     bool
+	failing   bool
 }
 
 type outcome struct {
@@ -454,7 +456,13 @@ func (s *Sampler) accept(res outcome) bool {
 	if res.panicked || res.err != nil || res.patch == nil {
 		s.mu.Lock()
 		e.stale = true
+		first := !e.failing && !res.panicked
+		e.failing = e.failing || !res.panicked
 		s.mu.Unlock()
+
+		if first {
+			s.logger.Warnf("[Probe] source %s has no data: %s", e.name, failureText(res.err))
+		}
 
 		return res.panicked
 	}
@@ -470,10 +478,15 @@ func (s *Sampler) accept(res outcome) bool {
 		return true
 	}
 
+	if e.failing {
+		s.logger.Infof("[Probe] source %s is back", e.name)
+	}
+
 	e.good = res.patch
 	e.goodAt = s.now()
 	e.touched = touched
 	e.stale = false
+	e.failing = false
 
 	return false
 }
@@ -714,6 +727,14 @@ func cloneSnapshot(src snapshot.Snapshot) snapshot.Snapshot {
 	})
 
 	return dst
+}
+
+func failureText(err error) string {
+	if err == nil {
+		return "no result"
+	}
+
+	return urlutil.RedactText(oneLine(err))
 }
 
 func oneLine(v any) string {
