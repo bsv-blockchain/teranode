@@ -19,12 +19,14 @@ const (
 	metricValidatorInvalid = "teranode_validator_invalid_transactions"
 	metricSpendBatchSize   = "teranode_aerospike_utxo_spend_batch_size"
 
-	metricCacheHits         = "teranode_tx_meta_cache_hits"
-	metricCacheMisses       = "teranode_tx_meta_cache_misses"
-	metricCacheEvictions    = "teranode_tx_meta_cache_evictions"
-	metricCacheValidEntries = "teranode_tx_meta_cache_valid_entries_count"
-	metricCacheCurrentGen   = "teranode_tx_meta_cache_current_gen_entries"
-	metricCachePreviousGen  = "teranode_tx_meta_cache_previous_gen_entries"
+	metricCacheHits          = "teranode_tx_meta_cache_hits"
+	metricCacheMisses        = "teranode_tx_meta_cache_misses"
+	metricCacheEvictions     = "teranode_tx_meta_cache_evictions"
+	metricCacheValidEntries  = "teranode_tx_meta_cache_valid_entries_count"
+	metricCacheCurrentGen    = "teranode_tx_meta_cache_current_gen_entries"
+	metricCachePreviousGen   = "teranode_tx_meta_cache_previous_gen_entries"
+	metricCacheBytes         = "teranode_tx_meta_cache_bytes"
+	metricCacheCapacityBytes = "teranode_tx_meta_cache_capacity_bytes"
 
 	metricAssemblyState   = "teranode_blockassembly_current_state"
 	metricAssemblyTipLag  = "teranode_blockassembly_tip_lag_blocks"
@@ -75,6 +77,8 @@ var MetricNames = append([]string{
 	metricCacheValidEntries,
 	metricCacheCurrentGen,
 	metricCachePreviousGen,
+	metricCacheBytes,
+	metricCacheCapacityBytes,
 	metricAssemblyState,
 	metricAssemblyTipLag,
 	metricAssemblyHeadAge,
@@ -145,13 +149,28 @@ func applyCache(s *snapshot.Snapshot, m MetricSet, r *Rates, cfg *settings.Setti
 	}
 
 	set(&s.Cache.EvictionsPerSec, windowRate(r, metricCacheEvictions))
-	set(&s.Cache.Fill, noData(noteNoData))
-	set(&s.Cache.SizeGB, noData(noteNoData))
-
-	if maxMB := cfg.SubtreeValidation.TxMetaCacheMaxMB; maxMB > 0 {
-		set(&s.Cache.CapacityGB, okReading(float64(maxMB)/1024))
+	bytes, bytesOK := m.Sum(metricCacheBytes)
+	if bytesOK {
+		set(&s.Cache.SizeGB, okReading(bytes/1e9))
 	} else {
+		set(&s.Cache.SizeGB, noData(noteNoData))
+	}
+
+	capacity, capacityOK := m.Sum(metricCacheCapacityBytes)
+
+	switch {
+	case capacityOK && capacity > 0:
+		set(&s.Cache.CapacityGB, okReading(capacity/1e9))
+	case cfg.SubtreeValidation.TxMetaCacheMaxMB > 0:
+		set(&s.Cache.CapacityGB, okReading(float64(cfg.SubtreeValidation.TxMetaCacheMaxMB)/1024))
+	default:
 		set(&s.Cache.CapacityGB, noData(noteNoData))
+	}
+
+	if bytesOK && capacityOK && capacity > 0 {
+		set(&s.Cache.Fill, okReading(bytes/capacity))
+	} else {
+		set(&s.Cache.Fill, noData(noteNoData))
 	}
 
 	valid, validOK := m.Sum(metricCacheValidEntries)

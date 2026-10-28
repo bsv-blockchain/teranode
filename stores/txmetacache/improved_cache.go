@@ -229,7 +229,9 @@ type Stats struct {
 	// Evictions is the number of entries the cache dropped to make room
 	// (ring wraps). Only the lockfree cache reports it; explicit deletes are
 	// counted separately by TxMetaCache.
-	Evictions uint64
+	Evictions     uint64
+	Bytes         uint64
+	CapacityBytes uint64
 }
 
 // Reset clears all statistics in the Stats object.
@@ -1128,7 +1130,17 @@ func (b *bucketNative) UpdateStats(s *Stats) {
 	s.ValidEntriesCount += currentGen + validPreviousGenCount
 
 	s.TotalMapSize += b.getMapSize()
+	s.CapacityBytes += uint64(len(b.chunks)) * ChunkSize
+	s.Bytes += b.ringBytes()
 	b.mu.RUnlock()
+}
+
+func (b *bucketNative) ringBytes() uint64 {
+	if b.gen > 1 {
+		return uint64(len(b.chunks)) * ChunkSize
+	}
+
+	return b.idx
 }
 
 func (b *bucketNative) listChunks() {}
@@ -1597,8 +1609,18 @@ func (b *bucketTrimmed) UpdateStats(s *Stats) {
 
 	s.TotalElementsAdded += uint64(b.elementsAdded) // nolint:gosec
 	s.TotalMapSize += b.getMapSize()
+	s.CapacityBytes += uint64(len(b.chunks)) * ChunkSize
+	s.Bytes += b.ringBytes()
 
 	b.mu.RUnlock()
+}
+
+func (b *bucketTrimmed) ringBytes() uint64 {
+	if b.gen > 1 {
+		return uint64(len(b.chunks)) * ChunkSize
+	}
+
+	return b.idx
 }
 
 func (b *bucketTrimmed) listChunks() {
@@ -2052,6 +2074,8 @@ func (b *bucketPreallocated) UpdateStats(s *Stats) {
 
 	s.TrimCount = b.trimCount
 	s.TotalMapSize += b.getMapSize()
+	s.CapacityBytes += uint64(len(b.chunks)) * ChunkSize
+	s.Bytes += b.idx
 
 	b.mu.RUnlock()
 }
@@ -2409,7 +2433,17 @@ func (b *bucketUnallocated) UpdateStats(s *Stats) {
 	s.ValidEntriesCount += currentGen + validPreviousGenCount
 
 	s.TotalMapSize += b.getMapSize()
+	s.CapacityBytes += uint64(len(b.chunks)) * ChunkSize
+	s.Bytes += b.ringBytes()
 	b.mu.RUnlock()
+}
+
+func (b *bucketUnallocated) ringBytes() uint64 {
+	if b.gen > 1 {
+		return uint64(len(b.chunks)) * ChunkSize
+	}
+
+	return b.idx
 }
 
 func (b *bucketUnallocated) listChunks() {

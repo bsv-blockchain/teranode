@@ -204,8 +204,7 @@ func TestCacheFillUsesSettingCapacity(t *testing.T) {
 	requireOK(t, 0.6, s.Cache.PreviousGenFrac)
 	requireOK(t, 200, s.Cache.EvictionsPerSec)
 
-	// The cache exports entry counts only. Entry size varies with the parent hashes
-	// and block IDs each entry holds, so no bytes estimate exists: fill and size stay nodata.
+	// An older node exports no bytes gauges: fill and size stay nodata.
 	requireNoData(t, s.Cache.Fill)
 	requireNoData(t, s.Cache.SizeGB)
 
@@ -214,6 +213,62 @@ func TestCacheFillUsesSettingCapacity(t *testing.T) {
 	s = applyOverWindow(t, set, next, cfg)
 
 	requireNoData(t, s.Cache.CapacityGB)
+}
+
+func cacheBytesSet(bytes, capacity float64) MetricSet {
+	return join(
+		gaugeSet(metricCacheValidEntries, 2_500_000),
+		gaugeSet(metricCacheBytes, bytes),
+		gaugeSet(metricCacheCapacityBytes, capacity),
+	)
+}
+
+func TestCacheFillFromBytesGauge(t *testing.T) {
+	set := cacheBytesSet(7.4e9, 8e9)
+
+	s := applyTwo(t, set, set, testSettings())
+
+	requireOK(t, 0.925, s.Cache.Fill)
+	requireOK(t, 7.4, s.Cache.SizeGB)
+	requireOK(t, 8, s.Cache.CapacityGB)
+	requireOK(t, 2.5, s.Cache.EntriesMillions)
+}
+
+func TestCacheFillNoDataWhenBytesGaugeAbsent(t *testing.T) {
+	set := gaugeSet(metricCacheValidEntries, 2_500_000)
+
+	s := applyTwo(t, set, set, testSettings())
+
+	requireNoData(t, s.Cache.Fill)
+	requireNoData(t, s.Cache.SizeGB)
+	requireOK(t, 2, s.Cache.CapacityGB)
+	requireOK(t, 2.5, s.Cache.EntriesMillions)
+
+	set = join(set, gaugeSet(metricCacheBytes, 7.4e9))
+	s = applyTwo(t, set, set, testSettings())
+
+	requireNoData(t, s.Cache.Fill)
+	requireOK(t, 7.4, s.Cache.SizeGB)
+	requireOK(t, 2, s.Cache.CapacityGB)
+
+	set = cacheBytesSet(7.4e9, 0)
+	s = applyTwo(t, set, set, testSettings())
+
+	requireNoData(t, s.Cache.Fill)
+	requireOK(t, 7.4, s.Cache.SizeGB)
+}
+
+func TestCacheFillUsesCapacityGaugeNotSetting(t *testing.T) {
+	cfg := testSettings()
+	cfg.SubtreeValidation.TxMetaCacheMaxMB = 1
+
+	set := cacheBytesSet(4e9, 8e9)
+
+	s := applyTwo(t, set, set, cfg)
+
+	requireOK(t, 0.5, s.Cache.Fill)
+	requireOK(t, 4, s.Cache.SizeGB)
+	requireOK(t, 8, s.Cache.CapacityGB)
 }
 
 func TestCacheGenerationSplitEmptyCacheIsNoData(t *testing.T) {
