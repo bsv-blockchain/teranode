@@ -50,7 +50,8 @@
       "diskFill": {"v": 0.71, "st": "warn"},
       "sizeGB": {"v": 1840, "st": "ok"},
       "readP99Sec": {"v": 0.038, "st": "crit", "normal": 0.0012},
-      "opsPerSec": {"v": 31000, "st": "ok"},
+      "readsPerSec": {"v": 31000, "st": "ok"},
+      "writesPerSec": {"v": 4200, "st": "ok"},
       "commitsPerSec": {"v": 0, "st": "nodata", "note": "no data"}
     },
     "postgres": {
@@ -58,7 +59,8 @@
       "diskFill": {"v": 0, "st": "nodata", "note": "no data"},
       "sizeGB": {"v": 0, "st": "nodata", "note": "no data"},
       "readP99Sec": {"v": 0, "st": "nodata", "note": "no data"},
-      "opsPerSec": {"v": 0, "st": "nodata", "note": "no data"},
+      "readsPerSec": {"v": 0, "st": "nodata", "note": "no data"},
+      "writesPerSec": {"v": 0, "st": "nodata", "note": "no data"},
       "commitsPerSec": {"v": 0, "st": "nodata", "note": "no data"}
     }
   },

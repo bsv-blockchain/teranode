@@ -53,12 +53,14 @@ export const UNITS = {
   'stores.aerospike.diskFill': 'fraction',
   'stores.aerospike.sizeGB': 'gb',
   'stores.aerospike.readP99Sec': 'seconds',
-  'stores.aerospike.opsPerSec': 'compact',
+  'stores.aerospike.readsPerSec': 'compact',
+  'stores.aerospike.writesPerSec': 'compact',
   'stores.aerospike.commitsPerSec': 'compact',
   'stores.postgres.diskFill': 'fraction',
   'stores.postgres.sizeGB': 'gb',
   'stores.postgres.readP99Sec': 'seconds',
-  'stores.postgres.opsPerSec': 'compact',
+  'stores.postgres.readsPerSec': 'compact',
+  'stores.postgres.writesPerSec': 'compact',
   'stores.postgres.commitsPerSec': 'compact',
 };
 
@@ -104,17 +106,24 @@ export const LABELS = {
   'stores.postgres.diskFill': 'Disk fill',
   'stores.aerospike.sizeGB': 'Size',
   'stores.postgres.sizeGB': 'Size',
-  'stores.aerospike.opsPerSec': 'Operations',
-  'stores.postgres.opsPerSec': 'Queries',
+  'stores.aerospike.readsPerSec': 'Reads',
+  'stores.aerospike.writesPerSec': 'Writes',
+  'stores.postgres.readsPerSec': 'Reads',
+  'stores.postgres.writesPerSec': 'Writes',
   'stores.aerospike.commitsPerSec': 'Commits',
   'stores.postgres.commitsPerSec': 'Commits',
 };
 
 export const STORE_RATE_SUFFIX = {
-  'stores.aerospike.opsPerSec': ' ops/s',
   'stores.aerospike.commitsPerSec': ' commits/s',
-  'stores.postgres.opsPerSec': ' q/s',
   'stores.postgres.commitsPerSec': ' commits/s',
+};
+
+export const STORE_RATE_PREFIXED = {
+  'stores.aerospike.readsPerSec': true,
+  'stores.aerospike.writesPerSec': true,
+  'stores.postgres.readsPerSec': true,
+  'stores.postgres.writesPerSec': true,
 };
 
 export const FLOW_PLACEMENT = {
@@ -369,6 +378,7 @@ function pulse(st) {
 
 const READOUT_ROOM = 118;
 const TANK_NOTE_LINES = 5;
+const TANK_NOTE_BUDGET = { aerospike: 2, postgres: 10 };
 
 function readout(y, label, fr, key) {
   let size = fr.text.length > 10 ? 12 : 15;
@@ -407,7 +417,22 @@ function meter(y, label, fr, pct, key) {
   ]);
 }
 
-function tank(y, label, pct, st, lines, notes, attrs) {
+function fitNotes(notes, maxLines) {
+  const wrapped = notes.map((note) => wrapWords(note, 28));
+  const total = wrapped.reduce((n, w) => n + w.length, 0);
+  if (total <= maxLines) return wrapped.flat();
+  const out = [];
+  let shown = 0;
+  for (const w of wrapped) {
+    if (out.length + w.length > maxLines - 1) break;
+    out.push(...w);
+    shown += 1;
+  }
+  out.push(`+${notes.length - shown} more in details`);
+  return out;
+}
+
+function tank(y, label, pct, st, lines, notes, attrs, maxNotes) {
   const hgt = 104;
   const top = y + 10;
   const bot = top + hgt;
@@ -417,8 +442,7 @@ function tank(y, label, pct, st, lines, notes, attrs) {
   const liqTop = bot - liqH;
   const ticks = [1, 2, 3].map((i) => h('line', { x1: 64, x2: 70, y1: top + (hgt * i) / 4, y2: top + (hgt * i) / 4, stroke: '#4a5866' }));
   const pctText = attrs['data-st'] === 'n' && !known ? '' : known ? `${Math.round(p)}%` : '–';
-  const noteLines = [];
-  notes.forEach((note) => wrapWords(note, 28).forEach((l) => noteLines.push(l)));
+  const noteLines = fitNotes(notes, maxNotes || TANK_NOTE_LINES);
   return h('g', attrs, [
     h('text', { x: 12, y, class: 'lb' }, label),
     h('rect', { x: 14, y: top, width: 54, height: hgt, fill: 'url(#glassG)', stroke: '#3a4756' }),
@@ -432,8 +456,9 @@ function tank(y, label, pct, st, lines, notes, attrs) {
     h('text', { x: 80, y: top + 16, class: 'val', 'font-size': 13 }, lines[0] || ''),
     h('text', { x: 80, y: top + 36, class: 'tx' }, lines[1] || ''),
     h('text', { x: 80, y: top + 52, class: 'tx' }, lines[2] || ''),
-    h('text', { x: 80, y: top + 68, class: 'lb' }, lines[3] || ''),
-    h('g', {}, noteLines.slice(0, TANK_NOTE_LINES).map((l, i) => h('text', { x: 12, y: bot + 22 + i * 14, class: 'wd' }, l))),
+    h('text', { x: 80, y: top + 68, class: 'tx' }, lines[3] || ''),
+    h('text', { x: 80, y: top + 84, class: 'tx' }, lines[4] || ''),
+    h('g', {}, noteLines.map((l, i) => h('text', { x: 12, y: bot + 22 + i * 14, class: 'wd' }, l))),
   ]);
 }
 
@@ -619,21 +644,25 @@ function storeTank(s, name, y, anchors) {
   const size = formatReading(`${base}.sizeGB`, store.sizeGB);
   const p99Key = `${base}.readP99Sec`;
   const p99 = formatReading(p99Key, store.readP99Sec);
-  const ops = formatReading(`${base}.opsPerSec`, store.opsPerSec);
+  const reads = formatReading(`${base}.readsPerSec`, store.readsPerSec);
+  const writes = formatReading(`${base}.writesPerSec`, store.writesPerSec);
   const commits = formatReading(`${base}.commitsPerSec`, store.commitsPerSec);
-  const rateLine = (key, fr) => (fr.nodata ? `${LABELS[key]} –` : `${fr.text}${STORE_RATE_SUFFIX[key]}`);
+  const rateLine = (key, fr) => {
+    if (fr.nodata) return `${LABELS[key]} –`;
+    return STORE_RATE_PREFIXED[key] ? `${LABELS[key]} ${fr.text}/s` : `${fr.text}${STORE_RATE_SUFFIX[key]}`;
+  };
   const lines = [
     size.nodata ? 'Size –' : size.text,
     `${LABELS[p99Key]} ${p99.text}`,
-    rateLine(`${base}.opsPerSec`, ops),
-    name === 'postgres' ? rateLine(`${base}.commitsPerSec`, commits) : p99.normal ? `Normal ${p99.normal}` : '',
-  ];
+    rateLine(`${base}.readsPerSec`, reads),
+    rateLine(`${base}.writesPerSec`, writes),
+  ].concat(name === 'postgres' ? [rateLine(`${base}.commitsPerSec`, commits)] : [p99.normal ? `Normal ${p99.normal}` : '']);
   const notes = [
-    [`${base}.diskFill`, disk], [`${base}.sizeGB`, size], [p99Key, p99], [`${base}.opsPerSec`, ops],
+    [`${base}.diskFill`, disk], [`${base}.sizeGB`, size], [p99Key, p99], [`${base}.readsPerSec`, reads], [`${base}.writesPerSec`, writes],
   ].concat(name === 'postgres' ? [[`${base}.commitsPerSec`, commits]] : [])
     .map(([k, fr]) => noteFor(k, fr)).filter(Boolean);
   const pct = disk.nodata ? null : finite(store.diskFill && store.diskFill.v) * 100;
-  return tank(y, label, pct, st, lines, notes, { ...attrs, 'data-st': st });
+  return tank(y, label, pct, st, lines, notes, { ...attrs, 'data-st': st }, TANK_NOTE_BUDGET[name]);
 }
 
 function storesBody(s, anchors) {

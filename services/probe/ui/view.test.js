@@ -542,6 +542,94 @@ test('a failed store source greys the tank instead of claiming not configured', 
   assert.ok(texts(renderHome(s, NOW)).includes('not configured'));
 });
 
+test('store tanks show reads and writes on separate lines', () => {
+  const s = snap();
+  s.sources = [];
+  s.stores.aerospike = {
+    configured: true,
+    diskFill: { v: 0.71, st: 'ok' },
+    sizeGB: { v: 1840, st: 'ok' },
+    readP99Sec: { v: 0.0012, st: 'ok' },
+    readsPerSec: { v: 31000, st: 'ok' },
+    writesPerSec: { v: 4200, st: 'ok' },
+    commitsPerSec: { v: 0, st: 'nodata' },
+  };
+  s.stores.postgres = {
+    configured: true,
+    diskFill: { v: 0.38, st: 'ok' },
+    sizeGB: { v: 214, st: 'ok' },
+    readP99Sec: { v: 0.004, st: 'ok', note: 'mean' },
+    readsPerSec: { v: 1200, st: 'ok' },
+    writesPerSec: { v: 300, st: 'ok' },
+    commitsPerSec: { v: 40, st: 'ok' },
+  };
+  const home = renderHome(s, NOW);
+  const aero = texts(one(home, 'data-store', 'aerospike'));
+  for (const line of ['1.84 TB', 'Read p99 1.2 ms', 'Reads 31k/s', 'Writes 4,200/s']) assert.ok(aero.includes(line), `${line} in ${aero.join('|')}`);
+  assert.ok(!aero.some((x) => typeof x === 'string' && x.includes('ops/s')));
+  const pg = texts(one(home, 'data-store', 'postgres'));
+  for (const line of ['214 GB', 'Query p99 4 ms', 'Reads 1,200/s', 'Writes 300/s', '40 commits/s']) assert.ok(pg.includes(line), `${line} in ${pg.join('|')}`);
+  assert.ok(!pg.some((x) => typeof x === 'string' && x.includes('q/s')));
+
+  s.stores.postgres.writesPerSec = { v: 0, st: 'nodata', age: 20 };
+  const stale = texts(one(renderHome(s, NOW), 'data-store', 'postgres'));
+  assert.ok(stale.includes('Writes –'), stale.join('|'));
+  assert.ok(stale.includes('Writes: no data, 20 s ago'), stale.join('|'));
+
+  s.sources = [{ name: 'aerospike', ok: false, age: 30 }];
+  const down = texts(one(renderHome(s, NOW), 'data-store', 'aerospike'));
+  assert.ok(down.includes('no data, 30 s ago'));
+  assert.ok(!down.includes('Reads 31k/s'));
+});
+
+test('aerospike tank notes never reach the postgres tank', () => {
+  const s = snap();
+  s.sources = [];
+  s.stores.postgres.configured = true;
+  s.stores.aerospike = {
+    configured: true,
+    diskFill: { v: 0, st: 'nodata', age: 40 },
+    sizeGB: { v: 0, st: 'nodata', age: 40 },
+    readP99Sec: { v: 0, st: 'nodata', note: 'latency not exposed', age: 40 },
+    readsPerSec: { v: 0, st: 'nodata', age: 40 },
+    writesPerSec: { v: 0, st: 'nodata', age: 40 },
+    commitsPerSec: { v: 0, st: 'nodata' },
+  };
+  const home = renderHome(s, NOW);
+  const aero = one(home, 'data-store', 'aerospike');
+  const pg = one(home, 'data-store', 'postgres');
+  const pgLabel = walk(pg).find((n) => n.tag === 'text');
+  const notes = walk(aero).filter((n) => n.tag === 'text' && n.attrs.class === 'wd');
+  assert.ok(notes.length >= 1);
+  for (const n of notes) assert.ok(Number(n.attrs.y) + 4 < Number(pgLabel.attrs.y) - 10, `note at ${n.attrs.y} reaches label at ${pgLabel.attrs.y}`);
+  assert.ok(notes.some((n) => /^\+\d+ more in details$/.test(n.text)), notes.map((n) => n.text).join('|'));
+
+  for (const key of ['diskFill', 'sizeGB', 'readP99Sec', 'readsPerSec', 'writesPerSec', 'commitsPerSec']) {
+    s.stores.postgres[key] = { v: 0, st: 'nodata', note: 'a long explanation of why this reading has no data', age: 4000 };
+  }
+  const pgNotes = walk(one(renderHome(s, NOW), 'data-store', 'postgres')).filter((n) => n.tag === 'text' && n.attrs.class === 'wd');
+  assert.ok(pgNotes.length <= 10);
+  for (const n of pgNotes) assert.ok(Number(n.attrs.y) <= 510, `postgres note at ${n.attrs.y} leaves the panel`);
+
+  const tankText = walk(aero).filter((n) => n.tag === 'text' && n.attrs.class !== 'wd' && n.attrs.class !== 'lb');
+  const bottom = Math.max(...walk(aero).filter((n) => n.tag === 'ellipse').map((n) => Number(n.attrs.cy)));
+  for (const n of tankText) assert.ok(Number(n.attrs.y) <= bottom, `line ${n.text} at ${n.attrs.y} below tank ${bottom}`);
+});
+
+test('stage view lists reads and writes rows for each store', () => {
+  const s = snap();
+  s.stores.postgres.configured = true;
+  const view = renderStage(s, 'stores', null, NOW);
+  for (const store of ['aerospike', 'postgres']) {
+    const name = store === 'aerospike' ? 'Aerospike' : 'Postgres';
+    assert.ok(texts(one(view, 'data-key', `stores.${store}.readsPerSec`)).includes(`${name}: Reads`));
+    assert.ok(texts(one(view, 'data-key', `stores.${store}.writesPerSec`)).includes(`${name}: Writes`));
+  }
+  const reads = walk(one(view, 'data-key', 'stores.aerospike.readsPerSec')).filter((n) => n.tag === 'td');
+  assert.equal(reads[0].text, '31k');
+  assert.equal(walk(view).filter((n) => n.attrs && typeof n.attrs['data-key'] === 'string' && n.attrs['data-key'].endsWith('.opsPerSec')).length, 0);
+});
+
 test('drilldown path outside the stage allowlist renders as text', () => {
   const bad = [
     'javascript:alert(1)',
@@ -600,7 +688,7 @@ test('popover shows the highest severity alarm that is not snoozed', () => {
 });
 
 const STAGE_KEYS = ['ingress', 'validator', 'cache', 'assembly', 'chain', 'stores'];
-const READING_COUNTS = { ingress: 6, validator: 5, cache: 10, assembly: 5, chain: 3, stores: 5 };
+const READING_COUNTS = { ingress: 6, validator: 5, cache: 10, assembly: 5, chain: 3, stores: 6 };
 const allAttrs = (node) => walk(node).flatMap((n) => Object.entries(n.attrs || {}));
 const dataRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-key'] && !n.attrs['data-marker']);
 const markerRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-marker']);
@@ -652,7 +740,7 @@ test('stage view shows a not configured row for an unconfigured store', () => {
   assert.equal(cells[0].text, 'Postgres');
   assert.equal(cells[1].text, 'not configured');
   assert.equal(walk(markers[0]).filter((n) => n.tag === 'svg').length, 0);
-  assert.equal(dataRows(view).length, 5);
+  assert.equal(dataRows(view).length, 6);
 
   const s = snap();
   s.stores.aerospike.configured = false;
@@ -678,8 +766,8 @@ test('renderStage lists every reading of the stage', () => {
   const s = snap();
   s.stores.postgres.configured = true;
   const rows = dataRows(renderStage(s, 'stores', null, NOW));
-  assert.equal(rows.filter((r) => r.attrs['data-key'].startsWith('stores.postgres.')).length, 5);
-  assert.equal(rows.length, 10);
+  assert.equal(rows.filter((r) => r.attrs['data-key'].startsWith('stores.postgres.')).length, 6);
+  assert.equal(rows.length, 12);
 
   const view = renderStage(snap(), 'cache', null, NOW);
   assert.equal(walk(view).filter((n) => n.tag === 'table').length, 1);
