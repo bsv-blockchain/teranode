@@ -1,13 +1,13 @@
 package alarm
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 )
 
@@ -177,16 +177,16 @@ func ParseFloors(entries []string) (map[string]float64, error) {
 		value = strings.TrimSpace(value)
 
 		if !found || name == "" || value == "" {
-			return nil, fmt.Errorf("invalid floor entry %s: want metric=value", strconv.Quote(entry))
+			return nil, errors.NewInvalidArgumentError("invalid floor entry %s: want metric=value", strconv.Quote(entry))
 		}
 
 		f, err := strconv.ParseFloat(value, 64)
 		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-			return nil, fmt.Errorf("invalid floor entry %s: value must be a finite number", strconv.Quote(entry))
+			return nil, errors.NewInvalidArgumentError("invalid floor entry %s: value must be a finite number", strconv.Quote(entry))
 		}
 
 		if _, dup := floors[name]; dup {
-			return nil, fmt.Errorf("invalid floor entry %s: duplicate metric", strconv.Quote(entry))
+			return nil, errors.NewInvalidArgumentError("invalid floor entry %s: duplicate metric", strconv.Quote(entry))
 		}
 
 		floors[name] = f

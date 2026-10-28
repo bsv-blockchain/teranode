@@ -1,13 +1,13 @@
 package alarm
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/stretchr/testify/require"
 )
@@ -120,7 +120,7 @@ func TestStoreAtomicWrite(t *testing.T) {
 	before, err := os.ReadFile(path)
 	require.NoError(t, err)
 
-	s.beforeRename = func() error { return errors.New("crash") }
+	s.beforeRename = func() error { return errors.NewStorageError("crash") }
 
 	require.NoError(t, s.AppendAlarm(alarmAt("new", t0.Add(time.Second))))
 	require.Error(t, s.Flush())
@@ -409,7 +409,7 @@ func TestFailedTrailingFlushStaysDirtyAndIsReported(t *testing.T) {
 	clk.advance(100 * time.Millisecond)
 	require.NoError(t, s.AppendAlarm(alarmAt("2", t0.Add(time.Second))))
 
-	s.beforeRename = func() error { return errors.New("disk full") }
+	s.beforeRename = func() error { return errors.NewStorageError("disk full") }
 
 	clk.advance(900 * time.Millisecond)
 	ft.fire(0)

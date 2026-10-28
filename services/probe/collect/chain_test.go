@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p"
@@ -251,7 +251,7 @@ func (c *countingClient) GetBlocksNotPersisted(ctx context.Context, limit int) (
 	c.notPersistedCalls++
 
 	if c.failBacklog {
-		return nil, errors.New("backlog unavailable")
+		return nil, errors.NewServiceError("backlog unavailable")
 	}
 
 	return c.ClientI.GetBlocksNotPersisted(ctx, limit)
