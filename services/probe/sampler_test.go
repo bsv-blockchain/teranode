@@ -900,3 +900,77 @@ func TestSamplerLatestBeforeFirstTick(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, strings.Contains(string(out), "null"))
 }
+
+func runUntilStopped(t *testing.T, s *Sampler, started <-chan struct{}) time.Duration {
+	t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		s.Run(ctx)
+		close(done)
+	}()
+
+	<-started
+
+	begin := time.Now()
+
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return")
+	}
+
+	return time.Since(begin)
+}
+
+func TestRunWaitsForAnInFlightCallThatEndsSoon(t *testing.T) {
+	started := make(chan struct{})
+	finished := make(chan struct{})
+
+	var once sync.Once
+
+	slow := newFake("p2p", func(context.Context, int) (snapshot.Patch, error) {
+		once.Do(func() { close(started) })
+		time.Sleep(300 * time.Millisecond)
+		close(finished)
+
+		return nil, errors.NewServiceError("p2p unavailable")
+	})
+
+	s := NewSampler([]Collector{slow}, nil, time.Hour, time.Hour, "n")
+
+	runUntilStopped(t, s, started)
+
+	select {
+	case <-finished:
+	default:
+		t.Fatal("Run returned before the in-flight call ended")
+	}
+}
+
+func TestRunStopsWaitingForAHungCallAfterTheBound(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	defer close(release)
+
+	var once sync.Once
+
+	hung := newFake("p2p", func(context.Context, int) (snapshot.Patch, error) {
+		once.Do(func() { close(started) })
+		<-release
+
+		return nil, errors.NewServiceError("p2p unavailable")
+	})
+
+	s := NewSampler([]Collector{hung}, nil, time.Hour, time.Hour, "n")
+
+	waited := runUntilStopped(t, s, started)
+
+	require.GreaterOrEqual(t, waited, shutdownWait)
+	require.Less(t, waited, shutdownWait+2*time.Second)
+}
