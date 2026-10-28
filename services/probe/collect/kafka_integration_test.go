@@ -158,3 +158,93 @@ func TestBrokerDown(t *testing.T) {
 	require.Nil(t, patch)
 	require.Less(t, time.Since(start), timeout+2*time.Second)
 }
+
+func TestUncommittedMemberCountsFullTopicAsLag(t *testing.T) {
+	env := kafkatest.MustStartEnv(t, context.Background())
+	newTopic(t, env, "uncommitted", 50)
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(env.BrokerAddr),
+		kgo.ConsumerGroup("group-live"),
+		kgo.ConsumeTopics("uncommitted"),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+		kgo.DisableAutoCommit(),
+	)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for ctx.Err() == nil {
+			cl.PollFetches(ctx)
+		}
+	}()
+
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		cl.Close()
+	})
+
+	k := newCollector(t, env, map[string]string{snapshot.FlowSubtrees: "uncommitted"})
+
+	require.Eventually(t, func() bool {
+		patch, cerr := k.Collect(context.Background())
+		if cerr != nil || patch == nil {
+			return false
+		}
+
+		s := snapshot.NewSnapshot("test")
+		patch(&s)
+
+		f := s.Flow(snapshot.FlowSubtrees)
+
+		return f != nil && f.Lag != nil && *f.Lag == 50
+	}, 30*time.Second, 500*time.Millisecond)
+}
+
+func TestMultiPartitionLagSumsAcrossPartitionsAndGroups(t *testing.T) {
+	env := kafkatest.MustStartEnv(t, context.Background())
+
+	cl, err := kgo.NewClient(kgo.SeedBrokers(env.BrokerAddr), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	require.NoError(t, err)
+	t.Cleanup(cl.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	adm := kadm.NewClient(cl)
+	_, err = adm.CreateTopic(ctx, 3, 1, nil, "multi")
+	require.NoError(t, err)
+
+	counts := []int{10, 20, 30}
+
+	for p, n := range counts {
+		for i := 0; i < n; i++ {
+			require.NoError(t, cl.ProduceSync(ctx, &kgo.Record{Topic: "multi", Partition: int32(p), Value: []byte("m")}).FirstErr())
+		}
+	}
+
+	commitAll := func(group string, at map[int32]int64) {
+		offsets := kadm.Offsets{}
+		for p, o := range at {
+			offsets.Add(kadm.Offset{Topic: "multi", Partition: p, At: o})
+		}
+
+		resp, cerr := adm.CommitOffsets(ctx, group, offsets)
+		require.NoError(t, cerr)
+		require.NoError(t, resp.Error())
+	}
+
+	commitAll("group-a", map[int32]int64{0: 5, 1: 10, 2: 30})
+	commitAll("group-b", map[int32]int64{0: 0, 1: 20})
+
+	k := newCollector(t, env, map[string]string{snapshot.FlowSubtrees: "multi"})
+
+	lag := collectLag(t, k, snapshot.FlowSubtrees)
+	require.NotNil(t, lag)
+	require.Equal(t, int64((5+10+0)+(10+0+30)), *lag)
+}
