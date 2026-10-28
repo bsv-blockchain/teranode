@@ -164,7 +164,7 @@ func TestGetBlockHeader(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "PROCESSING (4): invalid hash string -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "PROCESSING (4): invalid hash string -> encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {

@@ -265,7 +265,7 @@ func TestCatchup_DeepReorgDuringCatchup(t *testing.T) {
 				for {
 					block, err := model.NewBlockFromReader(reader)
 					if err != nil {
-						if err.Error() == "BLOCK_INVALID (11): error reading block header -> UNKNOWN (0): EOF" {
+						if err.Error() == "BLOCK_INVALID (11): error reading block header -> EOF" {
 							break
 						}
 						t.Logf("ERROR: Failed to parse block: %v", err)
