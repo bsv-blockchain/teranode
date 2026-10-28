@@ -2,6 +2,7 @@ package alarm
 
 import (
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -193,4 +194,30 @@ func ParseFloors(entries []string) (map[string]float64, error) {
 	}
 
 	return floors, nil
+}
+
+func CheckFloorKeys(floors map[string]float64) error {
+	known := make(map[string]bool, len(DefaultRules))
+
+	for _, r := range DefaultRules {
+		if r.FloorKey != "" {
+			known[r.FloorKey] = true
+		}
+	}
+
+	var unknown []string
+
+	for key := range floors {
+		if !known[key] {
+			unknown = append(unknown, key)
+		}
+	}
+
+	if len(unknown) == 0 {
+		return nil
+	}
+
+	sort.Strings(unknown)
+
+	return errors.NewInvalidArgumentError("unknown floor keys: %s", strings.Join(unknown, ", "))
 }
