@@ -23,6 +23,7 @@ type Drain struct {
 	window   time.Duration
 	capacity int
 	obs      []drainObservation
+	slot     time.Time
 }
 
 func NewDrain(window time.Duration) *Drain {
@@ -46,6 +47,13 @@ func (d *Drain) Observe(t time.Time, backlog float64) {
 		return
 	}
 
+	if len(d.obs) > 0 && t.Sub(d.slot) < drainCapResolution {
+		d.obs[len(d.obs)-1] = drainObservation{t: t, backlog: backlog}
+
+		return
+	}
+
+	d.slot = t
 	d.obs = append(d.obs, drainObservation{t: t, backlog: backlog})
 
 	cutoff := t.Add(-d.window)
