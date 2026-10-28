@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-// ProbeSettings configures the read-only probe service that serves the live dashboard.
 type ProbeSettings struct {
 	HTTPListenAddress  string        `key:"probe_httpListenAddress" desc:"HTTP listen address for the Probe service" default:"localhost:8100" category:"Probe" usage:"Address the probe dashboard and API bind to" type:"string" longdesc:"### Purpose\nSpecifies the bind address for the Probe HTTP server.\n\n### Format\n- **host:port** - Binds to one interface\n- **:port** - Binds to all network interfaces\n\n### Recommendations\n- Keep the default **localhost:8100** unless a reverse proxy or tunnel exposes the probe\n- Every request needs the bearer token in **probe_authToken**"`
 	AuthToken          string        `redact:"true" key:"probe_authToken" desc:"Bearer token required on every Probe request" default:"" category:"Probe" usage:"Required; the Probe service refuses to start when empty" type:"string" longdesc:"### Purpose\nStatic bearer token that clients present as 'Authorization: Bearer <token>' on every Probe request.\n\n### Behavior\nThe token is compared in constant time. An empty value makes the Probe service fail at startup.\n\n### Recommendations\n- Use a long random value\n- Never commit the token to a shared settings file"`

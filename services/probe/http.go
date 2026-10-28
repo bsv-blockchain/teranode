@@ -28,6 +28,10 @@ func (s *Server) requireToken(next echo.HandlerFunc) echo.HandlerFunc {
 	expected := []byte(s.settings.Probe.AuthToken)
 
 	return func(c echo.Context) error {
+		if len(expected) == 0 {
+			return c.NoContent(http.StatusUnauthorized)
+		}
+
 		header := c.Request().Header.Get(echo.HeaderAuthorization)
 		if !strings.HasPrefix(header, bearerPrefix) {
 			return c.NoContent(http.StatusUnauthorized)
