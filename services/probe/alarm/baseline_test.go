@@ -96,12 +96,86 @@ func TestUnknownMetric(t *testing.T) {
 func TestSpikeDoesNotShiftMeanMuch(t *testing.T) {
 	b := NewBaseline(10 * time.Minute)
 
-	at := feed(b, "rate", t0, 4000, 250*time.Millisecond, constant(1000))
+	at := feed(b, "rate", t0, 400, 2*time.Second, func(i int, _ time.Time) float64 {
+		if i%2 == 0 {
+			return 990
+		}
+
+		return 1010
+	})
+
+	meanBefore, tolBefore, _ := b.Normal("rate")
 	b.Observe("rate", 100000, at)
+
+	mean, tol, ready := b.Normal("rate")
+	require.True(t, ready)
+	require.InEpsilon(t, meanBefore, mean, 0.01)
+	require.InEpsilon(t, tolBefore, tol, 0.10)
+}
+
+func TestSustainedLevelShiftEventuallyBecomesNormal(t *testing.T) {
+	b := NewBaseline(10 * time.Minute)
+	step := 2 * time.Second
+	alpha := 1 - math.Exp2(-float64(step)/float64(time.Hour))
+
+	at := feed(b, "rate", t0, 400, step, constant(100))
+
+	prev, _, _ := b.Normal("rate")
+
+	for i := 0; i < 12*3600/2; i++ {
+		_, tolBefore, _ := b.Normal("rate")
+		b.Observe("rate", 200, at)
+		at = at.Add(step)
+
+		mean, _, _ := b.Normal("rate")
+		require.GreaterOrEqual(t, mean, prev)
+		require.LessOrEqual(t, mean-prev, alpha*8*tolBefore+1e-9)
+
+		prev = mean
+	}
 
 	mean, _, ready := b.Normal("rate")
 	require.True(t, ready)
-	require.InEpsilon(t, 1000, mean, 0.01)
+	require.InEpsilon(t, 200, mean, 0.05)
+}
+
+func TestFirstObservationsAreNotClamped(t *testing.T) {
+	b := NewBaseline(time.Minute)
+
+	b.Observe("m", 1e6, t0)
+
+	mean, _, _ := b.Normal("m")
+	require.Equal(t, 1e6, mean)
+
+	b.Observe("m", 5, t0.Add(2*time.Second))
+
+	alpha := 1 - math.Exp2(-2.0/3600)
+	mean, _, _ = b.Normal("m")
+	require.InEpsilon(t, 1e6+alpha*(5-1e6), mean, 1e-12)
+}
+
+func TestClampDoesNotApplyBeforeFiveObservations(t *testing.T) {
+	b := NewBaseline(time.Minute)
+	alpha := 1 - math.Exp2(-2.0/3600)
+	at := t0
+
+	for i := 0; i < 4; i++ {
+		b.Observe("m", 1000, at)
+		at = at.Add(2 * time.Second)
+	}
+
+	b.Observe("m", 100000, at)
+	at = at.Add(2 * time.Second)
+
+	mean, _, _ := b.Normal("m")
+	require.InEpsilon(t, 1000+alpha*99000, mean, 1e-12)
+
+	_, tol, _ := b.Normal("m")
+	b.Observe("m", 100000000, at)
+
+	after, _, _ := b.Normal("m")
+	require.LessOrEqual(t, after-mean, alpha*8*tol+1e-9)
+	require.Greater(t, after, mean)
 }
 
 func TestIrregularSamplingWeightsByTime(t *testing.T) {

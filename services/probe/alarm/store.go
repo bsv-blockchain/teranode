@@ -27,10 +27,22 @@ func WithClock(now func() time.Time) StoreOption {
 	return func(s *Store) { s.clock = now }
 }
 
+func withTimer(after func(d time.Duration, f func()) func() bool) StoreOption {
+	return func(s *Store) { s.afterFunc = after }
+}
+
+func defaultAfterFunc(d time.Duration, f func()) func() bool {
+	return time.AfterFunc(d, f).Stop
+}
+
 type Store struct {
 	mu           sync.Mutex
 	path         string
 	clock        func() time.Time
+	afterFunc    func(d time.Duration, f func()) func() bool
+	stopTimer    func() bool
+	timerGen     uint64
+	timerErr     error
 	data         storeFile
 	dirty        bool
 	lastWrite    time.Time
@@ -38,7 +50,7 @@ type Store struct {
 }
 
 func OpenStore(path string, opts ...StoreOption) (*Store, error) {
-	s := &Store{path: path, clock: time.Now}
+	s := &Store{path: path, clock: time.Now, afterFunc: defaultAfterFunc}
 
 	for _, o := range opts {
 		o(s)
@@ -198,21 +210,71 @@ func (s *Store) Flush() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.persistLocked()
+	return s.flushLocked()
 }
 
 func (s *Store) Close() error {
-	return s.Flush()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.disarmLocked()
+
+	return s.flushLocked()
+}
+
+func (s *Store) flushLocked() error {
+	err := s.persistLocked()
+	pending := s.timerErr
+	s.timerErr = nil
+
+	if err != nil {
+		return err
+	}
+
+	return pending
 }
 
 func (s *Store) markDirtyLocked() error {
 	s.dirty = true
 
-	if s.clock().Sub(s.lastWrite) < writeInterval {
+	elapsed := s.clock().Sub(s.lastWrite)
+	if elapsed >= writeInterval {
+		return s.persistLocked()
+	}
+
+	if s.stopTimer != nil {
 		return nil
 	}
 
-	return s.persistLocked()
+	s.timerGen++
+	gen := s.timerGen
+	s.stopTimer = s.afterFunc(writeInterval-elapsed, func() { s.trailingFlush(gen) })
+
+	return nil
+}
+
+func (s *Store) trailingFlush(gen uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if gen != s.timerGen || s.stopTimer == nil {
+		return
+	}
+
+	s.stopTimer = nil
+
+	if err := s.persistLocked(); err != nil {
+		s.timerErr = err
+	}
+}
+
+func (s *Store) disarmLocked() {
+	if s.stopTimer != nil {
+		s.stopTimer()
+		s.stopTimer = nil
+	}
+
+	s.timerGen++
 }
 
 func (s *Store) persistLocked() error {
@@ -231,6 +293,8 @@ func (s *Store) persistLocked() error {
 
 	s.dirty = false
 	s.lastWrite = s.clock()
+
+	s.disarmLocked()
 
 	return nil
 }

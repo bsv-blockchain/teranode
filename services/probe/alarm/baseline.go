@@ -17,6 +17,8 @@ const (
 	toleranceSigmas   = 3.0
 	toleranceFraction = 0.05
 	toleranceMinimum  = 1e-9
+	clampAfter        = 5
+	clampSigmas       = 8.0
 )
 
 type MetricState struct {
@@ -78,6 +80,11 @@ func (b *Baseline) Observe(metric string, v float64, t time.Time) {
 		return
 	}
 
+	if m.Count >= clampAfter {
+		band := clampSigmas * toleranceOf(m)
+		v = math.Max(m.Mean-band, math.Min(m.Mean+band, v))
+	}
+
 	dt := t.Sub(m.Last)
 	if dt < 0 {
 		dt = 0
@@ -106,10 +113,13 @@ func (b *Baseline) Normal(metric string) (mean, tolerance float64, ready bool) {
 		return 0, 0, false
 	}
 
-	tolerance = math.Max(toleranceSigmas*math.Sqrt(math.Max(m.Variance, 0)), toleranceFraction*math.Abs(m.Mean))
-	tolerance = math.Max(tolerance, toleranceMinimum)
+	return m.Mean, toleranceOf(m), m.Count >= minObservations && m.Last.Sub(m.First) >= b.warmup
+}
 
-	return m.Mean, tolerance, m.Count >= minObservations && m.Last.Sub(m.First) >= b.warmup
+func toleranceOf(m MetricState) float64 {
+	t := math.Max(toleranceSigmas*math.Sqrt(math.Max(m.Variance, 0)), toleranceFraction*math.Abs(m.Mean))
+
+	return math.Max(t, toleranceMinimum)
 }
 
 func (b *Baseline) Calibration(now time.Time) snapshot.Calibration {
