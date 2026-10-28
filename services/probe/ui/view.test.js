@@ -270,6 +270,50 @@ test('warming note replaces the status word', () => {
   assert.deepEqual(texts(oldest), ['Oldest waiting: 42 s', 'Calibrating']);
 });
 
+test('a long reading note wraps below the readout instead of overflowing it', () => {
+  const note = 'includes block-validation checks and rejected transactions';
+  const s = snap();
+  s.validator.validatedPerSec = { v: 0, st: 'ok', note };
+  const node = one(renderHome(s, NOW), 'data-key', 'validator.validatedPerSec');
+  const lines = texts(node).filter((t) => t.length >= 12 && t !== 'Validated, tx/s');
+  assert.ok(lines.length >= 2, 'the note is split over lines');
+  assert.ok(lines.every((l) => l.length <= 30), `every line fits the well: ${JSON.stringify(lines)}`);
+  assert.equal(lines.join(' '), note);
+  const inWell = walk(node).filter((n) => n.attrs && n.attrs.class === 'wd' && Number(n.attrs.x) === 36);
+  assert.equal(inWell.length, 1);
+  assert.equal(inWell[0].text, '');
+});
+
+test('a strip moves only while its flow carries traffic', () => {
+  const s = snap();
+  s.flows[0].rate = { v: 0, st: 'ok' };
+  s.flows[1].rate = { v: 50, st: 'ok' };
+  const home = renderHome(s, NOW);
+  const moving = (id) => walk(one(home, 'data-flow', id)).some((n) => n.attrs && /\bflow\b/.test(n.attrs.class || ''));
+  assert.equal(moving(s.flows[0].id), false);
+  assert.equal(moving(s.flows[1].id), true);
+  assert.equal(one(home, 'data-flow', s.flows[0].id).attrs['data-st'], 'n');
+});
+
+test('a short reading note stays inside the readout', () => {
+  const s = snap();
+  s.assembly.tipLagBlocks = { v: 0, st: 'ok', note: 'Calibrating' };
+  const node = one(renderHome(s, NOW), 'data-key', 'assembly.tipLagBlocks');
+  const inWell = walk(node).filter((n) => n.attrs && n.attrs.class === 'wd' && Number(n.attrs.x) === 36);
+  assert.deepEqual(inWell.map((n) => n.text), ['Calibrating']);
+  assert.equal(walk(node).filter((n) => n.attrs && n.attrs.class === 'wd' && Number(n.attrs.x) === 12).length, 0);
+});
+
+test('store tank notes are not cut off', () => {
+  const s = snap();
+  s.stores.postgres.configured = true;
+  s.stores.postgres.diskFill = { v: 0, st: 'nodata', note: 'disk capacity not set' };
+  s.stores.postgres.readP99Sec = { v: 0, st: 'nodata', note: 'needs pg_stat_statements' };
+  const all = texts(renderHome(s, NOW)).join(' ');
+  assert.ok(all.includes('pg_stat_statements'));
+  assert.ok(all.includes('capacity not'));
+});
+
 test('drain text variants', () => {
   const s = snap();
   assert.ok(texts(renderBottomBar(s, NOW)).includes('Drain time about 9 min'));
