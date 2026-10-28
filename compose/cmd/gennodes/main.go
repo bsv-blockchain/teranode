@@ -543,6 +543,7 @@ func main() {
 	allInOne := flag.Int("allinone", 1, "1 = single container per node (default), 0 = split per microservice (chaos topology)")
 	limits := flag.String("limits", "", "split-mode per-service resource caps: 'svc=cpus[:mem][,...]' (e.g. 'blockassembly=2:8g,validator=4'); empty = unlimited")
 	chaosTest := flag.Bool("chaostest", false, "lay the stack out like chaos-test's bsv-regtest fleet: a p2p network chaos-test can partition, an alert network and the alert hub (all-in-one only)")
+	svNodes := flag.Int("svnodes", 2, "with -chaostest: Bitcoin SV nodes following the teranodes over the legacy protocol (0-2)")
 	alertGenesis := flag.String("alert-genesis-keys", "", "with -chaostest: comma-separated alert genesis public keys (hex), matching the keys chaos-test signs alerts with")
 	retention := flag.String("retention", "production", "pruner/retention profile: production (inherit settings.conf), aggressive (prune within tens of blocks), or prod-scaling (mirror a production scaling deployment)")
 	flag.Parse()
@@ -586,7 +587,7 @@ func main() {
 				genesis = append(genesis, k)
 			}
 		}
-		if err := applyChaosPlanes(&s, genesis); err != nil {
+		if err := applyChaosPlanes(&s, genesis, *svNodes); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
 			os.Exit(2)
 		}
@@ -738,7 +739,10 @@ func writeAll(outDir string, s spec) error {
 		}
 	}
 	if s.Chaos != nil {
-		if err := writeAlertHubConfig(outDir, s); err != nil {
+		if err := writeAlertConfigs(outDir, s); err != nil {
+			return err
+		}
+		if err := writeSVNodeConfigs(outDir, s); err != nil {
 			return err
 		}
 	}

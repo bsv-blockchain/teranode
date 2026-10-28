@@ -35,6 +35,12 @@ alert_p2p_peer_discovery_interval.docker.teranode{{ .Index }}  = 15s
 alert_p2p_dht_mode.docker.teranode{{ .Index }}                 = client
 p2p_advertise_addresses.docker.teranode{{ .Index }}            = /ip4/{{ .ChaosIP }}/tcp/${P2P_PORT}
 p2p_share_private_addresses.docker.teranode{{ .Index }}        = true
+# The asset API's per-IP limits (10 req/s by default) return 429 to peers
+# catching up on a fast regtest chain, and to the node's own legacy service,
+# which fetches every block it serves the SV nodes from it. chaos-test's fleet
+# raises them the same way.
+asset_httpRateLimit.docker.teranode{{ .Index }}                = 100000
+asset_httpHeavyRateLimit.docker.teranode{{ .Index }}           = 10000
 asset_httpAddress.docker.teranode{{ .Index }}                  = http://{{ .ChaosIP }}:${ASSET_HTTP_PORT}${asset_apiPrefix}
 # The node's own services reach each other on localhost, as on chaos-test's
 # fleet. The docker defaults dial ${clientName}, which inside the container
@@ -52,6 +58,15 @@ asset_propagation_proxy_address.docker.teranode{{ .Index }}    = http://localhos
 pruner_grpcAddress.docker.teranode{{ .Index }}                 = localhost:${PRUNER_GRPC_PORT}
 coinbase_grpcAddress.docker.teranode{{ .Index }}               = localhost:${COINBASE_GRPC_PORT}
 legacy_httpAddress.docker.teranode{{ .Index }}                 = http://localhost:${LEGACY_HTTP_PORT}
+{{- if $.Chaos.SVNodes }}
+# The SV nodes follow over the legacy (Bitcoin wire) protocol on chaosnet.
+# They sync only from peers advertising NODE_NETWORK, which the legacy service
+# decides once at start-up from the block persister (on in the docker
+# context): multinode.sh up restarts the nodes once block 1 is persisted.
+startLegacy.docker.teranode{{ .Index }}                        = true
+legacy_listen_addresses.docker.teranode{{ .Index }}            = 0.0.0.0:18444
+legacy_allowSyncCandidateFromLocalPeers.docker.teranode{{ .Index }} = true
+{{- end }}
 {{- else }}
 # Alert is non-functional in this rig (its port is unexposed, it has no local
 # bootstrap peers, and the regtest topic has no matching genesis keys), so keep

@@ -22,13 +22,14 @@ A stack must be up (chaos-stack). Runs go through the orchestrator's API, not th
 | Scenario | Stack A | Stack B |
 |---|---|---|
 | `multinode-smoke`, `multinode-freeze-skew-rpc` | yes | no (not loaded) |
-| `freeze-skew-rpc` | yes (arcade starts with the orchestrator) | yes |
-| `freeze-timing-skew`, `freeze-fork-remine` | no (alert hub, partition) | yes |
-| `svnode-dust-policy` | no (SV nodes) | yes |
-| `arcade-same-height-flip-flop` | arcade is there, not run yet | yes |
-| `wallet-sustained-flow` | no (wallet) | yes |
+| every bundled scenario | yes (Stack A runs in chaos-test's layout) | yes |
 
-If the user asks for one on the wrong stack, say so and offer to switch (chaos-stack).
+Stack A started with `--plain` or `-allinone=0` has no partitions, alerts or SV nodes; only
+`freeze-skew-rpc` and our own scenarios run there. Results on Stack A are in
+`compose/chaostest/scenarios/README.md`; quote them when a run matches a known failure.
+
+`svnode-dust-policy` takes coinbases 101 deep: on a new chain, mine 110 blocks first
+(`compose/multinode.sh generate 1,110`) or it fails at "take the first funding coinbase".
 
 ## Reset or not
 
@@ -73,7 +74,10 @@ Each step prints as it finishes, then:
 - Known results (23-26 Oct 2026, image built from `pruner-unmined-tx-loss-repro`):
   `freeze-skew-rpc` on B passes with 5 findings (no invalid-block verdict, re-validation
   loop); on A, `freeze-skew-rpc` (28 Oct) and `multinode-freeze-skew-rpc` both fail at the
-  freeze step (the RPC freeze is a no-op on Aerospike), with or without load.
+  freeze step (the RPC freeze is a no-op on Aerospike), with or without load. On A (28 Oct):
+  `arcade-same-height-flip-flop` and `svnode-dust-policy` pass; `freeze-timing-skew` and
+  `freeze-fork-remine` fail on the missing invalid-block verdict; `wallet-sustained-flow`
+  fails its balance check (the wallet does not count the fan-out's coins).
 
 To dig into a failure (container logs around the step, Kafka verdicts, code), hand over to
 the `debug-teranode-docker` skill with the run id and timestamps from the saved JSON.

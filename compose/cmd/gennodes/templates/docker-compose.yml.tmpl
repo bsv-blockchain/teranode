@@ -121,6 +121,63 @@ services:
     ports:
       - "${HUB_HOST_PORT:-3000}:3000"
     restart: on-failure
+{{- range .SVNodes }}
+
+  {{ .Name }}:
+    # Bitcoin SV node following the teranodes over the legacy protocol on
+    # chaosnet; chaos-test partitions it like a teranode.
+    container_name: {{ .Name }}-multinode
+    image: ${SVNODE_IMAGE:-bitcoinsv/bitcoin-sv:1.2.2}
+    # Published for amd64 only; arm64 hosts run it under emulation.
+    platform: linux/amd64
+    networks:
+      teranode-network: {}
+      chaosnet:
+        ipv4_address: {{ .ChaosIP }}
+    # The image's entrypoint chowns /data and runs as user bitcoin; the conf
+    # lives outside /data so it can be mounted read-only.
+    command: ["bitcoind", "-conf=/config/bitcoin.conf"]
+    volumes:
+      - ./svnode/{{ .Name }}.conf:/config/bitcoin.conf:ro
+      - ../../data/multinode/{{ .Name }}:/data
+    ports:
+      - "{{ .RPCHostPort }}:18332"
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-conf=/config/bitcoin.conf", "getblockcount"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+    mem_limit: 2g
+    # bitcoind's scheduler can die after a host suspend or clock jump.
+    restart: on-failure
+
+  {{ .SidecarName }}:
+    # go-alert-system sidecar: joins the alert network like any node and
+    # applies each alert to {{ .Name }} over RPC (freeze ->
+    # addToConsensusBlacklist, ...). chaos-test partitions it for the SV
+    # node's alert plane.
+    container_name: {{ .SidecarName }}-multinode
+    image: ${ALERT_SYSTEM_IMAGE:-localhost/bsv-regtest/alert-system:v0.1.17}
+    pull_policy: never
+    user: "0:0"
+    entrypoint: ["sh", "-c", "until nc -z {{ $.Chaos.HubIP }} 9906; do sleep 1; done; exec /go-alert-system"]
+    networks:
+      teranode-network: {}
+      alertnet:
+        ipv4_address: {{ .AlertIP }}
+    depends_on:
+      {{ .Name }}:
+        condition: service_started
+    environment:
+      ALERT_SYSTEM_ENVIRONMENT: local
+      ALERT_SYSTEM_CONFIG_FILEPATH: /config/config.json
+    volumes:
+      - ./alert-system/{{ .SidecarName }}.json:/config/config.json:ro
+      - ../../data/multinode/{{ .SidecarName }}:/data
+    ports:
+      - "{{ .APIHostPort }}:3000"
+    restart: on-failure
+{{- end }}
 {{- end }}
 {{- range .Nodes }}
 

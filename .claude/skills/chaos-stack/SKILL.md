@@ -1,6 +1,6 @@
 ---
 name: chaos-stack
-description: Start, stop, switch, reset and inspect the two local chaos-testing stacks — Stack A, our multinode teranode stack (compose/multinode.sh, Aerospike) with chaos-test's orchestrator, and Stack B, galt-tr/chaos-test's bsv-regtest fleet (SQLite, arcade, alert hub, SV nodes, wallet) running our teranode image. Use whenever the user wants to bring up, tear down, switch between or reset a chaos/test environment, asks "is the fleet up / converged", mentions stack A or stack B, galt's fleet, bsv-regtest, chaos-test, the orchestrator on :8600, or wants a clean chain before a scenario. Pair with chaos-blast (load) and chaos-scenario (assertions).
+description: Start, stop, switch, reset and inspect the two local chaos-testing stacks — Stack A, our multinode teranode stack (compose/multinode.sh, Aerospike) in chaos-test's layout (partitionable p2p network, alert hub, SV nodes) with chaos-test's orchestrator, arcade, merkle-service and wallet, and Stack B, galt-tr/chaos-test's bsv-regtest fleet (SQLite, arcade, alert hub, SV nodes, wallet) running our teranode image. Use whenever the user wants to bring up, tear down, switch between or reset a chaos/test environment, asks "is the fleet up / converged", mentions stack A or stack B, galt's fleet, bsv-regtest, chaos-test, the orchestrator on :8600, or wants a clean chain before a scenario. Pair with chaos-blast (load) and chaos-scenario (assertions).
 license: MIT
 metadata:
   audience: devs, qa
@@ -13,7 +13,7 @@ Everything goes through one script, run from the teranode checkout:
 
 ```bash
 compose/chaostest/chaosctl.sh stack status
-compose/chaostest/chaosctl.sh stack up a [N] [-allinone=0] [--switch]
+compose/chaostest/chaosctl.sh stack up a [N] [--svnodes 0-2] [--plain|-allinone=0] [--switch]
 compose/chaostest/chaosctl.sh stack up b [--switch]
 compose/chaostest/chaosctl.sh stack down a|b
 compose/chaostest/chaosctl.sh stack reset
@@ -27,10 +27,15 @@ blaster.
 
 | Need | Stack |
 |---|---|
-| `freeze-skew-rpc` (needs arcade) | **A** (arcade starts with the orchestrator); B to compare on SQLite |
-| galt's other bundled scenarios (alert hub, SV-node dust, wallet) | **B**: only it has the alert hub, SV nodes and the wallet |
-| Our scenarios in `compose/chaostest/scenarios/`, Aerospike behaviour, split-mode per-service chaos (`-allinone=0`), pruner rigs, high throughput (~900 tx/s) | **A** |
-| Same scenario on two stores | both, one after the other (Stack B is SQLite, Stack A Aerospike) |
+| galt's bundled scenarios, our scenarios, Aerospike behaviour, high throughput (~900 tx/s) | **A** (the default) |
+| Split-mode per-service chaos (`-allinone=0`), pruner rigs | **A** with `-allinone=0`: single network, so no alerts, SV nodes or partitions |
+| Same scenario on SQLite, or comparing with galt's own fleet | **B**, one after the other with A |
+
+Stack A runs `multinode.sh up --chaostest`: node p2p on its own network (`chaosnet`, which
+chaos-test partitions), alerts on `alertnet` with the hub, and 2 SV nodes with alert sidecars.
+`--plain` (or `-allinone=0`) gives the old single-network stack. Partitions only hold because
+`up` "seals" every node (`multinode.sh chaos seal`); after restarting a node by hand, run
+`compose/multinode.sh chaos seal` again.
 
 Both stacks publish the same host ports (20000+), so only one runs at a time. `stack up`
 refuses while the other is up; `--switch` brings the other down first.
@@ -44,8 +49,11 @@ running, or the user did not ask for it in this turn, say what will be lost and 
 
 ## What the script handles (so you don't have to)
 
-- Stack A: `multinode.sh up` then `multinode.sh sim up` (builds the orchestrator image from
-  `../chaos-test` on first use, and starts arcade on :18080).
+- Stack A: `multinode.sh up --chaostest` (builds chaos-test's alert-system image if missing,
+  mines block 1 and restarts the teranodes once so the SV nodes can sync), then
+  `multinode.sh sim up` (builds the orchestrator and walletd images from `../chaos-test` on
+  first use; starts merkle-service, arcade on :18080 and the wallet on :18700). The alert hub
+  serves its API on :3000 about a minute after start.
 - Stack B: writes `bsv-regtest/.env` (all teranodes on `$TERANODE_IMAGE`, default
   `teranode:latest`) and installs `compose/chaostest/bsv-regtest.override.yaml` only if they
   are missing — an existing `.env` is kept, because people pin other builds there for

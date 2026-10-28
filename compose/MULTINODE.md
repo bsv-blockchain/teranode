@@ -32,7 +32,7 @@ compose/multinode.sh down
 
 | Command | Description |
 |---|---|
-| `up <N> [-allinone=0\|1] [--skip N:svc ...]` | Generate config and start N nodes (3-10). See [Split topology](#split-topology) for the flags. |
+| `up <N> [-allinone=0\|1] [--skip N:svc ...] [--chaostest [--svnodes 0-2]]` | Generate config and start N nodes (3-10). See [Split topology](#split-topology) for the flags, and [chaos-test scenarios](#chaos-test-scenarios) for `--chaostest`. |
 | `down` | Stop and remove all containers and volumes |
 | `restart` | Restart containers (picks up config changes after `make gen-multinode`) |
 | `status` | Show container status (split mode: tallies running/total services per node) |
@@ -40,7 +40,7 @@ compose/multinode.sh down
 | `dashboards` | Open all node dashboards in the browser |
 | `generate <node,count> ...` | Generate blocks on specific nodes |
 | `blast [nodes] [--build] [--auto-mine[=N]] [--fresh] [--target multinode\|bsv-regtest] [-- args]` | Run the coinbase blaster against the stack, or against chaos-test's fleet |
-| `sim up [--build] [--no-arcade]` / `sim run <scenario> [--step]` / `sim status\|logs\|down` | Run chaos-test scenarios against the stack. See [chaos-test scenarios](#chaos-test-scenarios). |
+| `sim up [--build] [--no-arcade] [--no-wallet]` / `sim run <scenario> [--step]` / `sim status\|logs\|down` | Run chaos-test scenarios against the stack. See [chaos-test scenarios](#chaos-test-scenarios). |
 
 ### Blaster
 
@@ -92,6 +92,7 @@ The suite is gated behind the `network_chaos` build tag so it does not run under
 | `chaos unpause <node> [service]` | Unfreeze a paused node or service |
 | `chaos slow <node> <ms>` | Add network latency to a node |
 | `chaos unslow <node>` | Remove added latency from a node |
+| `chaos seal [node]` | `--chaostest` stacks: make chaos-test partitions hold (see [chaos-test scenarios](#chaos-test-scenarios)) |
 
 ```bash
 # Isolate node 3 from peers (RPC still works, can still generate blocks)
@@ -120,22 +121,40 @@ The `isolate`/`heal`/`slow`/`unslow` commands inject `iptables` and `tc` rules i
 ```bash
 git clone https://github.com/galt-tr/chaos-test ../chaos-test   # once; or set CHAOS_TEST_DIR
 
-compose/multinode.sh up 3
-compose/multinode.sh sim up                        # builds the image on first use; UI on http://localhost:8600, arcade on :18080
-compose/multinode.sh sim run multinode-smoke       # follows the run, exits 0 on pass
+compose/multinode.sh up 3 --chaostest             # chaos-test's network layout, alert hub, 2 SV nodes
+compose/multinode.sh sim up                        # builds the image on first use; UI on http://localhost:8600, arcade on :18080, wallet
+compose/multinode.sh sim run freeze-timing-skew    # any bundled scenario; follows the run, exits 0 on pass
 compose/multinode.sh sim run multinode-freeze-skew-rpc --step   # pause before each step
 compose/multinode.sh sim down                      # 'down' also removes it
 ```
+
+`--chaostest` (all-in-one only) lays the stack out the way chaos-test's `bsv-regtest` fleet is, which is what its bundled scenarios assume:
+
+| Network | Subnet | Carries |
+|---|---|---|
+| `teranode-network-multinode-*` | docker-assigned | stores, Kafka, RPC, the orchestrator; never partitioned |
+| `teranode-chaosnet-multinode-*` | 10.200.0.0/24, pinned | node p2p (9905), the datahubs, legacy p2p to the SV nodes (18444), arcade |
+| `teranode-alertnet-multinode-*` | 192.0.0.128/26, pinned | alert p2p: teranodes (9908), the hub `alert-system-multinode` and SV sidecars (9906), the orchestrator |
+
+- chaos-test partitions a node by disconnecting it from chaosnet (`plane: p2p`) or alertnet (`plane: alert`). A node's own services talk on `localhost`, because its container name resolves to its chaosnet address.
+- Both planes are `internal`, and every node container drops packets for them that would leave through its default route (`chaos seal`, applied on `up`, `restart` and `chaos start`). Without that, a disconnected node still reaches the other side through the docker host: OrbStack forwards between bridges even when docker marks a network internal, and the partition silently leaks. Re-run `chaos seal` after restarting a node any other way.
+- Alerts use chaos-test's dev genesis keys (read from its `keys.json` at `up`) and throwaway identities from [`gennodes/alert_keys.json`](cmd/gennodes/alert_keys.json). The hub starts once teranode1's alert service listens and serves its API (`:3000`) after syncing with two peers, about a minute after `up`.
+- The nodes' asset API rate limits are raised (`asset_httpRateLimit`, `asset_httpHeavyRateLimit`) as on chaos-test's fleet. At the default 10 heavy requests per second per IP, the legacy service, which fetches each block it serves from its own asset API, was rate-limited and the SV nodes stalled.
+- `--svnodes N` (0-2, default 2) adds Bitcoin SV nodes (`bitcoinsv/bitcoin-sv:1.2.2`, amd64) following over the legacy protocol, each with an alert sidecar; RPC on host 40332/41332. svnode2 runs with `acceptnonstdoutputs=0`, as on chaos-test's fleet. `up` mines block 1 and restarts the teranodes once: their legacy service advertises NODE_NETWORK, which SV Node needs to sync, only if a block was persisted when it started.
+- Needs chaos-test's `alert-system` and `walletd` images; `up` and `sim up` build them from the checkout when missing.
 
 How it fits together:
 
 - `make gen-multinode` / `up` writes `generated/chaostest/inventory.json` (nodes, in-network and host URLs, Kafka verdict topics, containers) alongside the compose file.
 - `sim up` copies it to `data/multinode-chaostest/config/`, adding the miner key (`PK1`, which the coinbase pays) and chaos-test's development `keys.json`. Keys never land in `generated/`.
 - The orchestrator joins the stack's compose network, so it reaches nodes by name and consumes the `rejectedtx-*` / `invalid-blocks-*` topics that `event` checks match on. It uses the Docker socket (`CONTAINER_SOCKET`, default `/var/run/docker.sock`) for pause/stop and container-log checks.
-- `sim up` also starts arcade (`arcade-multinode`, the image and settings of bsv-regtest's `arcade` profile) on the stack network, pointed at every node's datahub and p2p address, and adds it to the inventory, so `submit` with `target: arcade` works. Host ports 18080 (API), 18081 (health), 18082 (events), 18083 (chaintracks); `ARCADE_HOST_PORT` moves them, `--no-arcade` skips it. There is no merkle-service, so arcade's merkle callbacks never arrive.
+- `sim up` also starts arcade (`arcade-multinode`, the image and settings of bsv-regtest's `arcade` profile) on the stack network, pointed at every node's datahub and p2p address (on chaosnet with `--chaostest`), and adds it to the inventory, so `submit` with `target: arcade` works. Host ports 18080 (API), 18081 (health), 18082 (events), 18083 (chaintracks); `ARCADE_HOST_PORT` moves them, `--no-arcade` skips it (and the wallet). merkle-service sends it merkle proofs.
+- Before arcade it starts merkle-service (`merkle-service-multinode`, bsv-regtest's `merkle` profile, amd64, host 18090), which follows the nodes over p2p and calls arcade back with merkle proofs.
+- It then starts the wallet: `wallet-db-multinode` (postgres), `wallet-infra-multinode` (go-wallet-toolbox storage server, amd64, broadcasting through arcade, host 18100) and `walletd-multinode` (host 18700), with chaos-test's dev wallet config and keys. `--no-wallet` skips it.
+- With `--chaostest` the orchestrator also joins alertnet, so `push_alert` reaches the nodes. `down` clears its alert log along with the chain.
 - Scenarios load from the image's bundled examples plus [`chaostest/scenarios/`](chaostest/scenarios/) (override with `SCENARIOS_DIR`). Bundled scenarios are baked into the image, so pick up new ones with `sim up --build`; ours are mounted live and load on the next `sim up`. Run records are kept in `data/multinode-chaostest/data/runs/`.
 
-Supported on this stack: mining, coinbase spends, `submit` to a node or arcade, `rpc_freeze`, container chaos and every node, Kafka and log check. Not available yet: the alert hub (`build_alert`/`push_alert`), the wallet, and SV nodes. Of the bundled scenarios, `freeze-skew-rpc` runs here; it stops at the freeze step because the RPC freeze has no effect on Aerospike. `partition` needs chaos-test's iptables partition mode, because this stack has a single network. Until then, use `chaos isolate`/`heal`. See [`chaostest/scenarios/README.md`](chaostest/scenarios/README.md).
+With `--chaostest` every action and check chaos-test has works here, so its bundled scenarios run unchanged. Without it there is one network: no alerts, SV nodes or partitions (use `chaos isolate`/`heal`). See [`chaostest/scenarios/README.md`](chaostest/scenarios/README.md) for results on this stack.
 
 The blaster runs alongside: start `blast` in another terminal and run a scenario while it loads the network. On both this stack and chaos-test's fleet the blaster funds itself from **PK2**, the coinbase's second output, while chaos-test scenarios spend the first (PK1), so the two never spend the same coins. A blaster state directory funded from PK1 by an earlier version needs `blast --fresh`.
 

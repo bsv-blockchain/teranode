@@ -51,9 +51,10 @@ type ctNetworks struct {
 	PartitionMode string `json:"partitionMode,omitempty"`
 
 	// Not read by chaos-test: the addresses multinode.sh attaches the
-	// orchestrator (alertnet) and arcade (chaosnet) with.
+	// orchestrator (alertnet), arcade and merkle-service (chaosnet) with.
 	OrchestratorAlertIP string `json:"orchestratorAlertIP,omitempty"`
 	ArcadeChaosIP       string `json:"arcadeChaosIP,omitempty"`
+	MerkleChaosIP       string `json:"merkleChaosIP,omitempty"`
 }
 
 type ctHub struct {
@@ -92,6 +93,17 @@ type ctNode struct {
 	KafkaRejectedTx    string `json:"kafkaRejectedTx"`
 	KafkaInvalidBlocks string `json:"kafkaInvalidBlocks"`
 	Container          string `json:"container"`
+
+	LegacyAddr  string     `json:"legacyAddr,omitempty"`  // teranode: chaosIP:18444 when SV nodes follow it
+	LegacyPeers []string   `json:"legacyPeers,omitempty"` // svnode: its -connect targets
+	Sidecar     *ctSidecar `json:"sidecar,omitempty"`     // svnode: its alert sidecar
+}
+
+type ctSidecar struct {
+	Name      string `json:"name"`
+	Container string `json:"container"`
+	APIURL    string `json:"apiURL"`
+	HostAPI   string `json:"hostAPIURL"`
 }
 
 type ctService struct {
@@ -120,6 +132,7 @@ func buildChaosTestInventory(s spec, testID string) ctInventory {
 			AlertName:           "teranode-alertnet-multinode-" + testID,
 			OrchestratorAlertIP: orchestratorAlertIP,
 			ArcadeChaosIP:       arcadeChaosIP,
+			MerkleChaosIP:       merkleChaosIP,
 		}
 		inv.Hub = &ctHub{
 			AlertIP:   c.HubIP,
@@ -145,10 +158,13 @@ func buildChaosTestInventory(s spec, testID string) ctInventory {
 		}
 
 		p2pAddr := fmt.Sprintf("/dns/%s/tcp/%d/p2p/%s", p2pHost, chaosTestP2PPort, nd.PeerID)
-		var alertAddr string
+		var alertAddr, legacyAddr string
 		if s.Chaos != nil {
 			p2pAddr = fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", nd.ChaosIP, chaosTestP2PPort, nd.PeerID)
 			alertAddr = nd.AlertAddr()
+			if len(s.Chaos.SVNodes) > 0 {
+				legacyAddr = fmt.Sprintf("%s:%d", nd.ChaosIP, legacyPort)
+			}
 		}
 
 		inv.Nodes = append(inv.Nodes, ctNode{
@@ -171,7 +187,33 @@ func buildChaosTestInventory(s spec, testID string) ctInventory {
 			KafkaRejectedTx:    "rejectedtx-" + name,
 			KafkaInvalidBlocks: "invalid-blocks-" + name,
 			Container:          container,
+			LegacyAddr:         legacyAddr,
 		})
+	}
+
+	if s.Chaos != nil {
+		for _, sv := range s.Chaos.SVNodes {
+			inv.Nodes = append(inv.Nodes, ctNode{
+				Kind:        "svnode",
+				Name:        sv.Name(),
+				Index:       sv.Index,
+				ChaosIP:     sv.ChaosIP,
+				AlertIP:     sv.AlertIP,
+				AlertPeerID: sv.AlertPeerID,
+				AlertAddr:   sv.AlertAddr(),
+				RPCURL:      fmt.Sprintf("http://%s:%d", sv.Name(), svRPCPort),
+				HostRPCURL:  fmt.Sprintf("http://localhost:%d", sv.RPCHostPort()),
+				HostBase:    sv.HostBase,
+				Container:   sv.Name() + "-multinode",
+				LegacyPeers: sv.Connect,
+				Sidecar: &ctSidecar{
+					Name:      sv.SidecarName(),
+					Container: sv.SidecarName() + "-multinode",
+					APIURL:    fmt.Sprintf("http://%s:%d", sv.SidecarName(), hubAPIPort),
+					HostAPI:   fmt.Sprintf("http://localhost:%d", sv.APIHostPort()),
+				},
+			})
+		}
 	}
 
 	return inv

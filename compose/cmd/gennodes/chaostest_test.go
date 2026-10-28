@@ -75,7 +75,7 @@ func TestChaosPlanes_Inventory(t *testing.T) {
 	keys, err := loadKeys(3)
 	require.NoError(t, err)
 	s := buildSpec(keys)
-	require.NoError(t, applyChaosPlanes(&s, testGenesis))
+	require.NoError(t, applyChaosPlanes(&s, testGenesis, 2))
 
 	inv := buildChaosTestInventory(s, "default")
 	require.Equal(t, "teranode-chaosnet-multinode-default", inv.Networks.ChaosName)
@@ -101,17 +101,17 @@ func TestChaosPlanes_Rejected(t *testing.T) {
 
 	s := buildSpec(keys)
 	s.AllInOne = false
-	require.Error(t, applyChaosPlanes(&s, testGenesis), "split topology")
+	require.Error(t, applyChaosPlanes(&s, testGenesis, 2), "split topology")
 
 	s = buildSpec(keys)
-	require.Error(t, applyChaosPlanes(&s, testGenesis[:2]), "too few genesis keys")
+	require.Error(t, applyChaosPlanes(&s, testGenesis[:2], 2), "too few genesis keys")
 }
 
 func TestChaosPlanes_WriteAll(t *testing.T) {
 	keys, err := loadKeys(3)
 	require.NoError(t, err)
 	s := buildSpec(keys)
-	require.NoError(t, applyChaosPlanes(&s, testGenesis))
+	require.NoError(t, applyChaosPlanes(&s, testGenesis, 2))
 
 	dir := t.TempDir()
 	require.NoError(t, writeAll(dir, s))
@@ -166,11 +166,77 @@ func TestChaosPlanes_HubWaitsForTeranode1(t *testing.T) {
 	keys, err := loadKeys(3)
 	require.NoError(t, err)
 	s := buildSpec(keys)
-	require.NoError(t, applyChaosPlanes(&s, testGenesis))
+	require.NoError(t, applyChaosPlanes(&s, testGenesis, 2))
 
 	dir := t.TempDir()
 	require.NoError(t, writeAll(dir, s))
 	compose, err := os.ReadFile(filepath.Join(dir, "docker-compose-multinode.yml"))
 	require.NoError(t, err)
 	require.Contains(t, string(compose), "until nc -z 192.0.0.141 9908")
+}
+
+func TestChaosPlanes_SVNodes(t *testing.T) {
+	keys, err := loadKeys(3)
+	require.NoError(t, err)
+	s := buildSpec(keys)
+	require.NoError(t, applyChaosPlanes(&s, testGenesis, 2))
+
+	dir := t.TempDir()
+	require.NoError(t, writeAll(dir, s))
+
+	inv := buildChaosTestInventory(s, "default")
+	require.Len(t, inv.Nodes, 5)
+	require.Equal(t, "10.200.0.11:18444", inv.Nodes[0].LegacyAddr)
+	sv2 := inv.Nodes[4]
+	require.Equal(t, "svnode", sv2.Kind)
+	require.Equal(t, "svnode2", sv2.Name)
+	require.Equal(t, "http://svnode2:18332", sv2.RPCURL)
+	require.Equal(t, "http://localhost:41332", sv2.HostRPCURL)
+	require.Equal(t, "/ip4/192.0.0.162/tcp/9906/p2p/"+sv2.AlertPeerID, sv2.AlertAddr)
+	require.Equal(t, []string{"10.200.0.11:18444", "10.200.0.12:18444", "10.200.0.13:18444", "10.200.0.21:18444"}, sv2.LegacyPeers)
+	require.NotNil(t, sv2.Sidecar)
+	require.Equal(t, "alert-svnode2-multinode", sv2.Sidecar.Container)
+
+	conf1, err := os.ReadFile(filepath.Join(dir, "svnode", "svnode1.conf"))
+	require.NoError(t, err)
+	conf2, err := os.ReadFile(filepath.Join(dir, "svnode", "svnode2.conf"))
+	require.NoError(t, err)
+	require.NotContains(t, string(conf1), "acceptnonstdoutputs")
+	require.Contains(t, string(conf2), "acceptnonstdoutputs=0", "svnode-dust-policy needs one strict SV node")
+	require.Contains(t, string(conf1), "connect=10.200.0.22:18444")
+
+	sidecar, err := os.ReadFile(filepath.Join(dir, "alert-system", "alert-svnode1.json"))
+	require.NoError(t, err)
+	require.Contains(t, string(sidecar), "http://svnode1:18332")
+	require.Contains(t, string(sidecar), s.Chaos.HubAddr)
+
+	settings, err := os.ReadFile(filepath.Join(dir, "settings_multinode.conf"))
+	require.NoError(t, err)
+	require.Contains(t, string(settings), "startLegacy.docker.teranode1                        = true")
+	require.Contains(t, string(settings), "asset_httpRateLimit.docker.teranode1                = 100000")
+
+	compose, err := os.ReadFile(filepath.Join(dir, "docker-compose-multinode.yml"))
+	require.NoError(t, err)
+	require.Contains(t, string(compose), "svnode2-multinode")
+	require.Contains(t, string(compose), "alert-svnode1-multinode")
+}
+
+func TestChaosPlanes_NoSVNodes(t *testing.T) {
+	keys, err := loadKeys(3)
+	require.NoError(t, err)
+	s := buildSpec(keys)
+	require.NoError(t, applyChaosPlanes(&s, testGenesis, 0))
+
+	dir := t.TempDir()
+	require.NoError(t, writeAll(dir, s))
+
+	require.Len(t, buildChaosTestInventory(s, "default").Nodes, 3)
+	settings, err := os.ReadFile(filepath.Join(dir, "settings_multinode.conf"))
+	require.NoError(t, err)
+	require.NotContains(t, string(settings), "startLegacy")
+	_, err = os.Stat(filepath.Join(dir, "svnode"))
+	require.True(t, os.IsNotExist(err))
+
+	s = buildSpec(keys)
+	require.Error(t, applyChaosPlanes(&s, testGenesis, 3), "the key pool has two sidecar keys")
 }
