@@ -1,6 +1,8 @@
 package collect
 
 import (
+	"time"
+
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -43,6 +45,8 @@ const (
 	noteUnbounded = "unbounded"
 
 	assemblyMaxBatchesPerIteration = 64
+
+	cacheRateWindow = 10 * time.Second
 )
 
 var aerospikeOpCounters = []string{
@@ -122,13 +126,13 @@ func applyValidator(s *snapshot.Snapshot, r *Rates, cfg *settings.Settings) {
 }
 
 func applyCache(s *snapshot.Snapshot, m MetricSet, r *Rates, cfg *settings.Settings) {
-	hits, hitsOK := r.PerSec(metricCacheHits)
-	misses, missesOK := r.PerSec(metricCacheMisses)
+	hits, hitsOK := r.PerSecOver(metricCacheHits, cacheRateWindow)
+	misses, missesOK := r.PerSecOver(metricCacheMisses, cacheRateWindow)
 
 	switch {
 	case !hitsOK || !missesOK:
 		set(&s.Cache.HitRate, noData(noteNoData))
-		set(&s.Cache.MissesPerSec, rate(r, metricCacheMisses))
+		set(&s.Cache.MissesPerSec, windowRate(r, metricCacheMisses))
 		setFlow(s, snapshot.FlowLookups, noData(noteNoData))
 	case hits+misses == 0:
 		set(&s.Cache.HitRate, noData(noteNoData))
@@ -140,7 +144,7 @@ func applyCache(s *snapshot.Snapshot, m MetricSet, r *Rates, cfg *settings.Setti
 		setFlow(s, snapshot.FlowLookups, okReading(hits+misses))
 	}
 
-	set(&s.Cache.EvictionsPerSec, rate(r, metricCacheEvictions))
+	set(&s.Cache.EvictionsPerSec, windowRate(r, metricCacheEvictions))
 	set(&s.Cache.Fill, noData(noteNoData))
 	set(&s.Cache.SizeGB, noData(noteNoData))
 
@@ -251,6 +255,15 @@ func sumRates(r *Rates, names ...string) snapshot.Reading {
 
 func rate(r *Rates, name string) snapshot.Reading {
 	v, ok := r.PerSec(name)
+	if !ok {
+		return noData(noteNoData)
+	}
+
+	return okReading(v)
+}
+
+func windowRate(r *Rates, name string) snapshot.Reading {
+	v, ok := r.PerSecOver(name, cacheRateWindow)
 	if !ok {
 		return noData(noteNoData)
 	}

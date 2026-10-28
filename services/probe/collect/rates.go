@@ -27,10 +27,16 @@ type observation struct {
 	series map[string]seriesSample
 }
 
+const (
+	historyRetention = 30 * time.Second
+	historyMaxLen    = 64
+)
+
 type Rates struct {
-	mu   sync.Mutex
-	prev *observation
-	curr *observation
+	mu      sync.Mutex
+	prev    *observation
+	curr    *observation
+	history []*observation
 }
 
 func NewRates() *Rates {
@@ -58,13 +64,79 @@ func (r *Rates) Observe(now time.Time, m MetricSet) {
 
 	r.prev = r.curr
 	r.curr = snap
+	r.history = trimHistory(append(r.history, snap), now)
+}
+
+func trimHistory(history []*observation, now time.Time) []*observation {
+	start := 0
+	for start < len(history)-1 && (now.Sub(history[start].at) > historyRetention || len(history)-start > historyMaxLen) {
+		start++
+	}
+
+	return append([]*observation(nil), history[start:]...)
 }
 
 func (r *Rates) frozen() *Rates {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	return &Rates{prev: r.prev, curr: r.curr}
+	return &Rates{prev: r.prev, curr: r.curr, history: append([]*observation(nil), r.history...)}
+}
+
+func (r *Rates) PerSecOver(name string, window time.Duration) (float64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	n := len(r.history)
+	if n < 2 || window <= 0 {
+		return 0, false
+	}
+
+	newest := r.history[n-1]
+
+	base := -1
+
+	for i := n - 2; i >= 0; i-- {
+		if newest.at.Sub(r.history[i].at) >= window {
+			base = i
+			break
+		}
+	}
+
+	if base < 0 {
+		return 0, false
+	}
+
+	prevValue, ok := seriesValue(r.history[base], name)
+	if !ok {
+		return 0, false
+	}
+
+	first := prevValue
+
+	for _, obs := range r.history[base+1:] {
+		value, ok := seriesValue(obs, name)
+		if !ok || value < prevValue {
+			return 0, false
+		}
+
+		prevValue = value
+	}
+
+	return (prevValue - first) / newest.at.Sub(r.history[base].at).Seconds(), true
+}
+
+func seriesValue(obs *observation, name string) (float64, bool) {
+	sample, ok := obs.series[name]
+	if !ok {
+		return 0, false
+	}
+
+	if sample.histogram {
+		return sample.count, true
+	}
+
+	return sample.value, true
 }
 
 func histogramSample(family *dto.MetricFamily) (seriesSample, bool) {
