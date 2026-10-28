@@ -99,10 +99,6 @@ func (k *Kafka) Collect(ctx context.Context) (snapshot.Patch, error) {
 			}
 
 			for partition, member := range partitions {
-				if member.Commit.At < 0 {
-					continue
-				}
-
 				if member.Err != nil {
 					return nil, errors.NewServiceError("could not read lag of group %s on %s/%d", group.Group, topic, partition, member.Err)
 				}
