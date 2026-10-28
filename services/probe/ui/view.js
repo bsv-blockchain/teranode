@@ -358,8 +358,6 @@ function pulse(st) {
 }
 
 const READOUT_ROOM = 118;
-const READOUT_NOTE_CHARS = 30;
-const READOUT_NOTE_LINES = 3;
 const TANK_NOTE_LINES = 5;
 
 function readout(y, label, fr, key) {
@@ -367,16 +365,20 @@ function readout(y, label, fr, key) {
   const wordW = fr.word ? textWidth(fr.word, 9.5, 0.52) : 0;
   if (fr.word && textWidth(fr.text, size, 0.6) + wordW > 108) size = 12;
   const c = COLORS[fr.st];
-  const inWell = !fr.word || textWidth(fr.text, size, 0.6) + wordW <= READOUT_ROOM;
-  const below = inWell ? [] : wrapWords(fr.word, READOUT_NOTE_CHARS).slice(0, READOUT_NOTE_LINES);
+  const room = READOUT_ROOM - textWidth(fr.text, size, 0.6);
+  const fits = !fr.word || wordW <= room;
+  const budget = Math.max(1, Math.floor(room / (9.5 * 0.52)));
+  const shown = fits ? fr.word : `${fr.word.slice(0, budget - 1).trimEnd()}…`;
+  const word = fits
+    ? h('text', { x: 36, y: y + 22.5, class: 'wd' }, shown)
+    : h('g', {}, [h('title', {}, fr.word), h('text', { x: 36, y: y + 22.5, class: 'wd' }, shown)]);
   return h('g', { 'data-key': key }, [
     h('text', { x: 12, y, class: 'lb' }, label),
     h('rect', { x: 12, y: y + 6, width: 146, height: 26, rx: 4, class: 'well' }),
     h('rect', { x: 12, y: y + 6, width: 3, height: 26, rx: 1.5, fill: c }),
     h('circle', { cx: 27, cy: y + 19, r: 3.5, fill: c, filter: 'url(#glow)', class: pulse(fr.st) }),
-    h('text', { x: 36, y: y + 22.5, class: 'wd' }, inWell ? fr.word : ''),
+    word,
     h('text', { x: 152, y: y + 24, 'text-anchor': 'end', class: 'val', 'font-size': size }, fr.text),
-    h('g', {}, below.map((l, i) => h('text', { x: 12, y: y + 43 + i * 11, class: 'wd' }, l))),
   ]);
 }
 
