@@ -7994,7 +7994,7 @@
 <tr>
 <td><code>teranode_blockvalidation_recovered_panics_total</code></td>
 <td>CounterVec</td>
-<td>Panics recovered in block validation, by <code>path</code> label: <code>worker</code>, <code>catchup</code>, <code>kafka</code> or <code>block_found</code>. Each one is a bug in the node. The block hash and stack are in the <code>PANIC</code> log line</td>
+<td>Panics recovered in block validation, by <code>path</code> label: <code>worker</code>, <code>catchup</code>, <code>kafka</code> or <code>block_found</code>, or for an errgroup goroutine those start, <code>catchup_fetch</code>, <code>block_validation</code> or <code>service</code>. Each one is a bug in the node. The stack, and on most paths the block hash, are in the <code>PANIC</code> log line</td>
 </tr>
 </tbody>
 </table>

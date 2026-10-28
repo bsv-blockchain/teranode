@@ -6764,7 +6764,7 @@
 <h1 id="aerospike-configuration-considerations">Aerospike - Configuration Considerations<a class="headerlink" href="#aerospike-configuration-considerations" title="Permanent link">&para;</a></h1>
 <p>Last Modified - 13-December-2024</p>
 <h1 id="general-notes">General notes<a class="headerlink" href="#general-notes" title="Permanent link">&para;</a></h1>
-<p>Teranode is tested at scaled-out configuration (1m tps throughput) with Aerospike. The Aerospike database is used to store the UTXO set, where indexes are stored in-memory, and data on disk.This document outlines some configuration notes for Aerospike.</p>
+<p>Teranode's scaled-out configuration (1m tps design target) uses Aerospike. The Aerospike database is used to store the UTXO set, where indexes are stored in-memory, and data on disk.This document outlines some configuration notes for Aerospike.</p>
 <p>If using the <code>Docker compose</code> installation path, your compose file will automatically install the Aerospike 7.1 community edition for you.</p>
 <p>Expiration settings:</p>
 <ul>
