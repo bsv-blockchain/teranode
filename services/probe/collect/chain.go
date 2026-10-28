@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/model"
@@ -14,16 +15,24 @@ import (
 const (
 	chainCallTimeout    = 3 * time.Second
 	chainMaxWaiting     = 20
-	chainPersisterLimit = 1000
+	chainPersisterLimit = 25
+	chainBacklogEvery   = 10 * time.Second
 )
 
 type Chain struct {
 	bc   blockchain.ClientI
 	p2pc p2p.ClientI
+	now  func() time.Time
+
+	mu         sync.Mutex
+	haveLast   bool
+	lastAt     time.Time
+	lastWait   []uint32
+	lastBehind snapshot.Reading
 }
 
 func NewChain(bc blockchain.ClientI, p2pc p2p.ClientI) *Chain {
-	return &Chain{bc: bc, p2pc: p2pc}
+	return &Chain{bc: bc, p2pc: p2pc, now: time.Now}
 }
 
 func (c *Chain) Name() string {
@@ -50,21 +59,9 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 		return nil, err
 	}
 
-	notPersisted, err := c.notPersisted(ctx)
+	waiting, behind, err := c.backlog(ctx)
 	if err != nil {
 		return nil, err
-	}
-
-	minedNotSet, err := c.minedNotSet(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	waiting := waitingHeights(notPersisted, minedNotSet)
-
-	behind := snapshot.Reading{Value: float64(len(notPersisted)), Status: snapshot.StatusOK}
-	if len(notPersisted) > 0 {
-		behind.Status = snapshot.StatusWarn
 	}
 
 	return func(s *snapshot.Snapshot) {
@@ -74,6 +71,39 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 		s.Chain.BlocksWaiting = waiting
 		s.Chain.PersisterBehind = behind
 	}, nil
+}
+
+func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	now := c.now()
+	if c.haveLast && now.Sub(c.lastAt) < chainBacklogEvery {
+		return append([]uint32{}, c.lastWait...), c.lastBehind, nil
+	}
+
+	notPersisted, err := c.notPersisted(ctx)
+	if err != nil {
+		return nil, snapshot.Reading{}, err
+	}
+
+	minedNotSet, err := c.minedNotSet(ctx)
+	if err != nil {
+		return nil, snapshot.Reading{}, err
+	}
+
+	behind := snapshot.Reading{Value: float64(len(notPersisted)), Status: snapshot.StatusOK}
+	if len(notPersisted) >= chainPersisterLimit {
+		behind.Value = chainPersisterLimit
+		behind.Note = "25 or more"
+	}
+
+	c.haveLast = true
+	c.lastAt = now
+	c.lastWait = waitingHeights(notPersisted, minedNotSet)
+	c.lastBehind = behind
+
+	return append([]uint32{}, c.lastWait...), behind, nil
 }
 
 func (c *Chain) Events(ctx context.Context) <-chan struct{} {
