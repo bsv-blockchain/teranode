@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/url"
+	"runtime"
 	"testing"
 	"time"
 
@@ -338,4 +339,147 @@ func TestNamespaceUsage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAggregateNodes(t *testing.T) {
+	tests := []struct {
+		name      string
+		nodes     []nodeStats
+		wantSize  float64
+		wantFill  float64
+		wantP99   float64
+		wantP99OK bool
+		wantOK    bool
+	}{
+		{
+			name:      "single node",
+			nodes:     []nodeStats{{name: "a", answered: true, usage: true, sizeGB: 2, fill: 0.25, p99: 0.002, p99ok: true}},
+			wantSize:  2,
+			wantFill:  0.25,
+			wantP99:   0.002,
+			wantP99OK: true,
+			wantOK:    true,
+		},
+		{
+			name: "three nodes sum sizes and take the fullest and slowest",
+			nodes: []nodeStats{
+				{name: "a", answered: true, usage: true, sizeGB: 10, fill: 0.20, p99: 0.001, p99ok: true},
+				{name: "b", answered: true, usage: true, sizeGB: 20, fill: 0.80, p99: 0.008, p99ok: true},
+				{name: "c", answered: true, usage: true, sizeGB: 5, fill: 0.50, p99: 0.002, p99ok: true},
+			},
+			wantSize:  35,
+			wantFill:  0.80,
+			wantP99:   0.008,
+			wantP99OK: true,
+			wantOK:    true,
+		},
+		{
+			name: "one node without latency does not blank the others",
+			nodes: []nodeStats{
+				{name: "a", answered: true, usage: true, sizeGB: 10, fill: 0.30, p99: 0.004, p99ok: true},
+				{name: "b", answered: true, usage: true, sizeGB: 10, fill: 0.10},
+			},
+			wantSize:  20,
+			wantFill:  0.30,
+			wantP99:   0.004,
+			wantP99OK: true,
+			wantOK:    true,
+		},
+		{
+			name: "no node with latency",
+			nodes: []nodeStats{
+				{name: "a", answered: true, usage: true, sizeGB: 1, fill: 0.1},
+				{name: "b", answered: true, usage: true, sizeGB: 2, fill: 0.2},
+			},
+			wantSize: 3,
+			wantFill: 0.2,
+			wantOK:   true,
+		},
+		{
+			name: "a failed node is ignored even when it carries values",
+			nodes: []nodeStats{
+				{name: "a", answered: true, usage: true, sizeGB: 4, fill: 0.40, p99: 0.001, p99ok: true},
+				{name: "b", sizeGB: 100, fill: 0.99, p99: 0.064, p99ok: true},
+			},
+			wantSize:  4,
+			wantFill:  0.40,
+			wantP99:   0.001,
+			wantP99OK: true,
+			wantOK:    true,
+		},
+		{
+			name:   "answered node without usage figures",
+			nodes:  []nodeStats{{name: "a", answered: true}},
+			wantOK: false,
+		},
+		{
+			name:   "all nodes failed",
+			nodes:  []nodeStats{{name: "a"}, {name: "b"}},
+			wantOK: false,
+		},
+		{
+			name:   "no nodes",
+			wantOK: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			size, fill, p99, p99ok, ok := aggregateNodes(tc.nodes)
+			require.Equal(t, tc.wantOK, ok)
+			require.Equal(t, tc.wantP99OK, p99ok)
+			require.InDelta(t, tc.wantSize, size, 1e-9)
+			require.InDelta(t, tc.wantFill, fill, 1e-9)
+			require.InDelta(t, tc.wantP99, p99, 1e-9)
+		})
+	}
+}
+
+func TestRepeatedFailedCollectsDoNotLeakGoroutines(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	defer ln.Close()
+
+	go func() {
+		for {
+			conn, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+
+			defer conn.Close()
+		}
+	}()
+
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	closedAddr := closed.Addr().String()
+	require.NoError(t, closed.Close())
+
+	hung, err := NewAerospike(&url.URL{Scheme: "aerospike", Host: ln.Addr().String(), Path: "/test"}, 200*time.Millisecond)
+	require.NoError(t, err)
+
+	down, err := NewAerospike(&url.URL{Scheme: "aerospike", Host: closedAddr, Path: "/test"}, 200*time.Millisecond)
+	require.NoError(t, err)
+
+	baseline := runtime.NumGoroutine()
+
+	for i := 0; i < 10; i++ {
+		patch, herr := hung.Collect(context.Background())
+		require.Error(t, herr)
+		require.Nil(t, patch)
+
+		patch, derr := down.Collect(context.Background())
+		require.Error(t, derr)
+		require.Nil(t, patch)
+	}
+
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= baseline+5
+	}, 10*time.Second, 100*time.Millisecond, "goroutines: baseline %d", baseline)
+
+	hung.Close()
+	down.Close()
 }

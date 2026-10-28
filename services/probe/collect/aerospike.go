@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -245,6 +246,68 @@ func (a *Aerospike) dropClient(client *aero.Client) {
 	client.Close()
 }
 
+type nodeStats struct {
+	name     string
+	answered bool
+	usage    bool
+	sizeGB   float64
+	fill     float64
+	p99      float64
+	p99ok    bool
+}
+
+func aggregateNodes(nodes []nodeStats) (sizeGB float64, fill float64, p99 float64, p99ok bool, ok bool) {
+	for _, n := range nodes {
+		if !n.answered {
+			continue
+		}
+
+		if n.usage {
+			ok = true
+			sizeGB += n.sizeGB
+			fill = max(fill, n.fill)
+		}
+
+		if n.p99ok {
+			p99ok = true
+			p99 = max(p99, n.p99)
+		}
+	}
+
+	return sizeGB, fill, p99, p99ok, ok
+}
+
+func (a *Aerospike) nodeInfo(node *aero.Node) nodeStats {
+	stats := nodeStats{name: node.GetName()}
+
+	policy := aero.NewInfoPolicy()
+	policy.Timeout = a.timeout
+
+	latency := readLatencyCommand(a.namespace)
+
+	info, err := node.RequestInfo(policy, "namespace/"+a.namespace, latency)
+	if err != nil {
+		return stats
+	}
+
+	ns, found := info["namespace/"+a.namespace]
+	if !found || strings.HasPrefix(ns, "ERROR") {
+		return stats
+	}
+
+	stats.answered = true
+
+	if used, fill, ok := namespaceUsage(ns); ok {
+		stats.usage = true
+		stats.sizeGB = used / aerospikeBytesPerGB
+		stats.fill = fill
+	}
+
+	stats.p99, stats.p99ok = parseReadLatencyP99(info[latency], a.namespace)
+
+	return stats
+}
+
 func (a *Aerospike) read() (aerospikeReadings, error) {
 	client, err := a.connection()
 	if err != nil {
@@ -257,18 +320,35 @@ func (a *Aerospike) read() (aerospikeReadings, error) {
 		return aerospikeReadings{}, errors.NewServiceError("probe aerospike client has no active node")
 	}
 
-	policy := aero.NewInfoPolicy()
-	policy.Timeout = a.timeout
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].GetName() < nodes[j].GetName() })
 
-	info, ierr := nodes[0].RequestInfo(policy, "namespace/"+a.namespace, readLatencyCommand(a.namespace))
-	if ierr != nil {
-		a.dropClient(client)
-		return aerospikeReadings{}, errors.NewServiceError("could not read aerospike namespace info", ierr)
+	results := make([]nodeStats, len(nodes))
+
+	var wg sync.WaitGroup
+
+	for i, node := range nodes {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			results[i] = a.nodeInfo(node)
+		}()
 	}
 
-	stats, ok := info["namespace/"+a.namespace]
-	if !ok || strings.HasPrefix(stats, "ERROR") {
-		return aerospikeReadings{}, errors.NewServiceError("aerospike returned no statistics for namespace %s: %s", a.namespace, stats)
+	wg.Wait()
+
+	answered := 0
+
+	for _, n := range results {
+		if n.answered {
+			answered++
+		}
+	}
+
+	if answered == 0 {
+		a.dropClient(client)
+		return aerospikeReadings{}, errors.NewServiceError("no aerospike node returned statistics for namespace %s", a.namespace)
 	}
 
 	readings := aerospikeReadings{
@@ -277,12 +357,14 @@ func (a *Aerospike) read() (aerospikeReadings, error) {
 		p99:  snapshot.Reading{Status: snapshot.StatusNoData, Note: aerospikeLatencyNote},
 	}
 
-	if used, fill, ok := namespaceUsage(stats); ok {
-		readings.size = snapshot.Reading{Value: used / aerospikeBytesPerGB, Status: snapshot.StatusOK}
+	sizeGB, fill, p99, p99ok, ok := aggregateNodes(results)
+
+	if ok {
+		readings.size = snapshot.Reading{Value: sizeGB, Status: snapshot.StatusOK}
 		readings.fill = snapshot.Reading{Value: fill, Status: snapshot.StatusOK}
 	}
 
-	if p99, ok := parseReadLatencyP99(info[readLatencyCommand(a.namespace)], a.namespace); ok {
+	if p99ok {
 		readings.p99 = snapshot.Reading{Value: p99, Status: snapshot.StatusOK}
 	}
 
