@@ -21,6 +21,7 @@ func TestProbeSettingsDefaults(t *testing.T) {
 	require.Equal(t, "", s.Probe.StatePath)
 	require.Nil(t, s.Probe.AerospikeURL)
 	require.Nil(t, s.Probe.PostgresURL)
+	require.Equal(t, 0.0, s.Probe.PostgresDiskCapacityGB)
 	require.Empty(t, s.Probe.Floors)
 }
 
@@ -30,6 +31,7 @@ func TestProbeSettingsReadOverrides(t *testing.T) {
 	t.Setenv("probe_metricsTargets", "a:1|b:2")
 	t.Setenv("probe_floors", "tps=100|hit=0.9")
 	t.Setenv("probe_postgresURL", "postgres://u:p@h:5432/db")
+	t.Setenv("probe_postgresDiskCapacityGB", "250.5")
 
 	s := NewSettings()
 
@@ -39,4 +41,5 @@ func TestProbeSettingsReadOverrides(t *testing.T) {
 	require.Equal(t, []string{"tps=100", "hit=0.9"}, s.Probe.Floors)
 	require.NotNil(t, s.Probe.PostgresURL)
 	require.Equal(t, "h:5432", s.Probe.PostgresURL.Host)
+	require.Equal(t, 250.5, s.Probe.PostgresDiskCapacityGB)
 }
