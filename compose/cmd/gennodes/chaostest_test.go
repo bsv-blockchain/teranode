@@ -48,6 +48,7 @@ func TestChaosTestInventory_Split(t *testing.T) {
 	require.Equal(t, "http://teranode1-asset:8090/api/v1", n1.AssetURL)
 	require.Equal(t, "http://teranode1-propagation:8833", n1.PropagationURL)
 	require.Equal(t, "http://teranode1-core:8000/health", n1.HealthURL)
+	require.Equal(t, "/dns/teranode1-p2p/tcp/9905/p2p/"+n1.PeerID, n1.P2PAddr)
 }
 
 func TestWriteAll_WritesChaosTestInventory(t *testing.T) {

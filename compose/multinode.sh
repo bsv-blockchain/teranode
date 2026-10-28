@@ -95,9 +95,10 @@ Chaos:
 
 chaos-test scenarios (github.com/galt-tr/chaos-test, checkout in ../chaos-test
 or CHAOS_TEST_DIR):
-  sim up [--build]                Start the scenario orchestrator + UI on :8600
-                                  (SIM_HOST_PORT) against this stack. Builds the
-                                  image on first use; --build rebuilds it.
+  sim up [--build] [--no-arcade]  Start the scenario orchestrator + UI on :8600
+                                  (SIM_HOST_PORT) and arcade on :18080
+                                  (ARCADE_HOST_PORT) against this stack. Builds
+                                  the image on first use; --build rebuilds it.
   sim run <scenario> [--step]     Run a scenario and follow it to completion
   sim status | logs | down        Orchestrator state, logs, or remove it
                                   (also removed by 'down')
@@ -910,12 +911,8 @@ cmd_blast() {
 
   # Target fleet. Both use the same host port scheme (node N: base
   # 20000 + (N-1)*2000; RPC base+1292, propagation gRPC base+84), so only the
-  # container naming, funding key and state directory differ.
-  #
-  # bsv-regtest is chaos-test's fleet (CHAOS_TEST_DIR/bsv-regtest). There the
-  # blaster funds itself from PK2, the coinbase's second output: chaos-test
-  # scenarios spend the first (PK1), and sharing a key would make the two
-  # double-spend each other's coins.
+  # container naming and state directory differ. bsv-regtest is chaos-test's
+  # fleet (CHAOS_TEST_DIR/bsv-regtest).
   local ctr_re ctr_fmt blaster_data_dir
   case "$target" in
     multinode)
@@ -928,19 +925,26 @@ cmd_blast() {
       ctr_re='^bsv-regtest-teranode([0-9]+)$'
       ctr_fmt='bsv-regtest-teranode%s'
       blaster_data_dir="$REPO_ROOT/data/bsv-regtest-blaster"
-      local pk2
-      pk2=$(sed -nE 's/^PK2[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$REPO_ROOT/settings.conf" | head -1)
-      if [[ -z "$pk2" ]]; then
-        echo "error: PK2 not found in settings.conf" >&2
-        exit 1
-      fi
-      export coinbase_wallet_private_key="$pk2"
       ;;
     *)
       echo "error: --target must be multinode or bsv-regtest, got '$target'" >&2
       exit 2
       ;;
   esac
+
+  # On both fleets the blaster funds itself from PK2, the coinbase's second
+  # output: chaos-test scenarios spend the first (PK1), and sharing a key
+  # would make the two double-spend each other's coins. A blaster state
+  # directory funded from PK1 by an older version needs --fresh.
+  local pk2="${PK2:-}"
+  if [[ -z "$pk2" ]]; then
+    pk2=$(sed -nE 's/^PK2[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$REPO_ROOT/settings.conf" | head -1)
+  fi
+  if [[ -z "$pk2" ]]; then
+    echo "error: PK2 not found in settings.conf; set PK2 in the environment" >&2
+    exit 1
+  fi
+  export coinbase_wallet_private_key="$pk2"
 
   if $fresh; then
     rm -rf "$blaster_data_dir"
@@ -1209,6 +1213,16 @@ SIM_PORT="${SIM_HOST_PORT:-8600}"
 SIM_DATA_DIR="$REPO_ROOT/data/multinode-chaostest"
 SIM_SCENARIOS_DIR="${SCENARIOS_DIR:-$SCRIPT_DIR/chaostest/scenarios}"
 
+# Arcade (ARC-compatible broadcaster) runs next to the orchestrator so the
+# scenarios that submit through it (freeze-skew-rpc, arcade-*) work here as on
+# chaos-test's own fleet. Same image and settings as bsv-regtest's 'arcade'
+# profile, pointed at this stack's datahubs and p2p peers. No merkle-service:
+# nothing that runs here needs merkle callbacks. State lives in the container
+# and goes with it, since every 'up' starts a new chain.
+ARCADE_CONTAINER="arcade-multinode"
+ARCADE_IMAGE="${ARCADE_IMAGE:-ghcr.io/bsv-blockchain/arcade:latest}"
+ARCADE_PORT="${ARCADE_HOST_PORT:-18080}"
+
 chaos_test_dir() {
   local dir="${CHAOS_TEST_DIR:-$REPO_ROOT/../chaos-test}"
   if [[ ! -f "$dir/sim/Dockerfile" ]]; then
@@ -1231,11 +1245,68 @@ sim_build() {
   docker build -t "$SIM_IMAGE" --build-arg UI="${SIM_UI:-1}" -f "$dir/sim/Dockerfile" "$dir"
 }
 
+# arcade_up <inventory> <network> writes arcade's config from the node list
+# and starts it on the stack network. Host ports follow bsv-regtest's:
+# API 18080, health 18081, events (SSE) 18082, chaintracks 18083.
+arcade_up() {
+  local inv="$1" network="$2"
+  local cfg="$SIM_DATA_DIR/arcade"
+  mkdir -p "$cfg"
+  python3 -I - "$inv" "$cfg/config.yaml" "$ARCADE_CONTAINER" <<'PY'
+import json, secrets, sys
+inv, out, name = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
+nodes = [n for n in inv["nodes"] if n["kind"] == "teranode"]
+lines = [
+    "# Written by multinode.sh sim up; mirrors bsv-regtest's arcade profile.",
+    "mode: all", "log_level: info", "network: regtest", "storage_path: /data/arcade",
+    f"callback_url: http://{name}:8080/api/v1/merkle-service/callback",
+    f"callback_token: {secrets.token_hex(32)}",
+    "api:", "  host: 0.0.0.0", "  port: 8080",
+    "health:", "  port: 8081",
+    "kafka:", "  backend: memory", "  consumer_group: arcade", "  max_retries: 5", "  buffer_size: 10000",
+    "store:", "  backend: pebble", "  pebble:", "    path: /data/pebble", "    sync_writes: false",
+    "datahub_urls:", *[f"  - {n['assetURL']}" for n in nodes],
+    "teranode:", '  auth_token: ""',
+    "p2p:", "  seeds: []", "  datahub_discovery: false", '  dht_mode: "off"', "  listen_port: 9905",
+    "  storage_path: /data/p2p", "  allow_private_urls: true",
+    "  bootstrap_peers:", *[f"    - {n['p2pAddr']}" for n in nodes],
+    "chaintracks_server:", "  enabled: true", "  host: 0.0.0.0", "  port: 8083", "  tie_scan_min_interval_ms: 500",
+    "callback:", "  allow_private_ips: true",
+    "validator:", "  accept_zero_fee: true", "  min_fee_per_kb: 0", "  standard_format_supported: true",
+    "bump_builder:", "  grace_window_ms: 5000", "  reconciler:", "    interval_ms: 2000", "    max_defer_attempts: 2",
+    "chaintracks:", "  mode: embedded", "  storage_path: /data/chaintracks",
+    f"  bootstrap_url: {nodes[0]['assetURL']}", "  bootstrap_mode: api",
+]
+open(out, "w").write("\n".join(lines) + "\n")
+PY
+
+  docker rm -f "$ARCADE_CONTAINER" >/dev/null 2>&1 || true
+  echo "starting $ARCADE_CONTAINER on $network..."
+  docker run -d --name "$ARCADE_CONTAINER" \
+    --network "$network" \
+    -p "$ARCADE_PORT:8080" -p "$((ARCADE_PORT + 1)):8081" \
+    -p "$((ARCADE_PORT + 2)):8082" -p "$((ARCADE_PORT + 3)):8083" \
+    -v "$cfg/config.yaml:/etc/arcade/config.yaml:ro" \
+    --memory 1g \
+    "$ARCADE_IMAGE" --mode all --config /etc/arcade/config.yaml >/dev/null
+
+  local deadline=$((SECONDS + 60))
+  until curl -sf -m 2 "http://localhost:$((ARCADE_PORT + 1))/health" >/dev/null 2>&1; do
+    if [[ "$(docker inspect -f '{{.State.Running}}' "$ARCADE_CONTAINER" 2>/dev/null)" != "true" ]] || ((SECONDS > deadline)); then
+      echo "error: arcade did not come up; last log lines:" >&2
+      docker logs --tail 30 "$ARCADE_CONTAINER" >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
+}
+
 sim_up() {
-  local build=false
+  local build=false arcade=true
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --build) build=true; shift ;;
+      --no-arcade) arcade=false; shift ;;
       *) echo "error: sim up: unknown flag '$1'" >&2; exit 2 ;;
     esac
   done
@@ -1280,6 +1351,24 @@ with open(sys.argv[2], "w") as f:
   local network
   network=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["networks"]["chaosnetName"])' "$inv")
 
+  if $arcade; then
+    arcade_up "$inv" "$network"
+    python3 -I - "$cfg/inventory.json" "$ARCADE_CONTAINER" "$ARCADE_PORT" <<'PY'
+import json, sys
+path, name, port = sys.argv[1], sys.argv[2], int(sys.argv[3])
+inv = json.load(open(path))
+pair = lambda p: {"url": f"http://{name}:{p}", "hostURL": f"http://localhost:{port + p - 8080}"}
+inv["services"]["arcade"] = {
+    **pair(8080), "container": name,
+    "urls": {"health": pair(8081), "events": pair(8082), "chaintracks": pair(8083)},
+}
+with open(path, "w") as f:
+    json.dump(inv, f, indent=2)
+PY
+  else
+    docker rm -f "$ARCADE_CONTAINER" >/dev/null 2>&1 || true
+  fi
+
   docker rm -f "$SIM_CONTAINER" >/dev/null 2>&1 || true
   echo "starting $SIM_CONTAINER on $network..."
   # -walletd= turns the wallet feature off; the env var cannot, because an
@@ -1314,6 +1403,10 @@ sim_down() {
   if docker inspect "$SIM_CONTAINER" >/dev/null 2>&1; then
     docker rm -f "$SIM_CONTAINER" >/dev/null
     echo "removed $SIM_CONTAINER (runs kept in ${SIM_DATA_DIR#"$REPO_ROOT"/}/data/runs)"
+  fi
+  if docker inspect "$ARCADE_CONTAINER" >/dev/null 2>&1; then
+    docker rm -f "$ARCADE_CONTAINER" >/dev/null
+    echo "removed $ARCADE_CONTAINER"
   fi
 }
 
@@ -1393,7 +1486,7 @@ cmd_sim() {
     status) sim_status ;;
     logs)   docker logs -f "$SIM_CONTAINER" ;;
     run)    sim_run "$@" ;;
-    *)      echo "usage: $0 sim up [--build] | down | build | status | logs | run <scenario> [--step]" >&2; exit 2 ;;
+    *)      echo "usage: $0 sim up [--build] [--no-arcade] | down | build | status | logs | run <scenario> [--step]" >&2; exit 2 ;;
   esac
 }
 

@@ -8,13 +8,14 @@ The authoring reference (actions, assertions, `${...}` expressions) is chaos-tes
 
 What the multinode stack supports:
 
-- Works: `mine`, `coinbase`, `newkey`, `spend`, `submit` to a node, `rpc_freeze`/`rpc_unfreeze`,
+- Works: `mine`, `coinbase`, `newkey`, `spend`, `submit` to a node or to `arcade` (started by
+  `sim up`), `rpc_freeze`/`rpc_unfreeze`,
   `chaos` (pause/unpause/stop/start), `automine`, `set`, `mark`, `wait`, and every check that
   reads nodes, Kafka verdicts or container logs (`same_tip`, `height`, `utxo_status`,
   `mempool_has`, `event`, `log_count`, `expr`, ...).
-- Not available: `submit` to `arcade`, `build_alert`/`push_alert` (no alert hub), `wallet_*`,
-  `arcade_*` checks, and SV nodes. Every bundled scenario uses at least one of these; run them
-  on chaos-test's own fleet instead (see "Blasting chaos-test's own fleet" in `MULTINODE.md`).
+- Not available yet: `build_alert`/`push_alert` (no alert hub), `wallet_*`, and SV nodes.
+  Bundled scenarios that use them run on chaos-test's own fleet (see "Blasting chaos-test's own
+  fleet" in `MULTINODE.md`). `freeze-skew-rpc` runs here unchanged.
 - `partition` needs chaos-test's iptables partition mode (the stack has one network, so a network
   disconnect would also cut a node off from its stores). Until that is available, use
   `compose/multinode.sh chaos isolate|heal` by hand.

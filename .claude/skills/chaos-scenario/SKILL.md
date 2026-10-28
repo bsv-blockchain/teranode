@@ -22,10 +22,10 @@ A stack must be up (chaos-stack). Runs go through the orchestrator's API, not th
 | Scenario | Stack A | Stack B |
 |---|---|---|
 | `multinode-smoke`, `multinode-freeze-skew-rpc` | yes | no (not loaded) |
-| `freeze-skew-rpc` | no (needs arcade) | yes |
+| `freeze-skew-rpc` | yes (arcade starts with the orchestrator) | yes |
 | `freeze-timing-skew`, `freeze-fork-remine` | no (alert hub, partition) | yes |
 | `svnode-dust-policy` | no (SV nodes) | yes |
-| `arcade-same-height-flip-flop` | no (arcade) | yes |
+| `arcade-same-height-flip-flop` | arcade is there, not run yet | yes |
 | `wallet-sustained-flow` | no (wallet) | yes |
 
 If the user asks for one on the wrong stack, say so and offer to switch (chaos-stack).
@@ -72,8 +72,8 @@ Each step prints as it finishes, then:
   and findings that appeared or went away (keyed by step and check, ignoring counts).
 - Known results (23-26 Oct 2026, image built from `pruner-unmined-tx-loss-repro`):
   `freeze-skew-rpc` on B passes with 5 findings (no invalid-block verdict, re-validation
-  loop); `multinode-freeze-skew-rpc` on A fails at the freeze step (the RPC freeze is a no-op
-  on Aerospike).
+  loop); on A, `freeze-skew-rpc` (28 Oct) and `multinode-freeze-skew-rpc` both fail at the
+  freeze step (the RPC freeze is a no-op on Aerospike), with or without load.
 
 To dig into a failure (container logs around the step, Kafka verdicts, code), hand over to
 the `debug-teranode-docker` skill with the run id and timestamps from the saved JSON.

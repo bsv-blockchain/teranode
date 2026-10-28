@@ -61,10 +61,9 @@ stopped. Funding does not depend on the interval: `blast start` mines 110 blocks
 - **Stop it before any reset** (chaos-stack's `stack reset` does this), then start with
   `--fresh`: its coinbase DB belongs to the old chain and every funding attempt fails with
   missing parents otherwise.
-- **Coins**: on Stack B it funds from PK2 (coinbase output 1) and chaos-test scenarios spend
-  output 0 (PK1), so they never collide. On Stack A both use PK1: a scenario's coinbase spend
-  can lose a race to the blaster. Mention it if a scenario's spend fails as a double spend
-  under load.
+- **Coins**: on both stacks it funds from PK2 (coinbase output 1) and chaos-test scenarios
+  spend output 0 (PK1), so they never collide. A blaster state directory from before this
+  (funded from PK1 on Stack A) needs `--fresh`.
 
 ## Reading the stats line
 

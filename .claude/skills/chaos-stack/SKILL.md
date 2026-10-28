@@ -27,7 +27,8 @@ blaster.
 
 | Need | Stack |
 |---|---|
-| galt's bundled scenarios (freeze/alert, SV-node dust, arcade, wallet) | **B**: only it has arcade, the alert hub, SV nodes and the wallet |
+| `freeze-skew-rpc` (needs arcade) | **A** (arcade starts with the orchestrator); B to compare on SQLite |
+| galt's other bundled scenarios (alert hub, SV-node dust, wallet) | **B**: only it has the alert hub, SV nodes and the wallet |
 | Our scenarios in `compose/chaostest/scenarios/`, Aerospike behaviour, split-mode per-service chaos (`-allinone=0`), pruner rigs, high throughput (~900 tx/s) | **A** |
 | Same scenario on two stores | both, one after the other (Stack B is SQLite, Stack A Aerospike) |
 
@@ -44,7 +45,7 @@ running, or the user did not ask for it in this turn, say what will be lost and 
 ## What the script handles (so you don't have to)
 
 - Stack A: `multinode.sh up` then `multinode.sh sim up` (builds the orchestrator image from
-  `../chaos-test` on first use).
+  `../chaos-test` on first use, and starts arcade on :18080).
 - Stack B: writes `bsv-regtest/.env` (all teranodes on `$TERANODE_IMAGE`, default
   `teranode:latest`) and installs `compose/chaostest/bsv-regtest.override.yaml` only if they
   are missing — an existing `.env` is kept, because people pin other builds there for

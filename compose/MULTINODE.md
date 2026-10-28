@@ -40,7 +40,7 @@ compose/multinode.sh down
 | `dashboards` | Open all node dashboards in the browser |
 | `generate <node,count> ...` | Generate blocks on specific nodes |
 | `blast [nodes] [--build] [--auto-mine[=N]] [--fresh] [--target multinode\|bsv-regtest] [-- args]` | Run the coinbase blaster against the stack, or against chaos-test's fleet |
-| `sim up [--build]` / `sim run <scenario> [--step]` / `sim status\|logs\|down` | Run chaos-test scenarios against the stack. See [chaos-test scenarios](#chaos-test-scenarios). |
+| `sim up [--build] [--no-arcade]` / `sim run <scenario> [--step]` / `sim status\|logs\|down` | Run chaos-test scenarios against the stack. See [chaos-test scenarios](#chaos-test-scenarios). |
 
 ### Blaster
 
@@ -121,7 +121,7 @@ The `isolate`/`heal`/`slow`/`unslow` commands inject `iptables` and `tc` rules i
 git clone https://github.com/galt-tr/chaos-test ../chaos-test   # once; or set CHAOS_TEST_DIR
 
 compose/multinode.sh up 3
-compose/multinode.sh sim up                        # builds the image on first use; UI on http://localhost:8600
+compose/multinode.sh sim up                        # builds the image on first use; UI on http://localhost:8600, arcade on :18080
 compose/multinode.sh sim run multinode-smoke       # follows the run, exits 0 on pass
 compose/multinode.sh sim run multinode-freeze-skew-rpc --step   # pause before each step
 compose/multinode.sh sim down                      # 'down' also removes it
@@ -132,11 +132,12 @@ How it fits together:
 - `make gen-multinode` / `up` writes `generated/chaostest/inventory.json` (nodes, in-network and host URLs, Kafka verdict topics, containers) alongside the compose file.
 - `sim up` copies it to `data/multinode-chaostest/config/`, adding the miner key (`PK1`, which the coinbase pays) and chaos-test's development `keys.json`. Keys never land in `generated/`.
 - The orchestrator joins the stack's compose network, so it reaches nodes by name and consumes the `rejectedtx-*` / `invalid-blocks-*` topics that `event` checks match on. It uses the Docker socket (`CONTAINER_SOCKET`, default `/var/run/docker.sock`) for pause/stop and container-log checks.
+- `sim up` also starts arcade (`arcade-multinode`, the image and settings of bsv-regtest's `arcade` profile) on the stack network, pointed at every node's datahub and p2p address, and adds it to the inventory, so `submit` with `target: arcade` works. Host ports 18080 (API), 18081 (health), 18082 (events), 18083 (chaintracks); `ARCADE_HOST_PORT` moves them, `--no-arcade` skips it. There is no merkle-service, so arcade's merkle callbacks never arrive.
 - Scenarios load from the image's bundled examples plus [`chaostest/scenarios/`](chaostest/scenarios/) (override with `SCENARIOS_DIR`). Bundled scenarios are baked into the image, so pick up new ones with `sim up --build`; ours are mounted live and load on the next `sim up`. Run records are kept in `data/multinode-chaostest/data/runs/`.
 
-Supported on this stack: mining, coinbase spends, `submit` to a node, `rpc_freeze`, container chaos and every node, Kafka and log check. Not available: arcade, the alert hub (`build_alert`/`push_alert`), the wallet, and SV nodes, which every bundled scenario uses at least one of. `partition` needs chaos-test's iptables partition mode, because this stack has a single network. Until then, use `chaos isolate`/`heal`. See [`chaostest/scenarios/README.md`](chaostest/scenarios/README.md).
+Supported on this stack: mining, coinbase spends, `submit` to a node or arcade, `rpc_freeze`, container chaos and every node, Kafka and log check. Not available yet: the alert hub (`build_alert`/`push_alert`), the wallet, and SV nodes. Of the bundled scenarios, `freeze-skew-rpc` runs here; it stops at the freeze step because the RPC freeze has no effect on Aerospike. `partition` needs chaos-test's iptables partition mode, because this stack has a single network. Until then, use `chaos isolate`/`heal`. See [`chaostest/scenarios/README.md`](chaostest/scenarios/README.md).
 
-The blaster runs alongside: start `blast` in another terminal and run a scenario while it loads the network.
+The blaster runs alongside: start `blast` in another terminal and run a scenario while it loads the network. On both this stack and chaos-test's fleet the blaster funds itself from **PK2**, the coinbase's second output, while chaos-test scenarios spend the first (PK1), so the two never spend the same coins. A blaster state directory funded from PK1 by an earlier version needs `blast --fresh`.
 
 ### chaosctl: both stacks, the blaster and scenarios in one tool
 
@@ -144,7 +145,7 @@ The blaster runs alongside: start `blast` in another terminal and run a scenario
 
 ### Blasting chaos-test's own fleet
 
-chaos-test's bundled scenarios need services this stack does not run (arcade, the alert hub, SV nodes, the wallet). To run them unchanged under load, run chaos-test's `bsv-regtest` fleet with our image and point the blaster at it:
+Most of chaos-test's bundled scenarios need services this stack does not run yet (the alert hub, SV nodes, the wallet). To run them unchanged under load, run chaos-test's `bsv-regtest` fleet with our image and point the blaster at it:
 
 ```bash
 # once: run our image, publish propagation gRPC, run amd64-only images under Rosetta
@@ -159,7 +160,6 @@ compose/multinode.sh blast --target bsv-regtest --fresh --auto-mine -- --workers
 curl -X POST -d '{"mode":"auto"}' localhost:8600/api/scenarios/freeze-skew-rpc/run
 ```
 
-- The blaster funds itself from **PK2**, the coinbase's second output. chaos-test scenarios spend the first output (PK1), so the two never spend the same coins.
 - That fleet runs teranode on SQLite, where this stack runs Aerospike, so the same scenario can behave differently on the two (an RPC freeze, for one, takes effect there and not here). With the default 100 workers and a block every second it sustained about 250 tx/s, but the other teranodes fell up to 50 blocks behind and needed about 40 s to catch up once mining slowed. Use `--workers 10` and the default 5 s auto-mine when a scenario needs the fleet converged; use this stack for high throughput.
 - chaos-test's `make reset` wipes the chain: stop the blaster first, and restart it with `--fresh`. Funding resumes once 100 blocks have been mined while it runs (`--auto-mine` does this).
 - Only one stack can run at a time: both publish the same host ports.

@@ -84,10 +84,10 @@ func buildChaosTestInventory(s spec, networkName string) ctInventory {
 		// All-in-one: one container answers everything. Split: RPC and health
 		// live in -core (also the container chaos pause/stop targets), asset
 		// and propagation in their own siblings.
-		rpcHost, assetHost, propHost := name, name, name
+		rpcHost, assetHost, propHost, p2pHost := name, name, name, name
 		container := name + "-multinode"
 		if !s.AllInOne {
-			rpcHost, assetHost, propHost = name+"-core", name+"-asset", name+"-propagation"
+			rpcHost, assetHost, propHost, p2pHost = name+"-core", name+"-asset", name+"-propagation", name+"-p2p"
 			container = name + "-core-multinode"
 		}
 
@@ -96,7 +96,7 @@ func buildChaosTestInventory(s spec, networkName string) ctInventory {
 			Name:               name,
 			Index:              nd.Index,
 			PeerID:             nd.PeerID,
-			P2PAddr:            fmt.Sprintf("/dns/%s/tcp/%d/p2p/%s", name, chaosTestP2PPort, nd.PeerID),
+			P2PAddr:            fmt.Sprintf("/dns/%s/tcp/%d/p2p/%s", p2pHost, chaosTestP2PPort, nd.PeerID),
 			RPCURL:             fmt.Sprintf("http://%s:%d", rpcHost, rpcContPort),
 			AssetURL:           fmt.Sprintf("http://%s:%d/api/v1", assetHost, dashboardContPort),
 			PropagationURL:     fmt.Sprintf("http://%s:%d", propHost, chaosTestPropHTTP),

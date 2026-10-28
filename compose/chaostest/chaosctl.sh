@@ -149,7 +149,12 @@ stack_status() {
       local out
       out=$(fleet_line)
       echo "orchestrator: up ($API)"
-      echo "fleet:        $(head -1 <<<"$out") [$(tail -1 <<<"$out")]"
+      if curl -sf -m 2 "http://localhost:$((${ARCADE_HOST_PORT:-18080} + 1))/health" >/dev/null 2>&1; then
+        echo "arcade:       up (http://localhost:${ARCADE_HOST_PORT:-18080})"
+      else
+        echo "arcade:       down"
+      fi
+      echo "fleet:       $(head -1 <<<"$out") [$(tail -1 <<<"$out")]"
       local run
       run=$(curl -sf -m 5 "$API/runs" | python3 -I -c '
 import json, sys
