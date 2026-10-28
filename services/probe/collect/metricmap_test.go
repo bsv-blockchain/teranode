@@ -328,6 +328,8 @@ func TestValidatorReadings(t *testing.T) {
 	s := applyTwo(t, first, second, testSettings())
 
 	requireOK(t, 50, s.Validator.ValidatedPerSec)
+	require.Equal(t, "includes block-validation checks and rejected transactions", s.Validator.ValidatedPerSec.Note)
+	require.Equal(t, s.Validator.ValidatedPerSec.Note, s.Flow(snapshot.FlowValidated).Rate.Note)
 	requireOK(t, 0.95, s.Validator.LatencyP99Sec)
 	requireOK(t, 0, s.Validator.ErrorsPerSec)
 	requireOK(t, 0.78, s.Validator.SpendBatchFill)
