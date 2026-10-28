@@ -65,7 +65,7 @@ func TestAPIRequiresBearer(t *testing.T) {
 		require.Less(t, status, 300, "%s %s with the token", r.method, r.path)
 	}
 
-	status, _ := doRequest(t, http.MethodGet, apiURL(srv, "/"), testToken, nil)
+	status, _ := doRequest(t, http.MethodGet, apiURL(srv, "/api/no-such-route"), testToken, nil)
 	require.NotEqual(t, http.StatusOK, status)
 }
 
