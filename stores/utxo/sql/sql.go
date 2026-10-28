@@ -2674,6 +2674,13 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		Reject: func(item *batchSpend, err error) {
 			item.deliver(err)
 		},
+		SameChecks: func(a, b *batchSpend) bool {
+			return a.blockHeight == b.blockHeight &&
+				a.ignoreConflicting == b.ignoreConflicting &&
+				a.ignoreLocked == b.ignoreLocked &&
+				a.skipUTXOHashCheck == b.skipUTXOHashCheck &&
+				utxo.SameUTXOHash(a.spend, b.spend)
+		},
 	})
 }
 

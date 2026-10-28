@@ -24,6 +24,17 @@ type SpendBatchHandler[T any] struct {
 	Result func(T) (error, bool)
 	// Reject answers an item that ProcessSpendBatch decides without the backend.
 	Reject func(T, error)
+	// SameChecks reports whether the backend runs the same checks for two claims
+	// on one outpoint, apart from the spending data: the same UTXO hash, block
+	// height and ignore flags.
+	SameChecks func(a, b T) bool
+}
+
+// spendOwner is the stored owner of an outpoint, and the claim whose answer
+// showed it.
+type spendOwner[T any] struct {
+	data    *spendpkg.SpendingData
+	decider T
 }
 
 // ProcessSpendBatch submits items to the backend in order, so the stored owner
@@ -37,15 +48,18 @@ type SpendBatchHandler[T any] struct {
 //   - any other error leaves the owner unknown.
 //
 // A later claim with different data than a known owner is rejected locally with
-// UTXO_SPENT naming that owner, as the backend would. A claim that matches the
-// owner still goes to the backend as an idempotent re-spend. Thus alternating
-// claims cost two backend calls, not one per claim. Only claims whose earlier
-// competitor failed without a known owner still cost one call each.
+// UTXO_SPENT naming that owner, but only when SameChecks holds against the claim
+// that showed the owner. That claim passed every check before the spent check,
+// so the backend would answer the later claim with the same UTXO_SPENT. A claim
+// with other checks, or one that matches the owner, still goes to the backend.
+// Thus alternating claims cost two backend calls, not one per claim. Only
+// claims whose earlier competitor failed without a known owner, or that need
+// other checks, still cost one call each.
 //
-// A local reject is always UTXO_SPENT. The backend could give LOCKED, CONFLICTING
-// or a hash mismatch for that claim when its flags or hash differ.
-//
-// The backend must still enforce ownership atomically against concurrent batches.
+// The local answer reflects the stored state when its part finished. It is an
+// answer the backend could also give, because the claim was waiting the whole
+// time. The backend must still enforce ownership atomically against concurrent
+// batches.
 func ProcessSpendBatch[T any](items []T, h SpendBatchHandler[T]) {
 	if len(items) == 0 {
 		return
@@ -56,7 +70,7 @@ func ProcessSpendBatch[T any](items []T, h SpendBatchHandler[T]) {
 		return
 	}
 
-	owners := make(map[spendOutpointKey]*spendpkg.SpendingData)
+	owners := make(map[spendOutpointKey]spendOwner[T])
 	pending := make(map[spendOutpointKey]*spendpkg.SpendingData)
 	var part []T
 
@@ -77,11 +91,11 @@ func ProcessSpendBatch[T any](items []T, h SpendBatchHandler[T]) {
 
 	rejectedByOwner := func(item T, spend *Spend, key spendOutpointKey) bool {
 		owner, known := owners[key]
-		if !known || sameSpendingData(owner, spend.SpendingData) {
+		if !known || sameSpendingData(owner.data, spend.SpendingData) || !h.SameChecks(owner.decider, item) {
 			return false
 		}
 
-		h.Reject(item, errors.NewUtxoSpentError(key.txID, key.vout, hashValue(spend.UTXOHash), owner))
+		h.Reject(item, errors.NewUtxoSpentError(key.txID, key.vout, hashValue(spend.UTXOHash), owner.data))
 
 		return true
 	}
@@ -133,7 +147,7 @@ func hasCompetingClaims[T any](items []T, spendForItem func(T) *Spend) bool {
 	return false
 }
 
-func learnOwner[T any](owners map[spendOutpointKey]*spendpkg.SpendingData, item T, h SpendBatchHandler[T]) {
+func learnOwner[T any](owners map[spendOutpointKey]spendOwner[T], item T, h SpendBatchHandler[T]) {
 	spend := h.Spend(item)
 	if spend == nil || spend.TxID == nil || spend.SpendingData == nil {
 		return
@@ -147,19 +161,24 @@ func learnOwner[T any](owners map[spendOutpointKey]*spendpkg.SpendingData, item 
 	key := spendOutpointKey{txID: *spend.TxID, vout: spend.Vout}
 
 	if err == nil {
-		owners[key] = spend.SpendingData
+		owners[key] = spendOwner[T]{data: spend.SpendingData, decider: item}
 		return
 	}
 
 	var spentData *errors.UtxoSpentErrData
 	if errors.Is(err, errors.ErrSpent) && errors.AsData(err, &spentData) &&
 		spentData.SpendingData != nil && !sameSpendingData(spentData.SpendingData, spend.SpendingData) {
-		owners[key] = spentData.SpendingData
+		owners[key] = spendOwner[T]{data: spentData.SpendingData, decider: item}
 	}
 }
 
 func sameSpendingData(first, next *spendpkg.SpendingData) bool {
 	return bytes.Equal(first.Bytes(), next.Bytes())
+}
+
+// SameUTXOHash reports whether two claims carry the same UTXO hash.
+func SameUTXOHash(a, b *Spend) bool {
+	return hashValue(a.UTXOHash) == hashValue(b.UTXOHash)
 }
 
 func hashValue(hash *chainhash.Hash) chainhash.Hash {
