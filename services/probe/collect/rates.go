@@ -140,15 +140,18 @@ func (r *Rates) Quantile(histName string, q float64) (float64, bool) {
 		return 0, false
 	}
 
-	prevCum := make(map[float64]float64, len(prev.buckets))
-	for _, b := range prev.buckets {
-		prevCum[b.upper] = b.cumulative
+	if len(prev.buckets) != len(curr.buckets) {
+		return 0, false
 	}
 
 	deltas := make([]bucketSample, 0, len(curr.buckets))
 
-	for _, b := range curr.buckets {
-		delta := b.cumulative - prevCum[b.upper]
+	for i, b := range curr.buckets {
+		if prev.buckets[i].upper != b.upper {
+			return 0, false
+		}
+
+		delta := b.cumulative - prev.buckets[i].cumulative
 		if delta < 0 {
 			return 0, false
 		}
