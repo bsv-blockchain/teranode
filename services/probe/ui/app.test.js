@@ -195,3 +195,177 @@ test('a snapshot frame updates the model', () => {
   ws.onmessage({ data: 'not json' });
   assert.equal(h.client.state.snapshot.node, 'teranode2');
 });
+
+const histPayload = (stage = 'cache', v = 0.6) => ({
+  stage,
+  series: [{ key: `${stage}.hitRate`, points: [{ t: '2026-10-28T11:30:00Z', v, st: 'ok' }, { t: '2026-10-28T11:30:02Z', v: null, st: 'nodata' }] }],
+});
+
+function historyHarness({ token = 'tok', handler } = {}) {
+  const calls = [];
+  const intervals = [];
+  const storage = new FakeStorage();
+  if (token) storage.setItem(TOKEN_KEY, token);
+  const sockets = [];
+  const client = createClient({
+    fetch: (url, init) => {
+      calls.push({ url, init });
+      return handler(url, init, calls.length);
+    },
+    WebSocket: class {
+      constructor() { sockets.push(this); this.sent = []; }
+      send(d) { this.sent.push(d); }
+      close() { this.closed = true; }
+    },
+    storage,
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    setInterval: (fn, ms) => { intervals.push({ fn, ms, cleared: false }); return intervals.length - 1; },
+    clearInterval: (id) => { if (intervals[id]) intervals[id].cleared = true; },
+    location: { protocol: 'http:', host: 'probe.local:8094' },
+  });
+  client.start();
+  return { client, calls, intervals, storage, sockets };
+}
+
+const okJson = (payload) => async () => ({ ok: true, status: 200, json: async () => payload });
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+test('history fetch uses the bearer header', async () => {
+  const h = historyHarness({ handler: okJson(histPayload()) });
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.intervals.length, 0);
+  h.client.openStage('cache');
+  await flush();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, '/api/history?stage=cache&minutes=10');
+  assert.equal(h.calls[0].init.headers.Authorization, 'Bearer tok');
+  assert.equal(h.calls[0].init.credentials, 'omit');
+  assert.ok(!h.calls[0].url.includes('tok'));
+  assert.equal(h.intervals.length, 1);
+  assert.equal(h.intervals[0].ms, 10000);
+  assert.equal(h.client.state.history.stage, 'cache');
+  assert.equal(h.client.state.history.error, false);
+  assert.equal(h.client.state.history.data.get('cache.hitRate').length, 2);
+
+  h.client.closeStage();
+  h.client.openStage('not-a-stage');
+  h.client.openStage('cache/../x');
+  assert.equal(h.calls.length, 1);
+});
+
+test('history polling stops when leaving the stage view', async () => {
+  const h = historyHarness({ handler: okJson(histPayload()) });
+  h.client.openStage('cache');
+  await flush();
+  h.intervals[0].fn();
+  await flush();
+  h.intervals[0].fn();
+  await flush();
+  assert.equal(h.calls.length, 3);
+
+  h.client.closeStage();
+  assert.equal(h.intervals[0].cleared, true);
+  assert.equal(h.client.state.history, null);
+  await flush();
+  assert.equal(h.calls.length, 3);
+
+  h.client.openStage('cache');
+  h.client.openStage('stores');
+  await flush();
+  assert.equal(h.intervals.length, 3);
+  assert.equal(h.intervals[1].cleared, true);
+  assert.equal(h.intervals[2].cleared, false);
+  assert.equal(h.calls[h.calls.length - 1].url, '/api/history?stage=stores&minutes=10');
+  h.client.closeStage();
+  assert.equal(h.intervals[2].cleared, true);
+});
+
+test('history 401 clears the token', async () => {
+  const h = historyHarness({ handler: async () => ({ ok: false, status: 401, json: async () => ({}) }) });
+  h.client.openStage('cache');
+  await flush();
+  assert.equal(h.storage.getItem(TOKEN_KEY), null);
+  assert.equal(h.client.state.needLogin, true);
+  assert.equal(h.client.state.message, 'The token was not accepted.');
+  assert.equal(h.sockets[0].closed, true);
+  assert.equal(h.intervals[0].cleared, true);
+
+  const before = h.calls.length;
+  h.client.login('fresh');
+  await flush();
+  assert.ok(h.calls.length > before);
+  assert.equal(h.calls[h.calls.length - 1].init.headers.Authorization, 'Bearer fresh');
+});
+
+test('overlapping history requests are skipped', async () => {
+  const pending = [];
+  const h = historyHarness({ handler: () => new Promise((resolve) => pending.push(resolve)) });
+  h.client.openStage('cache');
+  h.intervals[0].fn();
+  h.intervals[0].fn();
+  assert.equal(h.calls.length, 1);
+  pending[0]({ ok: true, status: 200, json: async () => histPayload() });
+  await flush();
+  assert.ok(h.client.state.history.data);
+  h.intervals[0].fn();
+  assert.equal(h.calls.length, 2);
+  pending[1]({ ok: true, status: 200, json: async () => histPayload() });
+  await flush();
+});
+
+test('history failure keeps the last good sparklines', async () => {
+  const replies = [
+    okJson(histPayload('cache', 0.6)),
+    async () => ({ ok: false, status: 500, json: async () => ({}) }),
+    async () => { throw new Error('down'); },
+    async () => ({ ok: true, status: 200, json: async () => { throw new Error('bad json'); } }),
+    okJson({ stage: 'cache', series: 'hostile' }),
+    okJson(histPayload('cache', 0.9)),
+  ];
+  const h = historyHarness({ handler: (url, init, n) => replies[n - 1]() });
+  h.client.openStage('cache');
+  await flush();
+  const good = h.client.state.history.data;
+  assert.equal(h.client.state.history.error, false);
+  for (let i = 0; i < 4; i++) {
+    h.intervals[0].fn();
+    await flush();
+    assert.equal(h.client.state.history.error, true, `reply ${i + 2}`);
+    assert.equal(h.client.state.history.data, good, `reply ${i + 2}`);
+    assert.equal(h.storage.getItem(TOKEN_KEY), 'tok');
+  }
+  h.intervals[0].fn();
+  await flush();
+  assert.equal(h.client.state.history.error, false);
+  assert.notEqual(h.client.state.history.data, good);
+  assert.equal(h.client.state.history.data.get('cache.hitRate')[0].v, 0.9);
+});
+
+test('history response after leaving the view is discarded', async () => {
+  const pending = [];
+  const h = historyHarness({ handler: () => new Promise((resolve) => pending.push(resolve)) });
+  h.client.openStage('cache');
+  h.client.closeStage();
+  pending[0]({ ok: true, status: 200, json: async () => histPayload() });
+  await flush();
+  assert.equal(h.client.state.history, null);
+  h.client.openStage('stores');
+  pending[1]({ ok: true, status: 200, json: async () => histPayload('cache') });
+  await flush();
+  assert.equal(h.client.state.history.data, null);
+  assert.equal(h.client.state.history.error, true);
+});
+
+test('history waits for a token before fetching', async () => {
+  const h = historyHarness({ token: '', handler: okJson(histPayload()) });
+  h.client.openStage('cache');
+  await flush();
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.intervals.length, 0);
+  h.client.login('late');
+  await flush();
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].init.headers.Authorization, 'Bearer late');
+  assert.equal(h.intervals.length, 1);
+});

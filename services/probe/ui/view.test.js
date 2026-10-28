@@ -13,6 +13,11 @@ import {
   flowPlacement,
   nextBackoff,
   toMarkupString,
+  renderStage,
+  sparkline,
+  parseRoute,
+  normalizeHistory,
+  STAGES,
 } from './view.js';
 
 const fixture = JSON.parse(readFileSync(new URL('./testdata/snapshot.json', import.meta.url), 'utf8'));
@@ -427,4 +432,262 @@ test('popover shows the highest severity alarm that is not snoozed', () => {
 
   s.alarms = s.alarms.map((a) => ({ ...a, snoozed: true }));
   assert.equal(walk(renderHome(s, NOW)).filter((n) => n.attrs && n.attrs['data-popover']).length, 0);
+});
+
+const STAGE_KEYS = ['ingress', 'validator', 'cache', 'assembly', 'chain', 'stores'];
+const READING_COUNTS = { ingress: 6, validator: 5, cache: 9, assembly: 5, chain: 3, stores: 5 };
+const allAttrs = (node) => walk(node).flatMap((n) => Object.entries(n.attrs || {}));
+const dataRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-key']);
+const coords = (d) => [...d.matchAll(/[ML]\s*([-\d.]+)\s+([-\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+
+function pt(minAgo, v, st = 'ok') {
+  return { t: new Date(NOW - minAgo * 60000).toISOString(), v, st };
+}
+
+const spark = (points, extra = {}) => sparkline(points, { key: 'cache.hitRate', label: 'Hit rate', now: NOW, ...extra });
+
+test('renderStage lists every reading of the stage', () => {
+  for (const key of STAGE_KEYS) {
+    const rows = dataRows(renderStage(snap(), key, null, NOW));
+    assert.equal(rows.length, READING_COUNTS[key], key);
+    for (const r of rows) assert.ok(r.attrs['data-key'].startsWith(`${key}.`), r.attrs['data-key']);
+  }
+
+  const s = snap();
+  s.stores.postgres.configured = true;
+  const rows = dataRows(renderStage(s, 'stores', null, NOW));
+  assert.equal(rows.filter((r) => r.attrs['data-key'].startsWith('stores.postgres.')).length, 5);
+  assert.equal(rows.length, 10);
+
+  const view = renderStage(snap(), 'cache', null, NOW);
+  assert.equal(walk(view).filter((n) => n.tag === 'table').length, 1);
+  const heads = walk(view).filter((n) => n.tag === 'th' && n.attrs.scope === 'col');
+  assert.deepEqual(heads.map((n) => n.text), ['Reading', 'Value', 'Status', 'Normal', 'Note', 'Last 10 minutes']);
+  const hit = one(view, 'data-key', 'cache.hitRate');
+  const cells = walk(hit).filter((n) => n.tag === 'th' || n.tag === 'td');
+  assert.equal(cells[0].attrs.scope, 'row');
+  assert.equal(cells[0].text, 'Hit rate');
+  assert.equal(cells[1].text, '61%');
+  assert.ok(texts(hit).includes('Critical'));
+  assert.ok(texts(hit).includes('96%'));
+  assert.equal(hit.attrs['data-st'], 'r');
+  assert.equal(walk(view).find((n) => n.tag === 'h1').text, 'Tx meta cache');
+  assert.equal(walk(view).find((n) => n.tag === 'a' && n.attrs.href === '#/').text, 'Back to overview');
+  assert.equal(one(view, 'data-role', 'stage-led').attrs['data-st'], 'r');
+
+  const aero = renderStage(snap(), 'stores', null, NOW);
+  assert.ok(texts(one(aero, 'data-key', 'stores.aerospike.diskFill')).includes('Aerospike: Disk fill'));
+  const unlabeled = snap();
+  unlabeled.cache.mystery = { v: 5, st: 'ok' };
+  assert.ok(texts(one(renderStage(unlabeled, 'cache', null, NOW), 'data-key', 'cache.mystery')).includes('mystery'));
+});
+
+test('renderStage shows alarms of the stage only', () => {
+  const cache = renderStage(snap(), 'cache', null, NOW);
+  const items = walk(cache).filter((n) => n.attrs && n.attrs['data-alarm-id']);
+  assert.deepEqual(items.map((n) => n.attrs['data-alarm-id']), ['cache-hit-rate']);
+  assert.ok(walk(cache).some((n) => n.attrs && n.attrs['data-action'] === 'snooze' && n.attrs['data-id'] === 'cache-hit-rate'));
+
+  const ingress = renderStage(snap(), 'ingress', null, NOW);
+  assert.ok(walk(ingress).some((n) => n.attrs && n.attrs['data-action'] === 'unsnooze'));
+
+  const assembly = renderStage(snap(), 'assembly', null, NOW);
+  assert.ok(texts(assembly).includes('No alarms for this stage.'));
+  assert.equal(walk(assembly).filter((n) => n.attrs && n.attrs['data-alarm-id']).length, 0);
+});
+
+test('sparkline handles a gap in history', () => {
+  const svg = spark([pt(9, 10), pt(8, 12), pt(7, 11), pt(6, null, 'nodata'), pt(5, 20), pt(4, 22), pt(3, 21)]);
+  assert.equal(svg.tag, 'svg');
+  const paths = walk(svg).filter((n) => n.tag === 'path');
+  assert.equal(paths.length, 1);
+  const d = paths[0].attrs.d;
+  assert.equal((d.match(/M/g) || []).length, 2, d);
+  assert.equal((d.match(/L/g) || []).length, 4, d);
+  const segments = d.split('M').filter(Boolean).map((seg) => coords(`M${seg}`));
+  assert.equal(segments.length, 2);
+  assert.equal(segments[0].length, 3);
+  assert.equal(segments[1].length, 3);
+  const gapStart = segments[0][2][0];
+  const gapEnd = segments[1][0][0];
+  const expectedGapX = (4 / 10) * 120;
+  assert.ok(gapStart < expectedGapX && gapEnd > expectedGapX, `${gapStart} ${expectedGapX} ${gapEnd}`);
+  const ys = segments.flat().map((c) => c[1]);
+  assert.ok(Math.max(...ys) <= 28 && Math.min(...ys) >= 0);
+  assert.ok(segments[1][2][1] < segments[0][0][1]);
+});
+
+test('sparkline with fewer than two points renders a dash', () => {
+  for (const points of [[], [pt(1, 5)], [pt(2, null, 'nodata'), pt(1, null, 'nodata')], [pt(2, 5), pt(1, null, 'nodata')], null, 'x']) {
+    const out = spark(points);
+    assert.notEqual(out.tag, 'svg');
+    assert.equal(out.text, '–');
+    assert.equal(walk(out).filter((n) => n.tag === 'path').length, 0);
+  }
+});
+
+test('sparkline flat series is a flat line', () => {
+  const svg = spark([pt(9, 7), pt(6, 7), pt(3, 7), pt(1, 7)]);
+  const ys = coords(walk(svg).find((n) => n.tag === 'path').attrs.d).map((c) => c[1]);
+  assert.equal(ys.length, 4);
+  assert.ok(ys.every((y) => y === ys[0]));
+  assert.equal(ys[0], 14);
+  assert.equal(walk(svg).find((n) => n.tag === 'circle').attrs.cy, '14');
+});
+
+test('sparkline scales x over the window and y to min and max', () => {
+  const pts = coords(walk(spark([pt(10, 0), pt(5, 50), pt(0, 100)])).find((n) => n.tag === 'path').attrs.d);
+  assert.equal(pts.length, 3);
+  assert.ok(pts[0][0] < pts[1][0] && pts[1][0] < pts[2][0]);
+  assert.ok(Math.abs((pts[1][0] - pts[0][0]) - (pts[2][0] - pts[1][0])) < 0.01);
+  assert.ok(pts[0][1] > pts[1][1] && pts[1][1] > pts[2][1]);
+  assert.ok(pts[0][1] < 28 && pts[2][1] > 0);
+  assert.ok(Math.abs(pts[1][1] - 14) < 0.01);
+});
+
+test('sparkline takes the status class and label of the latest point', () => {
+  const svg = spark([pt(9, 0.9), pt(1, 0.61, 'crit')]);
+  assert.match(svg.attrs.class, /\bst-crit\b/);
+  assert.equal(svg.attrs.role, 'img');
+  assert.equal(svg.attrs['aria-label'], '10 minute history of Hit rate, last value 61%');
+  assert.equal(walk(svg).filter((n) => n.tag === 'circle').length, 1);
+  assert.match(spark([pt(9, 1), pt(1, 2, '<x>')]).attrs.class, /\bst-nodata\b/);
+  for (const st of ['ok', 'warn', 'idle', 'nodata']) {
+    assert.match(spark([pt(9, 1), pt(1, 2, st)]).attrs.class, new RegExp(`\\bst-${st}\\b`));
+  }
+});
+
+test('sparkline never emits NaN or Infinity', () => {
+  const bad = [
+    pt(9, 'abc'), pt(8, NaN), pt(7, Infinity), pt(6, -Infinity), pt(5, 1e308), pt(4, -1e308), pt(3, -5), pt(2, 1.7976931348623157e308),
+    { t: 'not a date', v: 3, st: 'ok' }, { t: 12, v: 3 }, null, 7, { v: 4 }, pt(1, 5e-324), pt(0.5, -0),
+  ];
+  for (const opts of [{ key: 'cache.hitRate' }, { key: 'validator.latencyP99Sec', label: 'x' }, { key: 'nope', label: 'x' }, { key: 'cache.entriesMillions' }, { key: 'cache.sizeGB' }, { key: 'assembly.tipLagBlocks' }]) {
+    const out = spark(bad, opts);
+    assert.equal(out.tag, 'svg');
+    for (const [k, v] of allAttrs(out)) assert.doesNotMatch(String(v), /NaN|Infinity|undefined|null/, `${k}=${v}`);
+    assert.doesNotMatch(toMarkupString(out), /NaN|Infinity/);
+  }
+  const noOpts = sparkline(bad, {});
+  assert.equal(noOpts.tag, 'svg');
+  for (const [k, v] of allAttrs(noOpts)) assert.doesNotMatch(String(v), /NaN|Infinity|undefined|null/, `${k}=${v}`);
+  assert.equal(sparkline(bad).tag, 'svg');
+  assert.equal(spark([pt(2, 1e308), pt(1, -1e308)]).tag, 'svg');
+  assert.notEqual(spark([pt(2, '5'), pt(1, '6')]).tag, 'svg');
+});
+
+test('sparkline drops points older than the window', () => {
+  const d = walk(spark([pt(30, 1), pt(25, 2), pt(1, 3), pt(0.5, 4)])).find((n) => n.tag === 'path').attrs.d;
+  assert.equal((d.match(/L/g) || []).length, 1);
+});
+
+test('parseRoute accepts only the home page and known stages', () => {
+  assert.deepEqual(parseRoute(''), { name: 'home', stage: '' });
+  assert.deepEqual(parseRoute('#/'), { name: 'home', stage: '' });
+  for (const k of STAGE_KEYS) assert.deepEqual(parseRoute(`#/stage/${k}`), { name: 'stage', stage: k });
+});
+
+test('unknown hash falls back to home', () => {
+  const hostile = ['#', '#/stage', '#/stage/', '#/stage/unknown', '#/stage/Cache', '#/stage/cache/', '#/stage/cache?x=1', '#/stage/cache\n',
+    '#/stage/__proto__', '#/stage/constructor', 'javascript:alert(1)', '#/<script>', `#/stage/${'a'.repeat(5000)}`, null, undefined, 5, {}, '#/stages/cache'];
+  for (const h of hostile) assert.deepEqual(parseRoute(h), { name: 'home', stage: '' }, String(h).slice(0, 30));
+});
+
+test('alarm link path resolves to an existing stage', () => {
+  const s = snap();
+  const paths = s.alarms.flatMap((a) => a.drilldowns.map((d) => d.path));
+  assert.ok(paths.length >= 4);
+  for (const p of paths) {
+    const route = parseRoute(p);
+    assert.equal(route.name, 'stage', p);
+    assert.ok(STAGES.some((st) => st.key === route.stage), p);
+    assert.ok(walk(renderStage(s, route.stage, null, NOW)).some((n) => n.tag === 'table'), p);
+  }
+});
+
+test('stage title link is keyboard reachable', () => {
+  const home = renderHome(snap(), NOW);
+  for (const stage of STAGES) {
+    const panel = one(home, 'data-stage', stage.key);
+    const links = walk(panel).filter((n) => n.tag === 'a');
+    assert.equal(links.length, 1, stage.key);
+    assert.equal(links[0].attrs.href, `#/stage/${stage.key}`);
+    assert.ok(!('tabindex' in links[0].attrs));
+    assert.ok(texts(links[0]).includes(stage.title));
+    assert.match(links[0].attrs.class, /ti-link/);
+    assert.equal(parseRoute(links[0].attrs.href).stage, stage.key);
+  }
+});
+
+test('stage view escapes text from the snapshot', () => {
+  const s = snap();
+  s.alarms[1].title = '<script>alert(1)</script>';
+  s.alarms[1].body = '<img src=x onerror=alert(1)>';
+  s.cache.weird = { v: 1, st: 'ok', note: '<b>n</b>' };
+  s.cache['<img src=x>'] = { v: 1, st: 'ok' };
+  const view = renderStage(s, 'cache', null, NOW);
+  for (const n of walk(view)) {
+    assert.notEqual(n.tag, 'script');
+    assert.notEqual(n.tag, 'img');
+    assert.notEqual(n.tag, 'b');
+    for (const k of Object.keys(n.attrs || {})) assert.doesNotMatch(k, /^on/i);
+  }
+  const markup = toMarkupString(view);
+  assert.ok(!markup.includes('<script'));
+  assert.ok(!markup.includes('<img'));
+  assert.ok(!markup.includes('<b>'));
+  assert.ok(markup.includes('&lt;script&gt;alert(1)&lt;/script&gt;'));
+  assert.ok(texts(view).includes('<script>alert(1)</script>'));
+});
+
+test('hostile history payload is ignored', () => {
+  const good = { stage: 'cache', series: [{ key: 'cache.hitRate', points: [pt(2, 1), pt(1, 2)] }] };
+  assert.equal(normalizeHistory(good, 'cache').get('cache.hitRate').length, 2);
+  for (const bad of [null, undefined, 'x', 5, [], {}, { stage: 'cache' }, { stage: 'cache', series: 'x' }, { stage: 'validator', series: good.series }, { series: good.series }]) {
+    assert.equal(normalizeHistory(bad, 'cache'), null, JSON.stringify(bad));
+  }
+
+  const mixed = normalizeHistory({
+    stage: 'cache',
+    series: [
+      null, 3, 'x', { key: 7, points: [] }, { key: 'cache.a' }, { key: 'cache.b', points: 'x' },
+      { key: 'validator.latencyP99Sec', points: [pt(1, 1), pt(2, 2)] },
+      { key: '<img src=x onerror=alert(1)>', points: [pt(1, 1), pt(2, 2)] },
+      { key: `cache.${'k'.repeat(500)}`, points: [pt(1, 1), pt(2, 2)] },
+      { key: 'cache.ok', points: [pt(3, 1), null, 5, { t: 'bad', v: 1 }, { t: pt(1, 1).t, v: '9' }, { t: pt(0.5, 1).t, v: 2, st: 'bogus' }] },
+    ],
+  }, 'cache');
+  assert.deepEqual([...mixed.keys()], ['cache.ok']);
+  const ok = mixed.get('cache.ok');
+  assert.equal(ok.length, 3);
+  assert.equal(ok[1].v, null);
+  assert.equal(ok[2].v, 2);
+  assert.equal(ok[2].st, 'nodata');
+
+  const many = normalizeHistory({
+    stage: 'cache',
+    series: Array.from({ length: 5000 }, (_, i) => ({ key: `cache.k${i}`, points: [pt(2, 1), pt(1, 2)] })),
+  }, 'cache');
+  assert.equal(many.size, 64);
+
+  const long = normalizeHistory({
+    stage: 'cache',
+    series: [{ key: 'cache.hitRate', points: Array.from({ length: 100000 }, (_, i) => ({ t: new Date(NOW - (100000 - i) * 1000).toISOString(), v: i, st: 'ok' })) }],
+  }, 'cache').get('cache.hitRate');
+  assert.equal(long.length, 600);
+  assert.equal(long[599].v, 99999);
+
+  const hostile = normalizeHistory({
+    stage: 'cache',
+    series: [{ key: '<img src=x>', points: [pt(2, 1), pt(1, 2)] }, { key: 'cache.hitRate', points: [pt(2, 1), pt(1, 2)] }],
+  }, 'cache');
+  assert.deepEqual([...hostile.keys()], ['cache.hitRate']);
+  const view = renderStage(snap(), 'cache', { data: hostile, error: false }, NOW);
+  assert.ok(!toMarkupString(view).includes('<img'));
+  assert.equal(walk(view).filter((n) => n.tag === 'svg' && /spark/.test(n.attrs.class)).length, 1);
+});
+
+test('stage view shows history unavailable calmly', () => {
+  assert.ok(texts(renderStage(snap(), 'cache', { data: null, error: true }, NOW)).includes('History unavailable.'));
+  assert.ok(!texts(renderStage(snap(), 'cache', { data: null, error: false }, NOW)).includes('History unavailable.'));
 });
