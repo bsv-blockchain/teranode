@@ -187,6 +187,7 @@ func TestPanicInHubRunIsRecovered(t *testing.T) {
 	logger := &captureLogger{}
 
 	srv := newProbe(t, probeOpts{logger: logger})
+	srv.logClock = stepClock()
 	srv.setFaultHook(panicAt(faultHub, 3))
 	errCh := runProbe(t, srv)
 
