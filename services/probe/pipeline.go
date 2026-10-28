@@ -135,8 +135,13 @@ func moveAside(oldPath, newPath string) error {
 			return os.ErrExist
 		}
 
-		if _, statErr := os.Lstat(newPath); !errors.Is(statErr, os.ErrNotExist) {
+		_, statErr := os.Lstat(newPath)
+
+		switch {
+		case statErr == nil:
 			return os.ErrExist
+		case !errors.Is(statErr, os.ErrNotExist):
+			return statErr
 		}
 
 		return os.Rename(oldPath, newPath)

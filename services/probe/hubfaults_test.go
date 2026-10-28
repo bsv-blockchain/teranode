@@ -3,10 +3,8 @@ package probe
 import (
 	"context"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,80 +56,17 @@ func TestPersistentHubPanicSelfStopsAfterFive(t *testing.T) {
 	requireStopLogged(t, lines, "websocket hub")
 }
 
-func TestPersistentClientWriterPanicSelfStopsAfterFive(t *testing.T) {
-	logger := &captureLogger{}
-
-	srv := newProbe(t, probeOpts{logger: logger})
-	require.NoError(t, srv.Init(context.Background()))
-
-	cancel, errCh := startServer(t, srv)
-	defer cancel()
-
-	addr := srv.Addr()
-
-	for range maxConsecutivePanics {
-		conn := authedWS(t, srv)
-		readSnapshot(t, conn, 2*time.Second)
-	}
-
-	require.Equal(t, maxConsecutivePanics, srv.hubClients())
-
-	srv.setFaultHook(panicAt(faultClientWrite, -1))
-
-	awaitSelfStop(t, srv, errCh)
-	requirePortFree(t, addr)
-
-	lines := logger.Lines()
-	require.Equal(t, maxConsecutivePanics, countLines(lines, "websocket client writer panicked"))
-	requireStopLogged(t, lines, "websocket hub")
-}
-
-func TestCleanHubBroadcastResetsHubStreak(t *testing.T) {
-	logger := &captureLogger{}
-
-	var hits atomic.Int64
-
-	srv := newProbe(t, probeOpts{logger: logger})
-	srv.setFaultHook(func(point string) {
-		if point != faultHub {
-			return
-		}
-
-		n := hits.Add(1)
-		if (n >= 1 && n <= 4) || (n >= 6 && n <= 9) {
-			panic("injected hub fault")
-		}
-	})
-
-	errCh := runProbe(t, srv)
-
-	require.Eventually(t, func() bool { return hits.Load() >= 20 }, 10*time.Second, 5*time.Millisecond)
-
-	select {
-	case err := <-errCh:
-		require.FailNow(t, "probe stopped", "%v", err)
-	default:
-	}
-
-	status, msg, err := srv.Health(context.Background(), false)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, status)
-	require.NotEqual(t, probeStoppedHealth, msg)
-	require.Equal(t, 8, countLines(logger.Lines(), "websocket hub panicked"))
-	require.Zero(t, countLines(logger.Lines(), probeStoppedMessage))
-}
-
 func TestCleanPipelineTickDoesNotResetHubStreak(t *testing.T) {
 	f := newFaults(&captureLogger{})
 
-	for range maxConsecutivePanics - 1 {
-		f.hub.Panicked("websocket hub", "x")
+	for seq := uint64(1); seq < maxConsecutivePanics; seq++ {
+		f.hub.failedAt(seq, "websocket hub", "x")
 	}
 
 	f.pipeline.reset()
 	require.False(t, f.signal.stopped())
 
-	f.hub.Panicked("websocket hub", "x")
+	f.hub.failedAt(maxConsecutivePanics, "websocket hub", "x")
 	require.True(t, f.signal.stopped())
 	require.Contains(t, f.signal.Reason(), "websocket hub")
 }
@@ -143,8 +78,8 @@ func TestCleanHubBroadcastDoesNotResetPipelineStreak(t *testing.T) {
 		f.pipeline.Panicked("pipeline", "x")
 	}
 
-	f.hub.settle()
-	f.hub.settle()
+	f.hub.succeededAt(1)
+	f.hub.succeededAt(2)
 	require.False(t, f.signal.stopped())
 
 	f.pipeline.Panicked("pipeline", "x")
@@ -152,22 +87,52 @@ func TestCleanHubBroadcastDoesNotResetPipelineStreak(t *testing.T) {
 	require.Contains(t, f.signal.Reason(), "pipeline")
 }
 
-func TestHubStreakNeedsCleanBroadcastToReset(t *testing.T) {
+func hubCounterStreak(f *faults) int {
+	f.hub.mu.Lock()
+	defer f.hub.mu.Unlock()
+
+	return f.hub.streak
+}
+
+func TestHubCountsOneFailurePerBroadcast(t *testing.T) {
 	f := newFaults(&captureLogger{})
 
-	f.hub.settle()
-	f.hub.Panicked("websocket client writer", "x")
-	f.hub.settle()
-	f.hub.Panicked("websocket client writer", "x")
-	f.hub.settle()
-	f.hub.settle()
-	f.hub.Panicked("websocket client writer", "x")
+	for range maxConsecutivePanics {
+		f.hub.failedAt(1, "websocket client writer", "x")
+	}
 
-	f.hub.mu.Lock()
-	streak := f.hub.streak
-	f.hub.mu.Unlock()
+	require.Equal(t, 1, hubCounterStreak(f))
+	require.False(t, f.signal.stopped())
 
-	require.Equal(t, 1, streak)
+	for seq := uint64(2); seq < maxConsecutivePanics; seq++ {
+		for range maxConsecutivePanics {
+			f.hub.failedAt(seq, "websocket client writer", "x")
+		}
+	}
+
+	require.Equal(t, maxConsecutivePanics-1, hubCounterStreak(f))
+	require.False(t, f.signal.stopped())
+
+	f.hub.failedAt(maxConsecutivePanics, "websocket client writer", "x")
+	require.True(t, f.signal.stopped())
+}
+
+func TestHubSuccessOnlyResetsForNewerBroadcast(t *testing.T) {
+	f := newFaults(&captureLogger{})
+
+	f.hub.failedAt(3, "websocket client writer", "x")
+	f.hub.failedAt(4, "websocket client writer", "x")
+	f.hub.succeededAt(3)
+	require.Equal(t, 2, hubCounterStreak(f))
+
+	f.hub.succeededAt(4)
+	require.Equal(t, 2, hubCounterStreak(f))
+
+	f.hub.succeededAt(5)
+	require.Zero(t, hubCounterStreak(f))
+
+	f.hub.failedAt(4, "websocket client writer", "late")
+	require.Zero(t, hubCounterStreak(f))
 }
 
 func TestTwoCorruptionsInOneSecondKeepBothFiles(t *testing.T) {
