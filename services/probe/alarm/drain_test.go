@@ -136,21 +136,139 @@ func TestWindowDropsOldObservations(t *testing.T) {
 func TestNoisyShrinkingBacklogStillEstimates(t *testing.T) {
 	d := NewDrain(5 * time.Minute)
 
-	for i := 0; i <= 60; i++ {
-		noise := 5.0
+	const (
+		n          = 61.0
+		stepSecs   = 2.0
+		meanX      = stepSecs * (n - 1) / 2
+		sxx        = stepSecs * stepSecs * n * (n*n - 1) / 12
+		spikeUp    = 30.0
+		spikeUpAt  = 10
+		spikeDown  = -12.0
+		spikeDnAt  = 45
+		trueSlope  = -10.0
+		altNoise   = 5.0
+		biasSum    = spikeUp*(stepSecs*spikeUpAt-meanX) + spikeDown*(stepSecs*spikeDnAt-meanX)
+		lsSlope    = trueSlope + biasSum/sxx
+		newestSamp = 2200 + trueSlope*stepSecs*(n-1) + altNoise
+		expected   = newestSamp / -lsSlope
+	)
+
+	for i := 0; i < int(n); i++ {
+		noise := altNoise
 		if i%2 == 1 {
-			noise = -5.0
+			noise = -altNoise
 		}
 
-		s := float64(2 * i)
-		d.Observe(at(s), 2200-10*s+noise)
+		switch i {
+		case spikeUpAt:
+			noise += spikeUp
+		case spikeDnAt:
+			noise += spikeDown
+		}
+
+		s := stepSecs * float64(i)
+		d.Observe(at(s), 2200+trueSlope*s+noise)
 	}
 
 	secs, growing, ok := d.Seconds()
 
 	require.True(t, ok)
 	require.False(t, growing)
+	require.InEpsilon(t, expected, secs, 1e-6)
 	require.InEpsilon(t, 100.0, secs, 0.10)
+}
+
+func TestLeastSquaresNotEndpointSlope(t *testing.T) {
+	d := NewDrain(5 * time.Minute)
+
+	const (
+		n         = 150.0
+		stepSecs  = 2.0
+		start     = 2000.0
+		fall      = -5.0
+		outlier   = 400.0
+		lastX     = stepSecs * (n - 1)
+		meanX     = lastX / 2
+		sxx       = stepSecs * stepSecs * n * (n*n - 1) / 12
+		lsSlope   = fall + outlier*(lastX-meanX)/sxx
+		newest    = start + fall*lastX + outlier
+		expected  = newest / -lsSlope
+		endpoint  = (newest - start) / lastX
+		endpointS = newest / -endpoint
+	)
+
+	for i := 0; i < int(n); i++ {
+		s := stepSecs * float64(i)
+		v := start + fall*s
+
+		if i == int(n)-1 {
+			v += outlier
+		}
+
+		d.Observe(at(s), v)
+	}
+
+	secs, growing, ok := d.Seconds()
+
+	require.True(t, ok)
+	require.False(t, growing)
+	require.InEpsilon(t, expected, secs, 0.005)
+	require.Greater(t, math.Abs(secs-endpointS)/endpointS, 0.10)
+}
+
+func TestFastObservationsStillSpanFullWindow(t *testing.T) {
+	d := NewDrain(5 * time.Minute)
+
+	const (
+		start = 5000.0
+		fall  = 10.0
+	)
+
+	var newest float64
+
+	for i := 0; i <= 1800; i++ {
+		ts := drainStart.Add(time.Duration(i) * 200 * time.Millisecond)
+		secs := float64(i) * 0.2
+		newest = start - fall*secs
+		d.Observe(ts, newest)
+	}
+
+	require.Less(t, len(d.obs), 330)
+
+	span := d.obs[len(d.obs)-1].t.Sub(d.obs[0].t)
+	require.GreaterOrEqual(t, span, 295*time.Second)
+
+	secs, growing, ok := d.Seconds()
+
+	require.True(t, ok)
+	require.False(t, growing)
+	require.InEpsilon(t, newest/fall, secs, 0.01)
+}
+
+func TestObservationWithinOneSecondReplacesNewest(t *testing.T) {
+	d := NewDrain(5 * time.Minute)
+
+	d.Observe(at(0), 100)
+	d.Observe(at(0.5), 200)
+	require.Len(t, d.obs, 1)
+	require.Equal(t, at(0.5), d.obs[0].t)
+	require.Equal(t, 200.0, d.obs[0].backlog)
+
+	d.Observe(at(0.5), 999)
+	d.Observe(at(0.2), 999)
+	require.Len(t, d.obs, 1)
+	require.Equal(t, 200.0, d.obs[0].backlog)
+
+	d.Observe(at(1.0), 300)
+	require.Len(t, d.obs, 2)
+
+	d.Observe(at(1.9), 400)
+	require.Len(t, d.obs, 2)
+	require.Equal(t, 400.0, d.obs[1].backlog)
+	require.Equal(t, at(1.9), d.obs[1].t)
+
+	d.Observe(at(2.0), 500)
+	require.Len(t, d.obs, 3)
 }
 
 func TestInvalidObservationsIgnored(t *testing.T) {
