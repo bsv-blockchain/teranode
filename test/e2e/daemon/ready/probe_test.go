@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	probeTestToken   = "probe-e2e-token-7f3c9a1d5e"
-	probeTestTimeout = 30 * time.Second
+	probeTestToken     = "probe-e2e-token-7f3c9a1d5e"
+	probeTestTimeout   = 30 * time.Second
+	probeMaxDashboards = 16
 )
 
 var probeStages = []string{"ingress", "validator", "cache", "assembly", "chain", "stores"}
@@ -129,12 +130,21 @@ func probeSettings() func(*settings.Settings) {
 }
 
 func TestProbeServesLiveNodeState(t *testing.T) {
+	t.Run("with p2p", func(t *testing.T) {
+		probeServesLiveNodeState(t, true)
+	})
+
+	t.Run("without p2p", func(t *testing.T) {
+		probeServesLiveNodeState(t, false)
+	})
+}
+
+func probeServesLiveNodeState(t *testing.T, withP2P bool) {
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		EnableRPC:            true,
 		EnableValidator:      true,
-		EnableP2P:            true,
+		EnableP2P:            withP2P,
 		EnableProbe:          true,
-		UseUnifiedLogger:     true,
 		SettingsOverrideFunc: probeSettings(),
 		FSMState:             blockchain.FSMStateRUNNING,
 	})
@@ -218,6 +228,19 @@ func TestProbeServesLiveNodeState(t *testing.T) {
 		require.False(t, last.Stores.Aerospike.Configured)
 		require.False(t, last.Stores.Postgres.Configured)
 
+		if !withP2P {
+			require.Zero(t, last.PeerTip)
+		}
+
+		sources := map[string]bool{}
+		for _, src := range last.Sources {
+			sources[src.Name] = src.OK
+		}
+
+		require.True(t, sources["chain"], "chain source must be healthy: %+v", last.Sources)
+		require.True(t, sources["metrics"], "metrics source must be healthy: %+v", last.Sources)
+		require.NotContains(t, sources, "kafka", "in-memory Kafka must not be probed")
+
 		raw, err := json.Marshal(last)
 		require.NoError(t, err)
 		require.NotContains(t, string(raw), probeTestToken)
@@ -226,6 +249,61 @@ func TestProbeServesLiveNodeState(t *testing.T) {
 
 	t.Run("history saw the transactions arrive at ingress", func(t *testing.T) {
 		require.True(t, historyHasPositive(t, pc, "ingress", "ingress.propagationTxPerSec"))
+	})
+
+	t.Run("history saw the transactions validated", func(t *testing.T) {
+		require.Eventually(t, func() bool {
+			return historyHasPositive(t, pc, "validator", "validator.validatedPerSec")
+		}, probeTestTimeout, 500*time.Millisecond)
+	})
+
+	t.Run("websocket accepts 16 dashboards and rejects the 17th with 503", func(t *testing.T) {
+		conns := make([]*websocket.Conn, 0, probeMaxDashboards)
+
+		defer func() {
+			for _, c := range conns {
+				_ = c.Close()
+			}
+		}()
+
+		deadline := time.Now().Add(probeTestTimeout)
+
+		for len(conns) < probeMaxDashboards {
+			require.True(t, time.Now().Before(deadline), "only %d dashboards connected", len(conns))
+
+			conn, resp, err := websocket.DefaultDialer.DialContext(t.Context(), pc.ws, nil)
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+
+			if err != nil {
+				require.NotNil(t, resp, "dial failed without a response: %v", err)
+				require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+				time.Sleep(100 * time.Millisecond)
+
+				continue
+			}
+
+			auth, err := json.Marshal(map[string]string{"auth": probeTestToken})
+			require.NoError(t, err)
+			require.NoError(t, conn.WriteMessage(websocket.TextMessage, auth))
+
+			conns = append(conns, conn)
+		}
+
+		for _, c := range conns {
+			snap := readSnapshot(t, c, 10*time.Second)
+			require.Equal(t, "RUNNING", snap.FSM)
+		}
+
+		_, resp, err := websocket.DefaultDialer.DialContext(t.Context(), pc.ws, nil)
+		require.Error(t, err)
+		require.NotNil(t, resp)
+		require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 	})
 
 	t.Run("history returns series for every stage", func(t *testing.T) {
