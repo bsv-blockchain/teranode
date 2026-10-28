@@ -29,6 +29,7 @@ func TestSnapshotJSONContract(t *testing.T) {
 			RaisedAt: at, StartOfChain: true, Snoozed: true, Drilldowns: []Link{{Label: "l", Path: "/p"}},
 		}},
 		Calibration: Calibration{Ready: true, Until: at, Fraction: 1},
+		Sources:     []SourceHealth{{Name: "metrics", OK: true}, {Name: "aerospike", OK: false, AgeSec: 61.5}},
 	}
 	s.Cache.HitRate = Reading{Value: 0.9, Status: StatusOK, Normal: &normal, Note: "Warming", AgeSec: 4}
 	s.Chain.BlocksWaiting = []uint32{1, 2}
@@ -59,7 +60,8 @@ func TestSnapshotJSONContract(t *testing.T) {
 		`"flows":[{"id":"f","from":"a","to":"b","label":"l","rate":{"v":0,"st":""},"lag":3}],` +
 		`"alarms":[{"id":"a1","stage":"cache","title":"t","body":"b","textId":"x","severity":"warn","raisedAt":"2026-10-28T10:00:00Z","startOfChain":true,"snoozed":true,"drilldowns":[{"label":"l","path":"/p"}]}],` +
 		`"calibration":{"ready":true,"until":"2026-10-28T10:00:00Z","fraction":1},` +
-		`"drainSeconds":12.5,"drainGrowing":true}`
+		`"drainSeconds":12.5,"drainGrowing":true,` +
+		`"sources":[{"name":"metrics","ok":true},{"name":"aerospike","ok":false,"age":61.5}]}`
 
 	require.Equal(t, golden, string(out))
 }
@@ -114,6 +116,8 @@ func TestNewSnapshotHasAllFlowsInOrder(t *testing.T) {
 	}
 
 	require.Nil(t, s.Flow("missing"))
+	require.NotNil(t, s.Sources)
+	require.Empty(t, s.Sources)
 }
 
 func TestLookupResolvesFlowRates(t *testing.T) {
