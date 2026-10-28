@@ -204,7 +204,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 		closeAll(set.closers, f.pipeline)
 
-		return errors.NewServiceError("probe failed to listen on %s", s.settings.Probe.HTTPListenAddress, err)
+		return errors.NewServiceError("probe failed to listen on %s", s.settings.Probe.HTTPListenAddress, err) // urlsafe: a host:port listen address, no userinfo
 	}
 
 	hub := NewHub(pipe.out)
