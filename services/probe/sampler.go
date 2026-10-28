@@ -80,6 +80,7 @@ type Sampler struct {
 	ring       []snapshot.Snapshot
 	ringNext   int
 	ringCap    int
+	slotStart  time.Time
 	fastPanics int
 	slowPanics int
 }
@@ -530,6 +531,18 @@ func (s *Sampler) build() (snapshot.Snapshot, bool) {
 }
 
 func (s *Sampler) record(snap snapshot.Snapshot) {
+	if len(s.ring) > 0 && snap.Time.Sub(s.slotStart) < s.fastEvery {
+		s.ring[(s.ringNext-1+len(s.ring))%len(s.ring)] = snap
+
+		return
+	}
+
+	if len(s.ring) == 0 {
+		s.slotStart = snap.Time.Add(-s.fastEvery / 2)
+	} else {
+		s.slotStart = s.slotStart.Add(snap.Time.Sub(s.slotStart) / s.fastEvery * s.fastEvery)
+	}
+
 	if len(s.ring) < s.ringCap {
 		s.ring = append(s.ring, snap)
 
@@ -603,6 +616,12 @@ func normalise(snap *snapshot.Snapshot) {
 			snap.Alarms[i].Drilldowns = []snapshot.Link{}
 		}
 	}
+
+	snap.EachReading(func(_ string, r *snapshot.Reading) {
+		if r.Status == "" {
+			r.Status = snapshot.StatusNoData
+		}
+	})
 }
 
 func cloneSnapshot(src snapshot.Snapshot) snapshot.Snapshot {
