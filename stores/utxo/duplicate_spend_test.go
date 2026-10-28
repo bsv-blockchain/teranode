@@ -10,10 +10,11 @@ import (
 )
 
 type batchTestItem struct {
-	spend    *Spend
-	err      error
-	answered bool
-	local    bool
+	spend             *Spend
+	ignoreConflicting bool
+	err               error
+	answered          bool
+	local             bool
 }
 
 type batchTestBackend struct {
@@ -49,6 +50,9 @@ func (b *batchTestBackend) run(items []*batchTestItem) {
 			item.err = err
 			item.answered = true
 			item.local = true
+		},
+		SameChecks: func(a, b *batchTestItem) bool {
+			return a.ignoreConflicting == b.ignoreConflicting && SameUTXOHash(a.spend, b.spend)
 		},
 	})
 }
@@ -173,6 +177,44 @@ func TestProcessSpendBatch(t *testing.T) {
 		require.True(t, loser.local)
 		requireSpentBy(t, loser.err, ownerA)
 		require.NoError(t, again.err)
+	})
+
+	t.Run("a claim with other checks than the decider reaches the backend", func(t *testing.T) {
+		winner, conflicting, plain := claim(0, &a), claim(0, &b), claim(0, &c)
+		winner.ignoreConflicting = true
+		backend := &batchTestBackend{answer: func(spend *Spend) error {
+			if sameSpendingData(ownerA, spend.SpendingData) {
+				return nil
+			}
+			if sameSpendingData(ownerB, spend.SpendingData) {
+				return errors.NewTxConflictingError("parent is conflicting")
+			}
+			return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, ownerA)
+		}}
+		backend.run([]*batchTestItem{winner, conflicting, plain})
+
+		require.Equal(t, [][]*batchTestItem{{winner}, {conflicting}, {plain}}, backend.parts)
+		require.False(t, conflicting.local)
+		require.ErrorIs(t, conflicting.err, errors.ErrTxConflicting)
+		require.False(t, plain.local)
+		requireSpentBy(t, plain.err, ownerA)
+	})
+
+	t.Run("a claim with another UTXO hash reaches the backend", func(t *testing.T) {
+		otherHash := chainhash.HashH([]byte("other utxo"))
+		first, mismatch := claim(0, &a), claim(0, &b)
+		mismatch.spend.UTXOHash = &otherHash
+		backend := &batchTestBackend{answer: func(spend *Spend) error {
+			if *spend.UTXOHash == otherHash {
+				return errors.NewUtxoHashMismatchError("hash mismatch")
+			}
+			return storedOwner(ownerA)(spend)
+		}}
+		backend.run([]*batchTestItem{first, mismatch})
+
+		require.Equal(t, [][]*batchTestItem{{first}, {mismatch}}, backend.parts)
+		require.False(t, mismatch.local)
+		require.ErrorIs(t, mismatch.err, errors.ErrUtxoHashMismatch)
 	})
 
 	t.Run("invalid items reach the backend", func(t *testing.T) {

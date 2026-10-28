@@ -1011,9 +1011,12 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		deferFn()
 	}()
 
-	// The breaker and the batch metrics count one batcher batch, however many
-	// parts ProcessSpendBatch sends.
+	// The batch metrics count one batcher batch, however many parts
+	// ProcessSpendBatch sends. The breaker counts a split batch like the same
+	// batch without a split. The deferred record keeps the expression-path
+	// result of earlier parts when a later part panics.
 	var outcome spendBreakerOutcome
+	defer outcome.record(s.spendCircuitBreaker)
 
 	utxo.ProcessSpendBatch(batch, utxo.SpendBatchHandler[*batchSpend]{
 		Spend: func(item *batchSpend) *utxo.Spend {
@@ -1023,6 +1026,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			return item.spend
 		},
 		Process: func(part []*batchSpend) {
+			outcome.startPart(len(part) < len(batch))
+
 			if s.useExpressionSpend() {
 				s.SpendMultiWithExpressions(s.ctx, part, &outcome)
 			} else {
@@ -1038,9 +1043,13 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		Reject: func(item *batchSpend, err error) {
 			item.complete(err)
 		},
+		SameChecks: func(a, b *batchSpend) bool {
+			return a.blockHeight == b.blockHeight &&
+				a.ignoreConflicting == b.ignoreConflicting &&
+				a.ignoreLocked == b.ignoreLocked &&
+				utxo.SameUTXOHash(a.spend, b.spend)
+		},
 	})
-
-	outcome.record(s.spendCircuitBreaker)
 }
 
 // executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
@@ -1247,8 +1256,8 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 		// Only infrastructure failures count toward the circuit breaker. Per-record
 		// data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing parents during
 		// catch-up sync) must not trip it — issue #953.
-		if isInfrastructureFailure(batchErr) {
-			outcome.luaRecord(key, false)
+		if isInfrastructureFailure(batchErr) && outcome.countLuaRecord(key) {
+			s.spendCircuitBreaker.RecordFailure()
 		}
 		return
 	}
@@ -1274,7 +1283,9 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	switch res.Status {
 	case LuaStatusOK:
 		s.handleSuccessfulSpends(batchByKey, batch)
-		outcome.luaRecord(key, true)
+		if outcome.countLuaRecord(key) {
+			s.spendCircuitBreaker.RecordSuccess()
+		}
 	case LuaStatusError:
 		s.handleErrorSpends(res, batchByKey, batch, txID, thisBlockHeight, batchID)
 	}

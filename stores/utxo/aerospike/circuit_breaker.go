@@ -272,15 +272,18 @@ func (cb *circuitBreaker) reset() {
 	cb.consecutiveSuccess = 0
 }
 
-// spendBreakerOutcome collects the spend breaker result over all parts of one
-// batcher batch, so a split batch counts like the same batch without a split.
-// The expression path counts one success and one failure per batch. The Lua
-// path counts each record key once.
+// spendBreakerOutcome makes a split batch count on the spend breaker like the
+// same batch without a split. The expression path collects one success and one
+// failure over all parts, and record applies them once. The Lua path records
+// each batch record inline, in order. In a split batch it skips a record key
+// that an earlier part already counted.
 type spendBreakerOutcome struct {
-	success      bool
-	failure      bool
-	luaSuccesses map[spendRecordID]struct{}
-	luaFailures  map[spendRecordID]struct{}
+	success bool
+	failure bool
+
+	part    int
+	split   bool
+	luaSeen map[spendRecordID]int
 }
 
 // spendRecordID identifies a Lua batch record by value, because each part
@@ -303,23 +306,31 @@ func newSpendRecordID(key keyIgnoreLocked) spendRecordID {
 	}
 }
 
-func (o *spendBreakerOutcome) luaRecord(key keyIgnoreLocked, success bool) {
-	if success {
-		o.luaSuccesses = withRecordID(o.luaSuccesses, key)
-		return
-	}
-
-	o.luaFailures = withRecordID(o.luaFailures, key)
+// startPart begins the next part. split is false when the part is the whole
+// batch, so a batch without a split tracks nothing and counts as before.
+func (o *spendBreakerOutcome) startPart(split bool) {
+	o.part++
+	o.split = o.split || split
 }
 
-func withRecordID(ids map[spendRecordID]struct{}, key keyIgnoreLocked) map[spendRecordID]struct{} {
-	if ids == nil {
-		ids = make(map[spendRecordID]struct{})
+// countLuaRecord reports whether a Lua batch record counts on the breaker.
+func (o *spendBreakerOutcome) countLuaRecord(key keyIgnoreLocked) bool {
+	if !o.split {
+		return true
 	}
 
-	ids[newSpendRecordID(key)] = struct{}{}
+	id := newSpendRecordID(key)
+	if part, seen := o.luaSeen[id]; seen {
+		return part == o.part
+	}
 
-	return ids
+	if o.luaSeen == nil {
+		o.luaSeen = make(map[spendRecordID]int)
+	}
+
+	o.luaSeen[id] = o.part
+
+	return true
 }
 
 func (o *spendBreakerOutcome) record(cb *circuitBreaker) {
@@ -327,15 +338,7 @@ func (o *spendBreakerOutcome) record(cb *circuitBreaker) {
 		cb.RecordSuccess()
 	}
 
-	for range o.luaSuccesses {
-		cb.RecordSuccess()
-	}
-
 	if o.failure {
-		cb.RecordFailure()
-	}
-
-	for range o.luaFailures {
 		cb.RecordFailure()
 	}
 }
