@@ -115,3 +115,48 @@ func TestNewSnapshotHasAllFlowsInOrder(t *testing.T) {
 
 	require.Nil(t, s.Flow("missing"))
 }
+
+func TestLookupResolvesFlowRates(t *testing.T) {
+	s := NewSnapshot("n")
+
+	r, ok := s.Lookup("flows." + FlowTxMeta + ".rate")
+	require.True(t, ok)
+	require.Same(t, &s.Flow(FlowTxMeta).Rate, r)
+
+	for _, key := range []string{"flows", "flows." + FlowTxMeta, "flows.missing.rate", "flows." + FlowTxMeta + ".lag", "flows." + FlowTxMeta + ".rate.v"} {
+		r, ok = s.Lookup(key)
+		require.False(t, ok, key)
+		require.Nil(t, r, key)
+	}
+}
+
+func TestEachReadingVisitsEveryReading(t *testing.T) {
+	s := NewSnapshot("n")
+
+	stageReadings := 6 + 5 + 9 + 5 + 3
+	storeReadings := 2 * 5
+	flowReadings := len(s.Flows)
+
+	seen := make(map[string]*Reading)
+
+	s.EachReading(func(key string, r *Reading) {
+		_, dup := seen[key]
+		require.False(t, dup, key)
+
+		seen[key] = r
+	})
+
+	require.Len(t, seen, stageReadings+storeReadings+flowReadings)
+
+	require.Same(t, &s.Ingress.PropagationTxPerSec, seen["ingress.propagationTxPerSec"])
+	require.Same(t, &s.Cache.CapacityGB, seen["cache.capacityGB"])
+	require.Same(t, &s.Chain.SubscribersDropped, seen["chain.subscribersDropped"])
+	require.Same(t, &s.Stores.Postgres.CommitsPerSec, seen["stores.postgres.commitsPerSec"])
+	require.Same(t, &s.Flow(FlowBlockWrites).Rate, seen["flows."+FlowBlockWrites+".rate"])
+
+	for key, r := range seen {
+		looked, ok := s.Lookup(key)
+		require.True(t, ok, key)
+		require.Same(t, r, looked, key)
+	}
+}

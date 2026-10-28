@@ -172,10 +172,27 @@ func NewSnapshot(node string) Snapshot {
 	return s
 }
 
+const flowsKey = "flows"
+
 func (s *Snapshot) Lookup(key string) (*Reading, bool) {
 	v := reflect.ValueOf(s).Elem()
+	names := strings.Split(key, ".")
 
-	for _, name := range strings.Split(key, ".") {
+	if names[0] == flowsKey {
+		if len(names) < 3 {
+			return nil, false
+		}
+
+		f := s.Flow(names[1])
+		if f == nil {
+			return nil, false
+		}
+
+		v = reflect.ValueOf(f).Elem()
+		names = names[2:]
+	}
+
+	for _, name := range names {
 		if v.Kind() != reflect.Struct || v.Type() == readingType {
 			return nil, false
 		}
@@ -193,6 +210,39 @@ func (s *Snapshot) Lookup(key string) (*Reading, bool) {
 	}
 
 	return v.Addr().Interface().(*Reading), true
+}
+
+func (s *Snapshot) EachReading(fn func(key string, r *Reading)) {
+	eachReading(reflect.ValueOf(s).Elem(), "", fn)
+
+	for i := range s.Flows {
+		eachReading(reflect.ValueOf(&s.Flows[i]).Elem(), flowsKey+"."+s.Flows[i].ID+".", fn)
+	}
+}
+
+func eachReading(v reflect.Value, prefix string, fn func(key string, r *Reading)) {
+	t := v.Type()
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+
+		name := strings.Split(field.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+
+		fv := v.Field(i)
+
+		switch {
+		case field.Type == readingType:
+			fn(prefix+name, fv.Addr().Interface().(*Reading))
+		case field.Type.Kind() == reflect.Struct:
+			eachReading(fv, prefix+name+".", fn)
+		}
+	}
 }
 
 func fieldByJSONName(v reflect.Value, name string) (reflect.Value, bool) {
