@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"testing"
@@ -122,11 +123,15 @@ func TestCollectBlocksWaiting(t *testing.T) {
 	require.Subset(t, s.Chain.BlocksWaiting, []uint32{1, 2, 3})
 	require.IsIncreasing(t, s.Chain.BlocksWaiting)
 	require.GreaterOrEqual(t, s.Chain.PersisterBehind.Value, 3.0)
-	require.Equal(t, snapshot.StatusWarn, s.Chain.PersisterBehind.Status)
+	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
+	require.Empty(t, s.Chain.PersisterBehind.Note)
 }
 
 func TestCollectBlocksWaitingCapsAtTwentyAndIsNeverNil(t *testing.T) {
 	rig := newChainRig(t, nil)
+
+	clock := time.Unix(1_700_000_000, 0)
+	rig.chain.now = func() time.Time { return clock }
 
 	empty, err := rig.chain.Collect(context.Background())
 	require.NoError(t, err)
@@ -139,6 +144,8 @@ func TestCollectBlocksWaitingCapsAtTwentyAndIsNeverNil(t *testing.T) {
 	for h := uint32(1); h <= 25; h++ {
 		rig.addBlock(t, h)
 	}
+
+	clock = clock.Add(chainBacklogEvery)
 
 	s := collectSnapshot(t, rig.chain)
 	require.Len(t, s.Chain.BlocksWaiting, 20)
@@ -230,4 +237,133 @@ func TestCollectFailureReturnsErrorAndNilPatch(t *testing.T) {
 
 	require.Error(t, err)
 	require.Nil(t, patch)
+}
+
+type countingClient struct {
+	blockchain.ClientI
+	notPersistedCalls int
+	minedNotSetCalls  int
+	failBacklog       bool
+}
+
+func (c *countingClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
+	c.notPersistedCalls++
+
+	if c.failBacklog {
+		return nil, errors.New("backlog unavailable")
+	}
+
+	return c.ClientI.GetBlocksNotPersisted(ctx, limit)
+}
+
+func (c *countingClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
+	c.minedNotSetCalls++
+
+	return c.ClientI.GetBlocksMinedNotSet(ctx)
+}
+
+func newCountingRig(t *testing.T) (*chainRig, *countingClient, *time.Time) {
+	t.Helper()
+
+	rig := newChainRig(t, nil)
+	cc := &countingClient{ClientI: rig.bc}
+	rig.chain = NewChain(cc, &fakePeers{})
+
+	clock := time.Unix(1_700_000_000, 0)
+	rig.chain.now = func() time.Time { return clock }
+
+	return rig, cc, &clock
+}
+
+func TestBacklogCallsRateLimitedToTenSeconds(t *testing.T) {
+	rig, cc, clock := newCountingRig(t)
+	rig.addBlock(t, 1)
+
+	first := collectSnapshot(t, rig.chain)
+	require.Contains(t, first.Chain.BlocksWaiting, uint32(1))
+	require.NotContains(t, first.Chain.BlocksWaiting, uint32(2))
+
+	rig.addBlock(t, 2)
+	*clock = clock.Add(9 * time.Second)
+
+	second := collectSnapshot(t, rig.chain)
+	require.Equal(t, first.Chain.BlocksWaiting, second.Chain.BlocksWaiting)
+	require.Equal(t, first.Chain.PersisterBehind, second.Chain.PersisterBehind)
+	require.Equal(t, uint32(2), second.Tip)
+	require.Equal(t, 1, cc.notPersistedCalls)
+	require.Equal(t, 1, cc.minedNotSetCalls)
+
+	*clock = clock.Add(time.Second)
+
+	third := collectSnapshot(t, rig.chain)
+	require.Contains(t, third.Chain.BlocksWaiting, uint32(2))
+	require.Equal(t, 2, cc.notPersistedCalls)
+	require.Equal(t, 2, cc.minedNotSetCalls)
+}
+
+func TestPersisterBehindLowerBoundNote(t *testing.T) {
+	rig := newChainRig(t, nil)
+
+	for h := uint32(1); h <= 30; h++ {
+		rig.addBlock(t, h)
+	}
+
+	s := collectSnapshot(t, rig.chain)
+
+	require.Equal(t, 25.0, s.Chain.PersisterBehind.Value)
+	require.Equal(t, "25 or more", s.Chain.PersisterBehind.Note)
+	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
+}
+
+func TestBacklogRefreshFailureRetriesNextCollect(t *testing.T) {
+	rig, cc, clock := newCountingRig(t)
+	rig.addBlock(t, 1)
+
+	cc.failBacklog = true
+
+	patch, err := rig.chain.Collect(context.Background())
+	require.Error(t, err)
+	require.Nil(t, patch)
+
+	cc.failBacklog = false
+	*clock = clock.Add(time.Second)
+
+	s := collectSnapshot(t, rig.chain)
+	require.Contains(t, s.Chain.BlocksWaiting, uint32(1))
+	require.Equal(t, 2, cc.notPersistedCalls)
+}
+
+func TestWaitingHeights(t *testing.T) {
+	blocks := func(hs ...uint32) []*model.Block {
+		out := make([]*model.Block, 0, len(hs))
+		for _, h := range hs {
+			out = append(out, &model.Block{Height: h})
+		}
+
+		return out
+	}
+
+	many := make([]uint32, 0, 30)
+	for h := uint32(30); h >= 1; h-- {
+		many = append(many, h)
+	}
+
+	tests := []struct {
+		name   string
+		groups [][]*model.Block
+		want   []uint32
+	}{
+		{"no groups", nil, []uint32{}},
+		{"empty groups", [][]*model.Block{nil, {}}, []uint32{}},
+		{"overlap deduped and sorted", [][]*model.Block{blocks(5, 3, 4), blocks(4, 2, 5)}, []uint32{2, 3, 4, 5}},
+		{"nil blocks skipped", [][]*model.Block{{nil, {Height: 7}, nil}, {nil}}, []uint32{7}},
+		{"duplicate inside group", [][]*model.Block{blocks(1, 1, 1)}, []uint32{1}},
+		{"cap keeps the oldest twenty", [][]*model.Block{blocks(many...), blocks(31, 32)}, []uint32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, waitingHeights(tc.groups...))
+		})
+	}
 }
