@@ -590,7 +590,10 @@ function panel(i, stage, st, body) {
     h('rect', { width: PX, height: PH, rx: 8, fill: 'url(#panelG)', stroke: 'rgba(255,255,255,.1)' }),
     h('path', { d: `M0 8a8 8 0 0 1 8-8h${PX - 16}a8 8 0 0 1 8 8v26H0z`, fill: 'url(#hdG)' }),
     h('line', { x1: 0, x2: PX, y1: 34, y2: 34, stroke: 'rgba(255,255,255,.08)' }),
-    h('text', { x: 12, y: 22, class: 'ti' }, stage.title),
+    h('a', { href: `#/stage/${stage.key}`, class: 'ti-link', 'aria-label': `${stage.title} details` }, [
+      h('rect', { x: 0, y: 0, width: PX - 30, height: 34, class: 'ti-hit' }),
+      h('text', { x: 12, y: 22, class: 'ti' }, stage.title),
+    ]),
     h('circle', { cx: PX - 14, cy: 17, r: 4.5, fill: COLORS[st], filter: 'url(#glow)', class: pulse(st) }),
     h('g', {}, body),
   ]);
@@ -910,5 +913,220 @@ export function renderBottomBar(snapshot, nowMs) {
     ]),
     drain ? h('span', { class: 'drain' }, drain) : null,
     h('span', { class: 'updated' }, updatedText(s, nowMs)),
+  ]);
+}
+
+export const HISTORY_MINUTES = 10;
+export const MAX_SERIES = 64;
+export const MAX_POINTS = 600;
+const MAX_SERIES_SCANNED = 1024;
+const MAX_KEY_LENGTH = 96;
+const MAX_DEPTH = 6;
+const SPARK = { w: 120, h: 28, padX: 2, padY: 3 };
+const VALUE_LIMIT = 1e15;
+const HISTORY_STATUSES = ['ok', 'warn', 'crit', 'idle', 'nodata'];
+const ROW_WORDS = { ok: 'Normal', warn: 'Warning', crit: 'Critical', idle: 'Idle', nodata: 'No data' };
+const HOME_ROUTE = { name: 'home', stage: '' };
+
+export function parseRoute(hash) {
+  const m = typeof hash === 'string' ? DRILLDOWN_PATH.exec(hash) : null;
+  return m ? { name: 'stage', stage: m[1] } : { ...HOME_ROUTE };
+}
+
+function stageTitle(key) {
+  const found = STAGES.find((s) => s.key === key);
+  return found ? found.title : '';
+}
+
+function collectReadings(o, key, depth, out) {
+  if (!o || typeof o !== 'object' || Array.isArray(o) || depth > MAX_DEPTH) return;
+  if (typeof o.st === 'string') {
+    out.push({ key, reading: o });
+    return;
+  }
+  if (o.configured === false) return;
+  for (const [k, v] of Object.entries(o)) collectReadings(v, `${key}.${k}`, depth + 1, out);
+}
+
+export function stageReadings(snapshot, stageKey) {
+  const out = [];
+  if (snapshot && typeof snapshot === 'object' && stageTitle(stageKey)) collectReadings(snapshot[stageKey], stageKey, 0, out);
+  return out;
+}
+
+function rowLabel(key) {
+  const cut = key.lastIndexOf('.');
+  const own = LABELS[key] || key.slice(cut + 1);
+  const parent = key.slice(0, cut);
+  if (parent.includes('.') && LABELS[parent]) return `${LABELS[parent]}: ${own}`;
+  return own;
+}
+
+function validStatus(st) {
+  return HISTORY_STATUSES.includes(st) ? st : 'nodata';
+}
+
+function clampValue(v) {
+  return Math.max(-VALUE_LIMIT, Math.min(VALUE_LIMIT, v));
+}
+
+function safe(n) {
+  return typeof n === 'number' && Number.isFinite(n) ? n : 0;
+}
+
+export function normalizeHistory(payload, stage) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  if (payload.stage !== stage || !Array.isArray(payload.series)) return null;
+  const prefix = `${stage}.`;
+  const out = new Map();
+  for (const s of payload.series.slice(0, MAX_SERIES_SCANNED)) {
+    if (out.size >= MAX_SERIES) break;
+    if (!s || typeof s !== 'object' || typeof s.key !== 'string' || !Array.isArray(s.points)) continue;
+    if (s.key.length > MAX_KEY_LENGTH || !s.key.startsWith(prefix) || s.key.length === prefix.length) continue;
+    const points = [];
+    for (const p of s.points.slice(-MAX_POINTS)) {
+      if (!p || typeof p !== 'object' || typeof p.t !== 'string') continue;
+      const ms = Date.parse(p.t);
+      if (!Number.isFinite(ms)) continue;
+      const v = typeof p.v === 'number' && Number.isFinite(p.v) ? p.v : null;
+      points.push({ t: p.t, ms, v, st: validStatus(p.st) });
+    }
+    points.sort((a, b) => a.ms - b.ms);
+    out.set(s.key, points.map(({ t, v, st }) => ({ t, v, st })));
+  }
+  return out;
+}
+
+function sparkDash() {
+  return h('span', { class: 'spark-none' }, '–');
+}
+
+export function sparkline(points, opts) {
+  const o = opts && typeof opts === 'object' ? opts : {};
+  const key = typeof o.key === 'string' ? o.key : '';
+  const minutes = typeof o.minutes === 'number' && o.minutes > 0 && o.minutes <= 60 ? o.minutes : HISTORY_MINUTES;
+  const windowMs = minutes * 60000;
+  const clean = [];
+  for (const p of Array.isArray(points) ? points : []) {
+    if (!p || typeof p !== 'object' || typeof p.t !== 'string') continue;
+    const ms = Date.parse(p.t);
+    if (!Number.isFinite(ms)) continue;
+    const v = typeof p.v === 'number' && Number.isFinite(p.v) ? clampValue(p.v) : null;
+    clean.push({ ms, v, st: validStatus(p.st) });
+  }
+  clean.sort((a, b) => a.ms - b.ms);
+  if (clean.length === 0) return sparkDash();
+  const end = typeof o.now === 'number' && Number.isFinite(o.now) ? o.now : clean[clean.length - 1].ms;
+  const start = end - windowMs;
+  const inWindow = clean.filter((p) => p.ms >= start);
+  const numeric = inWindow.filter((p) => p.v !== null);
+  if (numeric.length < 2) return sparkDash();
+
+  const values = numeric.map((p) => p.v);
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const span = hi - lo;
+  const plotW = SPARK.w - 2 * SPARK.padX;
+  const plotH = SPARK.h - 2 * SPARK.padY;
+  const xOf = (ms) => SPARK.padX + Math.max(0, Math.min(1, (ms - start) / windowMs)) * plotW;
+  const yOf = (v) => (span > 0 ? SPARK.padY + (1 - (v - lo) / span) * plotH : SPARK.h / 2);
+  const at = (p) => `${num(safe(xOf(p.ms)))} ${num(safe(yOf(p.v)))}`;
+
+  const segments = [];
+  let run = null;
+  for (const p of inWindow) {
+    if (p.v === null) {
+      run = null;
+    } else {
+      if (!run) {
+        run = [];
+        segments.push(run);
+      }
+      run.push(p);
+    }
+  }
+  const d = segments
+    .map((seg) => (seg.length === 1 ? `M${at(seg[0])} L${at(seg[0])}` : seg.map((p, i) => `${i === 0 ? 'M' : 'L'}${at(p)}`).join(' ')))
+    .join(' ');
+
+  const last = numeric[numeric.length - 1];
+  const latest = inWindow[inWindow.length - 1];
+  const label = typeof o.label === 'string' && o.label ? o.label : key.slice(key.lastIndexOf('.') + 1);
+  return h('svg', {
+    class: `spark st-${latest.st}`,
+    viewBox: `0 0 ${SPARK.w} ${SPARK.h}`,
+    role: 'img',
+    'aria-label': `${num(minutes)} minute history of ${label}, last value ${formatValue(last.v, unitFor(key))}`,
+  }, [
+    h('path', { class: 'spark-line', d, fill: 'none' }),
+    h('circle', { class: 'spark-dot', cx: safe(xOf(last.ms)), cy: safe(yOf(last.v)), r: 2 }),
+  ]);
+}
+
+function statusCell(st) {
+  return h('td', { class: 'c-st' }, [
+    h('span', { class: `led led-${STATUS_LETTERS[st]}`, 'aria-hidden': 'true' }, ''),
+    h('span', { class: 'st-word' }, ROW_WORDS[st]),
+  ]);
+}
+
+function noteText(reading, fr) {
+  const note = typeof reading.note === 'string' && reading.note !== 'no data' ? reading.note : '';
+  if (!fr.nodata) return note;
+  const age = finite(reading.age) > 0 ? formatAge(reading.age) : '';
+  return [note, age].filter(Boolean).join(', ');
+}
+
+function readingRow(entry, series, nowMs) {
+  const { key, reading } = entry;
+  const fr = formatReading(key, reading);
+  const label = rowLabel(key);
+  return h('tr', { 'data-key': key, 'data-st': fr.st }, [
+    h('th', { scope: 'row', class: 'c-label' }, label),
+    h('td', { class: 'c-val' }, fr.text),
+    statusCell(validStatus(reading.st)),
+    h('td', { class: 'c-norm' }, fr.normal),
+    h('td', { class: 'c-note' }, noteText(reading, fr)),
+    h('td', { class: 'c-spark' }, [series ? sparkline(series, { key, label, now: nowMs }) : sparkDash()]),
+  ]);
+}
+
+function stageHeader(stageKey, st) {
+  return h('div', { class: 'sv-head' }, [
+    h('a', { class: 'btn', href: '#/' }, 'Back to overview'),
+    h('span', { class: `led led-${st}`, 'data-role': 'stage-led', 'data-st': st, 'aria-hidden': 'true' }, ''),
+    h('h1', { id: 'stage-title', tabindex: '-1' }, stageTitle(stageKey)),
+    h('span', { class: 'sv-word' }, PANEL_WORDS[st]),
+  ]);
+}
+
+export function renderStageAlarms(alarms, stageKey, nowMs) {
+  const mine = (Array.isArray(alarms) ? alarms : []).filter((a) => a && typeof a === 'object' && a.stage === stageKey);
+  if (mine.length === 0) return h('p', { class: 'al-empty' }, 'No alarms for this stage.');
+  return renderAlarmList(mine, nowMs);
+}
+
+export function renderStage(snapshot, stageKey, history, nowMs, notice) {
+  if (!stageTitle(stageKey) || !snapshot || typeof snapshot !== 'object') {
+    return h('div', { class: 'stage-view' }, [
+      stageHeader(stageKey, 'n'),
+      h('p', { class: 'al-empty' }, 'Waiting for the first sample.'),
+    ]);
+  }
+  const data = history && history.data instanceof Map ? history.data : null;
+  const now = typeof nowMs === 'number' && Number.isFinite(nowMs) ? nowMs : Date.parse(snapshot.time);
+  const rows = stageReadings(snapshot, stageKey).map((e) => readingRow(e, data ? data.get(e.key) : null, now));
+  const head = ['Reading', 'Value', 'Status', 'Normal', 'Note', `Last ${HISTORY_MINUTES} minutes`];
+  return h('div', { class: 'stage-view' }, [
+    stageHeader(stageKey, panelStatus(snapshot[stageKey])),
+    h('table', { class: 'readings' }, [
+      h('caption', { class: 'sr-only' }, `${stageTitle(stageKey)} readings`),
+      h('thead', {}, [h('tr', {}, head.map((t) => h('th', { scope: 'col' }, t)))]),
+      h('tbody', {}, rows),
+    ]),
+    h('p', { class: 'hist-note', role: 'status' }, history && history.error ? 'History unavailable.' : ''),
+    h('h2', { class: 'sv-sub' }, 'Alarms for this stage'),
+    notice ? h('p', { class: 'al-notice', role: 'alert' }, notice) : null,
+    renderStageAlarms(snapshot.alarms, stageKey, now),
   ]);
 }
