@@ -43,8 +43,9 @@ const (
 )
 
 const (
-	noteNoData    = "no data"
-	noteUnbounded = "unbounded"
+	noteNoData          = "no data"
+	noteValidatedCounts = "includes block-validation checks and rejected transactions"
+	noteUnbounded       = "unbounded"
 
 	assemblyMaxBatchesPerIteration = 64
 
@@ -109,10 +110,15 @@ func applyIngress(s *snapshot.Snapshot, m MetricSet, r *Rates) {
 }
 
 func applyValidator(s *snapshot.Snapshot, r *Rates, cfg *settings.Settings) {
-	set(&s.Validator.ValidatedPerSec, rate(r, metricValidatorTx))
+	validated := rate(r, metricValidatorTx)
+	if validated.Status != snapshot.StatusNoData {
+		validated.Note = noteValidatedCounts
+	}
+
+	set(&s.Validator.ValidatedPerSec, validated)
 	set(&s.Validator.ErrorsPerSec, rate(r, metricValidatorInvalid))
 	set(&s.Validator.QueueFill, noData(noteNoData))
-	setFlow(s, snapshot.FlowValidated, rate(r, metricValidatorTx))
+	setFlow(s, snapshot.FlowValidated, validated)
 
 	if p99, ok := r.Quantile(metricValidatorTx, 0.99); ok {
 		set(&s.Validator.LatencyP99Sec, okReading(p99))
