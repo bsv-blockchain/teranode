@@ -66,6 +66,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
@@ -271,11 +272,54 @@ func (cb *circuitBreaker) reset() {
 	cb.consecutiveSuccess = 0
 }
 
-// spendBreakerOutcome collects the expression-path breaker result over all parts
-// of one batcher batch, so a split batch counts once.
+// spendBreakerOutcome collects the spend breaker result over all parts of one
+// batcher batch, so a split batch counts like the same batch without a split.
+// The expression path counts one success and one failure per batch. The Lua
+// path counts each record key once.
 type spendBreakerOutcome struct {
-	success bool
-	failure bool
+	success      bool
+	failure      bool
+	luaSuccesses map[spendRecordID]struct{}
+	luaFailures  map[spendRecordID]struct{}
+}
+
+// spendRecordID identifies a Lua batch record by value, because each part
+// builds its own key pointers.
+type spendRecordID struct {
+	digest            string
+	txID              chainhash.Hash
+	blockHeight       uint32
+	ignoreConflicting bool
+	ignoreLocked      bool
+}
+
+func newSpendRecordID(key keyIgnoreLocked) spendRecordID {
+	return spendRecordID{
+		digest:            string(key.key.Digest()),
+		txID:              *key.hash,
+		blockHeight:       key.blockHeight,
+		ignoreConflicting: key.ignoreConflicting,
+		ignoreLocked:      key.ignoreLocked,
+	}
+}
+
+func (o *spendBreakerOutcome) luaRecord(key keyIgnoreLocked, success bool) {
+	if success {
+		o.luaSuccesses = withRecordID(o.luaSuccesses, key)
+		return
+	}
+
+	o.luaFailures = withRecordID(o.luaFailures, key)
+}
+
+func withRecordID(ids map[spendRecordID]struct{}, key keyIgnoreLocked) map[spendRecordID]struct{} {
+	if ids == nil {
+		ids = make(map[spendRecordID]struct{})
+	}
+
+	ids[newSpendRecordID(key)] = struct{}{}
+
+	return ids
 }
 
 func (o *spendBreakerOutcome) record(cb *circuitBreaker) {
@@ -283,7 +327,15 @@ func (o *spendBreakerOutcome) record(cb *circuitBreaker) {
 		cb.RecordSuccess()
 	}
 
+	for range o.luaSuccesses {
+		cb.RecordSuccess()
+	}
+
 	if o.failure {
+		cb.RecordFailure()
+	}
+
+	for range o.luaFailures {
 		cb.RecordFailure()
 	}
 }
