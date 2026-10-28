@@ -697,13 +697,20 @@ function raisedText(a, nowMs) {
   return `Raised ${hhmm(t)}, ${formatAge((nowMs - t) / 1000).replace(/^0 s ago$/, 'just now')}`;
 }
 
-function safeHash(path) {
-  return typeof path === 'string' && /^#\/[A-Za-z0-9/_\-.]*$/.test(path) ? path : null;
+export const DRILLDOWN_PATH = /^#\/stage\/(ingress|validator|cache|assembly|chain|stores)$/;
+
+export function isDrilldownPath(path) {
+  return typeof path === 'string' && DRILLDOWN_PATH.test(path);
 }
 
 function drilldownLinks(a, extra) {
   return (Array.isArray(a.drilldowns) ? a.drilldowns : [])
-    .map((d) => (d && safeHash(d.path) ? h('a', { class: 'btn', href: d.path, ...extra }, typeof d.label === 'string' ? d.label : d.path) : null))
+    .map((d) => {
+      if (!d || typeof d !== 'object') return null;
+      const label = typeof d.label === 'string' ? d.label : '';
+      if (isDrilldownPath(d.path)) return h('a', { class: 'btn', href: d.path, ...extra }, label || d.path);
+      return label ? h('span', { class: 'link-text' }, label) : null;
+    })
     .filter(Boolean);
 }
 
