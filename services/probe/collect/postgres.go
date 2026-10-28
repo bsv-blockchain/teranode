@@ -23,9 +23,11 @@ const (
 	postgresNoStatements  = "needs pg_stat_statements"
 	postgresMeanNote      = "mean"
 	postgresApplication   = "teranode-probe"
-	postgresDefaultSSL    = "disable"
+	postgresCloseBound    = time.Second
 	postgresStatementsExt = "pg_stat_statements"
 )
+
+var postgresPassThroughParams = []string{"sslmode", "sslrootcert", "sslcert", "sslkey", "connect_timeout", "application_name"}
 
 type Postgres struct {
 	connString string
@@ -76,17 +78,19 @@ func NewPostgres(u *url.URL, timeout time.Duration, diskCapacityGB float64) (*Po
 		password, _ = u.User.Password()
 	}
 
-	sslMode := postgresDefaultSSL
-	if v := u.Query().Get("sslmode"); v != "" {
-		sslMode = v
-	}
-
 	parts := []string{
 		"user=" + quotePostgresValue(user),
 		"password=" + quotePostgresValue(password),
 		"dbname=" + quotePostgresValue(database),
-		"sslmode=" + quotePostgresValue(sslMode),
 		"host=" + quotePostgresValue(u.Hostname()),
+	}
+
+	query := u.Query()
+
+	for _, key := range postgresPassThroughParams {
+		if v := query.Get(key); v != "" {
+			parts = append(parts, key+"="+quotePostgresValue(v))
+		}
 	}
 
 	if port := u.Port(); port != "" {
@@ -141,9 +145,14 @@ func (p *Postgres) connConfig() *pgx.ConnConfig {
 		return nil
 	}
 
-	cfg.ConnectTimeout = p.timeout
+	if cfg.ConnectTimeout <= 0 || cfg.ConnectTimeout > p.timeout {
+		cfg.ConnectTimeout = p.timeout
+	}
+
 	cfg.RuntimeParams["default_transaction_read_only"] = "on"
-	cfg.RuntimeParams["application_name"] = postgresApplication
+	if _, set := cfg.RuntimeParams["application_name"]; !set {
+		cfg.RuntimeParams["application_name"] = postgresApplication
+	}
 
 	return cfg
 }
@@ -161,7 +170,7 @@ func (p *Postgres) dropConn() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), min(p.timeout, postgresCloseBound))
 	defer cancel()
 
 	_ = p.conn.Close(ctx)
@@ -202,11 +211,11 @@ func (p *Postgres) Collect(ctx context.Context) (snapshot.Patch, error) {
 		return notConfiguredPostgresPatch, nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, p.timeout)
-	defer cancel()
-
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(ctx, p.timeout)
+	defer cancel()
 
 	conn, err := p.connection(ctx)
 	if err != nil {
