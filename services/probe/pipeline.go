@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ const (
 	drainWindow          = 5 * time.Minute
 	defaultFlushEvery    = time.Minute
 	corruptSuffixLayout  = "20060102T150405Z"
+	maxCorruptNames      = 1000
 )
 
 type collectorSet struct {
@@ -42,7 +44,8 @@ type pipeline struct {
 	logger  ulogger.Logger
 	hook    func(*snapshot.Snapshot)
 	fault   func(point string)
-	faults  *faultTracker
+	faults  *faultCounter
+	signal  *stopSignal
 	every   time.Duration
 	out     chan snapshot.Snapshot
 
@@ -111,9 +114,8 @@ func (s *Server) openStore() (*alarm.Store, string, error) {
 		return nil, "", errors.NewServiceError("probe could not open its state store", err)
 	}
 
-	moved := path + ".corrupt-" + time.Now().UTC().Format(corruptSuffixLayout)
-
-	if err := s.rename(path, moved); err != nil {
+	moved, err := s.moveCorrupt(path)
+	if err != nil {
 		return nil, "probe could not move its corrupt state file aside: " + oneLine(err), nil
 	}
 
@@ -127,7 +129,45 @@ func (s *Server) openStore() (*alarm.Store, string, error) {
 	return store, "", nil
 }
 
-func newPipeline(s *Server, set collectorSet, store *alarm.Store, faults *faultTracker) (*pipeline, error) {
+func moveAside(oldPath, newPath string) error {
+	if err := os.Link(oldPath, newPath); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return os.ErrExist
+		}
+
+		if _, statErr := os.Lstat(newPath); !errors.Is(statErr, os.ErrNotExist) {
+			return os.ErrExist
+		}
+
+		return os.Rename(oldPath, newPath)
+	}
+
+	return os.Remove(oldPath)
+}
+
+func (s *Server) moveCorrupt(path string) (string, error) {
+	base := path + ".corrupt-" + s.now().UTC().Format(corruptSuffixLayout)
+
+	for i := 0; i < maxCorruptNames; i++ {
+		name := base
+		if i > 0 {
+			name = base + "-" + strconv.Itoa(i)
+		}
+
+		err := s.rename(path, name)
+		if err == nil {
+			return name, nil
+		}
+
+		if !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+	}
+
+	return "", errors.NewProcessingError("no free name for the corrupt state file after %d attempts", maxCorruptNames)
+}
+
+func newPipeline(s *Server, set collectorSet, store *alarm.Store, f *faults) (*pipeline, error) {
 	cfg := s.settings.Probe
 
 	floors, err := alarm.ParseFloors(cfg.Floors)
@@ -154,7 +194,7 @@ func newPipeline(s *Server, set collectorSet, store *alarm.Store, faults *faultT
 	engine := alarm.NewEngine(alarm.DefaultRules, baseline, store, floors, cfg.SnoozeDefault, opts...)
 
 	sampler := NewSampler(set.fast, set.slow, cfg.SampleInterval, cfg.SlowSampleInterval, s.nodeName(),
-		WithLogger(s.logger), WithClock(s.now), withRecorder(faults.fatal()))
+		WithLogger(s.logger), WithClock(s.now), withRecorder(f.pipeline.fatal()))
 
 	return &pipeline{
 		sampler:    sampler,
@@ -164,7 +204,8 @@ func newPipeline(s *Server, set collectorSet, store *alarm.Store, faults *faultT
 		logger:     s.logger,
 		hook:       s.processHook,
 		fault:      s.fault,
-		faults:     faults,
+		faults:     f.pipeline,
+		signal:     f.signal,
 		every:      sampler.fastEvery,
 		out:        make(chan snapshot.Snapshot, 1),
 		flushEvery: s.flushEvery,
@@ -282,10 +323,10 @@ func (p *pipeline) run(ctx context.Context) {
 		}
 
 		if p.sampler.ConsecutivePanics() >= maxConsecutivePanics {
-			p.faults.fail()
+			p.signal.fail(probeStoppedMessage + " in the sampler collectors")
 		}
 
-		if p.faults.hasFailed() {
+		if p.signal.stopped() {
 			return
 		}
 	}

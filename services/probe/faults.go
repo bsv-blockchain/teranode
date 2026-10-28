@@ -13,59 +13,119 @@ const (
 	faultClose       = "close"
 	faultHub         = "hub"
 	faultClientWrite = "client-write"
+
+	groupPipeline   = "pipeline"
+	groupHub        = "websocket hub"
+	groupCollectors = "collectors"
 )
 
-type faultTracker struct {
+type stopSignal struct {
+	failed chan struct{}
+	once   sync.Once
+
+	mu     sync.Mutex
+	reason string
+}
+
+func newStopSignal() *stopSignal {
+	return &stopSignal{failed: make(chan struct{})}
+}
+
+func (s *stopSignal) fail(reason string) {
+	s.once.Do(func() {
+		s.mu.Lock()
+		s.reason = reason
+		s.mu.Unlock()
+
+		close(s.failed)
+	})
+}
+
+func (s *stopSignal) stopped() bool {
+	select {
+	case <-s.failed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *stopSignal) Reason() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.reason
+}
+
+type faultCounter struct {
+	group  string
 	logger ulogger.Logger
+	signal *stopSignal
 
 	mu     sync.Mutex
 	streak int
-
-	failed chan struct{}
-	once   sync.Once
+	dirty  bool
 }
 
-func newFaultTracker(logger ulogger.Logger) *faultTracker {
-	return &faultTracker{logger: logger, failed: make(chan struct{})}
+func newFaultCounter(group string, logger ulogger.Logger, signal *stopSignal) *faultCounter {
+	return &faultCounter{group: group, logger: logger, signal: signal}
 }
 
-func (f *faultTracker) Panicked(component string, value any) {
+func (f *faultCounter) Panicked(component string, value any) {
 	f.logger.Errorf("[Probe] %s panicked: %s", component, oneLine(value))
 
 	f.mu.Lock()
 	f.streak++
+	f.dirty = true
 	streak := f.streak
 	f.mu.Unlock()
 
 	if streak >= maxConsecutivePanics {
-		f.fail()
+		f.signal.fail(probeStoppedMessage + " in the " + f.group)
 	}
 }
 
-func (f *faultTracker) fatal() guard.Recorder {
-	return guard.RecorderFunc(func(component string, value any) {
-		f.Panicked(component, value)
-		f.fail()
-	})
-}
-
-func (f *faultTracker) reset() {
+func (f *faultCounter) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	f.streak = 0
+	f.dirty = false
 }
 
-func (f *faultTracker) fail() {
-	f.once.Do(func() { close(f.failed) })
+func (f *faultCounter) settle() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if !f.dirty {
+		f.streak = 0
+	}
+
+	f.dirty = false
 }
 
-func (f *faultTracker) hasFailed() bool {
-	select {
-	case <-f.failed:
-		return true
-	default:
-		return false
+func (f *faultCounter) fatal() guard.Recorder {
+	return guard.RecorderFunc(func(component string, value any) {
+		f.logger.Errorf("[Probe] %s panicked: %s", component, oneLine(value))
+		f.signal.fail("probe stopped after a panic ended the " + component + " loop")
+	})
+}
+
+type faults struct {
+	signal     *stopSignal
+	pipeline   *faultCounter
+	hub        *faultCounter
+	collectors *faultCounter
+}
+
+func newFaults(logger ulogger.Logger) *faults {
+	signal := newStopSignal()
+
+	return &faults{
+		signal:     signal,
+		pipeline:   newFaultCounter(groupPipeline, logger, signal),
+		hub:        newFaultCounter(groupHub, logger, signal),
+		collectors: newFaultCounter(groupCollectors, logger, signal),
 	}
 }
 

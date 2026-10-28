@@ -32,7 +32,7 @@ const (
 type Hub struct {
 	updates   <-chan snapshot.Snapshot
 	logger    ulogger.Logger
-	faults    guard.Recorder
+	faults    *faultCounter
 	fault     func(point string)
 	writeWait time.Duration
 	pingEvery time.Duration
@@ -66,16 +66,14 @@ func NewHub(updates <-chan snapshot.Snapshot) *Hub {
 		clients:   map[*wsClient]struct{}{},
 	}
 
-	h.faults = guard.RecorderFunc(func(component string, value any) {
-		h.logger.Errorf("[Probe] %s panicked: %s", component, oneLine(value))
-	})
+	h.faults = newFaultCounter(groupHub, h.logger, newStopSignal())
 
 	return h
 }
 
 func (h *Hub) Run(ctx context.Context) {
 	for !h.runOnce(ctx) {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || h.faults.signal.stopped() {
 			h.closeAll()
 
 			return
@@ -93,6 +91,7 @@ func (h *Hub) runOnce(ctx context.Context) (done bool) {
 
 			return true
 		case snap := <-h.updates:
+			h.faults.settle()
 			h.fault(faultHub)
 
 			raw, err := json.Marshal(snap)
