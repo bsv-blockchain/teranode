@@ -116,7 +116,7 @@ Colour shows only status:
 - Red: a critical alarm is active.
 - Grey: no data. The panel shows the age of the last good sample.
 
-When a source fails, every value from that source goes grey with the age of its last good sample. This includes the FSM chip and the tip chip (Blockchain source), the best peer height (P2P source), the Kafka lag on the flow strips (Kafka source) and the Aerospike and PostgreSQL tanks.
+When a source fails, every value from that source goes grey with the age of its last good sample. This includes the FSM chip and the tip chip (Blockchain source), the best peer height (P2P source), the Kafka lag on the flow strips (Kafka source) and the Aerospike and PostgreSQL tanks. The block height chips and the drain text keep their last values during an outage.
 
 ### 4.1 The Six Stages
 
@@ -154,7 +154,7 @@ A group that has subscribed but has not committed an offset shows the full topic
 ### 4.3 Drain Time
 
 The probe adds the queued blocks and the subtree queue to get one backlog.
-The block part is the full count of waiting blocks, not only the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the best peer height and the tip.
+The block part is the count of waiting blocks, up to the persister limit of about 25. It is not limited to the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the best peer height and the tip.
 It fits a line through the backlog samples of the last 5 minutes. The drain time is the backlog divided by the drain rate.
 When the backlog grows, the dashboard shows "growing" and no time.
 
