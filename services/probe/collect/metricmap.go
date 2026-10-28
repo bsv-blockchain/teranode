@@ -22,6 +22,7 @@ const (
 	metricCacheHits          = "teranode_tx_meta_cache_hits"
 	metricCacheMisses        = "teranode_tx_meta_cache_misses"
 	metricCacheEvictions     = "teranode_tx_meta_cache_evictions"
+	metricCacheInsertions    = "teranode_tx_meta_cache_insertions"
 	metricCacheValidEntries  = "teranode_tx_meta_cache_valid_entries_count"
 	metricCacheCurrentGen    = "teranode_tx_meta_cache_current_gen_entries"
 	metricCachePreviousGen   = "teranode_tx_meta_cache_previous_gen_entries"
@@ -155,6 +156,7 @@ func applyCache(s *snapshot.Snapshot, m MetricSet, r *Rates, cfg *settings.Setti
 	}
 
 	set(&s.Cache.EvictionsPerSec, windowRate(r, metricCacheEvictions))
+	set(&s.Cache.InsertionsPerSec, windowRate(r, metricCacheInsertions))
 	bytes, bytesOK := m.Sum(metricCacheBytes)
 	if bytesOK {
 		set(&s.Cache.SizeGB, okReading(bytes/1e9))

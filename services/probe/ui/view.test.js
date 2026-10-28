@@ -296,6 +296,16 @@ test('a strip moves only while its flow carries traffic', () => {
   assert.equal(one(home, 'data-flow', s.flows[0].id).attrs['data-st'], 'n');
 });
 
+test('the cache panel shows the insertion rate and the stage view lists it', () => {
+  const home = renderHome(snap(), NOW);
+  const row = one(home, 'data-key', 'cache.insertionsPerSec');
+  assert.ok(texts(row).includes('Inserts, per s'));
+  assert.ok(texts(row).includes('1,200'));
+
+  const stage = renderStage(snap(), 'cache', null, NOW);
+  assert.ok(texts(stage).includes('Inserts, per s'));
+});
+
 test('a short reading note stays inside the readout', () => {
   const s = snap();
   s.assembly.tipLagBlocks = { v: 0, st: 'ok', note: 'Calibrating' };
@@ -590,7 +600,7 @@ test('popover shows the highest severity alarm that is not snoozed', () => {
 });
 
 const STAGE_KEYS = ['ingress', 'validator', 'cache', 'assembly', 'chain', 'stores'];
-const READING_COUNTS = { ingress: 6, validator: 5, cache: 9, assembly: 5, chain: 3, stores: 5 };
+const READING_COUNTS = { ingress: 6, validator: 5, cache: 10, assembly: 5, chain: 3, stores: 5 };
 const allAttrs = (node) => walk(node).flatMap((n) => Object.entries(n.attrs || {}));
 const dataRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-key'] && !n.attrs['data-marker']);
 const markerRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-marker']);

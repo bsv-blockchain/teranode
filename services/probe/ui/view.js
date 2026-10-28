@@ -33,6 +33,7 @@ export const UNITS = {
   'cache.hitRate': 'fraction',
   'cache.missesPerSec': 'rate',
   'cache.evictionsPerSec': 'rate',
+  'cache.insertionsPerSec': 'rate',
   'cache.fill': 'fraction',
   'cache.currentGenFrac': 'fraction',
   'cache.previousGenFrac': 'fraction',
@@ -76,6 +77,7 @@ export const LABELS = {
   'cache.hitRate': 'Hit rate',
   'cache.missesPerSec': 'Misses, per s',
   'cache.evictionsPerSec': 'Evictions, per s',
+  'cache.insertionsPerSec': 'Inserts, per s',
   'cache.fill': 'Fill',
   'cache.currentGenFrac': 'Current gen',
   'cache.previousGenFrac': 'Previous gen',
@@ -559,12 +561,13 @@ function cacheBody(s, anchors) {
   const notes = [
     ['cache.fill', fill], ['cache.sizeGB', size], ['cache.capacityGB', cap], ['cache.entriesMillions', entries],
   ].map(([k, fr]) => noteFor(k, fr)).filter(Boolean);
-  anchors['cache.fill'] = 288;
+  anchors['cache.fill'] = 340;
   return [
     stdReadout(s, 58, 'cache.hitRate', anchors),
     stdReadout(s, 110, 'cache.missesPerSec', anchors),
     stdReadout(s, 162, 'cache.evictionsPerSec', anchors),
-    tank(222, labelWithNormal('cache.fill', fill), fill.nodata ? null : finite(c.fill && c.fill.v) * 100, fill.st, [
+    stdReadout(s, 214, 'cache.insertionsPerSec', anchors),
+    tank(274, labelWithNormal('cache.fill', fill), fill.nodata ? null : finite(c.fill && c.fill.v) * 100, fill.st, [
       `${sizeText} of ${cap.text}`,
       entries.nodata ? 'Entries –' : `${entries.text} entries`,
       `Current gen ${cur.text}`,
