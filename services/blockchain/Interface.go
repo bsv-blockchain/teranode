@@ -28,6 +28,7 @@ const (
 	SubscriberBlockValidation     = "blockvalidation"
 	SubscriberSubtreeValidation   = "subtreevalidation"
 	SubscriberPruner              = "Pruner"
+	SubscriberProbe               = "probe"
 	SubscriberAssetService        = "AssetService"
 	SubscriberUTXOPersister       = "utxo-persister"
 	SubscriberFileBlockHeight     = "File BlockHeight"
