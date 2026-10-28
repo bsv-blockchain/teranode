@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sort"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 
 	aero "github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/settings"
 )
@@ -30,9 +32,14 @@ type Aerospike struct {
 	password  string
 	timeout   time.Duration
 
+	readFn func() (aerospikeReadings, error)
+
 	mu     sync.Mutex
 	client *aero.Client
 	closed bool
+
+	panicMu sync.Mutex
+	pending any
 }
 
 type aerospikeReadings struct {
@@ -65,6 +72,7 @@ func NewAerospike(u *url.URL, timeout time.Duration) (*Aerospike, error) {
 	}
 
 	a := &Aerospike{hosts: hosts, namespace: namespace, timeout: timeout}
+	a.readFn = a.read
 
 	if u.User != nil {
 		if password, ok := u.User.Password(); ok {
@@ -148,15 +156,26 @@ func (a *Aerospike) Collect(ctx context.Context) (snapshot.Patch, error) {
 	ctx, cancel := context.WithTimeout(ctx, a.timeout)
 	defer cancel()
 
+	if v := a.takePendingPanic(); v != nil {
+		panic(fmt.Sprintf("aerospike read panicked: %v", v))
+	}
+
 	type result struct {
 		readings aerospikeReadings
 		err      error
+		panicked bool
 	}
 
 	done := make(chan result, 1)
+	read := a.readFn
 
 	go func() {
-		readings, err := a.read()
+		defer guard.Recover(guard.RecorderFunc(func(_ string, v any) {
+			a.setPendingPanic(v)
+			done <- result{panicked: true}
+		}), "aerospike read")
+
+		readings, err := read()
 		done <- result{readings: readings, err: err}
 	}()
 
@@ -164,6 +183,10 @@ func (a *Aerospike) Collect(ctx context.Context) (snapshot.Patch, error) {
 	case <-ctx.Done():
 		return nil, errors.NewServiceError("aerospike info request did not finish in %s", a.timeout, ctx.Err())
 	case res := <-done:
+		if res.panicked {
+			panic(fmt.Sprintf("aerospike read panicked: %v", a.takePendingPanic()))
+		}
+
 		if res.err != nil {
 			return nil, res.err
 		}
@@ -178,6 +201,30 @@ func (a *Aerospike) Collect(ctx context.Context) (snapshot.Patch, error) {
 			st.ReadP99Sec = readings.p99
 		}, nil
 	}
+}
+
+func (a *Aerospike) setPendingPanic(v any) {
+	a.panicMu.Lock()
+	defer a.panicMu.Unlock()
+
+	a.pending = v
+}
+
+func (a *Aerospike) takePendingPanic() any {
+	a.panicMu.Lock()
+	defer a.panicMu.Unlock()
+
+	v := a.pending
+	a.pending = nil
+
+	return v
+}
+
+func (a *Aerospike) hasPendingPanic() bool {
+	a.panicMu.Lock()
+	defer a.panicMu.Unlock()
+
+	return a.pending != nil
 }
 
 func notConfiguredAerospikePatch(s *snapshot.Snapshot) {
@@ -322,21 +369,38 @@ func (a *Aerospike) read() (aerospikeReadings, error) {
 
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].GetName() < nodes[j].GetName() })
 
-	results := make([]nodeStats, len(nodes))
+	type nodeResult struct {
+		index    int
+		stats    nodeStats
+		panicked any
+	}
 
-	var wg sync.WaitGroup
+	out := make(chan nodeResult, len(nodes))
 
 	for i, node := range nodes {
-		wg.Add(1)
-
 		go func() {
-			defer wg.Done()
+			defer guard.Recover(guard.RecorderFunc(func(_ string, v any) { out <- nodeResult{index: i, panicked: v} }), "aerospike node info")
 
-			results[i] = a.nodeInfo(node)
+			out <- nodeResult{index: i, stats: a.nodeInfo(node)}
 		}()
 	}
 
-	wg.Wait()
+	results := make([]nodeStats, len(nodes))
+
+	var panicked any
+
+	for range nodes {
+		r := <-out
+		results[r.index] = r.stats
+
+		if r.panicked != nil {
+			panicked = r.panicked
+		}
+	}
+
+	if panicked != nil {
+		panic(panicked)
+	}
 
 	answered := 0
 

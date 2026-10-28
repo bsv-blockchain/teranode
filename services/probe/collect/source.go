@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
@@ -90,48 +90,68 @@ func (s *localSource) Gather(ctx context.Context) (MetricSet, error) {
 }
 
 type httpSource struct {
-	targets []string
-	timeout time.Duration
-	client  *http.Client
+	targets  []string
+	timeout  time.Duration
+	client   *http.Client
+	scrapeFn func(ctx context.Context, target string) (MetricSet, error)
 }
 
 func NewHTTPSource(targets []string, timeout time.Duration) MetricSource {
-	return &httpSource{
+	s := &httpSource{
 		targets: append([]string(nil), targets...),
 		timeout: timeout,
 		client:  &http.Client{Timeout: timeout},
 	}
+
+	s.scrapeFn = func(ctx context.Context, target string) (MetricSet, error) {
+		return s.scrape(ctx, target)
+	}
+
+	return s
 }
 
 type scrapeResult struct {
-	families map[string]*dto.MetricFamily
+	index    int
+	families MetricSet
 	err      error
+	panicked any
 }
 
 func (s *httpSource) Gather(ctx context.Context) (MetricSet, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	results := make([]scrapeResult, len(s.targets))
-
-	var wg sync.WaitGroup
+	out := make(chan scrapeResult, len(s.targets))
 
 	for i, target := range s.targets {
-		wg.Add(1)
-
 		go func(i int, target string) {
-			defer wg.Done()
+			defer guard.Recover(guard.RecorderFunc(func(_ string, v any) { out <- scrapeResult{index: i, panicked: v} }), "metrics scrape")
 
-			families, err := s.scrape(ctx, target)
+			families, err := s.scrapeFn(ctx, target)
 			if err != nil {
 				err = fmt.Errorf("scrape %s: %w", target, err)
 			}
 
-			results[i] = scrapeResult{families: families, err: err}
+			out <- scrapeResult{index: i, families: families, err: err}
 		}(i, target)
 	}
 
-	wg.Wait()
+	results := make([]scrapeResult, len(s.targets))
+
+	var panicked any
+
+	for range s.targets {
+		r := <-out
+		results[r.index] = r
+
+		if r.panicked != nil {
+			panicked = r.panicked
+		}
+	}
+
+	if panicked != nil {
+		panic(fmt.Sprintf("metrics scrape panicked: %v", panicked))
+	}
 
 	set := make(MetricSet)
 
