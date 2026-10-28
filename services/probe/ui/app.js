@@ -4,6 +4,11 @@ import {
   renderBottomBar,
   renderAlarmList,
   renderAlarmSummary,
+  renderStage,
+  normalizeHistory,
+  parseRoute,
+  STAGES,
+  HISTORY_MINUTES,
   nextBackoff,
   SNOOZE_MINUTES,
 } from './view.js';
@@ -12,13 +17,18 @@ export const TOKEN_KEY = 'probe.token';
 export const REJECTED_MESSAGE = 'The token was not accepted.';
 export const ACTION_FAILED_MESSAGE = 'The request failed. Try again.';
 const UNAUTHORIZED_CLOSE = 4401;
+export const HISTORY_POLL_MS = 10000;
 
-export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeout, location }) {
-  const state = { snapshot: null, connected: false, reconnecting: false, needLogin: true, message: '', notice: '' };
+export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeout, setInterval, clearInterval, location }) {
+  const state = { snapshot: null, connected: false, reconnecting: false, needLogin: true, message: '', notice: '', history: null };
   const listeners = [];
   let socket = null;
   let backoff = 0;
   let timer = null;
+  let wantedStage = '';
+  let historyTimer = null;
+  let historyBusy = false;
+  let historyGen = 0;
 
   const emit = () => listeners.forEach((fn) => fn(state));
   const token = () => storage.getItem(TOKEN_KEY);
@@ -36,8 +46,77 @@ export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeo
     if (s) s.close();
   }
 
+  function stopHistoryTimer() {
+    historyGen++;
+    historyBusy = false;
+    if (historyTimer !== null) {
+      clearInterval(historyTimer);
+      historyTimer = null;
+    }
+  }
+
+  async function fetchHistory() {
+    const t = token();
+    if (!t || !wantedStage || historyBusy) return;
+    const gen = historyGen;
+    const stage = wantedStage;
+    historyBusy = true;
+    let resp = null;
+    try {
+      resp = await fetch(`/api/history?stage=${stage}&minutes=${HISTORY_MINUTES}`, {
+        headers: { Authorization: `Bearer ${t}` },
+        credentials: 'omit',
+        cache: 'no-store',
+      });
+    } catch {
+      resp = null;
+    }
+    let payload;
+    if (resp && resp.ok) {
+      try {
+        payload = await resp.json();
+      } catch {
+        payload = undefined;
+      }
+    }
+    if (gen !== historyGen) return;
+    historyBusy = false;
+    if (resp && resp.status === 401) {
+      reject();
+      return;
+    }
+    const data = resp && resp.ok ? normalizeHistory(payload, stage) : null;
+    const keep = state.history && state.history.stage === stage ? state.history.data : null;
+    state.history = { stage, data: data || keep, error: !data };
+    emit();
+  }
+
+  function startHistory() {
+    if (!wantedStage || !token() || historyTimer !== null) return;
+    if (!state.history || state.history.stage !== wantedStage) state.history = { stage: wantedStage, data: null, error: false };
+    historyTimer = setInterval(fetchHistory, HISTORY_POLL_MS);
+    fetchHistory();
+  }
+
+  function openStage(stage) {
+    if (!STAGES.some((s) => s.key === stage)) return;
+    if (wantedStage === stage && historyTimer !== null) return;
+    stopHistoryTimer();
+    wantedStage = stage;
+    state.history = { stage, data: null, error: false };
+    startHistory();
+    emit();
+  }
+
+  function closeStage() {
+    wantedStage = '';
+    stopHistoryTimer();
+    state.history = null;
+  }
+
   function reject() {
     storage.removeItem(TOKEN_KEY);
+    stopHistoryTimer();
     cancelTimer();
     dropSocket();
     state.connected = false;
@@ -115,6 +194,7 @@ export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeo
     dropSocket();
     emit();
     connect();
+    startHistory();
   }
 
   async function post(path, body) {
@@ -150,6 +230,8 @@ export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeo
     state,
     start,
     login,
+    openStage,
+    closeStage,
     onChange: (fn) => listeners.push(fn),
     snooze: (id, minutes) => post('/api/snooze', { id, minutes }),
     unsnooze: (id) => post('/api/unsnooze', { id }),
@@ -232,6 +314,7 @@ function mount(doc, win) {
     banner: $('banner'),
     alarmList: $('alarm-list'),
     home: $('home'),
+    stage: $('stage-view'),
     bottom: $('bottombar'),
     sr: $('sr-alarms'),
   };
@@ -241,9 +324,12 @@ function mount(doc, win) {
     storage: win.sessionStorage,
     setTimeout: win.setTimeout.bind(win),
     clearTimeout: win.clearTimeout.bind(win),
+    setInterval: win.setInterval.bind(win),
+    clearInterval: win.clearInterval.bind(win),
     location: win.location,
   });
   let alarmsOpen = false;
+  let route = parseRoute(win.location.hash);
 
   function renderBottom() {
     patchInto(doc, ui.bottom, renderBottomBar(client.state.snapshot, Date.now()));
@@ -257,7 +343,11 @@ function mount(doc, win) {
     doc.body.classList.toggle('stale', !state.connected && !!state.snapshot);
     ui.banner.hidden = state.needLogin || !state.reconnecting;
     patchInto(doc, ui.topbar, renderTopBar(state.snapshot, { alarmsOpen }));
-    patchInto(doc, ui.home, renderHome(state.snapshot, now));
+    const onStage = route.name === 'stage';
+    ui.home.hidden = onStage;
+    ui.stage.hidden = !onStage;
+    patchInto(doc, ui.home, onStage ? null : renderHome(state.snapshot, now));
+    patchInto(doc, ui.stage, onStage ? renderStage(state.snapshot, route.stage, state.history, now, state.notice) : null);
     ui.alarmList.hidden = !alarmsOpen;
     patchInto(doc, ui.alarmList, alarmsOpen ? listWithNotice(state, now) : null);
     patchInto(doc, ui.sr, renderAlarmSummary(state.snapshot ? state.snapshot.alarms : []));
@@ -275,7 +365,20 @@ function mount(doc, win) {
     render(client.state);
   }
 
+  function applyRoute(focusTitle) {
+    route = parseRoute(win.location.hash);
+    alarmsOpen = false;
+    if (route.name === 'stage') client.openStage(route.stage);
+    else client.closeStage();
+    render(client.state);
+    if (focusTitle && route.name === 'stage') {
+      const title = doc.getElementById('stage-title');
+      if (title) title.focus();
+    }
+  }
+
   client.onChange(render);
+  win.addEventListener('hashchange', () => applyRoute(true));
 
   ui.form.addEventListener('submit', (ev) => {
     ev.preventDefault();
@@ -313,6 +416,7 @@ function mount(doc, win) {
   });
 
   win.setInterval(renderBottom, 1000);
+  if (route.name === 'stage') client.openStage(route.stage);
   client.start();
   if (client.state.needLogin) ui.input.focus();
 }
