@@ -406,21 +406,41 @@ func TestChainReadings(t *testing.T) {
 	requireOK(t, 4, s.Chain.PersisterBehind)
 }
 
-func aerospikeSet(scale float64) MetricSet {
-	sets := make([]MetricSet, 0, len(aerospikeOpCounters))
-	for i, name := range aerospikeOpCounters {
-		sets = append(sets, counterSet(name, scale*float64(i+1)))
+func aerospikeCounters(base map[string]float64, perSec map[string]float64, seconds float64) MetricSet {
+	sets := make([]MetricSet, 0, len(base))
+	for name, v := range base {
+		sets = append(sets, counterSet(name, v+perSec[name]*seconds))
 	}
 
 	return join(sets...)
 }
 
-func TestAerospikeReadingsAndStoreFlows(t *testing.T) {
-	first := join(aerospikeSet(10), histSet(metricBlockchainAddBlock, 4, 1, []float64{1}, []uint64{4}))
-	second := join(aerospikeSet(30), histSet(metricBlockchainAddBlock, 32, 2, []float64{1}, []uint64{32}))
+func TestAerospikeReadsWritesAndStoreFlows(t *testing.T) {
+	base := map[string]float64{
+		"teranode_aerospike_txmeta_get":               100,
+		"teranode_aerospike_txmeta_get_multi_n":       200,
+		"teranode_aerospike_utxo_get":                 300,
+		metricAerospikeCreate:                         10,
+		metricAerospikeSpend:                          20,
+		"teranode_aerospike_txmeta_set_mined_batch_n": 30,
+		"teranode_aerospike_utxo_reset":               40,
+		"teranode_aerospike_utxo_delete":              50,
+	}
+	perSec := map[string]float64{
+		"teranode_aerospike_txmeta_get":               10,
+		"teranode_aerospike_txmeta_get_multi_n":       20,
+		"teranode_aerospike_utxo_get":                 30,
+		metricAerospikeCreate:                         1,
+		metricAerospikeSpend:                          2,
+		"teranode_aerospike_txmeta_set_mined_batch_n": 3,
+		"teranode_aerospike_utxo_reset":               4,
+		"teranode_aerospike_utxo_delete":              5,
+	}
 
-	n := float64(len(aerospikeOpCounters))
-	wantOps := 10 * n * (n + 1) / 2
+	require.ElementsMatch(t, append(append([]string{}, aerospikeReadCounters...), aerospikeWriteCounters...), keysOf(base))
+
+	first := join(aerospikeCounters(base, perSec, 0), histSet(metricBlockchainAddBlock, 4, 1, []float64{1}, []uint64{4}))
+	second := join(aerospikeCounters(base, perSec, 2), histSet(metricBlockchainAddBlock, 32, 2, []float64{1}, []uint64{32}))
 
 	s := snapshot.NewSnapshot("node")
 	s.Stores.Aerospike.Configured = true
@@ -433,27 +453,39 @@ func TestAerospikeReadingsAndStoreFlows(t *testing.T) {
 	r.Observe(start.Add(2*time.Second), second)
 	Apply(&s, second, r, testSettings())
 
-	requireOK(t, wantOps, s.Stores.Aerospike.OpsPerSec)
+	requireOK(t, 60, s.Stores.Aerospike.ReadsPerSec)
+	requireOK(t, 15, s.Stores.Aerospike.WritesPerSec)
 	requireNoData(t, s.Stores.Aerospike.ReadP99Sec)
 	require.True(t, s.Stores.Aerospike.Configured)
 	requireOK(t, 1840, s.Stores.Aerospike.SizeGB)
 	requireOK(t, 0.71, s.Stores.Aerospike.DiskFill)
+	requireOK(t, 3, s.Flow(snapshot.FlowUTXOOps).Rate)
+	requireOK(t, 14, s.Flow(snapshot.FlowBlockWrites).Rate)
+}
 
-	spendIdx, createIdx := -1, -1
+func TestAerospikeReadsWithoutWritesLeaveWritesNoData(t *testing.T) {
+	first := join(counterSet("teranode_aerospike_utxo_get", 10))
+	second := join(counterSet("teranode_aerospike_utxo_get", 30))
 
-	for i, name := range aerospikeOpCounters {
-		switch name {
-		case metricAerospikeSpend:
-			spendIdx = i
-		case metricAerospikeCreate:
-			createIdx = i
-		}
+	s := snapshot.NewSnapshot("node")
+
+	r := NewRates()
+	start := time.Unix(1000, 0)
+	r.Observe(start, first)
+	r.Observe(start.Add(2*time.Second), second)
+	Apply(&s, second, r, testSettings())
+
+	requireOK(t, 10, s.Stores.Aerospike.ReadsPerSec)
+	requireNoData(t, s.Stores.Aerospike.WritesPerSec)
+}
+
+func keysOf(m map[string]float64) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
 
-	require.NotEqual(t, -1, spendIdx)
-	require.NotEqual(t, -1, createIdx)
-	requireOK(t, 10*float64(spendIdx+1+createIdx+1), s.Flow(snapshot.FlowUTXOOps).Rate)
-	requireOK(t, 14, s.Flow(snapshot.FlowBlockWrites).Rate)
+	return out
 }
 
 func TestMissingMetricsGiveNoData(t *testing.T) {
@@ -474,7 +506,7 @@ func TestMissingMetricsGiveNoData(t *testing.T) {
 		"assembly.paused", "assembly.tipLagBlocks", "assembly.queueHeadAgeSec", "assembly.ingestQueueFill",
 		"assembly.subtreeFill",
 		"chain.forkDepth", "chain.subscribersDropped",
-		"stores.aerospike.readP99Sec", "stores.aerospike.opsPerSec",
+		"stores.aerospike.readP99Sec", "stores.aerospike.readsPerSec", "stores.aerospike.writesPerSec",
 	} {
 		reading, found := s.Lookup(key)
 		require.True(t, found, key)

@@ -47,7 +47,7 @@ func TestSnapshotJSONContract(t *testing.T) {
 
 		return strings.Join(parts, ",")
 	}
-	store := `{"configured":%C,` + st("diskFill", "sizeGB", "readP99Sec", "opsPerSec", "commitsPerSec") + `}`
+	store := `{"configured":%C,` + st("diskFill", "sizeGB", "readP99Sec", "readsPerSec", "writesPerSec", "commitsPerSec") + `}`
 
 	golden := `{"time":"2026-10-28T10:00:00Z","node":"n1","fsm":"RUNNING","tip":10,"peerTip":11,` +
 		`"ingress":{` + st("propagationTxPerSec", "subtreeIntakePerSec", "peers", "rejectedPerSec", "subtreeQueue", "subtreeQueueOldestSec") + `},` +
@@ -138,7 +138,7 @@ func TestEachReadingVisitsEveryReading(t *testing.T) {
 	s := NewSnapshot("n")
 
 	stageReadings := 6 + 5 + 10 + 5 + 5
-	storeReadings := 2 * 5
+	storeReadings := 2 * 6
 	flowReadings := len(s.Flows)
 
 	seen := make(map[string]*Reading)
