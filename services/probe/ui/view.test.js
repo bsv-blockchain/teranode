@@ -372,6 +372,50 @@ test('top bar chips follow the snapshot', () => {
   assert.ok(texts(b3).includes('No alarms'));
 });
 
+test('drilldown path outside the stage allowlist renders as text', () => {
+  const bad = [
+    'javascript:alert(1)',
+    '#/evil',
+    '#/stage/unknown',
+    '#/stage/cache/../x',
+    'https://example.com',
+    '//evil.example',
+    '',
+    `#/stage/${'a'.repeat(5000)}`,
+    '#/stage/cache?x=1',
+    '#/stage/Cache',
+    ' #/stage/cache',
+    '#/stage/cache ',
+    '#/stage/cache\n',
+    '#/stage/',
+    '#/stage',
+  ];
+  for (const path of bad) {
+    const alarm = { ...fixture.alarms[1], drilldowns: [{ label: 'Open details', path }] };
+    for (const out of [renderAlarmList([alarm], NOW), renderAlarmPopover(alarm, NOW)]) {
+      const nodes = walk(out);
+      assert.equal(nodes.filter((n) => n.tag === 'a').length, 0, `anchor for ${JSON.stringify(path.slice(0, 40))}`);
+      assert.equal(nodes.filter((n) => n.attrs && 'href' in n.attrs).length, 0, `href for ${JSON.stringify(path.slice(0, 40))}`);
+      assert.ok(texts(out).includes('Open details'), `label kept as text for ${JSON.stringify(path.slice(0, 40))}`);
+      const markup = toMarkupString(out);
+      assert.ok(!markup.includes('href'), markup.slice(0, 200));
+    }
+  }
+});
+
+test('known stage paths render as anchors', () => {
+  for (const stage of ['ingress', 'validator', 'cache', 'assembly', 'chain', 'stores']) {
+    const path = `#/stage/${stage}`;
+    const alarm = { ...fixture.alarms[1], drilldowns: [{ label: `Open ${stage}`, path }] };
+    for (const out of [renderAlarmList([alarm], NOW), renderAlarmPopover(alarm, NOW)]) {
+      const anchors = walk(out).filter((n) => n.tag === 'a');
+      assert.equal(anchors.length, 1, stage);
+      assert.equal(anchors[0].attrs.href, path);
+      assert.equal(anchors[0].text, `Open ${stage}`);
+    }
+  }
+});
+
 test('popover shows the highest severity alarm that is not snoozed', () => {
   const s = snap();
   const home = renderHome(s, NOW);

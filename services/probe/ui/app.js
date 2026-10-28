@@ -225,8 +225,8 @@ function mount(doc, win) {
   const $ = (id) => doc.getElementById(id);
   const ui = {
     login: $('login'),
-    form: $('login-form'),
-    input: $('token'),
+    form: $('token-form'),
+    input: $('probe-access-token'),
     loginMsg: $('login-msg'),
     topbar: $('topbar'),
     banner: $('banner'),

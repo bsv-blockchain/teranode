@@ -169,6 +169,15 @@ svg.stage {
 .btn:hover { background: rgba(255, 255, 255, .09); }
 .btn:disabled { opacity: .5; cursor: default; }
 
+.link-text {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .popover {
   box-sizing: border-box;
   width: 640px;
