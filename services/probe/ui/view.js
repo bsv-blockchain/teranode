@@ -47,6 +47,7 @@ export const UNITS = {
   'chain.forkDepth': 'blocks',
   'chain.persisterBehind': 'blocks',
   'chain.subscribersDropped': 'count',
+  'chain.peerHeight': 'count',
   'stores.aerospike.diskFill': 'fraction',
   'stores.aerospike.sizeGB': 'gb',
   'stores.aerospike.readP99Sec': 'seconds',
@@ -90,6 +91,7 @@ export const LABELS = {
   'chain.blocksWaiting': 'Blocks waiting',
   'chain.persisterBehind': 'Persister behind',
   'chain.subscribersDropped': 'Subscribers dropped',
+  'chain.peerHeight': 'Best peer height',
   'stores.aerospike': 'Aerospike',
   'stores.postgres': 'Postgres',
   'stores.aerospike.readP99Sec': 'Read p99',
@@ -860,6 +862,23 @@ function chip(name, st, text, tag, extra) {
   ]);
 }
 
+function tipChipText(tip, peerTip) {
+  if (!peerTip.known) return `Tip ${group(tip)}, ${peerTip.word}`;
+  return peerTip.height > 0 ? `Tip ${group(tip)}, peer ${group(peerTip.height)}` : `Tip ${group(tip)}`;
+}
+
+function peerState(s) {
+  const reading = s.chain && typeof s.chain === 'object' ? s.chain.peerHeight : undefined;
+  if (!reading || typeof reading !== 'object') {
+    return { known: true, height: finite(s.peerTip), word: '' };
+  }
+  const fr = formatReading('chain.peerHeight', reading);
+  if (fr.nodata) return { known: false, height: 0, word: `peer ${fr.word}` };
+  const height = finite(reading.v);
+  if (height <= 0) return { known: false, height: 0, word: typeof reading.note === 'string' && reading.note ? reading.note : 'peer no data' };
+  return { known: true, height, word: '' };
+}
+
 export function renderTopBar(snapshot, opts) {
   if (!snapshot || typeof snapshot !== 'object') return h('div', { class: 'chips' }, []);
   const s = snapshot;
@@ -867,8 +886,8 @@ export function renderTopBar(snapshot, opts) {
   const nodeSt = sources.every((x) => x && x.ok) ? 'g' : 'a';
   const fsm = str(s.fsm);
   const tip = finite(s.tip);
-  const peer = finite(s.peerTip);
-  const tipText = peer > 0 ? `Tip ${group(tip)}, peer ${group(peer)}` : `Tip ${group(tip)}`;
+  const peerTip = peerState(s);
+  const peer = peerTip.height;
   const alarms = Array.isArray(s.alarms) ? s.alarms.filter((a) => a && typeof a === 'object') : [];
   const live = alarms.filter((a) => !a.snoozed);
   const alarmSt = live.some((a) => a.severity === 'crit') ? 'r' : live.length > 0 ? 'a' : 'g';
@@ -877,7 +896,7 @@ export function renderTopBar(snapshot, opts) {
   return h('div', { class: 'chips' }, [
     chip('node', nodeSt, str(s.node)),
     chip('fsm', fsm === 'CATCHINGBLOCKS' ? 'a' : fsmLetter(fsm), `FSM: ${fsm || 'unknown'}`),
-    chip('tip', peer > tip ? 'a' : 'g', tipText),
+    chip('tip', peerTip.known ? (peer > tip ? 'a' : 'g') : 'n', tipChipText(tip, peerTip)),
     chip('alarms', alarmSt, alarmText, 'button', {
       type: 'button', 'data-action': 'toggle-alarms', 'aria-controls': 'alarm-list', 'aria-expanded': open ? 'true' : 'false',
     }),
