@@ -53,13 +53,16 @@ const (
 	cacheRateWindow = 10 * time.Second
 )
 
-var aerospikeOpCounters = []string{
+var aerospikeReadCounters = []string{
 	"teranode_aerospike_txmeta_get",
 	"teranode_aerospike_txmeta_get_multi_n",
-	"teranode_aerospike_txmeta_set_mined_batch_n",
 	"teranode_aerospike_utxo_get",
+}
+
+var aerospikeWriteCounters = []string{
 	metricAerospikeCreate,
 	metricAerospikeSpend,
+	"teranode_aerospike_txmeta_set_mined_batch_n",
 	"teranode_aerospike_utxo_reset",
 	"teranode_aerospike_utxo_delete",
 }
@@ -89,7 +92,7 @@ var MetricNames = append([]string{
 	metricSubscriberPendingFull,
 	metricSubscriberSendErrors,
 	metricBlockchainAddBlock,
-}, aerospikeOpCounters...)
+}, append(append([]string{}, aerospikeReadCounters...), aerospikeWriteCounters...)...)
 
 func Apply(s *snapshot.Snapshot, m MetricSet, r *Rates, cfg *settings.Settings) {
 	applyIngress(s, m, r)
@@ -255,7 +258,8 @@ func applyChain(s *snapshot.Snapshot, m MetricSet) {
 
 func applyStores(s *snapshot.Snapshot, r *Rates) {
 	set(&s.Stores.Aerospike.ReadP99Sec, noData(noteNoData))
-	set(&s.Stores.Aerospike.OpsPerSec, sumRates(r, aerospikeOpCounters...))
+	set(&s.Stores.Aerospike.ReadsPerSec, sumRates(r, aerospikeReadCounters...))
+	set(&s.Stores.Aerospike.WritesPerSec, sumRates(r, aerospikeWriteCounters...))
 	setFlow(s, snapshot.FlowUTXOOps, sumRates(r, metricAerospikeSpend, metricAerospikeCreate))
 	setFlow(s, snapshot.FlowBlockWrites, rate(r, metricBlockchainAddBlock))
 }

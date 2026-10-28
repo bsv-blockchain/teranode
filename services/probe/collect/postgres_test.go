@@ -38,7 +38,7 @@ func TestSqliteStoreIsNotConfigured(t *testing.T) {
 	st := snap.Stores.Postgres
 	require.False(t, st.Configured)
 
-	for _, r := range []snapshot.Reading{st.DiskFill, st.SizeGB, st.ReadP99Sec, st.OpsPerSec, st.CommitsPerSec} {
+	for _, r := range []snapshot.Reading{st.DiskFill, st.SizeGB, st.ReadP99Sec, st.ReadsPerSec, st.WritesPerSec, st.CommitsPerSec} {
 		require.Equal(t, snapshot.StatusNoData, r.Status)
 	}
 }

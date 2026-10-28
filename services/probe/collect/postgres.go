@@ -43,7 +43,8 @@ type Postgres struct {
 type postgresSample struct {
 	at           time.Time
 	commits      int64
-	rowOps       int64
+	readRows     int64
+	writeRows    int64
 	execMs       float64
 	calls        int64
 	hasStatement bool
@@ -201,7 +202,8 @@ func notConfiguredPostgresPatch(s *snapshot.Snapshot) {
 	st.DiskFill = snapshot.Reading{Status: snapshot.StatusNoData}
 	st.SizeGB = snapshot.Reading{Status: snapshot.StatusNoData}
 	st.ReadP99Sec = snapshot.Reading{Status: snapshot.StatusNoData}
-	st.OpsPerSec = snapshot.Reading{Status: snapshot.StatusNoData}
+	st.ReadsPerSec = snapshot.Reading{Status: snapshot.StatusNoData}
+	st.WritesPerSec = snapshot.Reading{Status: snapshot.StatusNoData}
 	st.CommitsPerSec = snapshot.Reading{Status: snapshot.StatusNoData}
 }
 
@@ -234,12 +236,13 @@ func (p *Postgres) Collect(ctx context.Context) (snapshot.Patch, error) {
 	sizeGB := float64(sizeBytes) / postgresBytesPerGB
 
 	readings := struct {
-		size, fill, p99, ops, commits snapshot.Reading
+		size, fill, p99, reads, writes, commits snapshot.Reading
 	}{
 		size:    snapshot.Reading{Value: sizeGB, Status: snapshot.StatusOK},
 		fill:    diskFillReading(sizeGB, p.capacityGB),
 		p99:     snapshot.Reading{Status: snapshot.StatusNoData, Note: postgresNoStatements},
-		ops:     snapshot.Reading{Status: snapshot.StatusNoData},
+		reads:   snapshot.Reading{Status: snapshot.StatusNoData},
+		writes:  snapshot.Reading{Status: snapshot.StatusNoData},
 		commits: snapshot.Reading{Status: snapshot.StatusNoData},
 	}
 
@@ -254,8 +257,12 @@ func (p *Postgres) Collect(ctx context.Context) (snapshot.Patch, error) {
 			readings.commits = snapshot.Reading{Value: v, Status: snapshot.StatusOK}
 		}
 
-		if v, ok := counterRate(previous.rowOps, current.rowOps, elapsed); ok {
-			readings.ops = snapshot.Reading{Value: v, Status: snapshot.StatusOK}
+		if v, ok := counterRate(previous.readRows, current.readRows, elapsed); ok {
+			readings.reads = snapshot.Reading{Value: v, Status: snapshot.StatusOK}
+		}
+
+		if v, ok := counterRate(previous.writeRows, current.writeRows, elapsed); ok {
+			readings.writes = snapshot.Reading{Value: v, Status: snapshot.StatusOK}
 		}
 
 		if previous.hasStatement && current.hasStatement {
@@ -271,7 +278,8 @@ func (p *Postgres) Collect(ctx context.Context) (snapshot.Patch, error) {
 		st.SizeGB = readings.size
 		st.DiskFill = readings.fill
 		st.ReadP99Sec = readings.p99
-		st.OpsPerSec = readings.ops
+		st.ReadsPerSec = readings.reads
+		st.WritesPerSec = readings.writes
 		st.CommitsPerSec = readings.commits
 	}, nil
 }
@@ -326,8 +334,8 @@ func readPostgresStats(ctx context.Context, tx pgx.Tx) (int64, *postgresSample, 
 	)
 
 	err := tx.QueryRow(ctx, `SELECT pg_database_size(current_database()), d.xact_commit,
-		d.tup_returned + d.tup_fetched + d.tup_inserted + d.tup_updated + d.tup_deleted
-		FROM pg_stat_database d WHERE d.datname = current_database()`).Scan(&size, &sample.commits, &sample.rowOps)
+		d.tup_returned + d.tup_fetched, d.tup_inserted + d.tup_updated + d.tup_deleted
+		FROM pg_stat_database d WHERE d.datname = current_database()`).Scan(&size, &sample.commits, &sample.readRows, &sample.writeRows)
 	if err != nil {
 		return 0, nil, errors.NewServiceError("could not read postgres database statistics", err)
 	}

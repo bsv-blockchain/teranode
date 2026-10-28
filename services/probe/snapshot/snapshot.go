@@ -88,7 +88,8 @@ type StoreStats struct {
 	DiskFill      Reading `json:"diskFill"`
 	SizeGB        Reading `json:"sizeGB"`
 	ReadP99Sec    Reading `json:"readP99Sec"`
-	OpsPerSec     Reading `json:"opsPerSec"`
+	ReadsPerSec   Reading `json:"readsPerSec"`
+	WritesPerSec  Reading `json:"writesPerSec"`
 	CommitsPerSec Reading `json:"commitsPerSec"`
 }
 
