@@ -331,3 +331,20 @@ func TestConcurrentUseIsRaceFree(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestCheckFloorKeys(t *testing.T) {
+	known := map[string]float64{}
+	for _, r := range DefaultRules {
+		if r.FloorKey != "" {
+			known[r.FloorKey] = 1
+		}
+	}
+
+	require.Len(t, known, 8)
+	require.NoError(t, CheckFloorKeys(known))
+	require.NoError(t, CheckFloorKeys(nil))
+
+	err := CheckFloorKeys(map[string]float64{"cache.hitRate": 0.9, "zeta": 1, "alpha": 2})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "alpha, zeta")
+}

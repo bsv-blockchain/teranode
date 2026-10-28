@@ -93,7 +93,12 @@ func (s *Server) Init(_ context.Context) error {
 		return errors.NewConfigurationError("probe_httpListenAddress must not be empty")
 	}
 
-	if _, err := alarm.ParseFloors(s.settings.Probe.Floors); err != nil {
+	floors, err := alarm.ParseFloors(s.settings.Probe.Floors)
+	if err != nil {
+		return errors.NewConfigurationError("probe_floors is invalid", err)
+	}
+
+	if err := alarm.CheckFloorKeys(floors); err != nil {
 		return errors.NewConfigurationError("probe_floors is invalid", err)
 	}
 
