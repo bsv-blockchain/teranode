@@ -124,6 +124,89 @@ func TestUIServesOnlyShippedFiles(t *testing.T) {
 	require.ElementsMatch(t, []string{"index.html", "style.css", "view.js", "app.js"}, names)
 }
 
+func uiElements(t *testing.T) []xml.StartElement {
+	t.Helper()
+
+	raw, err := ui.Files.ReadFile("index.html")
+	require.NoError(t, err)
+
+	dec := xml.NewDecoder(strings.NewReader(string(raw)))
+	dec.Strict = false
+	dec.AutoClose = xml.HTMLAutoClose
+	dec.Entity = xml.HTMLEntity
+
+	var out []xml.StartElement
+
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return out
+		}
+
+		require.NoError(t, err)
+
+		if v, ok := tok.(xml.StartElement); ok {
+			out = append(out, v.Copy())
+		}
+	}
+}
+
+func attrMap(el xml.StartElement) map[string]string {
+	m := map[string]string{}
+	for _, a := range el.Attr {
+		m[strings.ToLower(a.Name.Local)] = a.Value
+	}
+
+	return m
+}
+
+func TestUITokenInputIsNotSavedByBrowsers(t *testing.T) {
+	var inputs, forms []map[string]string
+
+	for _, el := range uiElements(t) {
+		switch strings.ToLower(el.Name.Local) {
+		case "input", "textarea", "select":
+			inputs = append(inputs, attrMap(el))
+		case "form":
+			forms = append(forms, attrMap(el))
+		}
+	}
+
+	require.Len(t, inputs, 1, "the token is the only field")
+
+	in := inputs[0]
+	require.Equal(t, "password", in["type"])
+	require.Equal(t, "off", in["autocomplete"])
+	require.NotContains(t, strings.ToLower(in["autocomplete"]), "password")
+	require.Equal(t, "off", in["autocapitalize"])
+	require.Equal(t, "off", in["autocorrect"])
+	require.Equal(t, "false", in["spellcheck"])
+	require.NotEmpty(t, in["id"])
+	require.NotEmpty(t, in["name"])
+
+	for _, key := range []string{"id", "name"} {
+		v := strings.ToLower(in[key])
+		for _, bad := range []string{"user", "pass", "login"} {
+			require.NotContains(t, v, bad, "%s %q", key, in[key])
+		}
+	}
+
+	for _, f := range forms {
+		_, hasAction := f["action"]
+		require.False(t, hasAction, "form must not submit anywhere")
+		_, hasMethod := f["method"]
+		require.False(t, hasMethod, "form must not submit anywhere")
+		require.Equal(t, "off", f["autocomplete"])
+
+		for _, key := range []string{"id", "name"} {
+			v := strings.ToLower(f[key])
+			for _, bad := range []string{"user", "pass", "login"} {
+				require.NotContains(t, v, bad, "form %s %q", key, f[key])
+			}
+		}
+	}
+}
+
 func TestUIHasNoInlineScriptOrHandlers(t *testing.T) {
 	raw, err := ui.Files.ReadFile("index.html")
 	require.NoError(t, err)
