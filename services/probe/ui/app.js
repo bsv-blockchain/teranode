@@ -18,6 +18,7 @@ export const REJECTED_MESSAGE = 'The token was not accepted.';
 export const ACTION_FAILED_MESSAGE = 'The request failed. Try again.';
 const UNAUTHORIZED_CLOSE = 4401;
 export const HISTORY_POLL_MS = 10000;
+export const HISTORY_TIMEOUT_MS = 8000;
 
 export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeout, setInterval, clearInterval, location }) {
   const state = { snapshot: null, connected: false, reconnecting: false, needLogin: true, message: '', notice: '', history: null };
@@ -28,7 +29,7 @@ export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeo
   let wantedStage = '';
   let historyTimer = null;
   let historyBusy = false;
-  let historyGen = 0;
+  let historyReq = null;
 
   const emit = () => listeners.forEach((fn) => fn(state));
   const token = () => storage.getItem(TOKEN_KEY);
@@ -46,48 +47,74 @@ export function createClient({ fetch, WebSocket, storage, setTimeout, clearTimeo
     if (s) s.close();
   }
 
-  function stopHistoryTimer() {
-    historyGen++;
+  function abortHistory() {
+    const req = historyReq;
+    historyReq = null;
     historyBusy = false;
+    if (!req) return;
+    req.done = true;
+    if (req.timeout !== null) {
+      clearTimeout(req.timeout);
+      req.timeout = null;
+    }
+    req.ctrl.abort();
+  }
+
+  function stopHistoryTimer() {
+    abortHistory();
     if (historyTimer !== null) {
       clearInterval(historyTimer);
       historyTimer = null;
     }
   }
 
+  function setHistoryError(stage) {
+    const keep = state.history && state.history.stage === stage ? state.history.data : null;
+    state.history = { stage, data: keep, error: true };
+  }
+
   async function fetchHistory() {
     const t = token();
     if (!t || !wantedStage || historyBusy) return;
-    const gen = historyGen;
     const stage = wantedStage;
+    const req = { ctrl: new AbortController(), timeout: null, done: false };
+    historyReq = req;
     historyBusy = true;
+    req.timeout = setTimeout(() => {
+      if (req.done) return;
+      req.timeout = null;
+      abortHistory();
+      setHistoryError(stage);
+      emit();
+    }, HISTORY_TIMEOUT_MS);
     let resp = null;
     try {
       resp = await fetch(`/api/history?stage=${stage}&minutes=${HISTORY_MINUTES}`, {
         headers: { Authorization: `Bearer ${t}` },
         credentials: 'omit',
         cache: 'no-store',
+        signal: req.ctrl.signal,
       });
     } catch {
       resp = null;
     }
     let payload;
-    if (resp && resp.ok) {
+    if (resp && resp.ok && !req.done) {
       try {
         payload = await resp.json();
       } catch {
         payload = undefined;
       }
     }
-    if (gen !== historyGen) return;
-    historyBusy = false;
+    if (req.done) return;
+    abortHistory();
     if (resp && resp.status === 401) {
       reject();
       return;
     }
     const data = resp && resp.ok ? normalizeHistory(payload, stage) : null;
-    const keep = state.history && state.history.stage === stage ? state.history.data : null;
-    state.history = { stage, data: data || keep, error: !data };
+    if (data) state.history = { stage, data, error: false };
+    else setHistoryError(stage);
     emit();
   }
 
