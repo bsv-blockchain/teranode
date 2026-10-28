@@ -189,3 +189,22 @@ func TestQuantileResetNotOK(t *testing.T) {
 	_, ok := r.Quantile("h", 0.5)
 	require.False(t, ok)
 }
+
+func TestQuantileBucketLayoutChangeNotOK(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(100, 0)
+	r.Observe(start, histSet("h", 30, 5, []float64{0.1, 0.5, 1}, []uint64{10, 20, 30}))
+
+	newLayout := []float64{0.1, 0.25, 0.5, 1}
+	r.Observe(start.Add(time.Second), histSet("h", 130, 50, newLayout, []uint64{60, 80, 110, 130}))
+
+	got, ok := r.Quantile("h", 0.7)
+	require.False(t, ok)
+	require.Zero(t, got)
+
+	r.Observe(start.Add(2*time.Second), histSet("h", 230, 90, newLayout, []uint64{110, 140, 190, 230}))
+
+	got, ok = r.Quantile("h", 0.7)
+	require.True(t, ok)
+	require.InDelta(t, 0.375, got, 1e-9)
+}
