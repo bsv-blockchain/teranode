@@ -640,9 +640,10 @@ func (c *LaneCache) UpdateStats(s *Stats) {
 	inserts := c.inserts.Load()
 
 	written := c.written() - c.resetWritten.Load()
+	capacity := uint64(len(c.lanes)) * c.ringSize
 
 	live := inserts
-	if capacity := uint64(len(c.lanes)) * c.ringSize; written > capacity {
+	if written > capacity {
 		live = uint64(float64(inserts) * float64(capacity) / float64(written))
 	}
 
@@ -675,4 +676,6 @@ func (c *LaneCache) UpdateStats(s *Stats) {
 	s.TotalMapSize += live
 	s.TotalElementsAdded += inserts
 	s.LaneWaits += c.laneWaits.Load()
+	s.Bytes += min(written, capacity)
+	s.CapacityBytes += capacity
 }
