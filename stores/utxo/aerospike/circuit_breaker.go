@@ -66,7 +66,6 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 )
 
@@ -272,73 +271,37 @@ func (cb *circuitBreaker) reset() {
 	cb.consecutiveSuccess = 0
 }
 
-// spendBreakerOutcome makes a split batch count on the spend breaker like the
-// same batch without a split. The expression path collects one success and one
-// failure over all parts, and record applies them once. The Lua path records
-// each batch record inline, in order. In a split batch it skips a record key
-// that an earlier part already counted.
+// spendBreakerOutcome coalesces repeated expression outcomes across parts until
+// an opposite outcome is recorded. An uninterrupted run of expression timeouts
+// counts once per batcher batch, but a success re-arms failure recording so a
+// later timeout cannot disappear after the breaker was reset. Outcomes are
+// recorded before Lua retries, preserving their processing order.
+// Lua records always count, even when a later part reuses the same record key.
 type spendBreakerOutcome struct {
 	success bool
 	failure bool
-
-	part    int
-	split   bool
-	luaSeen map[spendRecordID]int
 }
 
-// spendRecordID identifies a Lua batch record by value, because each part
-// builds its own key pointers.
-type spendRecordID struct {
-	digest            string
-	txID              chainhash.Hash
-	blockHeight       uint32
-	ignoreConflicting bool
-	ignoreLocked      bool
-}
+func (o *spendBreakerOutcome) recordExpressions(cb *circuitBreaker, success, failure bool) {
+	if success && !o.success {
+		o.record(cb, true)
+		o.success = true
+	}
 
-func newSpendRecordID(key keyIgnoreLocked) spendRecordID {
-	return spendRecordID{
-		digest:            string(key.key.Digest()),
-		txID:              *key.hash,
-		blockHeight:       key.blockHeight,
-		ignoreConflicting: key.ignoreConflicting,
-		ignoreLocked:      key.ignoreLocked,
+	if failure && !o.failure {
+		o.record(cb, false)
+		o.failure = true
 	}
 }
 
-// startPart begins the next part. split is false when the part is the whole
-// batch, so a batch without a split tracks nothing and counts as before.
-func (o *spendBreakerOutcome) startPart(split bool) {
-	o.part++
-	o.split = o.split || split
-}
-
-// countLuaRecord reports whether a Lua batch record counts on the breaker.
-func (o *spendBreakerOutcome) countLuaRecord(key keyIgnoreLocked) bool {
-	if !o.split {
-		return true
-	}
-
-	id := newSpendRecordID(key)
-	if part, seen := o.luaSeen[id]; seen {
-		return part == o.part
-	}
-
-	if o.luaSeen == nil {
-		o.luaSeen = make(map[spendRecordID]int)
-	}
-
-	o.luaSeen[id] = o.part
-
-	return true
-}
-
-func (o *spendBreakerOutcome) record(cb *circuitBreaker) {
-	if o.success {
+// record also re-arms the opposite expression outcome: a Lua success resets
+// the breaker, so a subsequent expression failure must count again (and vice versa).
+func (o *spendBreakerOutcome) record(cb *circuitBreaker, success bool) {
+	if success {
+		o.failure = false
 		cb.RecordSuccess()
-	}
-
-	if o.failure {
+	} else {
+		o.success = false
 		cb.RecordFailure()
 	}
 }
