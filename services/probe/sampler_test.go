@@ -1027,3 +1027,52 @@ func TestSourceFailureLoggedOncePerStateChange(t *testing.T) {
 	require.Len(t, infos, 1)
 	require.Contains(t, infos[0], "flaky")
 }
+
+func TestStaleChainFieldsCarryTheSourceAge(t *testing.T) {
+	clock := newFakeClock()
+
+	chain := newFake("chain", func(_ context.Context, call int) (snapshot.Patch, error) {
+		if call == 1 {
+			return func(s *snapshot.Snapshot) {
+				s.FSM = "RUNNING"
+				s.Tip = 1000
+			}, nil
+		}
+
+		return nil, errors.NewServiceError("blockchain unavailable")
+	})
+
+	kafka := newFake("kafka", func(_ context.Context, call int) (snapshot.Patch, error) {
+		if call == 1 {
+			return func(s *snapshot.Snapshot) {
+				lag := int64(3)
+				s.Flow(snapshot.FlowBlocks).Lag = &lag
+			}, nil
+		}
+
+		return nil, errors.NewServiceError("broker down")
+	})
+
+	s := NewSampler([]Collector{chain}, []Collector{kafka}, 20*time.Millisecond, 20*time.Millisecond, "n", WithClock(clock.Now))
+	startSampler(t, s)
+
+	waitForUpdate(t, s, 2*time.Second, func(snap snapshot.Snapshot) bool { return snap.FSM == "RUNNING" })
+
+	clock.Advance(45 * time.Second)
+
+	stale := waitForUpdate(t, s, 2*time.Second, func(snap snapshot.Snapshot) bool {
+		return snap.Time.Equal(clock.Now())
+	})
+
+	health := map[string]snapshot.SourceHealth{}
+	for _, src := range stale.Sources {
+		health[src.Name] = src
+	}
+
+	require.False(t, health["chain"].OK)
+	require.InDelta(t, 45, health["chain"].AgeSec, 0.001)
+	require.False(t, health["kafka"].OK)
+	require.InDelta(t, 45, health["kafka"].AgeSec, 0.001)
+	require.Equal(t, "RUNNING", stale.FSM)
+	require.Equal(t, uint32(1000), stale.Tip)
+}

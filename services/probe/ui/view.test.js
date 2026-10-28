@@ -72,7 +72,7 @@ test('stale reading renders no data and age', () => {
   const strip = one(home, 'data-flow', 'blocks-final');
   assert.ok(texts(strip).includes('no data'), texts(strip).join('|'));
   assert.ok(texts(strip).includes('30 s ago'), texts(strip).join('|'));
-  assert.ok(texts(strip).includes('lag 0'), texts(strip).join('|'));
+  assert.ok(texts(strip).includes('lag no data, 34 s ago'), texts(strip).join('|'));
   const path = walk(strip).find((n) => n.tag === 'path');
   assert.equal(path.attrs.stroke, '#56626f');
   assert.ok(!String(path.attrs.class || '').includes('flow'));
@@ -214,7 +214,7 @@ test('strips are placed by flow id', () => {
   }
 
   const subtrees = one(home, 'data-flow', 'subtrees');
-  assert.ok(texts(subtrees).includes('lag 1,840'), texts(subtrees).join('|'));
+  assert.ok(texts(subtrees).includes('lag no data, 34 s ago'), texts(subtrees).join('|'));
   assert.ok(texts(subtrees).includes('210/s'));
   const lookups = one(home, 'data-flow', 'lookups');
   assert.ok(texts(lookups).includes('11.1k/s'), texts(lookups).join('|'));
@@ -427,6 +427,56 @@ test('blocks waiting shows the true count and a more marker', () => {
   t = texts(renderHome(s, NOW));
   assert.ok(t.includes('Blocks waiting (4)'));
   assert.ok(t.includes('+1 more'));
+});
+
+test('a failed chain source greys the fsm and tip with their age', () => {
+  const s = snap();
+  s.fsm = 'RUNNING';
+  s.tip = 1000;
+  s.chain.peerHeight = { v: 1000, st: 'ok' };
+  s.sources = [{ name: 'metrics', ok: true }, { name: 'chain', ok: false, age: 45 }, { name: 'p2p', ok: true }];
+
+  const bar = renderTopBar(s);
+  const fsmChip = one(bar, 'data-chip', 'fsm');
+  const tipChip = one(bar, 'data-chip', 'tip');
+  assert.equal(fsmChip.attrs['data-st'], 'n');
+  assert.equal(tipChip.attrs['data-st'], 'n');
+  assert.ok(texts(bar).includes('FSM: no data, 45 s ago'));
+  assert.ok(texts(bar).includes('Tip no data, 45 s ago'));
+  assert.ok(!texts(bar).includes('FSM: RUNNING'));
+
+  const home = texts(renderHome(s, NOW));
+  assert.ok(home.includes('no data, 45 s ago'));
+  assert.ok(!home.includes('RUNNING'));
+
+  s.sources[1] = { name: 'chain', ok: true };
+  const live = renderTopBar(s);
+  assert.equal(one(live, 'data-chip', 'fsm').attrs['data-st'], 'g');
+  assert.ok(texts(live).includes('FSM: RUNNING'));
+});
+
+test('a failed kafka source greys the lag with its age', () => {
+  const s = snap();
+  s.flows = s.flows.map((f) => (f.id === 'blocks' ? { ...f, lag: 3 } : f));
+  s.sources = [{ name: 'kafka', ok: false, age: 75 }];
+  let t = texts(renderHome(s, NOW));
+  assert.ok(t.includes('lag no data, 1 min ago'), t.join('|'));
+  assert.ok(!t.includes('lag 3'));
+
+  s.sources = [{ name: 'kafka', ok: true }];
+  t = texts(renderHome(s, NOW));
+  assert.ok(t.includes('lag 3'));
+});
+
+test('a failed store source greys the tank instead of claiming not configured', () => {
+  const s = snap();
+  s.stores.postgres = { configured: false };
+  s.sources = [{ name: 'postgres', ok: false, age: 30 }];
+  const t = texts(renderHome(s, NOW));
+  assert.ok(t.includes('no data, 30 s ago'), t.join('|'));
+
+  s.sources = [];
+  assert.ok(texts(renderHome(s, NOW)).includes('not configured'));
 });
 
 test('drilldown path outside the stage allowlist renders as text', () => {

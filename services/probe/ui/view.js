@@ -479,6 +479,14 @@ function countMeterPct(v) {
   return Math.min(100, (Math.log10(v + 1) / Math.log10(COUNT_METER_FULL)) * 100);
 }
 
+function sourceOutage(s, name) {
+  const sources = s && Array.isArray(s.sources) ? s.sources : [];
+  const src = sources.find((x) => x && typeof x === 'object' && x.name === name);
+  if (!src || src.ok) return '';
+  const age = finite(src.age);
+  return age > 0 ? `no data, ${formatAge(age)}` : 'no data';
+}
+
 function fsmLetter(fsm) {
   if (fsm === 'CATCHINGBLOCKS') return 'a';
   if (fsm === 'RUNNING') return 'g';
@@ -558,8 +566,9 @@ function assemblyBody(s, anchors) {
 }
 
 function chainBody(s, anchors) {
-  const fsm = typeof s.fsm === 'string' && s.fsm ? s.fsm : '';
-  const fsmFr = { text: fsm || '–', word: fsm ? '' : 'no data', st: fsmLetter(fsm), normal: '', nodata: !fsm };
+  const outage = sourceOutage(s, 'chain');
+  const fsm = !outage && typeof s.fsm === 'string' && s.fsm ? s.fsm : '';
+  const fsmFr = { text: fsm || '–', word: fsm ? '' : outage || 'no data', st: fsmLetter(fsm), normal: '', nodata: !fsm };
   const chain = s.chain || {};
   anchors['chain.fsm'] = 77;
   return [
@@ -577,6 +586,10 @@ function storeTank(s, name, y, anchors) {
   const label = LABELS[base];
   const attrs = { 'data-key': base, 'data-store': name };
   anchors[base] = y + 62;
+  const outage = sourceOutage(s, name);
+  if (outage) {
+    return tank(y, label, null, 'n', ['', outage], [], { ...attrs, 'data-st': 'n' });
+  }
   if (store.configured === false || !store.configured) {
     return tank(y, label, null, 'n', ['', 'not configured'], [], { ...attrs, 'data-st': 'n' });
   }
@@ -635,7 +648,7 @@ function flowSpeed(v) {
   return '';
 }
 
-function strip(flow, place) {
+function strip(flow, place, kafkaOutage) {
   const x = px(place.gap) + PX + 6;
   const w = GAP - 12;
   const y = PY + 76 + place.slot * STRIP_PITCH;
@@ -653,7 +666,8 @@ function strip(flow, place) {
   const split = fr.nodata ? fr.word.split(', ') : [];
   const rateText = rate.st === 'idle' ? 'stalled' : fr.nodata ? split[0] : fr.text;
   const ageText = fr.nodata && split.length > 1 ? split.slice(1).join(', ') : '';
-  const lag = typeof flow.lag === 'number' && Number.isFinite(flow.lag) ? `lag ${group(flow.lag)}` : '';
+  const hasLag = typeof flow.lag === 'number' && Number.isFinite(flow.lag);
+  const lag = !hasLag ? '' : kafkaOutage ? `lag ${kafkaOutage}` : `lag ${group(flow.lag)}`;
   const sub = [ageText, lag].filter(Boolean);
   return h('g', { 'data-flow': flow.id, 'data-gap': place.gap, 'data-st': stalled ? 'n' : fr.st }, [
     h('text', { x: x + w / 2, y, 'text-anchor': 'middle', class: 'lb' }, typeof flow.label === 'string' ? flow.label : flow.id),
@@ -834,7 +848,7 @@ function leader(alarm, anchorsByStage) {
 function homeLabel(s) {
   const parts = STAGES.map((st) => `${st.title} ${PANEL_WORDS[panelStatus(s[st.key])]}`);
   const alarms = Array.isArray(s.alarms) ? s.alarms.length : 0;
-  return `Node ${str(s.node)}. ${parts.join(', ')}. FSM ${str(s.fsm) || 'unknown'}. ${alarms} ${alarms === 1 ? 'alarm' : 'alarms'}.`;
+  return `Node ${str(s.node)}. ${parts.join(', ')}. FSM ${sourceOutage(s, 'chain') || str(s.fsm) || 'unknown'}. ${alarms} ${alarms === 1 ? 'alarm' : 'alarms'}.`;
 }
 
 export function renderHome(snapshot, nowMs) {
@@ -851,7 +865,7 @@ export function renderHome(snapshot, nowMs) {
   });
   const strips = (Array.isArray(s.flows) ? s.flows : [])
     .filter((f) => f && flowPlacement(f.id))
-    .map((f) => strip(f, flowPlacement(f.id)));
+    .map((f) => strip(f, flowPlacement(f.id), sourceOutage(s, 'kafka')));
   const top = topAlarm(s.alarms);
   const pop = top ? h('g', { 'data-popover': str(top.id) }, [
     ...(leader(top, anchorsByStage) || []),
@@ -900,6 +914,7 @@ export function renderTopBar(snapshot, opts) {
   const s = snapshot;
   const sources = Array.isArray(s.sources) ? s.sources : [];
   const nodeSt = sources.every((x) => x && x.ok) ? 'g' : 'a';
+  const chainOutage = sourceOutage(s, 'chain');
   const fsm = str(s.fsm);
   const tip = finite(s.tip);
   const peerTip = peerState(s);
@@ -911,8 +926,8 @@ export function renderTopBar(snapshot, opts) {
   const open = !!(opts && opts.alarmsOpen);
   return h('div', { class: 'chips' }, [
     chip('node', nodeSt, str(s.node)),
-    chip('fsm', fsm === 'CATCHINGBLOCKS' ? 'a' : fsmLetter(fsm), `FSM: ${fsm || 'unknown'}`),
-    chip('tip', peerTip.known ? (peer > tip ? 'a' : 'g') : 'n', tipChipText(tip, peerTip)),
+    chainOutage ? chip('fsm', 'n', `FSM: ${chainOutage}`) : chip('fsm', fsm === 'CATCHINGBLOCKS' ? 'a' : fsmLetter(fsm), `FSM: ${fsm || 'unknown'}`),
+    chainOutage ? chip('tip', 'n', `Tip ${chainOutage}`) : chip('tip', peerTip.known ? (peer > tip ? 'a' : 'g') : 'n', tipChipText(tip, peerTip)),
     chip('alarms', alarmSt, alarmText, 'button', {
       type: 'button', 'data-action': 'toggle-alarms', 'aria-controls': 'alarm-list', 'aria-expanded': open ? 'true' : 'false',
     }),
