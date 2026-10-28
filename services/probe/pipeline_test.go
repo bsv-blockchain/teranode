@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/services/probe/collect"
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -497,4 +499,88 @@ func TestRealKafkaBuildsKafkaCollector(t *testing.T) {
 		cancel()
 		closeAll(set.closers, nil)
 	}
+}
+
+type flakyPeers struct {
+	p2p.ClientI
+
+	mu  sync.Mutex
+	err error
+}
+
+func (f *flakyPeers) fail(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.err = err
+}
+
+func (f *flakyPeers) GetPeers(context.Context) ([]*p2p.PeerInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	return []*p2p.PeerInfo{{Height: 120}}, nil
+}
+
+func TestDefaultCollectorsSplitChainAndP2P(t *testing.T) {
+	srv := New(&captureLogger{}, kafkaTestSettings("memory"), nil, &flakyPeers{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	set := srv.defaultCollectors(ctx, guard.RecorderFunc(func(string, any) {}))
+	defer closeAll(set.closers, nil)
+
+	require.Contains(t, collectorNames(set), "p2p")
+	require.NotContains(t, collectorNames(set), "chain")
+}
+
+func TestP2PFailureMarksPeerHeightNoDataAndKeepsChainLive(t *testing.T) {
+	clock := newFakeClock()
+	peers := &flakyPeers{}
+
+	chain := newFake("chain", func(context.Context, int) (snapshot.Patch, error) {
+		return func(s *snapshot.Snapshot) {
+			s.FSM = "RUNNING"
+			s.Tip = 100
+		}, nil
+	})
+
+	s := NewSampler([]Collector{chain, collect.NewPeers(peers)}, nil, 20*time.Millisecond, time.Hour, "n", WithClock(clock.Now))
+	startSampler(t, s)
+
+	live := waitForUpdate(t, s, 2*time.Second, func(snap snapshot.Snapshot) bool {
+		return snap.Chain.PeerHeight.Status == snapshot.StatusOK
+	})
+	require.Equal(t, 120.0, live.Chain.PeerHeight.Value)
+	require.Equal(t, uint32(120), live.PeerTip)
+
+	peers.fail(errors.NewServiceError("p2p unavailable"))
+	clock.Advance(30 * time.Second)
+
+	down := waitForUpdate(t, s, 2*time.Second, func(snap snapshot.Snapshot) bool {
+		return snap.Chain.PeerHeight.Status == snapshot.StatusNoData && snap.Chain.PeerHeight.AgeSec >= 30
+	})
+
+	require.Equal(t, "RUNNING", down.FSM)
+	require.Equal(t, uint32(100), down.Tip)
+
+	health := map[string]snapshot.SourceHealth{}
+	for _, src := range down.Sources {
+		health[src.Name] = src
+	}
+
+	require.True(t, health["chain"].OK)
+	require.False(t, health["p2p"].OK)
+	require.GreaterOrEqual(t, health["p2p"].AgeSec, 30.0)
+}
+
+func TestBlankMetricsTargetsUseLocalRegistry(t *testing.T) {
+	require.True(t, usesLocalMetrics(nil))
+	require.True(t, usesLocalMetrics([]string{"", " "}))
+	require.False(t, usesLocalMetrics([]string{"", "validator:9091"}))
 }

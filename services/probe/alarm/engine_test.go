@@ -753,6 +753,21 @@ func TestNeverReachableSourceRaisesAlarm(t *testing.T) {
 	require.Equal(t, []string{SourceUnreachableID + "stores"}, sourceAlarms(s))
 }
 
+func TestUnreachableP2PRaisesChainSourceAlarm(t *testing.T) {
+	r := newRig(t, nil)
+
+	var s *snapshot.Snapshot
+
+	for at := e0; !at.After(e0.Add(sec(29))); at = at.Add(tick) {
+		s = r.evalSnap(at, health(up("chain"), up("metrics"), down("p2p", 61+at.Sub(e0).Seconds())))
+	}
+
+	require.Empty(t, sourceAlarms(s))
+
+	s = r.evalSnap(e0.Add(sec(30)), health(up("chain"), up("metrics"), down("p2p", 91)))
+	require.Equal(t, []string{SourceUnreachableID + "chain"}, sourceAlarms(s))
+}
+
 func TestSourceMappedToTwoStagesAlarmsBoth(t *testing.T) {
 	t.Run("custom map", func(t *testing.T) {
 		r := newRig(t, nil, WithSourceStages(map[string][]string{"x": {"cache", "stores"}}))

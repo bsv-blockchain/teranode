@@ -192,16 +192,44 @@ func TestHTTPSourceAcceptsHostPortAndFullURL(t *testing.T) {
 	require.Equal(t, []string{"/metrics", "/metrics"}, paths)
 }
 
-func TestMetricsTargetURL(t *testing.T) {
+func TestMetricsTargetURLs(t *testing.T) {
 	cases := map[string]string{
 		"validator:9091":                   "http://validator:9091/metrics",
 		" validator:9091 ":                 "http://validator:9091/metrics",
+		"validator:9091/":                  "http://validator:9091/metrics",
+		"validator:9091/prom":              "http://validator:9091/prom",
+		"[::1]:9091":                       "http://[::1]:9091/metrics",
 		"http://validator:9091/metrics":    "http://validator:9091/metrics",
 		"https://validator:9091/metrics":   "https://validator:9091/metrics",
 		"http://validator:9091/other/path": "http://validator:9091/other/path",
 	}
 
 	for in, want := range cases {
-		require.Equal(t, want, metricsTargetURL(in), in)
+		require.Equal(t, []string{want}, MetricsTargetURLs([]string{in}), in)
 	}
+
+	require.Equal(t, []string{"http://a:1/metrics", "http://b:2/metrics"}, MetricsTargetURLs([]string{"a:1", "", "  ", "b:2"}))
+	require.Empty(t, MetricsTargetURLs([]string{"", " "}))
+	require.Empty(t, MetricsTargetURLs(nil))
+}
+
+func TestHTTPSourceIgnoresEmptyTargets(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			http.NotFound(w, r)
+			return
+		}
+
+		_, _ = w.Write([]byte("# TYPE beta gauge\nbeta 7\n"))
+	}))
+	defer srv.Close()
+
+	hostPort := strings.TrimPrefix(srv.URL, "http://")
+
+	set, err := NewHTTPSource([]string{hostPort, "", " "}, time.Second).Gather(context.Background())
+	require.NoError(t, err)
+
+	v, ok := set.Sum("beta")
+	require.True(t, ok)
+	require.Equal(t, 7.0, v)
 }

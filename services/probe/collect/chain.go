@@ -8,7 +8,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
-	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 )
@@ -21,25 +20,18 @@ const (
 )
 
 type Chain struct {
-	bc   blockchain.ClientI
-	p2pc p2p.ClientI
-	now  func() time.Time
+	bc  blockchain.ClientI
+	now func() time.Time
 
 	mu         sync.Mutex
 	haveLast   bool
 	lastAt     time.Time
 	lastWait   []uint32
 	lastBehind snapshot.Reading
-
-	peerMu   sync.Mutex
-	rec      guard.Recorder
-	peerBusy bool
-	peerOK   bool
-	peerTop  uint32
 }
 
-func NewChain(bc blockchain.ClientI, p2pc p2p.ClientI) *Chain {
-	return &Chain{bc: bc, p2pc: p2pc, now: time.Now}
+func NewChain(bc blockchain.ClientI) *Chain {
+	return &Chain{bc: bc, now: time.Now}
 }
 
 func (c *Chain) Name() string {
@@ -50,8 +42,6 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	peerTip := c.cachedPeerTip()
 
 	fsm, err := c.fsmState(ctx)
 	if err != nil {
@@ -71,7 +61,6 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 	return func(s *snapshot.Snapshot) {
 		s.FSM = fsm
 		s.Tip = tip
-		s.PeerTip = peerTip
 		s.Chain.BlocksWaiting = waiting
 		s.Chain.PersisterBehind = behind
 	}, nil
@@ -110,53 +99,7 @@ func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, error)
 	return append([]uint32{}, c.lastWait...), behind, nil
 }
 
-func (c *Chain) cachedPeerTip() uint32 {
-	c.peerMu.Lock()
-	defer c.peerMu.Unlock()
-
-	if !c.peerBusy {
-		c.peerBusy = true
-
-		rec := c.rec
-
-		go func() {
-			defer guard.Recover(rec, "chain peer tip")
-
-			c.refreshPeerTip()
-		}()
-	}
-
-	if !c.peerOK {
-		return 0
-	}
-
-	return c.peerTop
-}
-
-func (c *Chain) refreshPeerTip() {
-	defer c.peerDone()
-
-	tip, err := c.peerTip(context.Background())
-
-	c.peerMu.Lock()
-	defer c.peerMu.Unlock()
-
-	c.peerOK = err == nil
-	c.peerTop = tip
-}
-
-func (c *Chain) peerDone() {
-	c.peerMu.Lock()
-	defer c.peerMu.Unlock()
-
-	c.peerBusy = false
-}
-
 func (c *Chain) Events(ctx context.Context, rec guard.Recorder) <-chan struct{} {
-	c.peerMu.Lock()
-	c.rec = rec
-	c.peerMu.Unlock()
-
 	out := make(chan struct{}, 1)
 
 	notifications, err := c.bc.Subscribe(ctx, blockchain.SubscriberProbe)
@@ -221,34 +164,6 @@ func (c *Chain) tipHeight(ctx context.Context) (uint32, error) {
 	}
 
 	return meta.Height, nil
-}
-
-func (c *Chain) peerTip(ctx context.Context) (uint32, error) {
-	ctx, cancel := context.WithTimeout(ctx, chainCallTimeout)
-	defer cancel()
-
-	peers, err := c.p2pc.GetPeers(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	var tip uint32
-
-	for _, p := range peers {
-		if p == nil {
-			continue
-		}
-
-		if h := p.DisplayHeight(); h > tip {
-			tip = h
-		}
-
-		if p.Height > tip {
-			tip = p.Height
-		}
-	}
-
-	return tip, nil
 }
 
 func (c *Chain) notPersisted(ctx context.Context) ([]*model.Block, error) {

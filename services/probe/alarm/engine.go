@@ -48,6 +48,7 @@ func WithNow(now func() time.Time) EngineOption {
 var SourceStages = map[string][]string{
 	"metrics":   {"ingress", "validator", "cache", "assembly"},
 	"chain":     {"chain"},
+	"p2p":       {"chain"},
 	"kafka":     {"ingress"},
 	"aerospike": {"stores"},
 	"postgres":  {"stores"},
