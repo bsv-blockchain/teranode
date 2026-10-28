@@ -12,7 +12,7 @@ import (
 func TestHTTPSourceWorkerPanicReachesCaller(t *testing.T) {
 	src := NewHTTPSource([]string{"a:1", "b:2"}, time.Second).(*httpSource)
 	src.scrapeFn = func(_ context.Context, target string) (MetricSet, error) {
-		if target == "b:2" {
+		if target == "http://b:2/metrics" {
 			panic("scrape fault")
 		}
 
