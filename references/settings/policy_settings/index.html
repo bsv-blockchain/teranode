@@ -7537,9 +7537,9 @@
 <tr>
 <td>MaxNonStdTxValidationDuration</td>
 <td>int</td>
-<td>0 (not wired up; the getInt call is commented out in settings.go)</td>
+<td>1000</td>
 <td>maxnonstdtxvalidationduration</td>
-<td>Maximum validation time for non-standard transactions (ms)</td>
+<td>Bounds the consensus re-run of a transaction that failed a policy script limit (ms); a re-run that does not finish is reported as TxPolicy. 0 means no bound</td>
 </tr>
 <tr>
 <td>MaxTxChainValidationBudget</td>

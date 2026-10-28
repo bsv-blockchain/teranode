@@ -7890,7 +7890,7 @@
 <li><code>kafka_blocksFinalConfig</code>: Used for sending finalized blocks from Blockchain to the Legacy P2P service (<code>netsync.SyncManager</code>). The Block Persister does <strong>not</strong> consume this topic — it polls the Blockchain service over gRPC (<code>GetBlocksNotPersisted</code>) instead</li>
 <li><code>kafka_invalidBlocksConfig</code>: Used for notifying P2P about blocks that failed validation, for peer reputation management</li>
 <li><code>kafka_invalidSubtreesConfig</code>: Used for notifying P2P about subtrees that failed validation, for peer quality tracking</li>
-<li><code>kafka_txPolicyRejectedConfig</code>: Used for sending consensus-valid but policy-rejected transactions from Validator to Subtree Validation</li>
+<li><code>kafka_txPolicyRejectedConfig</code>: Used for sending policy-rejected transactions (usually, but not always, consensus-valid) from Validator to Subtree Validation</li>
 <li><code>kafka_legacyInvConfig</code>: Used by the Legacy Sync Manager to bridge legacy Bitcoin wire protocol inventory messages to and from Kafka</li>
 </ul>
 <p><strong>Key Features:</strong></p>

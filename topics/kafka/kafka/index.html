@@ -8081,7 +8081,7 @@
 <td><code>tx-policy-rejected</code> (<code>KAFKA_TX_POLICY_REJECTED</code> → <code>tx-policy-rejected</code>)</td>
 <td>Validator service <strong>and</strong> Subtree Validation service</td>
 <td>Subtree Validation service (<code>subtreevalidation.&lt;client&gt;.&lt;random&gt;</code>)</td>
-<td>Full raw transaction bytes for txs that are consensus-valid but fail local mining policy (e.g. zero-fee), txs the validator rejected as conflicting (<code>conflicting</code> set), and txs subtree validation kept aside from a peer subtree after context-free checks only (<code>keptAside</code> set) — cached but not "blessed", still fully validated on use</td>
+<td>Full raw transaction bytes for txs that fail local mining policy (e.g. zero-fee), usually but not always consensus-valid, txs the validator rejected as conflicting (<code>conflicting</code> set), and txs subtree validation kept aside from a peer subtree after context-free checks only (<code>keptAside</code> set) — cached but not "blessed", still fully validated on use</td>
 <td>Not set by default (<code>kafka_txPolicyRejectedConfig</code> has no default URL, so the topic is disabled unless explicitly configured); recommended 10-30 min when enabled</td>
 </tr>
 <tr>
@@ -8167,7 +8167,7 @@
 </ul>
 <h4 id="policy-rejected-transactions">Policy-Rejected Transactions<a class="headerlink" href="#policy-rejected-transactions" title="Permanent link">&para;</a></h4>
 <ul>
-<li><strong>kafka_tx_policy_rejected</strong> (<code>KAFKA_TX_POLICY_REJECTED</code> in settings, topic <code>tx-policy-rejected</code>): Distributes raw bytes for transactions that are consensus-valid but rejected by local mining policy (e.g. zero-fee), rejected as conflicting, or kept aside from a peer subtree<ul>
+<li><strong>kafka_tx_policy_rejected</strong> (<code>KAFKA_TX_POLICY_REJECTED</code> in settings, topic <code>tx-policy-rejected</code>): Distributes raw bytes for transactions rejected by local mining policy (e.g. zero-fee), usually but not always consensus-valid, rejected as conflicting, or kept aside from a peer subtree<ul>
 <li><strong>Purpose</strong>: Lets Subtree Validation resolve a missing transaction referenced by a subtree from a policy-rejected cache instead of re-fetching it from the originating peer, and keep a conflicting transaction and its descendants aside instead of writing them to the UTXO store; cached transactions still undergo full validation before use</li>
 <li><strong>Producers</strong>: Validator service (policy and conflicting rejections) and Subtree Validation service (kept-aside transactions, flagged <code>keptAside</code>; these passed context-free checks only and go to a separate cache)</li>
 <li><strong>Consumer</strong>: Subtree Validation service (consumer group <code>subtreevalidation.&lt;client&gt;.&lt;random&gt;</code>)</li>
