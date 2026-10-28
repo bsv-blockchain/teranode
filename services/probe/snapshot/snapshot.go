@@ -78,6 +78,7 @@ type ChainStage struct {
 	PersisterBehind    Reading  `json:"persisterBehind"`
 	SubscribersDropped Reading  `json:"subscribersDropped"`
 	PeerHeight         Reading  `json:"peerHeight"`
+	BlocksWaitingCount Reading  `json:"blocksWaitingCount"`
 	BlocksWaiting      []uint32 `json:"blocksWaiting"`
 }
 

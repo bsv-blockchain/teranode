@@ -48,6 +48,7 @@ export const UNITS = {
   'chain.persisterBehind': 'blocks',
   'chain.subscribersDropped': 'count',
   'chain.peerHeight': 'count',
+  'chain.blocksWaitingCount': 'count',
   'stores.aerospike.diskFill': 'fraction',
   'stores.aerospike.sizeGB': 'gb',
   'stores.aerospike.readP99Sec': 'seconds',
@@ -92,6 +93,7 @@ export const LABELS = {
   'chain.persisterBehind': 'Persister behind',
   'chain.subscribersDropped': 'Subscribers dropped',
   'chain.peerHeight': 'Best peer height',
+  'chain.blocksWaitingCount': 'Blocks waiting, count',
   'stores.aerospike': 'Aerospike',
   'stores.postgres': 'Postgres',
   'stores.aerospike.readP99Sec': 'Read p99',
@@ -415,10 +417,20 @@ function tank(y, label, pct, st, lines, notes, attrs) {
   ]);
 }
 
-function chips(y, label, heights, st) {
+function waitingTotal(count, listed) {
+  if (!count || typeof count !== 'object' || count.st === 'nodata' || typeof count.st !== 'string') {
+    return { total: listed, text: group(listed) };
+  }
+  const total = Math.max(finite(count.v), listed);
+  const note = typeof count.note === 'string' && count.note ? count.note : '';
+  return { total, text: note || group(total) };
+}
+
+function chips(y, label, heights, st, count) {
   const sorted = [...heights].filter((x) => typeof x === 'number').sort((a, b) => a - b);
   const shown = sorted.slice(0, 3).reverse();
-  const kids = [h('text', { x: 12, y, class: 'lb' }, `${label} (${group(sorted.length)})`)];
+  const waiting = waitingTotal(count, sorted.length);
+  const kids = [h('text', { x: 12, y, class: 'lb' }, `${label} (${waiting.text})`)];
   if (shown.length === 0) {
     kids.push(h('text', { x: 12, y: y + 21, class: 'tx' }, 'None'));
   }
@@ -433,6 +445,10 @@ function chips(y, label, heights, st) {
     }));
     kids.push(h('text', { x: x + 23, y: y + 21, 'text-anchor': 'middle', class: 'val', 'font-size': 9.5 }, group(height)));
   });
+  const more = waiting.total - shown.length;
+  if (shown.length > 0 && more > 0) {
+    kids.push(h('text', { x: 12 + shown.length * 49, y: y + 21, class: 'tx' }, `+${group(more)} more`));
+  }
   return h('g', { 'data-key': 'chain.blocksWaiting' }, kids);
 }
 
@@ -549,7 +565,7 @@ function chainBody(s, anchors) {
   return [
     readout(58, LABELS['chain.fsm'], fsmFr, 'chain.fsm'),
     stdReadout(s, 110, 'chain.forkDepth', anchors),
-    chips(162, LABELS['chain.blocksWaiting'], Array.isArray(chain.blocksWaiting) ? chain.blocksWaiting : [], fsmLetter(fsm) === 'g' ? 'g' : 'a'),
+    chips(162, LABELS['chain.blocksWaiting'], Array.isArray(chain.blocksWaiting) ? chain.blocksWaiting : [], fsmLetter(fsm) === 'g' ? 'g' : 'a', chain.blocksWaitingCount),
     stdReadout(s, 214, 'chain.persisterBehind', anchors),
     stdReadout(s, 266, 'chain.subscribersDropped', anchors),
   ];

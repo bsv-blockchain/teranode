@@ -27,6 +27,7 @@ type Chain struct {
 	haveLast   bool
 	lastAt     time.Time
 	lastWait   []uint32
+	lastCount  snapshot.Reading
 	lastBehind snapshot.Reading
 }
 
@@ -53,7 +54,7 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 		return nil, err
 	}
 
-	waiting, behind, err := c.backlog(ctx)
+	waiting, count, behind, err := c.backlog(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -62,27 +63,28 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 		s.FSM = fsm
 		s.Tip = tip
 		s.Chain.BlocksWaiting = waiting
+		s.Chain.BlocksWaitingCount = count
 		s.Chain.PersisterBehind = behind
 	}, nil
 }
 
-func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, error) {
+func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, snapshot.Reading, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	now := c.now()
 	if c.haveLast && now.Sub(c.lastAt) < chainBacklogEvery {
-		return append([]uint32{}, c.lastWait...), c.lastBehind, nil
+		return append([]uint32{}, c.lastWait...), c.lastCount, c.lastBehind, nil
 	}
 
 	notPersisted, err := c.notPersisted(ctx)
 	if err != nil {
-		return nil, snapshot.Reading{}, err
+		return nil, snapshot.Reading{}, snapshot.Reading{}, err
 	}
 
 	minedNotSet, err := c.minedNotSet(ctx)
 	if err != nil {
-		return nil, snapshot.Reading{}, err
+		return nil, snapshot.Reading{}, snapshot.Reading{}, err
 	}
 
 	behind := snapshot.Reading{Value: float64(len(notPersisted)), Status: snapshot.StatusOK}
@@ -91,12 +93,18 @@ func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, error)
 		behind.Note = "25 or more"
 	}
 
+	count := snapshot.Reading{Value: float64(countHeights(notPersisted, minedNotSet)), Status: snapshot.StatusOK}
+	if len(notPersisted) >= chainPersisterLimit {
+		count.Note = behind.Note
+	}
+
 	c.haveLast = true
 	c.lastAt = now
 	c.lastWait = waitingHeights(notPersisted, minedNotSet)
+	c.lastCount = count
 	c.lastBehind = behind
 
-	return append([]uint32{}, c.lastWait...), behind, nil
+	return append([]uint32{}, c.lastWait...), count, behind, nil
 }
 
 func (c *Chain) Events(ctx context.Context, rec guard.Recorder) <-chan struct{} {
@@ -206,4 +214,18 @@ func waitingHeights(groups ...[]*model.Block) []uint32 {
 	}
 
 	return heights
+}
+
+func countHeights(groups ...[]*model.Block) int {
+	seen := make(map[uint32]struct{})
+
+	for _, blocks := range groups {
+		for _, b := range blocks {
+			if b != nil {
+				seen[b.Height] = struct{}{}
+			}
+		}
+	}
+
+	return len(seen)
 }

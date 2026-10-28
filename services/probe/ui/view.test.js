@@ -403,6 +403,32 @@ test('tip chip follows the p2p peer height reading', () => {
   assert.equal(one(bar, 'data-chip', 'tip').attrs['data-st'], 'n');
 });
 
+test('blocks waiting shows the true count and a more marker', () => {
+  const s = snap();
+  s.chain.blocksWaiting = Array.from({ length: 20 }, (_, i) => 1000 + i);
+  s.chain.blocksWaitingCount = { v: 500, st: 'ok' };
+  let t = texts(renderHome(s, NOW));
+  assert.ok(t.includes('Blocks waiting (500)'));
+  assert.ok(t.includes('+497 more'));
+
+  s.chain.blocksWaitingCount = { v: 25, st: 'ok', note: '25 or more' };
+  t = texts(renderHome(s, NOW));
+  assert.ok(t.includes('Blocks waiting (25 or more)'));
+  assert.ok(t.includes('+22 more'));
+
+  s.chain.blocksWaiting = [7, 8];
+  s.chain.blocksWaitingCount = { v: 2, st: 'ok' };
+  t = texts(renderHome(s, NOW));
+  assert.ok(t.includes('Blocks waiting (2)'));
+  assert.ok(!t.some((x) => typeof x === 'string' && x.endsWith(' more')));
+
+  delete s.chain.blocksWaitingCount;
+  s.chain.blocksWaiting = [1, 2, 3, 4];
+  t = texts(renderHome(s, NOW));
+  assert.ok(t.includes('Blocks waiting (4)'));
+  assert.ok(t.includes('+1 more'));
+});
+
 test('drilldown path outside the stage allowlist renders as text', () => {
   const bad = [
     'javascript:alert(1)',
