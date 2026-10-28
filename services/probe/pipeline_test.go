@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -107,7 +108,7 @@ func newProbe(t *testing.T, o probeOpts) *Server {
 		fast = []Collector{newFake("metrics", okPatch(healthyPatch))}
 	}
 
-	srv.collectors = func(context.Context) collectorSet {
+	srv.collectors = func(context.Context, guard.Recorder) collectorSet {
 		return collectorSet{fast: fast, slow: slow}
 	}
 
@@ -330,7 +331,7 @@ func TestRepeatedPanicsStopProbeNotDaemon(t *testing.T) {
 		status, msg, err := srv.Health(context.Background(), liveness)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, status)
-		require.Contains(t, msg, probeStoppedMessage)
+		require.Equal(t, probeStoppedHealth, msg)
 	}
 
 	ln, err := net.Listen("tcp", addr)
@@ -367,7 +368,7 @@ func TestPipelinePanicsStopProbe(t *testing.T) {
 	status, msg, err := srv.Health(context.Background(), false)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, status)
-	require.Contains(t, msg, probeStoppedMessage)
+	require.Equal(t, probeStoppedHealth, msg)
 	require.Equal(t, 1, panicLines(logger.Lines()))
 	require.NoError(t, srv.Stop(context.Background()))
 }
@@ -408,7 +409,7 @@ func TestPipelineRecoversFromIsolatedPanics(t *testing.T) {
 	status, msg, err := srv.Health(context.Background(), false)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, status)
-	require.NotContains(t, msg, probeStoppedMessage)
+	require.NotEqual(t, probeStoppedHealth, msg)
 }
 
 func TestDefaultStatePath(t *testing.T) {

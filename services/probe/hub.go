@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/gorilla/websocket"
@@ -31,6 +32,8 @@ const (
 type Hub struct {
 	updates   <-chan snapshot.Snapshot
 	logger    ulogger.Logger
+	faults    guard.Recorder
+	fault     func(point string)
 	writeWait time.Duration
 	pingEvery time.Duration
 	slots     chan struct{}
@@ -53,24 +56,45 @@ type authMessage struct {
 }
 
 func NewHub(updates <-chan snapshot.Snapshot) *Hub {
-	return &Hub{
+	h := &Hub{
 		updates:   updates,
 		logger:    ulogger.New("probe"),
+		fault:     func(string) {},
 		writeWait: defaultWSWriteWait,
 		pingEvery: wsPingEvery,
 		slots:     make(chan struct{}, maxWSClients),
 		clients:   map[*wsClient]struct{}{},
 	}
+
+	h.faults = guard.RecorderFunc(func(component string, value any) {
+		h.logger.Errorf("[Probe] %s panicked: %s", component, oneLine(value))
+	})
+
+	return h
 }
 
 func (h *Hub) Run(ctx context.Context) {
+	for !h.runOnce(ctx) {
+		if ctx.Err() != nil {
+			h.closeAll()
+
+			return
+		}
+	}
+}
+
+func (h *Hub) runOnce(ctx context.Context) (done bool) {
+	defer guard.Recover(h.faults, "websocket hub")
+
 	for {
 		select {
 		case <-ctx.Done():
 			h.closeAll()
 
-			return
+			return true
 		case snap := <-h.updates:
+			h.fault(faultHub)
+
 			raw, err := json.Marshal(snap)
 			if err != nil {
 				h.logger.Errorf("[Probe] could not encode snapshot for websocket clients: %s", oneLine(err))
@@ -122,7 +146,14 @@ func (h *Hub) register(conn *websocket.Conn) (*wsClient, bool) {
 		c.enqueue(h.latest)
 	}
 
-	go h.writeLoop(c)
+	go func() {
+		defer guard.Recover(guard.RecorderFunc(func(component string, value any) {
+			h.remove(c)
+			h.faults.Panicked(component, value)
+		}), "websocket client writer")
+
+		h.writeLoop(c)
+	}()
 
 	return c, true
 }
@@ -169,6 +200,8 @@ func (h *Hub) writeLoop(c *wsClient) {
 		case <-c.done:
 			return
 		case raw := <-c.send:
+			h.fault(faultClientWrite)
+
 			if err := c.conn.SetWriteDeadline(time.Now().Add(h.writeWait)); err != nil {
 				h.remove(c)
 

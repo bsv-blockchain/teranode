@@ -6,12 +6,14 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/probe/alarm"
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -23,7 +25,7 @@ const (
 	shutdownTimeout     = 5 * time.Second
 	defaultNodeName     = "node"
 	probeStoppedMessage = "probe stopped after 5 consecutive panics"
-	probeStoppedHealth  = probeStoppedMessage + "; restart the probe to resume monitoring; the node is not affected"
+	probeStoppedHealth  = "probe stopped after repeated failures; the node must be restarted to resume probe monitoring; the node itself is not affected"
 )
 
 type Server struct {
@@ -32,11 +34,15 @@ type Server struct {
 	blockchainClient blockchain.ClientI
 	p2pClient        p2p.ClientI
 
-	collectors    func(ctx context.Context) collectorSet
+	collectors    func(ctx context.Context, rec guard.Recorder) collectorSet
 	now           func() time.Time
 	processHook   func(*snapshot.Snapshot)
 	wsAuthTimeout time.Duration
 	wsWriteWait   time.Duration
+	flushEvery    time.Duration
+	rename        func(oldPath, newPath string) error
+	listen        func(network, address string) (net.Listener, error)
+	hook          atomic.Pointer[func(point string)]
 
 	mu       sync.Mutex
 	listener net.Listener
@@ -52,6 +58,7 @@ type probeRun struct {
 	wg      sync.WaitGroup
 	closers []func()
 	logger  ulogger.Logger
+	faults  *faultTracker
 
 	once sync.Once
 	err  error
@@ -66,6 +73,9 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, bc blockchain.Clie
 		now:              time.Now,
 		wsAuthTimeout:    defaultWSAuthTimeout,
 		wsWriteWait:      defaultWSWriteWait,
+		flushEvery:       defaultFlushEvery,
+		rename:           os.Rename,
+		listen:           net.Listen,
 	}
 
 	s.collectors = s.defaultCollectors
@@ -149,23 +159,40 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		return errors.NewConfigurationError("probe_authToken must be set; the probe refuses to start without a token")
 	}
 
+	store, stopReason, err := s.openStore()
+	if err != nil {
+		return err
+	}
+
+	if stopReason != "" {
+		return s.selfStop(nil, stopReason)
+	}
+
+	faults := newFaultTracker(s.logger)
 	runCtx, cancel := context.WithCancel(ctx)
+	set := s.collectors(runCtx, faults)
 
-	set := s.collectors(runCtx)
-
-	pipe, err := newPipeline(s, set)
+	pipe, err := newPipeline(s, set, store, faults)
 	if err != nil {
 		cancel()
-		closeAll(set.closers)
+		closeAll(set.closers, faults)
+
+		if closeErr := store.Close(); closeErr != nil {
+			s.logger.Warnf("[Probe] could not close the state store: %s", oneLine(closeErr))
+		}
 
 		return err
 	}
 
-	ln, err := net.Listen("tcp", s.settings.Probe.HTTPListenAddress)
+	ln, err := s.listen("tcp", s.settings.Probe.HTTPListenAddress)
 	if err != nil {
 		cancel()
-		pipe.close()
-		closeAll(set.closers)
+
+		if closeErr := pipe.close(); closeErr != nil {
+			s.logger.Warnf("[Probe] could not close the state store: %s", oneLine(closeErr))
+		}
+
+		closeAll(set.closers, faults)
 
 		return errors.NewServiceError("probe failed to listen on %s", s.settings.Probe.HTTPListenAddress, err)
 	}
@@ -173,6 +200,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 	hub := NewHub(pipe.out)
 	hub.logger = s.logger
 	hub.writeWait = s.wsWriteWait
+	hub.faults = faults
+	hub.fault = s.fault
 
 	run := &probeRun{
 		pipe:    pipe,
@@ -180,6 +209,7 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		cancel:  cancel,
 		closers: set.closers,
 		logger:  s.logger,
+		faults:  faults,
 		httpSrv: &http.Server{
 			Handler:           s.newRouter(),
 			ReadHeaderTimeout: readHeaderTimeout,
@@ -200,32 +230,42 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 
 	serveErr := make(chan error, 1)
 
-	go func() { serveErr <- run.httpSrv.Serve(ln) }()
+	go func() {
+		defer guard.Recover(faults.fatal(), "http server")
+
+		serveErr <- run.httpSrv.Serve(ln)
+	}()
 
 	select {
 	case err = <-serveErr:
-		stopErr := run.stop()
-
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return errors.NewServiceError("probe http server failed", err)
+		if errors.Is(err, http.ErrServerClosed) {
+			return run.stop()
 		}
 
-		return stopErr
+		return s.selfStop(run, "probe http server failed: "+oneLine(err))
 	case <-ctx.Done():
 		return run.stop()
-	case <-pipe.failed:
-		s.mu.Lock()
-		s.stopped = probeStoppedHealth
-		s.mu.Unlock()
+	case <-faults.failed:
+		return s.selfStop(run, probeStoppedMessage)
+	}
+}
 
-		s.logger.Errorf("[Probe] %s; the probe has shut down its HTTP server and pipeline and the node keeps running", probeStoppedMessage)
+func (s *Server) selfStop(run *probeRun, reason string) error {
+	s.mu.Lock()
+	s.stopped = probeStoppedHealth
+	s.mu.Unlock()
 
-		if stopErr := run.stop(); stopErr != nil {
-			s.logger.Warnf("[Probe] cleanup after self-stop failed: %s", oneLine(stopErr))
-		}
+	s.logger.Errorf("[Probe] %s; the probe has shut down, the node keeps running, and the node must be restarted to resume probe monitoring", reason)
 
+	if run == nil {
 		return nil
 	}
+
+	if err := run.stop(); err != nil {
+		s.logger.Warnf("[Probe] cleanup after self-stop failed: %s", oneLine(err))
+	}
+
+	return nil
 }
 
 func (r *probeRun) launch(ctx context.Context, triggers []<-chan struct{}) {
@@ -236,18 +276,21 @@ func (r *probeRun) launch(ctx context.Context, triggers []<-chan struct{}) {
 	r.wg.Add(3)
 
 	go func() {
+		defer guard.Recover(r.faults.fatal(), "sampler")
 		defer r.wg.Done()
 
 		r.pipe.sampler.Run(ctx)
 	}()
 
 	go func() {
+		defer guard.Recover(r.faults.fatal(), "pipeline")
 		defer r.wg.Done()
 
 		r.pipe.run(ctx)
 	}()
 
 	go func() {
+		defer guard.Recover(r.faults.fatal(), "websocket hub")
 		defer r.wg.Done()
 
 		r.hub.Run(ctx)
@@ -271,11 +314,8 @@ func (r *probeRun) stop() error {
 
 		r.wg.Wait()
 
-		if err := r.pipe.close(); err != nil {
-			r.logger.Warnf("[Probe] could not save probe state on shutdown: %s", oneLine(err))
-		}
-
-		closeAll(r.closers)
+		r.closeState()
+		closeAll(r.closers, r.faults)
 
 		if len(errs) > 0 {
 			r.err = errors.Join(errs...)
@@ -285,9 +325,21 @@ func (r *probeRun) stop() error {
 	return r.err
 }
 
-func closeAll(closers []func()) {
+func (r *probeRun) closeState() {
+	defer guard.Recover(r.faults, "state close")
+
+	if err := r.pipe.close(); err != nil {
+		r.logger.Warnf("[Probe] could not save probe state on shutdown: %s", oneLine(err))
+	}
+}
+
+func closeAll(closers []func(), rec guard.Recorder) {
 	for _, c := range closers {
-		c()
+		func() {
+			defer guard.Recover(rec, "collector close")
+
+			c()
+		}()
 	}
 }
 

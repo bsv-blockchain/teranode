@@ -15,6 +15,8 @@ import (
 
 const writeInterval = time.Second
 
+var ErrCorruptStore = errors.New("probe store is corrupt")
+
 type storeFile struct {
 	Baseline *BaselineState       `json:"baseline,omitempty"`
 	Snoozes  map[string]time.Time `json:"snoozes,omitempty"`
@@ -68,7 +70,7 @@ func OpenStore(path string, opts ...StoreOption) (*Store, error) {
 		return nil, fmt.Errorf("probe store: read %s: %w", path, err)
 	case len(raw) > 0:
 		if err := json.Unmarshal(raw, &s.data); err != nil {
-			return nil, fmt.Errorf("probe store: %s is corrupt: %w", path, err)
+			return nil, fmt.Errorf("probe store: %s: %w: %w", path, ErrCorruptStore, err)
 		}
 	}
 
