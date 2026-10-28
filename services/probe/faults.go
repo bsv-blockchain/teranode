@@ -62,9 +62,10 @@ type faultCounter struct {
 	logger ulogger.Logger
 	signal *stopSignal
 
-	mu     sync.Mutex
-	streak int
-	dirty  bool
+	mu         sync.Mutex
+	streak     int
+	haveFailed bool
+	failedSeq  uint64
 }
 
 func newFaultCounter(group string, logger ulogger.Logger, signal *stopSignal) *faultCounter {
@@ -76,10 +77,13 @@ func (f *faultCounter) Panicked(component string, value any) {
 
 	f.mu.Lock()
 	f.streak++
-	f.dirty = true
 	streak := f.streak
 	f.mu.Unlock()
 
+	f.check(streak)
+}
+
+func (f *faultCounter) check(streak int) {
 	if streak >= maxConsecutivePanics {
 		f.signal.fail(probeStoppedMessage + " in the " + f.group)
 	}
@@ -90,18 +94,35 @@ func (f *faultCounter) reset() {
 	defer f.mu.Unlock()
 
 	f.streak = 0
-	f.dirty = false
 }
 
-func (f *faultCounter) settle() {
+func (f *faultCounter) failedAt(seq uint64, component string, value any) {
+	f.logger.Errorf("[Probe] %s panicked: %s", component, oneLine(value))
+
+	f.mu.Lock()
+
+	if f.haveFailed && seq <= f.failedSeq {
+		f.mu.Unlock()
+
+		return
+	}
+
+	f.haveFailed = true
+	f.failedSeq = seq
+	f.streak++
+	streak := f.streak
+	f.mu.Unlock()
+
+	f.check(streak)
+}
+
+func (f *faultCounter) succeededAt(seq uint64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if !f.dirty {
+	if !f.haveFailed || seq > f.failedSeq {
 		f.streak = 0
 	}
-
-	f.dirty = false
 }
 
 func (f *faultCounter) fatal() guard.Recorder {
