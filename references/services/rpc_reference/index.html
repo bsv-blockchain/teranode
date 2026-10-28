@@ -8927,7 +8927,7 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 <p><code>parameters</code> (object, optional):</p>
 </li>
 <li>
-<p><code>provideCoinbaseTx</code> (boolean, optional, default=false): If true, includes the coinbase transaction in the response</p>
+<p><code>provideCoinbaseTx</code> (boolean, optional, default=false): If true, includes the coinbase transaction in the response. This is the coinbase block assembly keeps on the candidate's job, paying the configured <code>miner_wallet_private_keys</code> addresses, and the one a solution without its own coinbase is mined with. The call fails if block assembly could not build one, for example because no miner wallet keys are configured</p>
 </li>
 <li><code>verbosity</code> (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes</li>
 </ol>
@@ -8975,11 +8975,12 @@ getpeerinfo, invalidateblock, reconsiderblock, setban, isbanned, listbanned, cle
 <div class="language-json highlight"><pre><span></span><code><span id="__span-36-1"><a id="__codelineno-36-1" name="__codelineno-36-1" href="#__codelineno-36-1"></a><span class="p">{</span>
 </span><span id="__span-36-2"><a id="__codelineno-36-2" name="__codelineno-36-2" href="#__codelineno-36-2"></a><span class="w">    </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span><span class="w">          </span><span class="c1">// Mining candidate ID</span>
 </span><span id="__span-36-3"><a id="__codelineno-36-3" name="__codelineno-36-3" href="#__codelineno-36-3"></a><span class="w">    </span><span class="nt">"nonce"</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">         </span><span class="c1">// Block nonce</span>
-</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4" href="#__codelineno-36-4"></a><span class="w">    </span><span class="nt">"coinbase"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span><span class="w">    </span><span class="c1">// Coinbase transaction</span>
+</span><span id="__span-36-4"><a id="__codelineno-36-4" name="__codelineno-36-4" href="#__codelineno-36-4"></a><span class="w">    </span><span class="nt">"coinbase"</span><span class="p">:</span><span class="w"> </span><span class="s2">"string"</span><span class="p">,</span><span class="w">    </span><span class="c1">// Coinbase transaction (optional, see below)</span>
 </span><span id="__span-36-5"><a id="__codelineno-36-5" name="__codelineno-36-5" href="#__codelineno-36-5"></a><span class="w">    </span><span class="nt">"time"</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="p">,</span><span class="w">          </span><span class="c1">// Block time</span>
 </span><span id="__span-36-6"><a id="__codelineno-36-6" name="__codelineno-36-6" href="#__codelineno-36-6"></a><span class="w">    </span><span class="nt">"version"</span><span class="p">:</span><span class="w"> </span><span class="kc">nu</span><span class="err">mber</span><span class="w">        </span><span class="c1">// Block version</span>
 </span><span id="__span-36-7"><a id="__codelineno-36-7" name="__codelineno-36-7" href="#__codelineno-36-7"></a><span class="p">}</span>
 </span></code></pre></div>
+<p>If <code>coinbase</code> is omitted, the block is mined with the coinbase block assembly kept on the candidate's job, the one <code>getminingcandidate</code> returns with <code>provideCoinbaseTx</code>, as in bitcoin-sv. The miner must then have hashed that coinbase. <code>version</code> goes into the block header only. Omitting <code>coinbase</code> fails if block assembly could not build one, for example because no miner wallet keys are configured.</p>
 <p><strong>Returns:</strong></p>
 <ul>
 <li><code>boolean</code> - True if accepted, false if rejected</li>

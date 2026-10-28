@@ -7147,7 +7147,7 @@
 <li>
 <p>Optional object containing:</p>
 <ul>
-<li><code>provideCoinbaseTx</code> (boolean, optional, default=false): If true, includes the coinbase transaction in the response</li>
+<li><code>provideCoinbaseTx</code> (boolean, optional, default=false): If true, includes the coinbase transaction in the response. This is the coinbase block assembly keeps on the candidate's job, paying the configured <code>miner_wallet_private_keys</code> addresses, and the one a solution without its own coinbase is mined with. The call fails if block assembly could not build one, for example because no miner wallet keys are configured</li>
 <li><code>verbosity</code> (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes</li>
 </ul>
 </li>
@@ -7206,7 +7206,7 @@
 <ul>
 <li><code>id</code> (string, required): Mining candidate ID</li>
 <li><code>nonce</code> (hexadecimal string, required): Nonce value found</li>
-<li><code>coinbase</code> (hexadecimal string, required): Complete coinbase transaction</li>
+<li><code>coinbase</code> (hexadecimal string, optional): Complete coinbase transaction. If omitted, the block is mined with the coinbase block assembly kept on the candidate's job, the one <code>getminingcandidate</code> returns with <code>provideCoinbaseTx</code>, as in bitcoin-sv. The miner must then have hashed that coinbase. Omitting it fails if block assembly could not build one, for example because no miner wallet keys are configured</li>
 <li><code>time</code> (numeric, required): Block time</li>
 <li><code>version</code> (numeric, optional): Block version</li>
 </ul>
