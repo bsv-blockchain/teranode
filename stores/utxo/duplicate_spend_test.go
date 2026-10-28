@@ -241,3 +241,26 @@ func TestProcessSpendBatch(t *testing.T) {
 		require.Empty(t, backend.parts)
 	})
 }
+
+func TestProcessSpendBatchWithoutSameChecks(t *testing.T) {
+	parent, hash, a, b := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}, chainhash.Hash{4}
+	first := &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&a, 0)}
+	second := &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&b, 0)}
+	var parts [][]*Spend
+	ProcessSpendBatch([]*Spend{first, second}, SpendBatchHandler[*Spend]{
+		Spend: func(s *Spend) *Spend { return s },
+		Process: func(part []*Spend) {
+			parts = append(parts, part)
+			for _, s := range part {
+				if s == second {
+					s.Err = errors.NewUtxoSpentError(parent, 0, hash, first.SpendingData)
+				}
+			}
+		},
+		Result: func(s *Spend) (error, bool) { return s.Err, true },
+		Reject: func(*Spend, error) { t.Fatal("no checks supplied: the backend must decide") },
+	})
+	require.Equal(t, [][]*Spend{{first}, {second}}, parts)
+	require.NoError(t, first.Err)
+	requireSpentBy(t, second.Err, first.SpendingData)
+}

@@ -26,7 +26,7 @@ type SpendBatchHandler[T any] struct {
 	Reject func(T, error)
 	// SameChecks reports whether the backend runs the same checks for two claims
 	// on one outpoint, apart from the spending data: the same UTXO hash, block
-	// height and ignore flags.
+	// height and ignore flags. If nil, claims are always sent to the backend.
 	SameChecks func(a, b T) bool
 }
 
@@ -59,7 +59,11 @@ type spendOwner[T any] struct {
 // The local answer reflects the stored state when its part finished. It is an
 // answer the backend could also give, because the claim was waiting the whole
 // time. The backend must still enforce ownership atomically against concurrent
-// batches.
+// batches. In particular, Aerospike does not promise an order for batch
+// operations on one key (including Lua calls with different heights or flags),
+// and PostgreSQL UPDATE ... FROM does not choose predictably between source
+// rows matching the same output. Do not rely on observed backend ordering to
+// combine competing claims into one part.
 func ProcessSpendBatch[T any](items []T, h SpendBatchHandler[T]) {
 	if len(items) == 0 {
 		return
@@ -91,7 +95,7 @@ func ProcessSpendBatch[T any](items []T, h SpendBatchHandler[T]) {
 
 	rejectedByOwner := func(item T, spend *Spend, key spendOutpointKey) bool {
 		owner, known := owners[key]
-		if !known || sameSpendingData(owner.data, spend.SpendingData) || !h.SameChecks(owner.decider, item) {
+		if !known || sameSpendingData(owner.data, spend.SpendingData) || h.SameChecks == nil || !h.SameChecks(owner.decider, item) {
 			return false
 		}
 

@@ -478,8 +478,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// data-state errors (KEY_NOT_FOUND_ERROR, FILTERED_OUT) take their own
 	// per-record branches above and are deliberately excluded from
 	// infraErrCount — issue #953.
-	outcome.success = outcome.success || okCount > 0
-	outcome.failure = outcome.failure || infraErrCount > 0
+	outcome.recordExpressions(s.spendCircuitBreaker, okCount > 0, infraErrCount > 0)
 
 	prometheusUtxoMapSpend.Add(float64(okCount))
 	if errCount > 0 {
