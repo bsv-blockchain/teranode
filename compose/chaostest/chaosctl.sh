@@ -201,18 +201,19 @@ stack_up() {
   docker image inspect "$TERANODE_IMAGE" >/dev/null 2>&1 || die "image $TERANODE_IMAGE not found; build it with 'make build' or set TERANODE_IMAGE"
 
   if [[ "$which" == a ]]; then
-    [[ ${#rest[@]} -eq 0 ]] && rest=(3)
     # The chaos-test layout (p2p network to partition, alert hub) is what
     # lets galt's scenarios run here; it needs all-in-one. --plain skips it.
-    local plain=false a
+    local plain=false count=false a
     local -a args=()
-    for a in "${rest[@]}"; do
+    for a in ${rest[@]+"${rest[@]}"}; do
       case "$a" in
         --plain) plain=true ;;
         -allinone=0|--allinone=0) plain=true; args+=("$a") ;;
+        [0-9]*) count=true; args+=("$a") ;;
         *) args+=("$a") ;;
       esac
     done
+    $count || args=(3 ${args[@]+"${args[@]}"})
     $plain || args+=(--chaostest)
     "$MULTINODE" up "${args[@]}" || die "multinode.sh up failed"
     "$MULTINODE" sim up || die "multinode.sh sim up failed"
