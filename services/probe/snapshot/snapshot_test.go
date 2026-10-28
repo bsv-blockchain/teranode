@@ -53,7 +53,7 @@ func TestSnapshotJSONContract(t *testing.T) {
 		`"ingress":{` + st("propagationTxPerSec", "subtreeIntakePerSec", "peers", "rejectedPerSec", "subtreeQueue", "subtreeQueueOldestSec") + `},` +
 		`"validator":{` + st("validatedPerSec", "latencyP99Sec", "queueFill", "spendBatchFill", "errorsPerSec") + `},` +
 		`"cache":{"hitRate":{"v":0.9,"st":"ok","normal":0.5,"note":"Warming","age":4},` +
-		st("missesPerSec", "evictionsPerSec", "fill", "currentGenFrac", "previousGenFrac", "entriesMillions", "sizeGB", "capacityGB") + `},` +
+		st("missesPerSec", "evictionsPerSec", "insertionsPerSec", "fill", "currentGenFrac", "previousGenFrac", "entriesMillions", "sizeGB", "capacityGB") + `},` +
 		`"assembly":{` + st("paused", "tipLagBlocks", "queueHeadAgeSec", "ingestQueueFill", "subtreeFill") + `},` +
 		`"chain":{` + st("forkDepth", "persisterBehind", "subscribersDropped", "peerHeight", "blocksWaitingCount") + `,"blocksWaiting":[1,2]},` +
 		`"stores":{"aerospike":` + strings.Replace(store, "%C", "true", 1) + `,"postgres":` + strings.Replace(store, "%C", "false", 1) + `},` +
@@ -137,7 +137,7 @@ func TestLookupResolvesFlowRates(t *testing.T) {
 func TestEachReadingVisitsEveryReading(t *testing.T) {
 	s := NewSnapshot("n")
 
-	stageReadings := 6 + 5 + 9 + 5 + 5
+	stageReadings := 6 + 5 + 10 + 5 + 5
 	storeReadings := 2 * 5
 	flowReadings := len(s.Flows)
 

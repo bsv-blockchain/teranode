@@ -894,7 +894,7 @@ func TestNoReadingEverHasEmptyStatus(t *testing.T) {
 				}
 			})
 
-			require.Equal(t, 49, count)
+			require.Equal(t, 50, count)
 
 			if len(fast) == 2 {
 				require.Equal(t, snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}, published.Cache.HitRate)

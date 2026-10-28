@@ -54,15 +54,16 @@ type ValidatorStage struct {
 }
 
 type CacheStage struct {
-	HitRate         Reading `json:"hitRate"`
-	MissesPerSec    Reading `json:"missesPerSec"`
-	EvictionsPerSec Reading `json:"evictionsPerSec"`
-	Fill            Reading `json:"fill"`
-	CurrentGenFrac  Reading `json:"currentGenFrac"`
-	PreviousGenFrac Reading `json:"previousGenFrac"`
-	EntriesMillions Reading `json:"entriesMillions"`
-	SizeGB          Reading `json:"sizeGB"`
-	CapacityGB      Reading `json:"capacityGB"`
+	HitRate          Reading `json:"hitRate"`
+	MissesPerSec     Reading `json:"missesPerSec"`
+	EvictionsPerSec  Reading `json:"evictionsPerSec"`
+	InsertionsPerSec Reading `json:"insertionsPerSec"`
+	Fill             Reading `json:"fill"`
+	CurrentGenFrac   Reading `json:"currentGenFrac"`
+	PreviousGenFrac  Reading `json:"previousGenFrac"`
+	EntriesMillions  Reading `json:"entriesMillions"`
+	SizeGB           Reading `json:"sizeGB"`
+	CapacityGB       Reading `json:"capacityGB"`
 }
 
 type AssemblyStage struct {

@@ -152,6 +152,7 @@ func publishedCacheSet(at time.Duration) MetricSet {
 		gaugeSet(metricCacheHits, 900*published),
 		gaugeSet(metricCacheMisses, 100*published),
 		gaugeSet(metricCacheEvictions, 50*published),
+		gaugeSet(metricCacheInsertions, 20*published),
 	)
 }
 
@@ -170,6 +171,7 @@ func TestCacheRatesStableAcrossPublishCadence(t *testing.T) {
 			require.Equal(t, snapshot.StatusNoData, s.Cache.HitRate.Status, at)
 			requireNoData(t, s.Cache.MissesPerSec)
 			requireNoData(t, s.Cache.EvictionsPerSec)
+			requireNoData(t, s.Cache.InsertionsPerSec)
 			requireNoData(t, s.Flow(snapshot.FlowLookups).Rate)
 
 			continue
@@ -178,6 +180,7 @@ func TestCacheRatesStableAcrossPublishCadence(t *testing.T) {
 		requireOK(t, 0.9, s.Cache.HitRate)
 		requireOK(t, 100, s.Cache.MissesPerSec)
 		requireOK(t, 50, s.Cache.EvictionsPerSec)
+		requireOK(t, 20, s.Cache.InsertionsPerSec)
 		requireOK(t, 1000, s.Flow(snapshot.FlowLookups).Rate)
 	}
 }
