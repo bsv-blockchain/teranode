@@ -209,7 +209,7 @@ func TestFileModeIs0600(t *testing.T) {
 
 func TestWritesAreCoalesced(t *testing.T) {
 	clk := &fakeClock{t: t0}
-	s, path := openTemp(t, WithClock(clk.now))
+	s, path := openTemp(t, WithClock(clk.now), withTimer((&fakeTimers{}).after))
 
 	count := func() int {
 		r, err := OpenStore(path)
@@ -286,5 +286,127 @@ func TestStoreConcurrentUseIsRaceFree(t *testing.T) {
 	}
 
 	wg.Wait()
+	require.NoError(t, s.Close())
+}
+
+type fakeTimers struct {
+	mu      sync.Mutex
+	delays  []time.Duration
+	funcs   []func()
+	stopped int
+}
+
+func (f *fakeTimers) after(d time.Duration, fn func()) func() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.delays = append(f.delays, d)
+	f.funcs = append(f.funcs, fn)
+
+	return func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+
+		f.stopped++
+
+		return true
+	}
+}
+
+func (f *fakeTimers) armed() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return len(f.funcs)
+}
+
+func (f *fakeTimers) fire(i int) {
+	f.mu.Lock()
+	fn := f.funcs[i]
+	f.mu.Unlock()
+
+	fn()
+}
+
+func diskCount(t *testing.T, path string) int {
+	t.Helper()
+
+	r, err := OpenStore(path)
+	require.NoError(t, err)
+
+	return len(r.AlarmsSince(time.Time{}))
+}
+
+func TestTrailingFlushPersistsWithinOneSecond(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	ft := &fakeTimers{}
+	s, path := openTemp(t, WithClock(clk.now), withTimer(ft.after))
+
+	require.NoError(t, s.AppendAlarm(alarmAt("1", t0)))
+	require.Equal(t, 1, diskCount(t, path))
+	require.Equal(t, 0, ft.armed())
+
+	clk.advance(300 * time.Millisecond)
+	require.NoError(t, s.AppendAlarm(alarmAt("2", t0.Add(time.Second))))
+	require.Equal(t, 1, ft.armed())
+	require.Equal(t, 700*time.Millisecond, ft.delays[0])
+
+	clk.advance(100 * time.Millisecond)
+	require.NoError(t, s.AppendAlarm(alarmAt("3", t0.Add(2*time.Second))))
+	require.Equal(t, 1, ft.armed())
+	require.Equal(t, 1, diskCount(t, path))
+
+	clk.advance(600 * time.Millisecond)
+	ft.fire(0)
+	require.Equal(t, 3, diskCount(t, path))
+
+	clk.advance(10 * time.Millisecond)
+	require.NoError(t, s.AppendAlarm(alarmAt("4", t0.Add(3*time.Second))))
+	require.Equal(t, 2, ft.armed())
+}
+
+func TestCloseStopsTimerAndFlushes(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	ft := &fakeTimers{}
+	s, path := openTemp(t, WithClock(clk.now), withTimer(ft.after))
+
+	require.NoError(t, s.AppendAlarm(alarmAt("1", t0)))
+	clk.advance(100 * time.Millisecond)
+	require.NoError(t, s.AppendAlarm(alarmAt("2", t0.Add(time.Second))))
+	require.Equal(t, 1, ft.armed())
+	require.Equal(t, 1, diskCount(t, path))
+
+	require.NoError(t, s.Close())
+	require.Equal(t, 1, ft.stopped)
+	require.Equal(t, 2, diskCount(t, path))
+
+	ft.fire(0)
+	require.Equal(t, 2, diskCount(t, path))
+}
+
+func TestFailedTrailingFlushStaysDirtyAndIsReported(t *testing.T) {
+	clk := &fakeClock{t: t0}
+	ft := &fakeTimers{}
+	s, path := openTemp(t, WithClock(clk.now), withTimer(ft.after))
+
+	require.NoError(t, s.AppendAlarm(alarmAt("1", t0)))
+	clk.advance(100 * time.Millisecond)
+	require.NoError(t, s.AppendAlarm(alarmAt("2", t0.Add(time.Second))))
+
+	s.beforeRename = func() error { return errors.New("disk full") }
+
+	clk.advance(900 * time.Millisecond)
+	ft.fire(0)
+	require.Equal(t, 1, diskCount(t, path))
+	require.True(t, s.dirty)
+
+	s.beforeRename = nil
+
+	err := s.Flush()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "disk full")
+	require.Equal(t, 2, diskCount(t, path))
+
+	require.NoError(t, s.Flush())
 	require.NoError(t, s.Close())
 }
