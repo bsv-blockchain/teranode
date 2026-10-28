@@ -31,24 +31,56 @@ type ctInventory struct {
 	Networks ctNetworks           `json:"networks"`
 	Nodes    []ctNode             `json:"nodes"`
 	Services map[string]ctService `json:"services"`
+	Hub      *ctHub               `json:"hub,omitempty"`
+	Alert    *ctAlert             `json:"alert,omitempty"`
 	RPCUser  string               `json:"rpcUser"`
 	RPCPass  string               `json:"rpcPass"`
 	MinerWIF string               `json:"minerWIF"`
 }
 
-// ctNetworks names the compose network for chaos-test's p2p plane. The
-// stack has a single network, so partitions must use iptables rather than a
-// network disconnect, which would also cut the node off from its stores.
+// ctNetworks names the compose networks for chaos-test's planes. Without
+// -chaostest the stack has a single network, so partitions must use iptables
+// rather than a network disconnect, which would also cut the node off from
+// its stores. With it, chaosnet carries only p2p and the datahubs, and
+// chaos-test's own network-disconnect partitions work as on its fleet.
 type ctNetworks struct {
+	Chaos         string `json:"chaosnet,omitempty"`
+	Alert         string `json:"alertnet,omitempty"`
 	ChaosName     string `json:"chaosnetName"`
-	PartitionMode string `json:"partitionMode"`
+	AlertName     string `json:"alertnetName,omitempty"`
+	PartitionMode string `json:"partitionMode,omitempty"`
+
+	// Not read by chaos-test: the addresses multinode.sh attaches the
+	// orchestrator (alertnet) and arcade (chaosnet) with.
+	OrchestratorAlertIP string `json:"orchestratorAlertIP,omitempty"`
+	ArcadeChaosIP       string `json:"arcadeChaosIP,omitempty"`
+}
+
+type ctHub struct {
+	AlertIP   string `json:"alertIP"`
+	PeerID    string `json:"peerID"`
+	AlertAddr string `json:"alertAddr"`
+	APIURL    string `json:"apiURL"`
+	HostAPI   string `json:"hostAPIURL"`
+	Container string `json:"container"`
+}
+
+type ctAlert struct {
+	Topic          string   `json:"topic"`
+	ProtocolID     string   `json:"protocolID"`
+	GenesisPubKeys []string `json:"genesisPubKeys"`
+	Bootstrap      string   `json:"bootstrap"`
 }
 
 type ctNode struct {
 	Kind               string `json:"kind"`
 	Name               string `json:"name"`
 	Index              int    `json:"index"`
+	ChaosIP            string `json:"chaosIP,omitempty"`
+	AlertIP            string `json:"alertIP,omitempty"`
 	PeerID             string `json:"peerID"`
+	AlertPeerID        string `json:"alertPeerID,omitempty"`
+	AlertAddr          string `json:"alertAddr,omitempty"`
 	P2PAddr            string `json:"p2pAddr"`
 	RPCURL             string `json:"rpcURL"`
 	AssetURL           string `json:"assetURL"`
@@ -67,7 +99,8 @@ type ctService struct {
 	Container string `json:"container,omitempty"`
 }
 
-func buildChaosTestInventory(s spec, networkName string) ctInventory {
+func buildChaosTestInventory(s spec, testID string) ctInventory {
+	networkName := "teranode-network-multinode-" + testID
 	inv := ctInventory{
 		Project:  "teranode-multinode",
 		Network:  "regtest",
@@ -77,6 +110,26 @@ func buildChaosTestInventory(s spec, networkName string) ctInventory {
 		},
 		RPCUser: "bitcoin",
 		RPCPass: "bitcoin",
+	}
+
+	if c := s.Chaos; c != nil {
+		inv.Networks = ctNetworks{
+			Chaos:               c.ChaosSubnet,
+			Alert:               c.AlertSubnet,
+			ChaosName:           "teranode-chaosnet-multinode-" + testID,
+			AlertName:           "teranode-alertnet-multinode-" + testID,
+			OrchestratorAlertIP: orchestratorAlertIP,
+			ArcadeChaosIP:       arcadeChaosIP,
+		}
+		inv.Hub = &ctHub{
+			AlertIP:   c.HubIP,
+			PeerID:    c.HubPeerID,
+			AlertAddr: c.HubAddr,
+			APIURL:    fmt.Sprintf("http://alert-system:%d", hubAPIPort),
+			HostAPI:   fmt.Sprintf("http://localhost:%d", hubAPIPort),
+			Container: "alert-system-multinode",
+		}
+		inv.Alert = &ctAlert{Topic: alertTopic, ProtocolID: alertProtocolID, GenesisPubKeys: c.genesis, Bootstrap: c.HubAddr}
 	}
 
 	for _, nd := range s.Nodes {
@@ -91,12 +144,23 @@ func buildChaosTestInventory(s spec, networkName string) ctInventory {
 			container = name + "-core-multinode"
 		}
 
+		p2pAddr := fmt.Sprintf("/dns/%s/tcp/%d/p2p/%s", p2pHost, chaosTestP2PPort, nd.PeerID)
+		var alertAddr string
+		if s.Chaos != nil {
+			p2pAddr = fmt.Sprintf("/ip4/%s/tcp/%d/p2p/%s", nd.ChaosIP, chaosTestP2PPort, nd.PeerID)
+			alertAddr = nd.AlertAddr()
+		}
+
 		inv.Nodes = append(inv.Nodes, ctNode{
 			Kind:               "teranode",
 			Name:               name,
 			Index:              nd.Index,
+			ChaosIP:            nd.ChaosIP,
+			AlertIP:            nd.AlertIP,
 			PeerID:             nd.PeerID,
-			P2PAddr:            fmt.Sprintf("/dns/%s/tcp/%d/p2p/%s", p2pHost, chaosTestP2PPort, nd.PeerID),
+			AlertPeerID:        nd.AlertPeerID,
+			AlertAddr:          alertAddr,
+			P2PAddr:            p2pAddr,
 			RPCURL:             fmt.Sprintf("http://%s:%d", rpcHost, rpcContPort),
 			AssetURL:           fmt.Sprintf("http://%s:%d/api/v1", assetHost, dashboardContPort),
 			PropagationURL:     fmt.Sprintf("http://%s:%d", propHost, chaosTestPropHTTP),
@@ -127,7 +191,7 @@ func writeChaosTestInventory(outDir string, s spec) error {
 		return err
 	}
 
-	b, err := json.MarshalIndent(buildChaosTestInventory(s, "teranode-network-multinode-"+testID), "", "  ")
+	b, err := json.MarshalIndent(buildChaosTestInventory(s, testID), "", "  ")
 	if err != nil {
 		return err
 	}

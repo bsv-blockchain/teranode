@@ -1,0 +1,67 @@
+[
+  {
+    "name": "hub",
+    "peer_id": "12D3KooWNAVm7Mohj1o5QLMgfUoqNw2nZaqgo24rizzVxLiQdDBg",
+    "private_key_hex": "394ad1d91a1ffb9ea00d9a22767e0617acaf38254fcce27d81eae50a42c93964b77471b610ab8c3c43d36525c480a289caebf7e9b1d1626845aaf97ba0814b0b"
+  },
+  {
+    "name": "teranode1",
+    "peer_id": "12D3KooWBayKyy7CXmdvPvDgCz1uqhQyqPBvAcXN5hDZzBL7tfzy",
+    "private_key_hex": "a6900e49c8997e6ab9d12d2fb29509e8f94e8a891452af6bb80cb894b861fa8a1a48ff4c3524fc3dfa76c031b8211c052073d8128a1a4cf47743a1ffa57dbcb2"
+  },
+  {
+    "name": "teranode2",
+    "peer_id": "12D3KooWSCDDMdtFZpWNQQgzh8f2rQBY7QbLBTWqhTK8JdUjee2j",
+    "private_key_hex": "3d25cf9654031639a2f4e646e5052080c738e29004170d976b42fbb3308eefc5f353a4a994a55b24e5b20991f03f96db8dfa8e8ecdf1f32182cfd15040685160"
+  },
+  {
+    "name": "teranode3",
+    "peer_id": "12D3KooWLUGrYsh5WTdtcE8g38hcGYM6Jb57D8PQKkSQkCZJhVjh",
+    "private_key_hex": "a0aef88e58e1172ab6d77aa5ff265fb237103196f1d4cba1cd491a006d9212e39e4aee8a5cb4d39b88f1272e5dfebb80f14b0498a1311cc8353fbe0fa8feb72c"
+  },
+  {
+    "name": "teranode4",
+    "peer_id": "12D3KooWGf3yJ3fp8hzGcuAWBX1Fs5kC76KXQ7hGheai4gw3fymb",
+    "private_key_hex": "7f2ab7bea1047e687a46a721faaa528e1bad4056e9acf1fd68691671764092b4659f015d14ebbc1f24de082647e56c1c47ce8cc234c3895d48865632d398f00a"
+  },
+  {
+    "name": "teranode5",
+    "peer_id": "12D3KooWQMc4rb8eTC9Qxe535dC39CG34K7TJkk6H18j81y4bqtM",
+    "private_key_hex": "a59b675e89de3c1741bdc65ce14db97b27a5004c7892dc58e023facd64640594d804564c507b59b276345006dffac40af4fd2d27c0f5acf92dc324ed5ad4d762"
+  },
+  {
+    "name": "teranode6",
+    "peer_id": "12D3KooWBQTWaPAeougRGkPWnp4yZjYY1tiPdaRXfEyn1FXGW8MM",
+    "private_key_hex": "3db76fd2cf8a7ebb67cb81b5a9c1ab652a5d2594b3867d342350bd30a24f7e511797797daf79bcec909adccd7edf1f16a10cd98d8b6da6e11a87fa86bafe9c50"
+  },
+  {
+    "name": "teranode7",
+    "peer_id": "12D3KooWCSJMDbcjscuKtEZYkrpgx4bu3cQsUvfDQYi9Fin4fqDf",
+    "private_key_hex": "ad634648e4df0f435fa3b5b2cc132b4d984fdb5c1e611c1b7d8504057104387726ebf6df5d2d52844735732289556fa2e01ef74c125940c949a62b2b130ec91e"
+  },
+  {
+    "name": "teranode8",
+    "peer_id": "12D3KooWPE18UN762ciVmNqfcPh7SfBxCfwb2BsaCFTs8Km9cg29",
+    "private_key_hex": "c848853aa569cef5143d87c42fa3d7fd3a774427ff1251dd87d6b69466f267aac7361494ca8f498095a7d81e03aac95c8da62ff4e124400b18224967d78b0436"
+  },
+  {
+    "name": "teranode9",
+    "peer_id": "12D3KooWB8KUMh18CT5919abevpDgy3qZfEZVqqqX7PF9HDPJwRM",
+    "private_key_hex": "6fbf9faef8c8ca77f4e7840977071f4ac36bea5bf2eeb1545a8473234e2d6325137517be13105b35eb4beff3ee62221c1d08dd19d8afbb93e20a1c1ad0c354a4"
+  },
+  {
+    "name": "teranode10",
+    "peer_id": "12D3KooWF1cXXhygMSq11DRJ9rEavHmeuJwvV9Lrfm4aBG9oJgZe",
+    "private_key_hex": "82fed8a7901154549e45ebdab06bf00903fc036ba9733863eb3d1dda8d247e374d2c0f00538809e878e58e0dac0c037ca611cddee97f869f534c21d987ee9029"
+  },
+  {
+    "name": "alert-svnode1",
+    "peer_id": "12D3KooWSPkkkbdvxnF5ThS5BNPHBmFodKkH4Lju7ueG73DB4Yti",
+    "private_key_hex": "c55c6ea824ce18b7becf03ff6558409d2097694eb4a26b57075a79325b971c7cf648b22bf8d9cf1479928a6d44f006cbc3cdb38d7b8c462c4aed891961a5342b"
+  },
+  {
+    "name": "alert-svnode2",
+    "peer_id": "12D3KooWBqBGnKAQexNSS1nxUK91FEc4qekqHCY59CVaiZUs1fkR",
+    "private_key_hex": "4dc69f4005e6997e85a571b39a42be1267d4d58e8039afe09610d152324dfff61deca276c91320e73518d3648b32f0f396200cdf38c8be791d519bbfb8394dae"
+  }
+]

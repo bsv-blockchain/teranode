@@ -27,7 +27,10 @@ Usage: compose/chaostest/chaosctl.sh <command> [args]
 
 Stacks (only one runs at a time):
   stack status                      Which stack is up, node tips, orchestrator, blaster
-  stack up a [multinode up args]    Stack A: multinode stack + orchestrator (default 3 nodes)
+  stack up a [multinode up args] [--plain]
+                                    Stack A: multinode stack in the chaos-test layout
+                                    (p2p network, alert hub) + orchestrator + arcade
+                                    (default 3 nodes); --plain: single-network stack
   stack up b                        Stack B: chaos-test's fleet with our image + its orchestrator
   stack down a|b                    Stop a stack (and the blaster)
   stack reset                       Wipe the active stack's chain and bring it back
@@ -199,7 +202,19 @@ stack_up() {
 
   if [[ "$which" == a ]]; then
     [[ ${#rest[@]} -eq 0 ]] && rest=(3)
-    "$MULTINODE" up "${rest[@]}" || die "multinode.sh up failed"
+    # The chaos-test layout (p2p network to partition, alert hub) is what
+    # lets galt's scenarios run here; it needs all-in-one. --plain skips it.
+    local plain=false a
+    local -a args=()
+    for a in "${rest[@]}"; do
+      case "$a" in
+        --plain) plain=true ;;
+        -allinone=0|--allinone=0) plain=true; args+=("$a") ;;
+        *) args+=("$a") ;;
+      esac
+    done
+    $plain || args+=(--chaostest)
+    "$MULTINODE" up "${args[@]}" || die "multinode.sh up failed"
     "$MULTINODE" sim up || die "multinode.sh sim up failed"
   else
     check_ct
@@ -257,11 +272,16 @@ stack_reset() {
     note "resetting chaos-test's fleet (make reset)..."
     make -C "$CT" RUNTIME=docker reset >"$STATE/reset.log" 2>&1 || die "make reset failed; see $STATE/reset.log"
   else
-    local n
-    n=$(python3 -I -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["nodes"]))' \
-      "$REPO_ROOT/compose/generated/chaostest/inventory.json" 2>/dev/null || echo 3)
-    note "resetting the multinode stack ($n nodes)..."
-    "$MULTINODE" down >/dev/null && "$MULTINODE" up "$n" >"$STATE/reset.log" 2>&1 && "$MULTINODE" sim up >>"$STATE/reset.log" 2>&1 ||
+    local n layout
+    # Same node count and layout as before the reset.
+    read -r n layout < <(python3 -I -c '
+import json, sys
+inv = json.load(open(sys.argv[1]))
+print(sum(1 for n in inv["nodes"] if n["kind"] == "teranode"), "--chaostest" if inv.get("hub") else "")
+' "$REPO_ROOT/compose/generated/chaostest/inventory.json" 2>/dev/null || echo 3)
+    note "resetting the multinode stack ($n nodes${layout:+, chaos-test layout})..."
+    # shellcheck disable=SC2086 # layout is empty or one flag
+    "$MULTINODE" down >/dev/null && "$MULTINODE" up "$n" $layout >"$STATE/reset.log" 2>&1 && "$MULTINODE" sim up >>"$STATE/reset.log" 2>&1 ||
       die "reset failed; see $STATE/reset.log"
   fi
   wait_orchestrator 120 || die "orchestrator API not answering after reset"

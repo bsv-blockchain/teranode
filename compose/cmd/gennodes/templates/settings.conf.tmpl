@@ -22,10 +22,43 @@ aerospike_port.docker.teranode{{ .Index }}                     = {{ .AerospikeSe
 utxostore.docker.teranode{{ .Index }}.test                     = aerospike://aerospike-{{ .Index }}:{{ .AerospikeServicePort }}/test?set=utxo&WarmUp=32&ConnectionQueueSize=32&LimitConnectionsToQueueSize=true&MinConnectionsPerNode=8&externalStore=file://${DATADIR}/external
 p2p_peer_id.docker.teranode{{ .Index }}                        = {{ .PeerID }}
 p2p_private_key.docker.teranode{{ .Index }}                    = {{ .PrivateKey }}
+{{- if $.Chaos }}
+# chaos-test layout (-chaostest): alerts on alertnet through the hub, with
+# chaos-test's genesis keys; p2p and the datahub advertised on chaosnet so a
+# partition (disconnect from chaosnet) cuts both.
+startAlert.docker.teranode{{ .Index }}                         = true
+alert_genesis_keys.docker.teranode{{ .Index }}                 = {{ $.Chaos.GenesisKeys }}
+alert_p2p_bootstrap_peer.docker.teranode{{ .Index }}           = {{ $.Chaos.HubAddr }}
+alert_p2p_private_key.docker.teranode{{ .Index }}              = {{ .AlertPrivateKey }}
+alert_p2p_allow_private_ips.docker.teranode{{ .Index }}        = false
+alert_p2p_peer_discovery_interval.docker.teranode{{ .Index }}  = 15s
+alert_p2p_dht_mode.docker.teranode{{ .Index }}                 = client
+p2p_advertise_addresses.docker.teranode{{ .Index }}            = /ip4/{{ .ChaosIP }}/tcp/${P2P_PORT}
+p2p_share_private_addresses.docker.teranode{{ .Index }}        = true
+asset_httpAddress.docker.teranode{{ .Index }}                  = http://{{ .ChaosIP }}:${ASSET_HTTP_PORT}${asset_apiPrefix}
+# The node's own services reach each other on localhost, as on chaos-test's
+# fleet. The docker defaults dial ${clientName}, which inside the container
+# resolves to its chaosnet address, so a partition would cut the node's
+# services apart.
+blockchain_grpcAddress.docker.teranode{{ .Index }}             = localhost:${BLOCKCHAIN_GRPC_PORT}
+blockassembly_grpcAddress.docker.teranode{{ .Index }}          = localhost:${BLOCK_ASSEMBLY_GRPC_PORT}
+blockvalidation_grpcAddress.docker.teranode{{ .Index }}        = localhost:${BLOCK_VALIDATION_GRPC_PORT}
+subtreevalidation_grpcAddress.docker.teranode{{ .Index }}      = localhost:${SUBTREE_VALIDATION_GRPC_PORT}
+validator_grpcAddress.docker.teranode{{ .Index }}              = localhost:${VALIDATOR_GRPC_PORT}
+validator_httpAddress.docker.teranode{{ .Index }}              = http://localhost:${VALIDATOR_HTTP_PORT}
+propagation_grpcAddresses.docker.teranode{{ .Index }}          = localhost:${PROPAGATION_GRPC_PORT}
+propagation_httpAddresses.docker.teranode{{ .Index }}          = http://localhost:${PROPAGATION_HTTP_PORT}
+asset_propagation_proxy_address.docker.teranode{{ .Index }}    = http://localhost:${PROPAGATION_HTTP_PORT}
+pruner_grpcAddress.docker.teranode{{ .Index }}                 = localhost:${PRUNER_GRPC_PORT}
+coinbase_grpcAddress.docker.teranode{{ .Index }}               = localhost:${COINBASE_GRPC_PORT}
+legacy_httpAddress.docker.teranode{{ .Index }}                 = http://localhost:${LEGACY_HTTP_PORT}
+{{- else }}
 # Alert is non-functional in this rig (its port is unexposed, it has no local
 # bootstrap peers, and the regtest topic has no matching genesis keys), so keep
 # it off - same as compose/settings_test.conf does for the other docker rigs.
+# -chaostest turns it on.
 startAlert.docker.teranode{{ .Index }}                         = false
+{{- end }}
 {{- /*
   Static peers must name the container that actually runs p2p. In all-in-one
   that is "teranodeN"; in split mode there is no such container (a node is
@@ -34,7 +67,9 @@ startAlert.docker.teranode{{ .Index }}                         = false
   propagate. Emit ONE value, not an override later in the file: a duplicate
   key here is won by the first occurrence.
 */}}
-{{- if $.AllInOne }}
+{{- if $.Chaos }}
+p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeersChaos }}
+{{- else if $.AllInOne }}
 p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeers }}
 {{- else }}
 p2p_static_peers.docker.teranode{{ .Index }}                   = {{ .StaticPeersSplit }}

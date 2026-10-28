@@ -34,7 +34,13 @@ Usage: compose/multinode.sh <command> [args]
 Commands:
   up <N> [--build] [-allinone=0|1] [--skip N:svc ...]
          [--limits svc=cpus[:mem],...] [--retention production|aggressive|prod-scaling]
+         [--chaostest]
                            Generate and start an N-node network (3-10).
+                           --chaostest: lay it out like chaos-test's fleet
+                             (all-in-one only): node p2p on its own network
+                             that chaos-test can partition, plus an alert
+                             network and the alert hub, so its bundled
+                             scenarios run unchanged ('sim up' next).
                            -allinone=1 (default): one container per node runs
                              all services in a single process.
                            -allinone=0: split topology - each node becomes 9
@@ -92,6 +98,9 @@ Chaos:
   chaos unpause <node> [service]  Unfreeze a paused node or service
   chaos slow <node> <ms>          Add network latency (split mode: -p2p only)
   chaos unslow <node>             Remove added latency
+  chaos seal [node]               --chaostest stacks: make chaos-test partitions
+                                  hold (re-run after a container restart that
+                                  'chaos start' or 'restart' did not do)
 
 chaos-test scenarios (github.com/galt-tr/chaos-test, checkout in ../chaos-test
 or CHAOS_TEST_DIR):
@@ -194,16 +203,72 @@ cmd_build() {
   echo "teranode:latest image built"
 }
 
+# chaostest_prepare readies what 'up --chaostest' needs from chaos-test's
+# checkout: the alert genesis public keys its orchestrator signs with (set in
+# CHAOSTEST_GENESIS, comma-separated) and the go-alert-system image its
+# bsv-regtest builds, which the alert hub runs.
+chaostest_prepare() {
+  local dir
+  dir=$(chaos_test_dir)
+  CHAOSTEST_GENESIS=$(python3 -I -c '
+import json, sys
+print(",".join(g["public_key_hex"] for g in json.load(open(sys.argv[1]))["genesis"]))
+' "$dir/bsv-regtest/config/keys.json") || {
+    echo "error: could not read alert genesis keys from $dir/bsv-regtest/config/keys.json" >&2
+    exit 1
+  }
+  local image="${ALERT_SYSTEM_IMAGE:-localhost/bsv-regtest/alert-system:v0.1.17}"
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "building $image from $dir/bsv-regtest..."
+    make -C "$dir/bsv-regtest" RUNTIME=docker build-alert-system
+  fi
+}
+
+# seal_planes [container...] makes chaos-test partitions hold on each
+# teranode container (default: all). Partitioning disconnects a container
+# from chaosnet or alertnet, but it keeps teranode-network and its default
+# route, and the docker host can forward packets for the lost subnet onto its
+# bridge: 'internal: true' blocks that on Linux docker, while OrbStack routes
+# between its bridges before docker's rules see them. So, inside the node's
+# network namespace, drop packets for those subnets that would leave through
+# the default-route interface; an attached plane has its own interface and is
+# unaffected. The rules sit in the mangle table, which 'chaos heal' (iptables
+# -F on the filter table) leaves alone. They live in the container's network
+# namespace, so a restart drops them: up, restart and 'chaos start' re-apply
+# them. No-op without the layout.
+seal_planes() {
+  local inv="$GEN_DIR/chaostest/inventory.json" nets
+  [[ -f "$inv" ]] || return 0
+  nets=$(python3 -I -c '
+import json, sys
+n = json.load(open(sys.argv[1]))["networks"]
+print(" ".join(x for x in (n.get("chaosnet"), n.get("alertnet")) if x))
+' "$inv")
+  [[ -z "$nets" ]] && return 0
+  local script='dev=$(ip route show default | awk "{print \$5; exit}"); [ -n "$dev" ] || exit 0; '
+  local net ctr
+  for net in $nets; do
+    script+="iptables -t mangle -C OUTPUT -o \"\$dev\" -d $net -j DROP 2>/dev/null || iptables -t mangle -A OUTPUT -o \"\$dev\" -d $net -j DROP; "
+  done
+  local -a ctrs=("$@")
+  [[ ${#ctrs[@]} -eq 0 ]] && mapfile -t ctrs < <(peer_containers)
+  for ctr in "${ctrs[@]}"; do
+    netns_sh "$ctr" "$script" || echo "warning: could not seal $ctr against partition leaks" >&2
+  done
+}
+
 cmd_up() {
   local n=""
   local do_build=false
   local allinone=1
   local limits=""
   local retention="production"
+  local chaostest=false
   local -a skip_specs=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --build) do_build=true; shift ;;
+      --chaostest|-chaostest) chaostest=true; shift ;;
       --limits=*|-limits=*) limits="${1#*=}"; shift ;;
       --limits|-limits)
         if [[ $# -lt 2 ]]; then
@@ -297,11 +362,21 @@ cmd_up() {
       skip_set["teranode${skip_n}-${skip_svc}"]=1
     done
   fi
+  local -a chaos_args=()
+  if $chaostest; then
+    if [[ "$allinone" -ne 1 ]]; then
+      echo "error: --chaostest needs the all-in-one topology; chaos-test partitions one container per node" >&2
+      exit 2
+    fi
+    chaostest_prepare
+    chaos_args=(-chaostest -alert-genesis-keys "$CHAOSTEST_GENESIS")
+  fi
   local topology="all-in-one"
   [[ "$allinone" -eq 0 ]] && topology="split-per-service"
+  $chaostest && topology="$topology, chaos-test layout"
   echo "generating $n-node stack (topology: $topology, retention: $retention${limits:+, limits: $limits})..."
   (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes \
-    -n "$n" -allinone="$allinone" -retention "$retention" -limits "$limits" -o compose/generated)
+    -n "$n" -allinone="$allinone" -retention "$retention" -limits "$limits" "${chaos_args[@]}" -o compose/generated)
   if [[ "$do_build" == true ]]; then
     cmd_build
   fi
@@ -324,6 +399,7 @@ cmd_up() {
     echo "starting containers..."
     compose up -d
   fi
+  $chaostest && seal_planes
   echo ""
   echo "dashboards:"
   for f in "$GEN_DIR"/open-dashboards.sh; do
@@ -350,10 +426,15 @@ cmd_down() {
   local state_dir="$REPO_ROOT/data/multinode"
   if [[ -d "$state_dir" ]]; then
     echo "wiping bind-mounted state in data/multinode/..."
-    if ! docker run --rm -v "$state_dir:/data" alpine sh -c 'rm -rf /data/aerospike* /data/teranode* 2>/dev/null' >/dev/null 2>&1; then
+    if ! docker run --rm -v "$state_dir:/data" alpine sh -c 'rm -rf /data/aerospike* /data/teranode* /data/alert-system /data/svnode* /data/alert-svnode* 2>/dev/null' >/dev/null 2>&1; then
       echo "warning: could not wipe data/multinode/ state; next 'up' may see stale data" >&2
     fi
   fi
+
+  # The orchestrator's alert log describes this chain's alert network; a new
+  # chain starts with none, as chaos-test's 'make reset' does. Runs are kept.
+  rm -f "$SIM_DATA_DIR/data/alerts.json" "$SIM_DATA_DIR/data/alerts.json.tmp" 2>/dev/null ||
+    docker run --rm -v "$SIM_DATA_DIR/data:/data" alpine rm -f /data/alerts.json /data/alerts.json.tmp >/dev/null 2>&1 || true
 
   # Wipe blaster local state so a subsequent 'blast' against a fresh chain
   # doesn't try to spend UTXOs that no longer exist.
@@ -369,6 +450,7 @@ cmd_restart() {
   require_stack
   compose down
   compose up -d
+  seal_planes
 }
 
 cmd_status() {
@@ -465,7 +547,7 @@ cmd_status() {
       local chaos_info drop_rules qdisc_line delay
       chaos_info=$(netns_sh "$net_ctr" '
         iptables -L INPUT --line-numbers 2>/dev/null | grep -c DROP || echo 0
-        tc qdisc show dev eth0 2>/dev/null
+        '"$P2P_DEV_SH"'tc qdisc show dev $dev 2>/dev/null
       ' 2>/dev/null || true)
       drop_rules=$(echo "$chaos_info" | sed -n '1p')
       qdisc_line=$(echo "$chaos_info" | sed -n '2,$p')
@@ -597,9 +679,13 @@ cmd_chaos() {
     unpause)   chaos_unpause "$@" ;;
     slow)      chaos_slow "$@" ;;
     unslow)    chaos_unslow "$@" ;;
+    seal)
+      if [[ $# -gt 0 ]]; then seal_planes "$(container_name "$1")"; else seal_planes; fi
+      echo "sealed against partition leaks"
+      ;;
     *)
       echo "error: unknown chaos action '$action'" >&2
-      echo "actions: isolate, heal, kill, start, pause, unpause, slow, unslow" >&2
+      echo "actions: isolate, heal, kill, start, pause, unpause, slow, unslow, seal" >&2
       exit 2
       ;;
   esac
@@ -645,13 +731,16 @@ chaos_isolate() {
   local script=""
   local blocked=0
   for other in $(peer_containers | grep -v "^${ctr}$"); do
-    local ip
-    ip=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$other" 2>/dev/null)
-    if [[ -n "$ip" ]]; then
+    # Every address the peer has: with --chaostest it is on three networks,
+    # and p2p runs over chaosnet, not teranode-network.
+    local ips ip
+    ips=$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$other" 2>/dev/null)
+    [[ -z "${ips// /}" ]] && continue
+    for ip in $ips; do
       script+="iptables -A INPUT -s ${ip} -j DROP; "
       script+="iptables -A OUTPUT -d ${ip} -j DROP; "
-      blocked=$((blocked + 1))
-    fi
+    done
+    blocked=$((blocked + 1))
   done
 
   if [[ $blocked -eq 0 ]]; then
@@ -744,6 +833,7 @@ chaos_start() {
   fi
   echo "starting teranode$node..."
   compose start "teranode${node}"
+  seal_planes "$(container_name "$node")"
   echo "teranode$node is up"
 }
 
@@ -808,16 +898,11 @@ chaos_unpause() {
   echo "teranode$node is unfrozen"
 }
 
-# Run a single tc command inside the target container's netns.
-netns_tc() {
-  local ctr="$1"
-  shift
-  docker run --rm \
-    --net="container:${ctr}" \
-    --cap-add=NET_ADMIN \
-    --entrypoint tc \
-    "$NETSHOOT_IMAGE" "$@"
-}
+
+# P2P_DEV_SH sets $dev, inside a node's netns, to the interface p2p runs
+# over: the chaosnet one with --chaostest (10.200.0.0/24, see gennodes
+# chaosplanes.go), else eth0, the only one.
+P2P_DEV_SH='dev=$(ip -o -4 addr show | awk '"'"'$4 ~ /^10\.200\.0\./ {print $2; exit}'"'"'); dev=${dev%%@*}; dev=${dev:-eth0}; '
 
 chaos_slow() {
   local node="${1:?usage: chaos slow <node> <ms>}"
@@ -826,7 +911,7 @@ chaos_slow() {
   ctr=$(container_name "$node")
   echo "adding ${ms}ms latency to teranode$node..."
   # Try add first; if a qdisc is already set, fall back to change.
-  if netns_sh "$ctr" "tc qdisc add dev eth0 root netem delay ${ms}ms 2>/dev/null || tc qdisc change dev eth0 root netem delay ${ms}ms"; then
+  if netns_sh "$ctr" "${P2P_DEV_SH}tc qdisc add dev \$dev root netem delay ${ms}ms 2>/dev/null || tc qdisc change dev \$dev root netem delay ${ms}ms"; then
     echo "teranode$node now has ${ms}ms added latency"
   else
     echo "error: failed to set latency on teranode$node" >&2
@@ -839,7 +924,7 @@ chaos_unslow() {
   local ctr
   ctr=$(container_name "$node")
   echo "removing latency from teranode$node..."
-  netns_tc "$ctr" qdisc del dev eth0 root 2>/dev/null || true
+  netns_sh "$ctr" "${P2P_DEV_SH}tc qdisc del dev \$dev root" >/dev/null 2>&1 || true
   echo "teranode$node latency restored to normal"
 }
 
@@ -1245,6 +1330,20 @@ sim_build() {
   docker build -t "$SIM_IMAGE" --build-arg UI="${SIM_UI:-1}" -f "$dir/sim/Dockerfile" "$dir"
 }
 
+# attach_planes <container> <inventory> <network-key> <ip-key> connects a
+# created (not yet started) container to one of the chaos-test layout's
+# networks at its pinned address. A no-op on a stack without that layout.
+attach_planes() {
+  local container="$1" inv="$2" net_key="$3" ip_key="$4" net ip
+  read -r net ip < <(python3 -I -c '
+import json, sys
+n = json.load(open(sys.argv[1]))["networks"]
+print(n.get(sys.argv[2], "") if n.get(sys.argv[3]) else "", n.get(sys.argv[3], ""))
+' "$inv" "$net_key" "$ip_key")
+  [[ -z "$ip" ]] && return 0
+  docker network connect --ip "$ip" "$net" "$container"
+}
+
 # arcade_up <inventory> <network> writes arcade's config from the node list
 # and starts it on the stack network. Host ports follow bsv-regtest's:
 # API 18080, health 18081, events (SSE) 18082, chaintracks 18083.
@@ -1256,6 +1355,11 @@ arcade_up() {
 import json, secrets, sys
 inv, out, name = json.load(open(sys.argv[1])), sys.argv[2], sys.argv[3]
 nodes = [n for n in inv["nodes"] if n["kind"] == "teranode"]
+# With the chaos-test layout (up --chaostest) arcade reaches the datahubs over
+# chaosnet, as on chaos-test's fleet, so a p2p partition cuts it off too.
+for n in nodes:
+    if n.get("chaosIP"):
+        n["assetURL"] = f"http://{n['chaosIP']}:8090/api/v1"
 lines = [
     "# Written by multinode.sh sim up; mirrors bsv-regtest's arcade profile.",
     "mode: all", "log_level: info", "network: regtest", "storage_path: /data/arcade",
@@ -1282,13 +1386,15 @@ PY
 
   docker rm -f "$ARCADE_CONTAINER" >/dev/null 2>&1 || true
   echo "starting $ARCADE_CONTAINER on $network..."
-  docker run -d --name "$ARCADE_CONTAINER" \
+  docker create --name "$ARCADE_CONTAINER" \
     --network "$network" \
     -p "$ARCADE_PORT:8080" -p "$((ARCADE_PORT + 1)):8081" \
     -p "$((ARCADE_PORT + 2)):8082" -p "$((ARCADE_PORT + 3)):8083" \
     -v "$cfg/config.yaml:/etc/arcade/config.yaml:ro" \
     --memory 1g \
     "$ARCADE_IMAGE" --mode all --config /etc/arcade/config.yaml >/dev/null
+  attach_planes "$ARCADE_CONTAINER" "$inv" chaosnetName arcadeChaosIP
+  docker start "$ARCADE_CONTAINER" >/dev/null
 
   local deadline=$((SECONDS + 60))
   until curl -sf -m 2 "http://localhost:$((ARCADE_PORT + 1))/health" >/dev/null 2>&1; do
@@ -1349,7 +1455,9 @@ with open(sys.argv[2], "w") as f:
   chmod 600 "$cfg/inventory.json" "$cfg/keys.json"
 
   local network
-  network=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["networks"]["chaosnetName"])' "$inv")
+  # The stack's own network (stores, Kafka, RPC). With --chaostest the
+  # inventory's chaosnetName is the p2p-only network instead.
+  network="teranode-network-multinode-${TEST_ID:-default}"
 
   if $arcade; then
     arcade_up "$inv" "$network"
@@ -1374,7 +1482,7 @@ PY
   # -walletd= turns the wallet feature off; the env var cannot, because an
   # empty WALLETD_URL falls back to bsv-regtest's walletd address.
   # host.docker.internal lets scenarios reach host-side tools (the blaster).
-  docker run -d --name "$SIM_CONTAINER" \
+  docker create --name "$SIM_CONTAINER" \
     --network "$network" \
     --add-host host.docker.internal:host-gateway \
     -p "$SIM_PORT:8600" \
@@ -1385,6 +1493,10 @@ PY
     -v "$SIM_DATA_DIR/data:/data" \
     -v "${CONTAINER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock" \
     "$SIM_IMAGE" -walletd= >/dev/null
+  # On the chaos-test layout its alert host pushes alerts to the nodes over
+  # alertnet.
+  attach_planes "$SIM_CONTAINER" "$inv" alertnetName orchestratorAlertIP
+  docker start "$SIM_CONTAINER" >/dev/null
 
   local deadline=$((SECONDS + 30))
   until curl -sf -m 2 "http://localhost:$SIM_PORT/api/inventory" >/dev/null 2>&1; do
