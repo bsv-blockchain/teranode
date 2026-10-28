@@ -17,9 +17,14 @@ func (s *Server) newRouter() *echo.Echo {
 	e.HidePort = true
 
 	e.Use(middleware.Recover())
-	e.Use(s.requireToken)
 
-	e.GET("/health", s.handleHealth)
+	e.GET("/health", s.handleHealth, s.requireToken)
+	e.GET("/api/snapshot", s.handleSnapshot, s.requireToken)
+	e.GET("/api/alarms", s.handleAlarms, s.requireToken)
+	e.GET("/api/history", s.handleHistory, s.requireToken)
+	e.POST("/api/snooze", s.handleSnooze, s.requireToken)
+	e.POST("/api/unsnooze", s.handleUnsnooze, s.requireToken)
+	e.GET("/ws", s.handleWS)
 
 	return e
 }
