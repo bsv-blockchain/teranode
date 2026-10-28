@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
@@ -19,15 +20,21 @@ import (
 // fsmStateOverrideClient wraps a blockchain client and pins GetFSMCurrentState
 // to a fixed state. The LocalClient test double always reports RUNNING, but
 // the legacy branch's option pairing is FSM-gated on
-// CATCHINGBLOCKS — tests need to drive both sides of that gate.
+// CATCHINGBLOCKS — tests need to drive both sides of that gate. It also pins
+// the tip height, which the test double's empty MockStore lacks.
 type fsmStateOverrideClient struct {
 	blockchain.ClientI
-	state blockchain.FSMStateType
+	state     blockchain.FSMStateType
+	tipHeight uint32
 }
 
 func (c *fsmStateOverrideClient) GetFSMCurrentState(_ context.Context) (*blockchain.FSMStateType, error) {
 	state := c.state
 	return &state, nil
+}
+
+func (c *fsmStateOverrideClient) GetBestBlockHeader(_ context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}, &model.BlockHeaderMeta{Height: c.tipHeight}, nil
 }
 
 // TestCheckSubtreeFromBlockLegacyUnconfirmedParents is the subtreevalidation
@@ -86,7 +93,8 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 		nilConsumer := &kafka.KafkaConsumerGroup{}
 		tSettings := test.CreateBaseTestSettings(t)
 
-		fsmClient := &fsmStateOverrideClient{ClientI: blockchainClient, state: fsmState}
+		// The tip sits just below the candidate block, so blockHeight is tip+1.
+		fsmClient := &fsmStateOverrideClient{ClientI: blockchainClient, state: fsmState, tipHeight: blockHeight - 1}
 
 		server, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, recordingClient, fsmClient, nilConsumer, nilConsumer, nil, nil)
 		require.NoError(t, err)
@@ -161,6 +169,30 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 				"resolution flag must be active in RUNNING too — FSM-gating it wedged testnet catch-up at 1740437")
 			require.True(t, opts.AddTXToBlockAssembly,
 				"RUNNING-state legacy blocks must keep feeding block assembly (reorg resilience) — upstream behaviour")
+		}
+	})
+
+	t.Run("RUNNING state, side block below Genesis: assembly disabled", func(t *testing.T) {
+		InitPrometheusMetrics()
+
+		// A side block is validated at its own height, here one below the tip+1
+		// (Genesis) block assembly mines at, so under older script rules (issue 4940).
+		childSubtree := singleNodeSubtree(t, childHash)
+		server, recordingClient := newServerWithFSMState(t, blockchain.FSMStateRUNNING, subtreeFixture{childSubtree, childTx.ExtendedBytes()})
+		require.Equal(t, blockHeight, server.settings.ChainCfgParams.GenesisActivationHeight)
+
+		request := legacyRequest(childSubtree)
+		request.BlockHeight = blockHeight - 1
+
+		response, err := server.CheckSubtreeFromBlock(context.Background(), request)
+		require.NoError(t, err)
+		require.True(t, response.Blessed)
+
+		recorded := recordingClient.recordedOptions(*childHash)
+		require.NotEmpty(t, recorded, "child transaction was not validated")
+
+		for _, opts := range recorded {
+			require.False(t, opts.AddTXToBlockAssembly, "a block in an older script era than tip+1 must not feed block assembly")
 		}
 	})
 

@@ -43,6 +43,25 @@ func BelowCheckpoint(checkpoints []chaincfg.Checkpoint, height uint32) bool {
 	return highest > 0 && height > 0 && height <= highest
 }
 
+// ForkBelowCheckpoint reports whether a block at blockHeight forks the chain below a
+// checkpoint the tip (tipHeight) has already reached: bitcoin-sv's
+// bad-fork-prior-to-checkpoint. Checkpoints above the tip do not count, so initial sync
+// is unaffected. A block AT a checkpoint height is left to the exact hash check
+// (catchup.ValidateHeaderAgainstCheckpoints).
+func ForkBelowCheckpoint(checkpoints []chaincfg.Checkpoint, blockHeight, tipHeight uint32) bool {
+	for _, cp := range checkpoints {
+		if cp.Height < 0 {
+			continue
+		}
+
+		if h := uint32(cp.Height); h <= tipHeight && blockHeight < h {
+			return true
+		}
+	}
+
+	return false
+}
+
 // OutpointOnlyEligible is the single eligibility gate for the below-checkpoint
 // outpoint-only fast path (PR 1178): the operator opted in, the UTXO store supports
 // outpoint-only spends (Stage A is SQL-only; Aerospike deferred to Stage B), chain

@@ -11,6 +11,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -393,6 +394,50 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 	return subtreeToCheck, nil
 }
 
+// feedsBlockAssembly reports whether a block's transactions may be added to
+// block assembly. Only in RUNNING (IDLE can follow an operator STOP while a
+// catchup batch is still validating historical blocks), and only when the block's
+// height and tip+1 share the same transaction rules: the txs are validated at the
+// block's own height, while assembly mines them at tip+1 without re-checking
+// scripts. A side block in an older era (below Genesis or Chronicle) would
+// otherwise put txs into the template that the rest of the network rejects
+// (issue 4940). A same-era block feeds even when it does not extend the tip, so
+// the txs of a competitor that loses stay in the template.
+func (u *Server) feedsBlockAssembly(ctx context.Context, state blockchain.FSMStateType, blockHeight uint32) (bool, error) {
+	if state != blockchain.FSMStateRUNNING {
+		return false, nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return false, errors.NewServiceError("failed to get best block header", err)
+	}
+
+	return sameTxRuleEra(u.settings.ChainCfgParams, blockHeight, tipMeta.Height+1), nil
+}
+
+// sameTxRuleEra reports whether no activation height that changes transaction
+// validity (script flags, BIP68 finality) lies between heights a and b, so a tx
+// valid at one is valid at the other under the same rules.
+func sameTxRuleEra(params *chaincfg.Params, a, b uint32) bool {
+	lo, hi := min(a, b), max(a, b)
+
+	for _, h := range []int64{
+		int64(params.BIP0065Height),
+		int64(params.BIP0066Height),
+		int64(params.CSVHeight),
+		int64(params.UahfForkHeight),
+		int64(params.GenesisActivationHeight),
+		int64(params.ChronicleActivationHeight),
+	} {
+		if h > int64(lo) && h <= int64(hi) {
+			return false
+		}
+	}
+
+	return true
+}
+
 // CheckBlockSubtrees validates every subtree a block references, fetching any it
 // does not hold, and reports whether the block's transactions are valid.
 //
@@ -587,9 +632,10 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get FSM current state", err))
 	}
 
-	// Only RUNNING feeds block assembly. IDLE can follow an operator STOP while
-	// a catchup batch is still validating historical blocks.
-	addTXToBlockAssembly := *currentState == blockchain.FSMStateRUNNING
+	addTXToBlockAssembly, err := u.feedsBlockAssembly(ctx, *currentState, block.Height)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to decide block assembly feed", err))
+	}
 
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))

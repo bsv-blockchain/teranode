@@ -226,3 +226,61 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra pins the block assembly
+// feed in RUNNING. A block's txs are validated at the block's own height, while
+// assembly mines them at tip+1 without re-checking scripts. A side block below
+// Genesis would put pre-Genesis-valid txs into the template (issue 4940); a
+// same-era competitor whose parent is not the tip must still feed, or its txs are
+// stranded when it loses: ErrTxExists keeps them out of assembly on resubmission.
+func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
+	tests := []struct {
+		name        string
+		blockHeight func(genesis uint32) uint32
+		feeds       bool
+	}{
+		{"side block below Genesis", func(genesis uint32) uint32 { return genesis - 1 }, false},
+		{"same-era competitor at the tip height", func(genesis uint32) uint32 { return genesis + 50 }, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, cleanup := setupTestServer(t)
+			defer cleanup()
+
+			// Registered before wireMultiBatchMocks: testify serves the first match.
+			genesis := server.settings.ChainCfgParams.GenesisActivationHeight
+			server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader", mock.Anything).
+				Return(&model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}},
+					&model.BlockHeaderMeta{ID: 100, Height: genesis + 50}, nil)
+
+			wireMultiBatchMocks(server) // FSM RUNNING
+
+			mockValidator := server.validatorClient.(*validator.MockValidator)
+			mockValidator.UtxoStore = server.utxoStore
+			recording := newRecordingValidatorClient(mockValidator)
+			server.validatorClient = recording
+
+			block := buildMultiBatchBlock(t, server, 1)
+			block.Header.HashPrevBlock = &chainhash.Hash{} // not the tip
+			block.Height = tt.blockHeight(genesis)
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			_, err = server.CheckBlockSubtrees(context.Background(), &subtreevalidation_api.CheckBlockSubtreesRequest{
+				Block:   blockBytes,
+				BaseUrl: "http://test.com",
+			})
+			require.NoError(t, err)
+
+			recording.mu.Lock()
+			defer recording.mu.Unlock()
+			require.NotEmpty(t, recording.callsByTx, "no transaction was validated")
+			for _, calls := range recording.callsByTx {
+				for _, opts := range calls {
+					require.Equal(t, tt.feeds, opts.AddTXToBlockAssembly)
+				}
+			}
+		})
+	}
+}

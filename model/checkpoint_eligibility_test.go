@@ -48,6 +48,35 @@ func TestBelowCheckpoint(t *testing.T) {
 	}
 }
 
+// TestForkBelowCheckpoint: bitcoin-sv's bad-fork-prior-to-checkpoint. Only checkpoints
+// the tip has reached count; a block below the highest of those is a fork below it.
+func TestForkBelowCheckpoint(t *testing.T) {
+	cps := []chaincfg.Checkpoint{{Height: 100}, {Height: 2000}, {Height: 500}}
+
+	tests := []struct {
+		name        string
+		checkpoints []chaincfg.Checkpoint
+		blockHeight uint32
+		tipHeight   uint32
+		want        bool
+	}{
+		{name: "no checkpoints", checkpoints: nil, blockHeight: 1, tipHeight: 5000, want: false},
+		{name: "tip below every checkpoint (initial sync)", checkpoints: cps, blockHeight: 50, tipHeight: 49, want: false},
+		{name: "below highest checkpoint the tip reached", checkpoints: cps, blockHeight: 499, tipHeight: 1999, want: true},
+		{name: "at highest checkpoint the tip reached", checkpoints: cps, blockHeight: 500, tipHeight: 1999, want: false},
+		{name: "above reached checkpoint, below unreached one", checkpoints: cps, blockHeight: 1500, tipHeight: 1999, want: false},
+		{name: "tip exactly at highest checkpoint", checkpoints: cps, blockHeight: 1999, tipHeight: 2000, want: true},
+		{name: "tip past all checkpoints, block above them", checkpoints: cps, blockHeight: 2001, tipHeight: 3000, want: false},
+		{name: "negative-height checkpoint ignored", checkpoints: []chaincfg.Checkpoint{{Height: -5}}, blockHeight: 1, tipHeight: 10, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ForkBelowCheckpoint(tt.checkpoints, tt.blockHeight, tt.tipHeight))
+		})
+	}
+}
+
 // TestOutpointOnlyEligible: full truth table for the shared outpoint-only gate.
 // Every conjunct must hold; any one missing keeps the gate closed (fail-safe).
 func TestOutpointOnlyEligible(t *testing.T) {

@@ -131,6 +131,7 @@ func TestCheckBlockSubtrees_GRPCPreservesExistsSweepStorageCode(t *testing.T) {
 func TestCheckBlockSubtrees_GRPCPreservesBatchLoadStorageCode(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	block, subtreeHash := blockWithOneSubtree(t)
 
@@ -167,6 +168,7 @@ func TestCheckBlockSubtrees_GRPCPreservesBatchLoadStorageCode(t *testing.T) {
 func TestCheckBlockSubtrees_GRPCPreservesBatchTxInvalidCode(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	tx1, err := createTestTransaction("tx1")
 	require.NoError(t, err)

@@ -474,6 +474,7 @@ func TestCheckBlockSubtrees_SiblingFailureDoesNotCancelInFlight(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
@@ -605,6 +606,7 @@ func TestCheckBlockSubtrees_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
 
 		server, cleanup := setupTestServer(t)
 		defer cleanup()
+		mockBestBlockHeader(server)
 
 		// New starts pessimistic regardless of bootstrap; Arm applies the intent.
 		afCfg := adaptivefetch.DefaultConfig()
@@ -690,6 +692,7 @@ func TestCheckBlockSubtrees_OversizedBody(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
 
@@ -743,6 +746,7 @@ func TestCheckBlockSubtrees_RetriesSubtreeFetchOn429(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.settings.SubtreeValidation.MaxIncomingSubtreeBytes = 128 // tiny cap
 
@@ -808,6 +812,7 @@ func TestCheckBlockSubtrees_LocalAssemblyPolicyIgnored(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	// Docker quickstart profile: small local assembly cap, generous receive cap.
 	server.settings.BlockAssembly.MaximumMerkleItemsPerSubtree = 32768
@@ -2332,6 +2337,15 @@ func blessedSubtreeBytes(t *testing.T) []byte {
 	require.NoError(t, err)
 
 	return b
+}
+
+// mockBestBlockHeader serves a tip for tests that reach the block assembly feed
+// decision without testing it. It is not part of setupTestServer: testify serves
+// the first matching expectation, so a default there would shadow every test's
+// own GetBestBlockHeader.
+func mockBestBlockHeader(server *Server) {
+	server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader", mock.Anything).
+		Return(&model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}, &model.BlockHeaderMeta{ID: 100}, nil).Maybe()
 }
 
 func setupTestServer(t *testing.T) (*Server, func()) {

@@ -2107,6 +2107,28 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
 		}
 
+		// Fork-below-checkpoint rule (bitcoin-sv's bad-fork-prior-to-checkpoint, gap-analysis
+		// 4697): reject a block below a checkpoint the tip has already passed. Such a block is
+		// validated at its own height, so below Genesis or Chronicle its txs get the older script
+		// rules (issue 4940). Only blocks at or below the highest checkpoint can trip it, so the
+		// tip lookup is skipped for every block above it.
+		if model.BelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height) {
+			_, tipMeta, tipErr := u.blockchainClient.GetBestBlockHeader(ctx)
+			if tipErr != nil {
+				return errors.NewServiceError("[ValidateBlock][%s] failed to get best block header for the checkpoint fork rule", block.Hash().String(), tipErr)
+			}
+
+			if model.ForkBelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, block.Height, tipMeta.Height) {
+				reason := fmt.Sprintf("bad-fork-prior-to-checkpoint: block height %d is below a checkpoint the tip (height %d) has passed", block.Height, tipMeta.Height)
+
+				if !opts.IsRevalidation {
+					u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, reason)
+				}
+
+				return errors.NewBlockInvalidError("[ValidateBlock][%s] %s", block.Hash().String(), reason)
+			}
+		}
+
 		// Use cached headers if available (during catchup), otherwise fetch from blockchain.
 		//
 		// PRECONDITION: a caller passing CachedHeaders MUST also set DisableOptimisticMining.
