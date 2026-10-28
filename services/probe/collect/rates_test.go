@@ -219,6 +219,96 @@ func gaugeSet(name string, values ...float64) MetricSet {
 	return MetricSet{name: family}
 }
 
+func publishedEvery5s(at time.Duration, perSec float64) float64 {
+	return perSec * float64(int(at.Seconds())/5*5)
+}
+
+func TestPerSecOverUsesWindow(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(100, 0)
+
+	for at := time.Duration(0); at <= 60*time.Second; at += 2 * time.Second {
+		r.Observe(start.Add(at), counterSet("c_total", publishedEvery5s(at, 100)))
+
+		if at < 10*time.Second {
+			continue
+		}
+
+		got, ok := r.PerSecOver("c_total", 10*time.Second)
+		require.True(t, ok, at)
+		require.InDelta(t, 100.0, got, 1e-9, at)
+	}
+}
+
+func TestPerSecOverNotOKUntilWindowFilled(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(100, 0)
+
+	for at := time.Duration(0); at < 10*time.Second; at += 2 * time.Second {
+		r.Observe(start.Add(at), counterSet("c_total", 10*at.Seconds()))
+
+		_, ok := r.PerSecOver("c_total", 10*time.Second)
+		require.False(t, ok, at)
+	}
+
+	r.Observe(start.Add(10*time.Second), counterSet("c_total", 100))
+
+	got, ok := r.PerSecOver("c_total", 10*time.Second)
+	require.True(t, ok)
+	require.InDelta(t, 10.0, got, 1e-9)
+
+	_, ok = r.PerSecOver("never_seen", 10*time.Second)
+	require.False(t, ok)
+}
+
+func TestPerSecOverResetNotOK(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(100, 0)
+	values := []float64{1000, 1020, 1040, 5, 25, 45, 65, 85, 105, 125}
+
+	for i, v := range values {
+		at := start.Add(time.Duration(i) * 2 * time.Second)
+		r.Observe(at, counterSet("c_total", v))
+
+		got, ok := r.PerSecOver("c_total", 10*time.Second)
+
+		switch {
+		case i < 5:
+			require.False(t, ok, i)
+		case i < 8:
+			require.False(t, ok, i)
+			require.Zero(t, got)
+		default:
+			require.True(t, ok, i)
+			require.InDelta(t, 10.0, got, 1e-9, i)
+		}
+	}
+}
+
+func TestPerSecOverHistoryBounded(t *testing.T) {
+	r := NewRates()
+	start := time.Unix(100, 0)
+
+	for i := 0; i < 200; i++ {
+		r.Observe(start.Add(time.Duration(i)*2*time.Second), counterSet("c_total", float64(i)))
+	}
+
+	require.LessOrEqual(t, len(r.history), 16)
+
+	_, ok := r.PerSecOver("c_total", 31*time.Second)
+	require.False(t, ok)
+
+	got, ok := r.PerSecOver("c_total", 30*time.Second)
+	require.True(t, ok)
+	require.InDelta(t, 0.5, got, 1e-9)
+
+	for i := 0; i < 200; i++ {
+		r.Observe(start.Add(400*time.Second+time.Duration(i)*time.Millisecond), counterSet("c_total", float64(i)))
+	}
+
+	require.LessOrEqual(t, len(r.history), historyMaxLen)
+}
+
 func TestPerSecCumulativeGauge(t *testing.T) {
 	r := NewRates()
 	start := time.Unix(100, 0)
