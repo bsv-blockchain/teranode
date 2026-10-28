@@ -141,6 +141,11 @@ func TestCollectBlocksWaitingCapsAtTwentyAndIsNeverNil(t *testing.T) {
 	s := collectSnapshot(t, rig.chain)
 	require.Len(t, s.Chain.BlocksWaiting, 20)
 	require.IsIncreasing(t, s.Chain.BlocksWaiting)
+	require.Equal(t, snapshot.StatusOK, s.Chain.BlocksWaitingCount.Status)
+	require.GreaterOrEqual(t, s.Chain.BlocksWaitingCount.Value, 25.0)
+	require.Equal(t, "25 or more", s.Chain.BlocksWaitingCount.Note)
+	require.Equal(t, float64(len(es.Chain.BlocksWaiting)), es.Chain.BlocksWaitingCount.Value)
+	require.Equal(t, snapshot.StatusOK, es.Chain.BlocksWaitingCount.Status)
 }
 
 func TestCollectOwnsOnlyItsFields(t *testing.T) {

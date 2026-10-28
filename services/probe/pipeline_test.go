@@ -584,3 +584,84 @@ func TestBlankMetricsTargetsUseLocalRegistry(t *testing.T) {
 	require.True(t, usesLocalMetrics([]string{"", " "}))
 	require.False(t, usesLocalMetrics([]string{"", "validator:9091"}))
 }
+
+func chainWithWaitingCount(count func(call int) float64) *fakeCollector {
+	heights := make([]uint32, 20)
+	for i := range heights {
+		heights[i] = uint32(1000 + i)
+	}
+
+	return newFake("chain", func(_ context.Context, call int) (snapshot.Patch, error) {
+		return func(s *snapshot.Snapshot) {
+			s.FSM = "CATCHINGBLOCKS"
+			s.Chain.BlocksWaiting = append([]uint32(nil), heights...)
+			s.Chain.BlocksWaitingCount = snapshot.Reading{Value: count(call), Status: snapshot.StatusOK}
+		}, nil
+	})
+}
+
+func TestDrainSeesGrowingBlockBacklogAboveTwenty(t *testing.T) {
+	clock := newFakeClock()
+
+	tick := newFake("metrics", func(context.Context, int) (snapshot.Patch, error) {
+		clock.Advance(5 * time.Second)
+
+		return func(*snapshot.Snapshot) {}, nil
+	})
+
+	srv := newProbe(t, probeOpts{fast: []Collector{tick, chainWithWaitingCount(func(call int) float64 { return float64(500 + 10*call) })}, clock: clock.Now})
+	runProbe(t, srv)
+
+	require.Eventually(t, func() bool {
+		snap := servedSnapshot(t, srv)
+
+		return snap.DrainGrowing && snap.DrainSeconds == nil && len(snap.Chain.BlocksWaiting) == 20
+	}, 20*time.Second, 20*time.Millisecond)
+}
+
+func TestDrainEstimatesShrinkingBlockBacklogAboveTwenty(t *testing.T) {
+	clock := newFakeClock()
+
+	tick := newFake("metrics", func(context.Context, int) (snapshot.Patch, error) {
+		clock.Advance(5 * time.Second)
+
+		return func(*snapshot.Snapshot) {}, nil
+	})
+
+	srv := newProbe(t, probeOpts{fast: []Collector{tick, chainWithWaitingCount(func(call int) float64 { return float64(max(2000-10*call, 0)) })}, clock: clock.Now})
+	runProbe(t, srv)
+
+	var snap snapshot.Snapshot
+
+	require.Eventually(t, func() bool {
+		snap = servedSnapshot(t, srv)
+
+		return snap.DrainSeconds != nil
+	}, 20*time.Second, 20*time.Millisecond)
+
+	require.False(t, snap.DrainGrowing)
+	require.Greater(t, snap.Chain.BlocksWaitingCount.Value, 20.0)
+	require.InDelta(t, snap.Chain.BlocksWaitingCount.Value/2, *snap.DrainSeconds, 0.01)
+}
+
+func TestBlockBacklog(t *testing.T) {
+	s := snapshot.NewSnapshot("n")
+	s.Chain.BlocksWaiting = []uint32{1, 2, 3}
+	require.Equal(t, 3.0, blockBacklog(&s))
+
+	s.Chain.BlocksWaitingCount = snapshot.Reading{Value: 120, Status: snapshot.StatusOK}
+	require.Equal(t, 120.0, blockBacklog(&s))
+
+	s.Tip = 1000
+	s.Chain.PeerHeight = snapshot.Reading{Value: 1500, Status: snapshot.StatusOK}
+	require.Equal(t, 120.0, blockBacklog(&s))
+
+	s.FSM = "CATCHINGBLOCKS"
+	require.Equal(t, 500.0, blockBacklog(&s))
+
+	s.Chain.PeerHeight.Status = snapshot.StatusNoData
+	require.Equal(t, 120.0, blockBacklog(&s))
+
+	s.Chain.BlocksWaitingCount.Status = snapshot.StatusNoData
+	require.Equal(t, 3.0, blockBacklog(&s))
+}

@@ -28,6 +28,7 @@ const (
 	defaultFlushEvery    = time.Minute
 	corruptSuffixLayout  = "20060102T150405Z"
 	maxCorruptNames      = 1000
+	fsmCatchingBlocks    = "CATCHINGBLOCKS"
 )
 
 type collectorSet struct {
@@ -390,7 +391,7 @@ func (p *pipeline) handle(snap snapshot.Snapshot) (clean bool) {
 	now := snap.Time
 	p.engine.Evaluate(now, &snap)
 
-	backlog := float64(len(snap.Chain.BlocksWaiting))
+	backlog := blockBacklog(&snap)
 	if q := snap.Ingress.SubtreeQueue; q.Status != snapshot.StatusNoData && q.Status != "" {
 		backlog += q.Value
 	}
@@ -418,6 +419,19 @@ func (p *pipeline) handle(snap snapshot.Snapshot) (clean bool) {
 	p.publish(snap)
 
 	return true
+}
+
+func blockBacklog(s *snapshot.Snapshot) float64 {
+	blocks := float64(len(s.Chain.BlocksWaiting))
+	if c := s.Chain.BlocksWaitingCount; c.Status != snapshot.StatusNoData && c.Status != "" {
+		blocks = c.Value
+	}
+
+	if p := s.Chain.PeerHeight; s.FSM == fsmCatchingBlocks && p.Status == snapshot.StatusOK && p.Value > float64(s.Tip) {
+		blocks = max(blocks, p.Value-float64(s.Tip))
+	}
+
+	return blocks
 }
 
 func (p *pipeline) publish(snap snapshot.Snapshot) {
