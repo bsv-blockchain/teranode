@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -73,6 +74,19 @@ func TestInitFailsWithEmptyToken(t *testing.T) {
 	srv := newTestServer(t, "")
 
 	require.Error(t, srv.Init(context.Background()))
+}
+
+func TestInitRejectsUnknownFloorKey(t *testing.T) {
+	srv := newTestServer(t, testToken)
+	srv.settings.Probe.Floors = []string{"cache.hitRate=0.9", "cache.hitrate=0.9"}
+
+	err := srv.Init(context.Background())
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrConfiguration))
+	require.Contains(t, err.Error(), "cache.hitrate")
+
+	srv.settings.Probe.Floors = []string{"cache.hitRate=0.9", "chain.persisterBehind=5"}
+	require.NoError(t, srv.Init(context.Background()))
 }
 
 func TestHealthRequiresToken(t *testing.T) {
