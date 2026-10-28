@@ -270,18 +270,19 @@ test('warming note replaces the status word', () => {
   assert.deepEqual(texts(oldest), ['Oldest waiting: 42 s', 'Calibrating']);
 });
 
-test('a long reading note wraps below the readout instead of overflowing it', () => {
+test('a long reading note is cut to fit the readout and keeps its full text as a tooltip', () => {
   const note = 'includes block-validation checks and rejected transactions';
   const s = snap();
   s.validator.validatedPerSec = { v: 0, st: 'ok', note };
   const node = one(renderHome(s, NOW), 'data-key', 'validator.validatedPerSec');
-  const lines = texts(node).filter((t) => t.length >= 12 && t !== 'Validated, tx/s');
-  assert.ok(lines.length >= 2, 'the note is split over lines');
-  assert.ok(lines.every((l) => l.length <= 30), `every line fits the well: ${JSON.stringify(lines)}`);
-  assert.equal(lines.join(' '), note);
-  const inWell = walk(node).filter((n) => n.attrs && n.attrs.class === 'wd' && Number(n.attrs.x) === 36);
-  assert.equal(inWell.length, 1);
-  assert.equal(inWell[0].text, '');
+  const words = walk(node).filter((n) => n.attrs && n.attrs.class === 'wd');
+  assert.equal(words.length, 1, 'one visible note and nothing below the well');
+  assert.equal(Number(words[0].attrs.x), 36);
+  assert.ok(words[0].text.endsWith('…'));
+  assert.ok(words[0].text.length * 9.5 * 0.52 <= 118, `the cut note fits the well: ${words[0].text}`);
+  assert.ok(note.startsWith(words[0].text.slice(0, -1)));
+  const titles = walk(node).filter((n) => n.tag === 'title');
+  assert.deepEqual(titles.map((n) => n.text), [note]);
 });
 
 test('a strip moves only while its flow carries traffic', () => {
