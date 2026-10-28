@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -44,6 +45,14 @@ func WithClock(now func() time.Time) Option {
 	}
 }
 
+func withRecorder(rec guard.Recorder) Option {
+	return func(s *Sampler) {
+		if rec != nil {
+			s.recorder = rec
+		}
+	}
+}
+
 type entry struct {
 	collector Collector
 	name      string
@@ -68,6 +77,7 @@ type Sampler struct {
 	slowEvery time.Duration
 	node      string
 	logger    ulogger.Logger
+	recorder  guard.Recorder
 	now       func() time.Time
 
 	kick     chan struct{}
@@ -114,6 +124,13 @@ func NewSampler(fast, slow []Collector, fastEvery, slowEvery time.Duration, node
 
 	if s.logger == nil {
 		s.logger = ulogger.New("probe")
+	}
+
+	if s.recorder == nil {
+		logger := s.logger
+		s.recorder = guard.RecorderFunc(func(component string, value any) {
+			logger.Errorf("[Probe] %s panicked: %s", component, oneLine(value))
+		})
 	}
 
 	s.started = s.now()
@@ -185,6 +202,8 @@ func (s *Sampler) historyLen() int {
 
 func (s *Sampler) Trigger(ch <-chan struct{}) {
 	go func() {
+		defer guard.Recover(s.recorder, "sampler trigger")
+
 		for {
 			select {
 			case _, ok := <-ch:
@@ -215,6 +234,7 @@ func (s *Sampler) Run(ctx context.Context) {
 	loops.Add(1)
 
 	go func() {
+		defer guard.Recover(s.recorder, "sampler slow loop")
 		defer loops.Done()
 
 		s.slowLoop(ctx)
@@ -397,6 +417,7 @@ func (s *Sampler) launch(ctx context.Context, e *entry, timeout time.Duration, r
 	callCtx, cancel := context.WithTimeout(ctx, timeout)
 
 	go func() {
+		defer guard.Recover(s.recorder, "sampler collector call")
 		defer cancel()
 
 		res := s.call(callCtx, e)

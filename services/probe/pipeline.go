@@ -2,6 +2,8 @@ package probe
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/probe/alarm"
 	"github.com/bsv-blockchain/teranode/services/probe/collect"
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -20,7 +23,8 @@ const (
 	collectorTimeout     = 3 * time.Second
 	metricsScrapeTimeout = 2 * time.Second
 	drainWindow          = 5 * time.Minute
-	flushEvery           = time.Minute
+	defaultFlushEvery    = time.Minute
+	corruptSuffixLayout  = "20060102T150405Z"
 )
 
 type collectorSet struct {
@@ -37,14 +41,13 @@ type pipeline struct {
 	drain   *alarm.Drain
 	logger  ulogger.Logger
 	hook    func(*snapshot.Snapshot)
+	fault   func(point string)
+	faults  *faultTracker
 	every   time.Duration
 	out     chan snapshot.Snapshot
 
-	failed   chan struct{}
-	failOnce sync.Once
-
-	streak    int
-	lastFlush time.Time
+	flushEvery time.Duration
+	lastFlush  time.Time
 
 	mu     sync.Mutex
 	latest snapshot.Snapshot
@@ -70,17 +73,66 @@ func kafkaHosts(raw string) []string {
 	return hosts
 }
 
-func newPipeline(s *Server, set collectorSet) (*pipeline, error) {
+func checkWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".probe-write-check-*")
+	if err != nil {
+		return err
+	}
+
+	name := f.Name()
+
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+
+		return err
+	}
+
+	return os.Remove(name)
+}
+
+func (s *Server) openStore() (*alarm.Store, string, error) {
+	path := statePath(s.settings)
+	dir := filepath.Dir(path)
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, "", errors.NewConfigurationError("probe state directory %s cannot be created", dir, err)
+	}
+
+	if err := checkWritable(dir); err != nil {
+		return nil, "", errors.NewConfigurationError("probe state directory %s is not writable", dir, err)
+	}
+
+	store, err := alarm.OpenStore(path)
+	if err == nil {
+		return store, "", nil
+	}
+
+	if !errors.Is(err, alarm.ErrCorruptStore) {
+		return nil, "", errors.NewServiceError("probe could not open its state store", err)
+	}
+
+	moved := path + ".corrupt-" + time.Now().UTC().Format(corruptSuffixLayout)
+
+	if err := s.rename(path, moved); err != nil {
+		return nil, "probe could not move its corrupt state file aside: " + oneLine(err), nil
+	}
+
+	s.logger.Warnf("[Probe] state file was corrupt; moved it to %s and started with an empty store", moved)
+
+	store, err = alarm.OpenStore(path)
+	if err != nil {
+		return nil, "", errors.NewServiceError("probe could not open a fresh state store", err)
+	}
+
+	return store, "", nil
+}
+
+func newPipeline(s *Server, set collectorSet, store *alarm.Store, faults *faultTracker) (*pipeline, error) {
 	cfg := s.settings.Probe
 
 	floors, err := alarm.ParseFloors(cfg.Floors)
 	if err != nil {
 		return nil, errors.NewConfigurationError("probe_floors is invalid", err)
-	}
-
-	store, err := alarm.OpenStore(statePath(s.settings))
-	if err != nil {
-		return nil, errors.NewServiceError("probe could not open its state store", err)
 	}
 
 	baseline := alarm.NewBaseline(cfg.BaselineWarmup)
@@ -102,24 +154,26 @@ func newPipeline(s *Server, set collectorSet) (*pipeline, error) {
 	engine := alarm.NewEngine(alarm.DefaultRules, baseline, store, floors, cfg.SnoozeDefault, opts...)
 
 	sampler := NewSampler(set.fast, set.slow, cfg.SampleInterval, cfg.SlowSampleInterval, s.nodeName(),
-		WithLogger(s.logger), WithClock(s.now))
+		WithLogger(s.logger), WithClock(s.now), withRecorder(faults.fatal()))
 
 	return &pipeline{
-		sampler:   sampler,
-		engine:    engine,
-		store:     store,
-		drain:     alarm.NewDrain(drainWindow),
-		logger:    s.logger,
-		hook:      s.processHook,
-		every:     sampler.fastEvery,
-		out:       make(chan snapshot.Snapshot, 1),
-		failed:    make(chan struct{}),
-		lastFlush: time.Now(),
-		latest:    sampler.Latest(),
+		sampler:    sampler,
+		engine:     engine,
+		store:      store,
+		drain:      alarm.NewDrain(drainWindow),
+		logger:     s.logger,
+		hook:       s.processHook,
+		fault:      s.fault,
+		faults:     faults,
+		every:      sampler.fastEvery,
+		out:        make(chan snapshot.Snapshot, 1),
+		flushEvery: s.flushEvery,
+		lastFlush:  time.Now(),
+		latest:     sampler.Latest(),
 	}, nil
 }
 
-func (s *Server) defaultCollectors(ctx context.Context) collectorSet {
+func (s *Server) defaultCollectors(ctx context.Context, rec guard.Recorder) collectorSet {
 	var set collectorSet
 
 	var src collect.MetricSource
@@ -135,7 +189,7 @@ func (s *Server) defaultCollectors(ctx context.Context) collectorSet {
 	if s.blockchainClient != nil && s.p2pClient != nil {
 		chain := collect.NewChain(s.blockchainClient, s.p2pClient)
 		set.fast = append(set.fast, chain)
-		set.triggers = append(set.triggers, chain.Events(ctx))
+		set.triggers = append(set.triggers, chain.Events(ctx, rec))
 	} else {
 		s.logger.Warnf("[Probe] chain collector disabled: blockchain or p2p client missing")
 	}
@@ -202,34 +256,51 @@ func (p *pipeline) run(ctx context.Context) {
 	ticker := time.NewTicker(p.every)
 	defer ticker.Stop()
 
-	p.publish(p.Latest())
+	p.safely("initial publish", func() {
+		p.fault(faultPublish)
+		p.publish(p.Latest())
+	})
 
 	for {
+		handled, clean := false, true
+
 		select {
 		case <-ctx.Done():
 			return
 		case snap := <-p.sampler.Updates():
-			p.handle(snap)
+			handled = true
+			clean = p.handle(snap)
 		case <-ticker.C:
 		}
 
-		if p.streak >= maxConsecutivePanics || p.sampler.ConsecutivePanics() >= maxConsecutivePanics {
-			p.failOnce.Do(func() { close(p.failed) })
-
-			return
+		if !p.maybeFlush() {
+			clean = false
 		}
 
-		p.maybeFlush()
+		if handled && clean {
+			p.faults.reset()
+		}
+
+		if p.sampler.ConsecutivePanics() >= maxConsecutivePanics {
+			p.faults.fail()
+		}
+
+		if p.faults.hasFailed() {
+			return
+		}
 	}
 }
 
-func (p *pipeline) handle(snap snapshot.Snapshot) {
-	defer func() {
-		if r := recover(); r != nil {
-			p.streak++
-			p.logger.Errorf("[Probe] pipeline panicked: %s", oneLine(r))
-		}
-	}()
+func (p *pipeline) safely(component string, fn func()) (ok bool) {
+	defer guard.Recover(p.faults, component)
+
+	fn()
+
+	return true
+}
+
+func (p *pipeline) handle(snap snapshot.Snapshot) (clean bool) {
+	defer guard.Recover(p.faults, "pipeline")
 
 	if p.hook != nil {
 		p.hook(&snap)
@@ -263,8 +334,9 @@ func (p *pipeline) handle(snap snapshot.Snapshot) {
 	p.latest = cloneSnapshot(snap)
 	p.mu.Unlock()
 
-	p.streak = 0
 	p.publish(snap)
+
+	return true
 }
 
 func (p *pipeline) publish(snap snapshot.Snapshot) {
@@ -285,19 +357,25 @@ func (p *pipeline) publish(snap snapshot.Snapshot) {
 	}
 }
 
-func (p *pipeline) maybeFlush() {
-	if time.Since(p.lastFlush) < flushEvery {
-		return
+func (p *pipeline) maybeFlush() bool {
+	if time.Since(p.lastFlush) < p.flushEvery {
+		return true
 	}
 
 	p.lastFlush = time.Now()
 
-	if err := p.engine.FlushState(); err != nil {
-		p.logger.Warnf("[Probe] could not save probe state: %s", oneLine(err))
-	}
+	return p.safely("state flush", func() {
+		p.fault(faultFlush)
+
+		if err := p.engine.FlushState(); err != nil {
+			p.logger.Warnf("[Probe] could not save probe state: %s", oneLine(err))
+		}
+	})
 }
 
 func (p *pipeline) close() error {
+	p.fault(faultClose)
+
 	var errs []error
 
 	for _, err := range []error{p.engine.FlushState(), p.store.Close()} {

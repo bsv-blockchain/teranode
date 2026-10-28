@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/services/probe/snapshot"
 )
 
@@ -106,12 +107,14 @@ func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, error)
 	return append([]uint32{}, c.lastWait...), behind, nil
 }
 
-func (c *Chain) Events(ctx context.Context) <-chan struct{} {
+func (c *Chain) Events(ctx context.Context, rec guard.Recorder) <-chan struct{} {
 	out := make(chan struct{}, 1)
 
 	notifications, err := c.bc.Subscribe(ctx, blockchain.SubscriberProbe)
 	if err != nil {
 		go func() {
+			defer guard.Recover(rec, "chain events")
+
 			<-ctx.Done()
 			close(out)
 		}()
@@ -120,6 +123,7 @@ func (c *Chain) Events(ctx context.Context) <-chan struct{} {
 	}
 
 	go func() {
+		defer guard.Recover(rec, "chain events")
 		defer close(out)
 
 		for {

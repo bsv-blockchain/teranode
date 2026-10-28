@@ -85,6 +85,22 @@ func TestStoreSurvivesRestart(t *testing.T) {
 	require.Equal(t, "a2", al[1].ID)
 }
 
+func TestCorruptStoreIsTyped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
+
+	_, err := OpenStore(path)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrCorruptStore))
+
+	dir := filepath.Join(t.TempDir(), "isdir")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	_, err = OpenStore(dir)
+	require.Error(t, err)
+	require.False(t, errors.Is(err, ErrCorruptStore))
+}
+
 func TestMissingFileIsEmptyStore(t *testing.T) {
 	s, _ := openTemp(t)
 

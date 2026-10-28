@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/services/probe/guard"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
@@ -25,7 +26,7 @@ func newTestServer(t *testing.T, token string) *Server {
 	s.Probe.StatePath = filepath.Join(t.TempDir(), "probe_state.json")
 
 	srv := New(ulogger.TestLogger{}, s, nil, nil)
-	srv.collectors = func(context.Context) collectorSet {
+	srv.collectors = func(context.Context, guard.Recorder) collectorSet {
 		return collectorSet{fast: []Collector{newFake("metrics", okPatch(healthyPatch))}}
 	}
 
