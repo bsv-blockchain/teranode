@@ -337,7 +337,7 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		}
 
 		// Parse headers
-		blockHeaders, parseErr := catchup.ParseBlockHeaders(blockHeadersBytes)
+		blockHeaders, parseErr := catchup.ParseBlockHeaders(blockHeadersBytes, u.settings.ChainCfgParams)
 		if parseErr != nil {
 			u.logger.Errorf("[catchup][%s] iteration %d: header parse error: %v", chainTipHash.String(), iteration, parseErr)
 

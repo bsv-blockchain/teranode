@@ -11,8 +11,22 @@ import (
 )
 
 // ValidateHeaderProofOfWork validates that a block header meets the proof of work requirement.
-// It checks that the block hash is less than or equal to the target difficulty.
-func ValidateHeaderProofOfWork(header *model.BlockHeader) error {
+// It checks that the target the header declares is not easier than the network's
+// proof-of-work limit, and that the block hash is less than or equal to that target.
+//
+// Checking the hash against the target the header chose for itself proves nothing on its
+// own: a fabricated header declares an easy target and meets it in a couple of hashes. The
+// limit bound is what makes the check meaningful. params may be nil, in which case no limit
+// is enforced (the same convention as model.BlockHeader.HasMetPowLimit). It is not a
+// substitute for the expected-difficulty rule, which this path does not run.
+func ValidateHeaderProofOfWork(header *model.BlockHeader, params *chaincfg.Params) error {
+	if limitErr := header.HasMetPowLimit(params); limitErr != nil {
+		return errors.NewNetworkInvalidResponseError(
+			"[validateHeaderProofOfWork][%s] block header declares a target easier than the network limit",
+			header.Hash().String(), limitErr,
+		)
+	}
+
 	// Use the built-in method to check if header meets target difficulty
 	ok, hashNum, err := header.HasMetTargetDifficulty()
 

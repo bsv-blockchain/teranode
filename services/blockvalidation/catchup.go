@@ -2545,7 +2545,7 @@ func (u *Server) validateBatchHeaders(ctx context.Context, headers []*model.Bloc
 		}
 
 		// Validate proof of work
-		if err := catchup.ValidateHeaderProofOfWork(header); err != nil {
+		if err := catchup.ValidateHeaderProofOfWork(header, u.settings.ChainCfgParams); err != nil {
 			u.logger.Errorf("[catchup:validateBatchHeaders] header %d/%d fails PoW validation: %v",
 				i+1, len(headers), err)
 			return err

@@ -65,7 +65,7 @@ func TestParseBlockHeaders(t *testing.T) {
 		header := testhelpers.CreateTestHeaderAtHeight(1)
 		headerBytes := header.Bytes()
 
-		headers, err := catchup.ParseBlockHeaders(headerBytes)
+		headers, err := catchup.ParseBlockHeaders(headerBytes, nil)
 		// The header should pass validation since it's properly mined
 		assert.NoError(t, err, "Should have no error for valid header")
 		assert.Len(t, headers, 1, "Should return one header")
@@ -75,7 +75,7 @@ func TestParseBlockHeaders(t *testing.T) {
 	})
 
 	t.Run("ParseEmptyBytes", func(t *testing.T) {
-		headers, err := catchup.ParseBlockHeaders([]byte{})
+		headers, err := catchup.ParseBlockHeaders([]byte{}, nil)
 		assert.Empty(t, headers, "Should return empty headers")
 		assert.NoError(t, err, "Should have no error")
 	})
@@ -85,7 +85,7 @@ func TestParseBlockHeaders(t *testing.T) {
 		headerBytes := make([]byte, model.BlockHeaderSize)
 
 		// This will fail proof of work validation
-		headers, err := catchup.ParseBlockHeaders(headerBytes)
+		headers, err := catchup.ParseBlockHeaders(headerBytes, nil)
 		assert.Empty(t, headers, "Should not return invalid headers")
 		assert.NotNil(t, err, "Should have validation error")
 		// Zero merkle root on non-genesis is invalid
@@ -100,7 +100,7 @@ func TestParseBlockHeaders(t *testing.T) {
 		// Set version to something
 		headerBytes[0] = 1
 
-		headers, err := catchup.ParseBlockHeaders(headerBytes)
+		headers, err := catchup.ParseBlockHeaders(headerBytes, nil)
 		assert.Empty(t, headers, "Should not return headers that fail validation")
 		assert.NotNil(t, err, "Should have validation error")
 	})
