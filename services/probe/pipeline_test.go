@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -424,4 +425,76 @@ func TestKafkaHostsSplit(t *testing.T) {
 	require.Empty(t, kafkaHosts(""))
 	require.Empty(t, kafkaHosts(" , "))
 	require.Equal(t, []string{"a:9092", "b:9092"}, kafkaHosts("a:9092, b:9092,"))
+}
+
+func collectorNames(set collectorSet) []string {
+	names := []string{}
+
+	for _, group := range [][]Collector{set.fast, set.slow} {
+		for _, c := range group {
+			names = append(names, c.Name())
+		}
+	}
+
+	return names
+}
+
+func kafkaTestSettings(scheme string, configs ...string) *settings.Settings {
+	s := settings.NewSettings()
+	s.Kafka = settings.KafkaSettings{Hosts: "127.0.0.1:9092", Scheme: scheme}
+	s.Probe.AerospikeURL = nil
+	s.Probe.PostgresURL = nil
+
+	for i, raw := range configs {
+		u, _ := url.Parse(raw)
+
+		switch i {
+		case 0:
+			s.Kafka.BlocksConfig = u
+		case 1:
+			s.Kafka.SubtreesConfig = u
+		}
+	}
+
+	return s
+}
+
+func TestInMemoryKafkaHasNoKafkaCollector(t *testing.T) {
+	cases := map[string]*settings.Settings{
+		"memory scheme":       kafkaTestSettings("memory"),
+		"memory config urls":  kafkaTestSettings("kafka", "memory://127.0.0.1:9092/blocks", "memory://127.0.0.1:9092/subtrees"),
+		"memory scheme mixed": kafkaTestSettings("memory", "memory://127.0.0.1:9092/blocks"),
+	}
+
+	for name, s := range cases {
+		logger := &captureLogger{}
+		srv := New(logger, s, nil, nil)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		set := srv.defaultCollectors(ctx, guard.RecorderFunc(func(string, any) {}))
+
+		require.NotContains(t, collectorNames(set), "kafka", name)
+
+		cancel()
+		closeAll(set.closers, nil)
+	}
+}
+
+func TestRealKafkaBuildsKafkaCollector(t *testing.T) {
+	cases := map[string]*settings.Settings{
+		"kafka scheme":      kafkaTestSettings("kafka"),
+		"kafka config urls": kafkaTestSettings("http", "kafka://127.0.0.1:9092/blocks", "memory://127.0.0.1:9092/subtrees"),
+	}
+
+	for name, s := range cases {
+		srv := New(&captureLogger{}, s, nil, nil)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		set := srv.defaultCollectors(ctx, guard.RecorderFunc(func(string, any) {}))
+
+		require.Contains(t, collectorNames(set), "kafka", name)
+
+		cancel()
+		closeAll(set.closers, nil)
+	}
 }
