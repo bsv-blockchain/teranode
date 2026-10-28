@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -81,6 +82,31 @@ func TestHealthRequiresToken(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, get(t, url, ""))
 	require.Equal(t, http.StatusUnauthorized, get(t, url, "wrong"))
 	require.Equal(t, http.StatusOK, get(t, url, testToken))
+}
+
+func TestEmptyTokenNeverAuthenticates(t *testing.T) {
+	srv := newTestServer(t, "")
+
+	ts := httptest.NewServer(srv.newRouter())
+	defer ts.Close()
+
+	require.Equal(t, http.StatusUnauthorized, get(t, ts.URL+"/health", ""))
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/health", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer ")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func TestStartRefusesEmptyToken(t *testing.T) {
+	srv := newTestServer(t, "")
+
+	require.Error(t, srv.Start(context.Background(), make(chan struct{})))
+	require.Empty(t, srv.Addr())
 }
 
 func TestStartReleasesPortOnStop(t *testing.T) {
