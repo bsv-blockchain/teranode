@@ -281,6 +281,8 @@ func (s *Server) defaultCollectors(ctx context.Context, rec guard.Recorder) coll
 		if err != nil {
 			s.logger.Warnf("[Probe] kafka collector disabled: %s", oneLine(err))
 		} else {
+			k.Watch(collect.WatchedTopics(s.settings.Kafka))
+
 			set.slow = append(set.slow, k)
 			set.closers = append(set.closers, k.Close)
 		}

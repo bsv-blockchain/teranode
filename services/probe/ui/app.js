@@ -1,5 +1,6 @@
 import {
   renderHome,
+  renderLanes,
   renderTopBar,
   renderBottomBar,
   renderAlarmList,
@@ -342,6 +343,9 @@ function mount(doc, win) {
     alarmList: $('alarm-list'),
     home: $('home'),
     stage: $('stage-view'),
+    lanes: $('lanes-view'),
+    viewStages: $('view-stages'),
+    viewLanes: $('view-lanes'),
     bottom: $('bottombar'),
     sr: $('sr-alarms'),
   };
@@ -371,14 +375,24 @@ function mount(doc, win) {
     ui.banner.hidden = state.needLogin || !state.reconnecting;
     patchInto(doc, ui.topbar, renderTopBar(state.snapshot, { alarmsOpen }));
     const onStage = route.name === 'stage';
-    ui.home.hidden = onStage;
+    const onLanes = route.name === 'lanes';
+    ui.home.hidden = onStage || onLanes;
+    ui.lanes.hidden = !onLanes;
     ui.stage.hidden = !onStage;
-    patchInto(doc, ui.home, onStage ? null : renderHome(state.snapshot, now));
+    setCurrent(ui.viewStages, !onLanes);
+    setCurrent(ui.viewLanes, onLanes);
+    patchInto(doc, ui.home, onStage || onLanes ? null : renderHome(state.snapshot, now));
+    patchInto(doc, ui.lanes, onLanes ? renderLanes(state.snapshot) : null);
     patchInto(doc, ui.stage, onStage ? renderStage(state.snapshot, route.stage, state.history, now, state.notice) : null);
     ui.alarmList.hidden = !alarmsOpen;
     patchInto(doc, ui.alarmList, alarmsOpen ? listWithNotice(state, now) : null);
     patchInto(doc, ui.sr, renderAlarmSummary(state.snapshot ? state.snapshot.alarms : []));
     renderBottom();
+  }
+
+  function setCurrent(link, current) {
+    if (current) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
   }
 
   function listWithNotice(state, now) {

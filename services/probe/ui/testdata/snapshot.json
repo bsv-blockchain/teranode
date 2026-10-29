@@ -35,6 +35,7 @@
     "paused": {"v": 1, "st": "warn", "note": "reorging"},
     "tipLagBlocks": {"v": 3, "st": "warn"},
     "queueHeadAgeSec": {"v": 42, "st": "warn"},
+    "transactions": {"v": 1250000, "st": "ok"},
     "ingestQueueFill": {"v": 0.17, "st": "ok"},
     "subtreeFill": {"v": 0, "st": "nodata", "note": "no data", "age": 12}
   },
@@ -64,6 +65,50 @@
       "commitsPerSec": {"v": 0, "st": "nodata", "note": "no data"}
     }
   },
+  "lanes": {
+    "tx": {
+      "alreadySeenPerSec": {"v": 310, "st": "ok"}
+    },
+    "subtrees": {
+      "alreadyKnownPerSec": {"v": 12, "st": "ok"},
+      "completedPerSec": {"v": 198, "st": "ok"},
+      "missingTxsPerSec": {"v": 1950, "st": "ok"},
+      "txsFetchedAvg": {"v": 9.4, "st": "ok"}
+    },
+    "blocks": {
+      "announcedTotal": {"v": 6, "st": "ok"},
+      "validatedTotal": {"v": 5, "st": "ok"},
+      "missingSubtrees": {"v": 0, "st": "ok"},
+      "missingSubtreesPerSec": {"v": 0, "st": "ok"}
+    },
+    "mining": {
+      "candidatesPerSec": {"v": 0.2, "st": "ok"},
+      "candidateAgeSec": {"v": 4, "st": "ok"},
+      "solutionsTotal": {"v": 2, "st": "ok"}
+    }
+  },
+  "blobs": {
+    "subtree": {
+      "readsPerSec": {"v": 410, "st": "ok"},
+      "writesPerSec": {"v": 198, "st": "ok"},
+      "errorsPerSec": {"v": 0, "st": "ok"},
+      "readP99Sec": {"v": 0.012, "st": "ok"},
+      "writeP99Sec": {"v": 0.03, "st": "ok"}
+    },
+    "block": {
+      "readsPerSec": {"v": 2.5, "st": "ok"},
+      "writesPerSec": {"v": 0.2, "st": "ok"},
+      "errorsPerSec": {"v": 0, "st": "ok"},
+      "readP99Sec": {"v": 0, "st": "nodata", "note": "no data"},
+      "writeP99Sec": {"v": 0, "st": "nodata", "note": "no data"}
+    }
+  },
+  "kafka": [
+    {"topic": "subtrees", "lag": 1840},
+    {"topic": "txmeta", "lag": 0},
+    {"topic": "blocks", "lag": 0},
+    {"topic": "rejectedtx", "lag": null}
+  ],
   "flows": [
     {"id": "tx-input", "from": "ingress", "to": "validator", "label": "tx input", "rate": {"v": 4100, "st": "ok"}},
     {"id": "subtrees", "from": "ingress", "to": "assembly", "label": "subtrees", "rate": {"v": 210, "st": "warn"}, "lag": 1840},

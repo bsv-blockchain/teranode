@@ -33,11 +33,31 @@ const (
 	metricAssemblyTipLag  = "teranode_blockassembly_tip_lag_blocks"
 	metricAssemblyHeadAge = "teranode_blockassembly_queue_head_age_seconds"
 	metricAssemblyQueued  = "teranode_blockassembly_queued_transactions"
+	metricAssemblyTxCount = "teranode_blockassembly_transactions"
 
 	metricForkLongestDepth      = "teranode_blockvalidation_fork_longest_depth"
 	metricSubscriberPendingFull = "teranode_blockchain_subscriber_pending_full_total"
 	metricSubscriberSendErrors  = "teranode_blockchain_subscriber_send_errors_total"
 	metricBlockchainAddBlock    = "teranode_blockchain_add_block"
+
+	metricSubtreeSkipped   = "teranode_subtreevalidation_subtree_already_exists_skipped_total"
+	metricSubtreeValidated = "teranode_subtreevalidation_validate_subtree"
+	metricBlessMissing     = "teranode_subtreevalidation_bless_missing_transaction"
+	metricBlockFound       = "teranode_blockvalidation_block_found"
+	metricBlockValidated   = "teranode_blockvalidation_validate_block"
+	metricMiningCandidates = "teranode_blockassembly_block_assembler_get_mining_candidate"
+
+	metricMiningCandidateTime     = "teranode_blockassembly_last_mining_candidate_timestamp_seconds"
+	metricValidatorExisting       = "teranode_validator_existing_tx_total"
+	metricBlockMissingSubtrees    = "teranode_subtreevalidation_block_missing_subtrees_total"
+	metricBlockMissingOutstanding = "teranode_subtreevalidation_block_missing_subtrees_outstanding"
+
+	metricBlobReads         = "teranode_blob_reads_total"
+	metricBlobWrites        = "teranode_blob_writes_total"
+	metricBlobErrors        = "teranode_blob_errors_total"
+	metricBlobReadDuration  = "teranode_blob_read_duration_seconds"
+	metricBlobWriteDuration = "teranode_blob_write_duration_seconds"
+	metricMiningSolutions   = "teranode_blockassembly_submit_mining_solution"
 
 	metricAerospikeCreate = "teranode_aerospike_utxo_store"
 	metricAerospikeSpend  = "teranode_aerospike_utxo_spend"
@@ -88,6 +108,23 @@ var MetricNames = append([]string{
 	metricAssemblyTipLag,
 	metricAssemblyHeadAge,
 	metricAssemblyQueued,
+	metricAssemblyTxCount,
+	metricSubtreeSkipped,
+	metricSubtreeValidated,
+	metricBlessMissing,
+	metricBlockFound,
+	metricBlockValidated,
+	metricMiningCandidates,
+	metricMiningCandidateTime,
+	metricMiningSolutions,
+	metricValidatorExisting,
+	metricBlockMissingSubtrees,
+	metricBlockMissingOutstanding,
+	metricBlobReads,
+	metricBlobWrites,
+	metricBlobErrors,
+	metricBlobReadDuration,
+	metricBlobWriteDuration,
 	metricForkLongestDepth,
 	metricSubscriberPendingFull,
 	metricSubscriberSendErrors,
@@ -101,6 +138,8 @@ func Apply(s *snapshot.Snapshot, m MetricSet, r *Rates, cfg *settings.Settings) 
 	applyAssembly(s, m, cfg)
 	applyChain(s, m)
 	applyStores(s, r)
+	applyLanes(s, r)
+	applyBlobs(s, r)
 }
 
 func applyIngress(s *snapshot.Snapshot, m MetricSet, r *Rates) {
@@ -219,6 +258,7 @@ func applyAssembly(s *snapshot.Snapshot, m MetricSet, cfg *settings.Settings) {
 
 	set(&s.Assembly.TipLagBlocks, gauge(m, metricAssemblyTipLag))
 	set(&s.Assembly.QueueHeadAgeSec, gauge(m, metricAssemblyHeadAge))
+	set(&s.Assembly.Transactions, gauge(m, metricAssemblyTxCount))
 	set(&s.Assembly.SubtreeFill, noData(noteNoData))
 
 	queued, ok := m.Sum(metricAssemblyQueued)
@@ -240,6 +280,57 @@ func assemblyQueueCapacity(cfg *settings.Settings) int64 {
 	}
 
 	return max(maxItems, int64(assemblyMaxBatchesPerIteration)*int64(cfg.BlockAssembly.SendBatchSize))
+}
+
+func applyLanes(s *snapshot.Snapshot, r *Rates) {
+	set(&s.Lanes.Tx.AlreadySeenPerSec, rate(r, metricValidatorExisting))
+	set(&s.Lanes.Subtrees.AlreadyKnownPerSec, rate(r, metricSubtreeSkipped))
+	set(&s.Lanes.Subtrees.CompletedPerSec, rate(r, metricSubtreeValidated))
+	set(&s.Lanes.Subtrees.MissingTxsPerSec, rate(r, metricBlessMissing))
+	set(&s.Lanes.Subtrees.TxsFetchedAvg, totalRatio(r, metricBlessMissing, metricSubtreeValidated))
+	set(&s.Lanes.Blocks.AnnouncedTotal, total(r, metricBlockFound))
+	set(&s.Lanes.Blocks.ValidatedTotal, total(r, metricBlockValidated))
+	set(&s.Lanes.Blocks.MissingSubtrees, total(r, metricBlockMissingOutstanding))
+	set(&s.Lanes.Blocks.MissingSubtreesPerSec, rate(r, metricBlockMissingSubtrees))
+	set(&s.Lanes.Mining.CandidatesPerSec, rate(r, metricMiningCandidates))
+	set(&s.Lanes.Mining.CandidateAgeSec, ageSec(r, metricMiningCandidateTime))
+	set(&s.Lanes.Mining.SolutionsTotal, total(r, metricMiningSolutions))
+}
+
+func total(r *Rates, name string) snapshot.Reading {
+	return reading(r.Total(name))
+}
+
+func applyBlobs(s *snapshot.Snapshot, r *Rates) {
+	applyBlobStore(&s.Blobs.Subtree, r, "subtree")
+	applyBlobStore(&s.Blobs.Block, r, "block")
+}
+
+func applyBlobStore(v *snapshot.BlobStoreView, r *Rates, store string) {
+	set(&v.ReadsPerSec, rate(r, StoreSeries(metricBlobReads, store)))
+	set(&v.WritesPerSec, rate(r, StoreSeries(metricBlobWrites, store)))
+	set(&v.ErrorsPerSec, rate(r, StoreSeries(metricBlobErrors, store)))
+	set(&v.ReadP99Sec, quantile(r, StoreSeries(metricBlobReadDuration, store), 0.99))
+	set(&v.WriteP99Sec, quantile(r, StoreSeries(metricBlobWriteDuration, store), 0.99))
+}
+
+func quantile(r *Rates, name string, q float64) snapshot.Reading {
+	return reading(r.Quantile(name, q))
+}
+
+func ageSec(r *Rates, name string) snapshot.Reading {
+	return reading(r.AgeSec(name))
+}
+
+func totalRatio(r *Rates, numerator, denominator string) snapshot.Reading {
+	top, topOK := r.Total(numerator)
+	bottom, bottomOK := r.Total(denominator)
+
+	if !topOK || !bottomOK || bottom <= 0 {
+		return noData(noteNoData)
+	}
+
+	return okReading(top / bottom)
 }
 
 func applyChain(s *snapshot.Snapshot, m MetricSet) {
@@ -285,25 +376,18 @@ func sumRates(r *Rates, names ...string) snapshot.Reading {
 }
 
 func rate(r *Rates, name string) snapshot.Reading {
-	v, ok := r.PerSec(name)
-	if !ok {
-		return noData(noteNoData)
-	}
-
-	return okReading(v)
+	return reading(r.PerSec(name))
 }
 
 func windowRate(r *Rates, name string) snapshot.Reading {
-	v, ok := r.PerSecOver(name, cacheRateWindow)
-	if !ok {
-		return noData(noteNoData)
-	}
-
-	return okReading(v)
+	return reading(r.PerSecOver(name, cacheRateWindow))
 }
 
 func gauge(m MetricSet, name string) snapshot.Reading {
-	v, ok := m.Sum(name)
+	return reading(m.Sum(name))
+}
+
+func reading(v float64, ok bool) snapshot.Reading {
 	if !ok {
 		return noData(noteNoData)
 	}
