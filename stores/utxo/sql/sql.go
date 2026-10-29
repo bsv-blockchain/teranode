@@ -92,6 +92,8 @@ const (
 // batchSpend represents a single UTXO spend request in a batch.
 // Mirrors aerospike/spend.go batchSpend struct.
 type batchSpend struct {
+	admission         utxo.SpendAdmission
+	requestCtx        context.Context
 	spend             *utxo.Spend // UTXO to spend
 	blockHeight       uint32      // Current block height
 	errCh             chan error  // Channel for completion notification
@@ -2178,50 +2180,40 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
 			}()
 
+			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+			if spendTimeout <= 0 {
+				spendTimeout = 30 * time.Second
+			}
+			requestCtx, cancel := context.WithTimeout(ctx, spendTimeout)
+			defer cancel()
 			errCh := make(chan error, 1)
-			s.spendBatcher.PutCtx(ctx, &batchSpend{
+			item := &batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
 				errCh:             errCh,
 				ignoreConflicting: useIgnoreConflicting,
 				ignoreLocked:      useIgnoreLocked,
 				skipUTXOHashCheck: useSkipUTXOHashCheck,
-			})
-
-			// Wait for batch response with timeout to prevent indefinite blocking
-			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
-			if spendTimeout <= 0 {
-				spendTimeout = 30 * time.Second
+				requestCtx:        requestCtx,
 			}
-
-			timer := time.NewTimer(spendTimeout)
-			defer timer.Stop()
+			defer item.admission.Abandon()
+			s.spendBatcher.PutCtx(requestCtx, item)
 
 			var batchErr error
 			select {
 			case batchErr = <-errCh:
 				// Batch completed successfully or with error
-			case <-ctx.Done():
-				// Known residual window (#1291, store-level atomic Spend /
-				// reverse-on-abort): this item is still enqueued in the batcher and
-				// will be committed by the callback under the store's own context,
-				// not this caller ctx. A straggler UPDATE can land after we give up
-				// here and after the rollback below has already run, leaving exactly
-				// the #1214 dangling ref. Not fixed here — counted below so it is
-				// at least observable.
+			case <-requestCtx.Done():
+				// The deferred Abandon runs before this worker returns, so rollback
+				// cannot be followed by dispatch of this still-queued item. A write
+				// admitted before the abort can still finish late (#1291).
 				prometheusUtxoSpendAbortInFlight.Inc()
-				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
-				return nil
-			case <-timer.C:
-				// Known residual window (#1291, store-level atomic Spend /
-				// reverse-on-abort): same straggler risk as the ctx.Done() arm
-				// above — the item remains enqueued and can still commit under the
-				// store's own context after this per-item wait gives up and after
-				// the rollback below has run. Not fixed here — counted below so it
-				// is at least observable.
-				prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
-				prometheusUtxoSpendAbortInFlight.Inc()
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+				if ctx.Err() != nil {
+					spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
+				} else {
+					prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
+					spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+				}
 				return nil
 			}
 
@@ -2478,6 +2470,12 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 	}()
 
 	utxo.ProcessSpendBatch(batch, utxo.SpendBatchHandler[*batchSpend]{
+		Start: func(item *batchSpend) error {
+			if item == nil {
+				return nil
+			}
+			return item.admission.Start(item.requestCtx)
+		},
 		Spend: func(item *batchSpend) *utxo.Spend {
 			if item == nil {
 				return nil

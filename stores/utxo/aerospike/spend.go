@@ -100,6 +100,8 @@ const maxAggregatedSpendErrs = 10
 
 // batchSpend represents a single UTXO spend request in a batch
 type batchSpend struct {
+	admission   utxo.SpendAdmission
+	requestCtx  context.Context
 	spend       *utxo.Spend // UTXO to spend
 	blockHeight uint32      // Current block height
 	group       *completion.Group
@@ -448,6 +450,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, err
 	}
 
+	spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+	if spendTimeout <= 0 {
+		spendTimeout = 30 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, spendTimeout)
+	defer cancel()
+
 	items := make([]*batchSpend, len(spends))
 	group := completion.NewGroup(int32(len(spends)))
 
@@ -476,6 +485,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			ignoreConflicting:   useIgnoreConflicting,
 			ignoreLocked:        useIgnoreLocked,
 			requireParentOutput: useRequireParentOutputs,
+			requestCtx:          requestCtx,
 		}
 		items[idx] = item
 
@@ -506,20 +516,16 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	// rejected send rejects every item — complete all of them and let the
 	// resolveSpendCompletions path below report it, instead of parking on
 	// group.Wait for the full spendTimeout and reporting a bogus timeout.
-	if enqueueErr := safeBatcherPutBatchCtx(s.spendBatcher, ctx, toEnqueue, "spend"); enqueueErr != nil {
+	if enqueueErr := safeBatcherPutBatchCtx(s.spendBatcher, requestCtx, toEnqueue, "spend"); enqueueErr != nil {
 		for _, item := range toEnqueue {
 			item.complete(enqueueErr)
 		}
 	}
 
-	// One shared wait for the whole batch, instead of one goroutine + timer
-	// per input. spendTimeout mirrors the previous per-item fallback.
-	spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
-	if spendTimeout <= 0 {
-		spendTimeout = 30 * time.Second
-	}
-
-	if waitErr := group.Wait(ctx, spendTimeout); waitErr != nil {
+	if waitErr := group.Wait(requestCtx, 0); waitErr != nil {
+		for _, item := range items {
+			item.admission.Abandon()
+		}
 		// The group did not complete within budget (context canceled, or the
 		// dispatcher took longer than spendTimeout). Some items may already
 		// have finished before the abort — resolveSpendCompletions(onlyCompleted=true)
@@ -531,8 +537,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// Roll back the spends we know completed. This is the WEAKEST case for
 		// the atomicity contract, not the strictest: onlyCompleted=true above
 		// excludes every item whose published flag is not yet set, but the
-		// dispatcher runs on s.ctx (not this now-dead caller ctx) and keeps
-		// writing to those items after we return here, so a straggler that later
+		// dispatcher runs on s.ctx for items already admitted to a backend part
+		// before abandonment. Only those can still write after we return; a straggler that later
 		// succeeds is never rolled back by this call. prometheusUtxoSpendAbortInFlight
 		// counts those skipped items so this residual window is measurable
 		// rather than invisible; closing it needs attempt identity or
@@ -547,7 +553,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// race, and an in-flight item still reads Err==nil (misclassified as a
 		// successful spend). A Wait error means the whole operation failed;
 		// callers must treat it as such and not inspect per-item slots.
-		if errors.Is(waitErr, context.Canceled) || errors.Is(waitErr, context.DeadlineExceeded) {
+		if ctx.Err() != nil {
 			return nil, errors.NewContextCanceledError("[SPEND] context canceled while waiting for batch response: %s", waitErr)
 		}
 
@@ -1016,6 +1022,12 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 	var outcome spendBreakerOutcome
 
 	utxo.ProcessSpendBatch(batch, utxo.SpendBatchHandler[*batchSpend]{
+		Start: func(item *batchSpend) error {
+			if item == nil {
+				return nil
+			}
+			return item.admission.Start(item.requestCtx)
+		},
 		Spend: func(item *batchSpend) *utxo.Spend {
 			if item == nil {
 				return nil
