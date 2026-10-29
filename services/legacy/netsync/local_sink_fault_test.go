@@ -5,6 +5,7 @@ import (
 	"context"
 	stderrors "errors"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,6 +234,154 @@ func TestPeer_AStoreFaultAtTheSinkKeepsTheConnection(t *testing.T) {
 	require.Equal(t, int64(0), sm.waste.dupDrained.Load(), "and not as a drained duplicate")
 	require.Positive(t, sm.waste.bytesWasted.Load(), "the body's bytes were received and lost")
 	require.True(t, sm.takeLocalFaultDrain(hash), "the mark is waiting for handleBlockOnDiskMsg")
+}
+
+// recordWritePanickingStore is recordWriteFailingStore's panicking twin: the
+// converted record's write panics instead of failing, standing in for a bug under
+// the conversion. A subtree write cannot stand in for one: the file storer writes
+// on its own goroutine, where no recover on the read loop can reach a panic.
+type recordWritePanickingStore struct {
+	blob.Store
+}
+
+func (s *recordWritePanickingStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	if fileType == fileformat.FileTypeBlock {
+		panic("store exploded")
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// panicOnceReader serves r and panics on the first read that passes at, as a bug
+// in the middle of the transaction loop would. Later reads go on normally, so the
+// drain after the panic can read the rest of the body off the wire. Reads are
+// short, as off a socket, or the stream's buffer would take the whole body in
+// its first read and the panic would land before the loop.
+type panicOnceReader struct {
+	r        io.Reader
+	at, read int
+	done     bool
+}
+
+func (p *panicOnceReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b[:min(len(b), 64)])
+	p.read += n
+
+	if !p.done && p.read > p.at {
+		p.done = true
+
+		panic("conversion exploded")
+	}
+
+	return n, err
+}
+
+// countingSubtreeStore counts the subtree structure files written through it.
+type countingSubtreeStore struct {
+	blob.Store
+	written *atomic.Int64
+}
+
+func (s *countingSubtreeStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
+	err := s.Store.SetFromReader(ctx, key, fileType, reader, opts...)
+	if err == nil && fileType == fileformat.FileTypeSubtreeToCheck {
+		s.written.Add(1)
+	}
+
+	return err
+}
+
+// TestPeer_APanicUnderTheSinkIsALocalFaultAndKeepsTheConnection: a panic under
+// the conversion is a bug of this node's, so it takes the route every other local
+// sink fault takes (TestPeer_AStoreFaultAtTheSinkKeepsTheConnection). The rest of
+// the body is drained, the peer stays connected, nothing of the block is left on
+// disk, the drain is marked so the block is asked for again, and the block's
+// stream leaves the registry. A stream left behind keeps blockHeldLocally true for
+// the hash, and no path asks for the block again until a restart.
+func TestPeer_APanicUnderTheSinkIsALocalFaultAndKeepsTheConnection(t *testing.T) {
+	realStore := memory.New()
+	sm := newPipelineParkManager(t, &recordWritePanickingStore{Store: realStore}, 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.streams = newStreamRegistry()
+
+	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
+	roots := goodRunSubtreeRoots(t, msgBlock, hash)
+
+	sender, receiver, onDisk, pings := streamingPeerPair(t, sm, 24)
+	require.True(t, sm.blockDownloads.Add(receiver, hash))
+
+	sender.QueueMessage(msgBlock, nil)
+	sender.QueueMessage(wire.NewMsgPing(42), nil)
+
+	select {
+	case <-pings:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the message after the block was never handled: the panic was not absorbed as a local fault")
+	}
+
+	require.True(t, receiver.Connected(), "a panic of this node's own must not disconnect the peer that delivered the block")
+
+	var msg *peerpkg.MsgBlockOnDisk
+	select {
+	case msg = <-onDisk:
+	default:
+		t.Fatal("the block never reached OnBlockOnDisk")
+	}
+
+	require.Equal(t, hash, msg.Hash)
+	require.False(t, msg.Converted)
+
+	requireNothingOfTheBlockOnDisk(t, realStore, hash, roots)
+
+	require.False(t, sm.streams.arriving(hash), "the stream must leave the registry, or the block is never asked for again")
+	require.Equal(t, int64(1), sm.waste.localFaultDrained.Load(), "the drain is counted as this node's own fault")
+	require.True(t, sm.takeLocalFaultDrain(hash), "the mark is waiting for handleBlockOnDiskMsg")
+}
+
+// TestSink_APanicMidTransactionLoopIsALocalFault is the same rule for a panic in
+// the middle of the transaction loop, after subtree files exist and while a
+// conversion is registered: driven through the sink chain the wire layer is
+// handed, so every wrapper between the read loop and the conversion is in it.
+func TestSink_APanicMidTransactionLoopIsALocalFault(t *testing.T) {
+	store := memory.New()
+	var written atomic.Int64
+	sm := newPipelineParkManager(t, &countingSubtreeStore{Store: store, written: &written}, 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.streams = newStreamRegistry()
+
+	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
+	roots := goodRunSubtreeRoots(t, msgBlock, hash)
+	body := blockBodyBytes(t, bsvutil.NewBlock(msgBlock))
+	owner := owingPeer(t, sm, hash, 25)
+
+	var sink func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error)
+
+	sm.installStreamingBlockPath(func(s func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error),
+		_ func(chainhash.Hash, *wire.BlockHeader, uint64) error, _ func(chainhash.Hash, bool) error,
+	) {
+		sink = s
+	})
+
+	src := &panicOnceReader{r: bytes.NewReader(body), at: len(body) * 4 / 5}
+
+	var (
+		converted bool
+		err       error
+	)
+
+	require.NotPanics(t, func() {
+		converted, err = sink(hash, &msgBlock.Header, peerpkg.NewDeliveryReader(src, owner), sinkPayloadLen(body))
+	})
+	require.NoError(t, err, "a local fault leaves the sink as a drain, not a read error")
+	require.False(t, converted)
+	require.Equal(t, len(body), src.read, "the rest of the body was drained off the wire")
+	require.Positive(t, written.Load(), "sanity: subtree files were on disk when the panic came, or their cleanup is asserted against nothing")
+
+	requireNothingOfTheBlockOnDisk(t, store, hash, roots)
+
+	require.False(t, sm.streams.arriving(hash), "the stream must leave the registry, or the block is never asked for again")
+	require.Equal(t, int64(1), sm.waste.localFaultDrained.Load())
+	require.True(t, sm.takeLocalFaultDrain(hash))
 }
 
 // TestPipelineSink_ABodyCutMidTransactionIsADeliveryFaultNotAnInvalidBlock pins

@@ -62,6 +62,35 @@ func TestAStreamCutPartWayIsCountedWithItsBytes(t *testing.T) {
 	require.Equal(t, int64(3000), sm.waste.bytesWasted.Load(), "the bytes that arrived before it was cut")
 }
 
+// A stream whose sink panics still leaves the registry. Left behind, it keeps
+// blockHeldLocally true for the hash, and no path asks for the block again.
+func TestAStreamWhoseSinkPanicsLeavesTheRegistry(t *testing.T) {
+	sm := streamManager(t)
+
+	active := func() int {
+		sm.streams.mu.Lock()
+		defer sm.streams.mu.Unlock()
+
+		return len(sm.streams.active)
+	}
+
+	var during int
+
+	sink := sm.trackBlockStreams(func(_ chainhash.Hash, _ *wire.BlockHeader, r io.Reader, _ int64) (bool, error) {
+		during = active()
+
+		panic("sink exploded")
+	})
+
+	require.Panics(t, func() {
+		_, _ = sink(chainhash.Hash{0x65}, &wire.BlockHeader{}, bytes.NewReader(make([]byte, 100)), 180)
+	})
+
+	require.Equal(t, 1, during, "sanity: the stream is registered while the sink runs")
+	require.Zero(t, active(), "the stream must leave the registry")
+	require.Equal(t, int64(1), sm.waste.streamsFailed.Load(), "counted as a failed stream")
+}
+
 func TestAPeerDroppedWithBlocksOwedIsCounted(t *testing.T) {
 	sm := streamManager(t)
 

@@ -1392,13 +1392,47 @@ func (p *Peer) handleAuthChMsg(msg *wire.MsgAuthch) {
 	p.logger.Debugf("Ignoring authch message from %v - this node does not have MinerID configured", p)
 }
 
+// maxHandshakePayload is the largest payload any message read before the read
+// loop starts may have: the version or createstream a connection opens with,
+// and the streamack answering a createstream. Each is a few hundred bytes.
+func maxHandshakePayload(pver uint32) uint64 {
+	return max((&wire.MsgVersion{}).MaxPayloadLength(pver),
+		(&wire.MsgCreateStream{}).MaxPayloadLength(pver),
+		(&wire.MsgStreamAck{}).MaxPayloadLength(pver))
+}
+
+// ReadHandshakeMessage reads one message through go-wire's buffered
+// ReadMessageWithEncodingN, which MsgVersion needs (its Bsvdecode requires a
+// *bytes.Buffer), after refusing a declared payload larger than any handshake
+// message can have. ReadMessageWithEncodingN allocates the whole declared
+// payload before reading a byte of it, bounded only by the type's own
+// MaxPayloadLength, which is the 4 GB excessive block size for tx and block, so
+// without this bound a 24-byte header from anyone who can open a connection
+// made this node allocate gigabytes. from is the peer the bytes come from, or
+// nil when there is none yet (DeliveredBy).
+func ReadHandshakeMessage(r io.Reader, from *Peer, pver uint32, bsvnet wire.BitcoinNet, enc wire.MessageEncoding) (int, wire.Message, []byte, error) {
+	var hdr [wire.MessageHeaderSize]byte
+
+	n, err := io.ReadFull(r, hdr[:])
+	if err != nil {
+		return n, nil, nil, err
+	}
+
+	// The length field sits after the 4-byte magic and the 12-byte command.
+	if length, limit := uint64(binary.LittleEndian.Uint32(hdr[16:20])), maxHandshakePayload(pver); length > limit {
+		return n, nil, nil, errors.NewNetworkInvalidResponseError("handshake message %q declares a %d-byte payload, above the %d bytes any handshake message can have",
+			bytes.TrimRight(hdr[4:16], "\x00"), length, limit)
+	}
+
+	return wire.ReadMessageWithEncodingN(&deliveryReader{r: io.MultiReader(bytes.NewReader(hdr[:]), r), from: from}, pver, bsvnet, enc)
+}
+
 // readMessage reads the next bitcoin message from the peer with logging.
 // It buffers the full payload before decoding and returns the raw payload
-// bytes. Use this for messages whose Bsvdecode requires a *bytes.Buffer
-// (notably MsgVersion) or whose raw bytes are needed downstream.
+// bytes. It serves only the handshake, so the message is bounded by
+// ReadHandshakeMessage.
 func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte, error) {
-	n, msg, buf, err := wire.ReadMessageWithEncodingN(&deliveryReader{r: p.conn, from: p},
-		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	n, msg, buf, err := ReadHandshakeMessage(p.conn, p, p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
 
 	if p.cfg.Listeners.OnRead != nil {
@@ -1450,15 +1484,16 @@ func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (int, wire.Me
 // a panic here must cost that peer its connection (the read loop answers any
 // such error with a reject and a disconnect), not take the process down.
 //
-// The streaming block handler runs the block sink on this goroutine, so a sink
-// panic is caught here too, and whatever the sink held when it panicked is not
-// released. That is logged at Error so it is seen. An out-of-memory failure is
-// fatal in Go and is not caught; go-wire bounding its allocations by the bytes
-// actually read is what prevents that.
+// The streaming block handler runs the block sink on this goroutine. The sync
+// manager's sink turns a panic under its conversion into a local fault itself
+// (netsync pipelineBlockSink), so it never reaches here; one that does is from
+// code outside that boundary, and whatever that code held is not released. An
+// out-of-memory failure is fatal in Go and is not caught; go-wire bounding its
+// allocations by the bytes actually read is what prevents that.
 func (p *Peer) readWireMessageStreaming(encoding wire.MessageEncoding) (n int, msg wire.Message, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			p.logger.Errorf("[readMessageStreaming][%s] recovered panic reading a message: %v stack=%q", p, r, debug.Stack())
+			p.logger.Errorf("[readMessageStreaming][%s] recovered panic reading a message: %q stack=%q", p, fmt.Sprint(r), debug.Stack())
 
 			msg = nil
 			err = errors.NewProcessingError("[readMessageStreaming][%s] recovered panic reading a message: %s", p, fmt.Sprint(r))

@@ -1157,6 +1157,18 @@ func (sm *SyncManager) trackBlockStreams(inner func(chainhash.Hash, *wire.BlockH
 
 		sm.streams.add(s)
 
+		// Removed and counted as failed even when inner panics: a stream left registered keeps
+		// blockHeldLocally true for the hash, and nothing asks for the block again.
+		finished := false
+
+		defer func() {
+			if !finished {
+				sm.streams.finish(s, time.Now(), false)
+				sm.waste.streamsFailed.Add(1)
+				sm.waste.bytesWasted.Add(s.read.Load())
+			}
+		}()
+
 		converted, err := inner(hash, header, countingReader{r: r, s: s}, n)
 
 		now = time.Now()
@@ -1165,6 +1177,7 @@ func (sm *SyncManager) trackBlockStreams(inner func(chainhash.Hash, *wire.BlockH
 		// bytes counted never reach n, and a test against n counted no stream as complete.
 		complete := err == nil
 		sm.streams.finish(s, now, complete)
+		finished = true
 
 		sm.streams.mu.Lock()
 		drained := s.path == admitRawDuplicate || s.path == admitLocalFault || s.path == admitNotOwed

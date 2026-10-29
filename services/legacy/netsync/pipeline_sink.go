@@ -2,7 +2,9 @@ package netsync
 
 import (
 	"bytes"
+	"fmt"
 	"io"
+	"runtime/debug"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -79,7 +81,27 @@ import (
 // A producer keeps its verdict outermost and never wraps a peer verdict inside a
 // local code: NewProcessingError("...", blockInvalidErr) would read as our fault,
 // keep the peer and re-download a body that is genuinely bad.
-func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.BlockHeader, r io.Reader, n int64) (bool, error) {
+//
+// A panic under the conversion is a bug of this node's, so it leaves as
+// ERR_PROCESSING, a local fault: the rest of the body is drained, the peer kept
+// and the block asked for again, and every wrapper's own failure path runs on the
+// way out. Files this copy wrote are removed before a takeover copy is let start
+// (convertStreamedBlock). A panic on the subtree file storer's own goroutine is
+// out of reach of any recover here and still ends the process.
+func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.BlockHeader, r io.Reader, n int64) (converted bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			sm.logger.Errorf("[pipelineBlockSink][%s] recovered panic converting the block: %q stack=%q", hash, fmt.Sprint(p), debug.Stack())
+
+			converted, err = false, errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block: %s", hash, fmt.Sprint(p))
+		}
+	}()
+
+	return sm.convertStreamedBlock(hash, header, r, n)
+}
+
+// convertStreamedBlock is pipelineBlockSink without its panic boundary.
+func (sm *SyncManager) convertStreamedBlock(hash chainhash.Hash, header *wire.BlockHeader, r io.Reader, n int64) (bool, error) {
 	// Every block converts. There is no fallback and nothing writes a whole
 	// block body to one file any more.
 	//
@@ -235,6 +257,16 @@ func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.Block
 		// took over can start once this runs. Without it a failed read after a takeover left that
 		// copy waiting until shutdown.
 		defer ctl.markCleaned()
+		// Run first on a panic: this copy's files go, as on every failure path, before
+		// markCleaned lets a copy that took over start. pipelineBlockSink then turns the
+		// panic into a local fault.
+		defer func() {
+			if p := recover(); p != nil {
+				sm.deleteWrittenOnFailure(hash, writer)
+
+				panic(p)
+			}
+		}()
 
 		for {
 			if ctl.yielding() {

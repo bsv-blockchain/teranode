@@ -1030,7 +1030,7 @@ func (sp *serverPeer) openRequiredStreams() {
 
 	// Read STREAMACK response before creating the peer to avoid resource
 	// leaks if the remote side rejects or fails to acknowledge the stream.
-	_, msg, _, err := wire.ReadMessageWithEncodingN(conn, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net, wire.BaseEncoding)
+	_, msg, _, err := peer.ReadHandshakeMessage(conn, nil, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net, wire.BaseEncoding)
 	if err != nil {
 		sp.server.logger.Warnf("Failed to read streamack from %s: %v", peerAddr, err)
 		conn.Close()

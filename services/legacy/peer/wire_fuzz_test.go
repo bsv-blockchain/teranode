@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"net"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -178,30 +181,102 @@ func FuzzStreamingBlockFraming(f *testing.F) {
 // claims a huge payload with nothing behind it must be rejected without
 // allocating proportionally to that untrusted field.
 //
-// go-wire bounds the declared length against the per-type MaxPayloadLength
-// before allocating, and discards oversized input in 10 KB chunks rather than
-// in one buffer. This test is what keeps that true: a regression here is a
-// one-packet OOM of the legacy service from any connected peer.
+// The claim sits just under each type's own MaxPayloadLength, which for tx and
+// block is the 4 GB excessive block size, so go-wire's per-type bound does not
+// refuse it. go-wire's buffered ReadMessageWithEncodingN allocates the whole
+// declared payload before reading, so the handshake read must refuse the length
+// first (ReadHandshakeMessage), and the post-handshake streaming read must never
+// buffer it. A regression here is a one-packet OOM of the legacy service from
+// any peer that can open a connection.
 func TestReadWireMessage_HostileDeclaredLengthIsBounded(t *testing.T) {
 	wire.SetLimits(maxWireBlockPayloadForFuzz)
+	RegisterStreamingBlockHandler()
 
 	const maxAlloc = uint64(8 << 20) // 8 MB — far above a bounded reject, far below the claim
 
-	for _, command := range []string{wire.CmdTx, wire.CmdBlock, wire.CmdInv, wire.CmdHeaders} {
-		// A well-formed header claiming ~4 GB, followed by nothing at all.
-		frame := buildFrame(command, nil)
-		binary.LittleEndian.PutUint32(frame[16:20], 0xF0000000)
-
-		alloc := allocDeltaBytes(func() {
-			_, _, _, err := wire.ReadMessageWithEncodingN(bytes.NewReader(frame),
-				wire.ProtocolVersion, wire.MainNet, wire.BaseEncoding)
-			require.Errorf(t, err, "a %s header claiming 0xF0000000 bytes with no payload must error", command)
-		})
-
-		require.Lessf(t, alloc, maxAlloc,
-			"reading a %d-byte %s frame allocated %d bytes — the payload buffer is sized from the untrusted length field",
-			len(frame), command, alloc)
+	readers := []struct {
+		name string
+		read func(r io.Reader) error
+	}{
+		{name: "handshake", read: func(r io.Reader) error {
+			_, _, _, err := ReadHandshakeMessage(r, nil, wire.ProtocolVersion, wire.MainNet, wire.BaseEncoding)
+			return err
+		}},
+		{name: "streaming", read: func(r io.Reader) error {
+			_, _, err := wire.ReadMessageStreamingN(r, wire.ProtocolVersion, wire.MainNet, wire.BaseEncoding)
+			return err
+		}},
 	}
+
+	for _, tc := range []struct {
+		command  string
+		declared uint32
+	}{
+		{wire.CmdTx, maxWireBlockPayloadForFuzz - 1000},
+		{wire.CmdBlock, maxWireBlockPayloadForFuzz - 1000},
+		{wire.CmdReject, 0xF0000000},
+		{wire.CmdInv, 0xF0000000},
+		{wire.CmdHeaders, 0xF0000000},
+	} {
+		// A well-formed header claiming gigabytes, followed by nothing at all.
+		frame := buildFrame(tc.command, nil)
+		binary.LittleEndian.PutUint32(frame[16:20], tc.declared)
+
+		for _, rd := range readers {
+			t.Run(tc.command+"/"+rd.name, func(t *testing.T) {
+				alloc := allocDeltaBytes(func() {
+					require.Errorf(t, rd.read(bytes.NewReader(frame)), "a %s header claiming %d bytes with no payload must error", tc.command, tc.declared)
+				})
+
+				require.Lessf(t, alloc, maxAlloc,
+					"reading a %d-byte %s frame allocated %d bytes — the payload buffer is sized from the untrusted length field",
+					len(frame), tc.command, alloc)
+			})
+		}
+	}
+}
+
+// TestReadHandshakeMessage_ReadsEveryHandshakeMessage: the length bound refuses
+// only what no handshake message can be, so each message a connection may open
+// with, and the streamack answering a createstream, still reads in full.
+func TestReadHandshakeMessage_ReadsEveryHandshakeMessage(t *testing.T) {
+	me := wire.NewNetAddressIPPort(net.ParseIP("10.0.0.1"), 8333, 0)
+	you := wire.NewNetAddressIPPort(net.ParseIP("10.0.0.2"), 8333, 0)
+
+	version := wire.NewMsgVersion(me, you, 42, 0)
+	version.UserAgent = "/" + strings.Repeat("u", wire.MaxUserAgentLen-2) + "/"
+
+	for _, msg := range []wire.Message{
+		version,
+		wire.NewMsgCreateStream(bytes.Repeat([]byte{1}, 16), wire.StreamTypeData1, wire.BlockPriorityStreamPolicy),
+		wire.NewMsgStreamAck(bytes.Repeat([]byte{1}, 16), wire.StreamTypeData1),
+	} {
+		t.Run(msg.Command(), func(t *testing.T) {
+			var frame bytes.Buffer
+			_, err := wire.WriteMessageN(&frame, msg, wire.ProtocolVersion, wire.MainNet)
+			require.NoError(t, err)
+
+			n, got, payload, err := ReadHandshakeMessage(bytes.NewReader(frame.Bytes()), nil, wire.ProtocolVersion, wire.MainNet, wire.BaseEncoding)
+			require.NoError(t, err)
+			require.Equal(t, frame.Len(), n, "the byte count covers the header and the payload")
+			require.Equal(t, msg.Command(), got.Command())
+			require.Equal(t, frame.Bytes()[wire.MessageHeaderSize:], payload)
+		})
+	}
+}
+
+// TestReadHandshakeMessage_RefusesALengthNoHandshakeMessageCanHave pins the
+// refusal itself: it is the peer's protocol violation, raised before a byte of
+// the payload is read.
+func TestReadHandshakeMessage_RefusesALengthNoHandshakeMessageCanHave(t *testing.T) {
+	frame := buildFrame(wire.CmdVersion, nil)
+	binary.LittleEndian.PutUint32(frame[16:20], uint32(maxHandshakePayload(wire.ProtocolVersion)+1)) //nolint:gosec // a few hundred bytes
+
+	n, msg, _, err := ReadHandshakeMessage(bytes.NewReader(frame), nil, wire.ProtocolVersion, wire.MainNet, wire.BaseEncoding)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the peer's violation, not this node's fault: %v", err)
+	require.Nil(t, msg)
+	require.Equal(t, wire.MessageHeaderSize, n, "only the header was read")
 }
 
 // allocDeltaBytes runs fn and returns the bytes allocated during it.
@@ -230,8 +305,11 @@ func allocDeltaBytes(fn func()) uint64 {
 // ReadMessageWithEncodingN of the handshake and the streaming
 // ReadMessageStreamingN of the post-handshake read loop. The block cases go
 // through Teranode's own streaming block handler with no sink installed, which
-// is its Bsvdecode fallback. The corrupted-checksum case pins that a decode
-// failing before the checksum is reached is still cheap.
+// is its Bsvdecode fallback. The count cases are bounded since go-wire v1.4.0,
+// the byte-length cases (scripts, the reject string) since v1.5.0. The
+// corrupted-checksum case pins, on the streaming path, that a decode failing
+// before the checksum is reached is still cheap; the buffered path checks the
+// checksum before decoding.
 func TestReadWireMessage_HostileCountInSmallFrameIsBounded(t *testing.T) {
 	wire.SetLimits(maxWireBlockPayloadForFuzz)
 	RegisterStreamingBlockHandler()
