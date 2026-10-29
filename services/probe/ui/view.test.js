@@ -6,6 +6,7 @@ import {
   panelStatus,
   formatReading,
   renderHome,
+  renderLanes,
   renderAlarmPopover,
   renderAlarmList,
   renderTopBar,
@@ -688,7 +689,7 @@ test('popover shows the highest severity alarm that is not snoozed', () => {
 });
 
 const STAGE_KEYS = ['ingress', 'validator', 'cache', 'assembly', 'chain', 'stores'];
-const READING_COUNTS = { ingress: 6, validator: 5, cache: 10, assembly: 5, chain: 3, stores: 6 };
+const READING_COUNTS = { ingress: 6, validator: 5, cache: 10, assembly: 6, chain: 3, stores: 6 };
 const allAttrs = (node) => walk(node).flatMap((n) => Object.entries(n.attrs || {}));
 const dataRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-key'] && !n.attrs['data-marker']);
 const markerRows = (view) => walk(view).filter((n) => n.tag === 'tr' && n.attrs['data-marker']);
@@ -1000,4 +1001,177 @@ test('hostile history payload is ignored', () => {
 test('stage view shows history unavailable calmly', () => {
   assert.ok(texts(renderStage(snap(), 'cache', { data: null, error: true }, NOW)).includes('History unavailable.'));
   assert.ok(!texts(renderStage(snap(), 'cache', { data: null, error: false }, NOW)).includes('History unavailable.'));
+});
+
+test('parseRoute knows the lanes view', () => {
+  assert.deepEqual(parseRoute('#/lanes'), { name: 'lanes', stage: '' });
+  assert.deepEqual(parseRoute('#/lanes/x'), { name: 'home', stage: '' });
+});
+
+test('lanes view shows four lanes then the shared panels', () => {
+  const view = renderLanes(snap());
+  const panels = walk(view).filter((n) => n.attrs && n.attrs['data-stage']);
+  assert.deepEqual(panels.map((p) => p.attrs['data-stage']), ['lane-tx', 'lane-subtrees', 'lane-blocks', 'lane-mining', 'cache', 'stores', 'lane-blobs', 'lane-kafka']);
+});
+
+const kafkaUp = () => {
+  const s = snap();
+  s.sources.find((x) => x.name === 'kafka').ok = true;
+  return s;
+};
+
+test('lanes view shows both blob stores with their readings', () => {
+  const view = renderLanes(snap());
+  const value = (key) => texts(one(view, 'data-key', key));
+  assert.ok(value('blobs.subtree.readsPerSec').includes('410'));
+  assert.ok(value('blobs.subtree.writesPerSec').includes('198'));
+  assert.ok(value('blobs.subtree.errorsPerSec').includes('0'));
+  assert.ok(value('blobs.block.readsPerSec').includes('2.5'));
+  const subtree = one(view, 'data-blob', 'subtree');
+  const block = one(view, 'data-blob', 'block');
+  assert.ok(texts(subtree).includes('Subtree store'));
+  assert.ok(texts(block).includes('Block store'));
+});
+
+test('lanes view shows no data for a blob reading without samples', () => {
+  const view = renderLanes(snap());
+  const t = texts(one(view, 'data-key', 'blobs.block.readP99Sec'));
+  assert.ok(t.includes('–'));
+  assert.ok(t.includes('no data'));
+});
+
+test('lanes view marks the blob panel grey when the node exports no blob metrics', () => {
+  const s = snap();
+  for (const store of ['subtree', 'block']) {
+    for (const field of Object.keys(s.blobs[store])) s.blobs[store][field] = { v: 0, st: 'nodata', note: 'no data' };
+  }
+  const panel = one(renderLanes(s), 'data-stage', 'lane-blobs');
+  assert.equal(panel.attrs['data-st'], 'n');
+});
+
+test('lanes view lists every Kafka topic in the order the probe sends', () => {
+  const view = renderLanes(kafkaUp());
+  const rows = walk(view).filter((n) => n.attrs && n.attrs['data-topic']);
+  assert.deepEqual(rows.map((r) => r.attrs['data-topic']), ['subtrees', 'txmeta', 'blocks', 'rejectedtx']);
+  assert.deepEqual(rows.map((r) => r.attrs['data-lag']), ['1840', '0', '0', undefined]);
+  assert.ok(texts(rows[0]).includes('1,840'));
+  assert.ok(texts(rows[3]).includes('no consumers'));
+  assert.equal(one(view, 'data-stage', 'lane-kafka').attrs['data-st'], 'g');
+});
+
+test('lanes view draws a lag bar only for a topic that is behind', () => {
+  const rows = walk(renderLanes(kafkaUp())).filter((n) => n.attrs && n.attrs['data-topic']);
+  const bars = (row) => walk(row).filter((n) => n.tag === 'rect' && n.attrs.fill === '#5b8fc7').length;
+  assert.equal(bars(rows[0]), 1);
+  assert.equal(bars(rows[1]), 0);
+  assert.equal(bars(rows[3]), 0);
+});
+
+test('lanes view shows a Kafka outage instead of stale lag', () => {
+  const view = renderLanes(snap());
+  assert.equal(walk(view).filter((n) => n.attrs && n.attrs['data-topic']).length, 0);
+  assert.ok(texts(one(view, 'data-kafka', 'outage')).includes('Kafka no data, 34 s ago'));
+  assert.equal(one(view, 'data-stage', 'lane-kafka').attrs['data-st'], 'n');
+});
+
+test('lanes view says so when no Kafka topic is watched', () => {
+  const s = kafkaUp();
+  s.kafka = [];
+  const view = renderLanes(s);
+  assert.ok(texts(one(view, 'data-kafka', 'none')).includes('No Kafka topics are watched on this node.'));
+  assert.equal(one(view, 'data-stage', 'lane-kafka').attrs['data-st'], 'n');
+});
+
+test('lanes view grows taller with more Kafka topics', () => {
+  const few = kafkaUp();
+  const many = kafkaUp();
+  for (let i = 0; i < 12; i++) many.kafka.push({ topic: `extra-${i}`, lag: i });
+  const height = (s) => Number(renderLanes(s).attrs.viewBox.split(' ')[3]);
+  assert.ok(height(many) > height(few));
+});
+
+test('lanes view ignores malformed Kafka and blob data', () => {
+  const s = kafkaUp();
+  s.kafka = [null, 7, { topic: 5, lag: 1 }, { topic: '', lag: 1 }, { topic: 'odd', lag: 'x' }, { topic: 'neg', lag: -4 }, { topic: '<b>', lag: 3 }];
+  s.blobs = 'nope';
+  const view = renderLanes(s);
+  const rows = walk(view).filter((n) => n.attrs && n.attrs['data-topic']);
+  assert.deepEqual(rows.map((r) => r.attrs['data-topic']), ['odd', 'neg', '<b>']);
+  assert.deepEqual(rows.map((r) => r.attrs['data-lag']), [undefined, '0', '3']);
+  assert.ok(texts(one(view, 'data-key', 'blobs.subtree.readsPerSec')).includes('–'));
+  s.kafka = 'nope';
+  assert.ok(texts(one(renderLanes(s), 'data-kafka', 'none')).length > 0);
+});
+
+test('lane panels have no drilldown link but the shared panels do', () => {
+  const view = renderLanes(snap());
+  const hrefs = walk(view).filter((n) => n.tag === 'a').map((n) => n.attrs.href);
+  assert.deepEqual(hrefs, ['#/stage/cache', '#/stage/stores']);
+});
+
+test('lanes view formats each lane reading', () => {
+  const view = renderLanes(snap());
+  const value = (key) => texts(one(view, 'data-key', key));
+  assert.ok(value('lanes.subtrees.completedPerSec').includes('198'));
+  assert.ok(value('lanes.subtrees.txsFetchedAvg').includes('9.4'));
+  assert.ok(value('lanes.blocks.announcedTotal').includes('6'));
+  assert.ok(value('lanes.blocks.tip').includes('912,437'));
+  assert.ok(value('lanes.mining.candidatesPerSec').includes('0.2'));
+  assert.ok(value('ingress.propagationTxPerSec').includes('4,100'));
+});
+
+test('lanes view shows the skipped, missing-subtree and candidate-age readings', () => {
+  const view = renderLanes(snap());
+  const value = (key) => texts(one(view, 'data-key', key));
+  assert.ok(value('lanes.tx.alreadySeenPerSec').includes('310'));
+  assert.ok(value('lanes.blocks.missingSubtrees').includes('0'));
+  assert.ok(value('lanes.mining.candidateAgeSec').some((t) => t.includes('4')));
+});
+
+test('lanes view shows no data when a node does not export a lanes metric', () => {
+  const s = snap();
+  for (const path of [['tx', 'alreadySeenPerSec'], ['blocks', 'missingSubtrees'], ['blocks', 'missingSubtreesPerSec'], ['mining', 'candidateAgeSec']]) {
+    s.lanes[path[0]][path[1]] = { v: 0, st: 'nodata', note: 'no data' };
+  }
+  const view = renderLanes(s);
+  for (const key of ['lanes.tx.alreadySeenPerSec', 'lanes.blocks.missingSubtrees', 'lanes.mining.candidateAgeSec']) {
+    const t = texts(one(view, 'data-key', key));
+    assert.ok(t.includes('–'), key);
+    assert.ok(t.includes('no data'), key);
+  }
+  assert.equal(one(view, 'data-flow', 'missing-subtrees').attrs['data-st'], 'n');
+});
+
+test('lanes view draws the two dependency arrows', () => {
+  const view = renderLanes(snap());
+  const missingTxs = one(view, 'data-flow', 'missing-txs');
+  assert.ok(texts(missingTxs).includes('txs'));
+  assert.ok(texts(missingTxs).includes('1,950/s'));
+  const missingSubtrees = one(view, 'data-flow', 'missing-subtrees');
+  assert.ok(texts(missingSubtrees).includes('subtrees'));
+  assert.ok(texts(missingSubtrees).includes('0/s'));
+});
+
+test('lanes view animates an arrow only while work flows', () => {
+  const animated = (view) => walk(view).filter((n) => n.attrs && typeof n.attrs.class === 'string' && n.attrs.class.startsWith('flow')).length;
+  assert.equal(animated(renderLanes(snap())), 1);
+  const s = snap();
+  s.lanes.subtrees.missingTxsPerSec.v = 0;
+  assert.equal(animated(renderLanes(s)), 0);
+});
+
+test('lanes view copes with a missing or hostile snapshot', () => {
+  assert.ok(texts(renderLanes(null)).includes('Waiting for the first sample.'));
+  const s = snap();
+  s.lanes = 'x';
+  s.tip = 'x';
+  s.ingress = null;
+  assert.doesNotThrow(() => renderLanes(s));
+  assert.doesNotThrow(() => renderLanes({}));
+});
+
+test('lanes view escapes text from the snapshot', () => {
+  const s = snap();
+  s.lanes.subtrees.completedPerSec = { v: 1, st: 'ok', note: '<img src=x onerror=alert(1)>' };
+  assert.ok(!toMarkupString(renderLanes(s)).includes('<img'));
 });

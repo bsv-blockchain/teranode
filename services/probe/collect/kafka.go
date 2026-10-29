@@ -2,6 +2,7 @@ package collect
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ type Kafka struct {
 	client  *kgo.Client
 	adm     *kadm.Client
 	topics  map[string]string
+	watched []string
 	timeout time.Duration
 }
 
@@ -67,6 +69,37 @@ func TopicsFromSettings(k settings.KafkaSettings) map[string]string {
 	return topics
 }
 
+func WatchedTopics(k settings.KafkaSettings) []string {
+	names := []string{
+		k.Subtrees, k.TxMeta, k.Blocks, k.BlocksFinal, k.InvalidBlocks,
+		k.InvalidSubtrees, k.LegacyInv, k.RejectedTx, k.TxPolicyRejected,
+	}
+
+	if k.ValidatorTxsConfig != nil {
+		names = append(names, strings.TrimPrefix(k.ValidatorTxsConfig.Path, "/"))
+	}
+
+	seen := make(map[string]bool, len(names))
+	topics := make([]string, 0, len(names))
+
+	for _, name := range names {
+		if name == "" || seen[name] {
+			continue
+		}
+
+		seen[name] = true
+		topics = append(topics, name)
+	}
+
+	sort.Strings(topics)
+
+	return topics
+}
+
+func (k *Kafka) Watch(topics []string) {
+	k.watched = append([]string(nil), topics...)
+}
+
 func (k *Kafka) Name() string {
 	return "kafka"
 }
@@ -87,8 +120,12 @@ func (k *Kafka) Collect(ctx context.Context) (snapshot.Patch, error) {
 	totals := make(map[string]int64, len(k.topics))
 	seen := make(map[string]bool, len(k.topics))
 
-	wanted := make(map[string]bool, len(k.topics))
+	wanted := make(map[string]bool, len(k.topics)+len(k.watched))
 	for _, topic := range k.topics {
+		wanted[topic] = true
+	}
+
+	for _, topic := range k.watched {
 		wanted[topic] = true
 	}
 
@@ -109,17 +146,29 @@ func (k *Kafka) Collect(ctx context.Context) (snapshot.Patch, error) {
 		}
 	}
 
-	byFlow := make(map[string]*int64, len(k.topics))
-
-	for id, topic := range k.topics {
+	lagOf := func(topic string) *int64 {
 		if !seen[topic] {
-			byFlow[id] = nil
-			continue
+			return nil
 		}
 
 		total := totals[topic]
-		byFlow[id] = &total
+
+		return &total
 	}
+
+	byFlow := make(map[string]*int64, len(k.topics))
+
+	for id, topic := range k.topics {
+		byFlow[id] = lagOf(topic)
+	}
+
+	topicLags := make([]snapshot.TopicLag, 0, len(k.watched))
+
+	for _, topic := range k.watched {
+		topicLags = append(topicLags, snapshot.TopicLag{Topic: topic, Lag: lagOf(topic)})
+	}
+
+	sortTopicLags(topicLags)
 
 	return func(s *snapshot.Snapshot) {
 		for id, lag := range byFlow {
@@ -127,7 +176,26 @@ func (k *Kafka) Collect(ctx context.Context) (snapshot.Patch, error) {
 				f.Lag = lag
 			}
 		}
+
+		s.Kafka = append([]snapshot.TopicLag(nil), topicLags...)
 	}, nil
+}
+
+func sortTopicLags(topics []snapshot.TopicLag) {
+	sort.Slice(topics, func(i, j int) bool {
+		a, b := topics[i], topics[j]
+
+		switch {
+		case a.Lag != nil && b.Lag == nil:
+			return true
+		case a.Lag == nil && b.Lag != nil:
+			return false
+		case a.Lag != nil && b.Lag != nil && *a.Lag != *b.Lag:
+			return *a.Lag > *b.Lag
+		default:
+			return a.Topic < b.Topic
+		}
+	})
 }
 
 func (k *Kafka) groupLags(ctx context.Context) (kadm.DescribedGroupLags, error) {

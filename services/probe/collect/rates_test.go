@@ -360,3 +360,85 @@ func TestMeanNotOK(t *testing.T) {
 	_, ok = r.Mean("h")
 	require.False(t, ok)
 }
+
+func TestAgeSecReadsTimestampGauge(t *testing.T) {
+	r := NewRates()
+
+	_, ok := r.AgeSec("ts")
+	require.False(t, ok)
+
+	r.Observe(time.Unix(100, 0), gaugeSet("ts", 96))
+
+	age, ok := r.AgeSec("ts")
+	require.True(t, ok)
+	require.InDelta(t, 4, age, 1e-9)
+
+	r.Observe(time.Unix(130, 0), gaugeSet("ts", 96))
+
+	age, ok = r.AgeSec("ts")
+	require.True(t, ok)
+	require.InDelta(t, 34, age, 1e-9)
+
+	r.Observe(time.Unix(140, 0), gaugeSet("ts", 150))
+
+	age, ok = r.AgeSec("ts")
+	require.True(t, ok)
+	require.Zero(t, age)
+
+	r.Observe(time.Unix(150, 0), gaugeSet("ts", 0))
+
+	_, ok = r.AgeSec("ts")
+	require.False(t, ok)
+
+	_, ok = r.AgeSec("absent")
+	require.False(t, ok)
+}
+
+func TestStoreSeriesSeparatesStoresAndKeepsTheFamilyTotal(t *testing.T) {
+	build := func(subtree, block float64) MetricSet {
+		return mergeStores(
+			labelled(counterSet("blob_total", subtree), "subtree"),
+			labelled(counterSet("blob_total", block), "block"),
+		)
+	}
+
+	r := NewRates()
+	start := time.Unix(100, 0)
+	r.Observe(start, build(10, 100))
+	r.Observe(start.Add(2*time.Second), build(30, 100))
+
+	got, ok := r.PerSec(StoreSeries("blob_total", "subtree"))
+	require.True(t, ok)
+	require.InDelta(t, 10, got, 1e-9)
+
+	got, ok = r.PerSec(StoreSeries("blob_total", "block"))
+	require.True(t, ok)
+	require.InDelta(t, 0, got, 1e-9)
+
+	got, ok = r.PerSec("blob_total")
+	require.True(t, ok)
+	require.InDelta(t, 10, got, 1e-9)
+
+	_, ok = r.PerSec(StoreSeries("blob_total", "tx"))
+	require.False(t, ok)
+}
+
+func TestTotalReadsCounterGaugeAndHistogramCount(t *testing.T) {
+	r := NewRates()
+
+	_, ok := r.Total("c_total")
+	require.False(t, ok)
+
+	r.Observe(time.Unix(100, 0), join(counterSet("c_total", 7), histSet("h", 12, 3, []float64{1}, []uint64{12})))
+
+	total, ok := r.Total("c_total")
+	require.True(t, ok)
+	require.InDelta(t, 7, total, 1e-9)
+
+	total, ok = r.Total("h")
+	require.True(t, ok)
+	require.InDelta(t, 12, total, 1e-9)
+
+	_, ok = r.Total("absent")
+	require.False(t, ok)
+}

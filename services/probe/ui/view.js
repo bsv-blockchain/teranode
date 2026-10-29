@@ -43,6 +43,30 @@ export const UNITS = {
   'assembly.paused': 'state',
   'assembly.tipLagBlocks': 'blocks',
   'assembly.queueHeadAgeSec': 'seconds',
+  'assembly.transactions': 'compact',
+  'lanes.tx.alreadySeenPerSec': 'rate',
+  'lanes.subtrees.alreadyKnownPerSec': 'rate',
+  'lanes.subtrees.completedPerSec': 'rate',
+  'lanes.subtrees.missingTxsPerSec': 'rate',
+  'lanes.subtrees.txsFetchedAvg': 'rate',
+  'lanes.blocks.announcedTotal': 'count',
+  'lanes.blocks.validatedTotal': 'count',
+  'lanes.blocks.missingSubtrees': 'count',
+  'lanes.blocks.missingSubtreesPerSec': 'rate',
+  'lanes.blocks.tip': 'count',
+  'lanes.mining.candidatesPerSec': 'rate',
+  'lanes.mining.solutionsTotal': 'count',
+  'lanes.mining.candidateAgeSec': 'seconds',
+  'blobs.subtree.readsPerSec': 'rate',
+  'blobs.subtree.writesPerSec': 'rate',
+  'blobs.subtree.errorsPerSec': 'rate',
+  'blobs.subtree.readP99Sec': 'seconds',
+  'blobs.subtree.writeP99Sec': 'seconds',
+  'blobs.block.readsPerSec': 'rate',
+  'blobs.block.writesPerSec': 'rate',
+  'blobs.block.errorsPerSec': 'rate',
+  'blobs.block.readP99Sec': 'seconds',
+  'blobs.block.writeP99Sec': 'seconds',
   'assembly.ingestQueueFill': 'fraction',
   'assembly.subtreeFill': 'fraction',
   'chain.forkDepth': 'blocks',
@@ -89,6 +113,20 @@ export const LABELS = {
   'assembly.paused': 'State',
   'assembly.tipLagBlocks': 'Tip lag',
   'assembly.queueHeadAgeSec': 'Queue head age',
+  'assembly.transactions': 'Transactions held',
+  'lanes.tx.alreadySeenPerSec': 'Already seen (skipped), per s',
+  'lanes.subtrees.alreadyKnownPerSec': 'Already known (ignored), per s',
+  'lanes.subtrees.completedPerSec': 'Completed, per s',
+  'lanes.subtrees.missingTxsPerSec': 'Missing txs fetched, per s',
+  'lanes.subtrees.txsFetchedAvg': 'Missing txs per subtree',
+  'lanes.blocks.announcedTotal': 'Announced, since start',
+  'lanes.blocks.validatedTotal': 'Validated, since start',
+  'lanes.blocks.missingSubtrees': 'Missing subtrees outstanding',
+  'lanes.blocks.missingSubtreesPerSec': 'Missing subtrees fetched, per s',
+  'lanes.blocks.tip': 'Tip height',
+  'lanes.mining.candidatesPerSec': 'Candidates served, per s',
+  'lanes.mining.solutionsTotal': 'Solutions found, since start',
+  'lanes.mining.candidateAgeSec': 'Candidate age',
   'assembly.ingestQueueFill': 'Ingest queue',
   'assembly.subtreeFill': 'Current subtree fill',
   'chain.fsm': 'FSM state',
@@ -606,8 +644,9 @@ function assemblyBody(s, anchors) {
     stdReadout(s, 58, 'assembly.paused', anchors),
     stdReadout(s, 110, 'assembly.tipLagBlocks', anchors),
     stdReadout(s, 162, 'assembly.queueHeadAgeSec', anchors),
-    fractionMeter(s, 228, 'assembly.ingestQueueFill', anchors),
-    fractionMeter(s, 278, 'assembly.subtreeFill', anchors),
+    stdReadout(s, 214, 'assembly.transactions', anchors),
+    fractionMeter(s, 280, 'assembly.ingestQueueFill', anchors),
+    fractionMeter(s, 330, 'assembly.subtreeFill', anchors),
   ];
 }
 
@@ -678,16 +717,21 @@ const BODIES = {
   stores: storesBody,
 };
 
-function panel(i, stage, st, body) {
-  return h('g', { transform: `translate(${px(i)},${PY})`, 'data-stage': stage.key, 'data-st': st }, [
-    h('rect', { width: PX, height: PH, rx: 8, fill: 'url(#panelG)', stroke: 'rgba(255,255,255,.1)' }),
-    h('path', { d: `M0 8a8 8 0 0 1 8-8h${PX - 16}a8 8 0 0 1 8 8v26H0z`, fill: 'url(#hdG)' }),
-    h('line', { x1: 0, x2: PX, y1: 34, y2: 34, stroke: 'rgba(255,255,255,.08)' }),
-    h('a', { href: `#/stage/${stage.key}`, class: 'ti-link', 'aria-label': `${stage.title} details` }, [
-      h('rect', { x: 0, y: 0, width: PX - 30, height: 34, class: 'ti-hit' }),
-      h('text', { x: 12, y: 22, class: 'ti' }, stage.title),
-    ]),
-    h('circle', { cx: PX - 14, cy: 17, r: 4.5, fill: COLORS[st], filter: 'url(#glow)', class: pulse(st) }),
+function panel(i, stage, st, body, geo) {
+  const w = (geo && geo.w) || PX;
+  const hgt = (geo && geo.h) || PH;
+  const y = (geo && geo.y) || PY;
+  return h('g', { transform: `translate(${px(i)},${y})`, 'data-stage': stage.key, 'data-st': st }, [
+    h('rect', { width: w, height: hgt, rx: 8, fill: 'url(#panelG)', stroke: 'rgba(255,255,255,.1)' }),
+    h('path', { d: `M0 8a8 8 0 0 1 8-8h${w - 16}a8 8 0 0 1 8 8v26H0z`, fill: 'url(#hdG)' }),
+    h('line', { x1: 0, x2: w, y1: 34, y2: 34, stroke: 'rgba(255,255,255,.08)' }),
+    stage.lane
+      ? h('text', { x: 12, y: 22, class: 'ti' }, stage.title)
+      : h('a', { href: `#/stage/${stage.key}`, class: 'ti-link', 'aria-label': `${stage.title} details` }, [
+        h('rect', { x: 0, y: 0, width: w - 30, height: 34, class: 'ti-hit' }),
+        h('text', { x: 12, y: 22, class: 'ti' }, stage.title),
+      ]),
+    h('circle', { cx: w - 14, cy: 17, r: 4.5, fill: COLORS[st], filter: 'url(#glow)', class: pulse(st) }),
     h('g', {}, body),
   ]);
 }
@@ -698,7 +742,7 @@ function flowSpeed(v) {
   return '';
 }
 
-function strip(flow, place, kafkaOutage) {
+function strip(flow, place, kafkaOutage, reverse) {
   const x = px(place.gap) + PX + 6;
   const w = GAP - 12;
   const y = PY + 76 + place.slot * STRIP_PITCH;
@@ -706,7 +750,7 @@ function strip(flow, place, kafkaOutage) {
   const stalled = rate.st === 'idle' || rate.st === 'nodata';
   const fr = formatReading(`flows.${flow.id}.rate`, rate);
   const v = finite(rate.v);
-  const d = `M${x + 7} ${y + 13} H${x + w - 7}`;
+  const d = reverse ? `M${x + w - 7} ${y + 13} H${x + 7}` : `M${x + 7} ${y + 13} H${x + w - 7}`;
   const still = stalled || !(v > 0);
   const path = still
     ? h('path', { d, stroke: COLORS.n, 'stroke-width': 3, 'stroke-dasharray': '2 8', 'stroke-linecap': 'round', fill: 'none' })
@@ -936,6 +980,166 @@ export function renderHome(snapshot, nowMs) {
   ]);
 }
 
+const LANE_PANELS = [
+  { key: 'tx', title: 'Transactions' },
+  { key: 'subtrees', title: 'Subtrees' },
+  { key: 'blocks', title: 'Blocks' },
+  { key: 'mining', title: 'Mining' },
+];
+
+function laneReading(s, key) {
+  if (key === 'lanes.blocks.tip') return finite(s.tip) > 0 ? { v: s.tip, st: 'ok' } : { st: 'nodata' };
+  return readingAt(s, key);
+}
+
+function laneReadout(s, y, key, label, source) {
+  const fr = formatReading(key, laneReading(s, source || key));
+  return readout(y, fr.normal ? `${label} (normal ${fr.normal})` : label, fr, key);
+}
+
+function laneStatus(s, sources) {
+  return worstOf(sources.map((k) => STATUS_LETTERS[(laneReading(s, k) || {}).st] || 'n'));
+}
+
+const LANE_ROWS = {
+  tx: [
+    ['lanes.tx.alreadySeenPerSec', 'Already seen (skipped), per s'],
+    ['ingress.propagationTxPerSec', 'Received, per s'],
+    ['validator.validatedPerSec', 'Validated, per s'],
+    ['ingress.rejectedPerSec', 'Rejected, per s'],
+    ['validator.latencyP99Sec', 'Validation p99'],
+    ['assembly.transactions', 'Held in block assembler'],
+  ],
+  subtrees: [
+    ['ingress.subtreeIntakePerSec', 'Received, per s'],
+    ['lanes.subtrees.alreadyKnownPerSec', 'Already known (ignored), per s'],
+    ['lanes.subtrees.completedPerSec', 'Completed, per s'],
+    ['lanes.subtrees.txsFetchedAvg', 'Missing txs per subtree'],
+    ['ingress.subtreeQueue', 'Waiting to process'],
+    ['ingress.subtreeQueueOldestSec', 'Oldest waiting'],
+  ],
+  blocks: [
+    ['lanes.blocks.announcedTotal', 'Announced, since start'],
+    ['lanes.blocks.validatedTotal', 'Validated, since start'],
+    ['lanes.blocks.missingSubtrees', 'Missing subtrees outstanding'],
+    ['lanes.blocks.tip', 'Tip height'],
+    ['chain.forkDepth', 'Fork depth'],
+  ],
+  mining: [
+    ['assembly.paused', 'Block assembly'],
+    ['lanes.mining.candidateAgeSec', 'Candidate age'],
+    ['lanes.mining.candidatesPerSec', 'Candidates served, per s'],
+    ['lanes.mining.solutionsTotal', 'Solutions found, since start'],
+    ['assembly.tipLagBlocks', 'Tip lag'],
+  ],
+};
+
+const LANE_ARROWS = [
+  { gap: 0, id: 'missing-txs', label: 'txs', key: 'lanes.subtrees.missingTxsPerSec' },
+  { gap: 1, id: 'missing-subtrees', label: 'subtrees', key: 'lanes.blocks.missingSubtreesPerSec' },
+];
+
+const WIDE_W = 2 * PX + GAP;
+const ROW2_Y = PY + PH + 24;
+const BLOB_H = 352;
+const KAFKA_ROW = 26;
+const KAFKA_BAR = '#5b8fc7';
+
+const BLOB_COLUMNS = [['subtree', 'Subtree store'], ['block', 'Block store']];
+const BLOB_ROWS = [
+  ['readsPerSec', 'Reads, per s'],
+  ['writesPerSec', 'Writes, per s'],
+  ['errorsPerSec', 'Errors, per s'],
+  ['readP99Sec', 'Read p99'],
+  ['writeP99Sec', 'Write p99'],
+];
+const BLOB_KEYS = BLOB_COLUMNS.flatMap(([store]) => BLOB_ROWS.map(([field]) => `blobs.${store}.${field}`));
+
+function blobsBody(s) {
+  return BLOB_COLUMNS.map(([store, title], col) => h('g', { transform: `translate(${col * (PX + GAP)},0)`, 'data-blob': store }, [
+    h('text', { x: 12, y: 62, class: 'tx' }, title),
+    ...BLOB_ROWS.map(([field, label], row) => laneReadout(s, 96 + row * 52, `blobs.${store}.${field}`, label)),
+  ]));
+}
+
+function kafkaTopics(s) {
+  const list = Array.isArray(s.kafka) ? s.kafka : [];
+  return list.filter((t) => t && typeof t === 'object' && typeof t.topic === 'string' && t.topic);
+}
+
+function kafkaHeight(s) {
+  return 58 + Math.max(1, kafkaTopics(s).length) * KAFKA_ROW + 14;
+}
+
+function kafkaRow(t, y) {
+  const known = typeof t.lag === 'number' && Number.isFinite(t.lag);
+  const lag = known ? Math.max(0, t.lag) : 0;
+  const lagText = known ? group(lag) : 'no consumers';
+  return h('g', { 'data-topic': t.topic, 'data-lag': known ? String(lag) : '' }, [
+    h('title', {}, `${t.topic}: total lag of all consumer groups`),
+    h('text', { x: 12, y: y + 11, class: 'tx' }, t.topic),
+    h('rect', { x: 160, y: y + 3, width: 150, height: 8, rx: 2, fill: '#18212b' }),
+    known && lag > 0 ? h('rect', { x: 160, y: y + 3, width: Math.max(2, (150 * countMeterPct(lag)) / 100), height: 8, rx: 2, fill: KAFKA_BAR }) : null,
+    h('text', { x: WIDE_W - 12, y: y + 11, 'text-anchor': 'end', class: known ? 'tx' : 'wd' }, lagText),
+  ].filter(Boolean));
+}
+
+function kafkaBody(s) {
+  const outage = sourceOutage(s, 'kafka');
+  if (outage) return [h('text', { x: 12, y: 66, class: 'wd', 'data-kafka': 'outage' }, `Kafka ${outage}`)];
+  const topics = kafkaTopics(s);
+  if (topics.length === 0) return [h('text', { x: 12, y: 66, class: 'wd', 'data-kafka': 'none' }, 'No Kafka topics are watched on this node.')];
+  return topics.map((t, i) => kafkaRow(t, 52 + i * KAFKA_ROW));
+}
+
+function kafkaStatus(s) {
+  return sourceOutage(s, 'kafka') || kafkaTopics(s).length === 0 ? 'n' : 'g';
+}
+
+function laneBody(s, lane) {
+  return LANE_ROWS[lane.key].map(([key, label], row) => laneReadout(s, 58 + row * 52, key, label));
+}
+
+export function renderLanes(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return h('div', { class: 'empty' }, [h('p', {}, 'Waiting for the first sample.')]);
+  }
+  const s = snapshot;
+  const lanes = LANE_PANELS.map((lane, i) => panel(
+    i,
+    { key: `lane-${lane.key}`, title: lane.title, lane: true },
+    laneStatus(s, LANE_ROWS[lane.key].map(([key]) => key)),
+    laneBody(s, lane),
+  ));
+  const shared = [
+    panel(4, STAGES[2], panelStatus(s.cache), cacheBody(s, {})),
+    panel(5, STAGES[5], panelStatus(s.stores), storesBody(s, {})),
+  ];
+  const arrows = LANE_ARROWS.map((a) => strip(
+    { id: a.id, label: a.label, rate: laneReading(s, a.key) || { st: 'nodata' } },
+    { gap: a.gap, slot: 0 },
+    '',
+    true,
+  ));
+  const kafkaH = kafkaHeight(s);
+  const second = [
+    panel(0, { key: 'lane-blobs', title: 'Blob stores', lane: true }, laneStatus(s, BLOB_KEYS), blobsBody(s), { y: ROW2_Y, w: WIDE_W, h: BLOB_H }),
+    panel(2, { key: 'lane-kafka', title: 'Kafka topics', lane: true }, kafkaStatus(s), kafkaBody(s), { y: ROW2_Y, w: WIDE_W, h: kafkaH }),
+  ];
+  const viewH = ROW2_Y + Math.max(BLOB_H, kafkaH) + 16 - VIEW.y;
+  return h('svg', {
+    class: 'stage tall',
+    viewBox: `${VIEW.x} ${VIEW.y} ${VIEW.w} ${viewH}`,
+    role: 'img',
+    'aria-label': `Lanes view. ${homeLabel(s)}`,
+  }, [
+    defs(),
+    h('g', { class: 'panels' }, [...lanes, ...shared, ...second]),
+    h('text', { x: px(4) - GAP / 2, y: PY + 56, 'text-anchor': 'middle', class: 'ti kafka' }, 'Shared'),
+    h('g', { class: 'strips' }, arrows),
+  ]);
+}
+
 function chip(name, st, text, tag, extra) {
   return h(tag || 'span', { class: 'chip', 'data-chip': name, 'data-st': st, ...(extra || {}) }, [
     h('span', { class: `led led-${st}`, 'aria-hidden': 'true' }, ''),
@@ -1039,8 +1243,10 @@ const VALUE_LIMIT = 1e15;
 const HISTORY_STATUSES = ['ok', 'warn', 'crit', 'idle', 'nodata'];
 const ROW_WORDS = { ok: 'Normal', warn: 'Warning', crit: 'Critical', idle: 'Idle', nodata: 'No data' };
 const HOME_ROUTE = { name: 'home', stage: '' };
+export const LANES_HASH = '#/lanes';
 
 export function parseRoute(hash) {
+  if (hash === LANES_HASH) return { name: 'lanes', stage: '' };
   const m = typeof hash === 'string' ? DRILLDOWN_PATH.exec(hash) : null;
   return m ? { name: 'stage', stage: m[1] } : { ...HOME_ROUTE };
 }

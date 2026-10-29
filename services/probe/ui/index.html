@@ -11,10 +11,15 @@
 <body>
 <header class="topbar">
 <div id="topbar" class="topbar-slot"></div>
+<nav class="views" aria-label="Dashboard view">
+<a id="view-stages" class="view-link" href="#/">Stages</a>
+<a id="view-lanes" class="view-link" href="#/lanes">Lanes</a>
+</nav>
 <div id="banner" class="banner" role="status" hidden="hidden">Disconnected. Reconnecting.</div>
 </header>
 <div id="alarm-list" class="alarm-drop" role="region" aria-label="Alarm list" hidden="hidden"></div>
 <main id="home" class="home"><div class="empty"><p>Waiting for the first sample.</p></div></main>
+<main id="lanes-view" class="home" hidden="hidden"></main>
 <main id="stage-view" class="stage-host" hidden="hidden"></main>
 <footer id="bottombar" class="bottombar"></footer>
 <div id="sr-alarms" class="sr-only" aria-live="polite"></div>

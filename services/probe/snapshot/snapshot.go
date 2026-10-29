@@ -70,8 +70,58 @@ type AssemblyStage struct {
 	Paused          Reading `json:"paused"`
 	TipLagBlocks    Reading `json:"tipLagBlocks"`
 	QueueHeadAgeSec Reading `json:"queueHeadAgeSec"`
+	Transactions    Reading `json:"transactions"`
 	IngestQueueFill Reading `json:"ingestQueueFill"`
 	SubtreeFill     Reading `json:"subtreeFill"`
+}
+
+type BlobStoreView struct {
+	ReadsPerSec  Reading `json:"readsPerSec"`
+	WritesPerSec Reading `json:"writesPerSec"`
+	ErrorsPerSec Reading `json:"errorsPerSec"`
+	ReadP99Sec   Reading `json:"readP99Sec"`
+	WriteP99Sec  Reading `json:"writeP99Sec"`
+}
+
+type BlobsView struct {
+	Subtree BlobStoreView `json:"subtree"`
+	Block   BlobStoreView `json:"block"`
+}
+
+type TopicLag struct {
+	Topic string `json:"topic"`
+	Lag   *int64 `json:"lag"`
+}
+
+type TxLane struct {
+	AlreadySeenPerSec Reading `json:"alreadySeenPerSec"`
+}
+
+type SubtreeLane struct {
+	AlreadyKnownPerSec Reading `json:"alreadyKnownPerSec"`
+	CompletedPerSec    Reading `json:"completedPerSec"`
+	MissingTxsPerSec   Reading `json:"missingTxsPerSec"`
+	TxsFetchedAvg      Reading `json:"txsFetchedAvg"`
+}
+
+type BlockLane struct {
+	AnnouncedTotal        Reading `json:"announcedTotal"`
+	ValidatedTotal        Reading `json:"validatedTotal"`
+	MissingSubtrees       Reading `json:"missingSubtrees"`
+	MissingSubtreesPerSec Reading `json:"missingSubtreesPerSec"`
+}
+
+type MiningLane struct {
+	CandidatesPerSec Reading `json:"candidatesPerSec"`
+	CandidateAgeSec  Reading `json:"candidateAgeSec"`
+	SolutionsTotal   Reading `json:"solutionsTotal"`
+}
+
+type LanesView struct {
+	Tx       TxLane      `json:"tx"`
+	Subtrees SubtreeLane `json:"subtrees"`
+	Blocks   BlockLane   `json:"blocks"`
+	Mining   MiningLane  `json:"mining"`
 }
 
 type ChainStage struct {
@@ -149,6 +199,9 @@ type Snapshot struct {
 	Assembly     AssemblyStage  `json:"assembly"`
 	Chain        ChainStage     `json:"chain"`
 	Stores       StoresStage    `json:"stores"`
+	Lanes        LanesView      `json:"lanes"`
+	Blobs        BlobsView      `json:"blobs"`
+	Kafka        []TopicLag     `json:"kafka"`
 	Flows        []Flow         `json:"flows"`
 	Alarms       []Alarm        `json:"alarms"`
 	Calibration  Calibration    `json:"calibration"`
@@ -174,7 +227,7 @@ func NewSnapshot(node string) Snapshot {
 		{FlowBlockWrites, "chain", "stores"},
 	}
 
-	s := Snapshot{Node: node, Flows: make([]Flow, len(flows)), Sources: []SourceHealth{}}
+	s := Snapshot{Node: node, Flows: make([]Flow, len(flows)), Sources: []SourceHealth{}, Kafka: []TopicLag{}}
 
 	for i, f := range flows {
 		s.Flows[i] = Flow{ID: f.id, From: f.from, To: f.to, Label: f.id, Rate: Reading{Status: StatusNoData}}

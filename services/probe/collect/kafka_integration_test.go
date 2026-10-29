@@ -139,6 +139,31 @@ func TestGroupOnOtherTopicContributesNothing(t *testing.T) {
 	require.Nil(t, collectLag(t, k, snapshot.FlowSubtrees))
 }
 
+func TestWatchedTopicsReportLagAndMissingConsumers(t *testing.T) {
+	env := kafkatest.MustStartEnv(t, context.Background())
+	newTopic(t, env, "watched-behind", 50)
+	newTopic(t, env, "watched-orphan", 10)
+	commit(t, env, "group-a", "watched-behind", 20)
+
+	k := newCollector(t, env, map[string]string{})
+	k.Watch([]string{"watched-orphan", "watched-behind", "watched-absent"})
+
+	patch, err := k.Collect(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, patch)
+
+	s := snapshot.NewSnapshot("test")
+	patch(&s)
+
+	behind := int64(30)
+
+	require.Equal(t, []snapshot.TopicLag{
+		{Topic: "watched-behind", Lag: &behind},
+		{Topic: "watched-absent"},
+		{Topic: "watched-orphan"},
+	}, s.Kafka)
+}
+
 func TestBrokerDown(t *testing.T) {
 	env := kafkatest.MustStartEnv(t, context.Background())
 	newTopic(t, env, "down", 5)

@@ -47,16 +47,11 @@ func (r *Rates) Observe(now time.Time, m MetricSet) {
 	snap := &observation{at: now, series: make(map[string]seriesSample, len(m))}
 
 	for name, family := range m {
-		switch family.GetType() {
-		case dto.MetricType_COUNTER, dto.MetricType_GAUGE:
-			if value, ok := m.Sum(name); ok {
-				snap.series[name] = seriesSample{value: value}
-			}
-		case dto.MetricType_HISTOGRAM:
-			if sample, ok := histogramSample(family); ok {
-				snap.series[name] = sample
-			}
+		if sample, ok := sampleOf(name, family); ok {
+			snap.series[name] = sample
 		}
+
+		addStoreSeries(snap, name, family)
 	}
 
 	r.mu.Lock()
@@ -65,6 +60,42 @@ func (r *Rates) Observe(now time.Time, m MetricSet) {
 	r.prev = r.curr
 	r.curr = snap
 	r.history = trimHistory(append(r.history, snap), now)
+}
+
+func StoreSeries(name, store string) string {
+	return name + `{store="` + store + `"}`
+}
+
+func sampleOf(name string, family *dto.MetricFamily) (seriesSample, bool) {
+	switch family.GetType() {
+	case dto.MetricType_COUNTER, dto.MetricType_GAUGE:
+		value, ok := (MetricSet{name: family}).Sum(name)
+		return seriesSample{value: value}, ok
+	case dto.MetricType_HISTOGRAM:
+		return histogramSample(family)
+	default:
+		return seriesSample{}, false
+	}
+}
+
+func addStoreSeries(snap *observation, name string, family *dto.MetricFamily) {
+	groups := make(map[string][]*dto.Metric)
+
+	for _, metric := range family.GetMetric() {
+		for _, label := range metric.GetLabel() {
+			if label.GetName() == "store" {
+				groups[label.GetValue()] = append(groups[label.GetValue()], metric)
+			}
+		}
+	}
+
+	for store, metrics := range groups {
+		group := &dto.MetricFamily{Name: family.Name, Type: family.Type, Metric: metrics}
+
+		if sample, ok := sampleOf(name, group); ok {
+			snap.series[StoreSeries(name, store)] = sample
+		}
+	}
 }
 
 func trimHistory(history []*observation, now time.Time) []*observation {
@@ -183,6 +214,33 @@ func (r *Rates) pair(name string) (prev, curr seriesSample, elapsed time.Duratio
 	}
 
 	return prev, curr, r.curr.at.Sub(r.prev.at), true
+}
+
+func (r *Rates) Total(name string) (float64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.curr == nil {
+		return 0, false
+	}
+
+	return seriesValue(r.curr, name)
+}
+
+func (r *Rates) AgeSec(name string) (float64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.curr == nil {
+		return 0, false
+	}
+
+	stamp, ok := seriesValue(r.curr, name)
+	if !ok || stamp <= 0 {
+		return 0, false
+	}
+
+	return max(float64(r.curr.at.UnixNano())/float64(time.Second)-stamp, 0), true
 }
 
 func (r *Rates) PerSec(name string) (float64, bool) {
