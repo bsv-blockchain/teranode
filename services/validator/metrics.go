@@ -261,6 +261,10 @@ var (
 	// rising value is not by itself a fault; compare it with
 	// shed_inblock_dropped_total.
 	prometheusValidatorExistingTxLockedUnmined prometheus.Counter
+
+	// prometheusValidatorExistingTx counts transactions skipped because the UTXO
+	// store already holds them.
+	prometheusValidatorExistingTx prometheus.Counter
 )
 
 // Synchronization primitives
@@ -661,6 +665,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "existing_tx_locked_unmined_total",
 			Help:      "Number of resubmits that found an existing transaction record locked, unmined and not conflicting. Causes include a conflict resolution in flight, an interrupted submission and a block-context transaction left outside the template by a queue shed",
+		},
+	)
+
+	prometheusValidatorExistingTx = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "existing_tx_total",
+			Help:      "Number of transactions skipped because the UTXO store already holds them",
 		},
 	)
 }
