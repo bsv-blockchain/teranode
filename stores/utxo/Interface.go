@@ -819,9 +819,11 @@ type Store interface {
 	// operation's first state mutation. It MUST be committed durably before
 	// returning. Recording the same intent id more than once is idempotent (the
 	// id is deterministic over kind+height+hashes), so a crash-retry of the same
-	// operation does not create a duplicate. A non-nil error MUST abort the
-	// caller — the operation must not proceed without a durable intent record.
-	BeginConflictIntent(ctx context.Context, intent ConflictIntent) error
+	// operation does not create a duplicate. inserted reports whether this call
+	// created the record, false when an earlier run of the same operation left
+	// it behind. A non-nil error MUST abort the caller — the operation must not
+	// proceed without a durable intent record.
+	BeginConflictIntent(ctx context.Context, intent ConflictIntent) (inserted bool, err error)
 
 	// CompleteConflictIntent deletes the intent record identified by intentID
 	// after the operation's terminal step has committed. Removing an

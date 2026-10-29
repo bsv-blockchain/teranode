@@ -18,19 +18,22 @@ import (
 type walSpyStore struct {
 	*MockUtxostore
 
-	beginErr  error
-	begun     []ConflictIntent
-	completed []chainhash.Hash
+	beginErr error
+	// intentExists makes Begin report the intent as left behind by an
+	// earlier run rather than created by this call.
+	intentExists bool
+	begun        []ConflictIntent
+	completed    []chainhash.Hash
 }
 
-func (w *walSpyStore) BeginConflictIntent(_ context.Context, intent ConflictIntent) error {
+func (w *walSpyStore) BeginConflictIntent(_ context.Context, intent ConflictIntent) (bool, error) {
 	if w.beginErr != nil {
-		return w.beginErr
+		return false, w.beginErr
 	}
 
 	w.begun = append(w.begun, intent)
 
-	return nil
+	return !w.intentExists, nil
 }
 
 func (w *walSpyStore) CompleteConflictIntent(_ context.Context, intentID chainhash.Hash) error {

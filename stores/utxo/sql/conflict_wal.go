@@ -42,8 +42,9 @@ func decodeIntentHashes(buf []byte) ([]chainhash.Hash, error) {
 
 // BeginConflictIntent durably records an intent before the operation's first
 // state mutation. Idempotent on the deterministic intent id: re-inserting the
-// same intent is a no-op rather than a duplicate-key error.
-func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+// same intent is a no-op rather than a duplicate-key error, and reports
+// inserted=false through the affected row count.
+func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) (bool, error) {
 	intentID := intent.IntentID()
 
 	var q string
@@ -56,18 +57,24 @@ func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictInt
 		     VALUES ($1, $2, $3, $4, $5, $6)`
 	}
 
-	if _, err := s.db.ExecContext(ctx, q,
+	res, err := s.db.ExecContext(ctx, q,
 		intentID[:],
 		string(intent.Kind),
 		int64(intent.BlockHeight),
 		intent.BlockHash[:],
 		encodeIntentHashes(intent.TxHashes),
 		intent.StartedAt,
-	); err != nil {
-		return errors.NewStorageError("[BeginConflictIntent] failed to record intent %s", intentID.String(), err)
+	)
+	if err != nil {
+		return false, errors.NewStorageError("[BeginConflictIntent] failed to record intent %s", intentID.String(), err)
 	}
 
-	return nil
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return false, errors.NewStorageError("[BeginConflictIntent] failed to read the result of recording intent %s", intentID.String(), err)
+	}
+
+	return rows > 0, nil
 }
 
 // CompleteConflictIntent removes the intent record once the terminal step

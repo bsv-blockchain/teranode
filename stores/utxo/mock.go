@@ -354,8 +354,8 @@ func (m *MockUtxostore) SetLocked(ctx context.Context, txHashes []chainhash.Hash
 // is exercised against a real store in dedicated tests, so the many mock-based
 // ProcessConflicting/ReverseProcessConflicting tests need not set expectations
 // for it. (Does not call m.Called, so unset expectations do not panic.)
-func (m *MockUtxostore) BeginConflictIntent(ctx context.Context, intent ConflictIntent) error {
-	return nil
+func (m *MockUtxostore) BeginConflictIntent(ctx context.Context, intent ConflictIntent) (bool, error) {
+	return true, nil
 }
 
 // CompleteConflictIntent is a safe no-op on the mock (see BeginConflictIntent).

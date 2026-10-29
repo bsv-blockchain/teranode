@@ -1062,8 +1062,8 @@ func (m *MockUTXOStore) SetConflicting(ctx context.Context, txHashes []chainhash
 func (m *MockUTXOStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setValue bool) error {
 	return nil
 }
-func (m *MockUTXOStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
-	return nil
+func (m *MockUTXOStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) (bool, error) {
+	return true, nil
 }
 func (m *MockUTXOStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
 	return nil

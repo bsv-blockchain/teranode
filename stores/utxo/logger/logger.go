@@ -372,11 +372,11 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 	return err
 }
 
-func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
-	err := s.store.BeginConflictIntent(ctx, intent)
-	s.logger.Debugf("[UTXOStore][logger][BeginConflictIntent] kind %s height %d hashes %v err %v : %s", intent.Kind, intent.BlockHeight, intent.TxHashes, err, caller())
+func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) (bool, error) {
+	inserted, err := s.store.BeginConflictIntent(ctx, intent)
+	s.logger.Debugf("[UTXOStore][logger][BeginConflictIntent] kind %s height %d hashes %v inserted %v err %v : %s", intent.Kind, intent.BlockHeight, intent.TxHashes, inserted, err, caller())
 
-	return err
+	return inserted, err
 }
 
 func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {

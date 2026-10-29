@@ -61,7 +61,27 @@ func (g AncestryGuard) enabled() bool { return g.check != nil }
 type ProcessConflictingOption func(*processConflictingOptions)
 
 type processConflictingOptions struct {
-	onRefused func(loser chainhash.Hash)
+	onRefused       func(loser chainhash.Hash)
+	resolvedWinners []chainhash.Hash
+}
+
+// WithResolvedWinners names winners in conflictingTxHashes whose resolution the
+// store already holds (see ForwardResolutionApplied). ProcessConflicting does
+// not walk their losers, because that walk starts from the parents' recorded
+// spender, which is now the winner itself, and would demote the winner's own
+// descendants. It does not refuse them for being not conflicting either. They
+// stay winners for everything else: the ancestry guard's winner set, the step-3
+// spend and the step-4 clear.
+//
+// They have to. With dependent winners A and B, B spending A, and only B
+// resolved, the walk from A reaches B, step 1 flags it and step 2 unspends its
+// input. Left out of the winner list, B would be refused by the guard as a loser
+// mined on the block's own ancestry, which queues a valid block for
+// invalidation, and even without the guard B's spend would never be restored.
+func WithResolvedWinners(resolved []chainhash.Hash) ProcessConflictingOption {
+	return func(o *processConflictingOptions) {
+		o.resolvedWinners = resolved
+	}
 }
 
 // WithRefusalHandler registers a callback invoked once per losing transaction

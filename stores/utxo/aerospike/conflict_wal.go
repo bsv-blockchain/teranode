@@ -66,15 +66,20 @@ func decodeIntentHashes(buf []byte) ([]chainhash.Hash, error) {
 }
 
 // BeginConflictIntent durably records an intent before the operation's first
-// state mutation. The default write policy uses RecordExistsAction=UPDATE and
-// TTLDontExpire, so re-recording the same deterministic intent id is an
-// idempotent overwrite (never a duplicate, never expires).
-func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+// state mutation, with TTLDontExpire. The write is CREATE_ONLY, so an intent an
+// earlier run of the same operation left behind is kept as it is and reported
+// as inserted=false.
+//
+// Retries are off for this write. settings.conf gives writes several retries,
+// and a retry of a CREATE_ONLY put whose first attempt landed gets KEY_EXISTS
+// back, which would report this call's own record as an earlier run's. With no
+// retry, a timeout is an error and the caller aborts, as for any failed Begin.
+func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) (bool, error) {
 	intentID := intent.IntentID()
 
 	key, err := aerospike.NewKey(s.namespace, s.conflictWALSet(), intentID[:])
 	if err != nil {
-		return errors.NewStorageError("[BeginConflictIntent] failed to build key for intent %s", intentID.String(), err)
+		return false, errors.NewStorageError("[BeginConflictIntent] failed to build key for intent %s", intentID.String(), err)
 	}
 
 	blockHash := intent.BlockHash
@@ -87,11 +92,19 @@ func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictInt
 		aerospike.NewBin(walBinStartedAt, int(intent.StartedAt)),
 	}
 
-	if err := s.client.PutBins(util.GetAerospikeWritePolicy(s.settings, 0), key, bins...); err != nil {
-		return errors.NewStorageError("[BeginConflictIntent] failed to record intent %s", intentID.String(), err)
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.RecordExistsAction = aerospike.CREATE_ONLY
+	policy.MaxRetries = 0
+
+	if err := s.client.PutBins(policy, key, bins...); err != nil {
+		if isKeyExists(err) {
+			return false, nil
+		}
+
+		return false, errors.NewStorageError("[BeginConflictIntent] failed to record intent %s", intentID.String(), err)
 	}
 
-	return nil
+	return true, nil
 }
 
 // CompleteConflictIntent removes the intent record once the terminal step

@@ -248,9 +248,9 @@ func (m *MockStore) SetLocked(ctx context.Context, txHashes []chainhash.Hash, se
 	return args.Error(0)
 }
 
-func (m *MockStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+func (m *MockStore) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) (bool, error) {
 	args := m.Called(ctx, intent)
-	return args.Error(0)
+	return args.Bool(0), args.Error(1)
 }
 
 func (m *MockStore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {

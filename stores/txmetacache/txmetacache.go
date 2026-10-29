@@ -1480,7 +1480,7 @@ func (t *TxMetaCache) SetLocked(ctx context.Context, txHashes []chainhash.Hash, 
 
 // BeginConflictIntent delegates to the wrapped store. The conflict-resolution
 // write-ahead log lives in the durable backend, not the in-memory cache.
-func (t *TxMetaCache) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
+func (t *TxMetaCache) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) (bool, error) {
 	return t.utxoStore.BeginConflictIntent(ctx, intent)
 }
 

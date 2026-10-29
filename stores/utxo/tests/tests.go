@@ -422,7 +422,9 @@ func ConflictWAL(t *testing.T, db utxostore.Store) {
 	require.Empty(t, pending, "store should start with no pending intents")
 
 	// Begin → the intent becomes pending and round-trips its fields.
-	require.NoError(t, db.BeginConflictIntent(ctx, forward))
+	inserted, err := db.BeginConflictIntent(ctx, forward)
+	require.NoError(t, err)
+	require.True(t, inserted, "the first Begin of an intent creates it")
 
 	pending, err = db.PendingConflictIntents(ctx)
 	require.NoError(t, err)
@@ -439,7 +441,9 @@ func ConflictWAL(t *testing.T, db utxostore.Store) {
 	// hashes in a different order) does not create a duplicate.
 	reordered := forward
 	reordered.TxHashes = []chainhash.Hash{h2, h1}
-	require.NoError(t, db.BeginConflictIntent(ctx, reordered))
+	inserted, err = db.BeginConflictIntent(ctx, reordered)
+	require.NoError(t, err)
+	require.False(t, inserted, "a re-begin must report the intent an earlier run left behind")
 
 	pending, err = db.PendingConflictIntents(ctx)
 	require.NoError(t, err)
@@ -452,7 +456,9 @@ func ConflictWAL(t *testing.T, db utxostore.Store) {
 		TxHashes:    []chainhash.Hash{chainhash.HashH([]byte("wal-tx-3"))},
 		StartedAt:   1_700_000_000_000_000_001,
 	}
-	require.NoError(t, db.BeginConflictIntent(ctx, reverse))
+	inserted, err = db.BeginConflictIntent(ctx, reverse)
+	require.NoError(t, err)
+	require.True(t, inserted)
 
 	pending, err = db.PendingConflictIntents(ctx)
 	require.NoError(t, err)
@@ -621,7 +627,8 @@ func ConflictWALCrashRecovery(t *testing.T, db utxostore.Store) {
 
 			// Crash left the forward intent behind.
 			intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentForward, BlockHeight: 20, TxHashes: []chainhash.Hash{*txW.TxIDChainHash()}, StartedAt: 1}
-			require.NoError(t, db.BeginConflictIntent(ctx, intent))
+			_, err = db.BeginConflictIntent(ctx, intent)
+			require.NoError(t, err)
 
 			// Replay: seed the processed-hashes map exactly as BlockAssembler does.
 			seeded := map[chainhash.Hash]struct{}{*txW.TxIDChainHash(): {}}
@@ -694,7 +701,8 @@ func ConflictWALCrashRecovery(t *testing.T, db utxostore.Store) {
 			tc.build(t, parent, txD, txC)
 
 			intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentReverse, BlockHeight: 20, TxHashes: []chainhash.Hash{*txD.TxIDChainHash()}, StartedAt: 1}
-			require.NoError(t, db.BeginConflictIntent(ctx, intent))
+			_, err = db.BeginConflictIntent(ctx, intent)
+			require.NoError(t, err)
 
 			_, _, err = utxostore.ReverseProcessConflicting(ctx, db, 20, chainhash.Hash{}, []chainhash.Hash{*txD.TxIDChainHash()})
 			require.NoError(t, err)

@@ -1733,21 +1733,7 @@ func (b *BlockAssembler) drainPendingInvalidations(ctx context.Context) {
 func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	switch intent.Kind {
 	case utxo.ConflictIntentForward:
-		// Seed the processed-hashes map with the intent's own hashes so the
-		// ProcessConflicting "tx is not conflicting" guard never fires when
-		// replaying a completed-but-not-tombstoned op (winners already
-		// Conflicting=false). The remaining steps are idempotent re-applications.
-		seeded := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
-		for _, h := range intent.TxHashes {
-			seeded[h] = struct{}{}
-		}
-
-		// Replay is chain-authorised too. The isBlockOnLongestChain gate above
-		// only establishes that the intent's block is still on the main chain; it
-		// says nothing about whether a losing transaction is confirmed on that
-		// block's own ancestry. Without the guard, replaying an intent recorded by
-		// a pre-fix process would re-apply the very corruption this prevents.
-		return b.processConflictingAndEvict(ctx, intent, seeded)
+		return b.reapplyForward(ctx, intent)
 	case utxo.ConflictIntentReverse:
 		return b.reverseProcessConflictingAndEvict(ctx, intent)
 	default:
@@ -1755,13 +1741,96 @@ func (b *BlockAssembler) replayConflictIntent(ctx context.Context, intent utxo.C
 	}
 }
 
+// reapplyForward brings the store to the end state of a forward resolution of
+// the intent's winners, for a forward intent being replayed or a reverse intent
+// being healed because its block is back on the chain.
+//
+// A winner the store already shows resolved (not conflicting, and the recorded
+// spender of its inputs) is not re-run. Re-running its resolution is not
+// idempotent: the loser walk starts from the parents' recorded spender, which is
+// now the winner itself, so a re-run demotes the winner's own descendants. That
+// is what the replay of a leftover intent did to mainnet on every restart from
+// 2026-10-19: the intent came from a resolution refused at step 0 with nothing
+// mutated, and every replay demoted the mined children of 38 already-resolved
+// winners. A reverse that was killed before it reached some of its winners
+// leaves those winners in the same state, so its heal takes the same filter.
+//
+// A kill between step 4 and step 5 of the original run leaves a resolved winner
+// whose parents are still locked, so the parents of every resolved winner are
+// unlocked here, as the stale-forward heal does. When some winners are still
+// pending, the whole list goes through ProcessConflicting with the resolved ones
+// named by WithResolvedWinners: their loser walk is skipped, but they stay
+// winners, so the ancestry guard does not take a resolved winner that spends a
+// pending one for a loser mined on the block's own ancestry, and step 3 restores
+// its spend after step 2 undid it.
+func (b *BlockAssembler) reapplyForward(ctx context.Context, intent utxo.ConflictIntent) error {
+	resolved := make([]chainhash.Hash, 0, len(intent.TxHashes))
+
+	for _, h := range intent.TxHashes {
+		applied, err := utxo.ForwardResolutionApplied(ctx, b.utxoStore, h)
+		if err != nil {
+			return err
+		}
+
+		if applied {
+			resolved = append(resolved, h)
+		}
+	}
+
+	if len(resolved) > 0 {
+		if err := b.unlockConflictParents(ctx, resolved); err != nil {
+			return err
+		}
+
+		// A kill between step 1 and the original run's eviction leaves the
+		// resolved winners' losers cached as non-conflicting in subtree
+		// validation. The intent's own winners are never losers.
+		winners := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
+		for _, h := range intent.TxHashes {
+			winners[h] = struct{}{}
+		}
+
+		losers, err := utxo.ResolvedForwardLosers(ctx, b.utxoStore, resolved, winners)
+		if err != nil {
+			return err
+		}
+
+		b.txMetaEvictor.Evict(losers)
+	}
+
+	if len(resolved) == len(intent.TxHashes) {
+		b.logger.Infof("[replayPendingConflictIntents][%s] %s intent for %d transaction(s) is already applied forward, clearing it without re-running", intent.BlockHash.String(), intent.Kind, len(intent.TxHashes))
+
+		return nil
+	}
+
+	// Seed the processed-hashes map with the intent's own hashes so the
+	// ProcessConflicting "tx is not conflicting" guard never fires on a winner
+	// whose step 4 ran but whose spends did not all land. The remaining steps
+	// are idempotent re-applications.
+	seeded := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
+	for _, h := range intent.TxHashes {
+		seeded[h] = struct{}{}
+	}
+
+	// Replay is chain-authorised too. The isBlockOnLongestChain gate only
+	// establishes that the intent's block is still on the main chain; it says
+	// nothing about whether a losing transaction is confirmed on that block's
+	// own ancestry. Without the guard, replaying an intent recorded by a pre-fix
+	// process would re-apply the very corruption this prevents.
+	return b.processConflictingAndEvict(ctx, intent, seeded, utxo.WithResolvedWinners(resolved))
+}
+
 // processConflictingAndEvict re-runs ProcessConflicting for a WAL intent and
 // evicts every tx it marked conflicting (losers and their cascaded descendants)
 // from subtree validation's txmeta cache. On failure it evicts what the run may
 // have flipped.
-func (b *BlockAssembler) processConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent, seeded map[chainhash.Hash]struct{}) error {
+func (b *BlockAssembler) processConflictingAndEvict(ctx context.Context, intent utxo.ConflictIntent,
+	seeded map[chainhash.Hash]struct{}, opts ...utxo.ProcessConflictingOption) error {
+	opts = append([]utxo.ProcessConflictingOption{b.conflictIntentRefusalHandler(intent.BlockHash)}, opts...)
+
 	_, allMarkedConflicting, err := utxo.ProcessConflicting(ctx, b.utxoStore, intent.BlockHeight, intent.BlockHash, intent.TxHashes, seeded,
-		utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), b.conflictIntentRefusalHandler(intent.BlockHash))
+		utxo.NewAncestryGuard(b.blockchainClient.CheckBlockIsAncestorOfBlock), opts...)
 
 	b.txMetaEvictor.Evict(allMarkedConflicting)
 
@@ -1792,10 +1861,10 @@ func (b *BlockAssembler) reverseProcessConflictingAndEvict(ctx context.Context, 
 //     demotes the winners and restores their counters, then unlock the parents
 //     the forward locked at step 2 (the step-5 unlock a crash may have skipped;
 //     SetLocked(false) is a no-op when already unlocked).
-//   - stale reverse (block now back on-chain): re-apply the forward via
-//     ProcessConflicting, which manages its own step-2 lock / step-5 unlock. The
-//     processed-hashes map is seeded so the "tx is not conflicting" guard does
-//     not fire on an already-applied winner.
+//   - stale reverse (block now back on-chain): re-apply the forward through
+//     reapplyForward, which leaves alone every winner the reverse never reached
+//     and runs ProcessConflicting, with its own step-2 lock / step-5 unlock, on
+//     the rest.
 func (b *BlockAssembler) healStaleConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	switch intent.Kind {
 	case utxo.ConflictIntentForward:
@@ -1805,17 +1874,7 @@ func (b *BlockAssembler) healStaleConflictIntent(ctx context.Context, intent utx
 
 		return b.unlockConflictParents(ctx, intent.TxHashes)
 	case utxo.ConflictIntentReverse:
-		seeded := make(map[chainhash.Hash]struct{}, len(intent.TxHashes))
-		for _, h := range intent.TxHashes {
-			seeded[h] = struct{}{}
-		}
-
-		// Replay is chain-authorised too. The isBlockOnLongestChain gate above
-		// only establishes that the intent's block is still on the main chain; it
-		// says nothing about whether a losing transaction is confirmed on that
-		// block's own ancestry. Without the guard, replaying an intent recorded by
-		// a pre-fix process would re-apply the very corruption this prevents.
-		return b.processConflictingAndEvict(ctx, intent, seeded)
+		return b.reapplyForward(ctx, intent)
 	default:
 		return errors.NewProcessingError("[healStaleConflictIntent] unknown conflict intent kind %q", intent.Kind)
 	}

@@ -1909,18 +1909,39 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 					// postProcess). Any in-flight tx whose parent gets cascaded here
 					// is dropped by that drain regardless of cascade discovery, so
 					// the per-block transient set is not needed here.
-					losingTxHashesMap, allMarkedConflicting, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
-						utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block))
-
-					// the store now says these are conflicting; subtree validation's txmeta cache must
-					// forget them. On error this is what the failed run may have flipped.
-					stp.txMetaEvictor.Evict(allMarkedConflicting)
-
+					//
+					// Nodes the store already shows resolved for this block are not
+					// re-resolved here either; see alreadyResolvedConflictingNodes.
+					resolvedNodes, resolvedLosers, err := stp.alreadyResolvedConflictingNodes(ctx, block, conflictingNodes)
 					if err != nil {
-						return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
+						return err
 					}
 
-					if losingTxHashesMap.Length() > 0 {
+					// A kill before the original run's eviction can leave these
+					// losers cached as non-conflicting in subtree validation.
+					stp.txMetaEvictor.Evict(resolvedLosers)
+
+					var losingTxHashesMap txmap.TxMap
+
+					if len(resolvedNodes) < len(conflictingNodes) {
+						var allMarkedConflicting []chainhash.Hash
+
+						losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
+							utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block),
+							utxostore.WithResolvedWinners(resolvedNodes))
+
+						// the store now says these are conflicting; subtree validation's txmeta cache must
+						// forget them. On error this is what the failed run may have flipped.
+						stp.txMetaEvictor.Evict(allMarkedConflicting)
+
+						if err != nil {
+							return errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions in Reset()", block.String(), err)
+						}
+					}
+
+					losingTxHashesMap, _ = mergeResolvedLosers(losingTxHashesMap, nil, resolvedLosers)
+
+					if losingTxHashesMap != nil && losingTxHashesMap.Length() > 0 {
 						// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
 						if err = stp.markConflictingTxsInSubtrees(ctx, losingTxHashesMap); err != nil {
 							return errors.NewProcessingError("[moveForwardBlock][%s] error marking conflicting transactions", block.String(), err)
@@ -5989,26 +6010,44 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 			block.Height = blockHeaderMeta.Height
 		}
 
-		var allMarkedConflicting []chainhash.Hash
-		losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
-			utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block))
-
-		// the store now says these are conflicting; subtree validation's txmeta cache must
-		// forget them. On error this is what the failed run may have flipped.
-		stp.txMetaEvictor.Evict(allMarkedConflicting)
-
+		// Nodes the store already shows resolved for this block are not
+		// re-resolved: ProcessConflicting is skipped when all of them are, and
+		// otherwise told which ones they are. See alreadyResolvedConflictingNodes
+		// for why they exist and why they cannot be re-run.
+		resolvedNodes, resolvedLosers, err := stp.alreadyResolvedConflictingNodes(ctx, block, conflictingNodes)
 		if err != nil {
-			return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+			return nil, nil, err
 		}
 
-		if len(allMarkedConflicting) > 0 {
-			conflictingSet = make(map[chainhash.Hash]struct{}, len(allMarkedConflicting))
-			for _, h := range allMarkedConflicting {
-				conflictingSet[h] = struct{}{}
+		// A kill before the original run's eviction can leave these losers
+		// cached as non-conflicting in subtree validation.
+		stp.txMetaEvictor.Evict(resolvedLosers)
+
+		if len(resolvedNodes) < len(conflictingNodes) {
+			var allMarkedConflicting []chainhash.Hash
+			losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
+				utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block),
+				utxostore.WithResolvedWinners(resolvedNodes))
+
+			// the store now says these are conflicting; subtree validation's txmeta cache must
+			// forget them. On error this is what the failed run may have flipped.
+			stp.txMetaEvictor.Evict(allMarkedConflicting)
+
+			if err != nil {
+				return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing conflicting transactions", block.String(), err)
+			}
+
+			if len(allMarkedConflicting) > 0 {
+				conflictingSet = make(map[chainhash.Hash]struct{}, len(allMarkedConflicting))
+				for _, h := range allMarkedConflicting {
+					conflictingSet[h] = struct{}{}
+				}
 			}
 		}
 
-		if losingTxHashesMap.Length() > 0 {
+		losingTxHashesMap, conflictingSet = mergeResolvedLosers(losingTxHashesMap, conflictingSet, resolvedLosers)
+
+		if losingTxHashesMap != nil && losingTxHashesMap.Length() > 0 {
 			// mark all the losing txs in the subtrees in the blocks they were mined into as conflicting
 			if err = stp.markConflictingTxsInSubtrees(ctx, losingTxHashesMap); err != nil {
 				return nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error marking conflicting transactions", block.String(), err)
