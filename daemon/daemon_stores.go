@@ -48,6 +48,13 @@ type Stores struct {
 	peerRegistryClientOnce sync.Once
 	peerRegistryClientErr  error
 
+	// wrappers wrap each store as it is built; set with WithStoreWrappers.
+	wrappers StoreWrappers
+	// rawUtxoStore and rawBlockchainStore are the stores before wrapping, so
+	// the test daemon's Crash can reach their database handles.
+	rawUtxoStore       utxostore.Store
+	rawBlockchainStore blockchainstore.Store
+
 	// constructedClients retains every gRPC client the daemon constructs
 	// (both daemonStores singletons and the fresh-per-construction clients
 	// otherwise discarded into locals) so daemon.closeClients can close each
@@ -81,12 +88,18 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 		return d.mainUtxoStore, nil
 	}
 
-	var err error
-
-	d.mainUtxoStore, err = utxofactory.NewStore(ctx, logger, appSettings, "main")
+	store, err := utxofactory.NewStore(ctx, logger, appSettings, "main")
 	if err != nil {
 		return nil, err
 	}
+
+	d.rawUtxoStore = store
+
+	if d.wrappers.UtxoStore != nil {
+		store = d.wrappers.UtxoStore(store)
+	}
+
+	d.mainUtxoStore = store
 
 	return d.mainUtxoStore, nil
 }
@@ -435,6 +448,10 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
 
+	if d.wrappers.TxStore != nil {
+		d.mainTxStore = d.wrappers.TxStore(d.mainTxStore)
+	}
+
 	return d.mainTxStore, nil
 }
 
@@ -488,6 +505,10 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
 
+	if d.wrappers.SubtreeStore != nil {
+		d.mainSubtreeStore = d.wrappers.SubtreeStore(d.mainSubtreeStore)
+	}
+
 	return d.mainSubtreeStore, nil
 }
 
@@ -506,6 +527,12 @@ func (d *Stores) GetBlockchainStore(_ context.Context, logger ulogger.Logger, ap
 	blockchainStore, err := blockchainstore.NewStore(logger, blockchainStoreURL, appSettings)
 	if err != nil {
 		return nil, err
+	}
+
+	d.rawBlockchainStore = blockchainStore
+
+	if d.wrappers.BlockchainStore != nil {
+		blockchainStore = d.wrappers.BlockchainStore(blockchainStore)
 	}
 
 	d.mainBlockchainStore = blockchainStore
@@ -615,6 +642,10 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
 
+	if d.wrappers.BlockStore != nil {
+		d.mainBlockStore = d.wrappers.BlockStore(d.mainBlockStore)
+	}
+
 	return d.mainBlockStore, nil
 }
 
@@ -687,12 +718,14 @@ func (d *Stores) Cleanup() {
 	// back a closed cached handle. The other closed singletons (block /
 	// block-persister stores, peer-registry client) are already nil'd below.
 	d.mainBlockchainStore = nil
+	d.rawBlockchainStore = nil
 	d.mainBlockValidationClient = nil
 	d.mainSubtreeStore = nil
 	d.mainSubtreeValidationClient = nil
 	d.mainTempStore = nil
 	d.mainTxStore = nil
 	d.mainUtxoStore = nil
+	d.rawUtxoStore = nil
 	d.mainValidatorClient = nil
 	d.mainP2PClient = nil
 	d.mainPeerRegistryClient = nil
