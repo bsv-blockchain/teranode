@@ -17,13 +17,16 @@ import (
 // Checking the hash against the target the header chose for itself proves nothing on its
 // own: a fabricated header declares an easy target and meets it in a couple of hashes. The
 // limit bound is what makes the check meaningful. params may be nil, in which case no limit
-// is enforced (the same convention as model.BlockHeader.HasMetPowLimit). It is not a
+// is enforced (the same convention as model.BlockHeader.HasMetPowLimit). The limit diagnostic is
+// carried as text, not as the wrapped cause: HasMetPowLimit's error is a BlockInvalidError, and
+// wrapping it would make the peer's lie about its own header read as a verdict on the announced
+// block, which stops catch-up before the alternative peers are tried. It is not a
 // substitute for the expected-difficulty rule, which this path does not run.
 func ValidateHeaderProofOfWork(header *model.BlockHeader, params *chaincfg.Params) error {
 	if limitErr := header.HasMetPowLimit(params); limitErr != nil {
 		return errors.NewNetworkInvalidResponseError(
-			"[validateHeaderProofOfWork][%s] block header declares a target easier than the network limit",
-			header.Hash().String(), limitErr,
+			"[validateHeaderProofOfWork][%s] block header declares a target easier than the network limit: %s",
+			header.Hash().String(), limitErr.Error(),
 		)
 	}
 

@@ -22,6 +22,9 @@ func TestValidateHeaderProofOfWork_NetworkLimit(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "got %v", err)
 		require.Contains(t, err.Error(), "easier than the network")
+		// the limit diagnostic is text, not the cause: the peer lied about its own header, which is
+		// not a verdict on the announced block, so catch-up must go on to try other peers
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "got %v", err)
 	})
 
 	t.Run("AcceptsTheNetworkMinimum", func(t *testing.T) {
