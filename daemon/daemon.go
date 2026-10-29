@@ -423,6 +423,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		waitErr <- sm.Wait()
 	}()
 
+	// stopCh is closed last, after closeClients and closeStores below (defers
+	// run LIFO), so Stop() returns only once the stores are closed and their
+	// batchers drained. Closing it before them let Stop() return, and the test
+	// daemon reset the store singletons, before closeStores read them, so no
+	// store was closed at all.
+	defer d.closeStopOnce.Do(func() { close(d.stopCh) })
+
 	// closeStores must run on BOTH shutdown paths (OS-signal via waitErr,
 	// daemon.Stop() via doneCh) and MUST run after every service has
 	// finished using the stores. The defer is registered here, before the
@@ -469,8 +476,6 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 		logger.Infof("daemon shutdown completed")
 	}
-
-	d.closeStopOnce.Do(func() { close(d.stopCh) })
 }
 
 // clientCloser is the optional close contract the daemon uses to tear down the
