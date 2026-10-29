@@ -608,14 +608,14 @@ func (s *Server) ClearBanned(ctx context.Context, _ *emptypb.Empty) (*peer_api.C
 // Parameters:
 //   - ctx: Context for cancellation and timeout control
 //   - peer: Request containing the peer address and ban duration
-//   - Addr: The peer's network address (IP:Port)
+//   - Addr: An IP, an IP:port or a subnet in CIDR form
 //   - Until: Unix timestamp when the ban should expire (seconds since epoch)
 //
 // Returns:
-//   - BanPeerResponse with Ok=true if the ban was successful, Ok=false otherwise
-//   - Error if the ban operation fails, particularly if the peer address is invalid
+//   - BanPeerResponse with Ok=true if the ban was recorded, Ok=false otherwise
+//   - Error if the address is not an IP or subnet, or the ban cannot be stored
 func (s *Server) BanPeer(ctx context.Context, peer *peer_api.BanPeerRequest) (*peer_api.BanPeerResponse, error) {
-	err := s.banPeer(peer.Addr, peer.Until)
+	err := s.banPeer(ctx, peer.Addr, peer.Until)
 	if err != nil {
 		return &peer_api.BanPeerResponse{Ok: false}, err
 	}
@@ -649,37 +649,27 @@ func (s *Server) UnbanPeer(ctx context.Context, peer *peer_api.UnbanPeerRequest)
 	return &peer_api.UnbanPeerResponse{Ok: true}, nil // ok means the request was received and processed, but no necessarily successfully
 }
 
-// banPeer is an internal helper method to ban a peer by its address for a specified duration.
+// banPeer bans an IP, an IP:port or a subnet (CIDR) until the given time.
 //
-// This method attempts to find a connected peer with the provided address, and if found,
-// sends a ban request to the server's ban channel. It handles the actual work of finding
-// the peer and initiating the ban process.
+// The ban goes into the ban list the legacy server consults when it admits a peer, whether or not a
+// matching peer is connected right now: bitcoin-sv's setban records a ban for an address it has no
+// peer for. The list publishes an "add" event, and handleBanEvent disconnects the connected peers
+// the ban covers.
 //
 // Parameters:
-//   - peerAddr: The network address of the peer to ban (IP:Port)
+//   - ctx: Context for the ban list write
+//   - peerAddr: An IP, IP:port or CIDR subnet
 //   - until: Unix timestamp indicating when the ban should expire (seconds since epoch)
 //
-// Returns an error if the peer couldn't be found by the provided address
-func (s *Server) banPeer(peerAddr string, until int64) error {
-	var foundPeer *serverPeer
+// Returns an error if peerAddr is neither an IP nor a subnet, or the ban list cannot store it.
+func (s *Server) banPeer(ctx context.Context, peerAddr string, until int64) error {
+	if err := s.server.banList.Add(ctx, peerAddr, time.Unix(until, 0)); err != nil {
+		s.logger.Warnf("Could not ban legacy peer or subnet %s: %v", peerAddr, err)
 
-	peers := s.server.getPeers()
-
-	s.logger.Infof("Peer length: %d", len(peers))
-
-	for _, sp := range peers {
-		if sp.Addr() == peerAddr {
-			foundPeer = sp
-			break
-		}
+		return err
 	}
 
-	if foundPeer == nil {
-		s.logger.Warnf("Attempted to ban legacy peer %s but peer not found", peerAddr)
-		return errors.New(errors.ERR_INVALID_IP, "tried to ban legacy peer but peer not found")
-	}
-	s.server.banPeerForDuration <- &banPeerForDurationMsg{peer: foundPeer, until: until}
-	s.logger.Infof("Banned legacypeer %s for %d seconds", peerAddr, until)
+	s.logger.Infof("Banned legacy peer or subnet %s until %s", peerAddr, time.Unix(until, 0))
 
 	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -1599,4 +1600,100 @@ func TestAnnounceNewTransactionsReachesPeerInBatchOrder(t *testing.T) {
 	defer mu.Unlock()
 
 	require.Equal(t, want, seen)
+}
+
+// A ban names an IP or a subnet while a peer's Addr() is "IP:port". handleBanEvent must still
+// disconnect every connected peer the ban covers, not only the first, and leave the rest.
+func TestHandleBanEvent_DisconnectsEveryPeerTheBanCovers(t *testing.T) {
+	srv := &server{logger: ulogger.TestLogger{}, query: make(chan interface{})}
+	state := newTestPeerState()
+
+	for i, addr := range []string{"10.0.0.5:8333", "10.0.0.9:51234", "192.168.1.1:8333"} {
+		state.inboundPeers.Set(int32(i), newTestOutboundPeer(t, srv, addr))
+	}
+
+	// handleBanEvent hands the disconnect to the peer handler; serve it here
+	go func() {
+		for msg := range srv.query {
+			srv.handleQuery(state, msg)
+		}
+	}()
+	t.Cleanup(func() { close(srv.query) })
+
+	_, subnet, err := net.ParseCIDR("10.0.0.0/24")
+	require.NoError(t, err)
+
+	srv.handleBanEvent(t.Context(), p2p.BanEvent{Action: "add", IP: "10.0.0.0/24", Subnet: subnet})
+
+	remaining := state.inboundPeers.Range()
+	require.Len(t, remaining, 1, "both peers in the subnet go, the other stays")
+
+	for _, sp := range remaining {
+		require.Equal(t, "192.168.1.1:8333", sp.Addr())
+	}
+
+	// a ban of one host, which is what a misbehaviour ban publishes (no subnet)
+	srv.handleBanEvent(t.Context(), p2p.BanEvent{Action: "add", IP: "192.168.1.1"})
+	require.Empty(t, state.inboundPeers.Range())
+}
+
+// setban sends the legacy service an IP or a CIDR subnet. Unbanning has to understand both, not
+// only an "IP:port".
+func TestHandleUnbanPeerMsg_AcceptsAnIPAndASubnet(t *testing.T) {
+	srv := &server{logger: ulogger.TestLogger{}, ctx: t.Context(), banList: emptyWritableBanList(t)}
+	state := newTestPeerState()
+
+	for _, ban := range []string{"10.0.0.0/24", "8.8.8.8", "9.9.9.9"} {
+		require.NoError(t, srv.banList.Add(t.Context(), ban, time.Now().Add(time.Hour)))
+	}
+
+	state.banned.Set("8.8.8.8", time.Now().Add(time.Hour))
+
+	srv.handleUnbanPeerMsg(state, "10.0.0.0/24")
+	require.False(t, srv.banList.IsBanned("10.0.0.5"), "the subnet is lifted")
+
+	srv.handleUnbanPeerMsg(state, "8.8.8.8")
+	require.False(t, srv.banList.IsBanned("8.8.8.8"))
+
+	_, held := state.banned.Get("8.8.8.8")
+	require.False(t, held, "a bare host is also lifted from the peer handler's own list")
+
+	srv.handleUnbanPeerMsg(state, "9.9.9.9:8333")
+	require.False(t, srv.banList.IsBanned("9.9.9.9"), "an IP:port still works")
+}
+
+// The same with IPv6: a peer's Addr() is "[addr]:port" and a ban is an address or a CIDR prefix.
+func TestHandleBanEvent_DisconnectsIPv6PeersInTheBannedSubnet(t *testing.T) {
+	srv := &server{logger: ulogger.TestLogger{}, query: make(chan interface{})}
+	state := newTestPeerState()
+
+	for i, addr := range []string{"[2001:db8::7]:8333", "[2001:db8:0:1::9]:8333", "[2001:db9::1]:8333", "[::ffff:10.0.0.5]:8333"} {
+		state.inboundPeers.Set(int32(i), newTestOutboundPeer(t, srv, addr))
+	}
+
+	go func() {
+		for msg := range srv.query {
+			srv.handleQuery(state, msg)
+		}
+	}()
+	t.Cleanup(func() { close(srv.query) })
+
+	_, subnet, err := net.ParseCIDR("2001:db8::/32")
+	require.NoError(t, err)
+
+	srv.handleBanEvent(t.Context(), p2p.BanEvent{Action: "add", IP: "2001:db8::/32", Subnet: subnet})
+
+	remaining := map[string]bool{}
+	for _, sp := range state.inboundPeers.Range() {
+		remaining[sp.Addr()] = true
+	}
+
+	require.Equal(t, map[string]bool{"[2001:db9::1]:8333": true, "[::ffff:10.0.0.5]:8333": true}, remaining)
+
+	// an IPv4 subnet covers an IPv4-mapped peer
+	_, v4, err := net.ParseCIDR("10.0.0.0/24")
+	require.NoError(t, err)
+
+	srv.handleBanEvent(t.Context(), p2p.BanEvent{Action: "add", IP: "10.0.0.0/24", Subnet: v4})
+	require.Len(t, state.inboundPeers.Range(), 1)
 }
