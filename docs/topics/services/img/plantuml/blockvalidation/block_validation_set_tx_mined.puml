@@ -54,6 +54,16 @@ else Block not in cache
     deactivate Blockchain
 end
 
+BlockValidation -> Blockchain: GetBlockHeader(ctx, blockHash)
+activate Blockchain
+Blockchain --> BlockValidation: BlockHeaderMeta (invalid, mined_set_generation)
+deactivate Blockchain
+note right of BlockValidation
+  Capture mined_set_generation before any work.
+  If invalid differs from the flag the worker passed in,
+  re-queue the block and stop.
+end note
+
 BlockValidation -> BlockValidation: Ensure all subtrees are loaded
 note right of BlockValidation
   Using fallbackGetFunc with subtreeValidationClient
@@ -106,7 +116,21 @@ alt Block was cached
     BlockValidation -> BlockValidation: Delete from lastValidatedBlocks cache
 end
 
-BlockValidation -> Blockchain: SetBlockMinedSet(ctx, blockHash)
+BlockValidation -> Blockchain: SetBlockMinedSet(ctx, blockHash, mined_set_generation)
+activate Blockchain
+note right of Blockchain
+  UPDATE ... SET mined_set = true
+  WHERE hash = $1 AND mined_set_gen = $2
+  ClearBlockMinedSet, InvalidateBlock and
+  RevalidateBlock bump mined_set_gen
+end note
+alt Generation unchanged
+    Blockchain --> BlockValidation: ok
+else Generation moved during the run
+    Blockchain --> BlockValidation: ERR_STATE_ERROR
+    BlockValidation -> BVServer: Re-queue on setMinedChan after a backoff (retry counter unchanged)
+end
+deactivate Blockchain
 
 BlockValidation --> BVServer
 deactivate BlockValidation

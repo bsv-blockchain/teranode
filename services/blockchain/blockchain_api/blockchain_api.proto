@@ -481,6 +481,7 @@ message GetBlockHeaderResponse {
   bool invalid = 13;          // Validity status
   google.protobuf.Timestamp processed_at = 14; // Timestamp when block was processed
   uint32 median_time_past = 15; // Median Time Past (MTP) - median of last 11 block timestamps (BIP113)
+  uint64 mined_set_generation = 16; // Bumped by every write that clears mined_set; SetBlockMinedSet compares against it
 }
 
 // CheckBlockIsCurrentChainResponse indicates if blocks are in the main chain.
@@ -618,6 +619,12 @@ message GetNextWorkRequiredResponse {
 // SetBlockMinedSetRequest marks a block as mined.
 message SetBlockMinedSetRequest {
   bytes blockHash = 1;  // Hash of the mined block
+  // The block's mined_set generation (GetBlockHeaderResponse.mined_set_generation)
+  // when the caller's tagging run started. Every writer that clears mined_set bumps
+  // it, so the write is refused with ERR_STATE_ERROR if it has changed since.
+  // Absent means a caller that predates the field: the write is unconditional, as
+  // it was before.
+  optional uint64 mined_set_generation = 2;
 }
 
 message ClearBlockMinedSetRequest {

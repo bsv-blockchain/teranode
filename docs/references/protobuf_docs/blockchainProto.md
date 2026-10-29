@@ -278,6 +278,8 @@ swagger:model GetBlockHeaderResponse
 | subtrees_set | [bool](#bool) |  | Subtrees status |
 | invalid | [bool](#bool) |  | Validity status |
 | processed_at | [google.protobuf.Timestamp](#google-protobuf-Timestamp) |  | Timestamp when block was processed |
+| median_time_past | [uint32](#uint32) |  | Median Time Past (MTP) - median of last 11 block timestamps (BIP113) |
+| mined_set_generation | [uint64](#uint64) |  | Bumped by every write that clears mined_set; SetBlockMinedSet compares against it |
 
 
 
@@ -898,6 +900,7 @@ SetBlockMinedSetRequest marks a block as mined.
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | blockHash | [bytes](#bytes) |  | Hash of the block to mark as mined |
+| mined_set_generation | [uint64](#uint64) | optional | The block's mined_set generation (GetBlockHeaderResponse.mined_set_generation) when the caller's tagging run started. Every writer that clears mined_set bumps it, so the write is refused with ERR_STATE_ERROR if it has changed since. Absent means a caller that predates the field: the write is unconditional, as it was before. |
 
 
 

@@ -602,10 +602,15 @@ type ClientI interface {
 	// Parameters:
 	// - ctx: Context for the operation with timeout and cancellation support
 	// - blockHash: Hash of the block to mark as mined
+	// - minedSetGeneration: BlockHeaderMeta.MinedSetGeneration read from GetBlockHeader
+	//   when the caller's tagging run started. The write is refused if it has moved since,
+	//   because ClearBlockMinedSet, InvalidateBlock or RevalidateBlock cleared mined_set so
+	//   the block is processed again.
 	//
 	// Returns:
+	// - errors.ErrStateError if the block's mined_set generation no longer equals minedSetGeneration
 	// - Error if the operation fails, nil on success
-	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error
 
 	// ClearBlockMinedSet resets the mined_set flag to false for a block.
 	//

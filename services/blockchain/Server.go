@@ -2011,6 +2011,8 @@ func (b *Blockchain) GetBlockHeader(ctx context.Context, req *blockchain_api.Get
 		Invalid:        meta.Invalid,
 		ProcessedAt:    processedAt,
 		MedianTimePast: meta.MedianTimePast,
+
+		MinedSetGeneration: meta.MinedSetGeneration,
 	}, nil
 }
 
@@ -2978,7 +2980,9 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][SetBlockMinedSet] hash must be %d bytes, got %d", chainhash.HashSize, len(req.BlockHash)))
 	}
 
-	err = b.store.SetBlockMinedSet(ctx, blockHash)
+	// An absent generation comes from a blockvalidation that predates it; keep the
+	// unconditional write it relied on rather than refuse every call during a rolling upgrade.
+	err = b.store.SetBlockMinedSet(ctx, blockHash, req.MinedSetGeneration)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}

@@ -128,6 +128,20 @@ const (
 	setMinedMaxBackoff = 16 * time.Second
 )
 
+// setMinedRequeueError is what setTxMinedStatus returns when the block's state moved
+// under the run: its final mined_set write was refused because the generation moved, or
+// the invalid flag changed before the run started. The run did not fail, so the setMined
+// worker neither charges nor resets the block's retry counter. It re-queues the block
+// through the backoff path, so a generation that keeps moving cannot drive back-to-back
+// full re-tags of a large block.
+type setMinedRequeueError struct {
+	reason string
+}
+
+func (e *setMinedRequeueError) Error() string {
+	return "set-mined run must be re-queued: " + e.reason
+}
+
 // setMinedRetryBackoff computes the exponential-with-cap backoff for the
 // (attempt)th retry. attempt is 1-indexed (1 = first retry after the initial
 // failure). 1s, 2s, 4s, 8s, 16s, 16s, ...
@@ -805,6 +819,26 @@ func (u *BlockValidation) start(ctx context.Context) error {
 					case <-ctx.Done():
 						return
 					default:
+					}
+
+					var requeue *setMinedRequeueError
+					if errors.As(err, &requeue) {
+						// The block's state moved under the run; it did not fail. Leave the
+						// retry counter as it is, neither charged nor reset, so a block that
+						// is also failing for real still reaches setMinedMaxRetries. Wait at
+						// the backoff for the attempts already made (1s at least) rather than
+						// re-queueing at once, so repeated resets cannot drive back-to-back
+						// full re-tags.
+						var attempt uint64
+						if prev, ok := u.setMinedRetries.Load(*blockHash); ok {
+							attempt = prev.(uint64)
+						}
+
+						backoff := setMinedRetryBackoff(int(attempt))
+						u.logger.Warnf("[BlockValidation:start][%s] setTxMined re-queued in %s, retry counter unchanged at %d: %s", blockHash.String(), backoff, attempt, err)
+						u.scheduleSetMinedRetry(ctx, blockHash, backoff)
+
+						return
 					}
 
 					u.logger.Errorf("[BlockValidation:start][%s] failed setTxMined: %s", blockHash.String(), err)
@@ -1573,6 +1607,27 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		return errors.NewServiceError("[setTxMined][%s] failed to get block header from blockchain", blockHash.String(), err)
 	}
 
+	// Capture the generation before any work. Everything this run decides (tag or untag,
+	// on the longest chain or not) is read after this point, so a reset that lands later
+	// moves the generation and the final SetBlockMinedSet is refused.
+	minedSetGeneration := blockHeaderMeta.MinedSetGeneration
+
+	// The caller read the invalid flag earlier, in its own GetBlockHeader. If an invalidate
+	// or revalidate landed between that read and this one, the generation above already
+	// counts it, so the guard cannot catch a run started on the stale flag. Ask the
+	// worker to re-queue instead; the next pick-up reads both together.
+	if startedInvalid := len(unsetMined) > 0 && unsetMined[0]; startedInvalid != blockHeaderMeta.Invalid {
+		u.logger.Warnf("[setTxMined][%s] block invalid flag changed before the run started (caller saw %t, now %t), re-queueing", blockHash.String(), startedInvalid, blockHeaderMeta.Invalid)
+
+		// A block taken from lastValidatedBlocks may hold mmap-backed subtrees, which
+		// have no finalizer; release them before dropping the block.
+		if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
+			u.logger.Warnf("[setTxMined][%s] failed closing subtrees before re-queue: %v", blockHash.String(), releaseErr)
+		}
+
+		return &setMinedRequeueError{reason: fmt.Sprintf("invalid flag changed before the run started (caller saw %t, now %t)", startedInvalid, blockHeaderMeta.Invalid)}
+	}
+
 	onLongestChain, err = u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{blockHeaderMeta.ID})
 	if err != nil {
 		return errors.NewServiceError("[setTxMined][%s] failed to check if block is on longest chain", blockHash.String(), err)
@@ -1671,8 +1726,21 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		u.logger.Warnf("[setTxMined][%s] failed closing subtrees after setting mined: %v", block.Hash().String(), releaseErr)
 	}
 
-	// update block mined_set to true
-	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash); err != nil {
+	// update block mined_set to true, but only if the block's mined_set generation is still
+	// the one this run started from. ClearBlockMinedSet, InvalidateBlock and RevalidateBlock
+	// clear mined_set so the block is processed again, and bump the generation. Overwriting
+	// mined_set here would make the worker's MinedSet guard and the mined-not-set sweep both
+	// skip the block for good, leaving its transactions tagged for a chain state that no
+	// longer holds.
+	if err = u.blockchainClient.SetBlockMinedSet(ctx, blockHash, minedSetGeneration); err != nil {
+		if errors.Is(err, errors.ErrStateError) {
+			// Not a failure of this run: the block must be processed again under its new
+			// state. The worker re-queues it after a backoff and leaves the retry counter alone.
+			u.logger.Warnf("[setTxMined][%s] block mined_set was cleared during the run, re-queueing: %v", blockHash.String(), err)
+
+			return &setMinedRequeueError{reason: "mined_set generation moved during the run: " + err.Error()}
+		}
+
 		return errors.NewServiceError("[setTxMined][%s] failed to set block mined", block.Hash().String(), err)
 	}
 

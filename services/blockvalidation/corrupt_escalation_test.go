@@ -261,7 +261,7 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 
 	// waitForPreviousBlocksToBeProcessed gates on the parent being mined, and the store writes
 	// genesis unmined; without this the optimistic AddBlock is never reached.
-	require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+	require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 	blockchainClient := &invalidateFailsFirstNClient{ClientI: realClient, failFirst: 1}
 
@@ -867,7 +867,7 @@ func TestOptimisticCorrupt_StrikeGatedOnRevalidation(t *testing.T) {
 
 		// waitForPreviousBlocksToBeProcessed gates on the parent being mined, and the store writes
 		// genesis unmined; without this the optimistic AddBlock is never reached.
-		require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash))
+		require.NoError(t, realClient.SetBlockMinedSet(ctx, tSettings.ChainCfgParams.GenesisHash, 0))
 
 		// Height 1, so the model height, the store-derived height and the BIP34 coinbase-encoded
 		// height all agree (StoreBlock re-derives the height from the parent chain).

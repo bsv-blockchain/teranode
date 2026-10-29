@@ -400,8 +400,8 @@ func (m *MockBlockchainClient) SendNotification(ctx context.Context, notificatio
 }
 
 // SetBlockMinedSet implements the blockchain.ClientI interface
-func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	args := m.Called(ctx, blockHash)
+func (m *MockBlockchainClient) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
+	args := m.Called(ctx, blockHash, minedSetGeneration)
 	return args.Error(0)
 }
 

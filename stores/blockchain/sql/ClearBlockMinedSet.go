@@ -10,6 +10,8 @@ import (
 // ClearBlockMinedSet resets mined_set to false for the specified block.
 // This triggers the background job to re-process transaction states.
 // Used during fork handling when blocks move from main chain to side chain.
+// It also bumps mined_set_gen, so a tagging run that started before the clear
+// has its SetBlockMinedSet refused instead of overwriting the reset.
 func (s *SQL) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
 	s.logger.Debugf("ClearBlockMinedSet %s", blockHash.String())
 
@@ -18,7 +20,7 @@ func (s *SQL) ClearBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash)
 
 	q := `
 		UPDATE blocks
-		SET mined_set = false
+		SET mined_set = false, mined_set_gen = mined_set_gen + 1
 		WHERE hash = $1
 	`
 

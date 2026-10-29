@@ -113,7 +113,10 @@ func TestReconsider_BelowCheckpoint_RunsExpectedNBitsAndSucceeds(t *testing.T) {
 	// Reconsider the ancestor. RevalidateBlock clears mined_set, so re-stamp it the way the
 	// setMined worker would; the descendant's validation waits on the parent's mined state.
 	require.NoError(t, client.RevalidateBlock(ctx, parent.Hash()))
-	require.NoError(t, client.SetBlockMinedSet(ctx, parent.Hash()))
+
+	_, revalidatedMeta, err := client.GetBlockHeader(ctx, parent.Hash())
+	require.NoError(t, err)
+	require.NoError(t, client.SetBlockMinedSet(ctx, parent.Hash(), revalidatedMeta.MinedSetGeneration))
 
 	// The difficulty inputs must still be reachable after the invalidation, which is the whole
 	// claim: the calculator walks parent_id and does not filter invalid rows.

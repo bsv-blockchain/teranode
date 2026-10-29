@@ -353,6 +353,13 @@ func (b *Blockchain) SetBlockMinedSet(ctx context.Context, req *blockchain_api.S
 
 Marks a block as mined in the blockchain, updating its status to indicate completion of the mining process.
 
+The write is conditional when the request carries `mined_set_generation`: it only lands while the
+block's `mined_set_gen` still equals that value. `ClearBlockMinedSet`, `InvalidateBlock` and
+`RevalidateBlock` each clear `mined_set` and bump `mined_set_gen`, so a tagging run that started
+before one of them is refused with `ERR_STATE_ERROR` instead of overwriting the reset. Block
+validation re-queues the block on that error. A request without the field, as sent by a block
+validation service that predates it, is the old unconditional write.
+
 ### GetBlocksMinedNotSet
 
 ```go

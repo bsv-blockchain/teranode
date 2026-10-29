@@ -102,7 +102,10 @@ func TestValidateBlock_ParentInvalid_ChildKeepsFullBodyAndReconsiders(t *testing
 	// Reconsider the parent. RevalidateBlock clears mined_set, so re-stamp it the way the setMined
 	// worker would; the child's validation waits on the parent's mined state.
 	require.NoError(t, client.RevalidateBlock(ctx, parent.Hash()))
-	require.NoError(t, client.SetBlockMinedSet(ctx, parent.Hash()))
+
+	_, revalidatedMeta, err := client.GetBlockHeader(ctx, parent.Hash())
+	require.NoError(t, err)
+	require.NoError(t, client.SetBlockMinedSet(ctx, parent.Hash(), revalidatedMeta.MinedSetGeneration))
 
 	_, parentMeta, err := client.GetBlockHeader(ctx, parent.Hash())
 	require.NoError(t, err)

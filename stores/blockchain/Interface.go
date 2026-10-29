@@ -369,12 +369,15 @@ type Store interface {
 	SetState(ctx context.Context, key string, data []byte) error
 	GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash) (bool, error)
 
-	// SetBlockMinedSet marks a block as mined.
+	// SetBlockMinedSet marks a block as mined. With a non-nil expectedGeneration the
+	// write only lands while the block's mined_set generation still equals it.
 	// Parameters:
 	//   - ctx: Context for the operation
 	//   - blockHash: Hash of the block to mark
-	// Returns: Any error encountered
-	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error
+	//   - expectedGeneration: BlockHeaderMeta.MinedSetGeneration when the caller's tagging
+	//     run started, or nil for the unconditional write older callers expect
+	// Returns: errors.ErrStateError if the generation has moved, else any error encountered
+	SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectedGeneration *uint64) error
 
 	// ClearBlockMinedSet resets the mined_set flag to false for a block,
 	// triggering background job processing to update transaction states.

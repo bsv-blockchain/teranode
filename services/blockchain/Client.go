@@ -845,6 +845,8 @@ func (c *Client) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) 
 		SubtreesSet:    resp.SubtreesSet,
 		Invalid:        resp.Invalid,
 		MedianTimePast: resp.MedianTimePast,
+
+		MinedSetGeneration: resp.MinedSetGeneration,
 	}
 
 	if resp.ProcessedAt != nil {
@@ -1683,12 +1685,15 @@ func (c *Client) GetBlockIsMined(ctx context.Context, blockHash *chainhash.Hash)
 // Parameters:
 //   - ctx: Context for the operation with timeout and cancellation support
 //   - blockHash: Hash of the block to mark as mined
+//   - minedSetGeneration: The block's mined_set generation when the caller's tagging run started
 //
 // Returns:
-//   - error: Any error encountered during the mining status update operation
-func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+//   - error: errors.ErrStateError if the block's mined_set generation has moved, or any
+//     other error encountered during the mining status update operation
+func (c *Client) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, minedSetGeneration uint64) error {
 	_, err := c.client.SetBlockMinedSet(ctx, &blockchain_api.SetBlockMinedSetRequest{
-		BlockHash: blockHash[:],
+		BlockHash:          blockHash[:],
+		MinedSetGeneration: &minedSetGeneration,
 	})
 	if err != nil {
 		return errors.UnwrapGRPC(err)

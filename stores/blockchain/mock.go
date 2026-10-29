@@ -723,7 +723,7 @@ func (m *MockStore) GetBlockIsMined(_ context.Context, blockHash *chainhash.Hash
 	return isMined, nil
 }
 
-func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash) error {
+func (m *MockStore) SetBlockMinedSet(ctx context.Context, blockHash *chainhash.Hash, expectedGeneration *uint64) error {
 	panic(implementMe)
 }
 

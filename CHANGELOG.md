@@ -106,6 +106,26 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **`SetBlockMinedSet` can now refuse a write with `ERR_STATE_ERROR`.** The blockchain
+  store gains a `mined_set_gen` column on `blocks`, added on startup with default 0.
+  `ClearBlockMinedSet`, `InvalidateBlock` and `RevalidateBlock` bump it.
+  `SetBlockMinedSetRequest` gains an optional `mined_set_generation` field, and
+  `GetBlockHeaderResponse` gains `mined_set_generation`. When the request carries the
+  field, the write only lands if the generation has not moved since the caller read it.
+  Otherwise the call returns `ERR_STATE_ERROR`, and block validation re-queues the
+  block after a backoff of at least 1 s, without charging or resetting its retry
+  counter. This stops a set-mined run that was in flight during an invalidation or a
+  catchup reset from overwriting that reset. It does not close the catchup fork case
+  on its own: catchup clears `mined_set` on the old-chain blocks before the reorg, so
+  the re-queued run still finds the block on the main chain and tags it again. That
+  ordering predates this change. Mixed versions keep working, so there is
+  no required upgrade order. An older block validation service sends no generation, and
+  a new blockchain service writes for it unconditionally, as before. A new block
+  validation service talking to an older blockchain service has its field ignored, and
+  gets the old unconditional write. Either way the race stays open until both services
+  run the new version. A client that calls `SetBlockMinedSet` with the field set must
+  handle `ERR_STATE_ERROR`. (#2018)
+
 - **Catch-up quick validation waits for each block's `.subtree` writes before it commits
   the block, and a shutdown waits for a block's in-flight commit.** A block was stored with
   `subtrees_set` while its `.subtree` files could still be in flight, so a failed write
