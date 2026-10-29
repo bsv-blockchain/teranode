@@ -312,6 +312,7 @@ func (sm *SyncManager) replayingHistory() bool {
 // itself is parkCommitFailure's; all this does is log it and carry it out.
 func (sm *SyncManager) parkedBlockFailed(entry parkedBlock, err error) bool {
 	d := parkCommitFailure(err)
+	d.rejectReason = blockRejectReason(err)
 
 	// While the node is catching blocks no reject is sent for a block that would
 	// not commit, because we are replaying history rather than judging a peer's

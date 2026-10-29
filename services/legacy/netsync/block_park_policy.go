@@ -106,6 +106,20 @@ type parkDisposition struct {
 	// Not set on committed (the block is in the chain) or abandoned (its parent is
 	// never coming, so the block is not wanted).
 	reAsk bool
+
+	// rejectReason is the reason the peer is told when the block is rejected to it
+	// (blockRejectReason), set by the caller that holds the error. Empty means the
+	// generic reason.
+	rejectReason string
+}
+
+// wireRejectReason is the reason to put in the reject message for this row.
+func (d parkDisposition) wireRejectReason() string {
+	if d.rejectReason == "" {
+		return defaultBlockRejectReason
+	}
+
+	return d.rejectReason
 }
 
 // The table. Read down the columns: keep-or-drop, rewind-or-not, blame-or-not.
@@ -555,10 +569,10 @@ func (sm *SyncManager) applyParkDisposition(entry parkedBlock, d parkDisposition
 		// reject, so the one message the peer was owed never left; waiting for
 		// the write here held the commit goroutine for as long as the peer
 		// chose not to read. Both wants are met off this goroutine.
-		sm.rejectThenDropPeer(entry, dropReason)
+		sm.rejectThenDropPeer(entry, d.wireRejectReason(), dropReason)
 
 	case d.blamePeer:
-		entry.peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &entry.hash, false)
+		entry.peer.PushRejectMsg(wire.CmdBlock, wire.RejectInvalid, d.wireRejectReason(), &entry.hash, false)
 
 	case d.dropPeer:
 		// The whole association, through its primary: entry.peer is the DATA1
@@ -644,10 +658,10 @@ func (sm *SyncManager) askDroppedBlockAgain(entry parkedBlock) {
 // goroutine ends within the bound either way. A peer that disconnects before
 // the write is signalled too (QueueMessage on a disconnected peer, and the
 // output handler's drain on quit, both send on it).
-func (sm *SyncManager) rejectThenDropPeer(entry parkedBlock, dropReason string) {
+func (sm *SyncManager) rejectThenDropPeer(entry parkedBlock, rejectReason, dropReason string) {
 	go func() {
 		sent := make(chan struct{}, 1)
-		entry.peer.QueueRejectMsg(wire.CmdBlock, wire.RejectInvalid, "block rejected", &entry.hash, sent)
+		entry.peer.QueueRejectMsg(wire.CmdBlock, wire.RejectInvalid, rejectReason, &entry.hash, sent)
 
 		timer := time.NewTimer(parkRejectWriteBound)
 		defer timer.Stop()
