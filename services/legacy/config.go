@@ -42,6 +42,14 @@ const (
 	// this node will accept over the legacy wire. It is not the overall
 	// message payload cap: go-wire derives that as ((ebs/1e6)*1MiB)*2, i.e.
 	// roughly 8.39 GB for this value (go-wire v1.2.10 message.go:38-42).
+	//
+	// Since go-wire v1.5.0 every decoder sizes its allocations by the bytes
+	// actually read, never by a declared count or length, so this caps what a
+	// peer may declare, not what a small frame can make this node allocate
+	// (pinned by TestReadWireMessage_HostileCountInSmallFrameIsBounded). It is
+	// deliberately not lowered to Policy.ExcessiveBlockSize: streamingBlockGate
+	// must see an over-policy block to discard it and keep the peer, which a
+	// go-wire refusal, answered with a disconnect, would not.
 	maxWireBlockPayload = 4_000_000_000
 	// defaultExcessiveBlockSize is only a placeholder. loadConfig always
 	// replaces it with the limit block validation actually enforces, see

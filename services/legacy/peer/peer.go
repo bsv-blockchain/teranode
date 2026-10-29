@@ -16,6 +16,7 @@ import (
 	"math"
 	"math/big"
 	"net"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -1429,8 +1430,7 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 // its reader to *bytes.Buffer; go-wire rejects CmdVersion explicitly with a
 // *wire.MessageError.
 func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (int, wire.Message, error) {
-	n, msg, err := wire.ReadMessageStreamingN(&deliveryReader{r: p.conn, from: p},
-		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	n, msg, err := p.readWireMessageStreaming(encoding)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
 
 	if p.cfg.Listeners.OnRead != nil {
@@ -1443,6 +1443,30 @@ func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (int, wire.Me
 
 	p.logReadMessage(msg, nil)
 	return n, msg, nil
+}
+
+// readWireMessageStreaming is the go-wire streaming read with any panic under it
+// turned into an error. The bytes being decoded are the remote peer's choice, so
+// a panic here must cost that peer its connection (the read loop answers any
+// such error with a reject and a disconnect), not take the process down.
+//
+// The streaming block handler runs the block sink on this goroutine, so a sink
+// panic is caught here too, and whatever the sink held when it panicked is not
+// released. That is logged at Error so it is seen. An out-of-memory failure is
+// fatal in Go and is not caught; go-wire bounding its allocations by the bytes
+// actually read is what prevents that.
+func (p *Peer) readWireMessageStreaming(encoding wire.MessageEncoding) (n int, msg wire.Message, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			p.logger.Errorf("[readMessageStreaming][%s] recovered panic reading a message: %v stack=%q", p, r, debug.Stack())
+
+			msg = nil
+			err = errors.NewProcessingError("[readMessageStreaming][%s] recovered panic reading a message: %s", p, fmt.Sprint(r))
+		}
+	}()
+
+	return wire.ReadMessageStreamingN(&deliveryReader{r: p.conn, from: p},
+		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
 }
 
 // logReadMessage emits the debug logging that readMessage / readMessageStreaming

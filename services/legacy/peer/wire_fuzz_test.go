@@ -3,6 +3,7 @@ package peer
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"runtime"
 	"testing"
 
@@ -215,4 +216,119 @@ func allocDeltaBytes(fn func()) uint64 {
 	runtime.ReadMemStats(&after)
 
 	return after.TotalAlloc - before.TotalAlloc
+}
+
+// TestReadWireMessage_HostileCountInSmallFrameIsBounded pins the other half of
+// the hostile-input question: a frame whose declared length is small and
+// honest, but whose payload carries a CompactSize count or byte length far
+// larger than the payload could ever back. A decoder that sizes an allocation
+// from that field before reading what it describes turns a frame of a few dozen
+// bytes into a multi-gigabyte allocation, under the 4 GB limits this service
+// installs, from any connected peer.
+//
+// Every case runs through both entry points a legacy peer uses: the buffered
+// ReadMessageWithEncodingN of the handshake and the streaming
+// ReadMessageStreamingN of the post-handshake read loop. The block cases go
+// through Teranode's own streaming block handler with no sink installed, which
+// is its Bsvdecode fallback. The corrupted-checksum case pins that a decode
+// failing before the checksum is reached is still cheap.
+func TestReadWireMessage_HostileCountInSmallFrameIsBounded(t *testing.T) {
+	wire.SetLimits(maxWireBlockPayloadForFuzz)
+	RegisterStreamingBlockHandler()
+
+	const maxAlloc = uint64(8 << 20) // 8 MB — far above a bounded reject, far below the claims
+
+	varInt := func(b *bytes.Buffer, v uint64) {
+		require.NoError(t, wire.WriteVarInt(b, wire.ProtocolVersion, v))
+	}
+
+	// txWithOneInput writes a tx version and one input with an empty script, i.e.
+	// everything before the output count.
+	txWithOneInput := func(b *bytes.Buffer) {
+		b.Write([]byte{1, 0, 0, 0}) // version
+		varInt(b, 1)                // input count
+		b.Write(make([]byte, 36))   // previous outpoint
+		varInt(b, 0)                // signature script length
+		b.Write(make([]byte, 4))    // sequence
+	}
+
+	cases := []struct {
+		name     string
+		command  string
+		payload  func(b *bytes.Buffer)
+		badCksum bool
+	}{
+		{name: "tx input count", command: wire.CmdTx, payload: func(b *bytes.Buffer) {
+			b.Write([]byte{1, 0, 0, 0})
+			varInt(b, 200_000_000)
+		}},
+		{name: "tx input count, corrupted checksum", command: wire.CmdTx, badCksum: true, payload: func(b *bytes.Buffer) {
+			b.Write([]byte{1, 0, 0, 0})
+			varInt(b, 200_000_000)
+		}},
+		{name: "tx signature script length", command: wire.CmdTx, payload: func(b *bytes.Buffer) {
+			b.Write([]byte{1, 0, 0, 0})
+			varInt(b, 1)
+			b.Write(make([]byte, 36))
+			varInt(b, 200_000_000)
+		}},
+		{name: "tx output script length", command: wire.CmdTx, payload: func(b *bytes.Buffer) {
+			txWithOneInput(b)
+			varInt(b, 1)             // output count
+			b.Write(make([]byte, 8)) // value
+			varInt(b, 1_000_000_000)
+		}},
+		{name: "block transaction count", command: wire.CmdBlock, payload: func(b *bytes.Buffer) {
+			b.Write(make([]byte, 80))
+			varInt(b, 399_000_000)
+		}},
+		{name: "block transaction script length", command: wire.CmdBlock, payload: func(b *bytes.Buffer) {
+			b.Write(make([]byte, 80))
+			varInt(b, 1)
+			b.Write([]byte{1, 0, 0, 0})
+			varInt(b, 1)
+			b.Write(make([]byte, 36))
+			varInt(b, 200_000_000)
+		}},
+		{name: "reject command string length", command: wire.CmdReject, payload: func(b *bytes.Buffer) {
+			varInt(b, 1_000_000_000)
+		}},
+	}
+
+	readers := []struct {
+		name string
+		read func(r io.Reader) error
+	}{
+		{name: "buffered", read: func(r io.Reader) error {
+			_, _, _, err := wire.ReadMessageWithEncodingN(r, wire.ProtocolVersion, wire.MainNet, wire.BaseEncoding)
+			return err
+		}},
+		{name: "streaming", read: func(r io.Reader) error {
+			_, _, err := wire.ReadMessageStreamingN(r, wire.ProtocolVersion, wire.MainNet, wire.BaseEncoding)
+			return err
+		}},
+	}
+
+	for _, tc := range cases {
+		var payload bytes.Buffer
+		tc.payload(&payload)
+
+		frame := buildFrame(tc.command, payload.Bytes())
+		if tc.badCksum {
+			frame[20] ^= 0xff
+		}
+
+		for _, rd := range readers {
+			t.Run(tc.name+"/"+rd.name, func(t *testing.T) {
+				alloc := allocDeltaBytes(func() {
+					require.Errorf(t, rd.read(bytes.NewReader(frame)),
+						"a %d-byte %s frame whose payload cannot back its declared count must error", len(frame), tc.command)
+				})
+
+				require.Lessf(t, alloc, maxAlloc,
+					"reading a %d-byte %s frame allocated %d bytes — a decoder sized an allocation from an untrusted count",
+					len(frame), tc.command, alloc)
+			})
+		}
+	}
 }
