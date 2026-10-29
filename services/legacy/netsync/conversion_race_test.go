@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -480,19 +481,29 @@ func TestATakeoverDisconnectsAConvertingCopyThatSendsNoByte(t *testing.T) {
 }
 
 // A second copy's merkle root is computed from the same peer bytes the sink
-// decodes, so a panic computing it gets the sink's verdict (recoveredSinkPanic),
-// not the read loop's own recover.
-func TestSideCopyMerkleRoot_APanicIsTheSinksVerdict(t *testing.T) {
+// decodes, after the copy is already off the wire and while the first copy may
+// still be converting the block. A panic computing it drops the second copy as a
+// duplicate, like every other failure of that check of this node's: not a
+// re-ask of a block that is converting, and not a panic counted against it.
+func TestSideCopyMerkleRoot_APanicDropsTheSecondCopy(t *testing.T) {
 	sm := newPipelineParkManager(t, memory.New(), 8)
 	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, map[string]struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.sinkPanics.Stop)
 
 	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
 	body := blockBodyBytes(t, bsvutil.NewBlock(msgBlock))
 	src := &panicOnceReader{r: bytes.NewReader(body), at: len(body) / 2}
 
-	var err error
+	var (
+		recovered bool
+		err       error
+	)
 
-	require.NotPanics(t, func() { _, _, err = sm.sideCopyMerkleRoot(hash, src, sinkPayloadLen(body)) })
-	require.Error(t, err)
-	require.True(t, isLocalSinkFault(err), "below the limit a panic is this node's fault, as in the sink: %v", err)
+	require.NotPanics(t, func() { _, _, recovered, err = sm.sideCopyMerkleRoot(hash, src, sinkPayloadLen(body)) })
+	require.True(t, recovered)
+	require.NoError(t, err)
+
+	_, counted := sm.sinkPanics.Get(hash)
+	require.False(t, counted, "a panic on the second copy is not counted against the block")
 }

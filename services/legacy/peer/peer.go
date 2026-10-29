@@ -1495,9 +1495,10 @@ func (p *Peer) readWireMessageStreaming(encoding wire.MessageEncoding) (n int, m
 		if r := recover(); r != nil {
 			p.logger.Errorf("[readMessageStreaming][%s] recovered panic reading a message: %q stack=%q", p, fmt.Sprint(r), debug.Stack())
 
-			// The peer's: what panicked was decoding the bytes it sent. The panic value
-			// stays in the log above, out of the error, whose text the read loop sends
-			// back to the peer in its reject.
+			// Answered as the peer's: under this read the sync manager's sink handles
+			// its own panics, so what is left is go-wire decoding the bytes the peer
+			// sent, or a wrapper of ours around them. The panic value stays in the log
+			// above, out of the error, whose text the read loop sends back in its reject.
 			msg = nil
 			err = errors.NewNetworkInvalidResponseError("[readMessageStreaming][%s] could not decode a message", p)
 		}

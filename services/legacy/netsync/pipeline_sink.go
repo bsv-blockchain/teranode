@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 )
 
 // pipelineBlockSink converts a block as it streams off the socket.
@@ -92,57 +93,86 @@ import (
 func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.BlockHeader, r io.Reader, n int64) (converted bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
-			converted, err = false, sm.recoveredSinkPanic(hash, p)
+			converted, err = false, sm.recoveredSinkPanic(hash, deliveringPeer(r), p)
 		}
 	}()
 
 	return sm.convertStreamedBlock(hash, header, r, n)
 }
 
-// sinkPanicLimit is the panic on one block's conversion from which the block
-// stops being retried; see recoveredSinkPanic.
+// sinkPanicLimit is how many different hosts' copies of one block must meet a
+// panic under its conversion before the block stops being asked for; see
+// recoveredSinkPanic.
 const sinkPanicLimit = 3
 
-// recoveredSinkPanic logs a panic recovered while converting block hash and
-// returns the error the sink leaves with.
+// recoveredSinkPanic logs a panic recovered while converting block hash, whose
+// copy from delivered, and returns the error the sink leaves with.
 //
 // A panic cannot say whose fault it was: a bug of this node's on an honest body,
-// or bytes a peer crafted to meet one. So it is first taken as this node's,
-// ERR_PROCESSING, a local fault: the rest of the body is drained, the peer kept
-// and the block asked for again. That retry is immediate, so a panic every copy
-// of the block meets would have each owner send the whole body again forever.
-// From the sinkPanicLimit-th panic on one hash within recentlyFailedBlocksTTL the
-// block is marked recently failed instead, which stops asking for it for that
-// long, and the error is the delivering peer's (ERR_NETWORK_INVALID_RESPONSE), so
-// the read loop drops it rather than letting it hold the block back.
+// or bytes a peer crafted to meet one. So a host's first panic on a block is
+// taken as this node's, ERR_PROCESSING, a local fault: the rest of the body is
+// drained, the peer kept and the block asked for again. That retry is immediate,
+// so a panic every copy of the block meets would have each owner send the whole
+// body again forever, and so the route is bounded twice over, by host as
+// notePolicyDecline counts:
 //
-// Neither error carries the panic value: the read loop echoes a read error's
-// text to the peer, and what crashed is for this node's log.
-func (sm *SyncManager) recoveredSinkPanic(hash chainhash.Hash, p any) error {
-	sm.logger.Errorf("[pipelineBlockSink][%s] recovered panic converting the block: %q stack=%q", hash, fmt.Sprint(p), debug.Stack())
+//   - a host whose copy of the block already met a panic is dropped on its next
+//     one, with the block left alone: one host cannot have a block written off;
+//   - once sinkPanicLimit different hosts have, the block is marked recently
+//     failed, which stops the wanted-range pass and the direct re-ask asking for
+//     it for recentlyFailedBlocksTTL, and from then every copy that meets a panic
+//     costs its sender the connection at once, until the block commits.
+//
+// Dropped means ERR_NETWORK_INVALID_RESPONSE, the delivering peer's, which the
+// read loop answers with a disconnect and never a ban. Neither error carries the
+// panic value: the read loop echoes a read error's text to the peer, and what
+// crashed is for this node's log.
+func (sm *SyncManager) recoveredSinkPanic(hash chainhash.Hash, delivered *peerpkg.Peer, p any) error {
+	sm.logger.Errorf("[pipelineBlockSink][%s] recovered panic converting the block from %s: %q stack=%q", hash, delivered, fmt.Sprint(p), debug.Stack())
 
 	if sm.sinkPanics == nil {
 		return errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block", hash)
 	}
 
-	count, _ := sm.sinkPanics.Get(hash)
-	count++
+	host := ""
 
-	if count < sinkPanicLimit {
-		sm.sinkPanics.Set(hash, count)
+	if delivered != nil {
+		primary := delivered
+		if sm.peerStates != nil {
+			_, primary, _ = sm.peerStateResolvingPrimary(delivered)
+		}
 
-		return errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block (%d of %d)", hash, count, sinkPanicLimit)
+		host = declineHost(primary)
 	}
 
-	sm.sinkPanics.Delete(hash)
+	sm.sinkPanicsMu.Lock()
+	defer sm.sinkPanicsMu.Unlock()
+
+	hosts, _ := sm.sinkPanics.Get(hash)
+
+	_, again := hosts[host]
+	if len(hosts) >= sinkPanicLimit || again {
+		return errors.NewNetworkInvalidResponseError("[pipelineBlockSink][%s] converting the block panicked again", hash)
+	}
+
+	if hosts == nil {
+		hosts = make(map[string]struct{})
+	}
+
+	hosts[host] = struct{}{}
+	sm.sinkPanics.Set(hash, hosts)
+
+	if len(hosts) < sinkPanicLimit {
+		return errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block", hash)
+	}
 
 	if sm.recentlyFailedBlocks != nil {
 		sm.recentlyFailedBlocks.Set(hash, struct{}{})
 	}
 
-	sm.logger.Errorf("[pipelineBlockSink][%s] converting the block panicked %d times; not asking for it again for %s", hash, count, recentlyFailedBlocksTTL)
+	sm.logger.Errorf("[pipelineBlockSink][%s] converting the block panicked on copies from %d hosts; not asking for it again for %s", hash, len(hosts), recentlyFailedBlocksTTL)
 
-	return errors.NewNetworkInvalidResponseError("[pipelineBlockSink][%s] converting the block panicked %d times", hash, count)
+	return errors.NewNetworkInvalidResponseError("[pipelineBlockSink][%s] converting the block panicked again", hash)
 }
 
 // convertStreamedBlock is pipelineBlockSink without its panic boundary.

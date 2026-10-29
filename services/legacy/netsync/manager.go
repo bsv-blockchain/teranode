@@ -716,11 +716,13 @@ type SyncManager struct {
 	// deleted on successful (re)process. A skipped descendant records its own hash
 	// too, so the whole descendant chain is suppressed transitively.
 	recentlyFailedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
-	// sinkPanics counts the panics recovered under each block's conversion, so a
-	// panic every copy of a block meets stops being retried (recoveredSinkPanic).
-	// TTL-bounded and size-capped like recentlyFailedBlocks; nil on struct-literal
-	// managers in tests, which then never stop retrying.
-	sinkPanics *expiringmap.ExpiringMap[chainhash.Hash, int]
+	// sinkPanics holds, per block, the hosts whose copies met a panic under its
+	// conversion, so a panic every copy of a block meets stops being retried
+	// (recoveredSinkPanic). TTL-bounded and size-capped like recentlyFailedBlocks,
+	// cleared when the block commits; nil on struct-literal managers in tests,
+	// which then never stop retrying. sinkPanicsMu serialises its updates.
+	sinkPanics   *expiringmap.ExpiringMap[chainhash.Hash, map[string]struct{}]
+	sinkPanicsMu sync.Mutex
 	// blockPark holds blocks that arrived before their parent. Without it such a
 	// block is fully downloaded, fully decoded and then discarded, and the
 	// getblocks sent in its place is ignored for as long as headers-first mode is
@@ -4695,7 +4697,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// before an early error return would leak that goroutine, since the caller
 	// receives a nil SyncManager and can never call Stop().
 	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL).WithMaxSize(recentlyFailedBlocksMaxTracked)
-	sm.sinkPanics = expiringmap.New[chainhash.Hash, int](recentlyFailedBlocksTTL).WithMaxSize(recentlyFailedBlocksMaxTracked)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, map[string]struct{}](recentlyFailedBlocksTTL).WithMaxSize(recentlyFailedBlocksMaxTracked)
 
 	// The dispatcher holds a pointer to the manager returned below, so it must be
 	// built from &sm, not from the local value.

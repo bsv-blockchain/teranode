@@ -385,24 +385,27 @@ func TestSink_APanicMidTransactionLoopIsALocalFault(t *testing.T) {
 }
 
 // TestSink_RepeatedPanicsOnOneBlockStopAskingForIt bounds the local-fault route
-// for a panic. Each drain asks for the block again at once, so a panic every
-// copy of the block meets, a bug of ours on its bytes or bytes a peer crafted to
-// meet one, would have every owner send the whole body again forever. From the
-// sinkPanicLimit-th panic on one hash the block is marked recently failed, which
-// stops asking for it for recentlyFailedBlocksTTL, and the error is the
-// delivering peer's, so the read loop drops it.
+// for a panic. Each drain asks for the block again at once, so a panic every copy
+// of the block meets, a bug of ours on its bytes or bytes a peer crafted to meet
+// one, would have every owner send the whole body again forever.
+//
+// One host's first panic on a block is taken as this node's. Its second costs it
+// its connection, and nothing more: one host cannot have a block written off,
+// as one host cannot by declaring it oversize (notePolicyDecline). Once
+// sinkPanicLimit different hosts have met a panic on it, the block is marked
+// recently failed, and every later panic on it costs its sender the connection
+// at once, until the block commits.
 func TestSink_RepeatedPanicsOnOneBlockStopAskingForIt(t *testing.T) {
 	sm := newPipelineParkManager(t, memory.New(), 8)
 	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
 	sm.streams = newStreamRegistry()
 	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
-	sm.sinkPanics = expiringmap.New[chainhash.Hash, int](recentlyFailedBlocksTTL)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, map[string]struct{}](recentlyFailedBlocksTTL)
 	t.Cleanup(sm.recentlyFailedBlocks.Stop)
 	t.Cleanup(sm.sinkPanics.Stop)
 
 	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
 	body := blockBodyBytes(t, bsvutil.NewBlock(msgBlock))
-	owner := owingPeer(t, sm, hash, 26)
 
 	var sink func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error)
 
@@ -412,28 +415,72 @@ func TestSink_RepeatedPanicsOnOneBlockStopAskingForIt(t *testing.T) {
 		sink = s
 	})
 
-	deliver := func() error {
+	deliver := func(from *peerpkg.Peer) error {
 		src := &panicOnceReader{r: bytes.NewReader(body), at: len(body) / 2}
-		_, err := sink(hash, &msgBlock.Header, peerpkg.NewDeliveryReader(src, owner), sinkPayloadLen(body))
+		_, err := sink(hash, &msgBlock.Header, peerpkg.NewDeliveryReader(src, from), sinkPayloadLen(body))
 
 		return err
 	}
 
-	for i := 1; i < sinkPanicLimit; i++ {
-		require.NoErrorf(t, deliver(), "panic %d of %d is still a local fault", i, sinkPanicLimit)
-
-		_, failed := sm.recentlyFailedBlocks.Get(hash)
-		require.False(t, failed)
+	requirePeersFault := func(err error) {
+		t.Helper()
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the delivering peer's, so the read loop drops it: %v", err)
+		require.False(t, isLocalSinkFault(err))
+		require.NotContains(t, err.Error(), "conversion exploded", "the panic text stays in this node's log; the error is echoed to the peer")
 	}
 
-	err := deliver()
-	require.Error(t, err, "the limit-th panic leaves the sink as a read error")
-	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the delivering peer's, so the read loop drops it: %v", err)
-	require.False(t, isLocalSinkFault(err))
-	require.NotContains(t, err.Error(), "conversion exploded", "the panic text stays in this node's log; the error is echoed to the peer")
+	marked := func() bool {
+		_, failed := sm.recentlyFailedBlocks.Get(hash)
+		return failed
+	}
 
-	_, failed := sm.recentlyFailedBlocks.Get(hash)
-	require.True(t, failed, "the block is not asked for again for a while")
+	first := owingPeer(t, sm, hash, 26)
+	require.NoError(t, deliver(first), "a host's first panic is this node's fault")
+	requirePeersFault(deliver(first))
+	require.False(t, marked(), "one host cannot have the block written off")
+
+	for i := 1; i < sinkPanicLimit; i++ {
+		other := owingPeer(t, sm, hash, uint8(26+i)) //nolint:gosec // a handful of peers
+
+		err := deliver(other)
+		if i < sinkPanicLimit-1 {
+			require.NoError(t, err)
+			require.False(t, marked())
+
+			continue
+		}
+
+		requirePeersFault(err)
+	}
+
+	require.True(t, marked(), "the block is not asked for again for a while")
+
+	requirePeersFault(deliver(owingPeer(t, sm, hash, uint8(26+sinkPanicLimit)))) //nolint:gosec // a handful of peers
+}
+
+// TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked: the
+// direct re-ask above the final checkpoint does not ask for a block marked
+// recently failed. The mark is what bounds a panic every copy of the block
+// meets (recoveredSinkPanic), and asking again would go on fetching it.
+func TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.peerStates = txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState]()
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+	sm.headersFirstMode.Store(false)
+
+	local, _, rec := connectRacePeer(t, 23, 0)
+
+	h := chainhash.HashH([]byte("a block marked recently failed"))
+	require.True(t, sm.blockDownloads.Add(local, h))
+	sm.recentlyFailedBlocks.Set(h, struct{}{})
+	sm.noteLocalFaultDrain(h)
+
+	sm.handleBlockOnDiskMsg(&blockOnDiskMsg{body: peerpkg.BlockBody{Hash: h}, peer: local})
+
+	require.Never(t, func() bool { return rec.count() > 0 }, 300*time.Millisecond, 10*time.Millisecond, "no getdata for a marked block")
 }
 
 // TestPipelineSink_ABodyCutMidTransactionIsADeliveryFaultNotAnInvalidBlock pins
