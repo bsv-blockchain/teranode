@@ -835,6 +835,15 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **The legacy P2P reject for an invalid block now says why.** Teranode answered
+  every invalid block from a legacy peer with the reject reason `block rejected`.
+  The reject code is unchanged (`RejectInvalid`), and the reason is now the string
+  bitcoin-sv uses for the same failure when it is known (for example `bad-txnmrklroot`,
+  `high-hash`, `bad-diffbits`, `bad-cb-missing`, `bad-txns-inputs-duplicate`), taken from a fixed
+  list; any other failure keeps `block rejected`. Error text is never sent to the
+  peer. A peer or tool that matched on the old fixed text needs no change unless it
+  relied on every reason being `block rejected`. No action is required. (#1536)
+
 - **Peer subtrees announced during a catchup are validated afterwards instead of
   lost.** While catching up, the subtree validator used to drop every
   peer-announced subtree, so the next block arrived with all of them unvalidated
