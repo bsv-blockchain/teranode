@@ -130,20 +130,20 @@ const sinkPanicLimit = 3
 func (sm *SyncManager) recoveredSinkPanic(hash chainhash.Hash, delivered *peerpkg.Peer, p any) error {
 	sm.logger.Errorf("[pipelineBlockSink][%s] recovered panic converting the block from %s: %q stack=%q", hash, delivered, fmt.Sprint(p), debug.Stack())
 
-	if sm.sinkPanics == nil {
+	// A copy with no known sender, the side copy a takeover converts from disk, has
+	// no vote: there is no host to drop, and counting it under none would stand in
+	// for a host of its own. A takeover happens once per race, and every copy off
+	// the wire is counted under its own sender.
+	if sm.sinkPanics == nil || delivered == nil {
 		return errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block", hash)
 	}
 
-	host := ""
-
-	if delivered != nil {
-		primary := delivered
-		if sm.peerStates != nil {
-			_, primary, _ = sm.peerStateResolvingPrimary(delivered)
-		}
-
-		host = declineHost(primary)
+	primary := delivered
+	if sm.peerStates != nil {
+		_, primary, _ = sm.peerStateResolvingPrimary(delivered)
 	}
+
+	host := declineHost(primary)
 
 	sm.sinkPanicsMu.Lock()
 	defer sm.sinkPanicsMu.Unlock()

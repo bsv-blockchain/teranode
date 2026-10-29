@@ -459,6 +459,25 @@ func TestSink_RepeatedPanicsOnOneBlockStopAskingForIt(t *testing.T) {
 	requirePeersFault(deliver(owingPeer(t, sm, hash, uint8(26+sinkPanicLimit)))) //nolint:gosec // a handful of peers
 }
 
+// A copy whose sender is not known, the side copy a takeover converts from
+// disk, has no vote: counted under no host, it would disconnect the next host on
+// its first panic and stand in for a host of its own. It stays a local fault.
+func TestRecoveredSinkPanic_ACopyWithNoKnownSenderHasNoVote(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, map[string]struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.sinkPanics.Stop)
+
+	h := chainhash.HashH([]byte("a block converted from a side copy"))
+
+	for range sinkPanicLimit + 1 {
+		err := sm.recoveredSinkPanic(h, nil, "exploded")
+		require.True(t, isLocalSinkFault(err), "no known sender, no verdict against one: %v", err)
+	}
+
+	_, counted := sm.sinkPanics.Get(h)
+	require.False(t, counted)
+}
+
 // TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked: the
 // direct re-ask above the final checkpoint does not ask for a block marked
 // recently failed. The mark is what bounds a panic every copy of the block
