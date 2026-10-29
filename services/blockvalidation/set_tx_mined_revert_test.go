@@ -261,11 +261,11 @@ func (s *minedFailingStore) SetMinedMulti(ctx context.Context, hashes []*chainha
 // successful UpdateTxMinedStatus. The error returns (ErrBlockInvalid,
 // ErrBlockParentNotMined, the generic update error, and the GetBlockHeaderIDs
 // failure) skipped that release, so the one owned mmap mapping and its temp
-// backing file leaked, and the setTxMined retry loop runs up to 10 times. Here a
-// UTXO-store decorator fails the mined SetMinedMulti so the generic error return
-// is taken; the block's mmap-backed subtree must still come back released, which
-// is observable as its backing file being gone. A nil-entry check would miss it:
-// the pinned release path nils entries without closing.
+// backing file leaked. Here a UTXO-store decorator fails the mined SetMinedMulti
+// so the generic error return is taken; the block's mmap-backed subtree must
+// still come back released, which is observable as its backing file being gone.
+// A nil-entry check would miss it: the pinned release path nils entries without
+// closing.
 func TestSetTxMinedStatus_ValidPathReleasesMmapSubtreesOnMinedUpdateError(t *testing.T) {
 	initPrometheusMetrics()
 

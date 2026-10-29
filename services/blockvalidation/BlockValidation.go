@@ -1528,11 +1528,10 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 	// restart) would otherwise strand that one mmap mapping and its temp backing
 	// file until process exit — an mmap-backed subtree has no finalizer. A
 	// freshly fetched block has no subtrees yet, so here the defer is a no-op
-	// until the valid path's heap-only GetSubtrees, or the unset path's reload,
-	// loads them. ReleaseSubtreeNodes on a nil or already-released slice is a
-	// no-op, so this one defer covers the success path and every error return,
-	// replacing the former per-branch defers and the explicit success-path
-	// release (issue #2029).
+	// until the valid path's GetSubtrees, or the unset path's reload, loads them.
+	// ReleaseSubtreeNodes on a nil or already-released slice is a no-op, so this
+	// one defer is the safety net for every error return; the success path still
+	// releases explicitly before SetBlockMinedSet (issue #2029).
 	defer func() {
 		if releaseErr := block.ReleaseSubtreeNodes(nil); releaseErr != nil {
 			u.logger.Warnf("[setTxMined][%s] failed releasing subtrees: %v", block.Hash().String(), releaseErr)
@@ -1572,9 +1571,12 @@ func (u *BlockValidation) setTxMinedStatus(ctx context.Context, blockHash *chain
 		}
 	} else {
 		// All subtrees should already be available for fully processed blocks.
-		// This load is heap-only (getAndValidateSubtrees ->
-		// DeserializeFromReaderWithAllocator); the deferred release above returns
-		// its memory on every exit, including this partial-load error return.
+		// A fresh fetch loads these on the heap (getAndValidateSubtrees ->
+		// DeserializeFromReaderWithAllocator), but a cached block whose subtrees are
+		// already loaded keeps them as they are, possibly mmap-backed. Do not pool
+		// the nodes or skip Close here on the strength of the heap case. The
+		// deferred release above returns the subtrees on every exit, including
+		// this partial-load error return.
 		_, err = block.GetSubtrees(ctx, u.logger, u.subtreeStore, u.settings.Block.GetAndValidateSubtreesConcurrency)
 		if err != nil {
 			return errors.NewProcessingError("[setTxMined][%s] failed to get subtrees from block", block.Hash().String(), err)
