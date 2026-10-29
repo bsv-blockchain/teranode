@@ -138,6 +138,9 @@ type Daemon struct {
 	// must fail fast, without reaching into logger internals.
 	startErr   error
 	startErrMu sync.Mutex
+	// crashed is set by crash; the shutdown path then skips closeClients and
+	// closeStores, as a killed process would.
+	crashed atomic.Bool
 }
 
 // New creates a new Daemon instance with the provided options.
@@ -546,6 +549,10 @@ type clientCloser interface {
 // closeStores, because clients sit in front of the stores in the dependency
 // graph. Each client is closed via the Stage-E clientCloser contract.
 func (d *Daemon) closeClients(logger ulogger.Logger) {
+	if d.crashed.Load() {
+		return
+	}
+
 	d.daemonStores.constructedClientsMu.Lock()
 	clients := d.daemonStores.constructedClients
 	d.daemonStores.constructedClients = nil
@@ -567,6 +574,10 @@ func (d *Daemon) closeClients(logger ulogger.Logger) {
 // batcher drain — to run with real time available, not return
 // immediately with context.Canceled.
 func (d *Daemon) closeStores(logger ulogger.Logger) {
+	if d.crashed.Load() {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
