@@ -877,6 +877,17 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **A legacy message that is well framed but too short is answered, not mistaken for a
+  hang-up.** A message with the right length and checksum whose payload is shorter than
+  its command needs (a `reject` with no payload, a `ping` with a short nonce) made the
+  decoder return an end-of-data error that the read loop took for the peer leaving: the
+  connection was dropped, the peer was told nothing, and the debug log said the peer
+  had disconnected. It is now a malformed message: the peer gets a `reject` with the
+  command `malformed` and the reason "message payload is shorter than its command
+  requires", and the log names the error. The connection is still closed, as for any
+  malformed message (bitcoin-sv keeps it); a connection that really ends, between
+  messages or inside one, is handled as before. (#1535)
+
 - **Peer subtrees announced during a catchup are validated afterwards instead of
   lost.** While catching up, the subtree validator used to drop every
   peer-announced subtree, so the next block arrived with all of them unvalidated

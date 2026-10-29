@@ -1396,8 +1396,10 @@ func (p *Peer) handleAuthChMsg(msg *wire.MsgAuthch) {
 // bytes. Use this for messages whose Bsvdecode requires a *bytes.Buffer
 // (notably MsgVersion) or whose raw bytes are needed downstream.
 func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte, error) {
-	n, msg, buf, err := wire.ReadMessageWithEncodingN(&deliveryReader{r: p.conn, from: p},
+	reader := &deliveryReader{r: p.conn, from: p}
+	n, msg, buf, err := wire.ReadMessageWithEncodingN(reader,
 		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	err = reader.classifyReadError(err)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
 
 	if p.cfg.Listeners.OnRead != nil {
@@ -1429,8 +1431,10 @@ func (p *Peer) readMessage(encoding wire.MessageEncoding) (wire.Message, []byte,
 // its reader to *bytes.Buffer; go-wire rejects CmdVersion explicitly with a
 // *wire.MessageError.
 func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (int, wire.Message, error) {
-	n, msg, err := wire.ReadMessageStreamingN(&deliveryReader{r: p.conn, from: p},
+	reader := &deliveryReader{r: p.conn, from: p}
+	n, msg, err := wire.ReadMessageStreamingN(reader,
 		p.ProtocolVersion(), p.cfg.ChainParams.Net, encoding)
+	err = reader.classifyReadError(err)
 	atomic.AddUint64(&p.bytesReceived, uint64(n))
 
 	if p.cfg.Listeners.OnRead != nil {
