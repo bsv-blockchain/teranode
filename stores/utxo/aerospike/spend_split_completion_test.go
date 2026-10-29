@@ -1,12 +1,15 @@
 package aerospike
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-batcher/v2/completion"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -39,7 +42,7 @@ func TestSpendSplitCompletesAllClaimsOnBackendFailure(t *testing.T) {
 						batch[i] = &batchSpend{spend: &utxo.Spend{
 							TxID: &parent, UTXOHash: &hash,
 							SpendingData: spendpkg.NewSpendingData(&spender, 0),
-						}, blockHeight: 100, group: group}
+						}, blockHeight: 100 + uint32(i), group: group}
 					}
 					calls := 0
 					fail := errorOperate()
@@ -79,6 +82,9 @@ func TestSpendSplitRecordsBreakerOutcomesAndOneMetricSample(t *testing.T) {
 			s := newSpendBreakerTestStore(t, expressions)
 			parent := chainhash.Hash{1}
 			batch, group := competingSpendBatch(&parent, &parent, &parent)
+			for i, item := range batch {
+				item.blockHeight += uint32(i)
+			}
 
 			calls := 0
 			s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
@@ -91,7 +97,7 @@ func TestSpendSplitRecordsBreakerOutcomesAndOneMetricSample(t *testing.T) {
 			s.sendSpendBatchLua(batch)
 			requireGroupCompleted(t, group, time.Second)
 
-			require.Equal(t, 3, calls, "a failure without an owner sends each competing claim to the backend")
+			require.Equal(t, 3, calls, "different checks still require backend decisions")
 			if expressions {
 				require.Equal(t, cbStateClosed, s.spendCircuitBreaker.state)
 				require.Equal(t, 1, s.spendCircuitBreaker.consecutiveFailures)
@@ -188,6 +194,7 @@ func TestSpendSplitPanicKeepsEarlierBreakerFailures(t *testing.T) {
 			s.spendCircuitBreaker = newCircuitBreaker(5, 1, time.Minute)
 			parent := chainhash.Hash{1}
 			batch, group := competingSpendBatch(&parent, &parent)
+			batch[1].blockHeight++
 
 			calls := 0
 			s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
@@ -327,6 +334,9 @@ func TestSpendExpressionBreakerBeforeLuaRetry(t *testing.T) {
 						parents = append(parents, &first)
 					}
 					batch, group := competingSpendBatch(parents...)
+					if split {
+						batch[2].blockHeight++
+					}
 					calls := 0
 					s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 						calls++
@@ -480,6 +490,86 @@ func TestSpendExpressionBreakerCountsFailureAfterRecovery(t *testing.T) {
 			require.Error(t, batch[0].spend.Err)
 			require.NoError(t, batch[1].spend.Err)
 			require.Error(t, batch[2].spend.Err)
+		})
+	}
+}
+
+func TestSpendSplitDoesNotDispatchAfterCallerReturns(t *testing.T) {
+	for _, expressions := range []bool{false, true} {
+		name := "lua"
+		if expressions {
+			name = "expressions"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, cancelCaller := range []bool{false, true} {
+				mode := "timeout"
+				if cancelCaller {
+					mode = "cancellation"
+				}
+				t.Run(mode, func(t *testing.T) {
+					s := newSpendBreakerTestStore(t, expressions)
+					s.settings.UtxoStore.SpendWaitTimeout = 200 * time.Millisecond
+					parent := chainhash.Hash{1}
+					tx := bt.NewTx()
+					require.NoError(t, tx.From(parent.String(), 0, "76a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac", 1000))
+					require.NoError(t, tx.PayToAddress("1BUBHgpCBWCsD2Ajbeu7ZgCgvMHsoYHm3W", 1))
+					queued := make(chan *batchSpend, 1)
+					s.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(items []*batchSpend) { queued <- items[0] }, false)
+					defer s.spendBatcher.Close()
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					result := make(chan error, 1)
+					go func() { _, err := s.Spend(ctx, tx, 2); result <- err }()
+					var later *batchSpend
+					select {
+					case later = <-queued:
+					case <-time.After(3 * time.Second):
+						t.Fatal("claim not queued")
+					}
+					firstBatch, _ := competingSpendBatch(&parent)
+					first := firstBatch[0]
+					first.spend.UTXOHash = later.spend.UTXOHash
+					// Different height bypasses failure reuse, so admission itself
+					// must prevent the second backend call after timeout.
+					first.blockHeight = 1
+					entered, release := make(chan struct{}), make(chan struct{})
+					calls := 0
+					s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+						calls++
+						if calls == 1 {
+							close(entered)
+							<-release
+							failRecords(records)
+						}
+						return nil
+					}
+					done := make(chan struct{})
+					go func() { defer close(done); s.sendSpendBatchLua([]*batchSpend{first, later}) }()
+					select {
+					case <-entered:
+					case <-time.After(3 * time.Second):
+						t.Fatal("first part not started")
+					}
+					if cancelCaller {
+						cancel()
+					}
+					select {
+					case err := <-result:
+						require.Error(t, err)
+					case <-time.After(3 * time.Second):
+						t.Fatal("caller did not stop waiting")
+					}
+					close(release)
+					select {
+					case <-done:
+					case <-time.After(3 * time.Second):
+						t.Fatal("batch did not finish")
+					}
+					require.Equal(t, 1, calls, "an abandoned claim must never start another write")
+					require.True(t, later.published.Load())
+					require.Error(t, later.err)
+				})
+			}
 		})
 	}
 }

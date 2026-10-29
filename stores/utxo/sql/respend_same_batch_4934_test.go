@@ -176,3 +176,75 @@ func TestRespendBehindLoserInSameBatchKeepsLegitimateSpends(t *testing.T) {
 			"output %d is owned by %s, not by S0", sp.Vout, resp.SpendingData.TxID)
 	}
 }
+
+// Hold the first part in a real SQLite connection checkout until the competing
+// caller has returned. The invalid first claim leaves the output spendable, so
+// dispatching the abandoned second claim would create a dangling spent output.
+func TestSpendBatchDoesNotCommitAbandonedLaterClaim(t *testing.T) {
+	for _, cancelCaller := range []bool{false, true} {
+		name := "timeout"
+		if cancelCaller {
+			name = "cancellation"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			store := setupSharedBatch(ctx, t, "abandoned-"+name)
+			require.NoError(t, store.SetBlockHeight(2))
+			parent := twoOutParent(ctx, t, store, name)
+			first, err := utxo.GetSpends(spendOf(t, parent, 1, 0))
+			require.NoError(t, err)
+			wrongHash := chainhash.Hash{99}
+			first[0].UTXOHash = &wrongHash
+			firstItem := &batchSpend{spend: first[0], blockHeight: 2, errCh: make(chan error, 1)}
+
+			store.spendBatcher.Close()
+			queued := make(chan *batchSpend, 1)
+			store.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(items []*batchSpend) { queued <- items[0] }, false)
+			store.settings.UtxoStore.SpendWaitTimeout = 200 * time.Millisecond
+			callerCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			result := make(chan error, 1)
+			laterTx := spendOf(t, parent, 2, 0)
+			go func() { _, err := store.Spend(callerCtx, laterTx, 2); result <- err }()
+			var later *batchSpend
+			select {
+			case later = <-queued:
+			case <-time.After(3 * time.Second):
+				t.Fatal("claim not queued")
+			}
+
+			store.db.SetMaxOpenConns(1)
+			held, err := store.db.Conn(ctx)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = held.Close() })
+			waits := store.db.Stats().WaitCount
+			done := make(chan struct{})
+			go func() { defer close(done); store.sendSpendBatch([]*batchSpend{firstItem, later}) }()
+			require.Eventually(t, func() bool { return store.db.Stats().WaitCount > waits }, time.Second, time.Millisecond)
+			if cancelCaller {
+				cancel()
+			}
+			select {
+			case err := <-result:
+				require.Error(t, err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("caller did not stop waiting")
+			}
+			require.NoError(t, held.Close())
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("batch did not complete")
+			}
+
+			require.ErrorIs(t, firstItem.err, errors.ErrUtxoHashMismatch)
+			stored, err := store.GetSpend(ctx, later.spend)
+			require.NoError(t, err)
+			require.Equal(t, int(utxo.Status_OK), stored.Status)
+			require.Nil(t, stored.SpendingData, "no transaction record exists for the abandoned caller")
+			require.Error(t, later.err)
+			_, err = store.Get(ctx, later.spend.SpendingData.TxID)
+			require.ErrorIs(t, err, errors.ErrTxNotFound)
+		})
+	}
+}

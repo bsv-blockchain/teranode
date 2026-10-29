@@ -18,12 +18,14 @@ type batchTestItem struct {
 }
 
 type batchTestBackend struct {
+	start  func(*batchTestItem) error
 	parts  [][]*batchTestItem
 	answer func(*Spend) error
 }
 
 func (b *batchTestBackend) run(items []*batchTestItem) {
 	ProcessSpendBatch(items, SpendBatchHandler[*batchTestItem]{
+		Start: b.start,
 		Spend: func(item *batchTestItem) *Spend {
 			if item == nil {
 				return nil
@@ -154,16 +156,16 @@ func TestProcessSpendBatch(t *testing.T) {
 		requireSpentBy(t, third.err, ownerB)
 	})
 
-	t.Run("a failure without an owner sends the next claim to the backend", func(t *testing.T) {
+	t.Run("a failure without an owner is reused for matching checks", func(t *testing.T) {
 		items := []*batchTestItem{claim(0, &a), claim(0, &b), claim(0, &a)}
 		backend := &batchTestBackend{answer: func(*Spend) error {
 			return errors.NewStorageError("backend down")
 		}}
 		backend.run(items)
 
-		require.Equal(t, [][]*batchTestItem{{items[0]}, {items[1]}, {items[2]}}, backend.parts)
-		for _, item := range items {
-			require.False(t, item.local)
+		require.Equal(t, [][]*batchTestItem{{items[0]}}, backend.parts)
+		for i, item := range items {
+			require.Equal(t, i > 0, item.local)
 			require.ErrorIs(t, item.err, errors.ErrStorageError)
 		}
 	})
@@ -193,11 +195,11 @@ func TestProcessSpendBatch(t *testing.T) {
 		}}
 		backend.run([]*batchTestItem{winner, conflicting, plain})
 
-		require.Equal(t, [][]*batchTestItem{{winner}, {conflicting}, {plain}}, backend.parts)
+		require.Equal(t, [][]*batchTestItem{{winner}, {conflicting}}, backend.parts)
 		require.False(t, conflicting.local)
 		require.ErrorIs(t, conflicting.err, errors.ErrTxConflicting)
-		require.False(t, plain.local)
-		requireSpentBy(t, plain.err, ownerA)
+		require.True(t, plain.local)
+		require.ErrorIs(t, plain.err, errors.ErrTxConflicting)
 	})
 
 	t.Run("a claim with another UTXO hash reaches the backend", func(t *testing.T) {
@@ -263,4 +265,68 @@ func TestProcessSpendBatchWithoutSameChecks(t *testing.T) {
 	require.Equal(t, [][]*Spend{{first}, {second}}, parts)
 	require.NoError(t, first.Err)
 	requireSpentBy(t, second.Err, first.SpendingData)
+}
+
+func TestSpendBatchFailureReuseBoundsBackendCalls(t *testing.T) {
+	for _, failure := range []error{
+		errors.NewStorageError("backend timeout"), errors.NewTxNotFoundError("parent missing"),
+		errors.NewTxLockedError("parent locked"), errors.NewTxConflictingError("parent conflicting"),
+		errors.NewUtxoHashMismatchError("wrong hash"),
+	} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			parent, hash := chainhash.Hash{1}, chainhash.Hash{2}
+			items := make([]*batchTestItem, 1024)
+			for i := range items {
+				spender := chainhash.Hash{byte(i%2 + 3)}
+				items[i] = &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&spender, 0)}}
+			}
+			backend := &batchTestBackend{answer: func(*Spend) error { return failure }}
+			backend.run(items)
+			require.Len(t, backend.parts, 1)
+			for _, item := range items {
+				require.Same(t, failure, item.err)
+				require.True(t, item.answered)
+			}
+		})
+	}
+}
+
+func TestSpendBatchAdmissionErrorIsNotReused(t *testing.T) {
+	parent, hash, a, b := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}, chainhash.Hash{4}
+	first := &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&a, 0)}}
+	second := &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&b, 0)}}
+	backend := &batchTestBackend{
+		start: func(item *batchTestItem) error {
+			if item == first {
+				return errors.NewServiceUnavailableError("caller expired")
+			}
+			return nil
+		},
+		answer: func(*Spend) error { return nil },
+	}
+	backend.run([]*batchTestItem{first, second})
+	require.Equal(t, [][]*batchTestItem{{second}}, backend.parts)
+	require.Error(t, first.err)
+	require.NoError(t, second.err)
+	require.False(t, second.local)
+}
+
+func TestSpendBatchRechecksAdmissionForPendingUnrelatedClaim(t *testing.T) {
+	parent, other, hash, a, b := chainhash.Hash{1}, chainhash.Hash{9}, chainhash.Hash{2}, chainhash.Hash{3}, chainhash.Hash{4}
+	first := &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&a, 0)}}
+	pending := &batchTestItem{spend: &Spend{TxID: &other, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&a, 0)}}
+	conflict := &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&b, 0)}}
+	abandoned := false
+	backend := &batchTestBackend{
+		start: func(item *batchTestItem) error {
+			if abandoned && item == pending {
+				return errors.NewServiceUnavailableError("caller expired")
+			}
+			return nil
+		},
+		answer: func(*Spend) error { abandoned = true; return nil },
+	}
+	backend.run([]*batchTestItem{first, conflict, pending})
+	require.Equal(t, [][]*batchTestItem{{first}}, backend.parts)
+	require.Error(t, pending.err)
 }
