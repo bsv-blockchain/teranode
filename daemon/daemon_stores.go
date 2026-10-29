@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/metered"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
@@ -435,6 +436,8 @@ func (d *Stores) GetTxStore(ctx context.Context, logger ulogger.Logger, appSetti
 		return nil, errors.NewServiceError("could not create tx store", err)
 	}
 
+	d.mainTxStore = metered.New("tx", d.mainTxStore)
+
 	return d.mainTxStore, nil
 }
 
@@ -487,6 +490,8 @@ func (d *Stores) GetSubtreeStore(ctx context.Context, logger ulogger.Logger, app
 	if err != nil {
 		return nil, errors.NewServiceError("could not create subtree store", err)
 	}
+
+	d.mainSubtreeStore = metered.New("subtree", d.mainSubtreeStore)
 
 	return d.mainSubtreeStore, nil
 }
@@ -561,6 +566,8 @@ func (d *Stores) GetTempStore(ctx context.Context, logger ulogger.Logger, appSet
 		return nil, errors.NewServiceError("could not create temp_store", err)
 	}
 
+	d.mainTempStore = metered.New("temp", d.mainTempStore)
+
 	return d.mainTempStore, nil
 }
 
@@ -615,6 +622,8 @@ func (d *Stores) GetBlockStore(ctx context.Context, logger ulogger.Logger, appSe
 		return nil, errors.NewServiceError("could not create block store", err)
 	}
 
+	d.mainBlockStore = metered.New("block", d.mainBlockStore)
+
 	return d.mainBlockStore, nil
 }
 
@@ -667,6 +676,8 @@ func (d *Stores) GetBlockPersisterStore(ctx context.Context, logger ulogger.Logg
 	if err != nil {
 		return nil, errors.NewServiceError("could not create block persister store", err)
 	}
+
+	d.mainBlockPersisterStore = metered.New("block_persister", d.mainBlockPersisterStore)
 
 	return d.mainBlockPersisterStore, nil
 }
