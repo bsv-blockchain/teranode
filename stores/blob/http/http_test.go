@@ -591,6 +591,147 @@ func TestHTTPStore_GetMissIsNotFound(t *testing.T) {
 	}
 }
 
+// TestHTTPStore_ExistsUsesMissHeader pins #1965: a HEAD carries no body, so Exists tells the
+// blob server's own miss from a wrong base URL or a proxy 404 only by MissHeader. A 404 with
+// the header is a miss; a bare 404 stays a miss by default (mixed-fleet compatibility with
+// servers that predate the header) but becomes a store fault when the store requires it.
+func TestHTTPStore_ExistsUsesMissHeader(t *testing.T) {
+	key := []byte{0x01, 0x02, 0xab}
+
+	withMissHeader := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(MissHeader, "1")
+		w.WriteHeader(http.StatusNotFound)
+	}
+	bare404 := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) }
+	held := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }
+
+	t.Run("404 with the miss header is not held, no error", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(withMissHeader))
+		t.Cleanup(server.Close)
+
+		exists, err := newStoreFor(t, server).Exists(context.Background(), key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
+	t.Run("200 is held", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(held))
+		t.Cleanup(server.Close)
+
+		exists, err := newStoreFor(t, server).Exists(context.Background(), key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		require.True(t, exists)
+	})
+
+	t.Run("bare 404 is a miss by default (mixed-fleet compat)", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(bare404))
+		t.Cleanup(server.Close)
+
+		exists, err := newStoreFor(t, server).Exists(context.Background(), key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+
+	t.Run("bare 404 is a store fault when requireMissHeader is set", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(bare404))
+		t.Cleanup(server.Close)
+
+		exists, err := newStoreRequiringMissHeader(t, server).Exists(context.Background(), key, fileformat.FileTypeTesting)
+		require.Error(t, err)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.False(t, exists)
+		require.NotContains(t, err.Error(), server.Listener.Addr().String(), "a fault does not name the blob server in its text")
+	})
+
+	t.Run("404 with the header is still a miss under requireMissHeader", func(t *testing.T) {
+		// The header, not the strict mode, is what makes a 404 a miss: under
+		// requireMissHeader a 404 that carries it is still not-held with no error.
+		server := httptest.NewServer(http.HandlerFunc(withMissHeader))
+		t.Cleanup(server.Close)
+
+		exists, err := newStoreRequiringMissHeader(t, server).Exists(context.Background(), key, fileformat.FileTypeTesting)
+		require.NoError(t, err)
+		require.False(t, exists)
+	})
+}
+
+// TestHTTPStore_MissHeaderAloneDecidesAMiss pins that MissHeader on its own marks a 404 as the
+// blob server's miss on the GET and DELETE paths, whatever the body says. The server also sends
+// NotFoundMsg, and that fallback would hide a header branch that never fires, so these answers
+// carry the header with a body that is not NotFoundMsg.
+func TestHTTPStore_MissHeaderAloneDecidesAMiss(t *testing.T) {
+	key := []byte{0x01, 0x02, 0xab}
+
+	headerForeignBody := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(MissHeader, "1")
+		http.Error(w, "an unrelated body", http.StatusNotFound)
+	}
+	foreignBodyNoHeader := func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "an unrelated body", http.StatusNotFound)
+	}
+
+	t.Run("GetIoReader: header with a foreign body is a miss", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(headerForeignBody))
+		t.Cleanup(server.Close)
+
+		rc, err := newStoreFor(t, server).GetIoReader(context.Background(), key, fileformat.FileTypeTx)
+		require.Nil(t, rc)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.NotErrorIs(t, err, errors.ErrStorageError)
+	})
+
+	t.Run("Get: header with a foreign body is a miss", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(headerForeignBody))
+		t.Cleanup(server.Close)
+
+		_, err := newStoreFor(t, server).Get(context.Background(), key, fileformat.FileTypeTx)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.NotErrorIs(t, err, errors.ErrStorageError)
+	})
+
+	t.Run("GetIoReader: a foreign body without the header is a store fault", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(foreignBodyNoHeader))
+		t.Cleanup(server.Close)
+
+		rc, err := newStoreFor(t, server).GetIoReader(context.Background(), key, fileformat.FileTypeTx)
+		require.Nil(t, rc)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.NotErrorIs(t, err, errors.ErrNotFound)
+	})
+
+	t.Run("Del: header with a foreign body is a miss, nothing to delete", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(headerForeignBody))
+		t.Cleanup(server.Close)
+
+		require.NoError(t, newStoreFor(t, server).Del(context.Background(), key, fileformat.FileTypeTx))
+	})
+
+	t.Run("Del: a foreign body without the header is a store fault", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(foreignBodyNoHeader))
+		t.Cleanup(server.Close)
+
+		err := newStoreFor(t, server).Del(context.Background(), key, fileformat.FileTypeTx)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+	})
+}
+
+// newStoreRequiringMissHeader builds a store with ?requireMissHeader=true on its URL.
+func newStoreRequiringMissHeader(t *testing.T, server *httptest.Server) *HTTPStore {
+	t.Helper()
+
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	q := u.Query()
+	q.Set("requireMissHeader", "true")
+	u.RawQuery = q.Encode()
+
+	store, err := New(ulogger.TestLogger{}, u, options.WithHTTPAuthToken(""))
+	require.NoError(t, err)
+
+	return store
+}
+
 const storePassword = "s3cret-password"
 
 // logRecorder is the testing.T a ulogger.UnifiedTestLogger writes to. It keeps every line, so a
