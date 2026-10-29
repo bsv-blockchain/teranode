@@ -9,6 +9,7 @@
     - [4.1 The Six Stages](#41-the-six-stages)
     - [4.2 Kafka Flow Strips and Consumer Lag](#42-kafka-flow-strips-and-consumer-lag)
     - [4.3 Drain Time](#43-drain-time)
+    - [4.4 The Lanes View](#44-the-lanes-view)
 5. [Alarms](#5-alarms)
     - [5.1 Alarm States](#51-alarm-states)
     - [5.2 Learned Baselines](#52-learned-baselines)
@@ -116,7 +117,7 @@ Colour shows only status:
 - Red: a critical alarm is active.
 - Grey: no data. The panel shows the age of the last good sample.
 
-When a source fails, every value from that source goes grey with the age of its last good sample. This includes the FSM chip and the tip chip (Blockchain source), the best peer height (P2P source), the Kafka lag on the flow strips (Kafka source) and the Aerospike and PostgreSQL tanks. The block height chips and the drain text keep their last values during an outage.
+When a source fails, every value from that source goes grey with the age of its last good sample. This includes the FSM chip and the tip chip (Blockchain source), the best peer height (P2P source), the Kafka lag on the flow strips and in the Kafka topics panel (Kafka source) and the Aerospike and PostgreSQL tanks. The block height chips and the drain text keep their last values during an outage.
 
 ### 4.1 The Six Stages
 
@@ -165,6 +166,42 @@ The probe adds the queued blocks and the subtree queue to get one backlog.
 The block part is the count of waiting blocks, up to the persister limit of about 25. It is not limited to the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the best peer height and the tip.
 It fits a line through the backlog samples of the last 5 minutes. The drain time is the backlog divided by the drain rate.
 When the backlog grows, the dashboard shows "growing" and no time.
+
+### 4.4 The Lanes View
+
+The links in the top right corner switch between the Stages view and the Lanes view. The Lanes view opens at `#/lanes`. Both views show the same snapshot.
+
+The Lanes view groups the readings by what the node does, not by service:
+
+| Lane | What it shows |
+|------|---------------|
+| Transactions | Raw transactions that arrive, the validation result and the transactions that the block assembler holds |
+| Subtrees | Subtrees that peers announce, the subtrees that are already known, and the missing transactions that the node fetches |
+| Blocks | Blocks that peers announce and that the node validates, the tip height and the fork depth |
+| Mining | The block assembler state, the candidates that miners fetch and the solutions that the node submits |
+
+The Tx meta cache and Data stores panels follow the lanes as shared panels. An arrow between two lanes glows only while work flows.
+
+On an idle node, the rate readings are 0. The totals in the Blocks and Mining lanes count from the start of the node and change only when a block or a solution arrives.
+
+Three readings come from metrics that only recent Teranode builds export. An older node shows "no data" for them:
+
+- Transactions that the node skipped because the UTXO store already holds them (`teranode_validator_existing_tx_total`).
+- Missing subtrees of a block that the node still has to fetch (`teranode_subtreevalidation_block_missing_subtrees_outstanding` and `teranode_subtreevalidation_block_missing_subtrees_total`).
+- The age of the last mining candidate that block assembly served (`teranode_blockassembly_last_mining_candidate_timestamp_seconds`). The age grows while no miner fetches a candidate.
+
+Below the lanes, two more panels show shared infrastructure.
+
+The Blob stores panel shows the subtree store and the block store. For each store it shows reads per second, writes per second, errors per second and the p99 latency of reads and writes. Teranode counts these calls in a wrapper around each blob store:
+
+- `teranode_blob_reads_total`: calls to `Exists`, `Get` and `GetIoReader`
+- `teranode_blob_writes_total`: calls to `Set`, `SetFromReader`, `SetDAH` and `Del`
+- `teranode_blob_errors_total`: failed calls. A not-found result and a call that the caller cancels are not errors.
+- `teranode_blob_read_duration_seconds` and `teranode_blob_write_duration_seconds`: call duration
+
+All five metrics carry a `store` label: `tx`, `subtree`, `temp`, `block` or `block_persister`. The panel shows `subtree` and `block`. The latency of `GetIoReader` is the time to open the reader. A p99 reading shows "no data" when no call finished in the last interval.
+
+The Kafka topics panel lists every Kafka topic of the node, worst first. A topic shows the total lag of all consumer groups, with a bar on a log scale. A topic with no consumer group shows "no consumers". The bar has no colour thresholds, because a normal lag depends on the topic. The list uses the topics from the Kafka settings. When the Kafka source fails, the panel shows the age of the last good sample and no lag.
 
 ## 5. Alarms
 

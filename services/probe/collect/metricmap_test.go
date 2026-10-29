@@ -19,6 +19,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/services/validator"
 	"github.com/bsv-blockchain/teranode/settings"
+	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/metered"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
@@ -352,6 +354,7 @@ func assemblySet(state, queued float64) MetricSet {
 		gaugeSet(metricAssemblyTipLag, 3),
 		gaugeSet(metricAssemblyHeadAge, 42),
 		gaugeSet(metricAssemblyQueued, queued),
+		gaugeSet(metricAssemblyTxCount, 1_250_000),
 	)
 }
 
@@ -362,6 +365,7 @@ func TestAssemblyReadings(t *testing.T) {
 	require.Equal(t, "reorging", s.Assembly.Paused.Note)
 	requireOK(t, 3, s.Assembly.TipLagBlocks)
 	requireOK(t, 42, s.Assembly.QueueHeadAgeSec)
+	requireOK(t, 1_250_000, s.Assembly.Transactions)
 	requireOK(t, 0.17, s.Assembly.IngestQueueFill)
 	requireNoData(t, s.Assembly.SubtreeFill)
 
@@ -503,7 +507,7 @@ func TestMissingMetricsGiveNoData(t *testing.T) {
 		"validator.errorsPerSec",
 		"cache.hitRate", "cache.missesPerSec", "cache.evictionsPerSec", "cache.fill", "cache.currentGenFrac",
 		"cache.previousGenFrac", "cache.entriesMillions", "cache.sizeGB",
-		"assembly.paused", "assembly.tipLagBlocks", "assembly.queueHeadAgeSec", "assembly.ingestQueueFill",
+		"assembly.paused", "assembly.tipLagBlocks", "assembly.queueHeadAgeSec", "assembly.transactions", "assembly.ingestQueueFill",
 		"assembly.subtreeFill",
 		"chain.forkDepth", "chain.subscribersDropped",
 		"stores.aerospike.readP99Sec", "stores.aerospike.readsPerSec", "stores.aerospike.writesPerSec",
@@ -707,6 +711,8 @@ func TestMetricNamesExist(t *testing.T) {
 	_, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, nil, txmetacache.Unallocated)
 	require.NoError(t, err)
 
+	metered.New("probe_metric_names", blobmemory.New())
+
 	families, err := prometheus.DefaultGatherer.Gather()
 	require.NoError(t, err)
 
@@ -732,4 +738,191 @@ func nameTaken(name string) bool {
 	prometheus.DefaultRegisterer.Unregister(probe)
 
 	return false
+}
+
+func lanesSet(skipped, validated, missing, found, blockValidated, candidates, solutions float64) MetricSet {
+	return join(
+		counterSet(metricSubtreeSkipped, skipped),
+		histSet(metricSubtreeValidated, uint64(validated), 1, []float64{1}, []uint64{uint64(validated)}),
+		histSet(metricBlessMissing, uint64(missing), 1, []float64{1}, []uint64{uint64(missing)}),
+		histSet(metricBlockFound, uint64(found), 1, []float64{1}, []uint64{uint64(found)}),
+		histSet(metricBlockValidated, uint64(blockValidated), 1, []float64{1}, []uint64{uint64(blockValidated)}),
+		counterSet(metricMiningCandidates, candidates),
+		histSet(metricMiningSolutions, uint64(solutions), 1, []float64{1}, []uint64{uint64(solutions)}),
+	)
+}
+
+func TestLanesReadings(t *testing.T) {
+	s := applyTwo(t, lanesSet(10, 100, 900, 5, 4, 20, 2), lanesSet(30, 140, 1500, 6, 5, 24, 3), testSettings())
+
+	requireOK(t, 10, s.Lanes.Subtrees.AlreadyKnownPerSec)
+	requireOK(t, 20, s.Lanes.Subtrees.CompletedPerSec)
+	requireOK(t, 300, s.Lanes.Subtrees.MissingTxsPerSec)
+	requireOK(t, 1500.0/140.0, s.Lanes.Subtrees.TxsFetchedAvg)
+	requireOK(t, 6, s.Lanes.Blocks.AnnouncedTotal)
+	requireOK(t, 5, s.Lanes.Blocks.ValidatedTotal)
+	requireOK(t, 2, s.Lanes.Mining.CandidatesPerSec)
+	requireOK(t, 3, s.Lanes.Mining.SolutionsTotal)
+}
+
+func labelled(set MetricSet, store string) MetricSet {
+	out := MetricSet{}
+
+	for name, family := range set {
+		copied := &dto.MetricFamily{Name: family.Name, Type: family.Type}
+
+		for _, metric := range family.Metric {
+			clone := proto.Clone(metric).(*dto.Metric)
+			clone.Label = append(clone.Label, &dto.LabelPair{Name: proto.String("store"), Value: proto.String(store)})
+			copied.Metric = append(copied.Metric, clone)
+		}
+
+		out[name] = copied
+	}
+
+	return out
+}
+
+func mergeStores(sets ...MetricSet) MetricSet {
+	out := MetricSet{}
+
+	for _, set := range sets {
+		for name, family := range set {
+			if existing, found := out[name]; found {
+				existing.Metric = append(existing.Metric, family.Metric...)
+				continue
+			}
+
+			out[name] = family
+		}
+	}
+
+	return out
+}
+
+func blobSet(store string, reads, writes, errs float64, readCount, writeCount uint64, readCums, writeCums []uint64) MetricSet {
+	uppers := []float64{0.01, 0.1}
+
+	return labelled(join(
+		counterSet(metricBlobReads, reads),
+		counterSet(metricBlobWrites, writes),
+		counterSet(metricBlobErrors, errs),
+		histSet(metricBlobReadDuration, readCount, 1, uppers, readCums),
+		histSet(metricBlobWriteDuration, writeCount, 1, uppers, writeCums),
+	), store)
+}
+
+func TestBlobStoreReadingsAreReportedPerStore(t *testing.T) {
+	first := mergeStores(
+		blobSet("subtree", 100, 50, 0, 0, 0, []uint64{0, 0}, []uint64{0, 0}),
+		blobSet("block", 10, 5, 0, 0, 0, []uint64{0, 0}, []uint64{0, 0}),
+	)
+	second := mergeStores(
+		blobSet("subtree", 300, 70, 4, 100, 20, []uint64{90, 100}, []uint64{20, 20}),
+		blobSet("block", 10, 5, 0, 0, 0, []uint64{0, 0}, []uint64{0, 0}),
+	)
+
+	s := applyTwo(t, first, second, testSettings())
+
+	requireOK(t, 100, s.Blobs.Subtree.ReadsPerSec)
+	requireOK(t, 10, s.Blobs.Subtree.WritesPerSec)
+	requireOK(t, 2, s.Blobs.Subtree.ErrorsPerSec)
+	requireOK(t, 0.091, s.Blobs.Subtree.ReadP99Sec)
+	requireOK(t, 0.01*0.99, s.Blobs.Subtree.WriteP99Sec)
+
+	requireOK(t, 0, s.Blobs.Block.ReadsPerSec)
+	requireOK(t, 0, s.Blobs.Block.WritesPerSec)
+	requireOK(t, 0, s.Blobs.Block.ErrorsPerSec)
+	requireNoData(t, s.Blobs.Block.ReadP99Sec)
+	requireNoData(t, s.Blobs.Block.WriteP99Sec)
+}
+
+func TestBlobStoreReadingsNeedTheStoreLabel(t *testing.T) {
+	both := mergeStores(blobSet("tx", 100, 50, 0, 0, 0, []uint64{0, 0}, []uint64{0, 0}))
+	more := mergeStores(blobSet("tx", 300, 70, 0, 0, 0, []uint64{0, 0}, []uint64{0, 0}))
+
+	s := applyTwo(t, both, more, testSettings())
+
+	requireNoData(t, s.Blobs.Subtree.ReadsPerSec)
+	requireNoData(t, s.Blobs.Block.WritesPerSec)
+}
+
+func TestBlobStoreReadingsMissingMetricsGiveNoData(t *testing.T) {
+	s := applyTwo(t, MetricSet{}, MetricSet{}, testSettings())
+
+	for _, v := range []snapshot.BlobStoreView{s.Blobs.Subtree, s.Blobs.Block} {
+		requireNoData(t, v.ReadsPerSec)
+		requireNoData(t, v.WritesPerSec)
+		requireNoData(t, v.ErrorsPerSec)
+		requireNoData(t, v.ReadP99Sec)
+		requireNoData(t, v.WriteP99Sec)
+	}
+}
+
+func newLanesSet(existing, missing, outstanding, candidateTime float64) MetricSet {
+	return join(
+		counterSet(metricValidatorExisting, existing),
+		counterSet(metricBlockMissingSubtrees, missing),
+		gaugeSet(metricBlockMissingOutstanding, outstanding),
+		gaugeSet(metricMiningCandidateTime, candidateTime),
+	)
+}
+
+func TestLanesSkippedSubtreeAndCandidateReadings(t *testing.T) {
+	s := applyTwo(t, newLanesSet(100, 4, 3, 995), newLanesSet(700, 10, 2, 1001), testSettings())
+
+	requireOK(t, 300, s.Lanes.Tx.AlreadySeenPerSec)
+	requireOK(t, 3, s.Lanes.Blocks.MissingSubtreesPerSec)
+	requireOK(t, 2, s.Lanes.Blocks.MissingSubtrees)
+	requireOK(t, 1, s.Lanes.Mining.CandidateAgeSec)
+}
+
+func TestLanesSkippedSubtreeAndCandidateIdle(t *testing.T) {
+	idle := newLanesSet(700, 10, 0, 998)
+	s := applyTwo(t, idle, idle, testSettings())
+
+	requireOK(t, 0, s.Lanes.Tx.AlreadySeenPerSec)
+	requireOK(t, 0, s.Lanes.Blocks.MissingSubtreesPerSec)
+	requireOK(t, 0, s.Lanes.Blocks.MissingSubtrees)
+	requireOK(t, 4, s.Lanes.Mining.CandidateAgeSec)
+}
+
+func TestLanesNoCandidateServedYetGivesNoAge(t *testing.T) {
+	never := newLanesSet(0, 0, 0, 0)
+	s := applyTwo(t, never, never, testSettings())
+
+	requireNoData(t, s.Lanes.Mining.CandidateAgeSec)
+	requireOK(t, 0, s.Lanes.Tx.AlreadySeenPerSec)
+}
+
+func TestLanesIdleNodeIsStatic(t *testing.T) {
+	idle := lanesSet(30, 140, 1500, 6, 5, 24, 3)
+	s := applyTwo(t, idle, idle, testSettings())
+
+	requireOK(t, 0, s.Lanes.Subtrees.AlreadyKnownPerSec)
+	requireOK(t, 0, s.Lanes.Subtrees.CompletedPerSec)
+	requireOK(t, 0, s.Lanes.Subtrees.MissingTxsPerSec)
+	requireOK(t, 0, s.Lanes.Mining.CandidatesPerSec)
+	requireOK(t, 6, s.Lanes.Blocks.AnnouncedTotal)
+}
+
+func TestLanesNoSubtreesCompletedGivesNoAverage(t *testing.T) {
+	zero := lanesSet(0, 0, 0, 0, 0, 0, 0)
+	s := applyTwo(t, zero, zero, testSettings())
+
+	requireNoData(t, s.Lanes.Subtrees.TxsFetchedAvg)
+	requireOK(t, 0, s.Lanes.Blocks.AnnouncedTotal)
+}
+
+func TestLanesMissingMetricsGiveNoData(t *testing.T) {
+	s := applyTwo(t, MetricSet{}, MetricSet{}, testSettings())
+
+	requireNoData(t, s.Lanes.Subtrees.CompletedPerSec)
+	requireNoData(t, s.Lanes.Subtrees.TxsFetchedAvg)
+	requireNoData(t, s.Lanes.Blocks.AnnouncedTotal)
+	requireNoData(t, s.Lanes.Mining.SolutionsTotal)
+	requireNoData(t, s.Lanes.Tx.AlreadySeenPerSec)
+	requireNoData(t, s.Lanes.Blocks.MissingSubtrees)
+	requireNoData(t, s.Lanes.Blocks.MissingSubtreesPerSec)
+	requireNoData(t, s.Lanes.Mining.CandidateAgeSec)
 }

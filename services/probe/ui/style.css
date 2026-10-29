@@ -134,6 +134,7 @@ svg.stage {
   font-variant-numeric: tabular-nums;
 }
 
+svg.stage.tall { max-height: none; }
 .stage text { font-family: inherit; }
 .lb { fill: var(--muted); font-size: 10.5px; }
 .tx { fill: var(--ink2); font-size: 11px; }
@@ -538,3 +539,26 @@ svg.stage {
 @media (prefers-reduced-motion: reduce) {
   .stage-host { transition: none; }
 }
+
+.views {
+  display: flex;
+  gap: calc(var(--u) * 4);
+  margin-left: auto;
+  padding: 0 calc(var(--u) * 8);
+}
+
+.view-link {
+  padding: calc(var(--u) * 4) calc(var(--u) * 12);
+  border-radius: calc(var(--u) * 13);
+  border: 1px solid rgba(255, 255, 255, .14);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: calc(var(--u) * 12);
+}
+
+.view-link[aria-current="page"] {
+  background: rgba(255, 255, 255, .12);
+  border-color: rgba(255, 255, 255, .3);
+}
+
+.locked .views { visibility: hidden; }

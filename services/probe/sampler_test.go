@@ -236,7 +236,7 @@ func TestFailingCollectorMarksNoData(t *testing.T) {
 
 	nodata := snapshot.Reading{Status: snapshot.StatusNoData}
 	require.Equal(t, snapshot.AssemblyStage{
-		Paused: nodata, TipLagBlocks: nodata, QueueHeadAgeSec: nodata, IngestQueueFill: nodata, SubtreeFill: nodata,
+		Paused: nodata, TipLagBlocks: nodata, QueueHeadAgeSec: nodata, Transactions: nodata, IngestQueueFill: nodata, SubtreeFill: nodata,
 	}, stale.Assembly)
 	require.Equal(t, snapshot.IngressStage{
 		PropagationTxPerSec: nodata, SubtreeIntakePerSec: nodata, Peers: nodata,
@@ -894,7 +894,7 @@ func TestNoReadingEverHasEmptyStatus(t *testing.T) {
 				}
 			})
 
-			require.Equal(t, 52, count)
+			require.Equal(t, 75, count)
 
 			if len(fast) == 2 {
 				require.Equal(t, snapshot.Reading{Value: 0.9, Status: snapshot.StatusOK}, published.Cache.HitRate)

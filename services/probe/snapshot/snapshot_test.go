@@ -30,6 +30,7 @@ func TestSnapshotJSONContract(t *testing.T) {
 		}},
 		Calibration: Calibration{Ready: true, Until: at, Fraction: 1},
 		Sources:     []SourceHealth{{Name: "metrics", OK: true}, {Name: "aerospike", OK: false, AgeSec: 61.5}},
+		Kafka:       []TopicLag{{Topic: "subtrees", Lag: &lag}, {Topic: "rejectedtx"}},
 	}
 	s.Cache.HitRate = Reading{Value: 0.9, Status: StatusOK, Normal: &normal, Note: "Warming", AgeSec: 4}
 	s.Chain.BlocksWaiting = []uint32{1, 2}
@@ -54,9 +55,16 @@ func TestSnapshotJSONContract(t *testing.T) {
 		`"validator":{` + st("validatedPerSec", "latencyP99Sec", "queueFill", "spendBatchFill", "errorsPerSec") + `},` +
 		`"cache":{"hitRate":{"v":0.9,"st":"ok","normal":0.5,"note":"Warming","age":4},` +
 		st("missesPerSec", "evictionsPerSec", "insertionsPerSec", "fill", "currentGenFrac", "previousGenFrac", "entriesMillions", "sizeGB", "capacityGB") + `},` +
-		`"assembly":{` + st("paused", "tipLagBlocks", "queueHeadAgeSec", "ingestQueueFill", "subtreeFill") + `},` +
+		`"assembly":{` + st("paused", "tipLagBlocks", "queueHeadAgeSec", "transactions", "ingestQueueFill", "subtreeFill") + `},` +
 		`"chain":{` + st("forkDepth", "persisterBehind", "subscribersDropped", "peerHeight", "blocksWaitingCount") + `,"blocksWaiting":[1,2]},` +
 		`"stores":{"aerospike":` + strings.Replace(store, "%C", "true", 1) + `,"postgres":` + strings.Replace(store, "%C", "false", 1) + `},` +
+		`"lanes":{"tx":{` + st("alreadySeenPerSec") + `},` +
+		`"subtrees":{` + st("alreadyKnownPerSec", "completedPerSec", "missingTxsPerSec", "txsFetchedAvg") + `},` +
+		`"blocks":{` + st("announcedTotal", "validatedTotal", "missingSubtrees", "missingSubtreesPerSec") + `},` +
+		`"mining":{` + st("candidatesPerSec", "candidateAgeSec", "solutionsTotal") + `}},` +
+		`"blobs":{"subtree":{` + st("readsPerSec", "writesPerSec", "errorsPerSec", "readP99Sec", "writeP99Sec") + `},` +
+		`"block":{` + st("readsPerSec", "writesPerSec", "errorsPerSec", "readP99Sec", "writeP99Sec") + `}},` +
+		`"kafka":[{"topic":"subtrees","lag":3},{"topic":"rejectedtx","lag":null}],` +
 		`"flows":[{"id":"f","from":"a","to":"b","label":"l","rate":{"v":0,"st":""},"lag":3}],` +
 		`"alarms":[{"id":"a1","stage":"cache","title":"t","body":"b","textId":"x","severity":"warn","raisedAt":"2026-10-28T10:00:00Z","startOfChain":true,"snoozed":true,"drilldowns":[{"label":"l","path":"/p"}]}],` +
 		`"calibration":{"ready":true,"until":"2026-10-28T10:00:00Z","fraction":1},` +
@@ -137,7 +145,7 @@ func TestLookupResolvesFlowRates(t *testing.T) {
 func TestEachReadingVisitsEveryReading(t *testing.T) {
 	s := NewSnapshot("n")
 
-	stageReadings := 6 + 5 + 10 + 5 + 5
+	stageReadings := 6 + 5 + 10 + 6 + 5 + 12 + 10
 	storeReadings := 2 * 6
 	flowReadings := len(s.Flows)
 
