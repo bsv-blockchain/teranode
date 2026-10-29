@@ -716,6 +716,11 @@ type SyncManager struct {
 	// deleted on successful (re)process. A skipped descendant records its own hash
 	// too, so the whole descendant chain is suppressed transitively.
 	recentlyFailedBlocks *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+	// sinkPanics counts the panics recovered under each block's conversion, so a
+	// panic every copy of a block meets stops being retried (recoveredSinkPanic).
+	// TTL-bounded and size-capped like recentlyFailedBlocks; nil on struct-literal
+	// managers in tests, which then never stop retrying.
+	sinkPanics *expiringmap.ExpiringMap[chainhash.Hash, int]
 	// blockPark holds blocks that arrived before their parent. Without it such a
 	// block is fully downloaded, fully decoded and then discarded, and the
 	// getblocks sent in its place is ignored for as long as headers-first mode is
@@ -4330,6 +4335,10 @@ func (sm *SyncManager) Stop() error {
 		sm.recentlyFailedBlocks.Stop()
 	}
 
+	if sm.sinkPanics != nil {
+		sm.sinkPanics.Stop()
+	}
+
 	// DC15 / review C1: quiesce Put then drain the tx-announce batcher before
 	// tearing down transports.
 	sm.closeTxAnnounceBatcher()
@@ -4686,6 +4695,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	// before an early error return would leak that goroutine, since the caller
 	// receives a nil SyncManager and can never call Stop().
 	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL).WithMaxSize(recentlyFailedBlocksMaxTracked)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, int](recentlyFailedBlocksTTL).WithMaxSize(recentlyFailedBlocksMaxTracked)
 
 	// The dispatcher holds a pointer to the manager returned below, so it must be
 	// built from &sm, not from the local value.

@@ -1481,8 +1481,8 @@ func (p *Peer) readMessageStreaming(encoding wire.MessageEncoding) (int, wire.Me
 
 // readWireMessageStreaming is the go-wire streaming read with any panic under it
 // turned into an error. The bytes being decoded are the remote peer's choice, so
-// a panic here must cost that peer its connection (the read loop answers any
-// such error with a reject and a disconnect), not take the process down.
+// a panic here costs that peer its connection (the read loop answers the error
+// with a reject and a disconnect) rather than taking the process down.
 //
 // The streaming block handler runs the block sink on this goroutine. The sync
 // manager's sink turns a panic under its conversion into a local fault itself
@@ -1495,8 +1495,11 @@ func (p *Peer) readWireMessageStreaming(encoding wire.MessageEncoding) (n int, m
 		if r := recover(); r != nil {
 			p.logger.Errorf("[readMessageStreaming][%s] recovered panic reading a message: %q stack=%q", p, fmt.Sprint(r), debug.Stack())
 
+			// The peer's: what panicked was decoding the bytes it sent. The panic value
+			// stays in the log above, out of the error, whose text the read loop sends
+			// back to the peer in its reject.
 			msg = nil
-			err = errors.NewProcessingError("[readMessageStreaming][%s] recovered panic reading a message: %s", p, fmt.Sprint(r))
+			err = errors.NewNetworkInvalidResponseError("[readMessageStreaming][%s] could not decode a message", p)
 		}
 	}()
 

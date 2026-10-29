@@ -20,8 +20,8 @@ import (
 // by bytes a remote peer chose. It must come back as a read error, which the
 // read loop answers with a disconnect, and not take the whole process down.
 func TestReadMessageStreamingRecoversAPanicAsAnError(t *testing.T) {
-	// A runtime fault panics with an error value, which the errors package would
-	// otherwise take as a wrapped cause rather than a format argument.
+	// A runtime fault panics with an error value, anything else with whatever it
+	// was given; neither reaches the error.
 	for _, tc := range []struct {
 		name  string
 		value any
@@ -67,9 +67,8 @@ func TestReadMessageStreamingRecoversAPanicAsAnError(t *testing.T) {
 
 			require.NotPanics(t, func() { _, msg, err = p.readMessageStreaming(wire.BaseEncoding) })
 			require.Error(t, err)
-			require.True(t, errors.Is(err, errors.ErrProcessing), "a recovered panic is this node's processing fault, not the peer's: %v", err)
-			require.Contains(t, err.Error(), tc.want)
-			require.NotContains(t, err.Error(), "MISSING")
+			require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a panic decoding what the peer sent is answered as the peer's: %v", err)
+			require.NotContains(t, err.Error(), tc.want, "the panic text stays in this node's log; the read loop echoes the error to the peer")
 			require.Nil(t, msg)
 		})
 	}

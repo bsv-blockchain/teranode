@@ -384,6 +384,58 @@ func TestSink_APanicMidTransactionLoopIsALocalFault(t *testing.T) {
 	require.True(t, sm.takeLocalFaultDrain(hash))
 }
 
+// TestSink_RepeatedPanicsOnOneBlockStopAskingForIt bounds the local-fault route
+// for a panic. Each drain asks for the block again at once, so a panic every
+// copy of the block meets, a bug of ours on its bytes or bytes a peer crafted to
+// meet one, would have every owner send the whole body again forever. From the
+// sinkPanicLimit-th panic on one hash the block is marked recently failed, which
+// stops asking for it for recentlyFailedBlocksTTL, and the error is the
+// delivering peer's, so the read loop drops it.
+func TestSink_RepeatedPanicsOnOneBlockStopAskingForIt(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.streams = newStreamRegistry()
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, int](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+	t.Cleanup(sm.sinkPanics.Stop)
+
+	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
+	body := blockBodyBytes(t, bsvutil.NewBlock(msgBlock))
+	owner := owingPeer(t, sm, hash, 26)
+
+	var sink func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error)
+
+	sm.installStreamingBlockPath(func(s func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error),
+		_ func(chainhash.Hash, *wire.BlockHeader, uint64) error, _ func(chainhash.Hash, bool) error,
+	) {
+		sink = s
+	})
+
+	deliver := func() error {
+		src := &panicOnceReader{r: bytes.NewReader(body), at: len(body) / 2}
+		_, err := sink(hash, &msgBlock.Header, peerpkg.NewDeliveryReader(src, owner), sinkPayloadLen(body))
+
+		return err
+	}
+
+	for i := 1; i < sinkPanicLimit; i++ {
+		require.NoErrorf(t, deliver(), "panic %d of %d is still a local fault", i, sinkPanicLimit)
+
+		_, failed := sm.recentlyFailedBlocks.Get(hash)
+		require.False(t, failed)
+	}
+
+	err := deliver()
+	require.Error(t, err, "the limit-th panic leaves the sink as a read error")
+	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the delivering peer's, so the read loop drops it: %v", err)
+	require.False(t, isLocalSinkFault(err))
+	require.NotContains(t, err.Error(), "conversion exploded", "the panic text stays in this node's log; the error is echoed to the peer")
+
+	_, failed := sm.recentlyFailedBlocks.Get(hash)
+	require.True(t, failed, "the block is not asked for again for a while")
+}
+
 // TestPipelineSink_ABodyCutMidTransactionIsADeliveryFaultNotAnInvalidBlock pins
 // the HARDEN 1421 rule on the real sink: a connection that ends inside a
 // transaction, before the declared payload length, says nothing about the block.

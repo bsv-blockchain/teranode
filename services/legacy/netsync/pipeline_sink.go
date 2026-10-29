@@ -49,7 +49,9 @@ import (
 //     sm.ctx is live only these two codes reach the read loop as a read error, and
 //     so a reject naming the block and the association dropped
 //     (peer.BlockBodyRejectedError); once it is cancelled absorbLocalSinkFault
-//     lets any code through to the read loop, see its doc comment.
+//     lets any code through to the read loop, see its doc comment. The one other
+//     code that reaches it is recoveredSinkPanic's ERR_NETWORK_INVALID_RESPONSE,
+//     raised by no producer, which the read loop answers with a disconnect.
 //   - of those, exactly three refusals also wrap errors.ErrBlockBodyMismatch
 //     inside the invalid verdict, and they are the only ones the legacy peer
 //     server will ban a host for, once the wire checksum is verified, which the
@@ -82,22 +84,65 @@ import (
 // local code: NewProcessingError("...", blockInvalidErr) would read as our fault,
 // keep the peer and re-download a body that is genuinely bad.
 //
-// A panic under the conversion is a bug of this node's, so it leaves as
-// ERR_PROCESSING, a local fault: the rest of the body is drained, the peer kept
-// and the block asked for again, and every wrapper's own failure path runs on the
-// way out. Files this copy wrote are removed before a takeover copy is let start
-// (convertStreamedBlock). A panic on the subtree file storer's own goroutine is
-// out of reach of any recover here and still ends the process.
+// A panic under the conversion leaves as an error, through recoveredSinkPanic,
+// and every wrapper's own failure path runs on the way out. Files this copy wrote
+// are removed before a takeover copy is let start (convertStreamedBlock). A panic
+// on the subtree file storer's own goroutine is out of reach of any recover here
+// and still ends the process.
 func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.BlockHeader, r io.Reader, n int64) (converted bool, err error) {
 	defer func() {
 		if p := recover(); p != nil {
-			sm.logger.Errorf("[pipelineBlockSink][%s] recovered panic converting the block: %q stack=%q", hash, fmt.Sprint(p), debug.Stack())
-
-			converted, err = false, errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block: %s", hash, fmt.Sprint(p))
+			converted, err = false, sm.recoveredSinkPanic(hash, p)
 		}
 	}()
 
 	return sm.convertStreamedBlock(hash, header, r, n)
+}
+
+// sinkPanicLimit is the panic on one block's conversion from which the block
+// stops being retried; see recoveredSinkPanic.
+const sinkPanicLimit = 3
+
+// recoveredSinkPanic logs a panic recovered while converting block hash and
+// returns the error the sink leaves with.
+//
+// A panic cannot say whose fault it was: a bug of this node's on an honest body,
+// or bytes a peer crafted to meet one. So it is first taken as this node's,
+// ERR_PROCESSING, a local fault: the rest of the body is drained, the peer kept
+// and the block asked for again. That retry is immediate, so a panic every copy
+// of the block meets would have each owner send the whole body again forever.
+// From the sinkPanicLimit-th panic on one hash within recentlyFailedBlocksTTL the
+// block is marked recently failed instead, which stops asking for it for that
+// long, and the error is the delivering peer's (ERR_NETWORK_INVALID_RESPONSE), so
+// the read loop drops it rather than letting it hold the block back.
+//
+// Neither error carries the panic value: the read loop echoes a read error's
+// text to the peer, and what crashed is for this node's log.
+func (sm *SyncManager) recoveredSinkPanic(hash chainhash.Hash, p any) error {
+	sm.logger.Errorf("[pipelineBlockSink][%s] recovered panic converting the block: %q stack=%q", hash, fmt.Sprint(p), debug.Stack())
+
+	if sm.sinkPanics == nil {
+		return errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block", hash)
+	}
+
+	count, _ := sm.sinkPanics.Get(hash)
+	count++
+
+	if count < sinkPanicLimit {
+		sm.sinkPanics.Set(hash, count)
+
+		return errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block (%d of %d)", hash, count, sinkPanicLimit)
+	}
+
+	sm.sinkPanics.Delete(hash)
+
+	if sm.recentlyFailedBlocks != nil {
+		sm.recentlyFailedBlocks.Set(hash, struct{}{})
+	}
+
+	sm.logger.Errorf("[pipelineBlockSink][%s] converting the block panicked %d times; not asking for it again for %s", hash, count, recentlyFailedBlocksTTL)
+
+	return errors.NewNetworkInvalidResponseError("[pipelineBlockSink][%s] converting the block panicked %d times", hash, count)
 }
 
 // convertStreamedBlock is pipelineBlockSink without its panic boundary.
@@ -725,7 +770,8 @@ func (sm *SyncManager) deleteWrittenOnFailure(hash chainhash.Hash, writer *subtr
 // A non-teranode error (a bare io.EOF or io.ErrUnexpectedEOF from a connection
 // that ended, a net.OpError) is not ours: it is returned to the read loop
 // unchanged so peer.shouldHandleReadError can see it by identity. ERR_BLOCK_INVALID
-// and ERR_BLOCK_CORRUPT are the peer's. Every other code is ours, and so is any
+// and ERR_BLOCK_CORRUPT are the peer's, and so is ERR_NETWORK_INVALID_RESPONSE,
+// which only recoveredSinkPanic raises here. Every other code is ours, and so is any
 // code added later: the default keeps the peer, which is the safe direction.
 //
 // errors.IsTransientLocalError is not used because it would miss ERR_PROCESSING,
@@ -743,6 +789,10 @@ func isLocalSinkFault(err error) bool {
 
 	switch tErr.Code() {
 	case errors.ERR_BLOCK_INVALID, errors.ERR_BLOCK_CORRUPT:
+		return false
+	case errors.ERR_NETWORK_INVALID_RESPONSE:
+		// recoveredSinkPanic's verdict at its limit: the block stops being retried,
+		// and the peer delivering it is dropped.
 		return false
 	default:
 		return true

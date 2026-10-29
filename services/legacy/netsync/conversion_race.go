@@ -318,7 +318,7 @@ func (sm *SyncManager) raceDuplicateCopy(hash chainhash.Hash, header *wire.Block
 	// recorder tells a read fault from a body the peer got wrong.
 	side := sm.readSideCopy(f)
 
-	root, mutated, err := streamedMerkleRoot(bufio.NewReaderSize(side, 1<<20), n)
+	root, mutated, err := sm.sideCopyMerkleRoot(hash, bufio.NewReaderSize(side, 1<<20), n)
 	if err != nil {
 		if side.err == nil {
 			return false, err
@@ -401,6 +401,19 @@ func (e *errRecordingReader) Read(p []byte) (int, error) {
 	}
 
 	return n, err
+}
+
+// sideCopyMerkleRoot is streamedMerkleRoot under the sink's panic boundary. It decodes the same
+// peer bytes the sink does, so a panic in it gets the sink's verdict (recoveredSinkPanic) rather
+// than reaching the read loop's own recover, and the two copies of a block are judged alike.
+func (sm *SyncManager) sideCopyMerkleRoot(hash chainhash.Hash, r io.Reader, n int64) (root *chainhash.Hash, mutated bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			root, mutated, err = nil, false, sm.recoveredSinkPanic(hash, p)
+		}
+	}()
+
+	return streamedMerkleRoot(r, n)
 }
 
 // streamedMerkleRoot reads a block body, from the transaction count on, whose wire payload is n

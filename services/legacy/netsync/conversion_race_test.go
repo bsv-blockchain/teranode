@@ -478,3 +478,21 @@ func TestATakeoverDisconnectsAConvertingCopyThatSendsNoByte(t *testing.T) {
 	require.NoError(t, err)
 	requireNoSideFiles(t, sm.blockPark.dir)
 }
+
+// A second copy's merkle root is computed from the same peer bytes the sink
+// decodes, so a panic computing it gets the sink's verdict (recoveredSinkPanic),
+// not the read loop's own recover.
+func TestSideCopyMerkleRoot_APanicIsTheSinksVerdict(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+
+	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
+	body := blockBodyBytes(t, bsvutil.NewBlock(msgBlock))
+	src := &panicOnceReader{r: bytes.NewReader(body), at: len(body) / 2}
+
+	var err error
+
+	require.NotPanics(t, func() { _, _, err = sm.sideCopyMerkleRoot(hash, src, sinkPayloadLen(body)) })
+	require.Error(t, err)
+	require.True(t, isLocalSinkFault(err), "below the limit a panic is this node's fault, as in the sink: %v", err)
+}
