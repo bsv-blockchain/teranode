@@ -106,6 +106,34 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 		}
 	}
 
+	blockHeader, blockHeaderMeta, err := s.queryBestBlockHeader(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Cache result - CacheQuery.Set() checks if cache was invalidated during query
+	result := [2]interface{}{blockHeader, blockHeaderMeta}
+	cacheOp.Set(result, s.cacheTTL)
+
+	return blockHeader, blockHeaderMeta, nil
+}
+
+// GetBestBlockHeaderUncached is GetBestBlockHeader with the response cache left out on both
+// sides: it neither reads the cache nor fills it. Every block store clears the cache, but only
+// after its own commit, so for the moment between a commit and the clear the cached call
+// returns the previous tip. The pruner's stamp reads the tip between every store call of a
+// drain and hands the height to the completion record, and a one-block-stale tip there would
+// be written into permanent state, so it takes this call.
+func (s *SQL) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBestBlockHeaderUncached")
+	defer deferFn()
+
+	return s.queryBestBlockHeader(ctx)
+}
+
+// queryBestBlockHeader is the one query behind both calls: the valid block with the most chain
+// work, ties broken by peer id and then insertion order.
+func (s *SQL) queryBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -213,10 +241,6 @@ func (s *SQL) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mode
 
 	// Set the block time to the timestamp in the meta
 	blockHeaderMeta.BlockTime = blockHeader.Timestamp
-
-	// Cache result - CacheQuery.Set() checks if cache was invalidated during query
-	result := [2]interface{}{blockHeader, blockHeaderMeta}
-	cacheOp.Set(result, s.cacheTTL)
 
 	return blockHeader, blockHeaderMeta, nil
 }

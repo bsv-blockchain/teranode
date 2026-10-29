@@ -41,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 )
 
@@ -675,6 +676,26 @@ type Store interface {
 	// This is used during blockchain reorganizations.
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 
+	// SpendsMadeBy returns the coins this transaction consumed, as records its own
+	// Unspend can restore. Undoing a conflict resolution uses it to put those coins
+	// back.
+	//
+	// The store answers rather than the caller working it out from the transaction,
+	// because a coin's identity is computed from the amount and locking script of the
+	// output being spent, and a transaction only records those when it is stored in
+	// extended form. A store that keeps transactions in the plain form cannot answer
+	// the question that way and has to answer it from what it does keep.
+	//
+	// Only what the store can still speak for is returned. An input whose coin was
+	// never actually spent, or whose record has passed out of retention, is omitted
+	// rather than guessed at, because a record that cannot be restored fails the whole
+	// restore on a store that checks.
+	//
+	// Called only when undoing a conflict resolution, which happens during a chain
+	// reorganisation or when replaying an operation a crash interrupted. It is never on
+	// the path an ordinary transaction takes, so it may be as expensive as it needs to be.
+	SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*Spend, error)
+
 	// SetMinedMulti marks transactions as mined in the block described by minedBlockInfo.
 	//
 	// Postcondition (when minedBlockInfo.UnsetMined is false and a nil error is returned):
@@ -879,4 +900,11 @@ type Store interface {
 	// its writer — SetBlockState publishes both fields from one tip
 	// atomically, while the individual setters update one field at a time.
 	GetBlockState() BlockState
+
+	// Stamper returns the store's stamp: the deep pass that writes each UTXO's block onto it
+	// once its tx_mined partition is deep enough. Every store answers, so no caller has to test
+	// the store's type to find it, and a wrapper forwards it like any other method. A store
+	// whose UTXOs carry their block from the moment they are mined has nothing to stamp and
+	// returns pruner.NoStamp, whose WindowBlocks is zero.
+	Stamper() pruner.Stamper
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -450,10 +451,14 @@ func (sm *SyncManager) legacyOutpointOnly(origin blockRequestOrigin, height uint
 // eligible block the cache cannot prove is refused before the RPC, and a parked
 // block-assembly gate is a local condition for every eligible block whether or
 // not it is proven, so the ServiceError wrap there must not depend on the proof.
+//
+// A store that nets below the checkpoint (utxoset) is always on this route, whatever the two
+// route settings say, because it takes those blocks only through quick validation.
 func (sm *SyncManager) unifiedRoute(height uint32) bool {
 	return sm.settings != nil &&
-		sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
-		sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint &&
+		((sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
+			sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint) ||
+			utxostore.NetsBelowCheckpoint(sm.utxoStore)) &&
 		sm.utxoStore != nil && sm.utxoStore.SupportsOutpointOnlySpend() &&
 		sm.chainParams != nil &&
 		model.BelowCheckpoint(sm.chainParams.Checkpoints, height)

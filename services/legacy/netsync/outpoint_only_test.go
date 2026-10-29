@@ -172,3 +172,33 @@ func TestSyncManager_needsParentMinedWait(t *testing.T) {
 		})
 	}
 }
+
+// nettingSpyStore is outpointOnlySpyStore on a store that nets below the checkpoint (utxoset).
+type nettingSpyStore struct {
+	outpointOnlySpyStore
+}
+
+func (s *nettingSpyStore) NetsBelowCheckpoint() bool { return true }
+
+// TestSyncManager_unifiedRouteIgnoresTheRouteSettingsOnANettingStore: on a store that nets
+// below the checkpoint the legacy service takes the unified route, and holds back an unproven
+// block, whatever its copies of the two route settings say. Block validation reaches the same
+// answer from the store, so a split where the two services' copies differ cannot leave them
+// disagreeing on the route.
+func TestSyncManager_unifiedRouteIgnoresTheRouteSettingsOnANettingStore(t *testing.T) {
+	const checkpointHeight = int32(1000)
+
+	for _, flags := range []struct{ unified, outpointOnly bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
+		tSettings, params := newOutpointOnlySettings(t, flags.outpointOnly, true, checkpointHeight)
+		tSettings.BlockValidation.LegacyUnifiedBelowCheckpoint = flags.unified
+
+		sm := &SyncManager{settings: tSettings, chainParams: params, utxoStore: &nettingSpyStore{outpointOnlySpyStore{NullStore: &nullstore.NullStore{}}}}
+		require.True(t, sm.unifiedRoute(500), "netting store, unified=%v outpointOnly=%v: below the checkpoint", flags.unified, flags.outpointOnly)
+		require.False(t, sm.unifiedRoute(1001), "netting store, unified=%v outpointOnly=%v: above the checkpoint", flags.unified, flags.outpointOnly)
+		require.True(t, sm.legacyOutpointOnly(blockRequestOrigin{headerProven: true}, 500), "netting store, unified=%v outpointOnly=%v: outpoint-only for a proven block", flags.unified, flags.outpointOnly)
+
+		// A store that does not net still follows the settings.
+		sm.utxoStore = &outpointOnlySpyStore{NullStore: &nullstore.NullStore{}}
+		require.Equal(t, flags.unified && flags.outpointOnly, sm.unifiedRoute(500), "non-netting store, unified=%v outpointOnly=%v", flags.unified, flags.outpointOnly)
+	}
+}

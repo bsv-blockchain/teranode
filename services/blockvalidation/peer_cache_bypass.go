@@ -50,33 +50,10 @@ func markCacheBypassRetryable(err error) error {
 }
 
 // isCacheBypassRetryable reports whether any link in err's chain carries the
-// cache-bypass marker. The walk mirrors catchupFailureAlreadyReported: the marker
-// must be found mid-chain because every layer above the fetch wraps the error.
+// cache-bypass marker, within hasErrorMarker's depth bound. The marker must be found
+// mid-chain because every layer above the fetch wraps the error.
 func isCacheBypassRetryable(err error) bool {
-	var e *errors.Error
-	if !errors.As(err, &e) {
-		return false
-	}
-
-	for depth := 0; e != nil && depth < 32; depth++ {
-		if v, ok := e.GetData(cacheBypassRetryableKey).(bool); ok && v {
-			return true
-		}
-
-		next := e.WrappedErr()
-		if next == nil {
-			return false
-		}
-
-		var wrapped *errors.Error
-		if !errors.As(next, &wrapped) {
-			return false
-		}
-
-		e = wrapped
-	}
-
-	return false
+	return hasErrorMarker(err, cacheBypassRetryableKey)
 }
 
 // peerResourceURL builds the URL for a peer asset endpoint.

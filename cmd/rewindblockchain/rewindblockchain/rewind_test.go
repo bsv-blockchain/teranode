@@ -27,6 +27,8 @@ import (
 	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofields "github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	storelogger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -1675,4 +1677,138 @@ func TestNewSubtreeStore_RejectsNilURL(t *testing.T) {
 	_, err := newSubtreeStore(logger(), tSettings)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not configured")
+}
+
+// stampedUTXOStore stands in for a UTXO store that writes blocks permanently at a fixed depth,
+// for the boundary the preflight refuses to cross. The sql store underneath answers everything
+// else; the stamp, which the sql store does not have, is supplied here. Its floors and depth are
+// fixed values, not a real stamp: a rewind reads only those two.
+type stampedUTXOStore struct {
+	utxo.Store
+
+	fence uint32
+	depth uint32
+}
+
+func (s stampedUTXOStore) Stamper() pruner.Stamper { return s }
+
+func (s stampedUTXOStore) Floors(context.Context) (pruner.StampFloors, error) {
+	return pruner.StampFloors{StampFence: s.fence, StampCompleteFloor: s.fence}, nil
+}
+
+func (s stampedUTXOStore) StampDepth() uint32 { return s.depth }
+
+func (stampedUTXOStore) WindowBlocks() uint32 { return 96 }
+
+// OpenDrain is refused: a rewind never opens a drain.
+func (stampedUTXOStore) OpenDrain(context.Context) (pruner.StampDrain, pruner.StampFloors, error) {
+	return nil, pruner.StampFloors{}, errors.NewProcessingError("a rewind never opens a stamp drain")
+}
+
+// TestRewindBlockchain_RefusesToExposeAStampedHeight: with a stamp fence of 96 and a stamp depth
+// of 96, the highest stamped height is 95 and the lowest safe target is 191. A target below
+// that is refused with no override, --force-deep included; the boundary target is accepted (and
+// short-circuits through DryRun). The numbers are a third of mainnet's because the chain
+// builder here holds at most 255 blocks; the rule is the same arithmetic.
+func TestRewindBlockchain_RefusesToExposeAStampedHeight(t *testing.T) {
+	const chainHeight = 200
+
+	run := func(t *testing.T, target int64) error {
+		ctx := context.Background()
+		bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+		bits, err := model.NewNBitFromString("207fffff")
+		require.NoError(t, err)
+		buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+		require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+		_, err = Rewind(ctx, logger(), tSettings, Options{
+			TargetHeight: target,
+			DryRun:       true,
+			AssumeYes:    true,
+			ForceDeep:    true,
+			Stores: &Stores{
+				Blockchain: bcStore,
+				UTXO:       stampedUTXOStore{Store: utxoStore, fence: 96, depth: 96},
+				Subtree:    subtreeStore,
+			},
+		})
+
+		return err
+	}
+
+	t.Run("refused one below the boundary", func(t *testing.T) {
+		err := run(t, 190)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "highest stamped height 95")
+		require.Contains(t, err.Error(), "lowest safe target is 191")
+		require.NotContains(t, err.Error(), "--force-deep", "there is no override")
+	})
+
+	t.Run("accepted at the boundary", func(t *testing.T) {
+		require.NoError(t, run(t, 191))
+	})
+}
+
+// TestRewindBlockchain_RefusesToExposeAStampedHeightThroughTheLoggingWrapper: a store opened with
+// logging=true reaches the tool wrapped in stores/utxo/logger. The wrapper forwards Stamper like
+// any other method, so the preflight still reads the stamp boundary and refuses the target.
+func TestRewindBlockchain_RefusesToExposeAStampedHeightThroughTheLoggingWrapper(t *testing.T) {
+	const chainHeight = 200
+
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	wrapped := storelogger.New(ctx, logger(), stampedUTXOStore{Store: utxoStore, fence: 96, depth: 96})
+
+	_, err = Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 190,
+		DryRun:       true,
+		AssumeYes:    true,
+		ForceDeep:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       wrapped,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.Error(t, err, "the logging wrapper hid the stamp boundary from the preflight")
+	require.Contains(t, err.Error(), "lowest safe target is 191")
+}
+
+// TestRewindBlockchain_SQLStoreHasNoStampBoundary: the plain sql store is asked for its stamp the
+// same way as any other and answers pruner.NoStamp, whose zero fence means nothing is stamped.
+// The preflight reads that as no boundary and permits a deep target, as it always has for a
+// store without a stamp. Without the zero-fence test, fence - 1 + depth wraps to the top of
+// uint32 and every target would be refused.
+func TestRewindBlockchain_SQLStoreHasNoStampBoundary(t *testing.T) {
+	const chainHeight = 200
+
+	ctx := context.Background()
+	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
+
+	require.Equal(t, pruner.NoStamp, utxoStore.Stamper(), "the sql store has nothing to stamp")
+
+	bits, err := model.NewNBitFromString("207fffff")
+	require.NoError(t, err)
+	buildLinearChain(t, ctx, bcStore, chainHeight, bits, tSettings.ChainCfgParams.GenesisHash)
+	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
+
+	_, err = Rewind(ctx, logger(), tSettings, Options{
+		TargetHeight: 1,
+		DryRun:       true,
+		AssumeYes:    true,
+		ForceDeep:    true,
+		Stores: &Stores{
+			Blockchain: bcStore,
+			UTXO:       utxoStore,
+			Subtree:    subtreeStore,
+		},
+	})
+	require.NoError(t, err)
 }

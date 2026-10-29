@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
 	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/assert"
@@ -920,6 +921,15 @@ type registryTipP2PClient struct {
 func (c *registryTipP2PClient) GetPeer(_ context.Context, _ string) (*p2p.PeerInfo, error) {
 	return &p2p.PeerInfo{BlockHash: c.tip}, nil
 }
+
+// nettingMockStore is the catch-up test's mock UTXO store as a store that nets below the
+// checkpoint and takes outpoint-only spends, the two properties model.NettedRouteAt reads.
+type nettingMockStore struct {
+	*utxo.MockUtxostore
+}
+
+func (nettingMockStore) NetsBelowCheckpoint() bool       { return true }
+func (nettingMockStore) SupportsOutpointOnlySpend() bool { return true }
 
 // TestCatchup_CompetingEqualWorkChains tests handling of chains with equal proof of work
 func TestCatchup_CompetingEqualWorkChains(t *testing.T) {

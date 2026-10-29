@@ -901,7 +901,7 @@ var checkedRowsPerDoc = map[string]int{
 	"blockassembly_settings.md":     44,
 	"blockchain_settings.md":        11,
 	"blockpersister_settings.md":    9,
-	"blockvalidation_settings.md":   71,
+	"blockvalidation_settings.md":   72,
 	"coinbase_settings.md":          21,
 	"faucet_settings.md":            1,
 	"legacy_settings.md":            28,
@@ -914,7 +914,7 @@ var checkedRowsPerDoc = map[string]int{
 	"validator_settings.md":         18,
 	"aerospike_settings.md":         13,
 	"blob_settings.md":              1,
-	"utxo_settings.md":              39,
+	"utxo_settings.md":              41,
 }
 
 // exampleKeyRe matches a `key = value` or `key=value` assignment inside the

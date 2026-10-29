@@ -51,8 +51,14 @@ func BelowCheckpoint(checkpoints []chaincfg.Checkpoint, height uint32) bool {
 // closed (fail-safe, invariant I2). Chain params are passed explicitly because
 // callers legitimately source them differently (netsync holds *chaincfg.Params
 // directly; blockvalidation and model read settings.ChainCfgParams).
+//
+// A store that nets below the checkpoint (utxoset) is always opted in, whatever
+// blockvalidation_outpoint_only_below_checkpoint says: it writes those blocks only through
+// the netted route, so the answer must come from the store, the checkpoint table and the
+// height alone. Every service then reaches the same answer, even when its copy of the
+// setting differs from another service's.
 func OutpointOnlyEligible(tSettings *settings.Settings, store utxo.Store, params *chaincfg.Params, height uint32) bool {
-	if tSettings == nil || !tSettings.BlockValidation.OutpointOnlyBelowCheckpoint {
+	if tSettings == nil || (!tSettings.BlockValidation.OutpointOnlyBelowCheckpoint && !utxo.NetsBelowCheckpoint(store)) {
 		return false
 	}
 

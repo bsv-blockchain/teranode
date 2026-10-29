@@ -4882,6 +4882,10 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			return nil, nil, err
 		}
 
+		if txMeta == nil || txMeta.Tx == nil {
+			return nil, nil, errors.NewProcessingError("[SetConflicting][%s] record carries no transaction body, so its inputs and outputs cannot be resolved", conflictingTxHash.String())
+		}
+
 		parentHashes[idx] = parentHashesOf(txMeta.Tx)
 
 		for i, input := range txMeta.Tx.Inputs {
@@ -6323,4 +6327,24 @@ func (s *Store) sendUnlockBatch(batch []*batchUnlockItem) {
 	for _, item := range batch {
 		item.done <- err
 	}
+}
+
+// SpendsMadeBy returns the coins this transaction consumed, as records Unspend can restore.
+//
+// This store keeps transactions in extended form, meaning each input carries the amount and
+// locking script of the output it spends, so the answer comes straight off the transaction
+// through the shared helper. That helper is the same loop this store's SetConflicting runs, and
+// the same one the conflict undo used to run inline, so the records are identical to what the
+// undo built for itself before it started asking the store.
+func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	txMeta, err := s.Get(ctx, &txHash, fields.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if txMeta == nil || txMeta.Tx == nil {
+		return nil, errors.NewTxNotFoundError("[SpendsMadeBy][%s] no transaction", txHash.String())
+	}
+
+	return utxo.SpendsForTx(txMeta.Tx)
 }

@@ -130,8 +130,13 @@ func TestReplayPendingConflictIntents_ForwardEvictsDemotedFromTxMetaCache(t *tes
 		StartedAt:   1,
 	}
 
+	// ProcessConflicting promotes the winner by spending its inputs, so its
+	// record must carry a body.
+	winnerTx := bt.NewTx()
+	require.NoError(t, winnerTx.From(chainhash.HashH([]byte("replay-winner-parent")).String(), 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+
 	mockStore := &utxo.MockUtxostore{}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true}, nil)
+	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true, Tx: winnerTx}, nil)
 	mockStore.On("GetCounterConflicting", mock.Anything, winner).Return([]chainhash.Hash{loser}, nil)
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{loser}, true).Return([]*utxo.Spend{}, []chainhash.Hash{child}, nil)
 	mockStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
@@ -180,6 +185,8 @@ func TestReplayPendingConflictIntents_ReverseEvictsDemotedFromTxMetaCache(t *tes
 	// parent has no conflicting children: nothing to promote
 	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demoted}, true).Return([]*utxo.Spend{}, []chainhash.Hash{child}, nil)
+	// the store, not the demoted tx's inputs, names the spends to give back
+	mockStore.On("SpendsMadeBy", mock.Anything, demoted).Return([]*utxo.Spend{}, nil)
 	mockStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
 	mockStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -351,8 +358,11 @@ func TestReplayPendingConflictIntents_FailedForwardEvictsFlipped(t *testing.T) {
 		StartedAt:   1,
 	}
 
+	winnerTx := bt.NewTx()
+	require.NoError(t, winnerTx.From(chainhash.HashH([]byte("failed-replay-winner-parent")).String(), 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+
 	mockStore := failingCascadeStore(loser, child)
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true}, nil)
+	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true, Tx: winnerTx}, nil)
 	mockStore.On("GetCounterConflicting", mock.Anything, winner).Return([]chainhash.Hash{loser}, nil)
 	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 

@@ -227,6 +227,13 @@ type Store interface {
 	// Returns: BlockHeader, BlockHeaderMeta, and any error encountered
 	GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
 
+	// GetBestBlockHeaderUncached is GetBestBlockHeader with the response cache left out on both
+	// sides: it neither reads the cache nor fills it, and the meta carries the block id. A block
+	// store clears the cache only after its own commit, so the cached call can be one block
+	// stale. The pruner's stamp reads the tip between every store call of a drain and writes
+	// the height into a permanent completion record, so it takes this call.
+	GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error)
+
 	// GetBlockHeader retrieves a block header by its hash.
 	// Parameters:
 	//   - ctx: Context for the operation
@@ -241,6 +248,17 @@ type Store interface {
 	//   - numberOfHeaders: Number of headers to retrieve
 	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
 	GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
+	// GetBlockHeadersByParentLinks retrieves up to numberOfHeaders headers by walking parent links
+	// back from blockHash, newest first. Unlike GetBlockHeaders it never selects rows by the
+	// on_main_chain flag and never consults or fills a cache, so a stale flag cannot change its
+	// answer and a caller that proves the result by hash linkage proves the chain itself.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - blockHash: Starting block hash
+	//   - numberOfHeaders: Number of headers to retrieve
+	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
+	GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
 	// GetBlockHeadersFromTill retrieves block headers between two blocks.
 	// Parameters:

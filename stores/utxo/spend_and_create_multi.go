@@ -708,3 +708,20 @@ func checkSpendAndCreateMultiList(txs []*bt.Tx, txids []chainhash.Hash) ([][]int
 
 	return parentsInList, nil
 }
+
+// BelowCheckpointNetter is implemented by a store whose SpendAndCreateMulti nets a list below
+// the highest hardcoded checkpoint itself, with outpoint-only spends and no spend-journal rows,
+// as utxoset does. Quick validation then hands such a store fixed ranges of transaction
+// positions, keeps unspendable transactions in the list, and never spends an existing
+// transaction's inputs a second time, because no journal row would accept the repeat.
+type BelowCheckpointNetter interface {
+	NetsBelowCheckpoint() bool
+}
+
+// NetsBelowCheckpoint reports whether s, or the store it wraps, is a BelowCheckpointNetter that
+// says yes.
+func NetsBelowCheckpoint(s any) bool {
+	n, ok := s.(BelowCheckpointNetter)
+
+	return ok && n.NetsBelowCheckpoint()
+}

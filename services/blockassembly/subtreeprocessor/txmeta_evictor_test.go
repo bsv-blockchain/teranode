@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -173,7 +174,12 @@ func newConflictTestProcessor(t *testing.T, evictor *TxMetaEvictor, failure conf
 	if failure == failWinnerLookup {
 		store.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.NewStorageError("store down"))
 	} else {
-		store.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true}, nil)
+		// ProcessConflicting promotes the winner by spending its inputs, so its
+		// record must carry a body.
+		winnerTx := bt.NewTx()
+		require.NoError(t, winnerTx.From(chainhash.HashH([]byte("winner-parent")).String(), 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+
+		store.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true, Tx: winnerTx}, nil)
 	}
 
 	store.On("GetCounterConflicting", mock.Anything, scenario.winner).Return([]chainhash.Hash{scenario.loser}, nil)
