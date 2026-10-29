@@ -347,10 +347,35 @@ type countingReader struct {
 type deliveryReader struct {
 	r    io.Reader
 	from *Peer
+
+	// readErr is the first error the underlying connection itself returned, if any. It is how a
+	// decode that ran off the end of a complete payload (classifyReadError) is told apart from a
+	// connection that ended.
+	readErr error
 }
 
 func (d *deliveryReader) Read(p []byte) (int, error) {
-	return d.r.Read(p)
+	n, err := d.r.Read(p)
+	if err != nil && d.readErr == nil {
+		d.readErr = err
+	}
+
+	return n, err
+}
+
+// classifyReadError turns an end-of-data error that the connection did not cause into a
+// *wire.MessageError. go-wire reads a message's whole payload off the socket and then decodes it
+// from a buffer, so a well-framed message that is shorter than its command needs (a reject with a
+// declared length of 0, say) makes the decoder run off the end of the buffer and return a bare
+// io.EOF or io.ErrUnexpectedEOF, which the read loop takes for the peer hanging up. The
+// connection itself never failed in that case; when it did (a socket that closed between
+// messages or inside one), the error stays as it is.
+func (d *deliveryReader) classifyReadError(err error) error {
+	if (err == io.EOF || err == io.ErrUnexpectedEOF) && d.readErr == nil {
+		return &wire.MessageError{Func: "ReadMessage", Description: "message payload is shorter than its command requires"}
+	}
+
+	return err
 }
 
 // NewDeliveryReader returns r marked as bytes arriving from peer from. The
