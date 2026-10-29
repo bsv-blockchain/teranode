@@ -854,6 +854,17 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **`setban` now reaches legacy peers.** `setban <ip|subnet> add`
+  failed on the legacy service with "tried to ban legacy peer but peer not found", and
+  a ban event from the P2P service never disconnected a legacy peer, because the
+  legacy service compared the peer's `IP:port` with the IP or subnet. A ban is now
+  recorded in the legacy ban list whether or not a matching peer is connected, every
+  connected legacy peer inside the IP or subnet is disconnected, and a reconnecting
+  one is refused until the ban expires or is lifted; `setban <ip|subnet> remove`
+  accepts an IP or a CIDR subnet. Operators who relied on the old failure to keep a
+  legacy peer connected after a ban, or who banned a subnet that includes a peer they
+  want, will see the peer dropped. No action is required. (#1537)
+
 - **Peer subtrees announced during a catchup are validated afterwards instead of
   lost.** While catching up, the subtree validator used to drop every
   peer-announced subtree, so the next block arrived with all of them unvalidated

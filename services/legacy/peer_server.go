@@ -2258,17 +2258,20 @@ func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, b
 // handleUnbanPeerMsg deals with un-banning peers.  It is invoked from the
 // peerHandler goroutine.
 func (s *server) handleUnbanPeerMsg(state *peerState, spAddr bannedPeerAddr) {
-	host, _, err := net.SplitHostPort(string(spAddr))
-	if err != nil {
-		s.logger.Errorf(cantSplitBanPeerMsg, spAddr, err)
-		return
+	// setban sends an IP or a subnet, an IP:port is also accepted; only a bare host has an entry in
+	// state.banned, a subnet only in the ban list
+	host := string(spAddr)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
 	}
 
 	s.logger.Infof("Un-banned peer %s ", host)
 
-	state.banned.Delete(host)
+	if !strings.Contains(host, "/") {
+		state.banned.Delete(host)
+	}
 
-	err = s.banList.Remove(s.ctx, host)
+	err := s.banList.Remove(s.ctx, host)
 	if err != nil {
 		s.logger.Errorf("Failed to remove ban for peer %s: %v", host, err)
 	}
@@ -2574,9 +2577,15 @@ func (s *server) handleQuery(state *peerState, querymsg interface{}) {
 	case disconnectNodeMsg:
 		// Check inbound peers. We pass a nil callback since we don't
 		// require any additional actions on disconnect for inbound peers.
+		// Every match goes: a subnet ban covers more than one connection.
 		found := disconnectPeer(state.inboundPeers, msg.cmp, nil)
 		if found {
+			for found {
+				found = disconnectPeer(state.inboundPeers, msg.cmp, nil)
+			}
+
 			msg.reply <- nil
+
 			return
 		}
 
@@ -4114,8 +4123,13 @@ func (s *server) handleBanEvent(_ context.Context, event p2p.BanEvent) {
 	// Create a message to send to the peer handler
 	disconnectMsg := disconnectNodeMsg{
 		cmp: func(sp *serverPeer) bool {
-			peerIP := net.ParseIP(sp.Addr())
-			return sp.Addr() == event.IP || (event.Subnet != nil && event.Subnet.Contains(peerIP))
+			// sp.Addr() is "IP:port"; a ban names the IP or the subnet
+			host, _, err := net.SplitHostPort(sp.Addr())
+			if err != nil {
+				return false
+			}
+
+			return host == event.IP || (event.Subnet != nil && event.Subnet.Contains(net.ParseIP(host)))
 		},
 		reply: make(chan error),
 	}
