@@ -118,6 +118,7 @@ func newBlockFoundFetchServer(t *testing.T) (*Server, *catchupErrorRecordingP2PC
 		stats:                    gocore.NewStat("test"),
 		announcedBlockRateLimits: newAnnouncedBlockRateLimitCache(),
 		blockPriorityQueue:       NewBlockPriorityQueue(ulogger.TestLogger{}),
+		forkManager:              NewForkManager(ulogger.TestLogger{}, tSettings),
 		blockFoundCh:             make(chan processBlockFound, 10),
 	}
 

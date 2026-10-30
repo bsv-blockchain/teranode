@@ -136,6 +136,9 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 //   - baseURL: Source URL from which the block can be retrieved
 //   - waitToComplete: When true, waits for validation to complete before returning
 //
+// The request carries no peer ID, so the server's per-(hash, peer) caps, such as the
+// recovered-panic cap, never apply to a block announced through this method.
+//
 // Returns an error if notification fails or validation encounters issues
 func (s *Client) BlockFound(ctx context.Context, blockHash *chainhash.Hash, baseURL string, waitToComplete bool) error {
 	req := &blockvalidation_api.BlockFoundRequest{

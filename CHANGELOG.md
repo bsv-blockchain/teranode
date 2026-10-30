@@ -18,6 +18,11 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — action required before upgrading
 
+- **`CheckBlockSubtrees` gRPC errors keep Teranode error codes.** Storage and
+  consensus errors include gRPC status metadata. Invalid URLs give `InvalidArgument`
+  status. External clients must use `errors.UnwrapGRPC` to read the error chain
+  and must accept these status codes. Teranode clients can read this format. (#1650)
+
 - **`grpc_admin_api_key` is now mandatory for the Blockchain service.** The service
   validates it at startup and refuses to start when it is empty, is a well-known
   placeholder (`testkey`, `changeme`, …), or is shorter than 16 characters. A value
@@ -81,7 +86,350 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   until it is reimaged. No chain state is corrupted. Upgrade Blockchain last, or raise
   `blockchain_maxMedianTimePastHeights` for the duration of the rollout. (#1776)
 
+- **The alert service now picks its network identity by `network`, and validates
+  `alert_genesis_keys`.** `alert_genesis_keys`, `alert_protocol_id` and `alert_topic_name`
+  default to empty, and each empty one takes the go-alert-system default for the
+  configured network: testnet and stn nodes now join their own alert network
+  (`/bitcoin-testnet/alert-system/0.0.1`, testnet genesis keys) instead of the mainnet
+  protocol and keys. Mainnet resolves to the same values as before. Regtest, teratestnet
+  and tstn keep the mainnet keys and protocol on `bitcoin_alert_system_<network>` and log
+  a warning. A non-empty `alert_topic_name` is now honoured on every network.
+
+  Affects testnet/stn nodes and any deployment that sets these keys. Clear values copied
+  from the old mainnet defaults into `settings_local.conf`, helm values or env, or a
+  testnet node stays on the mainnet alert network. An explicit `alert_genesis_keys` must
+  now hold 3 to 10 hex-encoded compressed public keys (blank entries are dropped, repeats
+  kept once), or the alert service fails to start with a configuration error. An alert
+  store that holds only the genesis alert and was seeded with other keys (a testnet or stn
+  store from v0.16.x or earlier) has its active keys reset to the resolved genesis keys on
+  first start, with a warning; there is no need to delete `alert.db`. (#1955)
+
 ### Breaking — behaviour changes on upgrade
+
+- **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
+  assembly, and catch-up no longer fetches a chain with less work than the best tip.**
+  Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop
+  handing transactions to block assembly in that state. A running node that fetched a
+  short competing branch therefore wrote the branch's transactions to the UTXO store but
+  not to the pool, and a child spending one of them could enter the pool without its
+  parent. A catch-up that starts from `RUNNING` and fetches at most
+  `blockvalidation_catchup_keep_block_assembly_max_blocks` blocks (new, default 6) now
+  keeps the hand-off on; such a run uses the level path, never the batched catch-up path.
+  Set the value to 0 to restore the old behaviour. Separately, catch-up now ends as a
+  no-op, charging no peer, when the header fetch reached the announced block and the
+  whole offered chain has less cumulative work than the best tip; equal work is still
+  fetched. The check runs after the existing fork checks, so a fork deeper than coinbase
+  maturity and the deep-fork secret-mining case are still refused with an error and
+  charged as before. In a mixed-version deploy, a subtree validation older than its block
+  validation ignores the new request field and keeps the hand-off off. The existing block-context queue-shed policy still accepts and unlocks
+  a transaction without a template entry on `ErrThresholdExceeded`; durable recovery
+  from that case is not added here. (#2075, partially addresses #2067)
+
+- **Catch-up quick validation waits for each block's `.subtree` writes before it commits
+  the block, and a shutdown waits for a block's in-flight commit.** A block was stored with
+  `subtrees_set` while its `.subtree` files could still be in flight, so a failed write
+  left a block recorded as having files it did not have. Each quick-validated block now
+  waits for its own writes to land; a write that fails leaves the block uncommitted for
+  the next catch-up run. Once the block is stored, unlocking its outputs is retried on a
+  context that a cancel does not stop, for up to 5 minutes. When `AddBlock` returns an
+  error, a retried existence check, bounded at 15 seconds, decides whether to finish the
+  commit or retry the block later. Shutdown now waits for a block's commit that is already
+  under way, including that check and the unlock, but only up to `service_manager_stopTimeout`
+  (default 30s), less up to 5s that shutdown keeps for flushing the invalid-block Kafka
+  producer. A stop during catch-up can now use the rest of that time. If the blockchain or
+  UTXO store hangs past the stop timeout at shutdown, the block's outputs stay locked
+  (tracked in #2015). To give the commit longer at shutdown, raise
+  `service_manager_stopTimeout` and the pod's `terminationGracePeriodSeconds` together.
+  (#2011)
+
+- **A mining candidate keeps its coinbase, and a solution without one is mined with it.**
+  Affects miners and pools that use `getminingcandidate` and `submitminingsolution`. As in
+  bitcoin-sv, block assembly now builds a candidate's coinbase once, keeps it on the job,
+  and returns it in the new `coinbase_tx` field of the `MiningCandidate` message. A
+  `submitminingsolution` call with no `coinbase` is mined with that coinbase. Before, block
+  assembly rebuilt one with a fresh random extranonce, so its merkle root was never the one
+  the miner hashed and every such solution failed the proof-of-work check, deleted the job
+  and reset block assembly. A solution's `version` now goes into the header only, no longer
+  into the coinbase as well. `getminingcandidate` with `coinbase=true` returns the kept
+  coinbase: a version 1 transaction paying the configured miner wallet addresses by P2PKH,
+  where it used to return a separately built version 2 transaction with one pay-to-pubkey
+  output that block assembly never saw. Miners that submit their own coinbase are not
+  affected, and neither is a node without `miner_wallet_private_keys`: it still serves
+  candidates, with no coinbase on the job, and refuses only a coinbase-less solution and
+  `coinbase=true`, as it did before. A solution that breaks a consensus rule no longer removes the job, so other
+  miners on the same candidate keep its coinbase and can still submit; the job goes when its
+  TTL lapses or a block is mined. A solution whose hash misses the target is rejected without
+  resetting block assembly, which it used to do. If `miner_wallet_private_keys` is set but
+  cannot build a coinbase, block assembly now logs a warning with the cause, at most once a
+  minute. Upgrade block assembly no later than the RPC service: an RPC service on this
+  build answers `getminingcandidate` with `coinbase=true` with an error while it is talking
+  to an older block assembly, which sends no coinbase. (#2027)
+
+- **A policy-mode script error is classified by a consensus re-run.** When policy
+  validation fails on `SCRIPTNUM_OVERFLOW`, `OP_COUNT`, `SCRIPT_SIZE`, `PUBKEY_COUNT`,
+  `SCRIPTNUM_MINENCODE` or `STACK_SIZE`, the validator runs the scripts again under
+  consensus limits. The tx is `TX_POLICY` if that run passes and `TX_INVALID` if it
+  fails. A script number over `maxscriptnumlengthpolicy` but within int64 is `TX_POLICY`
+  again, and is published to `KAFKA_TX_POLICY_REJECTED`. A pre-Genesis UTXO over a
+  consensus limit is `TX_INVALID` instead of `TX_POLICY`. `maxnonstdtxvalidationduration`
+  is now read, with a default of 1000 ms, and bounds the re-run only. A re-run that does
+  not finish in time is reported as `TX_POLICY`, as sv-node does. Set it to 0 to remove
+  the bound. The timeout is checked only between opcodes, so a new setting,
+  `validator_consensusRerunSlots` (default 1), caps how many re-runs run at once. When
+  no slot is free the tx is reported as `TX_POLICY` without a re-run. Set it to 0 to
+  turn re-runs off. While re-runs are unavailable, through a full slot or a timeout,
+  every policy script failure is `TX_POLICY`, including an int64 overflow. The re-run's
+  stack memory is capped at `maxstackmemoryusagepolicy` rather than the unlimited
+  consensus default, and reaching the cap is `TX_POLICY`. The exception, with or
+  without a re-run, is `STACK_SIZE` on a tx with a pre-Genesis input: it can be the
+  1000-element consensus limit, so it is `TX_INVALID`. RPC and propagation clients that act on the error code see the new codes (#2068).
+
+- **A block's tx is created as conflicting only when it is a double spend and nothing
+  else.** Block validation used to create a tx as conflicting as soon as one of its inputs
+  was already spent by another tx, dropping every other failed input. A block holding a
+  tx that double-spent a mempool tx and also spent an immature coinbase, or a frozen or
+  mismatched output, was accepted where SV nodes reject it. Such a block now fails
+  validation instead. Each input is classified by its own error, whatever its position in
+  the tx.
+
+  A block whose tx spends an immature coinbase, with or without a double spend, is now
+  marked invalid: the validator returns `TX_INVALID` for it on the block path, at the
+  block's own height. It used to fail as a processing error, so the block was retried and
+  never marked invalid, and the peer that sent it was not charged. This includes an
+  immature output another tx already spent: the SQL store reports that spend only as
+  spent, so the validator reads the parent of each double-spent output on the block path
+  and checks its maturity itself, a read per failed spend. Outside a block the
+  same spend is still a plain rejection, and below a checkpoint a failure stays local. A
+  frozen or mismatched output still fails without a verdict: freezes and reassignment
+  holds are this node's state, set at the height it applied the alert.
+
+  A block no longer takes a tx's stored conflicting record as its own verdict. Another
+  candidate block, at another height, may have created the record, and a tx valid there
+  can be invalid at this block's height. On every block path such a tx is now checked
+  again at the block's height for coinbase maturity and finality, from the store, without
+  writing anything. Either failure is `TX_INVALID`, as for a tx the block validates
+  (#2022); a peer subtree still takes the record as before. Each conflicting tx in a
+  block costs a read of its body and its parents, including in a
+  subtree this node validated before the block arrived. Relative lock times (BIP68,
+  before Genesis), the script rules of the Genesis boundary and frozen outputs are not
+  checked again, and a stored record that is not conflicting is still taken as it was.
+  (#2038)
+
+- **Peer subtrees holding conflicting txs are stored instead of rejected.** A subtree
+  announced by a peer used to fail validation when it held a tx conflicting with one
+  this node accepted, and the block referencing it then fetched and validated the
+  whole subtree again. Those txs, and txs spending them, are now kept aside, not
+  written to the UTXO store, in a new `subtreeConflicting` file next to the
+  subtree, which is stored as `subtreeToCheck` with the same retention. The
+  block that references the subtree creates them as conflicting. Nothing conflicting
+  reaches the UTXO store before a block with proof of work references it.
+
+  The validator now also publishes every tx it rejects as conflicting, submitted ones
+  included, raw on the policy-rejected topic, flagged by the new `conflicting` field
+  of `KafkaTxPolicyRejectedTopicMessage`. Subtree validation publishes the txs it keeps
+  aside that are not yet known as conflicting there too, flagged `keptAside`, after
+  checks that need no parent (structure, money range, policy size). Every subtree
+  validator caches them, kept-aside entries in a separate cache with their own budget
+  (`subtreevalidation_txPolicyRejectedCacheMaxMB` each), so a descendant in a later
+  subtree is kept aside too, once its parent is known: on the pod that kept the parent
+  aside as soon as it did, on the others once the publish arrives. A descendant whose
+  subtree reaches it before that still fails the subtree, as before. The rejected txs no
+  longer count towards the fail-fast miss thresholds. Without `kafka_txPolicyRejectedConfig`, each subtree
+  validator still learns the descendants it keeps aside itself, but not those another
+  one kept aside, nor the validators' rejections. With
+  `subtreevalidation_txPolicyRejectedCacheEnabled` off (it is on by default), conflicting
+  txs are kept aside within a subtree only. Descendants in the same subtree as their
+  conflicting parent still count towards the fail-fast thresholds. Kept-aside txs are
+  counted in `teranode_subtreevalidation_conflicting_kept_aside`. (#2038)
+
+  Only the kept-aside txs the peer sent are written next to the subtree, without the
+  previous-output data of extended format; those this node already held in its caches are
+  resolved again when the block needs them; if they have been evicted by then and the peer
+  cannot serve them, the block's subtree fails and is retried. The new
+  `subtreevalidation_keptAsideMaxBytesPerSubtree` (16 MB by default) caps what one subtree
+  keeps aside: over it, the subtree fails as before, though the txs it kept aside stay in
+  the kept-aside cache, within that cache's budget. There is no per-peer cap: a peer can
+  still announce many subtrees, each under the cap, of txs it sends itself.
+
+  Subtree validation now also produces on the policy-rejected topic: with Kafka topic
+  ACLs, grant it write access.
+
+  Upgrade every subtree validator together. One without this change ignores the
+  `keptAside` field and caches kept-aside txs, which a peer can fabricate, in its
+  policy-rejected cache, where they evict the validators' entries until it is
+  upgraded.
+
+  A tx rejected because every input that failed to spend is already spent by another
+  tx, or is an output of a conflicting tx, now also carries the new error code
+  `TX_REJECTED_CONFLICTING` (43, gRPC `FailedPrecondition`) in its error chain; one with
+  an input that failed for another reason, frozen for example, does not, in whatever
+  order its inputs come. The code clients see is unchanged (`UTXO_SPENT`, HTTP 409): the
+  new code is not a public cause. A gRPC client built before this change that receives
+  the code reads it as an unknown `ERR` value. The legacy service drops an orphan
+  rejected as conflicting from its orphan pool when its parent arrives; it used to
+  delete the parent's key instead, so the orphan stayed until it expired and was
+  validated again for each further parent that arrived.
+
+- **Blocks whose cached subtrees hold a tx the store flags conflicting are now rejected.**
+  Subtree validation used to bless a block whose subtrees it had already cached on
+  that cache alone, so a tx demoted to conflicting after caching could still pass.
+  It now binds the block body to its header whenever any subtree is cached, and
+  reads each such tx's `Conflicting` flag from the UTXO store, in RUNNING too. The
+  extra reads scale with transactions per block and are counted in
+  `teranode_subtreevalidation_cached_subtree_conflict_probes_total`. (#1938)
+
+  To keep the txmeta cache honest, block assembly and the validator now publish
+  DELETEs on the txmeta topic for every tx they demote to conflicting. **When
+  `kafka_txmetaConfig` is set, block assembly now connects to that topic at startup**
+  (creating it if missing) and exits if the broker stays unreachable, so its pod needs
+  produce access to the topic. Dropped DELETEs are counted in
+  `teranode_subtreeprocessor_txmeta_delete_dropped_total`, and late writes the cache
+  refused in `teranode_tx_meta_cache_tombstoned_writes_evicted_total`. The new
+  `subtreevalidation_txMetaTombstoneWindow` (default `30m`) sets how long a DELETE
+  keeps a tx out of the cache; it must exceed the worst txmeta consumer lag.
+
+  Subtree validation now refuses to start when the txmeta cache cannot be built
+  (including a non-positive `subtreevalidation_txMetaTombstoneWindow`). It used to
+  log the failure and run with no store, then panic on first use.
+
+- **A failed revert of an invalid block's mined tags now holds block assembly until it
+  succeeds.** When block validation reverts the mined tags of an invalid block and
+  `SetMinedMulti` fails, or a subtree read fails with anything other than not-found, the
+  revert now returns an error instead of logging a warning and marking the block done.
+  The block stays at `mined_set=false`, so block assembly waits for it before it starts,
+  resets or reorgs, exactly as it already does for a valid block whose mined update
+  fails. Reverting the tag is what marks a transaction unmined again, so carrying on
+  would rebuild block assembly without those transactions. The wait lasts as long as the
+  store fault: the setTxMined retry loop increments
+  `teranode_blockvalidation_setmined_retry_total`, a block that still fails after 10
+  attempts logs `manual_intervention_required` and increments
+  `teranode_blockvalidation_setmined_drops_total`, and the mined-not-set sweep then picks
+  it up again. Those alerts can now fire for invalid blocks. Operators who see them should
+  fix the UTXO or subtree store fault; block assembly resumes on the next successful
+  attempt. A subtree that is absent from the store is still skipped. (#2016)
+
+- **`utxostore_updateTxMinedStatus` is removed, and it was live.** Affects only nodes that
+  set it to `false`. Mined-tagging, the step after `AddBlock` that writes a block's ID onto
+  each of its transactions, now always runs. So does the check it carries, which rejects a
+  block that re-includes a transaction an ancestor block already mined. With the key at
+  `false`, neither ran, yet the block was still flagged as mined. The loader does not report
+  unknown keys, so a leftover `false` is ignored without an error and those nodes take on
+  the mined-tagging write load again. Delete the key from your config. (#2019)
+- **`ProcessBlock` refuses a legacy block whose parent is not stored.** Block validation's
+  `ProcessBlock` gRPC call used to answer success for a block with baseURL `legacy` and no stored
+  parent: it handed the block to catch-up and stored nothing. It now returns `ERR_SERVICE_ERROR`.
+  An empty `BaseUrl` defaults to `legacy`, so any external caller that omits it gets the same
+  refusal and must submit the parent first. Legacy sync keeps the block and retries it once the
+  parent commits. Blocks announced by p2p peers still go to catch-up. (#2021)
+- **A panic on the main block validation goroutines no longer stops the node.** The
+  priority-queue block workers and the catchup consumer now recover a panic, as the
+  `blockFoundCh` workers and the Kafka block message handler (#2010) already did. The
+  `errgroup` goroutines that block validation starts recover their own panics too: the
+  catchup fetch and validate pipeline, the parallel stages of quick validation, and the
+  service start and startup sweeps (issue bitcoin-sv/teranode#4993). A panic in a plain
+  `go` statement in block validation still stops the process. Before, the process stopped
+  and restarted, so an alert on a crash loop found it. That alert will not fire now for the
+  covered paths. Monitor the new counter `teranode_blockvalidation_recovered_panics_total`
+  (label `path`: `worker`, `catchup`, `kafka`, `block_found`, or for a goroutine those
+  start, `catchup_fetch`, `block_validation` or `service`) and the `PANIC` log line, which
+  has the stack and, on most paths, the block hash. Five more changes come with it:
+    - A Kafka block message that panics is committed and retried in memory, like any
+      other local fault, up to 8 times with backoff. The announcing peer is not blamed.
+      Each attempt that panics counts on `path="kafka"`.
+    - A catchup that panics counts as a failed attempt with the error type `local_panic`. It
+      is not charged to the peer. So is a catchup whose validation waited on a validation of
+      the same block that panicked on another goroutine, also when an alternative peer served
+      that catchup. In that case the node tries no further alternative peer in the cycle. It
+      counts toward
+      `blockvalidation_catchup_max_attempts_per_block` unless it validated at least one block
+      first. In that condition it resets the count, as each other failed catchup that made
+      progress does.
+    - After `blockvalidation_max_corrupt_attempts_per_block` (default 3) worker or
+      `blockFoundCh` panics for one block from one peer, the node stops that peer's
+      announcements and deliveries of the block before it fetches the block, for
+      `blockvalidation_corrupt_attempt_cooldown` (default 10 minutes). The panic counts for
+      the peer that served the attempt that panicked. On the `blockFoundCh` path that is the
+      announcing peer, or the peer that served the block after the announcer answered 429.
+      A capped peer is not fetched from as that 429 fallback either. A block this node has
+      already stored is still answered without error. On the `blockFoundCh` path the cap
+      applies only to blocks announced over Kafka. The `BlockFound` gRPC client sends no peer
+      ID, and a block announced without one is never capped.
+    - The error that a `WaitToComplete` caller gets after a `blockFoundCh` worker panic no
+      longer has the panic value in its text. The panic value is in the `PANIC` log line.
+    - A panic in a goroutine that a validation started is scored like the panics above: a
+      catchup ends as `local_panic` and no peer is charged. In catchup quick validation
+      it ends that catchup attempt, rather than falling back to normal validation of the
+      block. On the legacy route it counts
+      toward the per-peer panic cap above. Legacy sync gets `ERR_SERVICE_ERROR`
+      for it, and also for a delivery that the cap then stops, so the parked block is kept
+      and retried rather than rejected. A panic in the
+      Kafka consumer or gRPC server goroutine of the service start stops the service with an
+      error rather than the process with a crash. (#2012, #2035)
+
+- **Legacy peers that send BIP152 messages are no longer disconnected.** go-wire
+  is now v1.4.0, which decodes `cmpctblock`, `getblocktxn` and `blocktxn`. Until
+  now a legacy peer that sent one got a `malformed` reject and was disconnected.
+  Now the message is logged at debug level and ignored, and the peer stays
+  connected. Teranode never sends `sendcmpct`, so a well-behaved peer should not
+  send these. The bump also bounds how much the wire decoder allocates up front
+  for a declared element count. (#1996)
+
+- **A local processing error is no longer charged to a peer.** During catchup and
+  announced-block fetches, a `ProcessingError` with no peer or consensus code in its
+  chain no longer records a reputation failure or a malicious report, and no longer
+  signals a sync-peer rotation. Catchup treats it like other local faults: it clears the
+  block's markers and cached alternative announcers, does not try alternative peers, and
+  counts the attempt toward `blockvalidation_catchup_max_attempts_per_block`. Before, local faults such as a failed conflict-resolution
+  read lowered the serving peer's reputation and could drop it as a sync source. The
+  catchup error type for these is now `local_processing_fault`. Faults that a peer causes
+  are now coded `NETWORK_INVALID_RESPONSE` or `NETWORK_ERROR`, and they are still charged:
+  bytes that do not match the requested hash, headers with no common ancestor, a
+  checkpoint mismatch, and a failed fetch. The catchup dashboard shows these as
+  `network_error`. A checkpoint mismatch was shown as `checkpoint_verification_failed`
+  before. Because these codes count as network errors, more failures now take the
+  existing network-error retry paths. On the announced-block path, a block served for the
+  wrong hash, or a block whose subtrees the peer served with bad bytes, now tries the
+  alternative sources, and the block worker re-queues it. A block whose transaction
+  spends an immature coinbase or is non-final is now rejected as an invalid
+  transaction, not as a processing error. Catchup reports the serving peer malicious
+  for it, the direct block path strikes the peer for a corrupt body, and the legacy
+  route rejects the block as invalid. A block that spends a UTXO this node has frozen,
+  or that hits a UTXO hash mismatch in this node's store, stays a local fault.
+  (#2022)
+
+- **Catchup rejects headers that do not form one chain on the common ancestor.**
+  Before, a peer could offer headers whose first entry built on some other stored
+  block, and catchup carried on under the wrong heights with only a warning. Now
+  catchup stops before it touches local state, and the error is coded
+  `NETWORK_INVALID_RESPONSE`, so it is charged to the peer. A header batch whose
+  headers do not link to each other, or that does not build on the last header of
+  the batch before it, is rejected the same way as soon as it arrives, before the
+  fetch is counted as a success for the peer. Catchup also now clears
+  `mined_set` on the blocks a fork replaces only after every header check has
+  passed, just before it fetches blocks, so a fork rejected by a later check, or a
+  peer with nothing past the ancestor, no longer un-stamps the node's own blocks.
+  No action needed. (#2034)
+
+- **This release removes four Aerospike pruner metrics.** External monitoring systems must
+  remove queries for `utxo_pruner_parents_skipped_pruned_total`,
+  `utxo_pruner_pruned_set_size`, `utxo_pruner_pruned_set_saturated`, and
+  `utxo_pruner_pruned_set_rotations`. These metrics reported zero because the pruner
+  no longer skipped parents. After this upgrade, their queries give no data. (#1969)
+
+- **Block validation keeps a worker slot free for the tip, and holds a block behind a
+  parent that is still validating.** Blocks that do not extend the current tip may now
+  hold at most `blockvalidation_max_parallel_forks - 1` worker slots. With
+  `blockvalidation_max_parallel_forks = 1` nothing changes. A block whose parent is still
+  being fetched, queued or validated (by a worker, catchup, gRPC or legacy sync) now waits
+  in the queue for it instead of starting catchup, so the node no longer moves to
+  CATCHINGBLOCKS and stops mining while a slow parent validates. `blockValidationMaxRetries` (default 3), until now unread, caps how often a
+  block is requeued after a failed fetch (retried after 5 s) or after validation hits a
+  deadline such as `subtreevalidation_check_block_subtrees_timeout` (retried after
+  1 min). A block that timed out used to be dropped until a peer announced it again;
+  failed fetches were never actually retried. `0` turns these retries off.
+  `teranode_blockvalidation_priority_queue_processed_total` now labels `priority` with the
+  block's class (`chain_extending`, `near_fork`, `deep_fork`) instead of always `unknown`;
+  update any dashboard query that filters on `unknown`. (#1997)
 
 - **Peer-announced subtrees are validated at most 32 at a time.** The new
   `subtreevalidation_peerSubtreeConcurrency` (default 32) bounds how many peer
@@ -432,7 +780,116 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   shape. The same collapse on the HTTP blob store's own client and server is fixed
   too; no shipped configuration uses that store. (#1963)
 
+- **A block whose coinbase is not final is rejected.** Affects every node and every miner.
+  bitcoin-sv applies its `IsFinalTx` rule to the coinbase as to any other transaction, and
+  Teranode now does too: a block whose coinbase has a non-final input sequence and an
+  nLockTime not yet reached is invalid (`bad-txns-nonfinal`). From CSV onwards a time-based
+  nLockTime is measured against the parent's median time past. `submitminingsolution`
+  refuses such a coinbase instead of mining a block peers reject, and keeps the job, so a
+  corrected coinbase can still be submitted against it. The time-based check needs the
+  parent's median time past, which is looked up only after the solution has passed the
+  proof-of-work check. A solution's time and nonce are no longer copied into the coinbase
+  as its nLockTime and input sequence; they go into the header only, as in bitcoin-sv. A
+  node on an earlier build accepts blocks this one rejects, so upgrade every node
+  together. (#2017)
+
+- **A block's conflicting transactions are checked in one walk, and
+  `utxostore_conflictingChildrenMaxNodes` becomes a per-root budget for it.** Subtree
+  validation used to check a block's conflicting transactions one at a time, re-walking
+  the cones they share. A long conflicting chain cost about N²/2 store reads, so a
+  1,788-transaction chain took about five hours. That is far past the 30-minute
+  `subtreevalidation_check_block_subtrees_timeout`, and since each retry started again
+  from zero, the node wedged. `CheckBlockSubtrees` on cached subtrees, and the store
+  lookup of fresh subtrees, batched or not, now walk all of a block's conflicting transactions once
+  on a shared visited set, from N roots (the transactions and their counter-spenders).
+  The walk may visit the setting (default 100000) times N, which is the old aggregate
+  bound of N separate walks, so any block whose every per-transaction walk fit still
+  passes. Two costs change. In the worst case, the visited set can hold N times the
+  setting in memory, where each walk used to peak at the setting. A single runaway cone
+  now fails closed with `ERR_UTXO_WALK_LIMIT_EXCEEDED` after N times the setting in
+  reads, rather than after the setting. One smaller change comes with it, on the cached
+  path only. A counter-conflicting record missing from the store no longer skips that
+  transaction's whole check: the record counts as not mined, and the rest is still
+  checked. The fresh path is unchanged: a missing record still fails the check with a
+  retryable `TX_NOT_FOUND`, as blessing a missing transaction does.
+
+  The conflicting-walk histograms change meaning on these two paths:
+  `teranode_utxo_conflicting_walk_nodes`, `teranode_utxo_conflicting_walk_depth` and
+  `teranode_utxo_conflicting_walk_duration`.
+    - Before: one sample per per-transaction walk, usually two per conflicting transaction
+      (its counter-spender's walk and its own).
+    - Now: one sample per block-level batch, covering every root. For the same block the
+      sample count drops, and each sample's nodes, depth and duration rise.
+    - A batch sample's nodes can legitimately exceed `utxostore_conflictingChildrenMaxNodes`,
+      up to that budget times the batch's roots. An alert on walk size near the setting
+      reads differently after upgrading.
+    - Blessing a single missing transaction, and conflict processing, still record one
+      sample per walk, so the histograms now mix both kinds.
+
+  (bsv-blockchain/teranode#2037)
+
+- **A proven conflict now rejects a block even when part of the conflict check
+  failed.** Affects `CheckBlockSubtrees`: cached subtrees, fresh subtrees, and
+  missing transactions it fetches and blesses, alike. When a block's conflicting
+  transactions are checked against the candidate chain, a transaction that is
+  provably invalid used to lose to any retryable failure elsewhere in the same
+  check: a pruned parent record, a store fault, the
+  `utxostore_conflictingChildrenMaxNodes` walk limit, a frozen output, or another
+  input of the same transaction that could not be checked. On the fresh path the
+  verdict was also returned as a context cancellation, so block validation retried
+  it even when nothing else failed. Either way the block was retried, never
+  rejected, and the announcing peer was not scored for it. Now, if any
+  counter-conflicting transaction that was read is mined on the candidate chain,
+  the block is rejected with `TX_INVALID` whatever else failed, and scored as any
+  invalid transaction is; the retryable error is returned only when nothing is
+  proven. A block that used to retry indefinitely may now be rejected on the first
+  attempt. This includes a walk over the `utxostore_conflictingChildrenMaxNodes`
+  budget that already reached a mined counter-conflicting transaction (a
+  conflicting transaction, a counter-spender or a counter-spender's descendant;
+  the conflicting transactions' own descendants are only checked for frozen
+  outputs): raising the setting no longer changes that verdict. The fresh-path change also reaches `ValidateSubtreeInternal`,
+  so `CheckSubtreeFromBlock` and live peer subtrees return a proven conflict as
+  `TX_INVALID` too. On the live path, `subtreeMessageHandler` now logs it at error
+  level ("error processing kafka message") where it logged a "Context canceled,
+  skipping" warning, so operators will see new error-level log lines for such
+  subtrees. Nothing to configure. (bsv-blockchain/teranode#2052)
+
+- **Conflict-check failures in subtree validation are no longer reported as
+  context cancellations.** Two follow-ups to the entry above, both in subtree
+  validation's conflict check:
+  - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
+    live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
+    walk limit, a frozen output, an input out of range and the fail-fast
+    missing-tx threshold are no longer wrapped as a context cancellation. Each is
+    still retried and never charged to a peer. What changes is how they show up:
+    on the live path `subtreeMessageHandler` logs them at error level ("error
+    processing kafka message") where it logged a "Context canceled, skipping"
+    warning, and a catch-up run that ends on the walk limit, a frozen output or an
+    out-of-range input records `local_processing_fault` instead of
+    `local_context_cancelled` as its last error type. A missing record, a
+    cancelled check, and a record the store could not decode keep the old
+    classification.
+  - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
+    the check's context is cancelled while it runs, as the cached path and
+    blessing a missing transaction already did. Before, it was retried.
+
+  Nothing to configure. (bsv-blockchain/teranode#2066)
+
 ### Not breaking, but worth knowing
+
+- **Peer subtrees announced during a catchup are validated afterwards instead of
+  lost.** While catching up, the subtree validator used to drop every
+  peer-announced subtree, so the next block arrived with all of them unvalidated
+  and had to read their transactions from the UTXO store. Up to
+  `subtreevalidation_skippedSubtreeBackfillMax` (default 4096, newest kept) of them
+  are now validated through the normal peer-subtree path once the node is RUNNING
+  again, using at most half of `subtreevalidation_peerSubtreeConcurrency`, so
+  expect a burst of peer subtree validation right after a catchup. Subtrees
+  announced while IDLE, or more than 30 minutes before their replay, are still
+  dropped. New metric:
+  `teranode_subtreevalidation_skipped_peer_subtrees_total{outcome}` (recorded,
+  evicted, expired, requeued, dropped, replayed, replay_failed). Set the key to `0` for the previous
+  behaviour. (#2055)
 
 - **Mining candidates no longer build on the old tip during a reorg.** While block
   assembly is in the `reorging`, `reconciling` or `resetting` state, it can still

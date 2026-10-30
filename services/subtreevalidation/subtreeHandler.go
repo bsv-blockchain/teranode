@@ -24,7 +24,9 @@ import (
 
 // subtreeMessageHandler returns a Kafka message handler for subtree validation.
 //
-// The handler skips processing when blockchain FSM is in CATCHINGBLOCKS state and classifies
+// While the blockchain FSM is not RUNNING the handler does not validate peer subtrees; those
+// announced while catching up are kept (see skippedSubtrees) and validated once the node is
+// RUNNING again. It classifies
 // errors to prevent infinite retry loops on unrecoverable failures.
 //
 // rather than blocking in this handler. This prevents session timeouts and improves resource usage.
@@ -33,6 +35,10 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 	g.SetLimit(int(math.Max(4, float64(runtime.NumCPU()))))
 
 	return func(msg *kafka.KafkaMessage) error {
+		// Taken before any wait, including for a slot in g: a subtree kept for replay is aged
+		// from its receipt.
+		receivedAt := time.Now()
+
 		if msg == nil {
 			u.logger.Errorf("[subtreeMessageHandler] received nil message")
 			prometheusSubtreeKafkaMalformed.WithLabelValues("nil_message").Inc()
@@ -59,10 +65,15 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 		}
 
 		// Peer subtrees are only validated when caught up. IDLE can follow an
-		// operator STOP mid-catchup, with a UTXO set far behind the tip.
+		// operator STOP mid-catchup, with a UTXO set far behind the tip. Those
+		// announced while catching up are kept and validated once the node is
+		// RUNNING again.
 		if *state != blockchain.FSMStateRUNNING {
+			u.recordSkippedSubtreeMessage(gCtx, *state, msg.Value)
 			return nil
 		}
+
+		u.replaySkippedSubtrees(gCtx)
 
 		// In BlocksOnly mode, skip processing peer-announced subtrees (only process subtrees from blocks)
 		if u.settings.SubtreeValidation.BlocksOnly {
@@ -93,7 +104,7 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 		// Run the subtree handler in a goroutine managed by errgroup.
 		// We validate subtrees on best effort basis - no retries needed.
 		g.Go(func() error {
-			err := u.subtreesHandler(gCtx, hash, baseURL, kafkaMsg.PeerId)
+			err := u.subtreesHandler(gCtx, receivedAt, hash, baseURL, kafkaMsg.PeerId)
 			if err == nil {
 				return nil
 			}
@@ -117,21 +128,19 @@ func (u *Server) subtreeMessageHandler(ctx context.Context) func(msg *kafka.Kafk
 	}
 }
 
-func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string, validationOptions ...validator.Option) error {
+// subtreesHandler validates a peer subtree received at receivedAt. A subtree kept for replay
+// because the node is catching up is aged from receivedAt.
+func (u *Server) subtreesHandler(ctx context.Context, receivedAt time.Time, hash *chainhash.Hash, baseURL *url.URL, peerID string, validationOptions ...validator.Option) error {
 	// Wait for a validation slot before taking the subtree's quorum lock:
 	// block validation (CheckBlockSubtrees) waits on that lock, so a subtree
 	// queued here while holding it would make a block wait for the queue. A
 	// subtree validated while this one was queued is then skipped by the lock
 	// check below.
-	waitStart := time.Now()
-
-	releaseAdmission, err := u.peerSubtreeAdmission.acquire(ctx, u.settings.SubtreeValidation.PeerSubtreeConcurrency)
+	releaseAdmission, err := u.admitPeerSubtree(ctx)
 	if err != nil {
 		return err
 	}
 	defer releaseAdmission()
-
-	prometheusPeerSubtreeAdmissionWait.Observe(time.Since(waitStart).Seconds())
 
 	// The FSM was checked when the message arrived; the node may have left
 	// RUNNING while this subtree was queued, and peer subtrees are only
@@ -142,9 +151,58 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 	}
 
 	if *state != blockchain.FSMStateRUNNING {
+		if u.recordSkippedSubtree(ctx, *state, skippedSubtree{hash: *hash, baseURL: baseURL, peerID: peerID, recordedAt: receivedAt}) {
+			prometheusSkippedSubtrees.WithLabelValues("recorded").Inc()
+		}
+
 		return nil
 	}
 
+	result, err := u.validateAdmittedPeerSubtree(ctx, hash, baseURL, peerID, validationOptions...)
+	if err != nil {
+		return err
+	}
+
+	if result != peerSubtreeStored {
+		return errors.NewSubtreeExistsError("[subtreesHandler] Subtree lock %s already exists", hash.String())
+	}
+
+	return nil
+}
+
+// admitPeerSubtree waits for a peer-subtree validation slot (subtreevalidation_peerSubtreeConcurrency)
+// and returns the function that frees it.
+func (u *Server) admitPeerSubtree(ctx context.Context) (func(), error) {
+	waitStart := time.Now()
+
+	release, err := u.peerSubtreeAdmission.acquire(ctx, u.settings.SubtreeValidation.PeerSubtreeConcurrency)
+	if err != nil {
+		return nil, err
+	}
+
+	prometheusPeerSubtreeAdmissionWait.Observe(time.Since(waitStart).Seconds())
+
+	return release, nil
+}
+
+// peerSubtreeResult is how validateAdmittedPeerSubtree ended without an error.
+type peerSubtreeResult int
+
+const (
+	// peerSubtreeStored: the subtree was validated and stored, or was stored meanwhile.
+	peerSubtreeStored peerSubtreeResult = iota
+
+	// peerSubtreeExists: the subtree was already stored, so nothing was done.
+	peerSubtreeExists
+
+	// peerSubtreeLocked: another validation holds the subtree's quorum lock and nothing is stored
+	// yet, so nothing was done. That validation may still fail.
+	peerSubtreeLocked
+)
+
+// validateAdmittedPeerSubtree validates a peer subtree that holds an admission slot, on a node
+// that is RUNNING.
+func (u *Server) validateAdmittedPeerSubtree(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string, validationOptions ...validator.Option) (peerSubtreeResult, error) {
 	// The span starts after the wait, so the handler histogram measures
 	// validation only; the wait has its own metric.
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "subtreesHandler",
@@ -158,22 +216,26 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 	// was queued must be in blockIds and the height it is validated for.
 	blockIDsMap := u.currentBlockIDsMap.Load()
 	if blockIDsMap == nil {
-		return errors.NewProcessingError("[subtreesHandler] failed to get block IDs map during subtree validation")
+		return 0, errors.NewProcessingError("[subtreesHandler] failed to get block IDs map during subtree validation")
 	}
 
 	bestBlockHeaderMeta := u.bestBlockHeaderMeta.Load()
 	if bestBlockHeaderMeta == nil {
-		return errors.NewProcessingError("[subtreesHandler] failed to get best block header meta during subtree validation")
+		return 0, errors.NewProcessingError("[subtreesHandler] failed to get best block header meta during subtree validation")
 	}
 
-	gotLock, _, releaseLockFunc, err := u.quorum.TryLockIfFileNotExists(ctx, hash, fileformat.FileTypeSubtree)
+	gotLock, exists, releaseLockFunc, err := u.quorum.TryLockIfFileNotExists(ctx, hash, fileformat.FileTypeSubtree)
 	if err != nil {
-		return errors.NewProcessingError("[subtreesHandler] error getting lock for Subtree %s", hash.String(), err)
+		return 0, errors.NewProcessingError("[subtreesHandler] error getting lock for Subtree %s", hash.String(), err)
 	}
 	defer releaseLockFunc()
 
 	if !gotLock {
-		return errors.NewSubtreeExistsError("[subtreesHandler] Subtree lock %s already exists", hash.String())
+		if exists {
+			return peerSubtreeExists, nil
+		}
+
+		return peerSubtreeLocked, nil
 	}
 
 	v := ValidateSubtree{
@@ -186,17 +248,12 @@ func (u *Server) subtreesHandler(ctx context.Context, hash *chainhash.Hash, base
 
 	// validate the subtree as if it is for the next block height
 	// this is because subtrees are always validated ahead of time before they are needed for a block
-	subtree, err := u.ValidateSubtreeInternal(ctx, v, bestBlockHeaderMeta.Height+1, *blockIDsMap, validationOptions...)
-	if err != nil {
-		return err
+	// A nil subtree with no error means the subtree already existed in the store - another
+	// goroutine completed the write between TryLockIfFileNotExists and the in-store existence
+	// check. Nothing to clean up, and it is stored either way.
+	if _, err = u.ValidateSubtreeInternal(ctx, v, bestBlockHeaderMeta.Height+1, *blockIDsMap, validationOptions...); err != nil {
+		return 0, err
 	}
 
-	if subtree == nil {
-		// ValidateSubtreeInternal returned (nil, nil) because the subtree already existed in the
-		// store - another goroutine completed the write between TryLockIfFileNotExists and the
-		// in-store existence check. Nothing to clean up.
-		return nil
-	}
-
-	return nil
+	return peerSubtreeStored, nil
 }

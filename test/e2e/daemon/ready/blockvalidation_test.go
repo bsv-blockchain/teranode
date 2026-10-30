@@ -7,6 +7,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/teranode/daemon"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/stretchr/testify/require"
@@ -269,4 +270,29 @@ func TestBlockValidationWithDuplicateTransaction(t *testing.T) {
 	require.Error(t, err)
 
 	t.Log("Block validation correctly handled duplicate transaction scenario")
+}
+
+// With the daemon's BlockValidation service disabled, td.BlockValidation is the
+// only BlockValidation on the stores, so it must still set blocks mined.
+func TestBlockValidationSetsMinedWithoutBlockValidationService(t *testing.T) {
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{
+		SettingsOverrideFunc: test.ComposeSettings(
+			test.SystemTestSettings(),
+			func(s *settings.Settings) {
+				s.BlockValidation.GRPCListenAddress = ""
+			},
+		),
+	})
+	defer td.Stop(t)
+
+	err := td.BlockchainClient.Run(td.Ctx, "test")
+	require.NoError(t, err, "failed to initialize blockchain")
+
+	genesis, err := td.BlockchainClient.GetBlockByHeight(td.Ctx, 0)
+	require.NoError(t, err)
+
+	_, block1 := td.CreateTestBlock(t, genesis, 1001)
+	require.NoError(t, td.BlockValidation.ValidateBlock(td.Ctx, block1, "legacy", true))
+
+	td.WaitForBlockBeingMined(t, block1)
 }

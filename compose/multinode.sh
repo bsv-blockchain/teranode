@@ -1,9 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This script uses associative arrays (`local -A`), which need bash >= 4.
+# macOS still ships bash 3.2 as /bin/bash, and there `local -A` fails in a way
+# `set -e` does NOT catch: the function aborts but the script exits 0, so
+# `up` silently starts nothing and reports success. Re-exec under a newer
+# bash when one is installed rather than leaving that trap in place.
+if ((BASH_VERSINFO[0] < 4)); then
+  for _newer_bash in /opt/homebrew/bin/bash /usr/local/bin/bash; do
+    if [[ -x "$_newer_bash" ]]; then
+      exec "$_newer_bash" "$0" "$@"
+    fi
+  done
+  echo "error: multinode.sh needs bash >= 4 (found ${BASH_VERSION})." >&2
+  echo "       Install one with 'brew install bash' - no need to change your login shell." >&2
+  exit 2
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GEN_DIR="$SCRIPT_DIR/generated"
+BLASTER_DATA_DIR="$REPO_ROOT/data/multinode-blaster"
 COMPOSE_FILE="$GEN_DIR/docker-compose-multinode.yml"
 
 # Chaos primitives run iptables/tc inside the target container's netns via a
@@ -16,6 +33,7 @@ Usage: compose/multinode.sh <command> [args]
 
 Commands:
   up <N> [--build] [-allinone=0|1] [--skip N:svc ...]
+         [--limits svc=cpus[:mem],...] [--retention production|aggressive|prod-scaling]
                            Generate and start an N-node network (3-10).
                            -allinone=1 (default): one container per node runs
                              all services in a single process.
@@ -31,6 +49,18 @@ Commands:
                              specific service. Bring it up later with
                              'chaos start N svc'. blockchain cannot be --skipped
                              because sibling services depend on it.
+                           --limits svc=cpus[:mem]: cap a service's CPU and
+                             memory (split mode only; comma-separated for
+                             several). Use it to put a service under
+                             deterministic pressure rather than relying on
+                             load alone, e.g. --limits blockassembly=2:8g.
+                           --retention aggressive|prod-scaling: aggressive
+                             shrinks the pruner retention
+                             windows (288/144/1440 -> 20/10/40) so pruning is
+                             observable within tens of blocks on a fresh
+                             regtest chain. Default 'production' inherits
+                             settings.conf unchanged. Values live in
+                             compose/cmd/gennodes/main.go (aggressiveRetention).
   build                    Build the teranode Docker image
   down                     Stop and remove all containers and volumes
   restart                  Restart all containers (picks up config changes)
@@ -104,6 +134,37 @@ assert_known_service() {
   fi
 }
 
+# clean_blaster_state removes the embedded coinbase's sqlite DB.
+#
+# This MUST happen whenever the chain is destroyed, and only then: 'up' keeps
+# the existing chain, so the DB stays valid across it. The coinbase records the
+# UTXOs it owns in that DB; pointed at a new chain it keeps trying to spend
+# outputs of transactions that chain has never seen, and every funding attempt
+# fails with TX_MISSING_PARENT on a transaction no node can produce. The
+# symptom is remote from the cause - the blaster reports 100% fund errors and
+# logs the reason only to an in-memory buffer headless mode never prints.
+#
+# The DB does not live where you would expect. The blaster stores it at
+# sqlite:///<snapshot dir>/coinbase.db, and teranode's sqlite store resolves
+# that by joining dataFolder with the path minus its leading slash, then
+# appending ".db". With the absolute snapshot path cmd_blast passes and
+# dataFolder pinned to $REPO_ROOT/data, the DB therefore lands at
+# $REPO_ROOT/data$BLASTER_DATA_DIR/coinbase.db.db - data/Users/... on macOS,
+# data/home/... on Linux. Remove exactly that tree, then any parents it leaves
+# empty, rather than anything else under the shared data/ directory.
+clean_blaster_state() {
+  local stale="$REPO_ROOT/data$BLASTER_DATA_DIR"
+  if [[ -d "$stale" ]]; then
+    rm -rf "$stale"
+    echo "cleaned stray coinbase DB: $stale"
+    local parent
+    parent="$(dirname "$stale")"
+    while [[ "$parent" != "$REPO_ROOT/data" ]] && rmdir "$parent" 2>/dev/null; do
+      parent="$(dirname "$parent")"
+    done
+  fi
+}
+
 compose() {
   docker compose -f "$COMPOSE_FILE" "$@"
 }
@@ -119,10 +180,26 @@ cmd_up() {
   local n=""
   local do_build=false
   local allinone=1
+  local limits=""
+  local retention="production"
   local -a skip_specs=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --build) do_build=true; shift ;;
+      --limits=*|-limits=*) limits="${1#*=}"; shift ;;
+      --limits|-limits)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --limits requires an argument (e.g. --limits blockassembly=2:8g)" >&2
+          exit 2
+        fi
+        limits="$2"; shift 2 ;;
+      --retention=*|-retention=*) retention="${1#*=}"; shift ;;
+      --retention|-retention)
+        if [[ $# -lt 2 ]]; then
+          echo "error: --retention requires an argument (production|aggressive|prod-scaling)" >&2
+          exit 2
+        fi
+        retention="$2"; shift 2 ;;
       -allinone=0|--allinone=0) allinone=0; shift ;;
       -allinone=1|--allinone=1) allinone=1; shift ;;
       -allinone=*|--allinone=*)
@@ -143,6 +220,33 @@ cmd_up() {
     echo "error: specify number of nodes, e.g. '$0 up 5'" >&2
     exit 2
   fi
+  # Validate --limits / --retention up front, before we spend time generating.
+  # gennodes re-validates both; these checks just fail faster and with a
+  # message that names the multinode.sh flag the user actually typed.
+  if [[ -n "$limits" ]]; then
+    if [[ "$allinone" -ne 0 ]]; then
+      echo "error: --limits requires -allinone=0; there's no per-service granularity in all-in-one mode" >&2
+      exit 2
+    fi
+    local entry svc_name
+    IFS=',' read -ra _limit_entries <<< "$limits"
+    for entry in "${_limit_entries[@]}"; do
+      if [[ ! "$entry" =~ ^([a-z0-9]+)=(([0-9]+(\.[0-9]+)?)(:[0-9]+[kmgKMG]?)?|:[0-9]+[kmgKMG]?)$ ]]; then
+        echo "error: --limits must be svc=cpus[:mem] or svc=:mem (e.g. blockassembly=2:8g), got '$entry'" >&2
+        exit 2
+      fi
+      svc_name="${BASH_REMATCH[1]}"
+      assert_known_service "$svc_name" "--limits"
+    done
+  fi
+  case "$retention" in
+    production|aggressive|prod-scaling) ;;
+    *)
+      echo "error: --retention must be production, aggressive or prod-scaling, got '$retention'" >&2
+      exit 2
+      ;;
+  esac
+
   # Validate --skip specs up front, before we spend time generating.
   # Service list must track buildSplitServices() in compose/cmd/gennodes/main.go.
   local -A skip_set=()
@@ -177,8 +281,9 @@ cmd_up() {
   fi
   local topology="all-in-one"
   [[ "$allinone" -eq 0 ]] && topology="split-per-service"
-  echo "generating $n-node stack (topology: $topology)..."
-  (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes -n "$n" -allinone="$allinone" -o compose/generated)
+  echo "generating $n-node stack (topology: $topology, retention: $retention${limits:+, limits: $limits})..."
+  (cd "$REPO_ROOT" && go run ./compose/cmd/gennodes \
+    -n "$n" -allinone="$allinone" -retention "$retention" -limits "$limits" -o compose/generated)
   if [[ "$do_build" == true ]]; then
     cmd_build
   fi
@@ -231,7 +336,8 @@ cmd_down() {
 
   # Wipe blaster local state so a subsequent 'blast' against a fresh chain
   # doesn't try to spend UTXOs that no longer exist.
-  local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
+  local blaster_data_dir="$BLASTER_DATA_DIR"
+  clean_blaster_state
   if [[ -d "$blaster_data_dir" ]]; then
     rm -rf "$blaster_data_dir"
     echo "cleaned blaster state: $blaster_data_dir"
@@ -856,7 +962,7 @@ cmd_blast() {
     prop_addrs+="localhost:${prop}"
   done
   local rpc_port=$((20000 + (first - 1) * 2000 + 1292))
-  local rpc_url="http://localhost:${rpc_port}"
+  local rpc_url_default="http://localhost:${rpc_port}"
 
   # Wait for each target node's RPC to answer before launching the blaster.
   # Without this, gRPC dials to propagation can race container startup and
@@ -908,7 +1014,7 @@ cmd_blast() {
   # Control where the blaster writes snapshot + embedded coinbase DB so that
   # 'multinode.sh down' can clean it up alongside the chain state. Only inject
   # our path if the user didn't pass one via '--'.
-  local blaster_data_dir="$REPO_ROOT/data/multinode-blaster"
+  local blaster_data_dir="$BLASTER_DATA_DIR"
   local user_snapshot=false
   for arg in ${passthrough[@]+"${passthrough[@]}"}; do
     case "$arg" in
@@ -927,7 +1033,7 @@ cmd_blast() {
   echo "blaster:     $blaster_bin"
   echo "nodes:       ${nodes[*]}"
   echo "propagation: $prop_addrs"
-  echo "rpc:         $rpc_url  (funding source for embedded coinbase)"
+  echo "rpc:         $rpc_url_default  (funding source for embedded coinbase)"
   if ! $user_snapshot; then
     echo "snapshot:    $snapshot_path  (wiped by '$0 down')"
     echo "logs:        $blaster_data_dir/blaster.log  (blaster writes service logs here in TUI mode)"
@@ -949,9 +1055,42 @@ cmd_blast() {
     trap 'if [[ -n "'"$miner_pid"'" ]]; then kill '"$miner_pid"' 2>/dev/null || true; wait '"$miner_pid"' 2>/dev/null || true; fi' EXIT INT TERM
   fi
 
+  # rpc_url / rpc_user / rpc_pass (gocore keys, resolved from the environment
+  # before any settings file) point the embedded coinbase's BLOCK MONITOR at
+  # the node. They are NOT the same thing as the --rpc-url flag below: that
+  # one is used for broadcasting funding transactions, while the monitor
+  # reads gocore's "rpc_url", whose default is http://localhost:8332.
+  #
+  # Without these the monitor silently talks to nothing, so the coinbase never
+  # learns which coinbase outputs it owns, its DB stays empty, and every
+  # funding attempt fails with "sql: no rows in result set" while the blaster
+  # reports 100% fund errors and sends zero transactions.
+  #
+  # Note the monitor only records blocks mined WHILE IT IS RUNNING, and a
+  # coinbase needs 100 confirmations before it is spendable. So a chain mined
+  # entirely before the blaster starts yields no funds: mine at least ~100
+  # blocks with the blaster up (e.g. --auto-mine) before expecting throughput.
+  export rpc_url="${rpc_url:-$rpc_url_default}"
+  export rpc_user="${rpc_user:-bitcoin}"
+  export rpc_pass="${rpc_pass:-bitcoin}"
+  # Newer blaster builds read coinbase_rpc_* instead; set both so either works.
+  export coinbase_rpc_url="${coinbase_rpc_url:-$rpc_url}"
+  export coinbase_rpc_user="${coinbase_rpc_user:-$rpc_user}"
+  export coinbase_rpc_pass="${coinbase_rpc_pass:-$rpc_pass}"
+  echo "monitor rpc: $rpc_url  (embedded coinbase block monitor)"
+  echo ""
+
+  # Pin the blaster's dataFolder (a gocore key; the environment wins over
+  # settings.conf) so the coinbase DB lands where clean_blaster_state looks
+  # for it whatever directory this script was invoked from. The blaster keeps
+  # the caller's working directory, so relative passthrough paths such as
+  # --mix-schedule still resolve as typed.
+  if ! $user_snapshot; then
+    export dataFolder="$REPO_ROOT/data"
+  fi
   "$blaster_bin" \
     --propagation-addr "$prop_addrs" \
-    --rpc-url "$rpc_url" \
+    --rpc-url "$rpc_url_default" \
     ${passthrough[@]+"${passthrough[@]}"}
 }
 

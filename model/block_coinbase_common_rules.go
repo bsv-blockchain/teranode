@@ -28,8 +28,10 @@ const (
 	maxPubKeysPerMultiSigBeforeGenesis = 20
 )
 
-// CoinbaseCommonRuleViolation applies bitcoin-sv's CheckTransactionCommon to a block's coinbase and
-// returns the bitcoin-sv reject reason of the first rule it breaks, or "" when it breaks none. The
+// TxCommonRuleViolation applies bitcoin-sv's CheckTransactionCommon to tx and returns the
+// bitcoin-sv reject reason of the first rule it breaks, or "" when it breaks none. The rules are the
+// same for every transaction; Valid and quick validation apply them to a block's coinbase, and
+// validator.CheckTransactionContextFree to a tx that cannot be fully validated yet. The
 // rules run in bitcoin-sv's order: non-empty inputs, non-empty outputs, the consensus size limit,
 // the per-output and total money range, and, before Genesis only, the sigop limit.
 //
@@ -41,19 +43,19 @@ const (
 // Genesis is enabled from params.GenesisActivationHeight onwards, the same boundary bitcoin-sv's
 // IsGenesisEnabled and the validator use.
 //
-// The caller must guarantee a non-nil coinbaseTx: Inputs and Outputs are read unconditionally.
+// The caller must guarantee a non-nil tx: Inputs and Outputs are read unconditionally.
 // Valid's step 4 and both quick-validation entry points nil-check before calling.
 //
 // Deliberately a reason rather than an error, for the same reason CoinbaseScriptSigLengthInBounds
 // is a predicate: the verdict depends on whether the body is bound to its header, which only the
 // caller knows. Valid turns a violation into bindErr's binding-aware verdict, and the
 // quick-validation path, which never calls Valid, applies its own.
-func CoinbaseCommonRuleViolation(coinbaseTx *bt.Tx, height uint32, params *chaincfg.Params) string {
-	if len(coinbaseTx.Inputs) == 0 {
+func TxCommonRuleViolation(tx *bt.Tx, height uint32, params *chaincfg.Params) string {
+	if len(tx.Inputs) == 0 {
 		return "bad-txns-vin-empty"
 	}
 
-	if len(coinbaseTx.Outputs) == 0 {
+	if len(tx.Outputs) == 0 {
 		return "bad-txns-vout-empty"
 	}
 
@@ -64,7 +66,7 @@ func CoinbaseCommonRuleViolation(coinbaseTx *bt.Tx, height uint32, params *chain
 		maxTxSize = maxTxSizeConsensusBeforeGenesis
 	}
 
-	if coinbaseTx.Size() > maxTxSize {
+	if tx.Size() > maxTxSize {
 		return "bad-txns-oversize"
 	}
 
@@ -73,7 +75,7 @@ func CoinbaseCommonRuleViolation(coinbaseTx *bt.Tx, height uint32, params *chain
 	// before it is rejected.
 	var totalOut uint64
 
-	for _, out := range coinbaseTx.Outputs {
+	for _, out := range tx.Outputs {
 		if out.Satoshis > math.MaxInt64 {
 			return "bad-txns-vout-negative"
 		}
@@ -94,13 +96,13 @@ func CoinbaseCommonRuleViolation(coinbaseTx *bt.Tx, height uint32, params *chain
 	if !genesisEnabled {
 		var sigOps uint64
 
-		for _, in := range coinbaseTx.Inputs {
+		for _, in := range tx.Inputs {
 			if in.UnlockingScript != nil {
 				sigOps += preGenesisSigOpCount(*in.UnlockingScript)
 			}
 		}
 
-		for _, out := range coinbaseTx.Outputs {
+		for _, out := range tx.Outputs {
 			if out.LockingScript != nil {
 				sigOps += preGenesisSigOpCount(*out.LockingScript)
 			}

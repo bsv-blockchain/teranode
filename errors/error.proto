@@ -63,6 +63,9 @@ enum ERR {
   TX_CONSENSUS=40;
   TX_CREATING=41;
   TX_UNLOCK_FAILED=42;
+  // Rejected because every input that failed to spend is already spent by a different tx
+  // or is an output of a conflicting tx. Only the validator sets it; a store never does.
+  TX_REJECTED_CONFLICTING=43;
   TX_ERROR=49;
   // Service errors 50-59
   SERVICE_UNAVAILABLE=50;

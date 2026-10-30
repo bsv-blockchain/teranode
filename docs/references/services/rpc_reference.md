@@ -888,7 +888,7 @@ Returns information for creating a new block.
 
 1. `parameters` (object, optional):
 
-   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response
+   - `provideCoinbaseTx` (boolean, optional, default=false): If true, includes the coinbase transaction in the response. This is the coinbase block assembly keeps on the candidate's job, paying the configured `miner_wallet_private_keys` addresses, and the one a solution without its own coinbase is mined with. The call fails if block assembly could not build one, for example because no miner wallet keys are configured
    - `verbosity` (numeric, optional, default=0): 0 for standard response, 1 to include subtree hashes
 
 **Returns:**
@@ -947,11 +947,13 @@ Submits a solved block to the network.
    {
        "id": "string",          // Mining candidate ID
        "nonce": number,         // Block nonce
-       "coinbase": "string",    // Coinbase transaction
+       "coinbase": "string",    // Coinbase transaction (optional, see below)
        "time": number,          // Block time
        "version": number        // Block version
    }
    ```
+
+   If `coinbase` is omitted, the block is mined with the coinbase block assembly kept on the candidate's job, the one `getminingcandidate` returns with `provideCoinbaseTx`, as in bitcoin-sv. The miner must then have hashed that coinbase. `version` goes into the block header only. Omitting `coinbase` fails if block assembly could not build one, for example because no miner wallet keys are configured.
 
 **Returns:**
 

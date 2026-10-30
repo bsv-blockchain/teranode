@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync"
 	"sync/atomic"
@@ -354,6 +355,39 @@ func TestCheckBlockSubtreesBatched_WritesThroughSpendAndCreateMulti(t *testing.T
 		inBlock, ok := spy.published[*tx.TxIDChainHash()]
 		require.True(t, ok, "txmeta must be published for created tx %d", i)
 		require.True(t, inBlock, "published as in-block, as the validator publishes block transactions")
+	}
+}
+
+// The batch path hands nothing to block assembly, so a short catchup from RUNNING that keeps
+// the hand-off on (issue 2067) takes the level path, and a request without the flag, as an
+// older block validation sends, still takes the batch path.
+func TestCheckBlockSubtreesBatched_KeptHandoffTakesLevelPath(t *testing.T) {
+	for _, keep := range []bool{false, true} {
+		t.Run(fmt.Sprintf("keep=%v", keep), func(t *testing.T) {
+			f := newBatchedFixture(t, blockchain.FSMStateCATCHINGBLOCKS)
+
+			roots := []*bt.Tx{storedRoot(t, f, 1, opTrue), storedRoot(t, f, 2, opTrue)}
+			txs := chainedTxs(t, roots, 3)
+			block := storeBlock(t, f, txs, false)
+
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			_, err = f.server.CheckBlockSubtrees(context.Background(), &subtreevalidation_api.CheckBlockSubtreesRequest{
+				Block:                    blockBytes,
+				BaseUrl:                  "legacy",
+				KeepBlockAssemblyHandoff: keep,
+			})
+			require.NoError(t, err)
+
+			if keep {
+				require.Zero(t, f.store.multiCalls.Load(), "a kept hand-off must take the level path")
+			} else {
+				require.Positive(t, f.store.multiCalls.Load(), "without the flag catch-up above the checkpoint takes the batch path")
+			}
+
+			requireCreatedUnmined(t, f, txs)
+		})
 	}
 }
 

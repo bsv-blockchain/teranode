@@ -48,6 +48,10 @@ var (
 	prometheusCatchupActive         prometheus.Gauge
 	prometheusCatchupPeerHealthGate *prometheus.CounterVec
 
+	// prometheusRecoveredPanics counts the panics that the four BV-STARTUP-007 recovers caught,
+	// by path. The block hash and the stack are in the PANIC log line.
+	prometheusRecoveredPanics *prometheus.CounterVec
+
 	// catch-up subtree-data prefetch budget metrics. Aggregate counters with no block-hash
 	// label, for the cardinality reason recorded below; the block hash is in the log line
 	// each of these accompanies.
@@ -391,6 +395,21 @@ func _initPrometheusMetrics() {
 		},
 		[]string{"reason"},
 	)
+
+	prometheusRecoveredPanics = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockvalidation",
+			Name:      "recovered_panics_total",
+			Help:      "Total number of panics recovered in block validation, by path: worker (priority-queue block worker), catchup (catchup consumer), kafka (Kafka block message handler), block_found (blockFoundCh worker), or one of three paths for goroutines that those start: catchup_fetch (catchup fetch and validate pipeline), block_validation (parallel work inside one block validation) or service (service start and startup sweeps). Each one is a bug in this node. The node continues to run, and the block hash and stack are in the PANIC log line.",
+		},
+		[]string{"path"},
+	)
+
+	for _, path := range []string{recoveredPanicPathWorker, recoveredPanicPathCatchup, recoveredPanicPathKafka, recoveredPanicPathBlockFound,
+		recoveredPanicPathCatchupFetch, recoveredPanicPathBlockValidation, recoveredPanicPathService} {
+		prometheusRecoveredPanics.WithLabelValues(path)
+	}
 
 	// Initialize priority queue metrics
 	prometheusBlockPriorityQueueSize = promauto.NewGaugeVec(

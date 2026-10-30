@@ -193,7 +193,7 @@ Teranode's transaction lifecycle differs significantly from traditional Bitcoin 
 
 The transaction lifecycle in Teranode represents a fundamental reimagining of how Bitcoin transactions are processed. By decomposing the traditional monolithic approach into specialized, scalable microservices, Teranode achieves the throughput necessary for global-scale Bitcoin adoption while maintaining the security and reliability expected from the Bitcoin network.
 
-This architecture enables Teranode to consistently process over 1 million transactions per second, making it suitable for enterprise and global payment use cases that require both high throughput and low latency.
+This architecture is designed to let Teranode process over 1 million transactions per second, making it suitable for enterprise and global payment use cases that require both high throughput and low latency.
 
 ## Other Resources
 

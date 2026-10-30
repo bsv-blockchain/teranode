@@ -163,9 +163,9 @@ func TestReportCatchupFailureForError_SkipsCorrupt(t *testing.T) {
 		require.Equal(t, 0, client.failures)
 	})
 
-	t.Run("generic processing error is still charged", func(t *testing.T) {
+	t.Run("generic peer error is still charged", func(t *testing.T) {
 		u, client := newServer()
-		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewProcessingError("something else failed"))
+		u.reportCatchupFailureForError(context.Background(), "peer-1", errors.NewNetworkInvalidResponseError("something else failed"))
 		require.Equal(t, 1, client.failures)
 	})
 

@@ -45,11 +45,10 @@ func TestUpdateTxMinedStatus(t *testing.T) {
 		tSettings.ChainCfgParams = &chaincfg.RegressionNetParams
 
 		tSettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: true,
-			MaxMinedBatchSize:   1024,
-			MaxMinedRoutines:    1,                // SQLite only supports one writer at a time
-			DBTimeout:           30 * time.Second, // Increase timeout for SQLite in-memory operations
+			SpendBatcherSize:  1,
+			MaxMinedBatchSize: 1024,
+			MaxMinedRoutines:  1,                // SQLite only supports one writer at a time
+			DBTimeout:         30 * time.Second, // Increase timeout for SQLite in-memory operations
 		}
 		setWorkerSettings(tSettings)
 
@@ -243,10 +242,9 @@ func TestUpdateTxMinedStatus_BlockIDCollisionDetection(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -402,10 +400,9 @@ func TestUpdateTxMinedStatus_ContextCancellation(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -448,10 +445,9 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 
 	testTx := newTx(100)
@@ -548,42 +544,6 @@ func TestUpdateTxMinedStatus_DuplicateDetection(t *testing.T) {
 	})
 }
 
-// TestUpdateTxMinedStatus_ConfigurationDisabled tests disabled configuration scenario
-func TestUpdateTxMinedStatus_ConfigurationDisabled(t *testing.T) {
-	ctx := context.Background()
-	logger := ulogger.NewErrorTestLogger(t)
-
-	testTx := newTx(100)
-	block := &Block{}
-	block.Height = 100
-	block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
-	block.SubtreeSlices = []*subtree.Subtree{
-		{
-			Nodes: []subtree.Node{
-				{Hash: *testTx.TxIDChainHash()},
-			},
-		},
-	}
-
-	// Create a fresh mock for this test to avoid interference from previous tests
-	freshMockStore := &utxo.MockUtxostore{}
-
-	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: false, // Disabled
-	}
-	setWorkerSettings(tSettings)
-
-	// Should not call SetMinedMulti when disabled
-	err := UpdateTxMinedStatus(ctx, logger, tSettings, freshMockStore, block, 15, []uint32{}, true, nil)
-
-	require.NoError(t, err)
-	// Allow some time for any async processing to complete
-	time.Sleep(10 * time.Millisecond)
-	freshMockStore.AssertNotCalled(t, "SetMinedMulti")
-}
-
 // TestUpdateTxMinedStatus_DifferentBatchSizes tests different batch size configurations
 func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 	ctx := context.Background()
@@ -594,10 +554,9 @@ func TestUpdateTxMinedStatus_DifferentBatchSizes(t *testing.T) {
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   1, // Very small batch size
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 1, // Very small batch size
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -640,10 +599,9 @@ func TestUpdateTxMinedStatus_CoinbasePlaceholderHandling(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -720,10 +678,9 @@ func TestUpdateTxMinedStatus_ConcurrentProcessing(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    3, // Allow concurrent processing
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  3, // Allow concurrent processing
 	}
 	setWorkerSettings(tSettings)
 
@@ -776,10 +733,9 @@ func TestUpdateTxMinedStatus_MissingSubtree(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -805,10 +761,9 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   2, // Small batch size for testing
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 2, // Small batch size for testing
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -887,35 +842,6 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		assert.Contains(t, err.Error(), "block contains a transaction already on our chain")
 
 		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("should skip processing when UpdateTxMinedStatus disabled", func(t *testing.T) {
-		mockStore := &utxo.MockUtxostore{}
-
-		disabledSettings := test.CreateBaseTestSettings(t)
-		disabledSettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: false, // Disabled
-		}
-
-		testTx := newTx(100)
-		block := &Block{}
-		block.Height = 100
-		block.Subtrees = []*chainhash.Hash{testTx.TxIDChainHash()}
-		block.SubtreeSlices = []*subtree.Subtree{
-			{
-				Nodes: []subtree.Node{
-					{Hash: *testTx.TxIDChainHash()},
-				},
-			},
-		}
-
-		chainBlockIDsMap := map[uint32]bool{}
-
-		err := updateTxMinedStatus(ctx, logger, disabledSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, false)
-
-		require.NoError(t, err)
-		mockStore.AssertNotCalled(t, "SetMinedMulti")
 	})
 
 	t.Run("should handle mixed block ID validation results", func(t *testing.T) {
@@ -1164,10 +1090,9 @@ func Test_updateTxMinedStatus_Internal(t *testing.T) {
 		// trigger.
 		freshSettings := test.CreateBaseTestSettings(t)
 		freshSettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: true,
-			MaxMinedBatchSize:   1,
-			MaxMinedRoutines:    1,
+			SpendBatcherSize:  1,
+			MaxMinedBatchSize: 1,
+			MaxMinedRoutines:  1,
 		}
 		setWorkerSettings(freshSettings)
 
@@ -1214,10 +1139,9 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	tSettings.UtxoStore = settings.UtxoStoreSettings{
-		SpendBatcherSize:    1,
-		UpdateTxMinedStatus: true,
-		MaxMinedBatchSize:   10,
-		MaxMinedRoutines:    1,
+		SpendBatcherSize:  1,
+		MaxMinedBatchSize: 10,
+		MaxMinedRoutines:  1,
 	}
 	setWorkerSettings(tSettings)
 
@@ -1275,10 +1199,9 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		// Create large batch size settings
 		largeBatchSettings := test.CreateBaseTestSettings(t)
 		largeBatchSettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: true,
-			MaxMinedBatchSize:   1000, // Very large batch
-			MaxMinedRoutines:    1,
+			SpendBatcherSize:  1,
+			MaxMinedBatchSize: 1000, // Very large batch
+			MaxMinedRoutines:  1,
 		}
 
 		// Create subtree with many transactions
@@ -1314,10 +1237,9 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		boundarySettings := test.CreateBaseTestSettings(t)
 		boundarySettings.UtxoStore = settings.UtxoStoreSettings{
-			SpendBatcherSize:    1,
-			UpdateTxMinedStatus: true,
-			MaxMinedBatchSize:   3, // Exact boundary testing
-			MaxMinedRoutines:    1,
+			SpendBatcherSize:  1,
+			MaxMinedBatchSize: 3, // Exact boundary testing
+			MaxMinedRoutines:  1,
 		}
 
 		// Create exactly 3 transactions (should fit in one batch exactly)
@@ -1393,7 +1315,7 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("should not return error for invalid blocks when SetMinedMulti errors occur", func(t *testing.T) {
+	t.Run("should return error for invalid blocks when SetMinedMulti errors occur", func(t *testing.T) {
 		mockStore := &utxo.MockUtxostore{}
 
 		testTx := newTx(100)
@@ -1416,11 +1338,12 @@ func Test_updateTxMinedStatus_EdgeCases(t *testing.T) {
 
 		chainBlockIDsMap := map[uint32]bool{}
 
-		// Call with unsetMined=true (invalid block) - errors should be logged but not returned
+		// Call with unsetMined=true (invalid block). A swallowed error here let the caller
+		// set mined_set with the revert incomplete, so the block was never revisited (GAP-BV-057).
 		err := updateTxMinedStatus(ctx, logger, tSettings, mockStore, block, 15, chainBlockIDsMap, true, nil, true)
 
-		// Should NOT return error for invalid blocks - errors are logged only
-		require.NoError(t, err)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "failed to set mined status for 1 batches")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -1477,7 +1400,6 @@ func (l *warnCaptureLogger) warned() []string {
 func TestUpdateTxMinedStatus_BlockIDsStayOutOfTheVerdict(t *testing.T) {
 	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore.UpdateTxMinedStatus = true
 	setWorkerSettings(tSettings)
 
 	minedBlock := func(tx *bt.Tx) *Block {
@@ -1567,7 +1489,6 @@ func TestUpdateTxMinedStatus_SlowPathDetection(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
-	tSettings.UtxoStore.UpdateTxMinedStatus = true
 	setWorkerSettings(tSettings)
 
 	t.Run("should detect collision via slow-path when block ID is not in chainBlockIDsMap", func(t *testing.T) {

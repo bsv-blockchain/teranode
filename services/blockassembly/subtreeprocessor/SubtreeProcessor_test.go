@@ -1192,7 +1192,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		// Process remainder - since all transactions are already in currentTxMap,
 		// and transactionMap is empty (none are in the block), all should be processed
 		// but due to duplicate detection, they won't be re-added
-		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, currentTxMap, false)
+		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, nil, currentTxMap, false)
 		require.NoError(t, err)
 
 		// Count all transactions in the result
@@ -1265,7 +1265,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		// Process remainder - transactions in transactionMap won't be added
 		// But since they're already in currentTxMap from before, and processRemainderTxHashes
 		// uses addNode which has duplicate detection, none will be re-added
-		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, currentTxMap, false)
+		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, nil, currentTxMap, false)
 		if err != nil {
 			t.Fatalf("processRemainderTxHashes returned error: %v", err)
 		}
@@ -1378,7 +1378,7 @@ func testOrderPreservation(t *testing.T, subtreeProcessor *SubtreeProcessor, num
 	}
 
 	// Process remainder - all tx should come back in order
-	err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, sourceTxMap, false)
+	err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, nil, sourceTxMap, false)
 	require.NoError(t, err)
 
 	// Collect all remainder nodes from chainedSubtrees and currentSubtree

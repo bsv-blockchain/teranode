@@ -13,10 +13,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// heavyTestsEnv enables the SortedHashSet cases that take minutes under -race and
-// coverage. `make test` leaves it unset to stay inside its 10m timeout; `make
-// test-heavy` sets it and runs them without -race, in the PR test job. A new test
-// gated on it must also match the `test-heavy` -run pattern, or it runs nowhere.
+// heavyTestsEnv enables the SortedHashSet cases, and the package's large-queue
+// and throughput tests, that take minutes under -race and coverage. `make test`
+// leaves it unset to stay inside its 10m timeout; `make test-heavy` sets it and
+// runs them without -race, in the PR test job. A new test gated on it must also
+// match the `test-heavy` -run pattern, or it runs nowhere.
 const heavyTestsEnv = "TERANODE_HEAVY_TESTS"
 
 func heavyTests() bool {

@@ -315,9 +315,33 @@ func TestMarkConflictingRecursively_SetConflictingError(t *testing.T) {
 
 	// Assertions
 	assert.Nil(t, result)
-	assert.Nil(t, markedHashes)
+	assert.Equal(t, []chainhash.Hash{txHash}, markedHashes, "the failed write may have flipped the input, so it is reported")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "set conflicting error")
+	mockStore.AssertExpectations(t)
+}
+
+// TestMarkConflictingRecursively_LaterLevelErrorReturnsFlipped pins that a failure
+// below the first level still reports every hash the call may have flipped: the
+// levels already written plus the level whose write failed. Callers evict these
+// from subtree validation's txmeta cache, and a retry may never re-flip them.
+func TestMarkConflictingRecursively_LaterLevelErrorReturnsFlipped(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &MockUtxostore{}
+
+	parentHash := createTestHash("partial-parent")
+	childHash := createTestHash("partial-child")
+
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{parentHash}, true).
+		Return([]*Spend{{TxID: &parentHash, Vout: 0}}, []chainhash.Hash{childHash}, nil)
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{childHash}, true).
+		Return([]*Spend(nil), []chainhash.Hash(nil), errors.NewStorageError("child write failed"))
+
+	result, markedHashes, err := MarkConflictingRecursively(ctx, mockStore, []chainhash.Hash{parentHash})
+
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Equal(t, []chainhash.Hash{parentHash, childHash}, markedHashes)
 	mockStore.AssertExpectations(t)
 }
 

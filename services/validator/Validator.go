@@ -268,7 +268,10 @@ type Validator struct {
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
 	// policyRejectedTxKafkaProducerClient publishes consensus-valid transactions that were
-	// rejected by local policy (ErrTxPolicy). This is a separate topic from
+	// rejected by local policy (ErrTxPolicy). A policy script failure whose consensus
+	// re-run timed out, found no free slot or reached the policy stack memory cap is
+	// published unconfirmed (see classifyPolicyScriptError), so consumers must validate
+	// what they take from it, as subtree validation does. This is a separate topic from
 	// rejectedTxKafkaProducerClient for two reasons:
 	//   1. Different message schema: this topic carries the full raw tx bytes
 	//      (KafkaTxPolicyRejectedTopicMessage.RawTx) so that consumers can reconstruct
@@ -784,14 +787,48 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 			}
 		}
 
-		// Publish consensus-valid but policy-rejected transactions so subtree validation
+		// Publish policy-rejected transactions so subtree validation
 		// pods can cache the raw tx bytes and avoid HTTP roundtrips to other miners.
 		if errors.Is(err, errors.ErrTxPolicy) {
 			v.publishPolicyRejectedTx(ctx, ctxLogger, tx, err)
 		}
+
+		// Publish a transaction rejected as conflicting on the same topic, flagged, so
+		// subtree validation can keep it aside when a peer subtree contains it, instead
+		// of writing it to the UTXO store before a block with proof of work references
+		// it. txMetaData is set when the block path stored it as conflicting; skip those.
+		// A tx with another input that failed for a different reason is not conflicting. The
+		// stores emit TX_CONFLICTING per input, so only the validator's own verdict counts.
+		if txMetaData == nil && errors.Is(err, errors.ErrTxRejectedConflicting) {
+			v.publishRejectedTx(ctx, ctxLogger, tx, err, true)
+		}
 	}
 
 	return txMetaData, err
+}
+
+// spendConflicts reports whether a spend failed only because its output is already spent
+// by a different tx, or is an output of a tx stored as conflicting. It reads the spend's
+// own code: the stores join the failed spends' errors into the first one's chain, so
+// errors.Is on one spend's error also matches the inputs after it.
+func spendConflicts(err error) bool {
+	var spendErr *errors.Error
+	if !errors.As(err, &spendErr) {
+		return false
+	}
+
+	return spendErr.Code() == errors.ERR_UTXO_SPENT || spendErr.Code() == errors.ERR_TX_CONFLICTING
+}
+
+// spendsImmatureCoinbase reports whether a spend failed because its output is a coinbase output not
+// yet mature at the spending height. Like spendConflicts, it reads the spend's own top-level code.
+func spendsImmatureCoinbase(err error) bool {
+	var spendErr *errors.Error
+	if !errors.As(err, &spendErr) {
+		return false
+	}
+
+	return spendErr.Code() == errors.ERR_TX_COINBASE_IMMATURE
 }
 
 // publishPolicyRejectedTx publishes the raw bytes of a policy-rejected transaction to
@@ -799,6 +836,13 @@ func (v *Validator) ValidateWithOptions(ctx context.Context, tx *bt.Tx, blockHei
 // to populate a local cache, avoiding expensive HTTP fetches when a subtree from another
 // miner contains transactions our node rejected on policy grounds.
 func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogger.Logger, tx *bt.Tx, validationErr error) {
+	v.publishRejectedTx(ctx, ctxLogger, tx, validationErr, false)
+}
+
+// publishRejectedTx publishes a rejected transaction's raw bytes on the policy-rejected
+// topic. conflicting marks a transaction rejected because an input is already spent by
+// a different transaction, rather than one rejected on policy.
+func (v *Validator) publishRejectedTx(ctx context.Context, ctxLogger ulogger.Logger, tx *bt.Tx, validationErr error, conflicting bool) {
 	if v.policyRejectedTxKafkaProducerClient == nil {
 		return
 	}
@@ -833,9 +877,10 @@ func (v *Validator) publishPolicyRejectedTx(ctx context.Context, ctxLogger ulogg
 	txHash := tx.TxIDChainHash()
 
 	m := &kafkamessage.KafkaTxPolicyRejectedTopicMessage{
-		TxHash: txHash.CloneBytes(),
-		RawTx:  tx.SerializeBytes(),
-		Reason: validationErr.Error(),
+		TxHash:      txHash.CloneBytes(),
+		RawTx:       tx.SerializeBytes(),
+		Reason:      validationErr.Error(),
+		Conflicting: conflicting,
 	}
 
 	value, marshalErr := proto.Marshal(m)
@@ -1086,23 +1131,75 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		if errors.Is(err, errors.ErrUtxoError) {
-			saveAsConflicting := false
-
 			// Collect failed spends and attach a capped aggregate to the
 			// returned error. The failure count scales with the tx's input
 			// count; an uncapped chain makes every subsequent errors.Is on it
 			// walk the full chain (mainnet IBD stall, block 820116).
 			failedSpends := make([]error, 0, 8)
 
+			// the capped aggregate cannot tell a double spend from a tx that also spends a
+			// frozen or mismatched output, so it is decided here over every failed spend
+			everyFailedSpendConflicts := true
+
+			// a spend of a coinbase output no block at this height may make
+			var immatureSpend error
+
 			for _, spend := range spentUtxos {
 				if spend.Err != nil {
-					if validationOptions.CreateConflicting && (errors.Is(spend.Err, errors.ErrSpent) || errors.Is(spend.Err, errors.ErrTxConflicting)) {
-						saveAsConflicting = true
+					if !spendConflicts(spend.Err) {
+						everyFailedSpendConflicts = false
+					}
+
+					if immatureSpend == nil && spendsImmatureCoinbase(spend.Err) {
+						immatureSpend = spend.Err
 					}
 
 					failedSpends = append(failedSpends, spend.Err)
 				}
 			}
+
+			// a block's verdict, as below: not below a checkpoint, where the block is valid by definition
+			blockVerdict := validationOptions.CreateConflicting && !validationOptions.SkipScriptValidation && !validationOptions.OutpointOnlySpend
+
+			// A store may answer a spent output UTXO_SPENT without checking its maturity: the SQL
+			// store checks maturity only on an unspent output. Another candidate may have spent it
+			// at a height where it was mature, so a double spend is checked for maturity here,
+			// whatever else failed.
+			if blockVerdict && immatureSpend == nil {
+				read := make(map[chainhash.Hash]struct{})
+
+				for _, spend := range spentUtxos {
+					if spend.Err == nil || spend.TxID == nil || !spendConflicts(spend.Err) {
+						continue
+					}
+
+					if _, ok := read[*spend.TxID]; ok {
+						continue
+					}
+
+					read[*spend.TxID] = struct{}{}
+
+					parent, readErr := readInputParent(decoupledCtx, v.utxoStore, spend.TxID)
+					if readErr != nil {
+						err = errors.NewProcessingError("[Validate][%s] failed to read parent %s of a spent output", txID, spend.TxID.String(), readErr)
+						span.RecordError(err)
+
+						return nil, err
+					}
+
+					if immatureErr := immatureCoinbase(parent, blockHeight, v.settings); immatureErr != nil {
+						immatureSpend = errors.NewTxCoinbaseImmatureError("[Validate][%s] %s:%d", txID, spend.TxID.String(), spend.Vout, immatureErr)
+						everyFailedSpendConflicts = false
+
+						break
+					}
+				}
+			}
+
+			// A block's tx is created as conflicting only when it is a double spend and nothing
+			// else: any other failed spend (an immature coinbase, a frozen or mismatched output)
+			// makes it invalid, and creating it as conflicting would drop that failure.
+			saveAsConflicting := validationOptions.CreateConflicting && len(failedSpends) > 0 && everyFailedSpendConflicts
 
 			if len(failedSpends) > 0 {
 				if errors.As(err, &tErr) {
@@ -1136,7 +1233,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 						// NOTE: cascaded descendants may still be in the subtree processor's in-memory template
 						// until the next reset/reload — this path has no subtreeProcessor handle to evict them.
 						if !txMetaData.Conflicting {
-							if _, _, setErr := utxo.MarkConflictingRecursively(decoupledCtx, v.utxoStore, []chainhash.Hash{*tx.TxIDChainHash()}); setErr != nil {
+							_, marked, setErr := utxo.MarkConflictingRecursively(decoupledCtx, v.utxoStore, []chainhash.Hash{*tx.TxIDChainHash()})
+
+							// subtree validation's txmeta cache holds these as non-conflicting.
+							// Evict on failure too: the tx is conflicting in the store by then,
+							// so a revalidation skips this branch and never evicts it.
+							v.sendTxMetaDeletesToKafka(marked)
+
+							if setErr != nil {
 								err = errors.NewProcessingError("[Validate][%s] failed to mark existing tx as conflicting", txID, setErr)
 								span.RecordError(err)
 
@@ -1162,6 +1266,24 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 				span.RecordError(err)
 
 				return txMetaData, err
+			}
+
+			// A double spend and nothing else: marked conflicting, so subtree validation can
+			// keep it aside without mistaking a tx with an invalid input for one.
+			if len(failedSpends) > 0 && everyFailedSpendConflicts {
+				err = errors.NewTxRejectedConflictingError("[Validate][%s] every failed spend conflicts with a spent output", txID, err)
+			}
+
+			// In a block, blockHeight is the block's own height, so an immature coinbase spend
+			// makes the tx, and with it the block, invalid. Outside a block the coinbase may yet
+			// mature. Below a checkpoint the block is valid by definition, and a failure is ours
+			// to retry. A frozen output is not a verdict: freezes and reassignment holds are this
+			// node's state, set at the height it applied the alert, and another node may differ.
+			if immatureSpend != nil && blockVerdict {
+				err = errors.NewTxInvalidError("[Validate][%s] spends a coinbase output not yet mature at height %d: %v", txID, blockHeight, immatureSpend, err)
+				span.RecordError(err)
+
+				return nil, err
 			}
 		} else if errors.Is(err, errors.ErrTxNotFound) {
 			// PHASE ASSUMPTION: this branch (and the ErrUtxoError branch above) assumes the
@@ -1847,6 +1969,30 @@ func (v *Validator) sendTxMetaToKafka(data *meta.Data, txHash *chainhash.Hash) e
 	return nil
 }
 
+// sendTxMetaDeletesToKafka publishes txmeta DELETEs so subtree validation evicts
+// cached entries for txs this validator has just marked conflicting. A no-op when
+// the txmeta topic is not configured.
+func (v *Validator) sendTxMetaDeletesToKafka(hashes []chainhash.Hash) {
+	if v.txmetaKafkaProducerClient == nil || len(hashes) == 0 {
+		return
+	}
+
+	items := make([]*txmetaBatchItem, len(hashes))
+	for i := range hashes {
+		items[i] = &txmetaBatchItem{hash: &hashes[i], isDelete: true}
+	}
+
+	if v.txmetaKafkaBatcher != nil {
+		for _, item := range items {
+			v.txmetaKafkaBatcher.Put(item)
+		}
+
+		return
+	}
+
+	v.sendTxMetaBatch(items)
+}
+
 // sendTxMetaBatch serializes and publishes a batch of TxMeta items to Kafka.
 //
 // The Kafka message key is set to the first item's tx hash. With franz-go's default
@@ -1864,17 +2010,78 @@ func (v *Validator) sendTxMetaBatch(batch []*txmetaBatchItem) {
 		return
 	}
 
-	if v.settings.Validator.TxMetaWireFormat == "v2" {
-		v.sendTxMetaBatchV2(batch)
-		return
+	// A batch has no size limit of its own (validator_txmeta_kafka_batchSize, or
+	// a whole demotion cascade), so it goes out as records of bounded size. In
+	// v1 every record of the batch keeps the batch's key, and so its partition.
+	key := *batch[0].hash // copied: the producer reads the key after this returns
+
+	for _, chunk := range splitTxMetaBatch(batch) {
+		if v.settings.Validator.TxMetaWireFormat == "v2" {
+			v.sendTxMetaBatchV2(chunk)
+
+			continue
+		}
+
+		v.txmetaKafkaProducerClient.Publish(&kafka.Message{
+			Key:   key[:],
+			Value: serializeTxMetaBatch(chunk),
+		})
+	}
+}
+
+// maxTxMetaRecordBytes bounds one txmeta record, leaving headroom under Kafka's
+// default 1 MiB message limit.
+const maxTxMetaRecordBytes = 768 * 1024
+
+// splitTxMetaBatch cuts batch into consecutive chunks whose serialised size, in
+// either wire format, stays under maxTxMetaRecordBytes (an item larger than that
+// goes alone), and none of which is txmetacache.V2LookalikeCount items long:
+// that v1 count encodes as the v2 header signature, and a receiver can read
+// such a record as v2 and drop every entry in it.
+func splitTxMetaBatch(batch []*txmetaBatchItem) [][]*txmetaBatchItem {
+	var chunks [][]*txmetaBatchItem
+
+	start, size := 0, txmetacache.WireV2HeaderLen
+
+	for i := 0; i < len(batch); i++ {
+		entry := txMetaEntrySize(batch[i])
+
+		if i > start && size+entry > maxTxMetaRecordBytes {
+			end := i
+			if end-start == txmetacache.V2LookalikeCount {
+				end-- // the item moved out starts the next chunk
+			}
+
+			chunks = append(chunks, batch[start:end])
+			start, size = end, txmetacache.WireV2HeaderLen
+
+			// Size the next chunk again from its first item, so an item carried
+			// out by the 767 adjustment is checked against the cap like any other.
+			i = end - 1
+
+			continue
+		}
+
+		size += entry
 	}
 
-	value := serializeTxMetaBatch(batch)
+	switch rest := batch[start:]; {
+	case len(rest) == txmetacache.V2LookalikeCount:
+		chunks = append(chunks, rest[:len(rest)-1], rest[len(rest)-1:])
+	case len(rest) > 0:
+		chunks = append(chunks, rest)
+	}
 
-	v.txmetaKafkaProducerClient.Publish(&kafka.Message{
-		Key:   batch[0].hash[:],
-		Value: value,
-	})
+	return chunks
+}
+
+// txMetaEntrySize is item's size on the v2 wire, the larger of the two formats.
+func txMetaEntrySize(item *txmetaBatchItem) int {
+	if item.isDelete {
+		return txmetacache.WireV2MinEntrySize
+	}
+
+	return txmetacache.WireV2MinEntrySize + len(item.metaBytes)
 }
 
 // serializeTxMetaBatch serializes a batch of TxMeta items to raw bytes.

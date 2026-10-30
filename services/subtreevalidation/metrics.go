@@ -38,6 +38,13 @@ var (
 	// in storage, which is a common optimization operation.
 	prometheusSubtreeValidationCheckSubtree prometheus.Histogram
 
+	// prometheusSubtreeValidationCachedConflictProbes counts transactions whose
+	// conflicting flag was read from the UTXO store while blessing a block's
+	// already-cached subtrees. This is the cost the cached path took on to stop
+	// depending on the ConflictingNodes trailer (issue #1742), and it scales with
+	// transactions per block, so it is worth being able to see rather than infer.
+	prometheusSubtreeValidationCachedConflictProbes prometheus.Counter
+
 	// prometheusSubtreeValidationValidateSubtree tracks the duration of complete subtree validation operations.
 	// This is the primary metric for monitoring the core validation functionality,
 	// measuring end-to-end validation time including all sub-operations.
@@ -90,6 +97,11 @@ var (
 	// the per-level retry in unlockAcceptedTransactions did manage to unlock.
 	prometheusSubtreeValidationBlessUnlockRecovered prometheus.Counter
 
+	// prometheusSubtreeValidationConflictingKeptAside counts txs of peer subtrees kept aside
+	// because they conflict with txs this node accepted, until a block references them. It
+	// counts per validation pass: a subtree validated again after an interrupted pass counts again.
+	prometheusSubtreeValidationConflictingKeptAside prometheus.Counter
+
 	// prometheusSubtreeValidationBlessUnlockRetryFailedBatches counts unlock retry calls that
 	// returned an error. SetLocked reports the first error without per-record results, so the
 	// unit is one call, not one transaction: on a failed call some or all of its hashes stay
@@ -134,6 +146,13 @@ var (
 	// a metric a spike in the rate would be invisible.
 	prometheusSubtreeAlreadyExistsSkipped prometheus.Counter
 
+	// prometheusSkippedSubtrees counts peer subtrees announced while the node was catching up, by
+	// outcome: recorded (newly kept), evicted (oldest dropped when full), expired (announced more
+	// than skippedSubtreeMaxAge before its replay), requeued (kept again because the node was
+	// catching up again), dropped (the node was IDLE at replay), replayed (validated or already
+	// stored), replay_failed.
+	prometheusSkippedSubtrees *prometheus.CounterVec
+
 	// prometheusPeerSubtreeAdmissionWait tracks how long a peer subtree waited for a
 	// subtreevalidation_peerSubtreeConcurrency slot, and prometheusPeerSubtreeAdmissionWaiting
 	// how many are waiting now. Together they show whether the limit is too low.
@@ -167,6 +186,15 @@ func _initPrometheusMetrics() {
 			Name:      "check_subtree",
 			Help:      "Duration of calls to checkSubtree endpoint",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationCachedConflictProbes = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "cached_subtree_conflict_probes_total",
+			Help:      "Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing",
 		},
 	)
 
@@ -277,6 +305,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusSubtreeValidationConflictingKeptAside = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "conflicting_kept_aside",
+			Help:      "Transactions of peer subtrees kept aside because they conflict with accepted transactions, until a block references them, counted per validation pass",
+		},
+	)
+
 	prometheusSubtreeValidationBlessUnlockRetryFailedBatches = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -341,6 +378,16 @@ func _initPrometheusMetrics() {
 			Name:      "subtree_already_exists_skipped_total",
 			Help:      "Number of subtree Kafka messages skipped because the subtree already exists",
 		},
+	)
+
+	prometheusSkippedSubtrees = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "skipped_peer_subtrees_total",
+			Help:      "Peer subtrees announced while the node was catching up, by outcome (recorded, evicted, expired, requeued, dropped, replayed, replay_failed)",
+		},
+		[]string{"outcome"},
 	)
 
 	prometheusPeerSubtreeAdmissionWait = promauto.NewHistogram(

@@ -13,7 +13,8 @@
 //  1. First checks the response cache using a derived cache key for boolean existence results
 //  2. If not found in cache, executes a minimal SQL query that only checks existence without
 //     retrieving full block data
-//  3. Caches the boolean existence result to optimize future queries for the same block
+//  3. Caches a "found" result to optimize future queries for the same block; "not found" is
+//     never cached, since the cache is only cleared after a block's commit
 //
 // This approach significantly reduces database load and improves response times for this
 // frequently called operation. The response cache is automatically invalidated whenever blocks
@@ -44,7 +45,9 @@ import (
 //     - If a boolean result was previously cached, return it immediately
 //  2. If not found in cache (cache miss), executes an optimized SQL query
 //     that only checks for existence without retrieving block data
-//  3. Caches the boolean result (true or false) to optimize future queries for the same block
+//  3. Caches a true result to optimize future queries for the same block. A false result is
+//     not cached: StoreBlock clears the cache only after its commit, so a cached false could be
+//     served for a block that is already stored
 //
 // The SQL query is carefully designed to be as lightweight as possible, only checking
 // for the presence of a block hash in the blocks table without retrieving any columns.
@@ -92,8 +95,9 @@ func (s *SQL) GetBlockExists(ctx context.Context, blockHash *chainhash.Hash) (bo
 		&height,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// Cache the non-existence result
-			cacheOp.Set(false, s.cacheTTL)
+			// Not cached: StoreBlock clears the response cache only after its commit, so a
+			// cached "not found" could still be served for a block already stored, and block
+			// validation sends a child whose parent reads as missing to catchup.
 			return false, nil
 		}
 

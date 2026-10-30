@@ -175,6 +175,7 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockvalidation_last_validated_blocks_cache` | Gauge     | Number of blocks in the last validated blocks cache               |
 | `teranode_blockvalidation_block_exists_cache`          | Gauge     | Number of blocks in the block exists cache                        |
 | `teranode_blockvalidation_subtree_exists_cache`        | Gauge     | Number of subtrees in the subtree exists cache                    |
+| `teranode_blockvalidation_recovered_panics_total`      | CounterVec | Panics recovered in block validation, by `path` label: `worker`, `catchup`, `kafka` or `block_found`, or for an errgroup goroutine those start, `catchup_fetch`, `block_validation` or `service`. Each one is a bug in the node. The stack, and on most paths the block hash, are in the `PANIC` log line |
 
 ### Catchup Operation Metrics
 
@@ -345,6 +346,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_bless_missing_transaction`      | Histogram | Duration of bless missing transaction             |
 | `teranode_subtreevalidation_bless_unlock_failed`            | Counter   | Accepted transactions blessed although their two-phase-commit unlock failed |
 | `teranode_subtreevalidation_bless_unlock_recovered`         | Counter   | Subset of `bless_unlock_failed` that the per-level unlock retry made spendable |
+| `teranode_subtreevalidation_conflicting_kept_aside`         | Counter   | Transactions of peer subtrees kept aside because they conflict with accepted transactions, until a block references them, counted per validation pass |
 | `teranode_subtreevalidation_bless_unlock_retry_failed_batches` | Counter | Unlock retry calls that returned an error; counted per call, not per transaction, because the store reports no per-record result |
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_batch`  | Histogram | Duration of one SetCacheMulti batch from a Kafka txmeta message (per Kafka message, not per entry) |
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_count`  | Counter   | Number of ADD entries processed from Kafka (per-entry; mirrors the pre-batching histogram count)   |
@@ -352,6 +354,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_errors` | Counter   | Number of errors setting tx meta cache from kafka |
 | `teranode_subtreevalidation_kafka_malformed_messages_total` | Counter   | Malformed Kafka subtree messages dropped, labelled by `reason` (`nil_message`, `too_short`, `unmarshal_failure`, `bad_hash`, `bad_url`) |
 | `teranode_subtreevalidation_subtree_already_exists_skipped_total` | Counter | Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead |
+| `teranode_subtreevalidation_cached_subtree_conflict_probes_total` | Counter | Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing. Scales with transactions per block |
 | `teranode_subtreevalidation_peer_subtree_admission_wait` | Histogram | Seconds a peer subtree waited for a `subtreevalidation_peerSubtreeConcurrency` slot |
 | `teranode_subtreevalidation_peer_subtree_admission_waiting` | Gauge | Peer subtrees waiting for a `subtreevalidation_peerSubtreeConcurrency` slot |
 
@@ -412,6 +415,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_tx_meta_cache_current_gen_entries`  | Gauge | Number of entries in the current generation of the tx meta cache |
 | `teranode_tx_meta_cache_previous_gen_entries` | Gauge | Number of valid entries from the previous generation in the tx meta cache |
 | `teranode_tx_meta_cache_lane_waits`           | Gauge | Number of times a `lockfree` cache writer found every lane busy; should stay 0 |
+| `teranode_tx_meta_cache_tombstoned_writes_evicted_total` | Counter | Writes of a tx demoted to conflicting that were dropped, or evicted right after landing when the demotion arrived during the write: a txmeta ADD consumed after the demotion's DELETE (they travel on different partitions), or a read-through write whose store read raced the demotion. Non-zero means the race happened and was absorbed |
 
 ## Aerospike Service Metrics
 
@@ -473,5 +477,7 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_subtreeprocessor_remove_tx`                    | Histogram | Duration of removing tx in subtree processor                      |
 | `teranode_subtreeprocessor_reset`                        | Histogram | Duration of resetting subtree processor                           |
 | `teranode_subtreeprocessor_dynamic_subtree_size`         | Gauge     | Size of the dynamic subtree in the subtree processor              |
+| `teranode_subtreeprocessor_blockmaxsize_resizes`         | Counter   | Number of times the queued subtrees were re-chunked because the first one exceeded `blockmaxsize`. A resize lasts for one block, so a count that rises every block means the queue is rebuilt and stored again each block |
 | `teranode_subtreeprocessor_current_state`                | Gauge     | Current state of the subtree processor                           |
 | `teranode_subtreeprocessor_oversize_batch_admitted_total` | Counter  | Number of client batches that exceeded the normalized `blockassembly_maxQueueItems` and were admitted alone onto an empty queue, so the ceiling is transiently exceeded by one batch rather than that client wedging forever. **Any** non-zero value means a client's batch size is above this pod's normalized cap and the cross-pod sizing guidance in the `blockassembly_maxQueueItems` longdesc has not been applied |
+| `teranode_subtreeprocessor_txmeta_delete_dropped_total` | Counter | Txmeta cache DELETEs for txs demoted to conflicting that block assembly dropped because the txmeta producer buffer was full or stopped. Each one can leave subtree validation caching that tx as non-conflicting until the cache rotates it out, so alert on any increase |

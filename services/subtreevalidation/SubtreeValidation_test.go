@@ -1075,8 +1075,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		// Call the checkCounterConflictingOnCurrentChain method
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		// Run the check blessMissingTransaction runs
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.NoError(t, err)
 	})
 
@@ -1115,8 +1115,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		_, _, err = s.utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithConflicting(true), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		// Run the check blessMissingTransaction runs, should be OK since tx1DoubleSpend has not been mined
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.NoError(t, err)
 
 		// set the tx1DoubleSpend to mined
@@ -1129,8 +1129,8 @@ func Test_checkCounterConflictingOnCurrentChain(t *testing.T) {
 		require.Len(t, blockIDsMap, 1)
 		require.Equal(t, []uint32{122}, blockIDsMap[*tx1DoubleSpend.TxIDChainHash()])
 
-		// Call the checkCounterConflictingOnCurrentChain method, should be OK since tx1DoubleSpend has not been mined
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{
+		// Run the check blessMissingTransaction runs, should fail now that tx1DoubleSpend is mined
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{
 			122: true,
 		})
 		require.Error(t, err, "should be an error since tx1DoubleSpend has been mined")
@@ -1161,7 +1161,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			blockchainClient: blockchainClient,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, []utxo.UnresolvedMetaData{}, []chainhash.Hash{}, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, []utxo.UnresolvedMetaData{}, []chainhash.Hash{}, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 0, "should be no missing txs since all txs are in the subtree")
@@ -1194,7 +1194,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			httpmock.NewBytesResponder(200, append(tx1.ExtendedBytes(), tx2.ExtendedBytes()...)),
 		)
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, []chainhash.Hash{}, "http://localhost:8000", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, []chainhash.Hash{}, "http://localhost:8000", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 2, "should be 2 missing txs since all txs are in the subtree")
@@ -1244,7 +1244,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash4,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *subtree.RootHash(), subtree, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 2, "should be 2 missing txs since all txs are in the subtree")
@@ -1295,7 +1295,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 1, "should be 1 missing txs since all txs are in the subtree")
@@ -1345,7 +1345,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.Error(t, err, "should be an error since txs are in the wrong order")
 	})
 
@@ -1391,7 +1391,7 @@ func Test_getSubtreeMissingTxs(t *testing.T) {
 			*hash3,
 		}
 
-		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(t.Context(), *coinbaseSubtree.RootHash(), coinbaseSubtree, unresolved, allTxs, "test", "", true)
 		require.Error(t, err, "should be an error since we are missing a tx")
 	})
 }
@@ -1461,7 +1461,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 			})
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 3, "should be 3 missing txs since all txs are in the subtree")
@@ -1532,7 +1532,7 @@ func Test_getSubtreeMissingTxs_testnet(t *testing.T) {
 			})
 		}
 
-		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "")
+		missingTxs, err := s.getSubtreeMissingTxs(t.Context(), subtreeHash, nil, unresolved, allTxs, "test", "", true)
 		require.NoError(t, err, "should be no error since all txs are in the subtree")
 
 		require.Len(t, missingTxs, 1024, "should be 1024 missing txs since all txs are in the subtree")
@@ -1615,7 +1615,7 @@ func Test_getSubtreeMissingTxs_InvalidSubtreeData(t *testing.T) {
 
 		// The function should not panic even when NewSubtreeDataFromReader fails for the first URL
 		// It should continue to the next URL
-		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "", true)
 
 		// The test passes if there's no panic
 		// Since we're testing error handling, we expect either success (if second URL works)
@@ -1669,7 +1669,7 @@ func Test_getSubtreeMissingTxs_InvalidSubtreeData(t *testing.T) {
 		}
 
 		// This should not panic, even though all URLs return invalid data
-		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "")
+		_, err = s.getSubtreeMissingTxs(context.Background(), *subtreeHash, subtree, unresolved, allTxs, "test", "", true)
 
 		// We expect an error since no valid data could be retrieved
 		// The important thing is that it doesn't panic

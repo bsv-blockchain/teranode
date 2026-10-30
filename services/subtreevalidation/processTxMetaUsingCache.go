@@ -72,7 +72,7 @@ func (p *probePool) leave() {
 // the txmeta cache. See probeTxMetaCache; peer subtrees share one pool of
 // probe workers.
 func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem, failFast bool) (int, error) {
-	return u.probeTxMetaCache(ctx, &u.peerProbePool, txHashes, txMetaSlice, failFast)
+	return u.probeTxMetaCache(ctx, &u.peerProbePool, txHashes, txMetaSlice, failFast, 0)
 }
 
 // processBlockTxMetaUsingCache is processTxMetaUsingCache for block validation's
@@ -81,7 +81,7 @@ func (u *Server) processTxMetaUsingCache(ctx context.Context, txHashes []chainha
 // size, so a burst of peer subtrees cannot delay a block, while the total number
 // of probe workers stays bounded.
 func (u *Server) processBlockTxMetaUsingCache(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem) (int, error) {
-	return u.probeTxMetaCache(ctx, &u.blockProbePool, txHashes, txMetaSlice, false)
+	return u.probeTxMetaCache(ctx, &u.blockProbePool, txHashes, txMetaSlice, false, 0)
 }
 
 // probeTxMetaCache attempts to retrieve transaction metadata from the cache for a batch
@@ -110,7 +110,10 @@ func (u *Server) processBlockTxMetaUsingCache(ctx context.Context, txHashes []ch
 //
 // The function will return a ThresholdExceededError if failFast is true and
 // the number of missing transactions exceeds the configured threshold.
-func (u *Server) probeTxMetaCache(ctx context.Context, pool *probePool, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem, failFast bool) (int, error) {
+//
+// missAllowance raises the fail-fast miss threshold by misses already explained, such as
+// txs the validator rejected as conflicting, which will never be in the cache.
+func (u *Server) probeTxMetaCache(ctx context.Context, pool *probePool, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem, failFast bool, missAllowance uint32) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewProcessingError("txHashes and txMetaSlice must be the same length")
 	}
@@ -125,6 +128,9 @@ func (u *Server) probeTxMetaCache(ctx context.Context, pool *probePool, txHashes
 	}
 
 	missingTxThreshold := uint32(u.settings.SubtreeValidation.ProcessTxMetaUsingCacheMissingTxThreshold) // nolint: gosec // G115: configured threshold is non-negative
+	if missingTxThreshold > 0 {
+		missingTxThreshold += missAllowance
+	}
 
 	var (
 		missed atomic.Uint32

@@ -126,7 +126,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			DataCarrier:         getBool("datacarrier", false, alternativeContext...),
 			PermitBareMultisig:  getBool("permitbaremultisig", true, alternativeContext...),
 			// MaxStdTxValidationDuration:    getInt("maxstdtxvalidationduration", 3, alternativeContext...),       // 3ms
-			// MaxNonStdTxValidationDuration: getInt("maxnonstdtxvalidationduration", 1000, alternativeContext...), // 1000ms
+			MaxNonStdTxValidationDuration: getInt("maxnonstdtxvalidationduration", 1000, alternativeContext...), // 1000ms
 			// MaxTxChainValidationBudget:    getInt("maxtxchainvalidationbudget", 50, alternativeContext...),      // 50ms
 			// ValidationClockCPU:              getBool("validationclockcpu", false, alternativeContext...),
 			MinConsolidationFactor:          getInt("minconsolidationfactor", 20, alternativeContext...),
@@ -199,9 +199,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 		Alert: AlertSettings{
 			GenesisKeys:              getMultiString("alert_genesis_keys", "|", []string{}, alternativeContext...),
 			P2PPrivateKey:            getString("alert_p2p_private_key", "", alternativeContext...),
-			ProtocolID:               getString("alert_protocol_id", "/bitcoin/alert-system/1.0.0", alternativeContext...),
+			ProtocolID:               getString("alert_protocol_id", "", alternativeContext...),
 			StoreURL:                 getURL("alert_store", "sqlite:///alert", alternativeContext...),
-			TopicName:                getString("alert_topic_name", "bitcoin_alert_system", alternativeContext...),
+			TopicName:                getString("alert_topic_name", "", alternativeContext...),
 			P2PPort:                  getPort("ALERT_P2P_PORT", 9908, alternativeContext...),
 			P2PBootstrapPeer:         getString("alert_p2p_bootstrap_peer", "", alternativeContext...),
 			P2PAllowPrivateIPs:       getBool("alert_p2p_allow_private_ips", false, alternativeContext...),
@@ -473,9 +473,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SubtreeBatchPrefetchDepth:    getInt("blockvalidation_subtree_batch_prefetch_depth", 2, alternativeContext...),
 			SubtreeBatchWriteConcurrency: getInt("blockvalidation_subtree_batch_write_concurrency", 64, alternativeContext...),
 			// Dynamic peer switching and parallel fetching
-			CatchupMinThroughputKBps:    getInt("blockvalidation_catchup_min_throughput_kbps", 100, alternativeContext...),
-			CatchupParallelFetchEnabled: getBool("blockvalidation_catchup_parallel_fetch_enabled", true, alternativeContext...),
-			CatchupParallelFetchWorkers: getInt("blockvalidation_catchup_parallel_fetch_workers", 3, alternativeContext...),
+			CatchupMinThroughputKBps:          getInt("blockvalidation_catchup_min_throughput_kbps", 100, alternativeContext...),
+			CatchupParallelFetchEnabled:       getBool("blockvalidation_catchup_parallel_fetch_enabled", true, alternativeContext...),
+			CatchupParallelFetchWorkers:       getInt("blockvalidation_catchup_parallel_fetch_workers", 3, alternativeContext...),
+			CatchupKeepBlockAssemblyMaxBlocks: getInt("blockvalidation_catchup_keep_block_assembly_max_blocks", 6, alternativeContext...),
 		},
 		Validator: ValidatorSettings{
 			GRPCAddress:                          getString("validator_grpcAddress", "localhost:8081", alternativeContext...),
@@ -493,6 +494,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			HTTPRateLimit:                        getInt("validator_httpRateLimit", 1024, alternativeContext...),
 			HTTPBodyLimit:                        getString("validator_httpBodyLimit", "100MB", alternativeContext...),
 			KafkaMaxMessageBytes:                 getInt("validator_kafka_maxMessageBytes", 1024*1024, alternativeContext...), // Default 1MB
+			ConsensusRerunSlots:                  getInt("validator_consensusRerunSlots", 1, alternativeContext...),
 			UseLocalValidator:                    getBool("useLocalValidator", false, alternativeContext...),
 			TxMetaKafkaBatchSize:                 getInt("validator_txmeta_kafka_batchSize", 1024, alternativeContext...),
 			TxMetaKafkaBatchTimeoutMs:            getInt("validator_txmeta_kafka_batchTimeoutMs", 5, alternativeContext...),
@@ -559,7 +561,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ExternalStoreConcurrency:                getInt("utxostore_externalStoreConcurrency", 16, alternativeContext...),
 			PostgresPool:                            getPostgresPoolSettings("utxostore", alternativeContext...),
 			VerboseDebug:                            getBool("utxostore_verbose_debug", false, alternativeContext...),
-			UpdateTxMinedStatus:                     getBool("utxostore_updateTxMinedStatus", true, alternativeContext...),
 			MaxMinedRoutines:                        getInt("utxostore_maxMinedRoutines", 128, alternativeContext...),
 			MaxMinedBatchSize:                       getInt("utxostore_maxMinedBatchSize", 1024, alternativeContext...),
 			BlockHeightRetentionAdjustment:          getInt32("utxostore_blockHeightRetentionAdjustment", 0, alternativeContext...),
@@ -702,7 +703,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipProcessExpiredPreservations: getBool("pruner_skipProcessExpiredPreservations", false, alternativeContext...),      // Skip Phase 1b: expire old parent preservations
 			SkipDeletions:                   getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
 			MinBlockHeight:                  getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
-			UTXOPrunedSetMaxEntries:         getInt("pruner_utxoPrunedSetMaxEntries", 10_000_000, alternativeContext...),          // Soft cap on PrunedTxSet entries; 0 = use built-in 2B default (NOT unlimited)
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second, alternativeContext...),
@@ -713,6 +713,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCListenAddress:                         getString("subtreevalidation_grpcListenAddress", ":8089", alternativeContext...),
 			ProcessTxMetaUsingCacheConcurrency:        getInt("subtreevalidation_processTxMetaUsingCache_Concurrency", 32, alternativeContext...),
 			PeerSubtreeConcurrency:                    getInt("subtreevalidation_peerSubtreeConcurrency", 32, alternativeContext...),
+			SkippedSubtreeBackfillMax:                 getInt("subtreevalidation_skippedSubtreeBackfillMax", 4096, alternativeContext...),
 			ProcessTxMetaUsingCacheMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingCache_MissingTxThreshold", 1, alternativeContext...),
 			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
@@ -735,7 +736,9 @@ func NewSettings(alternativeContext ...string) *Settings {
 			BlocksOnly:                                getBool("subtreevalidation_blocks_only", false, alternativeContext...),
 			TxPolicyRejectedCacheEnabled:              getBool("subtreevalidation_txPolicyRejectedCacheEnabled", true, alternativeContext...),
 			TxPolicyRejectedCacheMaxMB:                getInt("subtreevalidation_txPolicyRejectedCacheMaxMB", 64, alternativeContext...),
+			KeptAsideMaxBytesPerSubtree:               getInt("subtreevalidation_keptAsideMaxBytesPerSubtree", 16*1024*1024, alternativeContext...),
 			CheckBlockSubtreesTimeout:                 getDuration("subtreevalidation_check_block_subtrees_timeout", 30*time.Minute, alternativeContext...),
+			TxMetaTombstoneWindow:                     getDuration("subtreevalidation_txMetaTombstoneWindow", 30*time.Minute, alternativeContext...),
 			MaxIncomingSubtreeBytes:                   int64(getInt("subtreevalidation_max_incoming_subtree_bytes", 128*1024*1024, alternativeContext...)),
 		},
 		// Adaptive subtreeData fetch gate. Defaults here mirror the struct

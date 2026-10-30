@@ -40,11 +40,11 @@
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |
 | ExternalStoreConcurrency | int | 16 | utxostore_externalStoreConcurrency | Maximum concurrent external storage operations |
 | VerboseDebug | bool | false | utxostore_verbose_debug | Verbose debug logging |
-| UpdateTxMinedStatus | bool | true | utxostore_updateTxMinedStatus | Transaction mined status updates |
 | MaxMinedRoutines | int | 128 | utxostore_maxMinedRoutines | Max mined transaction routines |
 | MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
 | BlockHeightRetentionAdjustment | int32 | 0 | utxostore_blockHeightRetentionAdjustment | **CRITICAL** - Retention adjustment |
 | DisableDAHCleaner | bool | false | utxostore_disableDAHCleaner | **CRITICAL** - DAH cleaner process control |
+| ConflictingChildrenMaxNodes | int | 100000 | utxostore_conflictingChildrenMaxNodes | Fail-closed node budget per root of a conflicting-descendant walk (<=0 = unlimited). Subtree validation walks a block's conflicting transactions as one batch from N roots (the transactions and their counter-spenders) and allows N × this budget: the old aggregate bound of N separate walks. Worst case, the visited set reaches N × this budget entries, and a single runaway cone fails after N × this budget reads rather than this budget. A walk that stops on the budget still rejects the block with `TX_INVALID` if it already reached a counter-conflicting transaction (a conflicting transaction, a counter-spender or a counter-spender's descendant) mined on the candidate chain; the conflicting transactions' own descendants are only checked for frozen outputs. Otherwise the block fails with `UTXO_WALK_LIMIT_EXCEEDED` and is retried |
 
 ### PostgreSQL Connection Pool (PostgresPool)
 

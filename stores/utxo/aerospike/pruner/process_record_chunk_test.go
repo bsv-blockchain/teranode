@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -89,12 +88,11 @@ func newTestService(t *testing.T) *Service {
 	}
 }
 
-// TestProcessRecordChunk_NilPrunedSetIsNoOp verifies that the nil prunedSet
-// production always passes (the cuckoo skip is disabled, see #1701) causes no
-// skipped-pruned increments. The chunk is crafted with zero inputs so no
-// parent updates accumulate and the flushCleanupBatches deletion path stays
-// gated by SkipDeletions.
-func TestProcessRecordChunk_NilPrunedSetIsNoOp(t *testing.T) {
+// TestProcessRecordChunk_RecordWithoutInputs verifies a record with no inputs
+// (e.g. coinbase) is processed without a parent update. The chunk is crafted
+// with zero inputs so no parent updates accumulate and the flushCleanupBatches
+// deletion path stays gated by SkipDeletions.
+func TestProcessRecordChunk_RecordWithoutInputs(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
 
@@ -121,13 +119,8 @@ func TestProcessRecordChunk_NilPrunedSetIsNoOp(t *testing.T) {
 		},
 	}
 
-	before := testutil.ToFloat64(prometheusUtxoParentsSkippedPruned)
-
-	processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunk, nil)
+	processed, skipped, err := svc.processRecordChunk(ctx, 1000, chunk)
 	require.NoError(t, err)
 	require.Equal(t, 1, processed)
 	require.Equal(t, 0, skipped)
-
-	after := testutil.ToFloat64(prometheusUtxoParentsSkippedPruned)
-	require.Equal(t, float64(0), after-before)
 }

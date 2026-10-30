@@ -6,6 +6,7 @@ package subtreevalidation
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -110,7 +111,8 @@ type Server struct {
 	txmetaConsumerClient kafka.KafkaConsumerGroupI
 
 	// policyRejectedTxConsumerClient consumes policy-rejected transaction messages.
-	// These are consensus-valid transactions that our validator rejected on policy grounds.
+	// These are transactions our validator rejected on policy grounds, usually but not
+	// always consensus-valid, so they are validated in full when used.
 	// Raw tx bytes are cached locally so subtree validation can avoid HTTP fetches.
 	policyRejectedTxConsumerClient kafka.KafkaConsumerGroupI
 
@@ -118,8 +120,17 @@ type Server struct {
 	// keyed by tx hash. Checked before requesting missing txs from other miners.
 	policyRejectedTxCache *txPolicyRejectedCache
 
+	// keptAsideTxCache holds descendants of conflicting txs kept aside by subtree validation.
+	// They are only context-free checked, so they have their own byte budget and cannot
+	// evict the txs the validators rejected.
+	keptAsideTxCache *txPolicyRejectedCache
+
 	// invalidSubtreeKafkaProducer publishes invalid subtree events to Kafka
 	invalidSubtreeKafkaProducer kafka.KafkaAsyncProducerI
+
+	// conflictingTxKafkaProducer publishes kept-aside descendants of conflicting txs on the
+	// policy-rejected topic, so every subtree validator learns them
+	conflictingTxKafkaProducer kafka.KafkaAsyncProducerI
 
 	// invalidSubtreeLock is used to synchronize access to the invalid subtree producer
 	invalidSubtreeLock sync.Mutex
@@ -156,6 +167,18 @@ type Server struct {
 	// peerSubtreeAdmission bounds how many peer subtrees are validated at
 	// once; see subtreesHandler.
 	peerSubtreeAdmission admissionGate
+
+	// skippedSubtrees keeps peer subtrees announced while the node was catching up, for
+	// validation once it is RUNNING again.
+	skippedSubtrees skippedSubtrees
+
+	// replaySubtreeFn replaces the validation of a replayed subtree, after its admission, age and
+	// RUNNING checks; nil in production.
+	replaySubtreeFn func(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string) error
+
+	// watcherReplayCalledFn is called by a RUNNING watcher after its replay call returns; nil in
+	// production.
+	watcherReplayCalledFn func()
 }
 
 // New creates a new Server instance with the provided dependencies.
@@ -280,7 +303,8 @@ func New(
 
 		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, bucketType)
 		if err != nil {
-			logger.Errorf("Failed to create tx meta cache: %v", err)
+			// carrying on would leave the service with a nil store
+			return nil, errors.NewServiceError("failed to create tx meta cache", err)
 		}
 	} else {
 		u.utxoStore = utxoStore
@@ -292,6 +316,7 @@ func New(
 			maxMB = 64
 		}
 		u.policyRejectedTxCache = newTxPolicyRejectedCache(maxMB * 1024 * 1024)
+		u.keptAsideTxCache = newTxPolicyRejectedCache(maxMB * 1024 * 1024)
 		logger.Infof("Policy-rejected tx cache enabled (max %d MB)", maxMB)
 	}
 
@@ -309,6 +334,18 @@ func New(
 		}
 	} else {
 		logger.Infof("No Kafka topic configured for invalid subtrees")
+	}
+
+	// Kept-aside descendants of conflicting txs go on the topic the validators publish their
+	// conflicting rejections on, so a subtree validator that sees their children knows them.
+	if tSettings.Kafka.TxPolicyRejectedConfig != nil {
+		conflictingTxKafkaProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, tSettings.Kafka.TxPolicyRejectedConfig, &tSettings.Kafka)
+		if err != nil {
+			logger.Errorf("Failed to create Kafka producer for kept-aside conflicting txs: %v", err)
+		} else {
+			u.conflictingTxKafkaProducer = conflictingTxKafkaProducer
+			u.conflictingTxKafkaProducer.Start(ctx, make(chan *kafka.Message, 1_000))
+		}
 	}
 
 	// get and set the initial best block
@@ -401,6 +438,9 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 							}
 							ctxLogger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to update best block: %s", err)
 						}
+
+						// A block can arrive before any peer subtree message after a catchup.
+						u.replaySkippedSubtreesIfRunning(ctx)
 					}
 				}
 			}
@@ -656,6 +696,7 @@ func (u *Server) Stop(ctx context.Context) error {
 	// flush can't block past the bounded Stop() window — the outstanding Stop()
 	// finishes the flush later if it can.
 	kafka.StopProducerCtx(ctx, u.logger, "subtreevalidation invalid-subtree", u.invalidSubtreeKafkaProducer)
+	kafka.StopProducerCtx(ctx, u.logger, "subtreevalidation conflicting-tx", u.conflictingTxKafkaProducer)
 
 	if u.policyRejectedTxConsumerClient != nil {
 		if err := u.policyRejectedTxConsumerClient.Close(); err != nil {

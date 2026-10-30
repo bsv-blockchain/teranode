@@ -98,7 +98,7 @@ func TestProcessRemainderTxHashes_BoundedFanOut(t *testing.T) {
 		}
 	}()
 
-	require.NoError(t, stp.processRemainderTxHashes(context.Background(), chained, transactionMap, nil, stp.currentTxMap, true))
+	require.NoError(t, stp.processRemainderTxHashes(context.Background(), chained, transactionMap, nil, nil, stp.currentTxMap, true))
 
 	stop.Store(true)
 	<-done

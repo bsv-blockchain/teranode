@@ -23,7 +23,7 @@ Every Teranode file that uses this package begins with an **8-byte magic header*
 
 The `FileType` enum defines supported file types, including:
 
-- `utxo-additions`, `utxo-deletions`, `utxo-headers`, `utxo-set`, `block`, `subtree`, `subtreeToCheck`, `subtreeData`, `subtreeMeta`, `tx`, `outputs`, `bloomfilter`, `dat`, `msgBlock`, `testing`, `batch-data`, `batch-keys`
+- `utxo-additions`, `utxo-deletions`, `utxo-headers`, `utxo-set`, `block`, `subtree`, `subtreeToCheck`, `subtreeData`, `subtreeMeta`, `subtreeConflicting`, `tx`, `outputs`, `bloomfilter`, `dat`, `msgBlock`, `testing`, `batch-data`, `batch-keys`
 
 Each file type has a unique 8-byte magic header for identification.
 

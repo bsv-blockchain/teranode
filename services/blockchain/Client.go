@@ -2085,6 +2085,12 @@ func (c *Client) CatchUpBlocks(ctx context.Context) error {
 
 // ReportPeerFailure reports a peer download failure to the blockchain service.
 func (c *Client) ReportPeerFailure(ctx context.Context, hash *chainhash.Hash, peerID string, failureType string, reason string) error {
+	// A failure can be about a message whose hash did not parse. The peer is still
+	// reported; the notification must carry a 32-byte hash, so send the zero hash.
+	if hash == nil {
+		hash = &chainhash.Hash{}
+	}
+
 	req := &blockchain_api.ReportPeerFailureRequest{
 		Hash:        hash[:],
 		PeerId:      peerID,

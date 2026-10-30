@@ -99,6 +99,8 @@ func BenchmarkDiskTxMap_ExistenceOnly(b *testing.B) {
 // TestDiskTxMap_ThroughputTarget verifies >1M ops/sec for SetIfNotExists.
 // Pre-computes hashes to measure map performance, not SHA256 throughput.
 func TestDiskTxMap_ThroughputTarget(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	const (
 		numGoroutines = 16
 		opsPerWorker  = 100_000
@@ -161,6 +163,8 @@ func TestDiskTxMap_ThroughputTarget(t *testing.T) {
 
 // TestDiskTxMap_MultiDiskThroughput tests with multiple Badger disk shards.
 func TestDiskTxMap_MultiDiskThroughput(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	const (
 		numGoroutines = 16
 		opsPerWorker  = 100_000
@@ -230,6 +234,8 @@ func TestDiskTxMap_MultiDiskThroughput(t *testing.T) {
 // shard lock + filter + map layer (no serialization, no Badger).
 // This is what determines the dedup ceiling.
 func TestDiskTxMap_ExistenceLayerThroughput(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	const (
 		numGoroutines = 16
 		opsPerWorker  = 500_000

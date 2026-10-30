@@ -139,9 +139,9 @@ func TestBlock_Valid_CoinbaseCommonRules(t *testing.T) {
 	})
 }
 
-// TestCoinbaseCommonRuleViolation pins each rule of bitcoin-sv's CheckTransactionCommon as applied
+// TestTxCommonRuleViolation pins each rule of bitcoin-sv's CheckTransactionCommon as applied
 // to a coinbase, in bitcoin-sv's order, with bitcoin-sv's reason strings and boundaries.
-func TestCoinbaseCommonRuleViolation(t *testing.T) {
+func TestTxCommonRuleViolation(t *testing.T) {
 	params := test.CreateBaseTestSettings(t).ChainCfgParams
 
 	coinbase := func(t *testing.T) *bt.Tx {
@@ -161,22 +161,22 @@ func TestCoinbaseCommonRuleViolation(t *testing.T) {
 	}
 
 	t.Run("a well-formed coinbase passes before and after Genesis", func(t *testing.T) {
-		require.Empty(t, CoinbaseCommonRuleViolation(coinbase(t), preGenesisHeight, params))
-		require.Empty(t, CoinbaseCommonRuleViolation(coinbase(t), unboundBodyHeight, params))
+		require.Empty(t, TxCommonRuleViolation(coinbase(t), preGenesisHeight, params))
+		require.Empty(t, TxCommonRuleViolation(coinbase(t), unboundBodyHeight, params))
 	})
 
 	t.Run("no inputs", func(t *testing.T) {
 		tx := coinbase(t)
 		tx.Inputs = nil
 
-		require.Equal(t, "bad-txns-vin-empty", CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params))
+		require.Equal(t, "bad-txns-vin-empty", TxCommonRuleViolation(tx, unboundBodyHeight, params))
 	})
 
 	t.Run("no outputs", func(t *testing.T) {
 		tx := coinbase(t)
 		tx.Outputs = nil
 
-		require.Equal(t, "bad-txns-vout-empty", CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params))
+		require.Equal(t, "bad-txns-vout-empty", TxCommonRuleViolation(tx, unboundBodyHeight, params))
 	})
 
 	t.Run("empty inputs are reported before empty outputs", func(t *testing.T) {
@@ -184,7 +184,7 @@ func TestCoinbaseCommonRuleViolation(t *testing.T) {
 		tx.Inputs = nil
 		tx.Outputs = nil
 
-		require.Equal(t, "bad-txns-vin-empty", CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params))
+		require.Equal(t, "bad-txns-vin-empty", TxCommonRuleViolation(tx, unboundBodyHeight, params))
 	})
 
 	t.Run("pre-Genesis size limit is exactly one megabyte", func(t *testing.T) {
@@ -199,13 +199,13 @@ func TestCoinbaseCommonRuleViolation(t *testing.T) {
 		tx.Outputs[0].LockingScript = bscript.NewFromBytes(script)
 		require.Equal(t, maxTxSizeConsensusBeforeGenesis, tx.Size())
 
-		require.Empty(t, CoinbaseCommonRuleViolation(tx, preGenesisHeight, params))
+		require.Empty(t, TxCommonRuleViolation(tx, preGenesisHeight, params))
 
 		tx.Outputs[0].LockingScript = bscript.NewFromBytes(append(script, 0x00))
-		require.Equal(t, "bad-txns-oversize", CoinbaseCommonRuleViolation(tx, preGenesisHeight, params))
+		require.Equal(t, "bad-txns-oversize", TxCommonRuleViolation(tx, preGenesisHeight, params))
 
 		// After Genesis the limit is one gigabyte, so the same transaction passes.
-		require.Empty(t, CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params))
+		require.Empty(t, TxCommonRuleViolation(tx, unboundBodyHeight, params))
 	})
 
 	t.Run("size is checked before output values", func(t *testing.T) {
@@ -213,23 +213,23 @@ func TestCoinbaseCommonRuleViolation(t *testing.T) {
 		tx.Outputs[0].LockingScript = bscript.NewFromBytes(make([]byte, maxTxSizeConsensusBeforeGenesis))
 		tx.Outputs[0].Satoshis = maxMoneySatoshis + 1
 
-		require.Equal(t, "bad-txns-oversize", CoinbaseCommonRuleViolation(tx, preGenesisHeight, params))
+		require.Equal(t, "bad-txns-oversize", TxCommonRuleViolation(tx, preGenesisHeight, params))
 	})
 
 	t.Run("an output value with the sign bit set is negative", func(t *testing.T) {
 		tx := coinbase(t)
 		tx.Outputs[0].Satoshis = math.MaxInt64 + 1
 
-		require.Equal(t, "bad-txns-vout-negative", CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params))
+		require.Equal(t, "bad-txns-vout-negative", TxCommonRuleViolation(tx, unboundBodyHeight, params))
 	})
 
 	t.Run("an output value at the money limit passes, one above does not", func(t *testing.T) {
 		tx := coinbase(t)
 		tx.Outputs[0].Satoshis = maxMoneySatoshis
-		require.Empty(t, CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params))
+		require.Empty(t, TxCommonRuleViolation(tx, unboundBodyHeight, params))
 
 		tx.Outputs[0].Satoshis = maxMoneySatoshis + 1
-		require.Equal(t, "bad-txns-vout-toolarge", CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params))
+		require.Equal(t, "bad-txns-vout-toolarge", TxCommonRuleViolation(tx, unboundBodyHeight, params))
 	})
 
 	t.Run("outputs each in range but summing above the money limit", func(t *testing.T) {
@@ -237,17 +237,17 @@ func TestCoinbaseCommonRuleViolation(t *testing.T) {
 		tx.Outputs[0].Satoshis = maxMoneySatoshis
 		tx.AddOutput(&bt.Output{Satoshis: 1, LockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE})})
 
-		require.Equal(t, "bad-txns-txouttotal-toolarge", CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params))
+		require.Equal(t, "bad-txns-txouttotal-toolarge", TxCommonRuleViolation(tx, unboundBodyHeight, params))
 	})
 
 	t.Run("pre-Genesis sigop limit counts CHECKSIG exactly", func(t *testing.T) {
 		tx := coinbase(t)
 		tx.Outputs[0].LockingScript = checkSigScript(maxTxSigOpsCountBeforeGenesis)
-		require.Empty(t, CoinbaseCommonRuleViolation(tx, preGenesisHeight, params))
+		require.Empty(t, TxCommonRuleViolation(tx, preGenesisHeight, params))
 
 		tx.Outputs[0].LockingScript = checkSigScript(maxTxSigOpsCountBeforeGenesis + 1)
-		require.Equal(t, "bad-txn-sigops", CoinbaseCommonRuleViolation(tx, preGenesisHeight, params))
-		require.Empty(t, CoinbaseCommonRuleViolation(tx, unboundBodyHeight, params), "no sigop limit after Genesis")
+		require.Equal(t, "bad-txn-sigops", TxCommonRuleViolation(tx, preGenesisHeight, params))
+		require.Empty(t, TxCommonRuleViolation(tx, unboundBodyHeight, params), "no sigop limit after Genesis")
 	})
 
 	t.Run("pre-Genesis sigops are summed across the scriptSig and every output", func(t *testing.T) {
@@ -255,11 +255,11 @@ func TestCoinbaseCommonRuleViolation(t *testing.T) {
 		half := maxTxSigOpsCountBeforeGenesis / 2
 		tx.Outputs[0].LockingScript = checkSigScript(half)
 		tx.AddOutput(&bt.Output{Satoshis: 1, LockingScript: checkSigScript(half)})
-		require.Empty(t, CoinbaseCommonRuleViolation(tx, preGenesisHeight, params))
+		require.Empty(t, TxCommonRuleViolation(tx, preGenesisHeight, params))
 
 		// One CHECKSIG in the coinbase scriptSig tips the total over the limit.
 		tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.Op1, bscript.OpCHECKSIG})
-		require.Equal(t, "bad-txn-sigops", CoinbaseCommonRuleViolation(tx, preGenesisHeight, params))
+		require.Equal(t, "bad-txn-sigops", TxCommonRuleViolation(tx, preGenesisHeight, params))
 	})
 }
 

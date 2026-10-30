@@ -445,7 +445,7 @@ The following datastores are supported (either in development / experimental or 
     - A high-performance, NoSQL distributed database.
     - Suitable for environments requiring high throughput and low latency.
     - Handles large volumes of UTXO data with fast read/write capabilities.
-    - Aerospike is the reference datastore. Teranode has been guaranteed to process 1 million tps with Aerospike.
+    - Aerospike is the reference datastore. Teranode's scaled-out design target of 1 million tps assumes Aerospike.
     - Aerospike records can contain up to 1MB.
    ![AerospikeRecord.png](../services/img/AerospikeRecord.png)
     - For more information, please refer to the official Aerospike documentation: <https://aerospike.com>.

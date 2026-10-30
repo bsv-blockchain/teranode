@@ -116,6 +116,19 @@ services:
   teranode{{ $node.Index }}-{{ $svc.Name }}:
     container_name: teranode{{ $node.Index }}-{{ $svc.Name }}-multinode
     image: teranode:latest
+{{- /*
+  Top-level cpus:/mem_limit: rather than deploy.resources.limits — this file
+  has no `version:` key so it is a Compose Spec file, where both are
+  first-class service properties mapped straight onto the container's cgroup
+  in non-swarm mode. kafka-shared above already uses mem_limit:, so this
+  keeps one idiom per file. Rendered only when -limits named this service.
+*/}}
+{{- if $svc.Limits.CPUs }}
+    cpus: {{ $svc.Limits.CPUs }}
+{{- end }}
+{{- if $svc.Limits.MemLimit }}
+    mem_limit: {{ $svc.Limits.MemLimit }}
+{{- end }}
 {{- if $svc.NeedsNetAdmin }}
     cap_add:
       - NET_ADMIN
@@ -142,6 +155,15 @@ services:
       ]
     environment:
       SETTINGS_CONTEXT: "docker.teranode{{ $node.Index }}.test"
+      # Required since the blockchain service began enforcing admin auth:
+      # without it every service exits at startup with CONFIGURATION (5).
+      # Set as an env var (not in settings_multinode.conf) because gocore
+      # resolves the environment before any settings context, so one value
+      # covers the server and all its in-cluster clients. Matches
+      # compose/docker-compose-ss.yml. This guards nothing real — the stack
+      # is regtest on a private docker network — but it must be >= 16 chars
+      # and not one of util.knownPlaceholderAPIKeys.
+      grpc_admin_api_key: docker-e2e-test-admin-key
       JAEGER_SERVICE_NAME: teranode{{ $node.Index }}-{{ $svc.Name }}
       JAEGER_AGENT_HOST: jaeger
       JAEGER_AGENT_PORT: 6831
@@ -170,6 +192,15 @@ services:
     ports:
 {{- range $port := $svc.HostPorts }}
       - "{{ add $node.HostBase (sub $port 8000) }}:{{ $port }}"
+{{- end }}
+{{- /*
+  Explicit-offset mappings, for container ports more than one service binds.
+  Every split service serves :9091 (pprof + /metrics), so the derived
+  arithmetic above would hand them all the same host port. Offsets come from
+  metricsHostOffset in main.go.
+*/}}
+{{- range $e := $svc.ExtraHostPorts }}
+      - "{{ add $node.HostBase $e.HostOffset }}:{{ $e.Container }}"
 {{- end }}
     expose:
 {{- range $port := $svc.ExposePorts }}

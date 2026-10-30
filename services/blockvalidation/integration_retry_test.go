@@ -138,6 +138,8 @@ func TestIntegrationRetryWithMultipleFailures(t *testing.T) {
 			{"http://peer3", "peer3"},
 		}
 
+		attempts := map[string]*int32{"peer1": &peer1Attempts, "peer2": &peer2Attempts, "peer3": &peer3Attempts}
+
 		// Send announcements from all peers
 		for _, peer := range peers {
 			kafkaMsg := &kafkamessage.KafkaBlockTopicMessage{
@@ -158,6 +160,11 @@ func TestIntegrationRetryWithMultipleFailures(t *testing.T) {
 				// We expect this to succeed eventually
 				assert.NoError(t, handler(kafkaMessage))
 			}()
+
+			// One peer at a time: a peer announcing after another peer has stored the block
+			// finds it stored and never fetches, so concurrent announcements made the
+			// per-peer attempt checks below depend on scheduling.
+			require.Eventually(t, func() bool { return atomic.LoadInt32(attempts[peer.peerID]) >= 1 }, 10*time.Second, time.Millisecond, "peer %s was never asked for the block", peer.peerID)
 		}
 
 		// Wait for processing with retries
