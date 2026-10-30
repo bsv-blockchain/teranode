@@ -1,5 +1,3 @@
-//go:build bvgaps
-
 package blockvalidation
 
 import (
@@ -62,7 +60,9 @@ func gap020Run(t *testing.T, firstParentIsAncestor bool) (err error, blocksReque
 	if firstParentIsAncestor {
 		firstParent = ancestorA
 	}
-	forkHeaders := testhelpers.CreateSyntheticChainFrom(firstParent, 5)
+	// 12 headers on an ancestor at 100 out-work the local tip at 110, so the offered chain passes
+	// the less-work refusal (catchup step 5.1) and reaches the header-chain checks.
+	forkHeaders := testhelpers.CreateSyntheticChainFrom(firstParent, 12)
 
 	server, mockBlockchainClient, targetBlock, cleanup := gap021Scenario(t, 100, 110, ancestorA, forkHeaders)
 	defer cleanup()
@@ -92,17 +92,14 @@ func gap020RemoveCall(calls []*mock.Call, c *mock.Call) []*mock.Call {
 // if the first header after the common ancestor does not link to the ancestor, the catchup MUST
 // abort before any block is fetched.
 //
-// The peer offers [A, h1..h5] where A is the stored common ancestor but h1.HashPrevBlock is a
-// DIFFERENT stored block B. Today buildHeaderCache only logs a warning, verifyChainContinuity only
-// needs the parent to exist locally (B does), and the cache build checks linkage only among the new
-// headers, so catchup proceeds to the block-body fetch (/blocks/...) with heights mis-assigned.
-// The test fails today because catchup reaches step 10 (blocks requested) instead of aborting.
+// The peer offers [A, h1..h12] where A is the stored common ancestor but h1.HashPrevBlock is a
+// DIFFERENT stored block B. Before bsv-blockchain/teranode#2034 the catchup proceeded to the
+// block-body fetch (/blocks/...) with heights mis-assigned; this is the regression test for that
+// gap (GAP-BV-020, resolved).
 //
 // A control subtest with a correctly linked chain proves the setup does reach the block fetch, so
 // "zero /blocks requests" is not vacuous.
-//
-// Code: services/blockvalidation/catchup.go buildHeaderCache (~1132-1137 warning only),
-// verifyChainContinuity (~1272-1294); catchup/header_chain_cache.go BuildFromHeaders (~115-121).
+
 func TestGapBV020_FirstHeaderMustLinkToCommonAncestor(t *testing.T) {
 	t.Run("control_linked_chain_reaches_block_fetch", func(t *testing.T) {
 		_, blocks := gap020Run(t, true)

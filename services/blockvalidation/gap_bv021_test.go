@@ -1,11 +1,10 @@
-//go:build bvgaps
-
 package blockvalidation
 
 import (
 	"context"
 	"encoding/binary"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,13 +86,10 @@ func gap021Scenario(t *testing.T, ancestorHeight, currentHeight uint32, ancestor
 // until every header-chain check (BV-CATCHUP-007..012, 014) has passed.
 //
 // The peer offers a fork of depth 10 (local tip 110, ancestor 100) whose headers pass the
-// fork-depth and secret-mining gates but contain a broken previous-hash link inside the new
-// headers. That is rejected by buildHeaderCache (HeaderChainCache.BuildFromHeaders -> validateChain),
-// which runs AFTER step 5.5. Today catchup() has already un-stamped the local blocks above the
-// ancestor, so ClearBlockMinedSet / SendNotification are called and this test fails.
-//
-// Code: services/blockvalidation/catchup.go catchup() step 5.5 (~287-325) vs buildHeaderCache (~1129);
-// catchup/header_chain_cache.go validateChain.
+// fork-depth, secret-mining and less-work gates but contain a broken previous-hash link inside the
+// new headers, which a header-chain check rejects. Before bsv-blockchain/teranode#2034 the clearing ran
+// ahead of that check and un-stamped the local blocks above the ancestor; it now runs as step 9.6,
+// after every header-chain check. This is the regression test for that gap (GAP-BV-021, resolved).
 func TestGapBV021_NoMinedSetClearBeforeHeaderChainChecks(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -108,7 +104,9 @@ func TestGapBV021_NoMinedSetClearBeforeHeaderChainChecks(t *testing.T) {
 	ancestorHeader.Bits = *nBits
 	testhelpers.MineHeader(ancestorHeader)
 
-	forkHeaders := testhelpers.CreateSyntheticChainFrom(ancestorHeader, 5)
+	// 12 headers on an ancestor at 100 out-work the local tip at 110, so the offered chain passes
+	// the less-work refusal (catchup step 5.1) and reaches the header-chain checks.
+	forkHeaders := testhelpers.CreateSyntheticChainFrom(ancestorHeader, 12)
 
 	// Break the link inside the new headers: header 3 no longer points at header 2.
 	bogusPrev := chainhash.HashH([]byte("gap021-bogus-parent"))
@@ -120,11 +118,12 @@ func TestGapBV021_NoMinedSetClearBeforeHeaderChainChecks(t *testing.T) {
 
 	err = server.catchup(context.Background(), targetBlock, "peer-gap021", "http://peer")
 
-	// Sanity: the catchup is rejected for the header-chain defect, not for a setup/earlier-gate reason,
-	// and it got past step 5.5 (the fork block lookup used by the clearing was reached).
+	// Sanity: the catchup is rejected for the broken link. Since bsv-blockchain/teranode#2034 the
+	// header fetch itself rejects a batch that does not link as one chain, so the rejection now comes
+	// earlier than buildHeaderCache; either way it precedes the clearing.
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "chain broken", "setup must fail on the broken header link (a later check)")
-	mockBlockchainClient.AssertCalled(t, "GetBlockHeadersByHeight", mock.Anything, mock.Anything, mock.Anything)
+	require.True(t, strings.Contains(err.Error(), "does not link") || strings.Contains(err.Error(), "chain broken"),
+		"setup must fail on the broken header link, got: %v", err)
 
 	// Spec assertion: no local block was un-stamped for a fork that is rejected by a header check.
 	mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)

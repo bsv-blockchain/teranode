@@ -1,5 +1,3 @@
-//go:build bvgaps
-
 package model
 
 import (

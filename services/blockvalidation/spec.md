@@ -1067,7 +1067,7 @@ flowchart TD
 
 ### Catchup flow
 
-The diagram shows the target order this spec requires. Today the code clears `mined_set` before the link, continuity, checkpoint and DAA checks (GAP-BV-021).
+The diagram shows the order this spec requires. The code follows it since bsv-blockchain/teranode#2034, which moved the `mined_set` clearing after every header-chain check (GAP-BV-021, resolved).
 
 ```mermaid
 flowchart TD
@@ -1115,7 +1115,7 @@ flowchart TD
 - `store_invalid_block_reserved_id_test.go`: BV-INGRESS-013, BV-VERDICT-004
 - `setminedchan_deadlock_test.go`, `subtree_files_ready_test.go`: BV-COMMIT-006, BV-COMMIT-002
 - `unified_route_server_test.go`, `Server_unified_route_test.go`, `checkpoint_boundary_test.go` (`TestOperatorOverrideFence`): BV-QUICK-003 through BV-QUICK-006
-- `quick_validate_prebind_test.go`, `quick_validate_one_wave_test.go` (`TestOneWave_ReplayStampsAndCreatesNothingTwice`), `quick_validate_one_wave_cancel_test.go`: BV-QUICK-009, BV-QUICK-019, BV-QUICK-018
+- `quick_validate_prebind_test.go`, `quick_validate_list_test.go` (`TestBatchList_ReplayStampsAndCreatesNothingTwice`, `TestBatchList_CancelStopsTheBackoff`, `TestBatchList_CallBoundExpiryIsARetryNotAVerdict`): BV-QUICK-009, BV-QUICK-019, BV-QUICK-018
 - `TestCheckSecretMiningWorkGating`, `TestQuickValidationBoundToActuallyVerifiedCheckpoint`: BV-CATCHUP-012, BV-QUICK-001
 - `TestRestoreFSMState_ExhaustedPersistenceRetriesRemainCatching`: BV-STATE-003 (pins the current, non-conforming behaviour)
 - `TestIsPeerBad_UnknownPeerFailsOpen`, `TestReleaseCatchupLock_ExternalErrorChargesOnlyTheFailingPeers`: BV-PEER-003, BV-PEER-007
@@ -1137,22 +1137,22 @@ The waiting caller is released with nil as soon as the block is placed on the pr
 `BlockFound` spawns one goroutine per call that blocks on a full channel (`Server.go` ~1380).
 *Work required:* send inline under the request context, or bound pending sends.
 
-**GAP-BV-003.** Kafka recoverable errors are committed.
+**GAP-BV-003.** Kafka recoverable errors are committed. **Resolved** by bsv-blockchain/teranode#2010.
 *Affects:* BV-INGRESS-009.
 The handler returns recoverable errors so that they will be redelivered, but the consumer runs with `kafka.WithLogErrorAndMoveOn()`, which commits every error while the context is live (`Server.go` ~1217; `util/kafka/kafka_consumer.go` ~1038). No existing consumer option can fix this alone: the consumer commits the highest marked offset, so a later success on the same partition commits past an uncommitted failure. Separately, on the unrecoverable path a hash-parse failure leaves the hash nil (`Server.go` ~933), and reporting the peer failure then dereferences it (`blockchain/Client.go` ~2088). That panics, the consumer's panic barrier swallows it, and the message is committed without any peer failure being reported.
 *Work required:* a redelivery mechanism that survives later commits on the same partition (for example, an internal retry queue for recoverable failures), and a guard on the nil hash.
-*Proof:* confirmed by `TestGapBV003_RecoverableKafkaErrorIsRedelivered`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2010; regression test: `TestGapBV003_RecoverableKafkaErrorIsRetried`. The text above describes the behaviour before the fix.
 
 **GAP-BV-004.** Go client cannot send `peer_id`.
 *Affects:* BV-INGRESS-010.
 `Interface.BlockFound` and `Client.BlockFound` have no peer-ID parameter (`Client.go` ~140).
 *Work required:* add the parameter and populate the proto field.
 
-**GAP-BV-005.** Missing parent returns success to synchronous callers.
+**GAP-BV-005.** Missing parent returns success to synchronous callers. **Resolved** by bsv-blockchain/teranode#2021.
 *Affects:* BV-INGRESS-017.
 On the non-unified route, a missing parent diverts to catchup and returns nil. When the catchup channel is full the divert is dropped with only a warning log (`Server.go` ~1800-1817). `processBlockFoundChannel` has the same nil-on-divert behaviour (~1125, ~1157). Legacy treats nil as accepted.
 *Work required:* return `ERR_SERVICE_ERROR` on divert for synchronous callers.
-*Proof:* confirmed by `TestGapBV005_ProcessBlockMissingParentReturnsServiceError`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2021; regression test: `TestGapBV005_ProcessBlockMissingParentReturnsServiceError`. The text above describes the behaviour before the fix.
 
 **GAP-BV-006.** Alternative sources are lost when a block is dequeued.
 *Affects:* BV-QUEUE-006.
@@ -1225,17 +1225,17 @@ The server never reads the field, which the client sets (`Client.go` ~214).
 On `ERR_CATCHUP_IN_PROGRESS`, `processCatchupChItem` logs "requeueing" but requeues nothing, and leaves the in-flight marker set for 10 minutes. Re-announcements in that window are absorbed as alternatives (`Server.go` ~2288).
 *Work required:* requeue the item, or clear the marker.
 
-**GAP-BV-020.** First header not linked to the ancestor is only a warning.
+**GAP-BV-020.** First header not linked to the ancestor is only a warning. **Resolved** by bsv-blockchain/teranode#2034.
 *Affects:* BV-CATCHUP-008.
 `catchup.go` ~1136 logs a warning. The continuity check (~1272-1294) only requires the first header's parent to be stored locally, and the header-cache build checks linkage among the new headers but not to the ancestor (`catchup/header_chain_cache.go` ~115-121). So a first header whose parent is a *different* stored block proceeds, with heights mis-assigned as ancestor + 1 + index, including for checkpoint matching (~1220).
 *Work required:* abort when the first header's previous hash is not the ancestor's hash.
-*Proof:* confirmed by `TestGapBV020_FirstHeaderMustLinkToCommonAncestor`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2034; regression test: `TestGapBV020_FirstHeaderMustLinkToCommonAncestor`, `TestCatchup_FirstHeaderMustLinkToCommonAncestor`. The text above describes the behaviour before the fix.
 
-**GAP-BV-021.** Mined-set clearing runs before the header checks.
+**GAP-BV-021.** Mined-set clearing runs before the header checks. **Resolved** by bsv-blockchain/teranode#2034.
 *Affects:* BV-CATCHUP-013.
 Fork-side `mined_set` clearing runs after the fork-depth and secret-mining checks but before the linkage, checkpoint and DAA checks (`catchup.go` ~287 vs ~337). A peer whose header chain later fails still causes canonical blocks to be un-stamped.
 *Work required:* move the clearing after all header-chain checks.
-*Proof:* confirmed by `TestGapBV021_NoMinedSetClearBeforeHeaderChainChecks`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2034; regression test: `TestGapBV021_NoMinedSetClearBeforeHeaderChainChecks`; the clearing now runs as catchup step 9.6, after every header-chain check. The text above describes the behaviour before the fix.
 
 **GAP-BV-022.** Circuit breaker never closes again.
 *Affects:* BV-CATCHUP-025.
@@ -1273,21 +1273,20 @@ Reports come from `validateBlocksOnChannel`, `releaseCatchupLock` and `processCa
 After 3 failed `RUN` attempts the node stays in `CATCHINGBLOCKS` (`catchup.go` ~1605; pinned by `TestRestoreFSMState_ExhaustedPersistenceRetriesRemainCatching`). The only later retry is a side effect of another catchup reaching its block phase, which a caught-up node may never do.
 *Work required:* retry `RUN` on a later pass that does not depend on a new catchup.
 
-**GAP-BV-029.** Async subtree writes and `subtrees_set` on the quick route.
+**GAP-BV-029.** Async subtree writes and `subtrees_set` on the quick route. **Resolved** by bsv-blockchain/teranode#2011.
 *Affects:* BV-QUICK-021.
 `commitBlock` sets `subtrees_set = true` while this block's subtree-file writes are still queued. On a writer failure or cancellation, the queued jobs are counted down without being written, which can leave committed blocks with `subtrees_set` and no subtree file (`quick_validate.go` ~546; `catchup.go` ~1336-1380).
 *Work required:* barrier the block's writes before AddBlock, or add a repair path.
-*Proof:* confirmed by `TestGapBV029_SubtreesSetNotCommittedAheadOfQueuedSubtreeWrites`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2011; regression test: `TestGapBV029_SubtreesSetNotCommittedAheadOfQueuedSubtreeWrites`. The text above describes the behaviour before the fix.
 
 **GAP-BV-030.** No recovery for outputs left locked.
 *Affects:* BV-QUICK-015.
 A crash between AddBlock and unlock leaves the block's outputs locked, and the block is then known, so the unlock is never re-run. Block Assembly's startup unlock covers only unmined transactions. Not verified end-to-end.
 *Work required:* unlock in a sweep, or make the unlock part of the block's commit record.
 
-**GAP-BV-031.** Chained create wave has no retry.
+**GAP-BV-031.** Chained create wave has no retry. **Resolved** by bsv-blockchain/teranode#1909.
 *Affects:* BV-QUICK-017.
-The create-only wave wraps every error as `ERR_PROCESSING` (`quick_validate.go` ~2496), while the one-wave and spend waves retry.
-*Work required:* use the same retry loop.
+The create-only wave wrapped every error as `ERR_PROCESSING`, while the one-wave and spend waves retried. Since #1909 a batch is applied as one list through `SpendAndCreateMulti`, and `applyList` retries the failed part of the list, creates included (`TestBatchList_StoreFaultRetriesTheList`, `TestBatchList_RetryableFailureRetriesOnlyWhatFailed`). Verified by reading the code.
 
 **GAP-BV-032.** Block Persister incompatibility and two-service agreement are not enforced.
 *Affects:* BV-QUICK-024, BV-QUICK-028.
@@ -1361,22 +1360,22 @@ Effective priority is recomputed only when the queue is re-sorted, and a re-sort
 The invalid-block producer close is raced against the stop context, but the block consumer's `Close()` is not; it is bounded only by the consumer's internal drain timeout (`Server.go` ~1323; `util/kafka/kafka_consumer.go` ~198-229). Not fully confirmed: the internal bound may be short enough in practice.
 *Work required:* race the consumer close against the stop context as well.
 
-**GAP-BV-043.** Internal revalidation leaves a block on the chain after an INVALID ancestor verdict.
+**GAP-BV-043.** Internal revalidation leaves a block on the chain after an INVALID ancestor verdict. **Resolved** by bsv-blockchain/teranode#2033.
 *Affects:* BV-OPTIMISTIC-005, BV-VERDICT-009.
 The internal revalidation path ends by returning the ancestor-membership check's result without acting on it (`BlockValidation.go` ~3447). An INVALID verdict from that check is retried 3 times (~856), then logged as "retries exhausted". An optimistically added block found invalid this way stays on the chain, and nothing is published. Verified by reading the code.
 *Work required:* invalidate and publish on an INVALID verdict from that check, as the other branches of the same function do.
-*Proof:* confirmed by `TestGapBV043_ReValidateInvalidAncestorVerdictInvalidatesBlock`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2033; regression test: `TestReValidateBlock_InvalidAncestorVerdictInvalidatesAndPublishes` and the other `TestReValidateBlock_InvalidAncestorVerdict*` tests. The text above describes the behaviour before the fix.
 
 **GAP-BV-044.** Catchup tries alternatives after an INVALID verdict on an unbound transaction list.
 *Affects:* BV-PEER-005.
 When Subtree Validation reports a transaction invalid during catchup and the subtree list is not yet bound, the service deliberately walks alternative sources (`catchup.go` ~1749-1762; `Server.go` ~716-728). That may be the right behaviour, because an unbound list says nothing about the block. If so, BV-PEER-005 should be scoped to INVALID verdicts on a bound body, which would retire this gap.
 *Work required:* decide; then either scope BV-PEER-005 or stop the walk.
 
-**GAP-BV-045.** Coinbase finality is not enforced.
+**GAP-BV-045.** Coinbase finality is not enforced. **Resolved** by bsv-blockchain/teranode#2017.
 *Affects:* BV-BODY-019.
 bitcoin-sv applies `IsFinalTx` to every transaction in a block, coinbase included (`validation.cpp` ~6024-6037, via `ContextualCheckTransaction` ~5934). Teranode's only finality check is in the Validator (`services/validator/Validator.go` ~1496), which never receives a coinbase, and block-level validation has no finality check. A block whose coinbase is non-final is therefore accepted by Teranode and rejected by bitcoin-sv: a chain-split risk. Verified by reading both code bases. Related, outside this service: when `SubmitMiningSolution` omits the coinbase, Block Assembly sets the coinbase's nLockTime to the block time and its input sequence to the nonce (`services/blockassembly/Server.go` ~1947-1953). With a non-zero nonce that coinbase is non-final by bitcoin-sv's rules, so this node may mine blocks bitcoin-sv rejects. Whether production miners use that path is not confirmed.
 *Work required:* add the coinbase finality rule to block validation, on every route; review the Block Assembly coinbase construction.
-*Proof:* confirmed by `TestGapBV045_NonFinalCoinbaseRejected` (package `model`), which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2017; regression test: `TestGapBV045_NonFinalCoinbaseRejected`. The text above describes the behaviour before the fix.
 
 **GAP-BV-046.** A present coinbase with no inputs is classified INCOMPLETE.
 *Affects:* BV-BODY-005.
@@ -1421,29 +1420,27 @@ A fork deeper than `CoinbaseMaturity` is reported malicious regardless of its wo
 The PoW ceiling is the looser of `PowLimit` and `PowLimitBits` (`model/BlockHeader.go` ~320), which on STN admits 0x207fffff where bitcoin-sv's STN `powLimit` rejects it. Teranode also applies the modern DAA to STN at all heights (`services/blockchain/Difficulty.go` ~117), where bitcoin-sv's STN `DaaHeight` is 2200 with the EDA before it. STN only.
 *Work required:* match bitcoin-sv's STN parameters, or record STN as an intentional deviation.
 
-**GAP-BV-054.** Three worker paths have no panic recovery.
+**GAP-BV-054.** Three worker paths have no panic recovery. **Resolved** by bsv-blockchain/teranode#2012.
 *Affects:* BV-STARTUP-007.
 The only `recover()` in the service is in the block-found workers (`Server.go` ~825). The priority-queue workers (`blockProcessingWorker`, ~2120), the catchup consumer (`processCatchupChItem`, ~2235) and the goroutine started inside the Kafka message handler (~889) have none, so a panic on any of those paths terminates the process. Verified by reading the code.
 *Work required:* recover on each path, report to any waiting caller, and continue.
-*Proof:* confirmed by `TestGapBV054_PriorityWorkerSurvivesPanic`, `TestGapBV054_CatchupConsumerSurvivesPanic`, `TestGapBV054_KafkaHandlerSurvivesPanic`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2012; regression test: the `TestGapBV054_*` suite (also bsv-blockchain/teranode#2035 for errgroup goroutines). The text above describes the behaviour before the fix.
 
-**GAP-BV-055.** The chained create wave can be cancelled mid-call.
+**GAP-BV-055.** The chained create wave can be cancelled mid-call. **Resolved** by bsv-blockchain/teranode#1909.
 *Affects:* BV-QUICK-018.
-The create-only wave calls `SpendAndCreate` directly under the errgroup context (`quick_validate.go` ~2490), unlike the one-wave and spend waves, which detach in-flight store calls. A sibling failure or shutdown therefore cancels a create that is already running. Verified by reading the code.
-*Work required:* run each create under the same detached, bounded context as the other waves.
-*Proof:* confirmed by `TestGapBV055_ChainedCreateWaveDoesNotCancelInFlightCreate`, which fails today (`make test-bvgaps`).
+The create-only wave called `SpendAndCreate` directly under the errgroup context, unlike the one-wave and spend waves, which detached in-flight store calls; a sibling failure or shutdown therefore cancelled a create already running. This was proven by a failing test before #1909 merged. Since #1909 the waves run in `utxo.DefaultSpendAndCreateMulti` on plain `errgroup.Group`s (no shared cancellation), and every store call runs under `context.WithoutCancel` with a bound, both there and in `applyList`. The proof test was removed because the code it exercised no longer exists; a regression test against the list path is test-plan backlog item 36.
 
-**GAP-BV-056.** A post-commit error on the quick route deletes a committed block's subtree files.
+**GAP-BV-056.** A post-commit error on the quick route deletes a committed block's subtree files. **Resolved** by bsv-blockchain/teranode#2011.
 *Affects:* BV-QUICK-015, BV-QUICK-021, BV-COMMIT-002.
 `commitBlock` returns an error when unlocking fails after `AddBlock` has committed the block with `subtrees_set` and `mined_set` true (`quick_validate.go` ~540-580). `tryQuickValidation` treats that as a local failure, deletes the `.subtree` files the attempt wrote, and falls through to full validation (`catchup.go` ~2047-2072), which finds the block already stored and does nothing. The block is left committed and marked `subtrees_set` with its subtree files deleted and its outputs locked. Verified by reading the code; not reproduced.
 *Work required:* treat any error after `AddBlock` as post-commit: never delete the block's files, and retry the unlock.
-*Proof:* confirmed by `TestGapBV056_PostCommitUnlockFailureKeepsCommittedBlocksSubtreeFiles`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2011; regression test: the `TestGapBV056_*` suite. The text above describes the behaviour before the fix.
 
-**GAP-BV-057.** Revert failures are swallowed and `mined_set` is still set.
+**GAP-BV-057.** Revert failures are swallowed and `mined_set` is still set. **Resolved** by bsv-blockchain/teranode#2016.
 *Affects:* BV-COMMIT-011.
 When reverting an invalid block's mined tags, `UpdateTxMinedStatus` logs `SetMinedMulti` errors and coverage gaps and returns success (`model/update-tx-mined.go` ~424-427), and missing subtrees are skipped. The caller then sets `mined_set`, so the block is never revisited and its transactions can keep stale tags. `model/update-tx-mined_test.go` ~1396 pins the swallowing. Verified by reading the code.
 *Work required:* return the error on the revert path, so `mined_set` stays false and the sweep retries.
-*Proof:* confirmed by `TestGapBV057_RevertFailureDoesNotSetMinedSet`, which fails today (`make test-bvgaps`).
+*Resolved:* fixed by bsv-blockchain/teranode#2016; regression test: `TestGapBV057_RevertFailureDoesNotSetMinedSet`. The text above describes the behaviour before the fix.
 
 **GAP-BV-058.** Flag updates are unconditional and can overwrite an invalidation or revalidation.
 *Affects:* BV-COMMIT-005, BV-COMMIT-011, BV-REVALIDATE-003.
@@ -1464,7 +1461,7 @@ The mined-not-set sweep is guarded by a compare-and-swap (`BlockValidation.go` ~
 
 **GAP-BV-061.** Catchup proceeds when clearing `mined_set` on the old branch fails.
 *Affects:* BV-CATCHUP-013.
-`catchup.go` ~296-315 logs and continues when `GetBlockHeadersByHeight` fails, and counts but does not act on `ClearBlockMinedSet` failures. The reorg then goes ahead: old-branch blocks keep `mined_set = true`, the sweep never revisits them, and their transactions keep stale mined tags. Verified by reading the code.
+`clearMinedSetOnForkedBlocks` (`catchup.go`, catchup step 9.6) returns nothing: it logs and continues when `GetBlockHeadersByHeight` fails, and counts but does not act on `ClearBlockMinedSet` failures. The reorg then goes ahead: old-branch blocks keep `mined_set = true`, the sweep never revisits them, and their transactions keep stale mined tags. Verified by reading the code.
 *Work required:* abort the catchup (LOCAL, no peer charge) when either call fails.
 *Proof:* confirmed by `TestGapBV061_CatchupAbortsWhenOldBranchMinedSetClearFails` (header read and clear failures), which fails today (`make test-bvgaps`).
 

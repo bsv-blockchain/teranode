@@ -36,10 +36,10 @@ func gap061ReplaceExpectation(m *mock.Mock, method string) {
 //
 // Spec-correct behaviour: when fork depth > 0 and reading the old-branch headers, or clearing
 // mined_set on any of them, fails, the catchup MUST abort before any catchup block is fetched or
-// validated. Here the peer offers a well-formed fork of depth 10 that passes every header-chain
-// check, and the local store fails the step. Expected to fail today: catchup() step 5.5
-// (catchup.go ~296-325) logs the error and continues, so the block phase starts and the first
-// catchup block is requested from the peer.
+// validated. Here the peer offers a well-formed fork of depth 10 with more work than the local
+// tip, which passes every header-chain check, and the local store fails the step. Expected to fail
+// today: clearMinedSetOnForkedBlocks (catchup.go, step 9.6) logs the error and returns nothing, so
+// the block phase starts and the first catchup block is requested from the peer.
 func TestGapBV061_CatchupAbortsWhenOldBranchMinedSetClearFails(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -78,7 +78,9 @@ func TestGapBV061_CatchupAbortsWhenOldBranchMinedSetClearFails(t *testing.T) {
 			ancestorHeader.Bits = *nBits
 			testhelpers.MineHeader(ancestorHeader)
 
-			forkHeaders := testhelpers.CreateSyntheticChainFrom(ancestorHeader, 5)
+			// 12 headers on an ancestor at 100 out-work the local tip at 110, so the offered chain
+			// passes the less-work refusal (catchup step 5.1) and reaches the mined_set clearing.
+			forkHeaders := testhelpers.CreateSyntheticChainFrom(ancestorHeader, 12)
 
 			server, mockBlockchainClient, targetBlock, cleanup := gap021Scenario(t, 100, 110, ancestorHeader, forkHeaders)
 			defer cleanup()

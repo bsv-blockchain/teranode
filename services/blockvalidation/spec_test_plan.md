@@ -11,6 +11,19 @@ This document answers two questions for each requirement in the Block Validation
 
 It ends with a prioritised test backlog and the test infrastructure needed to build it.
 
+> **Status update, 2026-10-30.** Ten gaps this plan marks "fails today" have since been fixed on `main`, each with a regression test (see the spec's Conformance Gaps for the test names):
+>
+> - GAP-BV-003 (bsv-blockchain/teranode#2010)
+> - GAP-BV-005 (bsv-blockchain/teranode#2021)
+> - GAP-BV-020 and GAP-BV-021 (bsv-blockchain/teranode#2034)
+> - GAP-BV-029 and GAP-BV-056 (bsv-blockchain/teranode#2011)
+> - GAP-BV-043 (bsv-blockchain/teranode#2033)
+> - GAP-BV-045 (bsv-blockchain/teranode#2017)
+> - GAP-BV-054 (bsv-blockchain/teranode#2012, bsv-blockchain/teranode#2035)
+> - GAP-BV-057 (bsv-blockchain/teranode#2016)
+>
+> GAP-BV-031 and GAP-BV-055 were resolved by bsv-blockchain/teranode#1909. The coverage rows and backlog items below still describe the 2026-10-19 assessment. For a backlog item on a resolved gap, the expected result is now "passes" rather than "fails today".
+
 ---
 
 ## Contents
@@ -320,10 +333,10 @@ Status codes: **C** covered, **P** partial, **G** pins a gap, **N** none. Unless
 | QUICK-013 | P | `TestQuickValidate_OutpointOnly_NoDecorate_ZeroFees` (mock store) | refusal above the checkpoint |
 | QUICK-014 | P | lock-gating tests (call flags only) | unlock strictly after AddBlock; real-store lock state |
 | QUICK-015 | N | — | unlock after crash (GAP-BV-030, 056) |
-| QUICK-016 | P | `TestOneWave_FailedApplyReleasesNoChainedSpends` | positive ordering under delay |
-| QUICK-017 | P | `TestSpendBatchWithRetry` (spend wave, mock store) | create wave (GAP-BV-031); cap of 10; `ErrSpent` |
-| QUICK-018 | P | one-wave cancel test | create wave (GAP-BV-055) |
-| QUICK-019 | P | `TestOneWave_ReplayStampsAndCreatesNothingTwice` (uses two different block IDs) | same ID on replay; block-ID reuse path |
+| QUICK-016 | P | `TestBatchList_ChainedAndIndependentMix`, `TestBatchList_RetryKeepsAFailedChildsParent` | positive ordering under delay |
+| QUICK-017 | P | `TestSpendBatchWithRetry` (spend wave, mock store); `TestBatchList_StoreFaultRetriesTheList`, `TestBatchList_RetryWithNoProgressGivesUp` | cap of 10; `ErrSpent` |
+| QUICK-018 | P | `TestBatchList_CancelStopsTheBackoff`, `TestBatchList_CallBoundExpiryIsARetryNotAVerdict` | sibling failure during an in-flight store call (GAP-BV-055, resolved by #1909) |
+| QUICK-019 | P | `TestBatchList_ReplayStampsAndCreatesNothingTwice` (uses two different block IDs) | same ID on replay; block-ID reuse path |
 | QUICK-020 | P | `TestQuickValidateBlock` (three options) | no separate notification; single insert on a real store |
 | QUICK-021 | N | — | files durable before AddBlock (GAP-BV-029, 056) |
 | QUICK-022 | N | — | DAH value; no subtree-meta file |
@@ -488,7 +501,7 @@ A crash point is a moment where the process can stop, or a call can fail, betwee
 | F0 | before block ID assigned | nothing | re-fetch | unchanged stores |
 | F1 | ID assigned, before first wave | ID reserved | retry reuses the same ID | same ID every retry |
 | F2 | inside a one-wave call (spend then create, not atomic) | parent spent by a transaction that does not exist yet | replay | each input spent by exactly one existing transaction |
-| F3 | inside the chained create wave | some creates done; can be cancelled mid-call (GAP-BV-055) | replay | as F2 |
+| F3 | inside the store's create wave (`SpendAndCreateMulti`) | some creates done | replay | as F2 |
 | F4 | inside the chained spend wave | some spends done | replay | as F2 |
 | F5 | between batches | earlier batches applied | replay, reusing the ID from the first transaction | same ID; correct even if that transaction was mined elsewhere before |
 | F6 | all batches applied, before AddBlock | locked outputs, no block row | replay, or none if never retried | no orphaned locked outputs |
@@ -585,9 +598,9 @@ Priorities: **P0** catches a consensus divergence, data loss or state corruption
 |---|---|---|---|---|---|
 | 32 | P0 | fail-point | Crash and replay at every cut point of the multi-wave apply | replay equals a clean run (the `SpendAndCreateMultiRepeatAtCutPoints` pattern), both outpoint modes | QUICK-016, 017, 019 |
 | 33 | P0 | fail-point | Post-AddBlock failures (fail today, GAP-BV-029, 030, 056) | unlock fails, process dies before unlock, async write fails: outputs end unlocked and files present | QUICK-015, 020, 021 |
-| 34 | P0 | metamorphic | Quick vs full validation | one generated chain (in-block parents, chained transactions, OP_RETURN, coinbase spends) through quick outpoint-only, quick normal and full validation: same verdict, identical UTXO state; also on single-fault mutations. Pattern: `stores/utxo/sql/batcher_metamorphic_test.go` | QUICK-003, 013, 023, 027 |
+| 34 | P0 | metamorphic | Quick vs full validation | one generated chain (in-block parents, chained transactions, OP_RETURN, coinbase spends) through quick outpoint-only, quick normal and full validation: same verdict, identical UTXO state; also on single-fault mutations | QUICK-003, 013, 023, 027 |
 | 35 | P0 | property | Whole-block idempotent replay | apply twice, N times, or after a random prefix: same UTXO set, same block ID, nothing created twice | QUICK-019 |
-| 36 | P0 | race | Create wave not cancelled mid-call (fails today, GAP-BV-055) | a sibling failure does not cancel a create in flight; no call starts after cancellation | QUICK-018 |
+| 36 | P0 | race | In-flight store call not cancelled by a sibling failure (regression guard for GAP-BV-055, resolved by #1909) | a sibling failure does not cancel a create in flight; no call starts after cancellation | QUICK-018 |
 | 37 | P0 | differential | Route-decision grid | every combination of height, checkpoints, override, flags, store capability, base URL and proof gives the same decision in Block Validation's and legacy netsync's route logic; the override never widens any fast path | QUICK-003, 006, 007, 028, 029 |
 | 38 | P1 | unit | Retry semantics, all waves | cap of 10, 2 s backoff, no-progress stop, `ErrSpent` and conflicts fail hard; create wave retries (fails today, GAP-BV-031) | QUICK-017 |
 | 39 | P1 | unit | Ordering and files | unlock after AddBlock; no separate notification; DAH = height + retention; no subtree-meta file | QUICK-014, 020, 022 |
@@ -681,7 +694,7 @@ Most of the backlog depends on a handful of shared pieces. In order:
 | 4 | **Hard crash for the test daemon.** In-process `Crash()` that skips the graceful shutdown path; later a subprocess mode that kills with signal 9 | Today `Stop` is graceful and completes the work a crash would interrupt | crash-then-restart-then-oracle tests | M, then L |
 | 5 | **Scripted peer** (`testhelpers/scriptedpeer`): a real `httptest` DataHub serving headers, blocks, subtrees and subtree data from a fork-able chain model. Per-request scripts: serve, truncate, lie about length, drip, stall, reset, switch chain. Request log; one shared fake P2P client with recorders; fault-injecting `net.Listener` | `httpmock` cannot express socket-level faults; 7 fake P2P clients are duplicated today | 9.5 | M |
 | 6 | **Block Validation fuzz targets**: header response, block batch, subtree data, Kafka message, `ProcessBlock` request, BIP34 coinbase, body binding. Generate the `fuzz.yaml` matrix from `FUZZ_TARGETS` | The service has no fuzz target | 9.5, 9.6 | M |
-| 7 | **Metamorphic helpers** reusing the `batcher_metamorphic_test.go` pattern: generator, independent reference model, normalised store snapshot | Catches ordering and batching divergences no example test finds | 9.1, 9.4 | M |
+| 7 | **Metamorphic helpers**: generator, independent reference model, normalised store snapshot | Catches ordering and batching divergences no example test finds | 9.1, 9.4 | M |
 | 8 | **Injectable clock** at the timestamp rule, retry backoff, circuit breaker and TTL caches; retry constants turned into fields | Time-dependent rules and drop paths are untestable or take minutes today | 8, 27, 44, 57, 68 | M |
 | 9 | **CI wiring**: `test/consensus` and the non-docker `test/` packages; a fail-point build pass; multinode chaos nightly; `wip/` triage | Existing tests that never run | 9.7 | S–M |
 | 10 | **Differential corpus** (9.8) | The only independent oracle for consensus rules | 9.1 | M, then L for live |
@@ -718,10 +731,10 @@ Each was confirmed by reading the code, and is now recorded in the spec's Confor
 
 | Gap | Defect | Severity |
 |---|---|---|
-| GAP-BV-054 | The priority-queue workers, the catchup consumer and the Kafka handler goroutine have no panic recovery. A panic on any of them terminates the node. | High |
-| GAP-BV-055 | The chained create wave of quick validation can be cancelled while a store call is in flight. | Medium |
-| GAP-BV-056 | On the quick route, an error after `AddBlock` (e.g. unlock fails) deletes the committed block's subtree files and leaves its outputs locked. | High |
-| GAP-BV-057 | Errors while reverting an invalid block's mined tags are swallowed, and `mined_set` is set anyway, so stale tags are never revisited. | High |
+| GAP-BV-054 | The priority-queue workers, the catchup consumer and the Kafka handler goroutine have no panic recovery. A panic on any of them terminates the node. Resolved by bsv-blockchain/teranode#2012. | High |
+| GAP-BV-055 | The chained create wave of quick validation can be cancelled while a store call is in flight. Resolved by bsv-blockchain/teranode#1909 after this assessment. | Medium |
+| GAP-BV-056 | On the quick route, an error after `AddBlock` (e.g. unlock fails) deletes the committed block's subtree files and leaves its outputs locked. Resolved by bsv-blockchain/teranode#2011. | High |
+| GAP-BV-057 | Errors while reverting an invalid block's mined tags are swallowed, and `mined_set` is set anyway, so stale tags are never revisited. Resolved by bsv-blockchain/teranode#2016. | High |
 | GAP-BV-058 | `SetBlockMinedSet` and `SetBlockSubtreesSet` are unconditional updates. A tagging run in flight can overwrite an invalidation or revalidation. Derived from the code; not reproduced. | High |
 | GAP-BV-059 | The subtrees sweep is not single-flight, unlike the mined sweep. | Low |
 | GAP-BV-060 | On the default non-optimistic path, a contextual header failure (median time past, version floor) is not published as an invalid-block notification, so the peer is never struck. Found in review; proven by `TestGapBV060_UnboundHeaderFinalVerdictPublishesNotification`. | Medium |

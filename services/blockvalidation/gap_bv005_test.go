@@ -1,5 +1,3 @@
-//go:build bvgaps
-
 package blockvalidation
 
 import (
