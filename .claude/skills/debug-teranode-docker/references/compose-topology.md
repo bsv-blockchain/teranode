@@ -9,7 +9,7 @@ when you need to reason about a specific stack or override discovery.
 
 | Path | Purpose | UTXO backend | pprof on host? | Settings context |
 |---|---|---|---|---|
-| `deploy/docker/mainnet/docker-compose.yml` · `…/testnet/…` | **Operator single-node miner** (extends `deploy/docker/base/*`). The "run a real node" path. | **Aerospike** (EE) | **No** | `docker.m` |
+| teranode-quickstart `docker-compose.yml` (separate repo) | **Operator single-node miner**. The "run a real node" path. | **Aerospike** | **No** | `docker.m` |
 | `compose/docker-compose-3blasters.yml` | **3 full nodes** + per-node aerospike/prometheus, optional blasters. `make chain-integrity-test`. | **Aerospike** (one per node) | **Yes** | `docker.teranode{1,2,3}.test` |
 | `compose/generated/docker-compose-multinode.yml` | **Generated N-node** (3–10), all-in-one or split. Created by `make gen-multinode N=<n>` / `compose/multinode.sh up <n>`. | Aerospike | **Yes** | `docker.teranodeN.test` |
 | `compose/docker-compose-ss.yml` | **Split single-node** — each microservice its own container; includes Toxiproxy for chaos. | **PostgreSQL** | mostly no | `docker.ss.teranode1` |
@@ -19,23 +19,29 @@ when you need to reason about a specific stack or override discovery.
 doesn't run a node. `make dev` is **native** (`go run .`), not Docker — its deps come from
 `scripts/dev-stack-macos.sh` or the standalone `deploy/docker/*` compose files.
 
-## Operator single-node containers (`deploy/docker/mainnet`)
+## Operator single-node containers (teranode-quickstart)
 
-Image `ghcr.io/bsv-blockchain/teranode:<ver>`; all teranode services share a base anchor with
-`SETTINGS_CONTEXT=docker.m`, `USE_LOCAL_AEROSPIKE/POSTGRES/KAFKA=true`. Published ports are
-bound to `127.0.0.1`.
+The operator stack lives in the separate
+[teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart) repo, not here:
+its `docker-compose.yml` extends the service definitions under its own `compose/` directory,
+and `setup.sh` writes `.env` (including `COMPOSE_PROFILES`). Image
+`ghcr.io/bsv-blockchain/teranode:${TERANODE_VERSION}`; all teranode services share a base
+anchor with `SETTINGS_CONTEXT=docker.m` and read `.env`. Published ports are bound to
+`127.0.0.1` (or `HOST_IP` for the public-facing ones).
 
 | Container | Host port | Notes |
 |---|---|---|
 | `blockchain` | — | FSM owner; health 8087 |
 | `asset` | `8090` | dashboard / blockchain viewer / **FSM endpoint** `/api/v1/fsm/state` |
-| `asset-cache` (nginx) | `8000` | |
+| `asset-cache` (nginx, profile `p2p`) | `8000` | |
 | `rpc` | `9292` | JSON-RPC |
-| `subtreevalidation`, `blockvalidation`, `blockassembly`, `pruner`, `legacy` | — | no host ports; `mem_limit` high on validation services |
+| `propagation` | `8084` | |
+| `peer` (profile `p2p`) | `9905` | P2P |
+| `subtreevalidation`, `blockvalidation`, `blockassembly`, `pruner`, `legacy` (profile `legacy`), `blockpersister` (profile `blockpersister`) | — | no host ports; per-service `mem_limit` from `MEM_LIMIT_*` in `.env` |
 | `postgres` (postgres:17) | `5432` | blockchain + other SQL stores |
-| `kafka-shared` (redpanda) | `9092/9093` + `9096` | message bus |
-| `aerospike` (EE) | `3000` | UTXO store, reachable in-net at `aerospike:3000` |
-| `prometheus` `9090` · `grafana` `3005→3000` | | metrics |
+| `kafka-shared` (redpanda) | `9092/9093` + `8081` | message bus |
+| `aerospike` | `3000` | UTXO store, reachable in-net at `aerospike:3000` |
+| `prometheus` `9090` · `grafana` `3005→3000` (profile `monitoring`) | | metrics |
 
 > **pprof/metrics 9091 is NOT published** in the operator stack — Prometheus scrapes it
 > in-network. To profile: `docker compose exec <svc> curl -s localhost:9091/debug/pprof/...`.
