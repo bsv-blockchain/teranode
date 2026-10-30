@@ -73,6 +73,20 @@ git fetch upstream && git rebase upstream/main && git push origin <branch>
 - Use TestContainers for integration tests needing external services (Aerospike,
   PostgreSQL).
 
+Test file layout:
+
+- `foo.go` is tested in `foo_test.go`. Before writing a test, find the existing
+  test file for the code under test and add to it.
+- A second test file for the same code is allowed only when its name states the
+  behaviour it covers (`create_arena_test.go`). Never name a file by how it was
+  written: no `_additional`, `_coverage`, `_extra`, `_more`, `_new` or numeric
+  suffixes.
+- Keep unit tests in the same directory as the code; don't move them to a
+  separate tree. The top-level `test/` tree holds the e2e, multi-node,
+  consensus-vector, long-running, sequential, chaos and soak suites.
+- Search production code first and open tests only when needed. Most hits for a
+  common identifier are in tests: `git grep <name> -- ':!*_test.go'`.
+
 Test tags: `testtxmetacache` (small cache for testing), `largetxmetacache`
 (production cache size), `aerospike` (tests requiring Aerospike).
 

@@ -668,6 +668,8 @@ func Test_queue2Threads(t *testing.T) {
 }
 
 func Test_queueLarge(t *testing.T) {
+	skipUnlessHeavyTests(t)
+
 	runtime.GC()
 
 	q := NewLockFreeQueue()

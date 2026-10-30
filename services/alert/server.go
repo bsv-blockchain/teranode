@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -238,11 +239,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 	var closeOnce sync.Once
 	defer closeOnce.Do(func() { close(readyCh) })
 
-	// Ensure we have the genesis alert in the database
-	if err = models.CreateGenesisAlert(
-		ctx, model.WithAllDependencies(s.appConfig),
-	); err != nil {
-		return errors.NewConfigurationError("error creating genesis alert", err)
+	if err = s.initGenesisKeys(ctx); err != nil {
+		return err
 	}
 
 	// Ensure that RPC connection is valid
@@ -277,6 +275,31 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) (err error)
 	return nil
 }
 
+// initGenesisKeys ensures the genesis alert is stored and that alerts are verified
+// against the configured genesis keys.
+func (s *Server) initGenesisKeys(ctx context.Context) error {
+	// Ensure we have the genesis alert in the database
+	if err := models.CreateGenesisAlert(
+		ctx, model.WithAllDependencies(s.appConfig),
+	); err != nil {
+		return errors.NewConfigurationError("error creating genesis alert", err)
+	}
+
+	// Ensure alerts are verified against the configured genesis keys
+	activeKeys, err := s.syncGenesisKeys(ctx)
+	if err != nil {
+		return errors.NewConfigurationError("error syncing alert genesis keys", err)
+	}
+
+	if activeKeys > maxGenesisKeys {
+		s.logger.Warnf("[Alert] alert store has %d active keys but alerts are verified against only the first %d", activeKeys, maxGenesisKeys)
+	} else {
+		s.logger.Infof("[Alert] verifying alerts against %d active keys from the alert store", activeKeys)
+	}
+
+	return nil
+}
+
 // Stop gracefully shuts down the server.
 // This method performs a clean shutdown of all server components, ensuring that
 // ongoing operations can complete and resources are properly released. It follows
@@ -307,12 +330,12 @@ func (s *Server) Stop(ctx context.Context) error {
 
 // loadConfig loads the server configuration and initializes required services.
 // This method performs the core configuration loading and service initialization for the alert server.
-// It reads configuration from Teranode settings, sets up network-specific topic names, validates
+// It reads configuration from Teranode settings, resolves the network-specific alert identity, validates
 // P2P configuration, creates necessary directories, and initializes the datastore connection.
 //
 // The configuration process includes:
 // - Reading alert system configuration from Teranode settings
-// - Adjusting topic names for non-mainnet networks (prefixed with network name)
+// - Resolving the per-network genesis keys, protocol ID and topic for empty settings
 // - Validating P2P configuration requirements
 // - Creating private key directories if needed
 // - Initializing and connecting to the configured datastore
@@ -330,11 +353,21 @@ func (s *Server) Stop(ctx context.Context) error {
 func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting bool) (err error) {
 	// read configuration from Teranode settings file
 	network := s.settings.ChainCfgParams.Name
-	topicName := s.settings.Alert.TopicName
 
-	if network != "mainnet" {
-		topicName = "bitcoin_alert_system_" + network
+	alertNetwork, mainnetFallback, err := resolveAlertNetworkConfig(network, alertNetworkConfig{
+		GenesisKeys: s.settings.Alert.GenesisKeys,
+		ProtocolID:  s.settings.Alert.ProtocolID,
+		TopicName:   s.settings.Alert.TopicName,
+	})
+	if err != nil {
+		return errors.NewConfigurationError("failed to resolve alert network defaults for network %s", network, err)
 	}
+
+	if len(mainnetFallback) > 0 {
+		s.logger.Warnf("[Alert] no public alert network for network %q, using mainnet values for unset %s", network, strings.Join(mainnetFallback, ", "))
+	}
+
+	s.logger.Infof("[Alert] alert network %q: protocol %s, topic %s", network, alertNetwork.ProtocolID, alertNetwork.TopicName)
 
 	// create the app config
 	s.appConfig = &config.Config{
@@ -350,8 +383,8 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 			IP:                    "0.0.0.0",
 			Port:                  strconv.Itoa(s.settings.Alert.P2PPort),
 			DHTMode:               s.settings.Alert.P2PDHTMode,
-			AlertSystemProtocolID: s.settings.Alert.ProtocolID,
-			TopicName:             topicName,
+			AlertSystemProtocolID: alertNetwork.ProtocolID,
+			TopicName:             alertNetwork.TopicName,
 			PrivateKey:            s.settings.Alert.P2PPrivateKey,
 			BootstrapPeer:         s.settings.Alert.P2PBootstrapPeer,
 			AllowPrivateIPs:       s.settings.Alert.P2PAllowPrivateIPs,
@@ -362,7 +395,7 @@ func (s *Server) loadConfig(ctx context.Context, models []interface{}, isTesting
 			HTTPClient: http.DefaultClient,
 		},
 		RPCConnections: []config.RPCConfig{},
-		GenesisKeys:    s.settings.Alert.GenesisKeys,
+		GenesisKeys:    alertNetwork.GenesisKeys,
 	}
 
 	// Require list of genesis keys
@@ -454,7 +487,7 @@ func (s *Server) requireP2P() error {
 // P2P private key files. It creates the directory in the user's home directory if it
 // doesn't already exist, using appropriate permissions for security.
 //
-// The directory is created at $HOME/.alert-system/ with permissions 0750 (owner: rwx, group: r-x, other: none)
+// The directory is created at $HOME/.bitcoin/ (config.LocalPrivateKeyDirectory) with permissions 0750 (owner: rwx, group: r-x, other: none)
 // to ensure that private key files stored within are protected from unauthorized access.
 // If the directory already exists, no error is returned.
 //

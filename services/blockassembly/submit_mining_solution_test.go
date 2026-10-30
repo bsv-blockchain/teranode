@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/testutil"
 	"github.com/stretchr/testify/mock"
@@ -470,6 +471,19 @@ func TestSubmitMiningSolution_NoCurrentBlock(t *testing.T) {
 	require.Contains(t, err.Error(), "no current best block")
 }
 
+// withIssuedCoinbase gives a hand-built candidate the coinbase GetMiningCandidate would have stored
+// on its job, which a solution without its own coinbase is mined with.
+func withIssuedCoinbase(t *testing.T, tSettings *settings.Settings, candidate *model.MiningCandidate) *model.MiningCandidate {
+	t.Helper()
+
+	coinbaseTx, err := candidate.CreateCoinbaseTxCandidate(tSettings)
+	require.NoError(t, err)
+
+	candidate.CoinbaseTx = coinbaseTx.Bytes()
+
+	return candidate
+}
+
 // requirePastFloorGuard asserts that a submission got past the median-time-past
 // guard, and does so durably.
 //
@@ -537,11 +551,11 @@ func TestSubmitMiningSolution_NTimeFloor(t *testing.T) {
 
 		s.jobStore.Set(*id, &subtreeprocessor.Job{
 			ID: id,
-			MiningCandidate: &model.MiningCandidate{
+			MiningCandidate: withIssuedCoinbase(t, &tSettings, &model.MiningCandidate{
 				Id:           idBytes,
 				PreviousHash: parent[:],
 				Time:         uint32(floor),
-			},
+			}),
 		}, time.Minute)
 
 		return s, idBytes
@@ -597,11 +611,11 @@ func TestSubmitMiningSolution_NTimeFloor(t *testing.T) {
 		// own, so the offending timestamp is provably the candidate's own.
 		s.jobStore.Set(*id, &subtreeprocessor.Job{
 			ID: id,
-			MiningCandidate: &model.MiningCandidate{
+			MiningCandidate: withIssuedCoinbase(t, s.blockAssembler.settings, &model.MiningCandidate{
 				Id:           idBytes,
 				PreviousHash: parent[:],
 				Time:         uint32(floor - 1),
-			},
+			}),
 		}, time.Minute)
 
 		err = submit(t, s, idBytes, nil)
@@ -686,11 +700,11 @@ func TestSubmitMiningSolution_NTimeFloorAdvisoryChain(t *testing.T) {
 	parentHash := parentHeader.Hash()
 	s.jobStore.Set(*id, &subtreeprocessor.Job{
 		ID: id,
-		MiningCandidate: &model.MiningCandidate{
+		MiningCandidate: withIssuedCoinbase(t, &tSettings, &model.MiningCandidate{
 			Id:           idBytes,
 			PreviousHash: parentHash[:],
 			Time:         uint32(candidateTime),
-		},
+		}),
 	}, time.Minute)
 
 	// mining.Mine forwards candidate.Time as req.Time, so submit the same value.

@@ -46,6 +46,7 @@ func resetTestMock(onReset func(m *subtreeprocessor.MockSubtreeProcessor) subtre
 	m.On("GetCurrentBlockHeader").Return(model.GenesisBlockHeader)
 	m.On("InitCurrentBlockHeader", mock.Anything).Return()
 	m.On("FlushDiskTxMapForLoad", mock.Anything, mock.Anything).Return(nil)
+	m.On("RequestBlockMaxSizeCheck").Return()
 
 	return m, resets
 }
@@ -358,4 +359,14 @@ func TestBlockAssembler_StorageTriggeredResetsArePaced(t *testing.T) {
 		require.Eventually(t, func() bool { return resets.Load() >= 2 }, 3*time.Second, 5*time.Millisecond,
 			"the request raised within the interval was kept and runs after it")
 	})
+}
+
+// Start loads the unmined txs outside the subtree processor's loop, so it must ask
+// the processor to check the resulting subtrees against blockmaxsize.
+func TestBlockAssembler_StartRequestsBlockMaxSizeCheck(t *testing.T) {
+	m, _ := resetTestMock(nil)
+
+	startWithMock(t, m)
+
+	m.AssertCalled(t, "RequestBlockMaxSizeCheck")
 }

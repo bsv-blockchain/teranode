@@ -112,7 +112,7 @@ func Test_checkCounterConflictingOnCurrentChain_scaling(t *testing.T) {
 		settings:  tSettings,
 	}
 
-	err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+	err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 	require.NoError(t, err)
 
 	gets := countingStore.gets.Load()
@@ -189,7 +189,7 @@ func Test_checkCounterConflictingOnCurrentChain_budget(t *testing.T) {
 		settings:  tSettings,
 	}
 
-	err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+	err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrUtxoWalkLimitExceeded)
 }
@@ -230,7 +230,7 @@ func Test_checkCounterConflictingOnCurrentChain_frozen(t *testing.T) {
 		_, _, err = utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithConflicting(true), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "counter conflicting tx is frozen")
 	})
@@ -265,7 +265,7 @@ func Test_checkCounterConflictingOnCurrentChain_frozen(t *testing.T) {
 		_, _, err = utxoStore.SpendAndCreate(ctx, tx1, 123, utxo.WithConflicting(true), utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "tx has frozen child")
 	})
@@ -292,7 +292,7 @@ func Test_checkCounterConflictingOnCurrentChain_frozen(t *testing.T) {
 		// winner's own descendant cone, which must still reject the bless
 		freezeOutput(t, ctx, utxoStore, tx1, 0, tSettings)
 
-		err = s.checkCounterConflictingOnCurrentChain(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
+		err = s.blessConflictCheck(ctx, *tx1.TxIDChainHash(), map[uint32]bool{})
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "child transaction is frozen")
 	})

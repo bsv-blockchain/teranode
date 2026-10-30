@@ -354,7 +354,7 @@ func TestOptimisticCorrupt_ReValidationConvergesOnInvalidation(t *testing.T) {
 
 	// The re-queued revalidation: it re-fails corrupt (nothing about the body changed), and THAT is
 	// the case the old gate dropped on the floor. It must now invalidate, because the block is stored.
-	revalidateErr := bv.reValidateBlock(requeued)
+	revalidateErr := bv.reValidateBlock(context.Background(), requeued)
 	require.Error(t, revalidateErr)
 	require.True(t, errors.IsBlockCorrupt(revalidateErr), "the body is still corrupt on the retry, got: %v", revalidateErr)
 
@@ -428,6 +428,7 @@ func newCorruptRevalidationHarness(ctx context.Context, t *testing.T, blockIsSto
 	mockBlockchain.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil).Maybe()
 	mockBlockchain.On("GetBlockHeader", mock.Anything, mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 99, MinedSet: true}, nil).Maybe()
 	mockBlockchain.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nBits, nil).Maybe()
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	mockBlockchain.On("GetBestBlockHeader", mock.Anything).Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 100}, nil).Maybe()
 	mockBlockchain.On("InvalidateBlock", mock.Anything, mock.Anything).Return([]chainhash.Hash{}, nil).Run(func(mock.Arguments) {
 		select {
@@ -486,7 +487,7 @@ func TestReValidateBlock_CorruptConvergesOnlyWhenOptimisticallyAdded(t *testing.
 		bv, block, invalidateCalled := newCorruptRevalidationHarness(ctx, t, true)
 		defer bv.StopCaches()
 
-		err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
+		err := bv.reValidateBlock(context.Background(), revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
 		require.Error(t, err)
 		require.True(t, errors.IsBlockCorrupt(err), "the retry must still see a corrupt body, got: %v", err)
 
@@ -504,7 +505,7 @@ func TestReValidateBlock_CorruptConvergesOnlyWhenOptimisticallyAdded(t *testing.
 		bv, block, invalidateCalled := newCorruptRevalidationHarness(ctx, t, true)
 		defer bv.StopCaches()
 
-		err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: false})
+		err := bv.reValidateBlock(context.Background(), revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: false})
 		require.Error(t, err)
 		require.True(t, errors.IsBlockCorrupt(err), "got: %v", err)
 
@@ -557,7 +558,7 @@ func TestReValidateBlock_CorruptInSubtreeValidationConvergesWhenOptimisticallyAd
 
 	corruptSubtreeValidationClient(t, bv)
 
-	err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
+	err := bv.reValidateBlock(context.Background(), revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
 	require.Error(t, err)
 	require.True(t, errors.IsBlockCorrupt(err), "the retry must still see a corrupt body, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a corrupt verdict must never be returned as invalid")
@@ -589,7 +590,7 @@ func TestReValidateBlock_CorruptInSubtreeValidationNotInvalidatedWhenNotOptimist
 
 	corruptSubtreeValidationClient(t, bv)
 
-	err := bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: false})
+	err := bv.reValidateBlock(context.Background(), revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: false})
 	require.Error(t, err)
 	require.True(t, errors.IsBlockCorrupt(err), "got: %v", err)
 
@@ -647,7 +648,7 @@ func TestReValidateBlock_WrongFileUnderRightKeyIsStorageNotCorrupt(t *testing.T)
 	require.NoError(t, bv.subtreeStore.Del(ctx, namedHash[:], fileformat.FileTypeSubtree))
 	require.NoError(t, bv.subtreeStore.Set(ctx, namedHash[:], fileformat.FileTypeSubtree, foreignBytes))
 
-	err = bv.reValidateBlock(revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
+	err = bv.reValidateBlock(context.Background(), revalidateBlockData{block: block, baseURL: "test", optimisticallyAdded: true})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrStorageError), "a wrong file under the right key is a storage fault, got: %v", err)
 	require.False(t, errors.IsBlockCorrupt(err), "local state must never produce a corrupt verdict, got: %v", err)

@@ -196,6 +196,11 @@ type parkedBlock struct {
 	// should hold is not going to grow it within a turn either, and without
 	// the stamp the restored block is re-dispatched every consumer turn off
 	// the still-queued drain request for its parent.
+	//
+	// And stamped for a retry-later failure whose parent the chain positively
+	// does not hold (parentAbsentFromChain): block validation refuses such a
+	// legacy block with a plain ServiceError, which carries no parent-missing
+	// code of its own.
 	parentMissingAt time.Time
 	// awaitingProofAt is when a commit of this block last failed because it is
 	// on the unified below-checkpoint route and the header cache could not

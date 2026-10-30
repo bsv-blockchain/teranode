@@ -34,6 +34,10 @@ const (
 	FileTypeSeedManifest   FileType = "seed-manifest"
 	FileTypeSeedCheckpoint FileType = "seed-checkpoint"
 	FileTypeUnknown        FileType = ""
+
+	// FileTypeSubtreeConflicting holds the txs of a peer subtree that were kept aside because
+	// they conflict with txs this node accepted, until a block references the subtree.
+	FileTypeSubtreeConflicting FileType = "subtreeConflicting"
 )
 
 func (f FileType) String() string {
@@ -70,6 +74,8 @@ var (
 	magicSeedChunk      = [8]byte{'S', 'C', 'K', '-', '1', '.', '0', ' '} // SCK-1.0
 	magicSeedManifest   = [8]byte{'S', 'M', 'F', '-', '1', '.', '0', ' '} // SMF-1.0
 	magicSeedCheckpoint = [8]byte{'S', 'C', 'P', '-', '1', '.', '0', ' '} // SCP-1.0
+
+	magicSubtreeConflicting = [8]byte{'S', 'C', 'F', '-', '1', '.', '0', ' '} // SCF-1.0
 )
 
 var fileTypeToMagic = map[FileType][8]byte{
@@ -96,6 +102,8 @@ var fileTypeToMagic = map[FileType][8]byte{
 	FileTypeSeedChunk:      magicSeedChunk,
 	FileTypeSeedManifest:   magicSeedManifest,
 	FileTypeSeedCheckpoint: magicSeedCheckpoint,
+
+	FileTypeSubtreeConflicting: magicSubtreeConflicting,
 }
 
 var magicToFileType = map[[8]byte]FileType{
@@ -123,6 +131,8 @@ var magicToFileType = map[[8]byte]FileType{
 	magicSeedChunk:      FileTypeSeedChunk,
 	magicSeedManifest:   FileTypeSeedManifest,
 	magicSeedCheckpoint: FileTypeSeedCheckpoint,
+
+	magicSubtreeConflicting: FileTypeSubtreeConflicting,
 }
 
 type Header struct {

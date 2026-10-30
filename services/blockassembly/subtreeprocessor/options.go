@@ -27,3 +27,12 @@ func WithTxMapDirs(dirs []string) Options {
 		stp.txMapDirs = dirs
 	}
 }
+
+// WithTxMetaEvictor makes the processor publish txmeta DELETEs for every tx its
+// conflict processing marks conflicting, so subtree validation evicts the stale
+// non-conflicting cache entries. A nil evictor disables publishing.
+func WithTxMetaEvictor(e *TxMetaEvictor) Options {
+	return func(stp *SubtreeProcessor) {
+		stp.txMetaEvictor = e
+	}
+}

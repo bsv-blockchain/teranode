@@ -1491,8 +1491,11 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		// Simulate server returning headers in chunks
+		// Simulate server returning headers in chunks. Each chunk continues the chain from the
+		// last header of the one before, as a real peer's does: the header fetch rejects a chunk
+		// that does not build on the last header it holds.
 		callCount := 0
+		prevHash := bestBlock.Header.Hash()
 		httpmock.RegisterResponder(
 			"GET",
 			`=~^http://test-peer/headers_from_common_ancestor/.*`,
@@ -1501,7 +1504,6 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 				// Create valid headers for testing
 				numHeaders := 10000
 				headers := make([]*model.BlockHeader, numHeaders)
-				prevHash := bestBlock.Header.Hash()
 
 				// Create a valid difficulty setting
 				nBits, _ := model.NewNBitFromString("207fffff") // minimum difficulty
@@ -1536,6 +1538,9 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		assert.LessOrEqual(t, len(result.Headers), 100000)
 		assert.Contains(t, result.StopReason, "Memory limit reached")
 		assert.False(t, result.ReachedTarget)
+		// Ten chunks of 10,000 fill the 100,000 cap and the eleventh would overflow it, so the
+		// cap, not the iteration limit, ends the fetch.
+		require.Equal(t, 11, callCount, "the accumulated-header cap must end the fetch")
 	})
 
 	t.Run("Context Cancellation During Catchup", func(t *testing.T) {
@@ -3932,7 +3937,7 @@ func TestSuboptimalCommonAncestorCausesHeightCalculationIssue(t *testing.T) {
 	//    The optimal would be block 12, but block 4 appears in both locator and peer's chain
 	// 5. Peer returns headers starting from block 4: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 	// 6. Our extractHeadersAfterAncestor removes block 4, leaving [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-	// 7. Our filterExistingBlocks removes blocks 5-12 (we have them), leaving [13, 14, 15, 16, 17, 18, 19]
+	// 7. Blocks 5-12 are dropped (we have them), leaving [13, 14, 15, 16, 17, 18, 19]
 	// 8. Checkpoint validation calculates: commonAncestorHeight(4) + 1 + index = 5 + index
 	// 9. Block 15 at index 2 gets height 7, but checkpoint expects height 15 -> FAIL!
 
@@ -3954,26 +3959,9 @@ func TestSuboptimalCommonAncestorCausesHeightCalculationIssue(t *testing.T) {
 	assert.Equal(t, blocks[5].Header.Hash(), headersAfterAncestor[0].Hash(), "First header should be block 5")
 	assert.Equal(t, blocks[19].Header.Hash(), headersAfterAncestor[14].Hash(), "Last header should be block 19")
 
-	// Mock filterExistingBlocks behavior - we already have blocks 5-12
-	ctx := context.Background()
-	for i := 5; i <= 12; i++ {
-		suite.MockBlockchain.On("GetBlockExists", ctx, blocks[i].Header.Hash()).Return(true, nil)
-	}
-
-	// We don't have blocks 13-19
-	for i := 13; i <= 19; i++ {
-		suite.MockBlockchain.On("GetBlockExists", ctx, blocks[i].Header.Hash()).Return(false, nil)
-	}
-
-	// Test filterExistingBlocks
+	// We already have blocks 5-12, so catchup is left with blocks 13-19.
+	filteredHeaders := headersAfterAncestor[8:]
 	targetBlock := &model.Block{Header: blocks[19].Header, Height: 19}
-	filteredHeaders, err := suite.Server.filterExistingBlocks(ctx, headersAfterAncestor, targetBlock)
-	require.NoError(t, err)
-
-	// Should return only blocks 13-19 (7 blocks) - blocks 5-12 were filtered out
-	require.Len(t, filteredHeaders, 7, "Should have 7 filtered headers (blocks 13-19)")
-	assert.Equal(t, blocks[13].Header.Hash(), filteredHeaders[0].Hash(), "First filtered header should be block 13")
-	assert.Equal(t, blocks[19].Header.Hash(), filteredHeaders[6].Hash(), "Last filtered header should be block 19")
 
 	// Create CatchupContext with SUBOPTIMAL ancestor (the bug)
 	catchupCtx := &CatchupContext{
@@ -3988,7 +3976,7 @@ func TestSuboptimalCommonAncestorCausesHeightCalculationIssue(t *testing.T) {
 	}
 
 	// This demonstrates the bug!
-	err = suite.Server.verifyCheckpointsInHeaderChain(catchupCtx)
+	err := suite.Server.verifyCheckpointsInHeaderChain(catchupCtx)
 
 	if err != nil {
 		t.Logf("BUG REPRODUCED: Checkpoint validation failed due to suboptimal common ancestor: %v", err)
@@ -4694,6 +4682,7 @@ func TestCatchup_ReportsValidatedHeaderChainWorkAfterHeaderValidation(t *testing
 	).Maybe()
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop after validated progress report"))
+	expectFSMRunning(mockBlockchainClient)
 
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
@@ -4956,6 +4945,9 @@ func TestFetchAndValidateBlocks_FSMRejectsWhenNotRunning(t *testing.T) {
 	// from an invalid source state (so CATCHUPBLOCKS event is invalid)
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("event CATCHUPBLOCKS inappropriate in current state IDLE"))
+	idle := blockchain.FSMStateIDLE
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&idle, nil).Maybe()
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.NewBlockNotFoundError("not stored"))
 
 	blocks := testhelpers.CreateTestBlockChain(t, 3)
 	catchupCtx := &CatchupContext{

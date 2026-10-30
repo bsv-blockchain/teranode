@@ -226,3 +226,61 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckBlockSubtrees_KeepHandoffDuringShortCatchup pins issue 2067's gate: a request that
+// asks to keep the hand-off feeds block assembly in CATCHINGBLOCKS, so a short catchup from
+// RUNNING does not strand a fork block's transactions outside the pool. The flag never turns
+// the hand-off on in IDLE, and a request without it keeps today's FSM-only rule.
+func TestCheckBlockSubtrees_KeepHandoffDuringShortCatchup(t *testing.T) {
+	cases := []struct {
+		state blockchain.FSMStateType
+		keep  bool
+		want  bool
+	}{
+		{blockchain.FSMStateCATCHINGBLOCKS, true, true},
+		{blockchain.FSMStateCATCHINGBLOCKS, false, false},
+		{blockchain.FSMStateIDLE, true, false},
+		{blockchain.FSMStateRUNNING, false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%s/keep=%v", tc.state, tc.keep), func(t *testing.T) {
+			server, cleanup := setupTestServer(t)
+			defer cleanup()
+
+			fsmState := tc.state
+			bc := server.blockchainClient.(*blockchain.Mock)
+			for _, call := range bc.ExpectedCalls {
+				if call.Method == "GetFSMCurrentState" {
+					call.ReturnArguments = mock.Arguments{&fsmState, nil}
+				}
+			}
+			wireMultiBatchMocks(server)
+
+			mockValidator := server.validatorClient.(*validator.MockValidator)
+			mockValidator.UtxoStore = server.utxoStore
+			recording := newRecordingValidatorClient(mockValidator)
+			server.validatorClient = recording
+
+			block := buildMultiBatchBlock(t, server, 2)
+			blockBytes, err := block.Bytes()
+			require.NoError(t, err)
+
+			_, err = server.CheckBlockSubtrees(context.Background(), &subtreevalidation_api.CheckBlockSubtreesRequest{
+				Block:                    blockBytes,
+				BaseUrl:                  "http://test.com",
+				KeepBlockAssemblyHandoff: tc.keep,
+			})
+			require.NoError(t, err)
+
+			recording.mu.Lock()
+			defer recording.mu.Unlock()
+			require.NotEmpty(t, recording.callsByTx, "no transaction was validated")
+			for _, calls := range recording.callsByTx {
+				for _, opts := range calls {
+					require.Equal(t, tc.want, opts.AddTXToBlockAssembly)
+				}
+			}
+		})
+	}
+}

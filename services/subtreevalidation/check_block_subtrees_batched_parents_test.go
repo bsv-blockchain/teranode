@@ -206,7 +206,7 @@ func TestCheckBlockSubtrees_LevelPathRejectsSpendOfMissingOutput(t *testing.T) {
 
 	err := checkBlock(t, f, storeBlock(t, f, []*bt.Tx{child}, false))
 	require.Error(t, err)
-	require.ErrorIs(t, err, errors.ErrTxInvalid, "a spend of a nonexistent output is a verdict on the block, not a retry: %v", err)
+	require.ErrorIs(t, errors.UnwrapGRPC(err), errors.ErrTxInvalid, "a spend of a nonexistent output is a verdict on the block, not a retry: %v", err)
 	require.Zero(t, f.store.multiCalls.Load(), "RUNNING takes the level path")
 	requireAbsent(t, f, []*bt.Tx{child})
 }

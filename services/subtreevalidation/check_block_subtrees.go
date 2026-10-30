@@ -3,6 +3,7 @@ package subtreevalidation
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -145,7 +146,16 @@ func (u *Server) loadSubtreeBatch(ctx, fetchCtx context.Context, request *subtre
 					return errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to check if subtree data exists in store", subtreeHash.String(), err)
 				}
 
-				if !subtreeDataExists {
+				// A peer subtree stored with conflicting txs kept aside had its other txs
+				// validated when it arrived; only the kept-aside txs need prewarming.
+				keptAside, keptAsideLoaded, err := u.keptAsideToPrewarm(gCtx, subtreeToCheck, subtreeDataExists)
+				if err != nil {
+					return err
+				}
+
+				if keptAsideLoaded {
+					subtreeTxs[subtreeIdx] = keptAside
+				} else if !subtreeDataExists {
 					// get the subtree data from the peer and process it directly
 					url, joinErr := util.JoinPeerURL(request.BaseUrl, "subtree_data", subtreeHash.String())
 					if joinErr != nil {
@@ -331,33 +341,14 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 			return nil, err
 		}
 
-		subtreeToCheck, err = subtreepkg.NewIncompleteTreeByLeafCount(leafCount)
-		if err != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to create subtree structure", subtreeHash.String(), err)
-		}
+		var subtreeBytes []byte
 
-		var nodeHash chainhash.Hash
-		for i := 0; i < len(subtreeNodeBytes)/chainhash.HashSize; i++ {
+		subtreeToCheck, subtreeBytes, err = subtreeToCheckFromNodes(subtreeHash, leafCount, func(i int) (nodeHash chainhash.Hash) {
 			copy(nodeHash[:], subtreeNodeBytes[i*chainhash.HashSize:(i+1)*chainhash.HashSize])
-
-			if nodeHash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-				if err = subtreeToCheck.AddCoinbaseNode(); err != nil {
-					return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add coinbase node to subtree", subtreeHash.String(), err)
-				}
-			} else {
-				if err = subtreeToCheck.AddNode(nodeHash, 0, 0); err != nil {
-					return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to add node to subtree", subtreeHash.String(), err)
-				}
-			}
-		}
-
-		if !subtreeHash.Equal(*subtreeToCheck.RootHash()) {
-			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree root hash mismatch: %s", subtreeHash.String(), subtreeToCheck.RootHash().String())
-		}
-
-		subtreeBytes, err := subtreeToCheck.Serialize()
+			return nodeHash
+		})
 		if err != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] failed to serialize subtree", subtreeHash.String(), err)
+			return nil, err
 		}
 
 		// Store the subtreeToCheck marker for later processing, with a DAH of
@@ -393,7 +384,8 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 	// check. A subtree always carries at least one node, so an empty one here is junk; abort
 	// this subtree's worker so the block never reaches block.Valid with an empty subtree. This
 	// keeps the model-side "emptied first subtree" case reachable only via our own concurrent
-	// node release, not via peer-supplied data.
+	// node release, not via peer-supplied data. Only a blob already on our disk gets here, so the
+	// error is local: it is not the serving peer's response.
 	if subtreeToCheck.Length() == 0 {
 		return nil, errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
 	}
@@ -401,15 +393,28 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 	return subtreeToCheck, nil
 }
 
+// CheckBlockSubtrees validates every subtree a block references, fetching any it
+// does not hold, and reports whether the block's transactions are valid.
+//
+// Every error return goes through errors.WrapGRPC. teranode's *Error has no
+// GRPCStatus method and the gRPC server installs no error-converting interceptor,
+// so a bare *Error crosses the wire as codes.Unknown and the caller's
+// errors.UnwrapGRPC rebuilds only a generic ERR_ERROR. Block validation then
+// cannot tell this node's own faults from a bad block, and charges them to the
+// peer that served it (issues 1031 and 1368). WrapGRPC carries the whole chain in
+// the status details, consensus verdicts included.
 func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidation_api.CheckBlockSubtreesRequest) (*subtreevalidation_api.CheckBlockSubtreesResponse, error) {
 	block, err := model.NewBlockFromBytes(request.Block)
 	if err != nil {
-		return nil, errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block from blockchain client", err)
+		// This message is the status line the caller logs, so it names the real failure.
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] failed to deserialise block from request bytes", err))
 	}
 
 	if request.BaseUrl != "" {
 		if err := util.ValidateURL(request.BaseUrl); err != nil {
-			return nil, errors.NewInvalidArgumentError("[CheckBlockSubtrees] invalid BaseUrl: %v", err)
+			// No %v verb: errors.New* takes a trailing error as the wrapped cause,
+			// so the verb would reach the caller's status line unformatted.
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[CheckBlockSubtrees] invalid BaseUrl", err))
 		}
 	}
 
@@ -492,7 +497,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	}
 
 	if err := existsGroup.Wait(); err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	missingSubtrees := make([]chainhash.Hash, 0, len(block.Subtrees))
@@ -517,6 +522,21 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		if !subtreeMissing[idx] {
 			cachedSubtrees = append(cachedSubtrees, *subtreeHash)
 		}
+	}
+
+	// The probe below costs a store read per leaf of every listed cached subtree,
+	// and the list is a peer claim until it is bound to the header. Bind it first,
+	// so a repeated or unbound list is rejected before it reaches the store.
+	bodyBound := false
+
+	if len(cachedSubtrees) > 0 {
+		dah := u.utxoStore.GetBlockHeight() + u.settings.GetSubtreeValidationBlockHeightRetention()
+
+		if err = u.checkBlockBodyBound(ctx, request, block, peerID, dah); err != nil {
+			return nil, errors.WrapGRPC(err)
+		}
+
+		bodyBound = true
 	}
 
 	if err = u.checkCachedSubtreesAgainstCandidateChain(ctx, block, cachedSubtrees); err != nil {
@@ -552,7 +572,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		// hash pointer; that nil-guard lives inside fetchCandidateParentMedianTime.
 		candidateParentMedianTime, mtpErr = u.fetchCandidateParentMedianTime(ctx, block.Header.HashPrevBlock)
 		if mtpErr != nil {
-			return nil, errors.NewProcessingError("[CheckBlockSubtrees] candidate-parent MTP", mtpErr)
+			return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] candidate-parent MTP", mtpErr))
 		}
 	}
 
@@ -560,21 +580,25 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// it for both the per-batch processTransactionsInLevels pass and the
 	// validateSubtree closure below. Querying it twice (once per pipeline) could
 	// straddle an FSM transition and give the two pipelines divergent
-	// WithAddTXToBlockAssembly settings for the same block. While catching up
-	// blocks, transactions must NOT be added to block assembly.
+	// WithAddTXToBlockAssembly settings for the same block. Bulk catch-up keeps
+	// transactions out of block assembly; a short run can explicitly keep the hand-off.
 	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get FSM current state", err))
 	}
 
 	// Only RUNNING feeds block assembly. IDLE can follow an operator STOP while
-	// a catchup batch is still validating historical blocks.
-	addTXToBlockAssembly := *currentState == blockchain.FSMStateRUNNING
+	// a catchup batch is still validating historical blocks. The exception is a
+	// short catchup that started from RUNNING: block validation asks to keep the
+	// hand-off on, offering unseen fork transactions to the pool through the
+	// existing RUNNING path (including its block-context queue-shed policy).
+	addTXToBlockAssembly := *currentState == blockchain.FSMStateRUNNING ||
+		(*currentState == blockchain.FSMStateCATCHINGBLOCKS && request.GetKeepBlockAssemblyHandoff())
 
 	// BATCHED SUBTREE LOADING: Get blockIds once before batching
 	blockHeaderIDs, err := u.blockchainClient.GetBlockHeaderIDs(ctx, block.Header.HashPrevBlock, uint64(u.settings.GetUtxoStoreBlockHeightRetention()*2))
 	if err != nil {
-		return nil, errors.NewProcessingError("[CheckSubtree] Failed to get block headers from blockchain client", err)
+		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get block headers from blockchain client", err))
 	}
 
 	blockIds := make(map[uint32]bool, len(blockHeaderIDs))
@@ -588,9 +612,14 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// each load batch is checked on all cores and written with
 	// SpendAndCreateMulti (processTransactionsBatched). That path writes before
 	// block.Valid runs, so it first proves the body is the one the header
-	// commits to.
+	// commits to. The batch path never hands transactions to block assembly, so a
+	// short catchup from RUNNING that keeps the hand-off on takes the level path.
 	checker, batched := u.batchChecker(*currentState, block.Height)
-	if batched {
+	if addTXToBlockAssembly {
+		checker, batched = nil, false
+	}
+
+	if batched && !bodyBound {
 		if err = u.checkBlockBodyBound(ctx, request, block, peerID, dah); err != nil {
 			return nil, errors.WrapGRPC(err)
 		}
@@ -690,7 +719,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		releaseArenas,
 	)
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapGRPC(err)
 	}
 
 	u.logger.Infof("[CheckBlockSubtrees] Completed processing %d transactions across %d subtree batches", totalProcessedTxs, numBatches)
@@ -724,14 +753,12 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	//       state the floater block is invalidated/rolled back (including the
 	//       optimistically-added block), in CATCHINGBLOCKS it
 	//       stays incomplete and is retried (preserving #1031);
-	//   (c) block-assembly contamination — FSM-gated off in
-	//       CATCHINGBLOCKS (both this closure and
-	//       processTransactionsInLevels gate on the same addTXToBlockAssembly
-	//       captured once above);
-	//       in RUNNING the substitution is byte-identical to the everyday
-	//       mempool policy-mode path (substituteUnconfirmedHeights with the
-	//       candidate height ≈ tip+1), so no new class of transaction reaches
-	//       block assembly.
+	//   (c) block-assembly contamination — bulk catch-up keeps the hand-off off.
+	//       A short catch-up from RUNNING may explicitly keep it on; both this
+	//       closure and processTransactionsInLevels use the same
+	//       addTXToBlockAssembly captured once above. Kept catch-up uses the
+	//       existing RUNNING block-validation options; an unresolved mempool
+	//       floater still reaches block.Valid's membership check described above.
 	subtreeValidatorOptions := []validator.Option{
 		validator.WithSkipPolicyChecks(true),
 		validator.WithInBlock(true),
@@ -794,12 +821,22 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 //
 // # COST
 //
-// Only the conflicting-node trailer is read, which go-subtree recovers by
-// seeking past the node array rather than streaming it. A block whose subtrees
-// carry no conflicting transactions — effectively all of them — costs a few
-// seeks per subtree and no blockchain or UTXO round trips at all. The ancestry
-// fetch and the counter-spend walk happen only when a conflicting transaction
-// is actually present.
+// Every transaction of every cached subtree is read from the UTXO store, for the
+// single field fields.Conflicting. On a path that previously did no UTXO round
+// trips at all this is the dominant new cost, and it is paid per block in the
+// steady state, where a node has already validated every subtree before the block
+// arrives.
+//
+// That is deliberate and is not configurable. The cheaper predecessor read only
+// each subtree's ConflictingNodes trailer, but the trailer records what was true
+// at blessing time and is never rewritten for a loser that was never mined, so it
+// answered a strictly weaker question than the fresh path's and left identical
+// block bytes to be judged by whether a node still held the blob (issue #1742). A
+// setting to skip the read would reintroduce exactly that divergence between
+// nodes, so the cost is taken unconditionally.
+//
+// The ancestry fetch and the counter-spend walk still happen only when a
+// conflicting transaction is actually present — effectively never.
 //
 // The ancestry window (retention*2) is deliberately wider than the subtree
 // retention window, so a cached subtree cannot outlive the range this check can
@@ -837,59 +874,116 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 		blockIds[blockID] = true
 	}
 
-	for _, txHash := range conflictingTxHashes {
-		// Same predicate the full-validation path applies via
-		// blessMissingTransaction. Note what that does and does not buy: the two
-		// paths agree on the QUESTION, but they do not start from the same facts.
-		// The fresh path asks it about every transaction the store currently
-		// flags Conflicting; this path can only ask it about the transactions the
-		// trailer names. A transaction that became conflicting after its subtree
-		// was blessed, and whose loser is never mined, never gets a trailer
-		// rewrite — so the cached path can still bless a block the fresh path
-		// would reject. That residual is divergence only: with no trailer entry
-		// there is no promotion, so no confirmed spend is reversed. Closing it
-		// needs the per-transaction conflicting flag, which is a wider change.
-		//
-		// Wrapped as a processing error
-		// rather than forced to tx-invalid: the underlying call returns
-		// ErrTxInvalid only for a genuine ancestry conflict, and errors.Is finds
-		// it through the chain. A walk-budget or store failure stays retryable
-		// instead of permanently marking the block invalid.
-		if err = u.checkCounterConflictingOnCurrentChain(ctx, txHash, blockIds); err != nil {
-			// A trailer names transactions that may have been pruned since the
-			// subtree was blessed — the trailer outlives the records it points
-			// at. The pre-existing caller of this predicate never saw that,
-			// because it had just validated the transaction and so knew the
-			// record existed; reading trailers from cached files removes that
-			// precondition.
-			//
-			// A record we cannot find is not evidence of an ancestor double
-			// spend. Rejecting on it would make one node refuse a block its
-			// peers accept purely because it pruned earlier — a node-local
-			// consensus split caused by housekeeping. Fail open, matching the
-			// same decision in filterAncestryConfirmedLosers, and leave the
-			// store-level guard to catch a real conflict at promotion time.
-			if errors.Is(err, errors.ErrTxNotFound) {
-				u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree conflict: a counter-conflicting record is no longer in the store, skipping",
-					block.Hash().String(), txHash.String())
+	// the block's candidate times, as CheckBlockSubtrees derives them for the validator, for the
+	// finality half of checkStoredTxAtHeight below
+	var candidateBlockTime, candidateParentMedianTime uint32
+	if block.Height < uint32(u.settings.ChainCfgParams.CSVHeight) {
+		candidateBlockTime = block.Header.Timestamp
+	} else if candidateParentMedianTime, err = u.fetchCandidateParentMedianTime(ctx, block.Header.HashPrevBlock); err != nil {
+		return errors.NewProcessingError("[CheckBlockSubtrees][%s] candidate-parent MTP for cached-subtree check", block.Hash().String(), err)
+	}
 
-				continue
+	atHeightOptions := validator.ProcessOptions(
+		validator.WithSkipPolicyChecks(true),
+		validator.WithCandidateBlockTime(candidateBlockTime),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+	)
+
+	for _, txHash := range conflictingTxHashes {
+		// A conflicting record may have been created by another candidate block at another
+		// height; check it at this block's height, as the full-validation path does
+		// (checkStoredConflictingAtHeight). A record pruned since the probe, the tx or a parent,
+		// fails open, as below.
+		if err = u.checkStoredTxAtHeight(ctx, txHash, nil, block.Height, atHeightOptions); err != nil {
+			if !errors.Is(err, errors.ErrTxNotFound) {
+				return err
 			}
 
-			return errors.NewProcessingError("[CheckBlockSubtrees][%s][%s] cached subtree conflicts with the candidate chain", block.Hash().String(), txHash.String(), err)
+			u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree tx at the block's height: it or a parent is no longer in the store, skipping",
+				block.Hash().String(), txHash.String())
 		}
+	}
+
+	// Same predicate the full-validation path applies via
+	// blessMissingTransaction, and now over the same facts: both paths ask it
+	// about every transaction the store currently flags Conflicting. This used
+	// to be asked only of the transactions a subtree's trailer named, which
+	// missed any transaction that became conflicting after its subtree was
+	// blessed and whose loser was never mined — the residual tracked as issue
+	// #1742, closed by sourcing the flag from the store above.
+	//
+	// Asked once for all of them, not once per transaction: the transactions
+	// share cones, and the per-transaction loop re-walked them N^2/2 times
+	// (issue 2037). Sourcing the set from the store rather than the trailer
+	// raises that N, so the batch is what keeps this path affordable.
+	//
+	// Wrapped as a processing error
+	// rather than forced to tx-invalid: the underlying call returns
+	// ErrTxInvalid only for a genuine ancestry conflict, and errors.Is finds
+	// it through the chain. A walk-budget or store failure stays retryable
+	// instead of permanently marking the block invalid, unless another
+	// member read is proven mined on the candidate chain.
+	notFound, err := u.checkCounterConflictingOnCurrentChainBatch(ctx, conflictingTxHashes, blockIds, skipMissingRecords)
+	if err != nil {
+		return errors.NewProcessingError("[CheckBlockSubtrees][%s] cached subtree conflicts with the candidate chain", block.Hash().String(), err)
+	}
+
+	// Each of these hashes was read from the store moments ago, so a record
+	// missing now means a counter-conflicting record is gone, or the
+	// transaction itself was pruned between the probe and this walk. The
+	// pre-existing caller of this predicate never saw either, because it had
+	// just validated the transaction and so knew the record existed; probing
+	// cached subtrees removes that precondition.
+	//
+	// A record we cannot find is not evidence of an ancestor double
+	// spend. Rejecting on it would make one node refuse a block its
+	// peers accept purely because it pruned earlier — a node-local
+	// consensus split caused by housekeeping. Fail open, matching the
+	// same decision in filterAncestryConfirmedLosers, and leave the
+	// store-level guard to catch a real conflict at promotion time.
+	for _, txHash := range notFound {
+		u.logger.Warnf("[CheckBlockSubtrees][%s][%s] cannot check cached-subtree conflict: a counter-conflicting record is no longer in the store, skipping",
+			block.Hash().String(), txHash.String())
 	}
 
 	return nil
 }
 
-// cachedSubtreeConflictingNodes collects the conflicting-node trailers of every
-// subtree referenced by the block.
+// cachedSubtreeConflictingNodes reports which transactions of the block's cached
+// subtrees the UTXO store currently flags Conflicting.
 //
-// Fails closed: the caller has just established that each file exists, so a read
-// or parse failure here is a transient fault or a corrupt file, never evidence
-// that a subtree has no conflicting transactions. Treating it as "none" would
-// turn a storage hiccup into a bypass of the check above.
+// It deliberately does NOT read each subtree's ConflictingNodes trailer. The
+// trailer records what was true when the subtree was blessed, and it is rewritten
+// only by markConflictingTxsInSubtrees, which buckets losers by txMeta.BlockIDs —
+// so a transaction demoted without ever being mined never gets its subtree
+// rewritten and never appears there. Asking the trailer therefore answered a
+// strictly weaker question than the fresh path's, which is the divergence issue
+// #1742 tracks: the same block bytes could be blessed by a node holding the blob
+// and rejected by one that had pruned it. The store holds the current fact, so
+// this asks the store.
+//
+// Fails closed on faults: the caller has just established that each file exists,
+// so a read or parse failure is a transient fault or a corrupt file, never
+// evidence that a subtree has no conflicting transactions. Treating it as "none"
+// would turn a storage hiccup into a bypass of the check above. The one exception
+// is a transaction absent from the store: both backends report that through
+// item.Err, and it is skipped rather than failed — the same fail-open the caller
+// applies to a pruned counter-conflicting record. Failing would reject any block
+// whose subtree blob outlived its transaction records, against peers that cannot
+// supply a record missing from this node's store.
+//
+// The skip is NOT proof the transaction was never conflicting. A record that aged
+// out may have been. It is only as safe as the retention ordering: a conflicting
+// record gets DAH = demotion height + 1 + UtxoStore retention (set only if no DAH
+// is set yet), a subtree blob gets DAH = blessing height + SubtreeValidation
+// retention, and demotion follows blessing. That ordering flips if
+// UtxoStore.BlockHeightRetentionAdjustment is set below
+// SubtreeValidation.BlockHeightRetentionAdjustment, and blockpersister sets the
+// subtree DAH to 0 (keep forever). In those cases this path can bless what the
+// fresh path would reject.
+//
+// Only fields.Conflicting is requested: the narrowest question that settles the
+// verdict.
 func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtrees []chainhash.Hash) ([]chainhash.Hash, error) {
 	perSubtree := make([][]chainhash.Hash, len(cachedSubtrees))
 
@@ -901,21 +995,12 @@ func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtre
 		subtreeHash := cachedSubtrees[idx]
 
 		g.Go(func() error {
-			reader, err := u.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
+			conflicting, err := u.cachedSubtreeConflictingNodesFor(gCtx, subtreeHash)
 			if err != nil {
-				return errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read cached subtree", subtreeHash.String(), err)
+				return err
 			}
 
-			defer func() {
-				_ = reader.Close()
-			}()
-
-			conflictingNodes, err := subtreepkg.DeserializeSubtreeConflictingFromReader(reader)
-			if err != nil {
-				return errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read conflicting nodes from cached subtree", subtreeHash.String(), err)
-			}
-
-			perSubtree[idx] = conflictingNodes
+			perSubtree[idx] = conflicting
 
 			return nil
 		})
@@ -931,6 +1016,156 @@ func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtre
 	}
 
 	return all, nil
+}
+
+// cachedSubtreeConflictingNodesFor reads one cached subtree's transaction hashes
+// and returns those the store currently flags Conflicting.
+func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHash chainhash.Hash) ([]chainhash.Hash, error) {
+	reader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	if err != nil {
+		return nil, errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read cached subtree", subtreeHash.String(), err)
+	}
+
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	// Node hashes only. Stopping before the trailer keeps this immune to what the
+	// trailer says (or whether it is there at all) and skips building Node structs
+	// for leaves that are only ever used as lookup keys.
+	nodeBytes, err := subtreepkg.DeserializeNodesFromReader(reader)
+	if err != nil {
+		return nil, errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read nodes from cached subtree", subtreeHash.String(), err)
+	}
+
+	numNodes := len(nodeBytes) / chainhash.HashSize
+	if numNodes == 0 {
+		return nil, nil
+	}
+
+	batchSize := u.settings.BlockValidation.ProcessTxMetaUsingStoreBatchSize
+	if batchSize <= 0 {
+		batchSize = numNodes
+	}
+
+	numBatches := (numNodes + batchSize - 1) / batchSize
+	perBatch := make([][]chainhash.Hash, numBatches)
+
+	// Batches go to the store in parallel, as in processTxMetaUsingStore:
+	// parallelism across subtrees alone leaves a block of a few large subtrees
+	// doing its round trips one at a time.
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(u.logger, g, u.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency)
+
+	for batchIdx := 0; batchIdx < numBatches; batchIdx++ {
+		batchIdx := batchIdx
+		start := batchIdx * batchSize
+		end := subtreepkg.Min(start+batchSize, numNodes)
+
+		g.Go(func() error {
+			conflicting, err := u.conflictingInBatch(gCtx, subtreeHash, nodeBytes[start*chainhash.HashSize:end*chainhash.HashSize])
+			if err != nil {
+				return err
+			}
+
+			perBatch[batchIdx] = conflicting
+
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return nil, err
+	}
+
+	var conflicting []chainhash.Hash
+	for _, batch := range perBatch {
+		conflicting = append(conflicting, batch...)
+	}
+
+	return conflicting, nil
+}
+
+// conflictingInBatch decorates one run of 32-byte transaction hashes with
+// fields.Conflicting and returns the flagged ones.
+func (u *Server) conflictingInBatch(ctx context.Context, subtreeHash chainhash.Hash, nodeBytes []byte) ([]chainhash.Hash, error) {
+	numNodes := len(nodeBytes) / chainhash.HashSize
+
+	itemsPtr := getUnresolvedMetaDataSlice(numNodes)
+	items := *itemsPtr
+
+	defer func() {
+		*itemsPtr = items
+		putUnresolvedMetaDataSlice(itemsPtr)
+	}()
+
+	for idx := 0; idx < numNodes; idx++ {
+		var hash chainhash.Hash
+		copy(hash[:], nodeBytes[idx*chainhash.HashSize:(idx+1)*chainhash.HashSize])
+
+		if hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			// Not a transaction, and not in the store.
+			continue
+		}
+
+		items = append(items, &utxostore.UnresolvedMetaData{Hash: hash, Idx: idx})
+	}
+
+	if len(items) == 0 {
+		return nil, nil
+	}
+
+	// Straight to the origin store: a one-field read must not populate the txmeta
+	// cache (see decorateReadPath).
+	store, _ := u.decorateReadPath(true)
+
+	// withStoreRetry reports a cancelled context as cancellation, not as a storage
+	// fault blockvalidation would redeliver the block for.
+	if err := u.withStoreRetry(ctx, fmt.Sprintf("conflicting probe of %d txs", len(items)), func() error {
+		for _, item := range items {
+			item.Data, item.Err = nil, nil
+		}
+
+		if err := store.BatchDecorate(ctx, items, fields.Conflicting); err != nil {
+			return err
+		}
+
+		// Aerospike reports a per-record timeout on the item, not from the call,
+		// and as the client's own error, which IsRetryableError does not know.
+		// Any per-record failure other than not-found therefore fails the attempt
+		// as a storage error, so the bounded retry covers it.
+		for _, item := range items {
+			if item.Err != nil && !errors.Is(item.Err, errors.ErrTxNotFound) {
+				return errors.NewStorageError("[cachedSubtreeConflictingNodes][%s] failed to read record %s", subtreeHash.String(), item.Hash.String(), item.Err)
+			}
+		}
+
+		return nil
+	}); err != nil {
+		return nil, errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read conflicting flags", subtreeHash.String(), err)
+	}
+
+	prometheusSubtreeValidationCachedConflictProbes.Add(float64(len(items)))
+
+	var out []chainhash.Hash
+
+	for _, item := range items {
+		if item.Err != nil {
+			// Absent from the store (the only item error the retry above lets
+			// through): skipped, see cachedSubtreeConflictingNodes. Failing here
+			// would reject any block whose subtree blob outlived its transaction
+			// records, and block validation maps ErrTxNotFound to a
+			// transient-incomplete retry against peers that cannot supply a record
+			// missing from OUR store.
+			continue
+		}
+
+		if item.Data != nil && item.Data.Conflicting {
+			out = append(out, item.Hash)
+		}
+	}
+
+	return out, nil
 }
 
 // findLocalSubtreeFile reports whether this node already has a copy of the given
@@ -1110,8 +1345,11 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 		}
 	}()
 
-	// Use TeeReader to split network stream to storage and parser simultaneously
-	teeReader := io.TeeReader(body, pw)
+	// Use TeeReader to split network stream to storage and parser simultaneously.
+	// storeSide records whether a write into the store failed, which tells a parse
+	// error caused by the store from one caused by the peer's bytes.
+	storeSide := &pipeWriteRecorder{w: pw}
+	teeReader := io.TeeReader(body, storeSide)
 
 	// Use pooled bufio.Reader for parsing
 	bufferedReader := bufioReaderPool.Get().(*bufio.Reader)
@@ -1135,6 +1373,23 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 	// Wait for storage operation to complete
 	storeErr := <-storeDone
 
+	// The parser failed on the peer's bytes while every write into the store had
+	// succeeded, so the store's error, if any, is only the abort above echoed
+	// back. Reporting it would make the peer's fault look like a local storage
+	// fault, which catch-up neither charges to the peer nor retries elsewhere, so
+	// it carries a peer code: a bare ProcessingError is a local fault. A cancelled
+	// context also fails the read with no store-side failure, and that is ours.
+	// If the store failed on its own in the same instant, before any write saw
+	// it, that failure is not reported here; nothing was stored, and the next
+	// attempt meets it again.
+	if parseErr != nil && !storeSide.failed {
+		if ctx.Err() != nil {
+			return errors.NewProcessingError("[processSubtreeDataStream] failed to parse transactions", parseErr)
+		}
+
+		return errors.NewNetworkInvalidResponseError("[processSubtreeDataStream] failed to parse transactions", parseErr)
+	}
+
 	// Check for errors from both operations
 	if storeErr != nil {
 		// ErrBlobAlreadyExists is benign HERE, as it is for the subtreeToCheck write above,
@@ -1143,10 +1398,10 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 		// refuses only a complete body there, so this writer's whole body has streamed through
 		// the tee and every transaction is parsed, which is what this call is for, and the
 		// file on disk is another writer's complete subtreeData for the same root hash. Only
-		// the parse and count checks below still decide the call. When the key was taken
-		// before this write began, the store refuses before reading, the tee fails, and
-		// parseErr fails the call as before. On the file store without that option a writer
-		// that races past the pre-write check publishes by rename and replaces the file.
+		// the count check below still decides the call. When the key was taken before this
+		// write began, the store refuses before reading, the tee fails, and the parse check
+		// below fails the call as a local fault. On the file store without that option a
+		// writer that races past the pre-write check publishes by rename and replaces the file.
 		if errors.Is(storeErr, errors.ErrBlobAlreadyExists) {
 			u.logger.Warnf("[processSubtreeDataStream][%s] subtreeData was published by another writer while this one streamed; keeping theirs", subtree.RootHash().String())
 		} else {
@@ -1154,19 +1409,37 @@ func (u *Server) processSubtreeDataStream(ctx context.Context, subtree *subtreep
 		}
 	}
 
+	// Only a store-side failure reaches here with a parse error: a write into the store
+	// failed, so the parse failed with it. That is ours.
 	if parseErr != nil {
 		return errors.NewProcessingError("[processSubtreeDataStream] failed to parse transactions", parseErr)
 	}
 
 	// Verify transaction count
 	if txCount != subtree.Length() {
-		return errors.NewProcessingError("[processSubtreeDataStream] transaction count mismatch: expected %d, got %d", subtree.Length(), txCount)
+		return errors.NewNetworkInvalidResponseError("[processSubtreeDataStream] transaction count mismatch: expected %d, got %d", subtree.Length(), txCount)
 	}
 
 	u.logger.Debugf("[processSubtreeDataStream] Processed %d transactions from subtree %s (single-pass streaming)",
 		txCount, subtree.RootHash().String())
 
 	return nil
+}
+
+// pipeWriteRecorder forwards writes and records whether any failed. It is written
+// only from the parsing goroutine, through the TeeReader.
+type pipeWriteRecorder struct {
+	w      io.Writer
+	failed bool
+}
+
+func (p *pipeWriteRecorder) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	if err != nil {
+		p.failed = true
+	}
+
+	return n, err
 }
 
 // readTransactionsFromSubtreeDataStream reads transactions directly from subtreeData stream.
@@ -1281,6 +1554,16 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 		}
 	}
 
+	storedConflictingOptions := validator.ProcessOptions(
+		validator.WithSkipPolicyChecks(true),
+		validator.WithCandidateBlockTime(candidateBlockTime),
+		validator.WithCandidateParentMedianTime(candidateParentMedianTime),
+	)
+
+	if err = u.checkStoredConflictingAtHeight(ctx, txHashes, txMetaSlice, allTransactions, blockHeight, storedConflictingOptions); err != nil {
+		return err
+	}
+
 	alreadyValidated := len(txHashes) - missed
 
 	if missed == 0 {
@@ -1341,8 +1624,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	// addTXToBlockAssembly is captured once by the caller (CheckBlockSubtrees)
 	// from a single FSM read, so this pass and the validateSubtree closure cannot
-	// diverge across an FSM transition. While catching up blocks it is false,
-	// disabling adding transactions to block assembly.
+	// diverge across an FSM transition. Bulk catch-up disables the hand-off; a
+	// short catch-up from RUNNING can explicitly keep it on.
 	if !addTXToBlockAssembly {
 		validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
 	}
@@ -1744,11 +2027,11 @@ func validateSubtreeLeafCount(subtreeHash chainhash.Hash, leafCount, policyMax i
 	// guarantee local and stable if that constructor ever changes. A subtree always carries at
 	// least one node.
 	if leafCount == 0 {
-		return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
+		return errors.NewNetworkInvalidResponseError("[CheckBlockSubtrees][%s] subtree has zero nodes", subtreeHash.String())
 	}
 
 	if leafCount > policyMax {
-		return errors.NewProcessingError("[CheckBlockSubtrees][%s] subtree response exceeds policy max %d nodes (got %d)",
+		return errors.NewNetworkInvalidResponseError("[CheckBlockSubtrees][%s] subtree response exceeds policy max %d nodes (got %d)",
 			subtreeHash.String(), policyMax, leafCount)
 	}
 

@@ -63,7 +63,7 @@ Please note that the use of subtrees within blocks represents a data abstraction
 
 - **Faster Validation**: Since nodes process subtrees continuously, validating a block is quicker because it involves validating the presence and correctness of subtree identifiers rather than individual transactions.
 
-- **Scalability**: The model supports a much higher transaction throughput (> 1M transactions per second).
+- **Scalability**: The model is designed for a much higher transaction throughput (> 1M transactions per second).
 
 ## Network Behavior
 

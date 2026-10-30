@@ -121,8 +121,8 @@ type Server struct {
 	// is used to send rejected transaction data to Kafka topics for monitoring and analysis.
 	rejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
-	// policyRejectedTxKafkaProducerClient publishes consensus-valid but policy-rejected
-	// transactions to Kafka. Subtree validation pods consume these to cache raw tx bytes.
+	// policyRejectedTxKafkaProducerClient publishes policy-rejected transactions, usually
+	// but not always consensus-valid, to Kafka. Subtree validation pods consume these to cache raw tx bytes.
 	policyRejectedTxKafkaProducerClient kafka.KafkaAsyncProducerI
 
 	// blockAssemblyClient connects to the block assembly service for mining integration,

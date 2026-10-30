@@ -391,9 +391,7 @@
 Teranode uses build tags to control which tests run:
 
 - `test_tna` - TNA test suite (`test/tna/`)
-- `test_tec` - TEC test suite (`test/tec/`)
-- `test_tnd` - TND test suite (`test/tnd/`)
-- `test_tnf` - TNF test suite (`test/tnf/`)
+- `test_tec` - TEC test suite (`test/tec/`). Each file in it also has its own tag, from `test_tec_blk_2` to `test_tec_blk_7`.
 - `test_smoke` - Smoke tests (docker-based e2e)
 - `test_functional` - Functional tests (subset of smoke)
 - `test_utxo` - UTXO tests (subset of smoke)
@@ -402,7 +400,7 @@ Teranode uses build tags to control which tests run:
 - `aerospike` - Tests requiring Aerospike
 - `debug` - Enable debug mode for tests
 
-> **Note:** The `test/tnb/` and `test/tnj/` test directories do not use build tags; run them directly with `go test ./test/tnb/` and `go test ./test/tnj/`.
+> **Note:** The `test/tnb/`, `test/tnd/`, `test/tnf/` and `test/tnj/` test directories do not use build tags. Run them directly, for example `go test ./test/tnd/`. No `make` target or CI workflow runs any of these acceptance categories; see [Running Tests](runningTests.md#test-levels).
 
 # Other Resources
 

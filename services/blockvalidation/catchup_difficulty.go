@@ -33,6 +33,8 @@ func (u *Server) validateCatchupHeaderDifficulty(ctx context.Context, catchupCtx
 	default:
 	}
 
+	// The chain is anchored on the common ancestor, so this must run on the untrimmed header list,
+	// before fetchAndValidateBlocks drops the stored front.
 	if err := validateHeaderChainDifficulty(u.settings, catchupCtx.commonAncestorMeta, catchupCtx.blockHeaders); err != nil {
 		if errors.IsMaliciousResponseError(err) {
 			if prometheusCatchupErrors != nil && catchupCtx.peerID != "" {

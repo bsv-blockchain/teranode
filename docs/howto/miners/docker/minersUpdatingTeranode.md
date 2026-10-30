@@ -1,6 +1,6 @@
 # Update Docker Teranode
 
-Last modified: 11-August-2026
+Last modified: 19-October-2026
 
 Docker updates are managed from the
 [teranode-quickstart](https://github.com/bsv-blockchain/teranode-quickstart)
@@ -45,7 +45,10 @@ Set a specific Teranode release tag:
 ```
 
 Use this for rollback only after checking the release notes for data-format or
-migration warnings.
+migration warnings. Teranode applies blockchain store schema changes on startup,
+and it only applies them forward. To roll back across a release that changes
+data formats, restore the backup that you took before the upgrade. See
+[How to Back Up and Restore Teranode Data](../minersHowToBackup.md).
 
 ## Update Quickstart Itself
 

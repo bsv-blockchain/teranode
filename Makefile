@@ -183,7 +183,7 @@ test:
 # The PR test job runs it after `make test`.
 .PHONY: test-heavy
 test-heavy:
-	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^TestSortedHashSet_' ./services/blockassembly/subtreeprocessor
+	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$)' ./services/blockassembly/subtreeprocessor
 
 # run the Block Validation gap-proof tests (services/blockvalidation/spec.md, Conformance Gaps).
 # Each asserts spec-correct behaviour and is expected to FAIL until its gap is fixed, so this

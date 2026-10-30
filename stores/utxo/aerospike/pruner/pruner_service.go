@@ -109,10 +109,6 @@ var (
 	prometheusUtxoExternalFilesDeletedSkipped prometheus.Counter
 	prometheusUtxoRetryAttempts               prometheus.Counter
 	prometheusUtxoTimeoutEvents               prometheus.Counter
-	prometheusUtxoParentsSkippedPruned        prometheus.Counter
-	prometheusUtxoPrunedSetSize               prometheus.Gauge
-	prometheusUtxoPrunedSetSaturated          prometheus.Gauge
-	prometheusUtxoPrunedSetRotations          prometheus.Gauge
 )
 
 // Options contains configuration options for the cleanup service
@@ -227,11 +223,7 @@ type Service struct {
 	// every write outside the pruner stay on COMMIT_ALL — see prune_policies.go.
 	removalCommitLevel aerospike.CommitLevel
 
-	// Always nil. PrunedTxSet is a cuckoo filter and must not decide
-	// parent-marker writes; a false positive drops replay protection.
-	prunedSet *PrunedTxSet
-
-	partitionWorkerFn func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int, prunedSet *PrunedTxSet) (int64, int64, error)
+	partitionWorkerFn func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int) (int64, int64, error)
 
 	// Lua UDF module name
 	luaPackage string
@@ -346,27 +338,6 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 			Name: "utxo_pruner_timeout_events_total",
 			Help: "Total number of timeout events requiring retry during pruning operations",
 		})
-		prometheusUtxoParentsSkippedPruned = promauto.NewCounter(prometheus.CounterOpts{
-			Name: "utxo_pruner_parents_skipped_pruned_total",
-			Help: "Always 0: the PrunedTxSet parent-update skip is disabled (see #1701). Number of parent updates skipped because parent was already pruned (in this or a prior session)",
-		})
-		prometheusUtxoPrunedSetSize = promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "utxo_pruner_pruned_set_size",
-			Help: "Always 0: PrunedTxSet is never constructed (see #1701). Approximate number of TXIDs tracked in the in-memory PrunedTxSet across prune sessions",
-		})
-		prometheusUtxoPrunedSetSaturated = promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "utxo_pruner_pruned_set_saturated",
-			Help: "Always 0 because PrunedTxSet is never constructed (see #1701) — do NOT read 0 here as healthy. 1 if any PrunedTxSet Insert has failed since construction without rotation recovering it (extreme CAS contention without saturation, or insertion into a freshly-rotated generation also failing — both are error/backstop signals; should be 0 in normal operation. Use utxo_pruner_pruned_set_rotations for routine cap pressure.)",
-		})
-		// Tracked as a Gauge (not a Counter) because the value is sampled
-		// from PrunedTxSet.Rotations() at the end of each prune session
-		// rather than incremented per-event. The _total suffix is omitted
-		// to comply with the Prometheus convention that "_total" is
-		// reserved for Counter metrics.
-		prometheusUtxoPrunedSetRotations = promauto.NewGauge(prometheus.GaugeOpts{
-			Name: "utxo_pruner_pruned_set_rotations",
-			Help: "Always 0: PrunedTxSet is never constructed (see #1701). Cumulative number of generation rotations across all PrunedTxSet shards (each rotation drops the previous-gen entries; high rate suggests pruner_utxoPrunedSetMaxEntries is too small)",
-		})
 	})
 
 	// Use the configured query policy from settings (configured via aerospike_queryPolicy URL)
@@ -423,11 +394,11 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		fieldConflicting:               fields.Conflicting.String(),
 	}
 
-	// Do not construct PrunedTxSet. It is a cuckoo filter used to skip
-	// parent deletedChildren writes; a false positive drops the replay
-	// marker on a live parent. prunedSet stays nil so every parent is
-	// updated. Missing parents already return TX_NOT_FOUND / KEY_NOT_FOUND
-	// and are counted as skipped.
+	// Every parent of a deleted record gets an addDeletedChildren write. Do
+	// not skip parents through a probabilistic "already pruned" set: a false
+	// positive drops the replay marker on a live parent (see #1701). Missing
+	// parents already return TX_NOT_FOUND / KEY_NOT_FOUND and are counted as
+	// skipped.
 	service.partitionWorkerFn = service.partitionWorker
 
 	return service, nil
@@ -590,7 +561,6 @@ func (s *Service) partitionWorker(
 	blockHeight uint32,
 	partitionStart int,
 	partitionCount int,
-	prunedSet *PrunedTxSet,
 ) (processed int64, skipped int64, err error) {
 
 	// Each worker creates its own policy for complete independence (no shared state)
@@ -660,27 +630,6 @@ func (s *Service) partitionWorker(
 				rec = r
 			}
 
-			// NOTE: prunedSet.Add is deliberately NOT called here in the read
-			// hot path. It is called in batch at the top of processRecordChunk
-			// (per-chunk, before any CheckAndRemove). Two reasons:
-			//
-			//   1) Cache locality. Calling Add per scanned record put a cuckoo
-			//      bucket cache miss on every record, costing ~5% of total CPU
-			//      under load (measured in CPU profile on dev-scale-1). Doing
-			//      the ~30 us batch of Adds once per 1024-record chunk lets the
-			//      hardware prefetcher do its job and amortises the cost.
-			//
-			//   2) Concurrent-chunk visibility. The chunk processor takes the
-			//      ~10 ms BatchOperate wait after submitting parent updates.
-			//      Other chunk goroutines (chunkGroupLimit=4) run during that
-			//      wait and do their own CheckAndRemoves. Adding chunk N's
-			//      TXIDs UP FRONT in processRecordChunk — rather than after the
-			//      flush — means those concurrent chunks see N's TXIDs during
-			//      the entire window and can skip parents that N just queued
-			//      for deletion. This is what lifted the catch rate from ~56%
-			//      (Add-after-flush) to ~99% (Add up-front) without changing
-			//      throughput or smoothness.
-
 			// Check for timeout/network errors
 			if rec.Err != nil {
 				var asErr aerospike.Error
@@ -713,7 +662,7 @@ func (s *Service) partitionWorker(
 
 	submitChunk := func(chunkToProcess []*aerospike.Result) {
 		chunkGroup.Go(func() error {
-			processed, skipped, err := s.processRecordChunk(ctx, blockHeight, chunkToProcess, prunedSet)
+			processed, skipped, err := s.processRecordChunk(ctx, blockHeight, chunkToProcess)
 			if err != nil {
 				return err
 			}
@@ -811,12 +760,6 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 		partitionStart += partitionCount
 	}
 
-	// prunedSet is always nil (cuckoo skip disabled: a false positive
-	// dropped deletedChildren on a live parent). The nil-guarded Add /
-	// CheckAndRemove paths below are therefore no-ops; every parent gets
-	// an addDeletedChildren write.
-	prunedSet := s.prunedSet
-
 	// Cumulative counters persist across retry attempts
 	var cumulativeProcessed, cumulativeSkipped int64
 
@@ -837,7 +780,7 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 			wg.Add(1)
 			go func(r partitionRange) {
 				defer wg.Done()
-				processed, skipped, err := s.partitionWorkerFn(ctx, blockHeight, r.start, r.count, prunedSet)
+				processed, skipped, err := s.partitionWorkerFn(ctx, blockHeight, r.start, r.count)
 				results <- workerResult{
 					processed:      processed,
 					skipped:        skipped,
@@ -934,16 +877,6 @@ func (s *Service) PruneWithPartitions(ctx context.Context, blockHeight uint32, b
 
 		prometheusUtxoCleanupBatch.Observe(float64(elapsed.Microseconds()) / 1_000_000)
 
-		if prunedSet != nil {
-			prometheusUtxoPrunedSetSize.Set(float64(prunedSet.Len()))
-			prometheusUtxoPrunedSetRotations.Set(float64(prunedSet.Rotations()))
-			if prunedSet.Saturated() {
-				prometheusUtxoPrunedSetSaturated.Set(1)
-			} else {
-				prometheusUtxoPrunedSetSaturated.Set(0)
-			}
-		}
-
 		s.notifier.NotifyPruneComplete(blockHeight, cumulativeProcessed)
 
 		return cumulativeProcessed, nil
@@ -985,7 +918,7 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 
 // processRecordChunk processes a chunk of parent records with batched child verification
 // Returns: (processedCount, skippedCount, error)
-func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, chunk []*aerospike.Result, prunedSet *PrunedTxSet) (int, int, error) {
+func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, chunk []*aerospike.Result) (int, int, error) {
 	if len(chunk) == 0 {
 		return 0, 0, nil
 	}
@@ -1102,30 +1035,6 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	processedCount := 0
 	skippedCount := 0
 
-	// Add this chunk's record TXIDs to prunedSet UP FRONT, before any
-	// CheckAndRemove fires. This makes the TXIDs visible to concurrent
-	// chunk goroutines (chunkGroupLimit=4) throughout this chunk's entire
-	// processing + flush wait — closing the timing window where a
-	// concurrent chunk's CheckAndRemove would otherwise miss because the
-	// Add hasn't happened yet.
-	//
-	// Cost: ~30 us for a 1024-record chunk (lock-free atomic CAS, ~30 ns
-	// each). Negligible vs the ~10 ms flushCleanupBatches that follows.
-	if prunedSet != nil {
-		for _, rec := range chunk {
-			if rec.Err != nil || rec.Record == nil || rec.Record.Bins == nil {
-				continue
-			}
-			txIDBytes, ok := rec.Record.Bins[s.fieldTxID].([]byte)
-			if !ok || len(txIDBytes) != 32 {
-				continue
-			}
-			var h chainhash.Hash
-			copy(h[:], txIDBytes)
-			prunedSet.Add(h)
-		}
-	}
-
 	for _, rec := range chunk {
 		if rec.Err != nil {
 			if firstRecordError == nil {
@@ -1182,21 +1091,14 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 		}
 
 		// Safe to delete - get inputs for parent updates.
-		// Note: this record's TXID is already in prunedSet from the up-front
-		// Add loop at the top of processRecordChunk.
 		inputs, err := s.getTxInputsFromBins(ctx, blockHeight, rec.Record.Bins, txHash)
 		if err != nil {
 			return 0, 0, err
 		}
 
-		// Accumulate parent updates, skipping parents already pruned in this session
+		// Accumulate parent updates
 		for _, input := range inputs {
-			// Check if parent TX was already pruned — if so, skip the update
 			parentTxID := input.PreviousTxIDChainHash()
-			if prunedSet != nil && prunedSet.CheckAndRemove(*parentTxID) {
-				prometheusUtxoParentsSkippedPruned.Inc()
-				continue
-			}
 
 			keySource := uaerospike.CalculateKeySource(parentTxID, input.PreviousTxOutIndex, s.utxoBatchSize)
 			parentKeyStr := string(keySource)
@@ -1245,9 +1147,7 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 	}
 
 	// Flush all accumulated operations in one batch per chunk. Blocks on
-	// Aerospike network I/O. The chunk's record TXIDs were Added to
-	// prunedSet at the top of this function so concurrent chunks can see
-	// them during this wait.
+	// Aerospike network I/O.
 	if err := s.flushCleanupBatches(ctx, allParentUpdates, allDeletions, allExternalFiles); err != nil {
 		return 0, 0, err
 	}

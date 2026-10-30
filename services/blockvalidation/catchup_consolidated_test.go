@@ -21,96 +21,6 @@ import (
 // Crash Recovery Tests (consolidated from catchup_crash_recovery_test.go)
 // ============================================================================
 
-// TestCatchup_CrashDuringBlockValidation tests recovery from crashes during block validation
-func TestCatchup_CrashDuringBlockValidation(t *testing.T) {
-	t.Run("ResumeFromLastValidatedBlock", func(t *testing.T) {
-		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
-		defer cleanup()
-
-		// Create test headers
-		testHeaders := testhelpers.CreateTestHeaders(t, 10)
-		targetBlock := &model.Block{
-			Header: testHeaders[9],
-			Height: 1010,
-		}
-
-		// Setup mocks
-		mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Hash()).
-			Return(false, nil)
-
-		bestBlockHeader := testHeaders[0]
-		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
-			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000}, nil)
-
-		mockBlockchainClient.On("GetBlockLocator", mock.Anything, mock.Anything, mock.Anything).
-			Return([]*chainhash.Hash{bestBlockHeader.Hash()}, nil)
-
-		// Create a map to track which blocks "exist"
-		existingBlocks := make(map[string]bool)
-		for i := 1; i <= 5; i++ {
-			existingBlocks[testHeaders[i].Hash().String()] = true
-		}
-
-		// Mock GetBlockExists for each header
-		for i := 1; i < 10; i++ {
-			exists := existingBlocks[testHeaders[i].Hash().String()]
-			mockBlockchainClient.On("GetBlockExists", mock.Anything, testHeaders[i].Hash()).
-				Return(exists, nil).Maybe()
-		}
-
-		// Mock common ancestor finding
-		mockBlockchainClient.On("GetBlockHeader", mock.Anything, testHeaders[0].Hash()).
-			Return(testHeaders[0], &model.BlockHeaderMeta{Height: 1000}, nil).Maybe()
-
-		// Filter should only return blocks we don't have (6-9)
-		newHeaders, err := server.filterExistingBlocks(ctx, testHeaders[1:], targetBlock)
-
-		assert.NoError(t, err)
-		assert.Len(t, newHeaders, 4, "Should only process blocks 6-9")
-
-		// Verify the filtered blocks are the correct ones
-		for i, header := range newHeaders {
-			assert.Equal(t, testHeaders[i+6].Hash(), header.Hash(),
-				"Should start from block 6 after crash recovery")
-		}
-
-		t.Logf("Successfully resumed from block %d after crash", 6)
-	})
-
-	t.Run("DetectCorruptedValidationState", func(t *testing.T) {
-		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
-		defer cleanup()
-
-		testHeaders := testhelpers.CreateTestHeaders(t, 5)
-		targetBlock := &model.Block{
-			Header: testHeaders[4],
-			Height: 1005,
-		}
-
-		// Setup basic mocks
-		mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Hash()).
-			Return(false, nil)
-
-		bestBlockHeader := testHeaders[0]
-		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
-			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000}, nil)
-
-		// Simulate corrupted state: block exists but its parent doesn't
-		mockBlockchainClient.On("GetBlockExists", mock.Anything, testHeaders[2].Hash()).
-			Return(true, nil).Once()
-		mockBlockchainClient.On("GetBlockExists", mock.Anything, testHeaders[1].Hash()).
-			Return(false, nil).Once()
-
-		// This represents a corrupted state that needs recovery
-		_, err := server.filterExistingBlocks(ctx, testHeaders[1:3], targetBlock)
-
-		assert.NoError(t, err)
-		// The function should handle this gracefully by including the block for re-validation
-	})
-}
-
 // TestCatchup_ConcurrentCatchupLock tests the catchup lock mechanism
 func TestCatchup_ConcurrentCatchupLock(t *testing.T) {
 	t.Run("OnlyOneCatchupAllowed", func(t *testing.T) {
@@ -170,6 +80,8 @@ func TestCatchup_ConcurrentCatchupLock(t *testing.T) {
 		failureCount := 0
 		mu := sync.Mutex{}
 
+		var winner *CatchupContext
+
 		var wg sync.WaitGroup
 		wg.Add(numGoroutines)
 
@@ -190,9 +102,9 @@ func TestCatchup_ConcurrentCatchupLock(t *testing.T) {
 				mu.Lock()
 				if err == nil {
 					successCount++
-					// Hold lock briefly
-					time.Sleep(10 * time.Millisecond)
-					server.releaseCatchupLock(ctx, &err)
+					// Hold the lock until every goroutine has tried. Releasing it early lets a
+					// goroutine that starts late acquire it legitimately, which made this flaky.
+					winner = ctx
 				} else {
 					failureCount++
 				}
@@ -201,6 +113,11 @@ func TestCatchup_ConcurrentCatchupLock(t *testing.T) {
 		}
 
 		wg.Wait()
+
+		if winner != nil {
+			var releaseErr error
+			server.releaseCatchupLock(winner, &releaseErr)
+		}
 
 		// Exactly one should succeed
 		assert.Equal(t, 1, successCount,
@@ -320,47 +237,6 @@ func TestCatchup_HeaderCacheCorruption(t *testing.T) {
 		// Verify cache is cleared
 		_, exists = server.headerChainCache.GetValidationHeaders(testHeaders[2].Hash())
 		assert.False(t, exists, "Cache should be cleared after cleanup")
-	})
-}
-
-// TestCatchup_PartialStateRecovery tests recovery from partial catchup states
-func TestCatchup_PartialStateRecovery(t *testing.T) {
-	t.Run("SkipAlreadyValidatedBlocks", func(t *testing.T) {
-		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
-		defer cleanup()
-
-		// Create 20 test headers
-		testHeaders := testhelpers.CreateTestHeaders(t, 20)
-		targetBlock := &model.Block{
-			Header: testHeaders[19],
-			Height: 1020,
-		}
-
-		// Simulate that blocks 1-10 were already validated
-		for i := 1; i <= 10; i++ {
-			mockBlockchainClient.On("GetBlockExists", mock.Anything, testHeaders[i].Hash()).
-				Return(true, nil).Once()
-		}
-
-		// Blocks 11-19 still need validation
-		for i := 11; i < 20; i++ {
-			mockBlockchainClient.On("GetBlockExists", mock.Anything, testHeaders[i].Hash()).
-				Return(false, nil).Once()
-		}
-
-		// Filter blocks
-		newHeaders, err := server.filterExistingBlocks(ctx, testHeaders[1:], targetBlock)
-
-		assert.NoError(t, err)
-		assert.Len(t, newHeaders, 9, "Should only return blocks 11-19")
-
-		// Verify we're skipping the right blocks
-		for i, header := range newHeaders {
-			expectedIndex := i + 11
-			assert.Equal(t, testHeaders[expectedIndex].Hash(), header.Hash(),
-				"Should skip already validated blocks")
-		}
 	})
 }
 
@@ -503,8 +379,11 @@ func TestCatchup_ContextStateConsistency(t *testing.T) {
 			currentHeight:      1000,
 			blockHeaders:       testHeaders[1:],
 			headersFetchResult: &catchup.Result{
-				Headers: testHeaders[1:], // Headers to be filtered
+				// Peer headers start at the common ancestor (index 0), as a real fetch returns them,
+				// so filterHeaders keeps testHeaders[1:], whose first parent is the ancestor.
+				Headers: testHeaders,
 			},
+			commonAncestorIndex: 0,
 		}
 
 		// Verify context consistency after various operations
@@ -555,33 +434,6 @@ func TestCatchup_ContextStateConsistency(t *testing.T) {
 
 // TestCatchup_ErrorPropagation tests that errors are properly propagated through the catchup flow
 func TestCatchup_ErrorPropagation(t *testing.T) {
-	t.Run("PropagateValidationErrors", func(t *testing.T) {
-		ctx := context.Background()
-		server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
-		defer cleanup()
-
-		testHeaders := testhelpers.CreateTestHeaders(t, 3)
-		targetBlock := &model.Block{
-			Header: testHeaders[2],
-			Height: 1003,
-		}
-
-		// Mock a validation error
-		expectedErr := assert.AnError
-		mockBlockchainClient.On("GetBlockExists", mock.Anything, testHeaders[1].Hash()).
-			Return(false, expectedErr).Once()
-
-		mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Hash()).
-			Return(false, nil).Maybe()
-
-		// Error should be handled gracefully (logged but continues)
-		headers, err := server.filterExistingBlocks(ctx, testHeaders[1:], targetBlock)
-
-		// filterExistingBlocks includes the header even on error to be safe
-		assert.NoError(t, err, "Should not propagate error")
-		assert.Len(t, headers, 2, "Should include headers despite error")
-	})
-
 	t.Run("CleanupOnError", func(t *testing.T) {
 		server, _, _, cleanup := setupTestCatchupServer(t)
 		defer cleanup()

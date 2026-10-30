@@ -204,7 +204,7 @@ func TestSubtreesHandler(t *testing.T) {
 				httpmock.NewBytesResponder(tt.httpStatusCode, tx1.ExtendedBytes()),
 			)
 
-			err := server.subtreesHandler(context.Background(), tt.hash, tt.baseURL, tt.peerID)
+			err := server.subtreesHandler(context.Background(), time.Now(), tt.hash, tt.baseURL, tt.peerID)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -389,7 +389,7 @@ func TestSubtreesHandler_NilSubtree(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotPanics(t, func() {
-		err = server.subtreesHandler(context.Background(), subtreeHash, baseURL, "peer1")
+		err = server.subtreesHandler(context.Background(), time.Now(), subtreeHash, baseURL, "peer1")
 	})
 	require.NoError(t, err)
 }
@@ -457,6 +457,8 @@ func testSubtreeMessageHandlerSkipsInState(t *testing.T, state blockchain.FSMSta
 	validateSubtreeCalled := atomic.Bool{}
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+	// A subtree skipped while catching up starts a watcher for RUNNING; let it give up.
+	blockchainClient.On("WaitForFSMtoTransitionToGivenState", mock.Anything, blockchain.FSMStateRUNNING).Return(errors.NewContextCanceledError("test")).Maybe()
 
 	server := &testServer{
 		Server: Server{

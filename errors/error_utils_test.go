@@ -139,6 +139,33 @@ func TestIsTransientLocalError(t *testing.T) {
 	}
 }
 
+func TestIsBlockSpendRuleViolation(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{name: "nil error", err: nil, expected: false},
+		{name: "coinbase immature", err: NewTxCoinbaseImmatureError("coinbase is not spendable yet"), expected: true},
+		{name: "non final", err: NewUtxoNonFinalError("transaction is not final"), expected: true},
+		// The validator re-derives every input's parent output data from this node's store,
+		// so a mismatch is the store disagreeing with itself, not the block.
+		{name: "utxo hash mismatch", err: NewUtxoHashMismatchError("utxo hash mismatch"), expected: false},
+		{name: "wrapped coinbase immature", err: NewProcessingError("outer", NewProcessingError("error spending utxos", NewTxCoinbaseImmatureError("immature"))), expected: true},
+		// Frozen depends on this node's alert-system state, not on the block.
+		{name: "frozen utxo", err: NewUtxoFrozenError("utxo is frozen"), expected: false},
+		// A double spend is a conflict, not a broken rule.
+		{name: "spent utxo", err: New(ERR_UTXO_SPENT, "utxo already spent"), expected: false},
+		{name: "plain processing error", err: NewProcessingError("boom"), expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, IsBlockSpendRuleViolation(tt.err))
+		})
+	}
+}
+
 func TestIsNetworkError(t *testing.T) {
 	tests := []struct {
 		name     string

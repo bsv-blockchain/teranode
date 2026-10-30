@@ -4,7 +4,7 @@ Last Modified - 13-December-2024
 
 # General notes
 
-Teranode is tested at scaled-out configuration (1m tps throughput) with Aerospike. The Aerospike database is used to store the UTXO set, where indexes are stored in-memory, and data on disk.This document outlines some configuration notes for Aerospike.
+Teranode's scaled-out configuration (1m tps design target) uses Aerospike. The Aerospike database is used to store the UTXO set, where indexes are stored in-memory, and data on disk.This document outlines some configuration notes for Aerospike.
 
 If using the `Docker compose` installation path, your compose file will automatically install the Aerospike 7.1 community edition for you.
 

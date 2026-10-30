@@ -2,8 +2,11 @@ package blockvalidation
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestDrainWriteJobs_ReleasesStrandedWaiter pins the leak fix (bitcoin-sv/teranode#4692):
@@ -49,4 +52,36 @@ func TestDrainWriteJobs_ReleasesStrandedWaiter(t *testing.T) {
 // fetchAndValidateBlocks never creates the channel at all.
 func TestDrainWriteJobs_NilChannel(t *testing.T) {
 	drainWriteJobs(nil)
+}
+
+// TestDrainWriteJobs_MarksDrainedJobsUnwritten pins bitcoin-sv/teranode#4978: a job drained
+// after the pool tore down was never written, so its block's barrier must see it as unwritten
+// once the WaitGroup releases, or quickValidateBlockAsync would commit the block with
+// subtrees_set and no file.
+func TestDrainWriteJobs_MarksDrainedJobsUnwritten(t *testing.T) {
+	barrier := &subtreeWriteBarrier{}
+	ch := make(chan *SubtreeWriteJob, 1)
+
+	barrier.Add(1)
+	ch <- &SubtreeWriteJob{Done: &barrier.WaitGroup, Unwritten: &barrier.unwritten}
+	close(ch)
+
+	drainWriteJobs(ch)
+
+	barrier.Wait()
+	require.True(t, barrier.unwritten.Load())
+}
+
+// TestDrainWriteJobs_UnwrittenWithoutBarrier covers a job carrying only the flag: it is still
+// raised, and the missing WaitGroup does not panic.
+func TestDrainWriteJobs_UnwrittenWithoutBarrier(t *testing.T) {
+	var unwritten atomic.Bool
+
+	ch := make(chan *SubtreeWriteJob, 1)
+	ch <- &SubtreeWriteJob{Unwritten: &unwritten}
+	close(ch)
+
+	drainWriteJobs(ch)
+
+	require.True(t, unwritten.Load())
 }

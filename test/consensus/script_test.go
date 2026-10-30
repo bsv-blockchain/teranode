@@ -1474,7 +1474,6 @@ func TestScriptTests(t *testing.T) {
 				SCRIPT_ERR_UNSATISFIED_LOCKTIME: "go-bdk locktime enforcement differs",
 				SCRIPT_ERR_SIG_PUSHONLY:         "go-bdk may not enforce SIGPUSHONLY",
 				SCRIPT_ERR_SIG_HASHTYPE:         "go-bdk may not enforce strict sighash types",
-				SCRIPT_ERR_SCRIPTNUM_OVERFLOW:   "go-bdk may handle large numbers differently",
 				SCRIPT_ERR_STACK_SIZE:           "go-bdk may have different stack limits",
 				SCRIPT_ERR_SCRIPT_SIZE:          "go-bdk may have different script size limits",
 				SCRIPT_ERR_OP_COUNT:             "go-bdk may have different op count limits",

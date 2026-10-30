@@ -75,7 +75,7 @@ func BenchmarkRemainderLookupPhase(b *testing.B) {
 		}()
 
 		for i := 0; i < b.N; i++ {
-			require.NoError(b, stp.processRemainderTxHashes(context.Background(), chained, transactionMap, nil, stp.currentTxMap, true))
+			require.NoError(b, stp.processRemainderTxHashes(context.Background(), chained, transactionMap, nil, nil, stp.currentTxMap, true))
 		}
 
 		b.StopTimer()

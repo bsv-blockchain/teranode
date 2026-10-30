@@ -156,7 +156,7 @@ func TestSubtreesHandler_WaitsForAdmissionBeforeTheQuorumLock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 
-	go func() { done <- server.subtreesHandler(ctx, &hash, baseURL, "peer-1") }()
+	go func() { done <- server.subtreesHandler(ctx, time.Now(), &hash, baseURL, "peer-1") }()
 
 	// While the handler is queued, nobody holds the subtree's lock.
 	require.Eventually(t, func() bool { return server.peerSubtreeAdmission.waiting.Load() == 1 },
@@ -186,7 +186,7 @@ func TestSubtreesHandler_ReleasesAdmissionWhenTheSubtreeExists(t *testing.T) {
 	baseURL, err := url.Parse("http://peer.invalid")
 	require.NoError(t, err)
 
-	err = server.subtreesHandler(context.Background(), &hash, baseURL, "peer-1")
+	err = server.subtreesHandler(context.Background(), time.Now(), &hash, baseURL, "peer-1")
 	require.True(t, errors.Is(err, errors.ErrSubtreeExists), "got %v", err)
 
 	requireSlotFree(t, server)
@@ -201,7 +201,7 @@ func TestSubtreesHandler_ReleasesAdmissionOnError(t *testing.T) {
 	baseURL, err := url.Parse("http://peer.invalid")
 	require.NoError(t, err)
 
-	err = server.subtreesHandler(context.Background(), &hash, baseURL, "peer-1")
+	err = server.subtreesHandler(context.Background(), time.Now(), &hash, baseURL, "peer-1")
 	require.Error(t, err)
 
 	requireSlotFree(t, server)
@@ -217,13 +217,15 @@ func TestSubtreesHandler_SkipsWhenNoLongerRunningAfterTheWait(t *testing.T) {
 	catchingBlocks := blockchain.FSMStateCATCHINGBLOCKS
 	blockchainClient := &blockchain.Mock{}
 	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&catchingBlocks, nil)
+	// The dropped subtree is kept for the backfill, which waits for RUNNING; let it give up.
+	blockchainClient.On("WaitForFSMtoTransitionToGivenState", mock.Anything, blockchain.FSMStateRUNNING).Return(errors.NewContextCanceledError("test")).Maybe()
 	server.blockchainClient = blockchainClient
 
 	hash := chainhash.HashH([]byte("peer subtree"))
 	baseURL, err := url.Parse("http://peer.invalid")
 	require.NoError(t, err)
 
-	require.NoError(t, server.subtreesHandler(context.Background(), &hash, baseURL, "peer-1"))
+	require.NoError(t, server.subtreesHandler(context.Background(), time.Now(), &hash, baseURL, "peer-1"))
 
 	gotLock, _, releaseLock, err := q.TryLockIfFileNotExists(context.Background(), &hash, fileformat.FileTypeSubtree)
 	require.NoError(t, err)

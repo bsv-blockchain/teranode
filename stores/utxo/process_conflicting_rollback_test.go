@@ -363,12 +363,46 @@ func TestProcessConflictingRollback_CascadeDescendants(t *testing.T) {
 		return seen[losingTxHash] && seen[descendantHash]
 	}), false).Return(nil).Once()
 
-	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
+	result, mayBeMarked, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
 
 	require.Nil(t, result)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "MANUAL INTERVENTION REQUIRED")
 	require.Contains(t, err.Error(), "spend failed")
 	require.Contains(t, err.Error(), "descendant not found")
+	require.Equal(t, []chainhash.Hash{losingTxHash, descendantHash}, mayBeMarked,
+		"the rollback failed, so the cascade may still be conflicting and must be reported for eviction")
+	mockStore.AssertExpectations(t)
+}
+
+// TestProcessConflicting_PartialStep1ReportsFlippedHashes pins that a step 1
+// cascade failing below its first level still returns every hash it may have
+// flipped. Step 1 never committed, so no rollback runs and the loser stays
+// conflicting in the store; the caller has to evict it from subtree
+// validation's txmeta cache.
+func TestProcessConflicting_PartialStep1ReportsFlippedHashes(t *testing.T) {
+	ctx := context.Background()
+	mockStore := &MockUtxostore{}
+
+	winnerHash := createTestHash("partial-step1-winner")
+	loserHash := createTestHash("partial-step1-loser")
+	childHash := createTestHash("partial-step1-child")
+
+	mockStore.On("Get", mock.Anything, &winnerHash, mock.Anything).Return(&meta.Data{
+		Tx:          createTestTransaction(),
+		Conflicting: true,
+	}, nil).Once()
+	mockStore.On("GetCounterConflicting", mock.Anything, winnerHash).
+		Return([]chainhash.Hash{loserHash}, nil).Once()
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{loserHash}, true).
+		Return([]*Spend{{TxID: &loserHash, Vout: 0}}, []chainhash.Hash{childHash}, nil).Once()
+	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{childHash}, true).
+		Return([]*Spend(nil), []chainhash.Hash(nil), errors.NewStorageError("child write failed")).Once()
+
+	losers, mayBeMarked, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{winnerHash}, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
+
+	require.Error(t, err)
+	require.Nil(t, losers)
+	require.Equal(t, []chainhash.Hash{loserHash, childHash}, mayBeMarked)
 	mockStore.AssertExpectations(t)
 }

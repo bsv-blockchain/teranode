@@ -1,5 +1,3 @@
-//go:build bvgaps
-
 package blockvalidation
 
 import (
@@ -63,28 +61,24 @@ func (c *gap003Chain) count(h chainhash.Hash) int {
 	return n
 }
 
-// TestGapBV003_RecoverableKafkaErrorIsRedelivered proves GAP-BV-003.
+// TestGapBV003_RecoverableKafkaErrorIsRetried proves GAP-BV-003.
 //
 // Spec: BV-INGRESS-009 (AC-BV-INGRESS-009.1): a Kafka block message whose processing fails for a
-// local or transient reason (service, storage, ...) MUST NOT be committed, so it is redelivered.
+// local or transient reason (service, storage, ...) must be processed again, not lost.
 //
 // The real service wiring is used: a real memory:// KafkaConsumerGroup (util/kafka, in-memory
 // broker) is started exactly as Server.Start does,
 // `Start(ctx, u.consumerMessageHandler(ctx), kafka.WithLogErrorAndMoveOn())`. Message 1's first
-// handling fails with ERR_SERVICE_ERROR (which consumerMessageHandler deliberately returns "so
-// the message will be consumed again"); message 2 on the same partition succeeds.
+// handling fails with ERR_SERVICE_ERROR; message 2 on the same partition succeeds.
+//
+// The consumer commits the highest marked offset per partition, so returning the error to Kafka
+// cannot redeliver message 1 once message 2 succeeds. The handler instead commits message 1 and
+// retries it in-process (kafka_block_retry.go). That retry lives in memory, so a restart during
+// the retry window drops it; catchup and P2P sync recover the block then.
 //
 // Asserted: message 1 is handled again (the handler's existence check sees hash1 a second time)
 // after message 2 has been handled.
-//
-// Fails today because the consumer wrapper for WithLogErrorAndMoveOn (util/kafka
-// kafka_consumer.go, wrapConsumerFn) logs the returned error and returns nil, i.e. the record is
-// marked/committed and never redelivered; the consumer simply moves on to message 2.
-//
-// Caveat: the in-memory broker has no offset store, so "committed" is observed as "never
-// redelivered / consumer moved on", which is the in-memory equivalent of the real consumer's
-// MarkCommitRecords for a nil handler result.
-func TestGapBV003_RecoverableKafkaErrorIsRedelivered(t *testing.T) {
+func TestGapBV003_RecoverableKafkaErrorIsRetried(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -141,13 +135,13 @@ func TestGapBV003_RecoverableKafkaErrorIsRedelivered(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Bounded window for redelivery of message 1.
+	// Bounded window for the retry of message 1.
 	deadline = time.Now().Add(3 * time.Second)
 	for chain.count(hash1) < 2 && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
 	require.GreaterOrEqual(t, chain.count(hash1), 2,
-		"BV-INGRESS-009: message 1 failed with a recoverable ERR_SERVICE_ERROR but was committed (handled %d time(s), never redelivered) while message 2 on the same partition was processed",
+		"BV-INGRESS-009: message 1 failed with a recoverable ERR_SERVICE_ERROR and was never processed again (handled %d time(s)) while message 2 on the same partition was processed",
 		chain.count(hash1))
 }

@@ -26,6 +26,12 @@ import (
 
 const errProcessTxMetaContextDone = "[processTxMetaUsingStore] context done"
 
+// errProcessTxMetaSettle prefixes every settle failure settledError returns, on
+// both branches, under a cancellation wrap or under the failure's own code. It
+// does not say the context is done: the cancellation wrap also covers a missing
+// record or a decode fault while ctx is live (keepsCancellation).
+const errProcessTxMetaSettle = "[processTxMetaUsingStore]"
+
 var TxMetaFieldsForDecorate = []fields.FieldName{fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating}
 
 // txMetaFieldsForBlockValidation is TxMetaFieldsForDecorate without TxInpoints.
@@ -213,6 +219,14 @@ func (u *Server) decorateReadPath(skipCachePopulation bool) (utxo.Store, []field
 // is true and the number of missing transactions exceeds the configured threshold.
 func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem,
 	blockIds map[uint32]bool, batched bool, failFast bool, skipCachePopulation bool) (int, error) {
+	return u.processTxMetaUsingStoreAllowing(ctx, txHashes, txMetaSlice, blockIds, batched, failFast, skipCachePopulation, 0)
+}
+
+// processTxMetaUsingStoreAllowing is processTxMetaUsingStore with the fail-fast miss
+// threshold raised by missAllowance, for misses already explained, such as txs the
+// validator rejected as conflicting, which are not in the store either.
+func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes []chainhash.Hash, txMetaSlice []metaSliceItem,
+	blockIds map[uint32]bool, batched bool, failFast bool, skipCachePopulation bool, missAllowance int) (int, error) {
 	if len(txHashes) != len(txMetaSlice) {
 		return 0, errors.NewInvalidArgumentError("txHashes and txMetaSlice must be the same length")
 	}
@@ -223,6 +237,9 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 	batchSize := u.settings.BlockValidation.ProcessTxMetaUsingStoreBatchSize
 	validateSubtreeInternalConcurrency := u.settings.BlockValidation.ProcessTxMetaUsingStoreConcurrency
 	missingTxThreshold := u.settings.BlockValidation.ProcessTxMetaUsingStoreMissingTxThreshold
+	if missingTxThreshold > 0 {
+		missingTxThreshold += missAllowance
+	}
 
 	g, gCtx := errgroup.WithContext(ctx)
 	util.SafeSetLimit(u.logger, g, validateSubtreeInternalConcurrency)
@@ -235,6 +252,13 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 	store, decorateFields := u.decorateReadPath(skipCachePopulation)
 
 	var missed atomic.Int32
+
+	// Conflicting transactions are collected by whichever batch decorates them
+	// and checked against the chain once, after every batch is done (issue 2037).
+	// settleCollectedConflictingTxs checks them even when a batch failed, and
+	// clears them when the check fails, so no entry is left set without passing
+	// it.
+	var conflicting conflictingTxCollector
 
 	if batched {
 		for i := 0; i < len(txHashes); i += batchSize {
@@ -326,9 +350,7 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 
 						// if the tx is conflicting, we need to check if it is conflicting on the current chain
 						if txMetaSlice[data.Idx].conflicting {
-							if err = u.checkCounterConflictingOnCurrentChain(ctx, data.Hash, blockIds); err != nil {
-								return errors.NewProcessingError("[processTxMetaUsingStore][%s] failed to check counter conflicting tx on current chain", data.Hash.String(), err)
-							}
+							conflicting.add(data.Hash, data.Idx)
 						}
 					}
 
@@ -337,8 +359,8 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 			})
 		}
 
-		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.NewContextCanceledError("[processTxMetaUsingStore]", err)
+		if err := u.settleCollectedConflictingTxs(ctx, g.Wait(), &conflicting, txMetaSlice, blockIds); err != nil {
+			return int(missed.Load()), settledError(ctx, errProcessTxMetaSettle, err)
 		}
 
 		return int(missed.Load()), nil
@@ -397,6 +419,16 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 									txInpoints:  txMeta.TxInpoints,
 								}
 
+								// The batched branch above collects these too; without it here,
+								// whether a block's counter-spends are caught depended on which
+								// branch SubtreeValidation.BatchMissingTransactions selected.
+								// Collected rather than checked per transaction, for the reason
+								// the batched branch collects: these transactions share cones,
+								// and one walk each costs ~N²/2 store reads (issue 2037).
+								if txMetaSlice[i+j].conflicting {
+									conflicting.add(txHash, i+j)
+								}
+
 								continue
 							}
 						}
@@ -413,10 +445,81 @@ func (u *Server) processTxMetaUsingStore(ctx context.Context, txHashes []chainha
 			})
 		}
 
-		if err := g.Wait(); err != nil {
-			return int(missed.Load()), errors.NewContextCanceledError(errProcessTxMetaContextDone, err)
+		if err := u.settleCollectedConflictingTxs(ctx, g.Wait(), &conflicting, txMetaSlice, blockIds); err != nil {
+			return int(missed.Load()), settledError(ctx, errProcessTxMetaSettle, err)
 		}
 
 		return int(missed.Load()), nil
 	}
+}
+
+// settledError is the error processTxMetaUsingStore returns for what
+// settleCollectedConflictingTxs returned.
+//
+// A proven conflict is a verdict on the block and leaves as TX_INVALID. Under a
+// ContextCanceled wrap block validation took it for this node's own cancellation
+// and retried the block (blockvalidation's isRecoverableBlockMessageError, and
+// catchup's releaseCatchupLock). It leaves as TX_INVALID even once ctx is done, as
+// on the cached path and in blessMissingTransaction: the verdict needs a member
+// whose record was read and lists a block of the candidate chain, and a read that
+// failed, cancelled or not, is never counted as mined.
+//
+// Any other failure is this node's own, and is wrapped as a cancellation only
+// where block validation needs the wrap to treat it as one (keepsCancellation).
+//
+// Every failure leaves with message on top, as ValidateSubtreeInternal expects.
+// One that is not wrapped as a cancellation keeps its own code there (prefixed).
+func settledError(ctx context.Context, message string, err error) error {
+	if !provenConflict(err) && keepsCancellation(ctx, err) {
+		return errors.NewContextCanceledError(message, err)
+	}
+
+	return prefixed(message, err)
+}
+
+// prefixed puts message on top of err under err's own code, so errors.Is and
+// every caller's classification of err are unchanged. An err that is not itself
+// an *errors.Error leaves as it is: a wrap would have to flatten it to text.
+func prefixed(message string, err error) error {
+	var top *errors.Error
+	if !errors.As(err, &top) || error(top) != err {
+		return err
+	}
+
+	return errors.New(top.Code(), message, top)
+}
+
+// keepsCancellation reports whether settledError wraps a failure that is not a
+// proven conflict as a cancellation. It reads codes, never error text, so a store
+// fault whose text names a deadline while ctx is live leaves as a store fault.
+//
+//   - ctx.Err(): ctx is done, so the failure is this node's own cancellation.
+//   - ERR_CONTEXT_CANCELED: the failure is already one, from a read that gave up
+//     on a done errgroup ctx.
+//   - ERR_TX_NOT_FOUND: a record this node no longer holds, not the peer's fault.
+//   - ERR_TX_INVALID under another code: a record this node could not decode.
+//
+// Without the wrap, block validation already retries a store fault
+// (ERR_STORAGE_ERROR, or a local service fault), the threshold
+// (ERR_THRESHOLD_EXCEEDED), and a processing error carrying no code it reads as
+// the peer's: the walk limit, a frozen output, an input out of range. The wrap only
+// mislabelled those as cancellations. The last two arms still need it:
+//
+//   - A missing record (ERR_TX_NOT_FOUND). ValidateBlock turns it into a transient
+//     block-incomplete error, a code catch-up reads as the peer's, so without the
+//     wrap catch-up would signal a peer failure, which rotates the sync peer, and
+//     fetch the block from other peers, for a record this node pruned.
+//   - A TX_INVALID under another code, such as a record the aerospike store read
+//     but could not decode. The wrap keeps the Kafka path retrying the block and
+//     keeps catch-up from charging the peer or reporting it malicious. It does not
+//     keep the peer from being struck: ValidateBlock's infrastructure guard
+//     matches context.Canceled, not ERR_CONTEXT_CANCELED, so the decode fault
+//     still gets a corrupt verdict and penalizeCorruptBlockPeer, on the Kafka
+//     path and in catch-up alike. That is pre-existing, and
+//     TestValidateBlock_ProvenConflictIsNotACancellation pins it.
+func keepsCancellation(ctx context.Context, err error) bool {
+	return ctx.Err() != nil ||
+		errors.Is(err, errors.ErrContextCanceled) ||
+		errors.Is(err, errors.ErrTxNotFound) ||
+		errors.Is(err, errors.ErrTxInvalid)
 }

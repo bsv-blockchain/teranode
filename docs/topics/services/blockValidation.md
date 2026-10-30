@@ -682,7 +682,8 @@ When a block arrives whose parent is not on the current chain tip, the fork mana
 
 The fork manager enforces limits on concurrent fork processing to prevent resource exhaustion:
 
-- **maxParallelForks**: Maximum number of forks that can be processed simultaneously (default: 4, configurable via `blockvalidation_maxParallelForks`)
+- **maxParallelForks**: Maximum number of forks that can be processed simultaneously (default: 4, configurable via `blockvalidation_max_parallel_forks`)
+- **Tip slot**: Blocks that do not extend the current tip may hold at most `maxParallelForks - 1` slots, so slow fork blocks cannot occupy every worker while a chain-extending block waits. The class is the one recorded when the block was queued. With `maxParallelForks = 1` there is no reserved slot
 - **maxTrackedForks**: Maximum total number of forks to track (default: 1000, configurable via `blockvalidation_maxTrackedForks`)
 - **BlockProcessingGuard**: Automatic cleanup mechanism using Go finalizers to ensure processing locks are always released
 
@@ -761,19 +762,25 @@ When a new block is discovered via `BlockFound()`:
 
 The `WaitForBlock()` method:
 
-1. Checks fork manager to ensure processing limits not exceeded
-2. Selects highest priority block that can be processed
-3. Returns block to worker for validation
-4. Blocks waiting if no blocks available (with timeout)
+1. Skips blocks that are still in their retry delay
+2. Skips blocks whose parent is still being fetched, queued or validated. Validating a child before its parent is stored would find no parent and send it to catchup, moving the FSM to CATCHINGBLOCKS and stopping mining. This gate applies whatever the block's priority, so skip and age promotions cannot bypass it
+3. Checks fork manager to ensure processing limits, including the tip slot, are not exceeded
+4. Selects highest priority block that can be processed, claiming its processing slot before removing it from the queue, so the block is always visible as either queued or processing
+5. Returns block to worker for validation
+6. Blocks waiting if no blocks available (with timeout)
+
+When a block is announced and its parent is not stored yet but is being fetched, queued or validated, it is queued behind the parent instead of going to catchup. A parent validated outside the queue (by catchup, a gRPC `ProcessBlock` call or legacy sync) holds no worker slot, so the check also asks block validation whether the parent is still validating, and the queue is woken when that validation ends. If the parent is then the best block, its queued children take the chain-extending class. Below the checkpoint, the quick-validation paths of legacy sync and catchup skip this check. It takes the parent's class when the parent is queued or validating. A parent still being fetched has no class yet, so the child is classified on its own and takes the parent's class when the parent finishes.
 
 ##### Retry Mechanism
 
-When block validation fails due to transient errors:
+Only failures that are not a verdict on the block are retried. The worker puts the block back on the queue (`RequeueAfter()`) before releasing its processing slot, held back for a fixed delay:
 
-1. **RequeueForRetry()**: Adds block back to queue with incremented retry count
-2. **Exponential Backoff**: Each retry waits longer before reprocessing
-3. **Retry Limits**: Maximum retries configurable (default: 3)
-4. **Alternative Sources**: After failures, attempts to fetch from different peers
+1. **Failed fetch** (network or malicious-response error): retried after 5 seconds
+2. **Deadline** (validation running past a timeout such as `subtreevalidation_check_block_subtrees_timeout`): retried after 1 minute
+3. **Retry Limits**: At most `blockValidationMaxRetries` requeues per block hash (default: 3). The count resets when the block validates successfully. `0` disables these retries
+4. **Same Source**: The requeued block keeps the peer that announced it, with its original class and height
+
+Invalid blocks are never retried.
 
 ##### Alternative Source Handling
 

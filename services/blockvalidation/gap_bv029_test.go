@@ -1,5 +1,3 @@
-//go:build bvgaps
-
 package blockvalidation
 
 import (
@@ -34,16 +32,17 @@ func (s *gap029FailingSubtreeSetStore) Set(ctx context.Context, key []byte, file
 	return s.Store.Set(ctx, key, fileType, value, opts...)
 }
 
-// TestGapBV029_SubtreesSetNotCommittedAheadOfQueuedSubtreeWrites covers GAP-BV-029 (BV-QUICK-021).
+// TestGapBV029_SubtreesSetNotCommittedAheadOfQueuedSubtreeWrites covers GAP-BV-029 (BV-QUICK-021),
+// bitcoin-sv/teranode#4978.
 //
-// Spec-correct behaviour: a block must not be stored with subtrees_set=true unless all of its
-// .subtree files are present, so the async route must either barrier the block's writes before
-// AddBlock or repair afterwards. Here the async quick route (tryQuickValidation with a real write
-// worker) validates a block while the store fails the .subtree write; whatever the route does with
-// the block, a block that ends up stored with subtrees_set=true must have its .subtree file.
-// Expected to fail today: commitBlock (quick_validate.go) calls AddBlock with WithSubtreesSet(true)
-// without waiting for the queued jobs (catchup.go tryQuickValidation only waits on the write
-// WaitGroup on the failure path), so the commit lands and the failed write leaves no file.
+// A block must not be stored with subtrees_set=true unless all of its .subtree files are present.
+// Here the async quick route (tryQuickValidation with a real write worker) validates an honest block
+// while the store fails the .subtree write. quickValidateBlockAsync waits for the block's queued
+// writes before commitBlock, sees the failed one, and refuses to commit; tryQuickValidation then
+// aborts with the subtree-writes-not-landed marker rather than falling through.
+//
+// Mutation proof: removing the awaitSubtreeWrites call before commitBlock stores the block with
+// subtrees_set and no file, and the test fails on the not-committed assertion.
 func TestGapBV029_SubtreesSetNotCommittedAheadOfQueuedSubtreeWrites(t *testing.T) {
 	failing := &gap029FailingSubtreeSetStore{Store: blobmemory.New()}
 	h := newPreBindHarness(t, failing)
@@ -80,17 +79,14 @@ func TestGapBV029_SubtreesSetNotCommittedAheadOfQueuedSubtreeWrites(t *testing.T
 	// Precondition: the writer really attempted (and failed) the .subtree write.
 	require.Positive(t, failing.failedSets.Load(), "precondition: the worker must have attempted the .subtree write")
 
+	require.True(t, isSubtreeWritesNotLanded(quickErr), "tryQuickValidation must surface the failed .subtree write: %v", quickErr)
+
 	_, meta, err := h.chain.GetBlockHeader(h.ctx, block.Hash())
-	if err != nil {
-		// Spec-correct alternative: the block was not committed ahead of its writes. That is only
-		// acceptable if the write failure was surfaced to the caller rather than swallowed.
-		require.Error(t, quickErr, "block not committed, yet quick validation reported no error for the failed .subtree write")
-		return
+	if err == nil {
+		require.False(t, meta.SubtreesSet, "block stored with subtrees_set=true but its .subtree file was never written")
 	}
 
-	if meta.SubtreesSet {
-		exists, err := h.subtreeStore.Exists(h.ctx, served.RootHash()[:], fileformat.FileTypeSubtree)
-		require.NoError(t, err)
-		require.True(t, exists, "block stored with subtrees_set=true but its .subtree file was never written")
-	}
+	exists, err := h.chain.GetBlockExists(h.ctx, block.Hash())
+	require.NoError(t, err)
+	require.False(t, exists, "block must not be committed ahead of its failed .subtree write")
 }

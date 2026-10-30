@@ -1147,6 +1147,24 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 		}
 	}()
 
+	// A block whose parent is unknown and not in flight DOES go to catchup
+	blockFound4 := processBlockFound{
+		hash:    blocks[4].Hash(), // This block's parent (block 3) is neither stored nor queued yet
+		baseURL: "http://test-peer",
+		peerID:  "test_peer",
+		errCh:   make(chan error, 1),
+	}
+
+	err = server.processBlockFoundChannel(ctx, blockFound4)
+	require.NoError(t, err)
+
+	select {
+	case hash := <-catchupReceived:
+		assert.Equal(t, blocks[4].Hash(), hash, "Non-chain-extending block should have been sent to catchup")
+	case <-time.After(5 * time.Second):
+		t.Error("Expected non-chain-extending block to be sent to catchup")
+	}
+
 	// Now process block 3 which extends the chain
 	// This should NOT go to catchup despite busy queue
 	bestHeader, bestMeta, err := mockBlockchainClient.GetBestBlockHeader(ctx)
@@ -1183,23 +1201,22 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 	queue := server.blockPriorityQueue
 	assert.True(t, queue.Contains(*blocks[3].Hash()))
 
-	// Now test that a non-chain-extending block DOES go to catchup
-	blockFound4 := processBlockFound{
-		hash:    blocks[4].Hash(), // This block's parent (block 3) doesn't exist yet
-		baseURL: "http://test-peer",
-		peerID:  "test_peer",
-		errCh:   make(chan error, 1),
-	}
+	// Block 4 announced again: its parent is now queued, so it waits behind it instead of
+	// going to catchup (issue 4944), and takes its parent's class
+	blockFound4.errCh = make(chan error, 1)
 
-	// Process the non-chain-extending block
 	err = server.processBlockFoundChannel(ctx, blockFound4)
 	require.NoError(t, err)
 
-	// This one SHOULD go to catchup
+	time.Sleep(500 * time.Millisecond)
+
 	select {
 	case hash := <-catchupReceived:
-		assert.Equal(t, blocks[4].Hash(), hash, "Non-chain-extending block should have been sent to catchup")
-	case <-time.After(5 * time.Second):
-		t.Error("Expected non-chain-extending block to be sent to catchup")
+		t.Errorf("Block %s whose parent is queued should NOT have been sent to catchup", hash)
+	default:
 	}
+
+	priority, ok := queue.PriorityOf(blocks[4].Hash())
+	require.True(t, ok, "block 4 should be queued behind its parent")
+	assert.Equal(t, PriorityChainExtending, priority)
 }
