@@ -31,8 +31,24 @@ func NewUTXOValue(value uint64, locktime uint32, script []byte) *UTXOValue {
 	}
 }
 
+// maxExactScriptAlloc is the largest script length NewUTXOValueFromReader
+// trusts enough to allocate up front; longer scripts use a bounded, growing
+// read. This mirrors services/utxopersister, the production (and hardened)
+// copy of this UTXO wire format.
+const maxExactScriptAlloc = 64 * 1024
+
 // NewUTXOValueFromBytes creates a UTXOValue from a byte slice.
-func NewUTXOValueFromBytes(b []byte) *UTXOValue {
+//
+// b is untrusted: it may be truncated or crafted. The fixed header is 16 bytes
+// (8-byte value + 4-byte locktime + 4-byte script length) followed by the
+// script. Both the header and the declared script length are bounds-checked so
+// a short or hostile buffer returns an error instead of panicking with a
+// slice-out-of-range.
+func NewUTXOValueFromBytes(b []byte) (*UTXOValue, error) {
+	if len(b) < 16 {
+		return nil, errors.NewProcessingError("utxo value too short: need at least 16 header bytes, got %d", len(b))
+	}
+
 	u := new(UTXOValue)
 
 	u.Value = binary.LittleEndian.Uint64(b[:8])
@@ -41,9 +57,16 @@ func NewUTXOValueFromBytes(b []byte) *UTXOValue {
 	// Read the script length from the next 4 bytes
 	length := binary.LittleEndian.Uint32(b[12:16])
 
+	// length is an untrusted value read from b; guard the slice so a bogus
+	// length cannot drive an out-of-range panic. uint64 arithmetic avoids any
+	// overflow of 16+length.
+	if uint64(len(b)) < 16+uint64(length) {
+		return nil, errors.NewProcessingError("utxo value script truncated: declared length %d but only %d script bytes available", length, len(b)-16)
+	}
+
 	u.Script = b[16 : 16+length]
 
-	return u
+	return u, nil
 }
 
 // NewUTXOValueFromReader creates a UTXOValue by reading from an io.Reader.
@@ -88,10 +111,29 @@ func NewUTXOValueFromReader(r io.Reader) (*UTXOValue, error) {
 	// 	return nil, errors.NewError("invalid script length: %d", length)
 	// }
 
-	u.Script = make([]byte, length)
-	if _, err := io.ReadFull(r, u.Script); err != nil {
-		return nil, err
+	// length is read straight from r and is untrusted. A truncated or crafted
+	// record can declare a script length of up to 4 GB with no bytes behind
+	// it; do NOT do make([]byte, length) on that. Mirror
+	// services/utxopersister.NewUTXOFromReader: small scripts get one
+	// exactly-sized allocation, but a large declared length is streamed via
+	// io.CopyN (bytes.Buffer.ReadFrom over an io.LimitReader), which grows to
+	// the bytes actually present and stops at EOF rather than pre-allocating
+	// the claimed size.
+	if length <= maxExactScriptAlloc {
+		u.Script = make([]byte, length)
+		if _, err := io.ReadFull(r, u.Script); err != nil {
+			return nil, err
+		}
+
+		return u, nil
 	}
+
+	var script bytes.Buffer
+	if _, err := io.CopyN(&script, r, int64(length)); err != nil {
+		return nil, errors.NewProcessingError("error reading utxo script (%d bytes)", length, err)
+	}
+
+	u.Script = script.Bytes()
 
 	// expected, _ := hex.DecodeString("76a914df2fd021d3db1504cca2d63e082665171bda420288ac")
 	// if !bytes.Equal(u.Script, expected) {
