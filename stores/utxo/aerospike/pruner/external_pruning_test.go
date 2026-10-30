@@ -407,17 +407,17 @@ func TestExternalFileAlreadyDeleted(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, exists)
 
-	// Trigger cleanup - should handle missing file gracefully
+	// Missing inputs must retain the record so replay protection can be retried,
+	// and must do so without failing the cycle: a hard error here would unwind
+	// into PruneWithPartitions, which never retries a non-timeout error, so this
+	// one record would block all pruning permanently.
 	pruneCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	recordsProcessed, err := service.Prune(pruneCtx, 7, "<test-hash>")
-	cancel()
+	defer cancel()
+	processed, err := service.Prune(pruneCtx, 7, "<test-hash>")
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, recordsProcessed, int64(0))
-
-	// Verify the Aerospike record was still deleted
+	require.Equal(t, int64(0), processed)
 	_, err = client.Get(nil, key)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	require.NoError(t, err, "record with unresolvable inputs must be retained")
 }
 
 // TestMixedExternalAndNormalTransactions tests pruning of both types in one batch
@@ -475,8 +475,13 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 	keySourceParent := uaerospike.CalculateKeySource(&txIDParent, 0, 128)
 	keyParent, _ := aerospike.NewKey(namespace, set, keySourceParent)
 
+	// Output 0 records the normal child as its spender: a marker is only written
+	// for the child an output really names (keepSpendHolders).
+	txIDNormal := chainhash.HashH([]byte("normal-mixed"))
+
 	err = client.Put(writePolicy, keyParent, aerospike.BinMap{
 		fields.TxID.String():           txIDParent.CloneBytes(),
+		fields.Utxos.String():          []interface{}{spentUtxoElement(&txIDNormal)},
 		fields.DeleteAtHeight.String(): 0,
 	})
 	require.NoError(t, err)
@@ -504,7 +509,6 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 	require.NoError(t, err)
 
 	// Create 1 normal transaction (stored inline)
-	txIDNormal := chainhash.HashH([]byte("normal-mixed"))
 	keyNormal, _ := aerospike.NewKey(namespace, set, txIDNormal[:])
 
 	err = client.Put(writePolicy, keyNormal, aerospike.BinMap{

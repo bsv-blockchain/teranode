@@ -111,9 +111,22 @@ type batchSpend struct {
 	published         atomic.Bool
 	ignoreConflicting bool
 	ignoreLocked      bool
-	// requireParentOutput turns off the "already blessed" fallback for this item;
-	// see utxo.IgnoreFlags.RequireParentOutputs.
-	requireParentOutput bool
+	// spenderCreatedByCaller is set for utxo.IgnoreFlags.SpenderCreatedByCaller or
+	// utxo.IgnoreFlags.RequireParentOutputs. It turns off the "already blessed"
+	// fallback and switches the rollback to its error-class rule (see
+	// rollbackPartialSpends).
+	spenderCreatedByCaller bool
+	// spenderRecordFound is set for RequireParentOutputs without
+	// SpenderCreatedByCaller: the record was in place before the list, so a
+	// failed call keeps its idempotent matches, which are that record's own
+	// spends (spendCompletionResult.rollbackSet).
+	spenderRecordFound bool
+	// idempotent is set from the Lua response when the utxo already recorded
+	// exactly this spend, so nothing was written. resolveSpendCompletions keeps
+	// such inputs out of the rollback list: the spend they matched is the
+	// confirmed, historical one, and reversing it would hand a confirmed output
+	// to any new spender.
+	idempotent bool
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -437,7 +450,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
-	useRequireParentOutputs := len(ignoreFlags) > 0 && ignoreFlags[0].RequireParentOutputs
+	// Both flags turn the bless off and decide the rollback by error class. Only
+	// SpenderCreatedByCaller says the caller wrote the record: with
+	// RequireParentOutputs alone the record may be a live transaction's, so a
+	// failed call reverses what it wrote and leaves its idempotent matches.
+	spenderCreatedByCaller := len(ignoreFlags) > 0 && (ignoreFlags[0].SpenderCreatedByCaller || ignoreFlags[0].RequireParentOutputs)
+	spenderRecordFound := spenderCreatedByCaller && !ignoreFlags[0].SpenderCreatedByCaller
 
 	spends, err = utxo.GetSpends(tx)
 	if err != nil {
@@ -466,12 +484,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		}
 
 		item := &batchSpend{
-			spend:               spend,
-			blockHeight:         blockHeight,
-			group:               group,
-			ignoreConflicting:   useIgnoreConflicting,
-			ignoreLocked:        useIgnoreLocked,
-			requireParentOutput: useRequireParentOutputs,
+			spend:                  spend,
+			blockHeight:            blockHeight,
+			group:                  group,
+			ignoreConflicting:      useIgnoreConflicting,
+			ignoreLocked:           useIgnoreLocked,
+			spenderCreatedByCaller: spenderCreatedByCaller,
+			spenderRecordFound:     spenderRecordFound,
 		}
 		items[idx] = item
 
@@ -533,6 +552,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// counts those skipped items so this residual window is measurable
 		// rather than invisible; closing it needs attempt identity or
 		// create-before-spend ordering, tracked in #1291.
+		//
+		// Whether an idempotent match is historical is decided from the
+		// completed items only (result.prunedRejection), and an input still in
+		// flight counts as a possible marker hit (result.unresolved): its slot
+		// cannot be read without racing the dispatcher, and an unanswered
+		// marker hit read as "no marker" reversed a confirmed spend.
 		s.rollbackPartialSpends(tx, result, "batched mode, after wait error")
 
 		// Do NOT return the live spends slice on the abort path: items still
@@ -558,7 +583,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	// safe to read regardless of the CAS flag (onlyCompleted=false).
 	result := s.resolveSpendCompletions(ctx, tx, items, false)
 
-	if len(spends) != len(result.spentSpends) { // there must have been failures
+	if result.succeeded != len(spends) { // there must have been failures
 		s.rollbackPartialSpends(tx, result, "batched mode")
 
 		// Aggregate with a hard cap. The failure count scales with the tx's
@@ -575,7 +600,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		}
 
 		// return the errors found
-		return spends, errors.NewUtxoError("error in aerospike spend (batched mode) - errors", errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
+		return spends, errors.NewUtxoError("error in aerospike spend (batched mode) - errors", errors.JoinCapped(maxAggregatedSpendErrs, utxo.ReplayRejectionsFirst(failedSpends)...))
 	}
 
 	prometheusUtxoMapSpend.Add(float64(len(spends)))
@@ -590,7 +615,20 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 // rollbackPartialSpends does NOT read this memo — it always issues its own
 // fresh probe (see rollbackPartialSpends for why).
 type spendCompletionResult struct {
-	spentSpends []*utxo.Spend
+	spentSpends      []*utxo.Spend // written by this call
+	idempotentSpends []*utxo.Spend // already recorded; this call wrote nothing
+	succeeded        int           // every input that did not fail, idempotent matches included
+	rollbackNeeded   bool
+	// prunedRejection is true when a resolved input failed on a pruned-replay
+	// marker; see utxo.RollbackSet.
+	prunedRejection bool
+	// unresolved counts inputs skipped because they were still in flight on the
+	// abort path. Their answers are unknown.
+	unresolved int
+	// spenderCreatedByCaller and spenderRecordFound mirror the batchSpend fields
+	// for the call; see rollbackPartialSpends and rollbackSet.
+	spenderCreatedByCaller bool
+	spenderRecordFound     bool
 
 	spenderChecked bool
 	spenderExists  bool
@@ -612,12 +650,20 @@ type spendCompletionResult struct {
 
 	// sawUnwinnable records that at least one completed spend failed with an
 	// error class meaning this txid can never win (ErrSpent, ErrTxConflicting,
-	// ErrFrozen, ErrUtxoHashMismatch). When set, it overrides sawTransientLock's
+	// ErrFrozen, ErrUtxoHashMismatch, or a pruned-replay marker). When set, it overrides sawTransientLock's
 	// suppression: a concurrent attempt at the SAME txid sees the same
 	// outpoints and hits the same unwinnable failure, so it can never reach
 	// Create either, meaning nobody can be a legitimate owner of the partial
 	// spends and the rollback is both safe and required (#1214).
 	sawUnwinnable bool
+}
+
+// rollbackSet is the set a failed call reverses (see utxo.RollbackSet). An
+// idempotent match is held back when a resolved input hit a pruned-replay marker
+// or when any input is still unanswered, since that input may be the marker hit.
+// On the normal path every input is answered, so unresolved is zero there.
+func (r *spendCompletionResult) rollbackSet() []*utxo.Spend {
+	return utxo.RollbackSet(r.spentSpends, r.idempotentSpends, r.prunedRejection || r.unresolved > 0 || r.spenderRecordFound)
 }
 
 // rollbackDecision is what the spender-existence probe implies for the spends
@@ -712,7 +758,35 @@ func decideRollback(getErr error) rollbackDecision {
 // "indeterminate" outcome on prometheusUtxoPartialSpendRollbacks below — no
 // automated detector for it exists yet.
 func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, phase string) {
-	if len(result.spentSpends) == 0 {
+	rollback := result.rollbackSet()
+	if len(rollback) == 0 {
+		return
+	}
+
+	// The create-first block paths (utxo.IgnoreFlags.SpenderCreatedByCaller, and
+	// RequireParentOutputs on DefaultSpendAndCreateMulti's second wave) wrote the
+	// spending transaction's record themselves in this pass, so the
+	// existence probe below would always find it and never fire, and on a
+	// failure the caller deletes that record again (utxo.DeleteCreated): the
+	// spends left in place would name a record-less spender. Those callers
+	// decide by error class instead (utxo.IsSpendRollbackError, recorded as
+	// rollbackNeeded): a validation failure, either pruned-replay answer
+	// included, reverses what the call wrote, while an infrastructure error
+	// leaves it for the retry to match idempotently.
+	if result.spenderCreatedByCaller {
+		if !result.rollbackNeeded {
+			return
+		}
+
+		rbCtx, cancel := s.spendRollbackContext()
+		defer cancel()
+
+		if prometheusUtxoPartialSpendRollbacks != nil {
+			prometheusUtxoPartialSpendRollbacks.WithLabelValues(rollbackFire.String()).Inc()
+		}
+
+		s.unspendRollback(rbCtx, tx, rollback, phase)
+
 		return
 	}
 
@@ -784,12 +858,7 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// same one. On overrun the loop aborts and every spend past that point
 	// stays applied (a bounded truncation, not a full revert), counted by
 	// utxo_spend_rollback_failed.
-	rbTimeout := s.settings.UtxoStore.SpendRollbackTimeout
-	if rbTimeout <= 0 {
-		rbTimeout = 120 * time.Second
-	}
-
-	rbCtx, cancel := context.WithTimeout(context.Background(), rbTimeout)
+	rbCtx, cancel := s.spendRollbackContext()
 	defer cancel()
 
 	_, getErr := s.Get(rbCtx, tx.TxIDChainHash(), fields.Fee)
@@ -805,7 +874,7 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 		return
 	case rollbackSkipIndeterminate:
 		s.logger.Errorf("[SPEND][%s] cannot determine whether spender exists, skipping rollback of %d partial spend(s) (%s): %v",
-			tx.TxID(), len(result.spentSpends), phase, getErr)
+			tx.TxID(), len(rollback), phase, getErr)
 
 		return
 	case rollbackFire:
@@ -821,29 +890,47 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// identity, or creating the spending tx's record before spending its
 	// parents — tracked in #1291; the outcome metrics here make the residual
 	// window measurable in the meantime.
+	s.unspendRollback(rbCtx, tx, rollback, phase)
+}
+
+// spendRollbackContext is the context a rollback runs under; see
+// rollbackPartialSpends for why it is detached from both the caller's ctx and
+// s.ctx, and bounded by SpendRollbackTimeout rather than SpendWaitTimeout.
+func (s *Store) spendRollbackContext() (context.Context, context.CancelFunc) {
+	rbTimeout := s.settings.UtxoStore.SpendRollbackTimeout
+	if rbTimeout <= 0 {
+		rbTimeout = 120 * time.Second
+	}
+
+	return context.WithTimeout(context.Background(), rbTimeout)
+}
+
+// unspendRollback reverses rollback and reports the outcome.
+func (s *Store) unspendRollback(rbCtx context.Context, tx *bt.Tx, rollback []*utxo.Spend, phase string) {
 	// Call the counting form, not Unspend: the counter must be a ref count so it
 	// means the same thing as the sql store's counter of the same name. Aggregating
 	// calls on one backend and dangling refs on the other would be exactly the
 	// per-backend drift the shared outcome labels exist to prevent.
-	unspendFailed, unspendErr := s.unspend(rbCtx, result.spentSpends)
+	unspendFailed, unspendErr := s.unspend(rbCtx, rollback)
 	if unspendErr != nil {
 		if prometheusUtxoSpendRollbackFailed != nil {
 			prometheusUtxoSpendRollbackFailed.Add(float64(unspendFailed))
 		}
 
 		s.logger.Errorf("[SPEND][%s] rolled back %d of %d partial spend(s), %d left dangling (%s): %v",
-			tx.TxID(), len(result.spentSpends)-unspendFailed, len(result.spentSpends), unspendFailed, phase, unspendErr)
+			tx.TxID(), len(rollback)-unspendFailed, len(rollback), unspendFailed, phase, unspendErr)
 
 		return
 	}
 
-	s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (%s)", tx.TxID(), len(result.spentSpends), phase)
+	s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (%s)", tx.TxID(), len(rollback), phase)
 }
 
 // resolveSpendCompletions applies the ErrTxNotFound "already blessed"
 // fallback and conflict-data extraction to each item exactly once, and
-// reports which spends succeeded (the set the caller rolls back when the
-// batch as a whole failed).
+// reports which spends succeeded, plus whether any completed spend carries a
+// rollback-triggering error (see utxo.IsSpendRollbackError) and the transient
+// and unwinnable signals rollbackPartialSpends gates on.
 //
 // When onlyCompleted is true (the group.Wait abort path), an item whose
 // published flag is still false is skipped without touching its slot: the
@@ -871,7 +958,19 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 	result := &spendCompletionResult{spentSpends: make([]*utxo.Spend, 0, len(items))}
 
 	for _, item := range items {
+		// Set when the call was built, never written by the dispatcher, so it
+		// is safe to read on an unpublished item too.
+		if item.spenderCreatedByCaller {
+			result.spenderCreatedByCaller = true
+		}
+
+		if item.spenderRecordFound {
+			result.spenderRecordFound = true
+		}
+
 		if onlyCompleted && !item.published.Load() {
+			result.unresolved++
+
 			// This item is invisible to sawTransientLock, sawTransientCreating and
 			// sawUnwinnable as well as to spentSpends, because reading spend.Err
 			// before observing published would race with the dispatcher. Two
@@ -894,10 +993,20 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 
 		spend := item.spend
 
-		if spend.Err != nil && errors.Is(spend.Err, errors.ErrTxNotFound) && !item.requireParentOutput {
+		// A blessed input wrote nothing: its parent record is gone. It counts as
+		// succeeded but goes into neither rollback list, because Unspend fails on
+		// it and stops there, leaving the sibling spends this call did write in
+		// place.
+		blessed := false
+
+		if spend.Err != nil && errors.Is(spend.Err, errors.ErrTxNotFound) && !item.spenderCreatedByCaller {
 			// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
 			// the utxo store. We can check whether the tx already exists, which means it has been validated and
-			// blessed. In this case we can just clear the error.
+			// blessed. In this case we can just clear the error. Never when the caller wrote the spending
+			// transaction's record in this pass (SpenderCreatedByCaller, the create-first block paths, or
+			// RequireParentOutputs, the second wave of DefaultSpendAndCreateMulti): its presence is not prior
+			// validation, and a replay of a transaction whose parent was pruned too would be blessed by the
+			// copy the replay itself just created.
 			//
 			// The outcome is memoized on result (both ways) so a determinate
 			// answer (found, or definitively not-found) is looked up at most once
@@ -918,6 +1027,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 
 			if result.spenderExists {
 				spend.Err = nil
+				blessed = true
 			}
 		}
 
@@ -938,7 +1048,8 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			// same outpoints and hits the same unwinnable failure, so nobody
 			// can reach Create either. See rollbackPartialSpends' gate.
 			if errors.Is(spend.Err, errors.ErrSpent) || errors.Is(spend.Err, errors.ErrTxConflicting) ||
-				errors.Is(spend.Err, errors.ErrFrozen) || errors.Is(spend.Err, errors.ErrUtxoHashMismatch) {
+				errors.Is(spend.Err, errors.ErrFrozen) || errors.Is(spend.Err, errors.ErrUtxoHashMismatch) ||
+				errors.Is(spend.Err, errors.ErrUtxoSpendingTxPruned) {
 				result.sawUnwinnable = true
 			}
 
@@ -949,11 +1060,31 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 				spend.ConflictingTxID = errSpent.SpendingData.TxID
 			}
 
+			if utxo.IsSpendRollbackError(spend.Err, item.spenderCreatedByCaller) {
+				result.rollbackNeeded = true
+			}
+
+			if utxo.IsReplayAnswer(spend.Err) {
+				result.prunedRejection = true
+			}
+
 			// don't stop processing the rest of the batch, we want to see all errors
 			continue
 		}
 
-		result.spentSpends = append(result.spentSpends, spend)
+		result.succeeded++
+
+		// An idempotent match wrote nothing: the output already recorded this
+		// exact spend. Kept apart from the fresh spends because whether it may be
+		// reversed depends on why the call failed; see utxo.RollbackSet. A
+		// blessed input wrote nothing and has no record to reverse.
+		switch {
+		case blessed:
+		case item.idempotent:
+			result.idempotentSpends = append(result.idempotentSpends, spend)
+		default:
+			result.spentSpends = append(result.spentSpends, spend)
+		}
 	}
 
 	return result
@@ -1129,6 +1260,14 @@ func (s *Store) validateSpendItem(bItem *batchSpend) error {
 	if bItem.spend.SpendingData == nil {
 		return errors.NewProcessingError("[SPEND_BATCH_LUA][%s] spending data is nil", bItem.spend.TxID.String())
 	}
+
+	// The replay-marker check is keyed on the spender's txid. The expression
+	// path adds that clause only when it has one, so a spend without it would
+	// write through with no marker check at all; refuse it on both paths.
+	if bItem.spend.SpendingData.TxID == nil {
+		return errors.NewProcessingError("[SPEND_BATCH_LUA][%s] spending data has no spending txid", bItem.spend.TxID.String())
+	}
+
 	return nil
 }
 
@@ -1226,6 +1365,10 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	}
 
 	// Handle signals
+	// Flag idempotent matches before any item is completed: the rollback
+	// decision reads the flag once the item is published.
+	markIdempotentSpends(res.Idempotent, batchByKey, batch)
+
 	if res.Signal != "" {
 		s.handleSpendSignal(ctx, res.Signal, txID, res.ChildCount, thisBlockHeight)
 	}
@@ -1309,6 +1452,40 @@ func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *c
 			s.logger.Errorf("Failed to unset DAH for child records: %v", err)
 		}
 		// External store DAH is disabled - lifecycle managed by pruner service
+	}
+}
+
+// markIdempotentSpends flags the batch items the Lua reported as idempotent
+// matches. Must run before the items are completed, since resolveSpendCompletions
+// reads the flag once the item is published.
+//
+// Only indices this record was asked about (batchByKey) are accepted. The answer
+// may come from the native dispatcher, which lives outside this repo, and an
+// index that belongs to another record's spends names an item that may already
+// have been completed and published in an earlier iteration: writing its flag
+// then is an unsynchronised write, and it changes the rollback set of an
+// unrelated transaction. Bounding against the whole batch did not catch that.
+func markIdempotentSpends(idempotent []int, batchByKey []aerospike.MapValue, batch []*batchSpend) {
+	if len(idempotent) == 0 {
+		return
+	}
+
+	asked := make(map[int]struct{}, len(batchByKey))
+
+	for _, batchItem := range batchByKey {
+		if idx, ok := batchItem["idx"].(int); ok {
+			asked[idx] = struct{}{}
+		}
+	}
+
+	for _, idx := range idempotent {
+		if _, ok := asked[idx]; !ok {
+			continue
+		}
+
+		if idx >= 0 && idx < len(batch) && batch[idx] != nil {
+			batch[idx].idempotent = true
+		}
 	}
 }
 
@@ -1410,7 +1587,29 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] UTXO already spent but no spending data provided", txID.String())
 
 	case LuaErrorCodeInvalidSpend:
-		return errors.NewUtxoError("[SPEND_BATCH_LUA][%s] invalid spend for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+		// INVALID_SPEND has exactly one producer: the deletedChildren check in
+		// teranode.lua's spend, which rejects a replay of a child the pruner has
+		// already removed. It gets the dedicated pruned-spend code so
+		// utxo.IsSpendRollbackError can roll the transaction's sibling spends back
+		// instead of leaving them recorded against a transaction that will
+		// never exist.
+		return errors.NewUtxoSpendingTxPrunedError("[SPEND_BATCH_LUA][%s] invalid spend for vout %d: spending transaction was pruned: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+
+	// The three record-level answers arrive here too. When one spend in a Lua
+	// call hits a replay marker, spendMulti answers every other spend of that
+	// record per index rather than for the whole record (teranode.lua, the
+	// recordErrorCode block), so they must keep the typed errors
+	// createGeneralError gives them: the validator matches ErrTxConflicting, the
+	// legacy block path swallows it, and ErrTxLocked is what the validator
+	// retries on. A bare StorageError hard-failed a block that used to validate.
+	case LuaErrorCodeConflicting:
+		return errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, vout %d - %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+
+	case LuaErrorCodeLocked:
+		return errors.NewTxLockedError("[SPEND_BATCH_LUA][%s] transaction is locked, vout %d - %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+
+	case LuaErrorCodeCoinbaseImmature:
+		return errors.NewTxCoinbaseImmatureError("[SPEND_BATCH_LUA][%s] coinbase is locked, vout %d - %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	case LuaErrorCodeFrozen:
 		return errors.NewUtxoFrozenError("[SPEND_BATCH_LUA][%s] UTXO is frozen, vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)

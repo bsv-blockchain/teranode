@@ -350,9 +350,12 @@ func TestDeleteAtHeight(t *testing.T) {
 	}
 	_ = input2.PreviousTxIDAdd(&txID2Parent)
 
-	// create parent record that should be marked before deletion of child
+	// create parent record that should be marked before deletion of child. Its
+	// output 0 records child 1 as the spender: a marker is only written for the
+	// child an output really names (keepSpendHolders).
 	err = client.Put(writePolicy, keyParent, aerospike.BinMap{
 		fields.TxID.String():           txIDParent.CloneBytes(),
+		fields.Utxos.String():          []interface{}{spentUtxoElement(&txID1)},
 		fields.DeleteAtHeight.String(): 0,
 	})
 	require.NoError(t, err)

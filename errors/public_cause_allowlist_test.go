@@ -33,6 +33,7 @@ func TestPublicCauseAllowlistIsClosed(t *testing.T) {
 		ERR_TX_CREATING,
 		ERR_UTXO_FROZEN,
 		ERR_TX_MISSING_PARENT,
+		ERR_UTXO_SPENDING_TX_PRUNED,
 	}
 
 	got := make([]ERR, 0, len(publicCauseCodes))

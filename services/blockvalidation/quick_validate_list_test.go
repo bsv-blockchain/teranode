@@ -697,7 +697,7 @@ func TestBatchList_CancelStopsTheBackoff(t *testing.T) {
 			}
 
 			start := time.Now()
-			err := bv.applyList(ctx, block, txs, txids, make([]int, len(txs)), true, true, func(*bt.Tx) {})
+			err := bv.applyList(ctx, block, txs, txids, make([]int, len(txs)), true, true, func(*bt.Tx) {}, nil)
 			elapsed := time.Since(start)
 
 			require.Error(t, err)
@@ -740,7 +740,7 @@ func TestBatchList_RetryableParentFailureRetriesTheList(t *testing.T) {
 	}, nil).Once()
 
 	block := &model.Block{Height: 100, ID: 42}
-	require.NoError(t, bv.applyList(context.Background(), block, txs, txids, []int{0, 0}, false, false, func(*bt.Tx) {}))
+	require.NoError(t, bv.applyList(context.Background(), block, txs, txids, []int{0, 0}, false, false, func(*bt.Tx) {}, nil))
 	store.AssertNumberOfCalls(t, "SpendAndCreateMulti", 2)
 }
 

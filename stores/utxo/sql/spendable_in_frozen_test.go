@@ -68,7 +68,7 @@ func TestSpendSpendableInHoldYieldsFrozenNotLocked(t *testing.T) {
 // multi-input spend that fails on one held input must not leave its other
 // inputs marked spent.
 //
-// needsSpendRollback (sql.go) decides whether to undo the spends that already
+// utxo.NeedsSpendRollback decides whether to undo the spends that already
 // succeeded, and it lists ErrSpent/ErrTxConflicting/ErrFrozen/ErrUtxoHashMismatch
 // -- not ErrTxLocked. So while the spendableIn hold returned ErrTxLocked, this
 // path took the no-rollback branch and stranded every sibling input as spent by

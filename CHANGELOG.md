@@ -106,6 +106,30 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **A replay of a pruned transaction is refused, and the pruners keep more records
+  to make that possible.** When the pruner deletes a fully spent, mined transaction it
+  now leaves a marker on the parents it spent, and a later attempt to spend those
+  outputs again is refused with the new error `ERR_UTXO_SPENDING_TX_PRUNED` (code 78)
+  instead of being accepted. API clients see it as HTTP 409 from propagation and as
+  gRPC `FailedPrecondition`, the same as `ERR_UTXO_SPENT`. To keep the markers
+  trustworthy, both pruners (Aerospike and SQL) now keep a record whose inputs they
+  cannot resolve and hold back a child they cannot vouch for, so storage can stay
+  higher than before on a node where those cases occur. New counters show it:
+  `utxo_pruner_input_resolution_errors_total`,
+  `utxo_pruner_children_held_unverified_total`, `utxo_pruner_markers_superseded_total`,
+  `utxo_pruner_marker_withdraw_failures_total` and
+  `utxo_sql_pruner_children_held_back_total`; operators should alert on a steadily
+  rising value. The Aerospike store registers a new UDF module, `teranode_v66`, on
+  startup.
+
+  Two validator request fields are new, `spender_created_by_caller` and
+  `ignore_locked`, and the gRPC client now sends `ignore_locked`, which it used to
+  drop. On a deployment with a remote validator (`useLocalValidator=false`), subtree
+  validation's spends past a parent locked by an in-flight conflict check now succeed
+  where they used to fail with `TX_LOCKED`; an in-process validator already behaved
+  this way. Upgrade the validator together with subtree validation: an old validator
+  ignores both fields and keeps refusing those spends with `TX_LOCKED`. (#1702)
+
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**
   Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop

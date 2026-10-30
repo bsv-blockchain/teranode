@@ -1136,6 +1136,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// count; an uncapped chain makes every subsequent errors.Is on it
 			// walk the full chain (mainnet IBD stall, block 820116).
 			failedSpends := make([]error, 0, 8)
+			prunedReplay := false
 
 			// the capped aggregate cannot tell a double spend from a tx that also spends a
 			// frozen or mismatched output, so it is decided here over every failed spend
@@ -1152,6 +1153,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 					if immatureSpend == nil && spendsImmatureCoinbase(spend.Err) {
 						immatureSpend = spend.Err
+					}
+
+					// Both replay answers, not only the marker: a missing parent
+					// identifies a replay too when the caller wrote this
+					// transaction's record in this pass (utxo.IsPrunedReplayRejection),
+					// which is how a chain the pruner removed end to end, marker and
+					// all, is rejected.
+					if utxo.IsPrunedReplayRejection(spend.Err, validationOptions.SpenderCreatedByCaller) {
+						prunedReplay = true
 					}
 
 					failedSpends = append(failedSpends, spend.Err)
@@ -1201,9 +1211,19 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// makes it invalid, and creating it as conflicting would drop that failure.
 			saveAsConflicting := validationOptions.CreateConflicting && len(failedSpends) > 0 && everyFailedSpendConflicts
 
+			// A replay of a transaction the pruner removed is never a conflict to
+			// reconcile, even when a sibling input answered ErrSpent. Taking the
+			// conflicting-create branch returned ErrTxConflicting with the marker
+			// rejection dropped from the chain, which the legacy block path
+			// swallows, so the block committed with the replay back in the store.
+			// The rejection must reach the caller as it is.
+			if prunedReplay {
+				saveAsConflicting = false
+			}
+
 			if len(failedSpends) > 0 {
 				if errors.As(err, &tErr) {
-					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
+					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, utxo.ReplayRejectionsFirst(failedSpends)...))
 				}
 			}
 
@@ -1301,8 +1321,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			//   - tx is NOT locked
 			// Otherwise, surface the original ErrTxNotFound — a "tx exists in store" alone is not proof of validation
 			// (a re-org or DAH window could expose a stale or mid-flight record).
+			//
+			// Never when the caller wrote this transaction's record itself in this
+			// pass (WithSpenderCreatedByCaller): the legacy block path creates every
+			// transaction, mined and unlocked, before it validates, so that record
+			// satisfies every condition below and proves nothing. With the SQL and
+			// Aerospike stores this branch is shadowed, since both return an
+			// aggregate ErrUtxoError that the branch above handles first; the gate
+			// is kept so a store that returns a bare ErrTxNotFound gets the same
+			// answer.
 			txMetaData = &meta.Data{}
-			if metaErr := v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); metaErr == nil {
+			if metaErr := v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); metaErr == nil && !validationOptions.SpenderCreatedByCaller {
 				if len(txMetaData.BlockIDs) > 0 && !txMetaData.Conflicting && !txMetaData.Locked {
 					v.logger.Warnf("[Validate][%s] parent tx DAH-evicted, child already mined and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
 
@@ -2320,6 +2349,7 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 
 	opts := []utxo.CreateOption{
 		utxo.WithIgnoreLocked(validationOptions.IgnoreLocked),
+		utxo.WithSpenderCreatedByCaller(validationOptions.SpenderCreatedByCaller),
 	}
 
 	if validationOptions.OutpointOnlySpend {

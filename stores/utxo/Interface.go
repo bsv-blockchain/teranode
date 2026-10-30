@@ -192,6 +192,15 @@ type IgnoreFlags struct {
 	// Set ONLY on the gated below-checkpoint outpoint-only path (spec §3.2 Seam 1). Default
 	// false — above-checkpoint and steady-state spends always enforce the hash.
 	SkipUTXOHashCheck bool
+	// SpenderCreatedByCaller says the caller wrote the spending transaction's own
+	// record in this same pass, so its presence in the store proves nothing about
+	// prior validation. Both stores otherwise treat "parent not found, but the
+	// spending transaction exists" as a transaction that was validated and
+	// blessed before its parent was pruned, and clear the error. The
+	// create-first block paths write the record before they spend, so without
+	// this flag a replay of a transaction whose parent was pruned too is blessed
+	// on the strength of the record the replay itself just created.
+	SpenderCreatedByCaller bool
 	// RequireParentOutputs makes a spend whose parent output is not found fail, even when the
 	// spending transaction already has a record. Without it the store reads that record as
 	// proof the spends were made in an earlier attempt and the parent has since been pruned
@@ -199,6 +208,13 @@ type IgnoreFlags struct {
 	// ONLY by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
 	// whose records the first wave created before any of those spends, so the record proves
 	// nothing. Its first-wave combined calls spend before they create and leave it unset.
+	//
+	// Both stores also decide a failed call's rollback by error class (IsSpendRollbackError)
+	// rather than on a record-existence probe, which would always find the first wave's
+	// record, but without SpenderCreatedByCaller they reverse only what the call wrote. The
+	// record may then belong to a live transaction the list found in place, and an
+	// idempotent match is that transaction's own spend. The second wave sets
+	// SpenderCreatedByCaller as well for a record its first wave created.
 	RequireParentOutputs bool
 }
 
@@ -339,6 +355,15 @@ func withRequireParentOutputs() CreateOption {
 	}
 }
 
+// withRequireParentOutputsCreatedByCaller sets IgnoreFlags.RequireParentOutputs and
+// SpenderCreatedByCaller, for the spend wave's call on a record its first wave created.
+func withRequireParentOutputsCreatedByCaller() CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.RequireParentOutputs = true
+		o.IgnoreFlags.SpenderCreatedByCaller = true
+	}
+}
+
 // The boolean CreateOptions below return one of two package-level closures
 // rather than closing over their argument. A closure that captures anything is
 // heap-allocated the moment it escapes, and these escape on every call: they go
@@ -462,6 +487,16 @@ func WithSkipUTXOHashCheck(b bool) CreateOption {
 	}
 
 	return optSkipUTXOHashCheckFalse
+}
+
+// WithSpenderCreatedByCaller marks the spending transaction's record as written
+// by the caller in this pass (see IgnoreFlags.SpenderCreatedByCaller). Set it on
+// the spend phase of a create-first block path for every transaction that phase
+// 1 created, and only those.
+func WithSpenderCreatedByCaller(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.SpenderCreatedByCaller = b
+	}
 }
 
 // WithCreateOnly makes SpendAndCreate skip the spend phase: only the

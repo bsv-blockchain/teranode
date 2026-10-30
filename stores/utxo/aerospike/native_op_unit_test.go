@@ -182,10 +182,10 @@ func TestHandleBatchRecordErrorSetMined(t *testing.T) {
 // msgpack bin-encoded (byte slice) blockIDs must be a parse error, never a
 // byte-per-ID success.
 func TestLuaResponseIntSliceRejectsByteSlice(t *testing.T) {
-	_, err := luaResponseIntSlice([]byte{1, 2, 3})
+	_, err := luaResponseIntSlice("blockIDs", []byte{1, 2, 3})
 	require.Error(t, err)
 
-	ids, err := luaResponseIntSlice([]int64{1, 2})
+	ids, err := luaResponseIntSlice("blockIDs", []int64{1, 2})
 	require.NoError(t, err)
 	require.Equal(t, []int{1, 2}, ids)
 
@@ -195,4 +195,28 @@ func TestLuaResponseIntSliceRejectsByteSlice(t *testing.T) {
 		"blockIDs": []byte{10, 20},
 	})
 	require.Error(t, err)
+}
+
+// TestParseLuaMapResponseNamesMalformedIdempotentField pins that a malformed
+// idempotent payload is reported as an idempotent problem. The shared integer
+// list parser used to hardcode blockIDs in its errors, so this case read as a
+// blockIDs fault during diagnosis.
+func TestParseLuaMapResponseNamesMalformedIdempotentField(t *testing.T) {
+	s := &Store{}
+
+	for name, payload := range map[string]interface{}{
+		"wrong type":  "not-a-list",
+		"bad element": []interface{}{1, "two"},
+		"bin-encoded": []byte{1, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := s.ParseLuaMapResponse(map[string]interface{}{
+				"status":     "OK",
+				"idempotent": payload,
+			})
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "idempotent")
+			require.NotContains(t, err.Error(), "blockID")
+		})
+	}
 }
