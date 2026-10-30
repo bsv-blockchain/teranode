@@ -1959,6 +1959,17 @@ func (u *BlockValidation) ValidateBlock(ctx context.Context, block *model.Block,
 //
 // Returns an error if validation fails or nil on success.
 func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *model.Block, baseURL string, opts *ValidateBlockOptions) error {
+	return u.validateBlockWithOptions(ctx, block, baseURL, opts, true)
+}
+
+// validateBlockWithOptionsHeld is ValidateBlockWithOptions for a caller that already holds this
+// block's runOncePerBlock entry. Catch-up's per-block step takes that entry around quick validation
+// and its fall-back to this, so a second runOncePerBlock call here would wait on its own entry.
+func (u *BlockValidation) validateBlockWithOptionsHeld(ctx context.Context, block *model.Block, baseURL string, opts *ValidateBlockOptions) error {
+	return u.validateBlockWithOptions(ctx, block, baseURL, opts, false)
+}
+
+func (u *BlockValidation) validateBlockWithOptions(ctx context.Context, block *model.Block, baseURL string, opts *ValidateBlockOptions, guarded bool) error {
 	if opts == nil {
 		opts = &ValidateBlockOptions{}
 	}
@@ -1977,7 +1988,7 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 	// Use helper to ensure block is validated only once
 	blockHash := block.Hash()
-	return u.runOncePerBlock(blockHash, opts, func(opts *ValidateBlockOptions) error {
+	validate := func(opts *ValidateBlockOptions) error {
 		var err error
 
 		// Use context-aware logger for trace correlation
@@ -2939,7 +2950,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		}
 
 		return nil
-	})
+	}
+
+	if !guarded {
+		return validate(opts)
+	}
+
+	return u.runOncePerBlock(blockHash, opts, validate)
 }
 
 // prepareBlockAssembly hands a block whose header checks passed and whose subtrees are in the

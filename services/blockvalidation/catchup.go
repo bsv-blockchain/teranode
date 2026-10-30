@@ -1953,8 +1953,9 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 			// A block stored since the header phase goes straight to normal validation, which finds
 			// it stored (or stored invalid) and stops; quick validation's commit would collide with
 			// it. The worker's mark only saves the prewarm: a block can also be stored after that
-			// check, so validation checks again here. This narrows the window to quick validation's
-			// own run; it does not close it.
+			// check, so validation checks again here. That narrows the window to quick validation's
+			// own run, and validateCatchupBlock closes it for every route that validates through
+			// ValidateBlockWithOptions.
 			alreadyStored := item.alreadyStored
 			if !alreadyStored {
 				var err error
@@ -1965,49 +1966,45 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 				}
 			}
 
-			tryNormalValidation := true
-			if !alreadyStored {
-				var err error
+			// Standard validation path for blocks not verified by checkpoints
+			// Create validation options with cached headers
+			opts := &ValidateBlockOptions{
+				CachedHeaders: cachedHeaders,
+				IsCatchupMode: true,
+				// UNCONDITIONAL, and deliberately not derived from the peer-path opt-in helper
+				// that processBlockFound uses. This caller supplies CachedHeaders, whose run holds
+				// only the block's in-batch predecessors, so the optimistic branch's synchronous
+				// CheckHeaderContextual would evaluate the median-time-past window against a run of
+				// 1..10 headers that does not reach genesis, reject the first ten blocks of every
+				// batch with a header-context error, abort the cycle and charge the honest primary a
+				// catch-up failure. This is the precondition recorded on the cached-header read in
+				// ValidateBlockWithOptions; lifting it needs the header cache to top up short windows
+				// from the store first (issue 1499). The optimistic-mining peer opt-in therefore
+				// governs only the peer-served new-block path (bitcoin-sv/teranode#4692).
+				DisableOptimisticMining: true,
+				// The catch-up primary, which is the right party for any corrupt verdict that
+				// reaches ValidateBlockWithOptions from here: per-subtree bytes were hash-verified
+				// against the requested hash at fetch time and any mismatch was already struck
+				// against the serving peer there (fetchAndStoreSubtree), so a surviving whole-body
+				// merkle mismatch is a property of the primary's own subtree list, not of whichever
+				// peer parallel fetch happened to assign a subtree to (bitcoin-sv/teranode#4692).
+				PeerID: peerID,
+				// A short run that started from RUNNING keeps handing unseen transactions to
+				// block assembly, decided once in fetchAndValidateBlocks (issue 2067).
+				KeepBlockAssemblyHandoff: catchupCtx.keepBlockAssemblyHandoff,
+			}
 
-				// Try quick validation if applicable
-				tryNormalValidation, err = u.tryQuickValidation(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan, item.freshlyWritten)
-				if err != nil {
-					return err
-				}
+			// Try quick validation if applicable, falling back to standard validation. Both run
+			// as one step under this block's runOncePerBlock entry; see validateCatchupBlock.
+			tryNormalValidation, normalErr, err := u.validateCatchupBlock(gCtx, block, catchupCtx, peerID, baseURL, writeJobsChan, item.freshlyWritten, opts, alreadyStored)
+			if err != nil {
+				return err
 			}
 
 			if tryNormalValidation {
-				// Standard validation path for blocks not verified by checkpoints
-				// Create validation options with cached headers
-				opts := &ValidateBlockOptions{
-					CachedHeaders: cachedHeaders,
-					IsCatchupMode: true,
-					// UNCONDITIONAL, and deliberately not derived from the peer-path opt-in helper
-					// that processBlockFound uses. This caller supplies CachedHeaders, whose run holds
-					// only the block's in-batch predecessors, so the optimistic branch's synchronous
-					// CheckHeaderContextual would evaluate the median-time-past window against a run of
-					// 1..10 headers that does not reach genesis, reject the first ten blocks of every
-					// batch with a header-context error, abort the cycle and charge the honest primary a
-					// catch-up failure. This is the precondition recorded on the cached-header read in
-					// ValidateBlockWithOptions; lifting it needs the header cache to top up short windows
-					// from the store first (issue 1499). The optimistic-mining peer opt-in therefore
-					// governs only the peer-served new-block path (bitcoin-sv/teranode#4692).
-					DisableOptimisticMining: true,
-					// The catch-up primary, which is the right party for any corrupt verdict that
-					// reaches ValidateBlockWithOptions from here: per-subtree bytes were hash-verified
-					// against the requested hash at fetch time and any mismatch was already struck
-					// against the serving peer there (fetchAndStoreSubtree), so a surviving whole-body
-					// merkle mismatch is a property of the primary's own subtree list, not of whichever
-					// peer parallel fetch happened to assign a subtree to (bitcoin-sv/teranode#4692).
-					PeerID: peerID,
-					// A short run that started from RUNNING keeps handing unseen transactions to
-					// block assembly, decided once in fetchAndValidateBlocks (issue 2067).
-					KeepBlockAssemblyHandoff: catchupCtx.keepBlockAssemblyHandoff,
-				}
-
 				// Validate the block using standard validation
 				// Note: ValidateBlockWithOptions now automatically stores invalid blocks with invalid=true
-				if err := u.blockValidation.ValidateBlockWithOptions(gCtx, block, baseURL, opts); err != nil {
+				if err := normalErr; err != nil {
 					u.logger.Errorf("[catchup:validateBlocksOnChannel][%s] failed to validate block %s at position %d: %v", blockUpTo.Hash().String(), block.Hash().String(), i, err)
 
 					// Incomplete block (e.g. no coinbase from seeded peer) — abort catchup on this peer
@@ -2111,6 +2108,63 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 	u.logger.Infof("[catchup:validateBlocksOnChannel][%s] completed validation of %d blocks", blockUpTo.Hash().String(), i)
 
 	return nil
+}
+
+// validateCatchupBlock runs one block's quick validation and, when that falls back, its standard
+// validation as one step under the block's runOncePerBlock entry, the entry every
+// ValidateBlockWithOptions caller takes, legacy sync's included.
+//
+// Holding the entry across both is what keeps another route from committing the block while quick
+// validation is in flight. Quick validation hands each subtree's FileTypeSubtree write to the async
+// writer while the same batch's transactions are still being created, and a full validation that
+// finds that file treats the subtree as already validated and creates none of its transactions
+// (CheckBlockSubtrees only validates the subtrees it reports missing). A legacy-sync validation of
+// the same block that ran inside that window committed it with transaction records missing; quick
+// validation then failed locally, its cleanup deleted the .subtree the committed block now
+// depended on, and the fall-back stopped at "tried to validate existing valid block". Nothing
+// rebuilt the file, setTxMined could never mark the block mined, and the next reorg left block
+// assembly waiting for it indefinitely.
+//
+// tryNormalValidation reports whether standard validation ran, and normalErr is then its result.
+// err is a quick-validation failure that does not fall back; a route waiting on the entry gets a
+// retry-later ServiceError for it instead, never the verdict itself. When another route already
+// holds the entry, this block takes that route's result as its standard-validation result, as a
+// direct ValidateBlockWithOptions call would.
+func (u *Server) validateCatchupBlock(ctx context.Context, block *model.Block, catchupCtx *CatchupContext, peerID, baseURL string, writeJobsChan chan<- *SubtreeWriteJob,
+	fetchFreshlyWritten map[chainhash.Hash]map[fileformat.FileType]struct{}, opts *ValidateBlockOptions, alreadyStored bool) (tryNormalValidation bool, normalErr error, err error) {
+	ran := false
+
+	guardErr := u.blockValidation.runOncePerBlock(block.Hash(), opts, func(opts *ValidateBlockOptions) error {
+		ran = true
+		tryNormalValidation = true
+
+		// A block already stored skips quick validation, whose commit would collide with it.
+		if !alreadyStored {
+			tryNormalValidation, err = u.tryQuickValidation(ctx, block, catchupCtx, peerID, baseURL, writeJobsChan, fetchFreshlyWritten)
+			if err != nil {
+				// What a waiter on this entry gets. It holds its own copy of the block, often from
+				// another peer, so it must not take a verdict on catch-up's: a corrupt or incomplete
+				// body here is the catch-up peer's, and a local fault is this run's. A plain
+				// ServiceError reads as retry-later on every route, and the retry validates the
+				// waiter's own copy. Catch-up itself still handles err.
+				return errors.NewServiceError("[catchup:validateCatchupBlock][%s] catch-up's quick validation of this block did not complete, validate it again", block.Hash().String())
+			}
+
+			if !tryNormalValidation {
+				return nil
+			}
+		}
+
+		normalErr = u.blockValidation.validateBlockWithOptionsHeld(ctx, block, baseURL, opts)
+
+		return normalErr
+	})
+
+	if !ran {
+		return true, guardErr, nil
+	}
+
+	return tryNormalValidation, normalErr, err
 }
 
 // tryQuickValidation attempts quick validation for checkpointed blocks.
@@ -2396,10 +2450,26 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 		// that reuse is the whole point of catch-up's prefetch phase. Deleting them on a purely
 		// local failure would force a needless re-fetch for a body nothing has accused of being
 		// bad. Clearing quick validation's own FileTypeSubtree is still correct: normal
-		// validation rebuilds it fresh via its own path regardless.
+		// validation rebuilds it fresh via its own path, unless the block is already stored.
 		select {
 		case <-waitDone:
-			if delErr := u.removeCatchupSubtreeFiles(ctx, catchupCtx, freshlyWritten); delErr != nil {
+			// Normal validation stops at a block that is already stored, so nothing rebuilds a
+			// FileTypeSubtree deleted from under one, and setTxMined can never mark it mined.
+			// validateCatchupBlock keeps every route that goes through ValidateBlockWithOptions
+			// out while this runs; this check covers any route that commits without it, and is
+			// made after the writes settled, right before the delete. A failed lookup aborts
+			// without deleting: either guess can leave the block's subtree unusable, and the next
+			// catch-up run quick-validates it again.
+			stored, existsErr := u.blockValidation.GetBlockExists(ctx, block.Hash())
+			if existsErr != nil {
+				return false, storedLookupError(ctx, existsErr, "[catchup:tryQuickValidation][%s] block %s: failed to check whether the block is stored before removing its .subtree files",
+					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
+			}
+
+			if stored {
+				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s was stored by another route while quick validation ran, keeping its .subtree files",
+					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
+			} else if delErr := u.removeCatchupSubtreeFiles(ctx, catchupCtx, freshlyWritten); delErr != nil {
 				return false, delErr
 			}
 		case <-ctx.Done():
@@ -2495,8 +2565,8 @@ func mergeFreshlyWritten(sets ...map[chainhash.Hash]map[fileformat.FileType]stru
 
 // removeCatchupSubtreeFiles deletes exactly the peer-supplied subtree blobs THIS attempt itself
 // wrote, type by type, for the block (bitcoin-sv/teranode#4692). Used on BOTH the plain
-// quick-validation failure (before falling back to normal validation, which re-creates the files)
-// and the corrupt-body path (which aborts for a fresh re-download from another peer) — on both the
+// quick-validation failure (before falling back to normal validation, which re-creates the files;
+// skipped when another route stored the block meanwhile) and the corrupt-body path (which aborts for a fresh re-download from another peer) — on both the
 // full-validation and quick-validation branches, not just a failed quick validation.
 //
 // freshlyWritten restricts deletion to the (hash, fileType) pairs this attempt is known to have
