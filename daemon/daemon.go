@@ -138,6 +138,9 @@ type Daemon struct {
 	// must fail fast, without reaching into logger internals.
 	startErr   error
 	startErrMu sync.Mutex
+	// crashed is set by crash; the shutdown path then skips closeClients and
+	// closeStores, as a killed process would.
+	crashed atomic.Bool
 }
 
 // New creates a new Daemon instance with the provided options.
@@ -423,6 +426,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		waitErr <- sm.Wait()
 	}()
 
+	// stopCh is closed last, after closeClients and closeStores below (defers
+	// run LIFO), so Stop() returns only once the stores are closed and their
+	// batchers drained. Closing it before them let Stop() return, and the test
+	// daemon reset the store singletons, before closeStores read them, so no
+	// store was closed at all.
+	defer d.closeStopOnce.Do(func() { close(d.stopCh) })
+
 	// closeStores must run on BOTH shutdown paths (OS-signal via waitErr,
 	// daemon.Stop() via doneCh) and MUST run after every service has
 	// finished using the stores. The defer is registered here, before the
@@ -469,8 +479,6 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 		logger.Infof("daemon shutdown completed")
 	}
-
-	d.closeStopOnce.Do(func() { close(d.stopCh) })
 }
 
 // clientCloser is the optional close contract the daemon uses to tear down the
@@ -492,6 +500,10 @@ type clientCloser interface {
 // closeStores, because clients sit in front of the stores in the dependency
 // graph. Each client is closed via the Stage-E clientCloser contract.
 func (d *Daemon) closeClients(logger ulogger.Logger) {
+	if d.crashed.Load() {
+		return
+	}
+
 	d.daemonStores.constructedClientsMu.Lock()
 	clients := d.daemonStores.constructedClients
 	d.daemonStores.constructedClients = nil
@@ -513,6 +525,10 @@ func (d *Daemon) closeClients(logger ulogger.Logger) {
 // batcher drain — to run with real time available, not return
 // immediately with context.Canceled.
 func (d *Daemon) closeStores(logger ulogger.Logger) {
+	if d.crashed.Load() {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

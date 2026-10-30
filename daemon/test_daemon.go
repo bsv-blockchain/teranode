@@ -94,6 +94,7 @@ type TestDaemon struct {
 	skipContainerCleanup  bool
 	prunerObserver        *testPrunerObserver
 	blobDeletionObserver  *testBlobDeletionObserver
+	crashed               bool
 	t                     *testing.T // Reference to testing.T for unified logging
 }
 
@@ -136,6 +137,10 @@ type TestOptions struct {
 	// By default tests only wait for liveness because some narrow daemon configurations
 	// intentionally start without every readiness dependency.
 	WaitForHealthReadiness bool
+	// StoreWrappers wraps the UTXO, blockchain and blob stores the daemon builds,
+	// so every service and the TestDaemon's own store fields see the wrapped
+	// store. Use it to inject faults in front of the real stores.
+	StoreWrappers StoreWrappers
 }
 
 // JSONError represents a JSON error response from the RPC server.
@@ -530,7 +535,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	startErr := attemptP2PPort(maxP2PPortAttempts, func(p2pPort int) error {
 		appSettings.P2P.Port = p2pPort
 
-		d = New(loggerFactory, WithContext(ctx))
+		d = New(loggerFactory, WithContext(ctx), WithStoreWrappers(opts.StoreWrappers))
 
 		services := []string{
 			"-all=0",
@@ -770,8 +775,13 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	return td
 }
 
-// Stop stops the TestDaemon instance and cleans up resources.
+// Stop stops the TestDaemon instance and cleans up resources. It does nothing
+// after Crash.
 func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
+	if td.crashed {
+		return
+	}
+
 	if err := td.d.Stop(skipTracerShutdown...); err != nil {
 		t.Errorf("Failed to stop daemon %s: %v", td.Settings.ClientName, err)
 	}
@@ -786,13 +796,7 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 
 	// Shutdown the logger to prevent race conditions on testing.T access
 	// Background goroutines may still be running and trying to log errors
-	if errorTestLogger, ok := td.Logger.(*ulogger.ErrorTestLogger); ok {
-		errorTestLogger.Shutdown()
-	}
-
-	if unifiedTestLogger, ok := td.Logger.(*ulogger.UnifiedTestLogger); ok {
-		unifiedTestLogger.Shutdown()
-	}
+	td.shutdownLogger()
 
 	// Cleanup daemon stores to reset singletons
 	td.d.daemonStores.Cleanup()
@@ -813,6 +817,69 @@ func (td *TestDaemon) Stop(t *testing.T, skipTracerShutdown ...bool) {
 	}
 
 	t.Logf("Daemon %s stopped successfully", td.Settings.ClientName)
+}
+
+// Crash stops the TestDaemon the way a killed process stops, so a test can
+// restart a node on the same data directory and check what survived. Unlike
+// Stop, it runs no graceful shutdown: no service Stop(), no Kafka flush, no
+// batcher drain. The UTXO and blockchain database connections are closed first,
+// so writes still queued in a batcher are lost, and the libp2p host is closed so
+// peers see the node drop.
+//
+// To restart, create a new TestDaemon with SkipRemoveDataDir set (and DataDir
+// set to td.Settings.DataFolder when the first daemon used a custom one). An
+// in-process crash cannot stop goroutines that ignore the context; they keep
+// running until they next touch a closed connection. Stop does nothing after
+// Crash.
+func (td *TestDaemon) Crash(t *testing.T) {
+	t.Helper()
+
+	if td.crashed {
+		return
+	}
+
+	td.crashed = true
+
+	// Services left running hit the closed connections and log errors; the
+	// error test logger would fail the test on them.
+	td.shutdownLogger()
+
+	td.d.crash(td.Logger)
+	td.ctxCancel()
+
+	select {
+	case <-td.d.stopCh:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("daemon %s did not exit within 30s of the crash", td.Settings.ClientName)
+	}
+
+	td.d.daemonStores.Cleanup()
+
+	if td.containerManager != nil && !td.skipContainerCleanup {
+		if err := td.containerManager.Cleanup(); err != nil {
+			t.Logf("Warning: Failed to cleanup container manager: %v", err)
+		}
+	}
+
+	// A killed process releases its sockets. Closing the listeners releases
+	// their ports at once and stops the gRPC and HTTP servers serving on them.
+	// There is no wait for the ports: once released, another process may bind
+	// one, so a dial-based check would report it still bound.
+	util.CleanupListeners(td.Settings.Context)
+
+	t.Logf("Daemon %s crashed", td.Settings.ClientName)
+}
+
+// shutdownLogger stops the test loggers from writing to testing.T, so
+// goroutines still running after the daemon stops cannot log into it.
+func (td *TestDaemon) shutdownLogger() {
+	if errorTestLogger, ok := td.Logger.(*ulogger.ErrorTestLogger); ok {
+		errorTestLogger.Shutdown()
+	}
+
+	if unifiedTestLogger, ok := td.Logger.(*ulogger.UnifiedTestLogger); ok {
+		unifiedTestLogger.Shutdown()
+	}
 }
 
 // Log logs a message with the test name prefix for consistent test output.

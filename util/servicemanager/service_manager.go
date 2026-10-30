@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -54,6 +55,8 @@ type ServiceManager struct {
 	// Defaults to DefaultStopTimeout in NewServiceManager; the daemon overrides
 	// it from settings.ServiceManagerStopTimeout.
 	StopTimeout time.Duration
+	// killed is set by Kill; Wait then skips every service's Stop().
+	killed atomic.Bool
 	// statusClient       status.ClientI
 }
 
@@ -263,6 +266,14 @@ func (sm *ServiceManager) ForceShutdown() {
 	sm.cancelFunc()
 }
 
+// Kill cancels the services' context like ForceShutdown, but Wait then skips
+// every service's Stop(), so no graceful shutdown work (Kafka flushes, batcher
+// drains) runs. It lets the test daemon emulate a process crash in-process.
+func (sm *ServiceManager) Kill() {
+	sm.killed.Store(true)
+	sm.cancelFunc()
+}
+
 // Wait starts all services and waits for them to complete or error.
 // If any service errors, all other services are stopped gracefully and the error is returned.
 func (sm *ServiceManager) Wait() error {
@@ -274,6 +285,16 @@ func (sm *ServiceManager) Wait() error {
 		} else {
 			sm.logger.Errorf("Received error: %v", err)
 		}
+	}
+
+	if sm.killed.Load() {
+		sm.logger.Warnf("🛑 Services killed, skipping graceful stop")
+
+		if errors.Is(err, context.Canceled) {
+			err = nil
+		}
+
+		return err
 	}
 
 	// Per-service Stop() timeout; configurable (default DefaultStopTimeout)
