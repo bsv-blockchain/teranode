@@ -256,6 +256,56 @@ Chain reorganization and double-spend/conflict handling are cross-cutting: they 
 - [Understanding Double Spends and Conflict Resolution](understandingDoubleSpends.md) covers first-seen detection, conflicting-transaction tracking, and the five reorg phases (mark original as conflicting → unspend original → process double spend → update double-spend status → cleanup).
 - [State Management in Teranode](stateManagement.md) covers the FSM states (`Idle`, `Running`, `CatchingBlocks`) that drive catchup after a missing parent block, and how services wait on state transitions.
 
+#### 9.2.1 Reorg Coordination Order
+
+A reorg changes state in three places: the chain tip in the Blockchain service, the mined status of transactions in the UTXO store, and the unmined transaction set in Block Assembly. Double-spend resolution in the UTXO store is part of the third. This section gives the order of these changes. It also states what is atomic and what is not.
+
+##### Order of Steps
+
+1. **Blockchain changes the tip.** `StoreBlock` writes the block row. The best block is the valid block with the most `chain_work` (`GetBestBlockID` orders by `chain_work DESC, peer_id ASC, id ASC`), so the tip moves when the row commits. For a block that does not extend the current best, the insert and the `on_main_chain` repair run in one SQL transaction. `InvalidateBlock` and `RevalidateBlock` can also move the tip. No depth limit applies at this step.
+2. **Blockchain publishes the change.** After the commit, `AddBlock` publishes the block on the `blocks-final` Kafka topic (valid blocks only), and the Legacy service relays it to legacy peers. Then `AddBlock` sends a `Block` notification to subscribers over gRPC.
+3. **Block Validation records mined status.** `setTxMined` runs in the background for each validated block. It asks the Blockchain service whether the block is on the current chain (`CheckBlockIsInCurrentChain`). Then it writes the block IDs and `unmined_since` of the block's transactions through `model.UpdateTxMinedStatus`, and sets `mined_set` on the block. This job does not run for a block that arrives with a pre-assigned ID: a quick-validated block (`commitBlock`), or a block at or below the highest checkpoint (`buildAddBlockOpts`). Block Validation writes the mined status of these transactions during validation, before step 1, and `AddBlock` stores the block with `mined_set` already true.
+4. **Block Assembly reads the tip.** The notification wakes the Block Assembly event loop, which runs `processNewBlockAnnouncement` on one goroutine. This function does not use the hash in the notification. It calls `GetBestBlockHeader`, so it always acts on the tip from step 1, and many notifications fold into one pass. It selects one path:
+    - **Move up**: the new tip extends the Block Assembly tip by one block. Block Assembly fetches no locators and calls `MoveForwardBlock` directly. This is the path for a normal new block.
+    - For all other cases, Block Assembly finds the common ancestor from two block locators, then selects one of the paths below.
+    - **Catch-up**: there are no blocks to move back.
+    - **Reorg in place**: the default when there are blocks to move back.
+    - **Reset**: the depth reaches the UTXO retention; or the depth reaches coinbase maturity above height 1000; or a moved-back block is invalid; or the in-place reorg fails (`reorgNeedsReset`, `handleReorg`).
+5. **Block Assembly waits for Block Validation.** On the catch-up, reorg and reset paths, Block Assembly does not change the UTXO store until step 3 is complete. The move-up path waits only in some cases:
+    - Move up waits for `mined_set` on the block only when the block carries conflicting transactions (`waitForBlockBeingMined`, before `ProcessConflicting`). Otherwise it does not wait, and it can write the coinbase UTXOs of the block (`processCoinbaseUtxos`) before step 3 is complete.
+    - Catch-up waits for `mined_set` on the last block (`waitForBlockBeingMined`, 300-second limit). When the limit expires, Block Assembly logs the error, increments `teranode_blockassembly_processing_stuck_total{reason="catchup"}`, and tries again on the next notification or reconcile.
+    - Reorg in place and reset wait until no block has `mined_set` false (`WaitForPendingBlocks`). This wait retries with no limit.
+6. **Block Assembly moves blocks back.** The subtree processor runs `reorgBlocks` on its own goroutine. For each block that leaves the main chain, `moveBackBlock` returns the block's transactions to block assembly. If the block carried `ConflictingNodes`, `ReverseProcessConflicting` undoes the double-spend swap that the block applied. Transactions that are also in a block that moves forward are not reversed.
+7. **Block Assembly moves blocks forward.** For each block that joins the main chain, `moveForwardBlock` removes the block's transactions from block assembly. If the block carries conflicting transactions, `ProcessConflicting` runs the five-phase swap in [Understanding Double Spends](understandingDoubleSpends.md#3-chain-reorganization-handling).
+8. **Block Assembly records longest-chain status.** `reorgBlocks` calls `MarkTransactionsOnLongestChain` to clear `unmined_since` on transactions that are now mined on the main chain, and to set it on transactions that are not. Then Block Assembly stores its new tip (`setBestBlockHeader`) and persists it (`SetState`).
+
+##### What the Order Guarantees
+
+- Block Assembly never starts a reorg before the Blockchain service commits the new tip. A notification only wakes Block Assembly; Block Assembly reads the tip itself in step 4.
+- Block Assembly does not change the UTXO store for a reorg before Block Validation sets `mined_set` on the affected blocks (step 5). For catch-up, this wait has a 300-second limit, as step 5 describes.
+- Two services write `unmined_since`: Block Validation in step 3, and Block Assembly in steps 6 to 8. Step 5 makes the Block Assembly writes come after the Block Validation writes.
+- At runtime, only Block Assembly calls `ProcessConflicting` and `ReverseProcessConflicting`: in steps 6 and 7, and in the startup replay below. Double-spend resolution does not run apart from the Block Assembly reorg. The Validator and Subtree Validation mark a transaction as conflicting when they first detect a double spend. That is detection, not the reorg swap.
+- Block Assembly runs a reconcile at startup, and when block generation waits too long for the tip (`triggerReconcile`). A reconcile runs step 4 again, so a lost notification does not leave Block Assembly on an old tip.
+
+##### What Is Not Atomic
+
+- **The UTXO rollback to the fork point is not one atomic operation.** Steps 6 to 8 write to the UTXO store block by block. Each `ProcessConflicting` and `ReverseProcessConflicting` call records a write-ahead intent before its first write (`BeginConflictIntent`), and undoes its own partial writes if it fails in the process. `MarkTransactionsOnLongestChain` has no write-ahead intent. If the in-place reorg fails, Block Assembly restores its in-memory state and falls back to a reset. The UTXO writes for blocks that the failed reorg already processed stay, and the reset rebuilds block assembly from the UTXO store.
+- **The services disagree on the tip for a period.** From step 2 to the end of step 8, the Blockchain service and legacy peers have the new tip, but Block Assembly still has the old tip. `GetMiningCandidate` returns an empty candidate on the new tip only in the `blockchainSubscription` and `movingUp` states. In the `reorging`, `reconciling` and `resetting` states, the candidate uses the Block Assembly tip, which is the old tip until step 8 completes.
+
+##### Restart After a Crash in a Reorg
+
+On start, Block Assembly does these steps in sequence:
+
+1. It loads its persisted tip (`initState`). After a crash in a reorg, this is the tip before the reorg.
+2. It waits for pending blocks (`WaitForPendingBlocks`).
+3. It replays each pending write-ahead intent, or heals the intent if its block changed chain since the crash (`replayPendingConflictIntents`).
+4. It loads unmined transactions (`loadUnminedTransactions`).
+5. It starts its listeners and runs a reconcile, which runs the reorg again from the persisted tip.
+
+The code states that `ProcessConflicting` and `ReverseProcessConflicting` are idempotent under replay. This document does not verify an end-to-end second run of a half-applied reorg.
+
+The offline `rewindblockchain` tool also writes to the UTXO store. It requires a stopped node, so it is outside this order.
+
 ### 9.3 Synchronous vs Asynchronous Boundaries
 
 Services communicate through a mix of synchronous gRPC calls and asynchronous Kafka topics; the [Interaction Patterns](teranode-microservices-overview.md#6-interaction-patterns) and [Kafka Message Broker](teranode-microservices-overview.md#51-kafka-message-broker) sections describe which hops use which mechanism.
