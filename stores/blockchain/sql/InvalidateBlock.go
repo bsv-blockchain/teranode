@@ -129,6 +129,15 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	}
 
 	defer func() {
+		// The auto-committed UPDATE was accepted, so it may have moved chain membership even
+		// if no RETURNING row reaches us, and the rebuild below writes the column too. A walk
+		// running without slowPathMu may have read its rows before these commits; noting the
+		// write after the last of them and before the lock drops makes that walk run again
+		// rather than leave its older view in place. The fork point can lie arbitrarily deep,
+		// so the note names no height. A missing block or an UPDATE the database rejected
+		// returned above and is not noted.
+		defer s.noteOnMainChainWrite(noRepairFloor)
+
 		err = errors.Join(err, rows.Close())
 
 		// Invalidate caches FIRST so that getBestBlockID does not return a
@@ -149,8 +158,15 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 		rebuildCtx, rebuildCancel := context.WithTimeout(context.Background(), migrationFullRebuildTimeout)
 		defer rebuildCancel()
 
+		// The UPDATE above has committed, so a failed rebuild leaves the column describing
+		// the old chain. Record it: the guard stays up and the background repair retries
+		// the full walk until it lands. A rebuild that lands here also satisfies any
+		// repair an earlier failure left owed.
 		if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, true); rebuildErr != nil {
 			s.logger.Errorf("InvalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+			s.markOnMainChainDirty(true, noRepairFloor, "invalidate_block", rebuildErr)
+		} else {
+			s.onMainChainRepaired(true)
 		}
 
 		if s.useInMemoryChainCheck {
