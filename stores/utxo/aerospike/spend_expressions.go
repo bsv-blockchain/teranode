@@ -285,15 +285,12 @@ func (s *Store) buildSpendOperations(
 // SpendMultiWithExpressions processes multiple spend requests using Aerospike expressions.
 // Unlike the Lua-based spendMulti which handles multiple spends per transaction in a single UDF call,
 // this creates individual batch operations for each spend but executes them in a single batch.
-func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpend) {
+//
+// The caller records outcome on the spend circuit breaker once per batcher batch.
+func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpend, outcome *spendBreakerOutcome) {
 	start := time.Now()
-	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "SpendMultiWithExpressions",
-		tracing.WithHistogram(prometheusUtxoSpendBatch),
-	)
-	defer func() {
-		prometheusUtxoSpendBatchSize.Observe(float64(len(batch)))
-		deferFn()
-	}()
+	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "SpendMultiWithExpressions")
+	defer deferFn()
 
 	batchID := s.batchID.Add(1)
 	s.logSpendBatchStart(batchID, len(batch))
@@ -367,7 +364,7 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	}
 
 	// Process results
-	s.processSpendBatchResultsExpressions(ctx, batchRecords, spendIndex, batchID, start)
+	s.processSpendBatchResultsExpressions(ctx, batchRecords, spendIndex, batchID, start, outcome)
 }
 
 // processSpendBatchResultsExpressions processes the results from expression-based spend operations.
@@ -385,6 +382,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 	spendIndex map[int]*batchSpend,
 	batchID uint64,
 	start time.Time,
+	outcome *spendBreakerOutcome,
 ) {
 	okCount := 0
 	errCount := 0
@@ -480,14 +478,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// data-state errors (KEY_NOT_FOUND_ERROR, FILTERED_OUT) take their own
 	// per-record branches above and are deliberately excluded from
 	// infraErrCount — issue #953.
-	if s.spendCircuitBreaker != nil {
-		if okCount > 0 {
-			s.spendCircuitBreaker.RecordSuccess()
-		}
-		if infraErrCount > 0 {
-			s.spendCircuitBreaker.RecordFailure()
-		}
-	}
+	outcome.recordExpressions(s.spendCircuitBreaker, okCount > 0, infraErrCount > 0)
 
 	prometheusUtxoMapSpend.Add(float64(okCount))
 	if errCount > 0 {
@@ -531,6 +522,6 @@ func (s *Store) processSpendBatchResultsExpressions(
 		prometheusUtxoSpendExpressionLuaRetry.Inc()
 		prometheusUtxoSpendExpressionLuaRetryN.Add(float64(len(retryThroughLua)))
 
-		s.executeLuaSpendBatch(retryThroughLua)
+		s.executeLuaSpendBatch(retryThroughLua, outcome)
 	}
 }

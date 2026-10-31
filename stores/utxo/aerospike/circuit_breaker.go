@@ -270,3 +270,38 @@ func (cb *circuitBreaker) reset() {
 	cb.halfOpenAttempts = 0
 	cb.consecutiveSuccess = 0
 }
+
+// spendBreakerOutcome coalesces repeated expression outcomes across parts until
+// an opposite outcome is recorded. An uninterrupted run of expression timeouts
+// counts once per batcher batch, but a success re-arms failure recording so a
+// later timeout cannot disappear after the breaker was reset. Outcomes are
+// recorded before Lua retries, preserving their processing order.
+// Lua records always count, even when a later part reuses the same record key.
+type spendBreakerOutcome struct {
+	success bool
+	failure bool
+}
+
+func (o *spendBreakerOutcome) recordExpressions(cb *circuitBreaker, success, failure bool) {
+	if success && !o.success {
+		o.record(cb, true)
+		o.success = true
+	}
+
+	if failure && !o.failure {
+		o.record(cb, false)
+		o.failure = true
+	}
+}
+
+// record also re-arms the opposite expression outcome: a Lua success resets
+// the breaker, so a subsequent expression failure must count again (and vice versa).
+func (o *spendBreakerOutcome) record(cb *circuitBreaker, success bool) {
+	if success {
+		o.failure = false
+		cb.RecordSuccess()
+	} else {
+		o.success = false
+		cb.RecordFailure()
+	}
+}

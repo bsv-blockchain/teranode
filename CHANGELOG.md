@@ -327,6 +327,54 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   (including a non-positive `subtreevalidation_txMetaTombstoneWindow`). It used to
   log the failure and run with no store, then panic on first use.
 
+- **UTXO batch conflicts are now decided by the stored owner.** SQL and Aerospike
+  send competing claims on the same outpoint to the backend in ordered parts. A
+  re-submitted spend is accepted when it matches the stored owner, even if an
+  earlier claim in the batch fails. Double-spend errors name the actual owner,
+  including owners absent from the batch. Previously, arrival order could cause a
+  false `UTXO_SPENT` error and rollback of an existing spend when the spending
+  transaction had not yet been created. Callers can now see success instead of
+  `UTXO_SPENT` for valid retries. No configuration change is required.
+
+  Once a part tells the stored owner of an outpoint, later competing claims in
+  the batch are refused locally with `UTXO_SPENT` naming that owner, when they
+  run the same store checks as the claim that showed the owner: the same UTXO
+  hash, block height and ignore flags. Thus alternating double-spends cost two
+  backend calls, not one per claim. Non-`UTXO_SPENT` backend failures are reused
+  for later same-outpoint claims with identical checks, so a storage outage or
+  missing parent no longer causes a serial backend call per competing claim.
+  Claims with different checks still need their own decision; there is no global
+  two-part limit across independent outpoints or validation settings.
+
+  SQL and Aerospike now check each queued input's admission state and caller
+  deadline immediately before dispatching its backend part. A caller that stops
+  waiting abandons queued inputs before rollback, preventing later parts from
+  writing those inputs after the caller has returned. `utxostore_spendWaitTimeout`
+  now includes enqueue time (per input on SQL, per transaction on Aerospike), so
+  callers under queue pressure may receive timeout errors sooner. The setting
+  and its default are unchanged; no configuration change is required. Operations
+  already admitted before timeout can still finish late: this does not close the
+  general in-flight rollback window tracked in #1291.
+
+  The `teranode_aerospike_utxo_spend_batch` and
+  `teranode_aerospike_utxo_spend_batch_size` histograms now count one batcher
+  batch, however many parts it needs. The Lua retry of `FILTERED_OUT` records is
+  no longer a separate histogram sample. The Aerospike spend circuit breaker
+  records expression outcomes before Lua retries, including in split batches.
+  Repeated expression failures count once per batcher batch until a success
+  resets the breaker; the next failure then counts again. Repeated expression
+  successes are likewise coalesced until a failure. Lua records every success
+  and infrastructure failure in processing order, including retries and repeated
+  keys in later parts. Split Lua batches can therefore reach the breaker
+  threshold sooner during an outage because they perform more backend operations.
+  Breaker settings are unchanged. The SQL spend batcher now
+  recovers a panic and answers every waiting caller with an error, instead of
+  leaving them to wait for `utxostore_spendWaitTimeout`. Go integrations using
+  `FilterConflictingDuplicateSpendClaims` must migrate to `ProcessSpendBatch`
+  with a `SpendBatchHandler`; omitting `SameChecks` disables local result reuse.
+  Asynchronous integrations should supply
+  `Start` to exclude abandoned requests at each part boundary. (#2036, bitcoin-sv/teranode#4934)
+
 - **A failed revert of an invalid block's mined tags now holds block assembly until it
   succeeds.** When block validation reverts the mined tags of an invalid block and
   `SetMinedMulti` fails, or a subtree read fails with anything other than not-found, the
@@ -892,21 +940,21 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 - **Conflict-check failures in subtree validation are no longer reported as
   context cancellations.** Two follow-ups to the entry above, both in subtree
   validation's conflict check:
-  - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
-    live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
-    walk limit, a frozen output, an input out of range and the fail-fast
-    missing-tx threshold are no longer wrapped as a context cancellation. Each is
-    still retried and never charged to a peer. What changes is how they show up:
-    on the live path `subtreeMessageHandler` logs them at error level ("error
-    processing kafka message") where it logged a "Context canceled, skipping"
-    warning, and a catch-up run that ends on the walk limit, a frozen output or an
-    out-of-range input records `local_processing_fault` instead of
-    `local_context_cancelled` as its last error type. A missing record, a
-    cancelled check, and a record the store could not decode keep the old
-    classification.
-  - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
-    the check's context is cancelled while it runs, as the cached path and
-    blessing a missing transaction already did. Before, it was retried.
+    - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
+      live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
+      walk limit, a frozen output, an input out of range and the fail-fast
+      missing-tx threshold are no longer wrapped as a context cancellation. Each is
+      still retried and never charged to a peer. What changes is how they show up:
+      on the live path `subtreeMessageHandler` logs them at error level ("error
+      processing kafka message") where it logged a "Context canceled, skipping"
+      warning, and a catch-up run that ends on the walk limit, a frozen output or an
+      out-of-range input records `local_processing_fault` instead of
+      `local_context_cancelled` as its last error type. A missing record, a
+      cancelled check, and a record the store could not decode keep the old
+      classification.
+    - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
+      the check's context is cancelled while it runs, as the cached path and
+      blessing a missing transaction already did. Before, it was retried.
 
   Nothing to configure. (bsv-blockchain/teranode#2066)
 

@@ -100,6 +100,8 @@ const maxAggregatedSpendErrs = 10
 
 // batchSpend represents a single UTXO spend request in a batch
 type batchSpend struct {
+	admission   utxo.SpendAdmission
+	requestCtx  context.Context
 	spend       *utxo.Spend // UTXO to spend
 	blockHeight uint32      // Current block height
 	group       *completion.Group
@@ -114,6 +116,9 @@ type batchSpend struct {
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
 	requireParentOutput bool
+	// err is the answer complete stored. Only the batcher goroutine reads it,
+	// because the caller may rewrite spend.Err once the group completes.
+	err error
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -132,6 +137,7 @@ type batchSpend struct {
 // the slot write) would NOT establish that happens-before edge.
 func (b *batchSpend) complete(err error) {
 	if b.completed.CompareAndSwap(false, true) {
+		b.err = err
 		b.spend.Err = err
 		b.published.Store(true)
 		b.group.Done()
@@ -444,6 +450,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, err
 	}
 
+	spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+	if spendTimeout <= 0 {
+		spendTimeout = 30 * time.Second
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, spendTimeout)
+	defer cancel()
+
 	items := make([]*batchSpend, len(spends))
 	group := completion.NewGroup(int32(len(spends)))
 
@@ -472,6 +485,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			ignoreConflicting:   useIgnoreConflicting,
 			ignoreLocked:        useIgnoreLocked,
 			requireParentOutput: useRequireParentOutputs,
+			requestCtx:          requestCtx,
 		}
 		items[idx] = item
 
@@ -502,20 +516,16 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	// rejected send rejects every item — complete all of them and let the
 	// resolveSpendCompletions path below report it, instead of parking on
 	// group.Wait for the full spendTimeout and reporting a bogus timeout.
-	if enqueueErr := safeBatcherPutBatchCtx(s.spendBatcher, ctx, toEnqueue, "spend"); enqueueErr != nil {
+	if enqueueErr := safeBatcherPutBatchCtx(s.spendBatcher, requestCtx, toEnqueue, "spend"); enqueueErr != nil {
 		for _, item := range toEnqueue {
 			item.complete(enqueueErr)
 		}
 	}
 
-	// One shared wait for the whole batch, instead of one goroutine + timer
-	// per input. spendTimeout mirrors the previous per-item fallback.
-	spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
-	if spendTimeout <= 0 {
-		spendTimeout = 30 * time.Second
-	}
-
-	if waitErr := group.Wait(ctx, spendTimeout); waitErr != nil {
+	if waitErr := group.Wait(requestCtx, 0); waitErr != nil {
+		for _, item := range items {
+			item.admission.Abandon()
+		}
 		// The group did not complete within budget (context canceled, or the
 		// dispatcher took longer than spendTimeout). Some items may already
 		// have finished before the abort — resolveSpendCompletions(onlyCompleted=true)
@@ -527,8 +537,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// Roll back the spends we know completed. This is the WEAKEST case for
 		// the atomicity contract, not the strictest: onlyCompleted=true above
 		// excludes every item whose published flag is not yet set, but the
-		// dispatcher runs on s.ctx (not this now-dead caller ctx) and keeps
-		// writing to those items after we return here, so a straggler that later
+		// dispatcher runs on s.ctx for items already admitted to a backend part
+		// before abandonment. Only those can still write after we return; a straggler that later
 		// succeeds is never rolled back by this call. prometheusUtxoSpendAbortInFlight
 		// counts those skipped items so this residual window is measurable
 		// rather than invisible; closing it needs attempt identity or
@@ -543,7 +553,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// race, and an in-flight item still reads Err==nil (misclassified as a
 		// successful spend). A Wait error means the whole operation failed;
 		// callers must treat it as such and not inspect per-item slots.
-		if errors.Is(waitErr, context.Canceled) || errors.Is(waitErr, context.DeadlineExceeded) {
+		if ctx.Err() != nil {
 			return nil, errors.NewContextCanceledError("[SPEND] context canceled while waiting for batch response: %s", waitErr)
 		}
 
@@ -999,40 +1009,63 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		})
 	}()
 
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
-		func(item *batchSpend) *utxo.Spend {
+	_, _, deferFn := tracing.Tracer("aerospike").Start(s.ctx, "sendSpendBatch",
+		tracing.WithHistogram(prometheusUtxoSpendBatch),
+	)
+	defer func() {
+		prometheusUtxoSpendBatchSize.Observe(float64(len(batch)))
+		deferFn()
+	}()
+
+	// Repeated expression outcomes are coalesced across parts until an opposite
+	// outcome occurs. Lua records always count, in processing order.
+	var outcome spendBreakerOutcome
+
+	utxo.ProcessSpendBatch(batch, utxo.SpendBatchHandler[*batchSpend]{
+		Start: func(item *batchSpend) error {
+			if item == nil {
+				return nil
+			}
+			return item.admission.Start(item.requestCtx)
+		},
+		Spend: func(item *batchSpend) *utxo.Spend {
 			if item == nil {
 				return nil
 			}
 			return item.spend
 		},
-		func(item *batchSpend, err error) {
+		Process: func(part []*batchSpend) {
+			if s.useExpressionSpend() {
+				s.SpendMultiWithExpressions(s.ctx, part, &outcome)
+			} else {
+				s.executeLuaSpendBatch(part, &outcome)
+			}
+		},
+		Result: func(item *batchSpend) (error, bool) {
+			if item == nil || !item.published.Load() {
+				return nil, false
+			}
+			return item.err, true
+		},
+		Reject: func(item *batchSpend, err error) {
 			item.complete(err)
 		},
-	)
-	if len(batch) == 0 {
-		return
-	}
-
-	// Use expression-based implementation only when each Aerospike record holds a single
-	// UTXO (utxoBatchSize == 1). With multiple UTXOs per record, the expression cannot
-	// byte-compare the specific UTXO hash at a list offset, so we fall back to Lua which
-	// performs the strict precondition check inside the UDF.
-	if s.useExpressionSpend() {
-		s.SpendMultiWithExpressions(s.ctx, batch)
-		return
-	}
-
-	s.executeLuaSpendBatch(batch)
+		SameChecks: func(a, b *batchSpend) bool {
+			return a.blockHeight == b.blockHeight &&
+				a.ignoreConflicting == b.ignoreConflicting &&
+				a.ignoreLocked == b.ignoreLocked &&
+				utxo.SameUTXOHash(a.spend, b.spend)
+		},
+	})
 }
 
 // executeLuaSpendBatch runs the Lua UDF spend pipeline for the provided batch. It is the
 // shared backend used by sendSpendBatchLua's Lua route and by the expression path's
-// retry-through-Lua handler. Callers MUST have already run any duplicate-claim
-// filtering, since this method does not re-run it and assumes every item still expects
-// exactly one response on its errCh.
-func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
-	s.executeLuaSpendBatchContext(s.ctx, batch)
+// retry-through-Lua handler. Callers must supply a batch without conflicting claims
+// on the same outpoint. This method does not split batches itself.
+// A panic reaches sendSpendBatchLua, which answers the parts that did not run.
+func (s *Store) executeLuaSpendBatch(batch []*batchSpend, outcome *spendBreakerOutcome) {
+	s.runLuaSpendBatch(s.ctx, batch, outcome)
 }
 
 // executeLuaSpendBatchContext keeps recovery writes synchronous and bounds the network request
@@ -1047,6 +1080,11 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 			}
 		})
 	}()
+
+	s.runLuaSpendBatch(parentCtx, batch, &spendBreakerOutcome{})
+}
+
+func (s *Store) runLuaSpendBatch(parentCtx context.Context, batch []*batchSpend, outcome *spendBreakerOutcome) {
 	if len(batch) == 0 {
 		return
 	}
@@ -1056,13 +1094,8 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 
 	ctx, _, deferFn := tracing.Tracer("aerospike").Start(parentCtx, "sendSpendBatchLua",
 		tracing.WithParentStat(stat),
-		tracing.WithHistogram(prometheusUtxoSpendBatch),
 	)
-
-	defer func() {
-		prometheusUtxoSpendBatchSize.Observe(float64(len(batch)))
-		deferFn()
-	}()
+	defer deferFn()
 
 	batchID := s.batchID.Add(1)
 	s.logSpendBatchStart(batchID, len(batch))
@@ -1078,7 +1111,7 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 		return
 	}
 
-	s.processSpendBatchResults(ctx, batchRecords, batchRecordKeys, batchesByKey, batch, batchID)
+	s.processSpendBatchResults(ctx, batchRecords, batchRecordKeys, batchesByKey, batch, batchID, outcome)
 	stat.NewStat("postBatchOperate").AddTime(start)
 }
 
@@ -1209,7 +1242,7 @@ func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aer
 }
 
 // processSpendBatchResults processes the results of the batch operation
-func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batchRecordKeys []keyIgnoreLocked, batchesByKey map[keyIgnoreLocked][]aerospike.MapValue, batch []*batchSpend, batchID uint64) {
+func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batchRecordKeys []keyIgnoreLocked, batchesByKey map[keyIgnoreLocked][]aerospike.MapValue, batch []*batchSpend, batchID uint64, outcome *spendBreakerOutcome) {
 	for batchIdx, batchRecord := range batchRecords {
 		key := batchRecordKeys[batchIdx]
 		batchByKey, ok := batchesByKey[key]
@@ -1219,7 +1252,7 @@ func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aer
 		}
 
 		txID := batch[batchByKey[0]["idx"].(int)].spend.TxID
-		s.processSingleBatchResult(ctx, batchRecord, batchByKey, batch, txID, key.blockHeight, batchID)
+		s.processSingleBatchResult(ctx, batchRecord, batchByKey, batch, txID, key.blockHeight, batchID, outcome)
 	}
 
 	if s.settings.UtxoStore.VerboseDebug {
@@ -1228,10 +1261,16 @@ func (s *Store) processSpendBatchResults(ctx context.Context, batchRecords []aer
 }
 
 // processSingleBatchResult processes a single batch record result
-func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerospike.BatchRecordIfc, batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64) {
+func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerospike.BatchRecordIfc, batchByKey []aerospike.MapValue, batch []*batchSpend, txID *chainhash.Hash, thisBlockHeight uint32, batchID uint64, outcome *spendBreakerOutcome) {
 	batchErr := batchRecord.BatchRec().Err
 	if batchErr != nil {
 		s.handleBatchError(batchByKey, batch, thisBlockHeight, batchID, batchErr)
+		// Only infrastructure failures count toward the circuit breaker. Per-record
+		// data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing parents during
+		// catch-up sync) must not trip it — issue #953.
+		if isInfrastructureFailure(batchErr) {
+			outcome.record(s.spendCircuitBreaker, false)
+		}
 		return
 	}
 
@@ -1256,6 +1295,7 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	switch res.Status {
 	case LuaStatusOK:
 		s.handleSuccessfulSpends(batchByKey, batch)
+		outcome.record(s.spendCircuitBreaker, true)
 	case LuaStatusError:
 		s.handleErrorSpends(res, batchByKey, batch, txID, thisBlockHeight, batchID)
 	}
@@ -1281,12 +1321,6 @@ func (s *Store) handleBatchError(batchByKey []aerospike.MapValue, batch []*batch
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].complete(errors.NewStorageError("[SPEND_BATCH_LUA][%s] error in aerospike spend batch record, blockHeight %d: %d", batch[idx].spend.TxID.String(), thisBlockHeight, batchID, err))
-	}
-	// Only count infrastructure failures toward the circuit breaker.
-	// Per-record data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing
-	// parents during catch-up sync) must not trip the breaker — issue #953.
-	if s.spendCircuitBreaker != nil && isInfrastructureFailure(err) {
-		s.spendCircuitBreaker.RecordFailure()
 	}
 }
 
@@ -1339,10 +1373,6 @@ func (s *Store) handleSuccessfulSpends(batchByKey []aerospike.MapValue, batch []
 	for _, batchItem := range batchByKey {
 		idx := batchItem["idx"].(int)
 		batch[idx].complete(nil)
-	}
-	// Record successful batch operation for circuit breaker
-	if s.spendCircuitBreaker != nil {
-		s.spendCircuitBreaker.RecordSuccess()
 	}
 }
 
