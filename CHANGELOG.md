@@ -912,6 +912,20 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **Catch-up checks the difficulty of every offered header before fetching any
+  block.** The header precheck used to skip the first ~147 headers after the
+  common ancestor, every pre-DAA header and chains that never adjust difficulty,
+  leaving them to block validation after the subtree prewarm had already fetched
+  their data. A short fork mined against a target the peer chose could therefore
+  make the node download block data. Every header is now checked against the
+  same calculator block validation uses, reading the window below the ancestor
+  from the blockchain store. A peer offering a wrong `nBits` is reported as
+  malicious (`invalid_difficulty`) before any body is requested, and catch-up
+  fails without blaming the peer when the expected difficulty cannot be read.
+  Expect a few hundred extra blockchain store reads per catch-up. Block
+  validation's own check is unchanged. No action is required.
+  (bitcoin-sv/teranode#4582)
+
 - **Peer subtrees announced during a catchup are validated afterwards instead of
   lost.** While catching up, the subtree validator used to drop every
   peer-announced subtree, so the next block arrived with all of them unvalidated

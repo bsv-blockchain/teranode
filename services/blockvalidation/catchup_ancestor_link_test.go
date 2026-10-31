@@ -102,6 +102,7 @@ type ancestorLinkRun struct {
 	err             error
 	headersRequests int
 	blocksRequests  int
+	otherRequests   int // requests for anything but headers and /blocks/, such as /subtree_data
 	minedClears     int64
 	breakerFailures int    // failures counted on the peer's circuit breaker after the catchup
 	errorType       string // previousCatchupAttempt.ErrorType, how releaseCatchupLock classified err
@@ -130,6 +131,9 @@ const (
 	// header the batch before it ended on. The target is f2 on f1, which the peer never serves, so
 	// reaching the target never ends the fetch.
 	offerReplayBetweenBatches
+	// offerWrongBits: h1..h5 linked on b5, where h1 is mined against bits other than its parent's.
+	// Regtest never adjusts difficulty, so the bits every block must carry are its parent's.
+	offerWrongBits
 )
 
 // runAncestorLinkCatchup runs catchup() against a real sqlitememory blockchain store holding the
@@ -191,6 +195,11 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		offered = forkHeadersFrom(t, ancestor, 5, 6, 1000)
 	case offerFirstOnOther:
 		offered = forkHeadersFrom(t, otherBlockB, 5, 6, 1000)
+	case offerWrongBits:
+		h1 := forkHeadersFrom(t, ancestor, 1, 6, 1000)[0]
+		h1.Bits = nBitsFrom(t, "1f7fffff")
+		testhelpers.MineHeader(h1)
+		offered = append([]*model.BlockHeader{h1}, forkHeadersFrom(t, h1, 4, 7, 1000)...)
 	case offerBreakAtSecond:
 		offered = append(forkHeadersFrom(t, ancestor, 1, 6, 1000), forkHeadersFrom(t, otherBlockB, 4, 7, 2000)...)
 	case offerBreakBetweenBatches, offerReplayBetweenBatches:
@@ -259,6 +268,13 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		})
 	httpmock.RegisterResponder("GET", `=~^http://peer/blocks/.*`, httpmock.NewBytesResponder(500, nil))
 
+	var otherRequests atomic.Int64
+
+	httpmock.RegisterNoResponder(func(req *http.Request) (*http.Response, error) {
+		otherRequests.Add(1)
+		return httpmock.ConnectionFailure(req)
+	})
+
 	// Add the headers only the later batches carry, so the target is the newest header offered and
 	// the end-state check covers every offered block.
 	switch shape {
@@ -295,6 +311,7 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		errorType:       errorType,
 		headersRequests: int(headersRequests.Load()),
 		blocksRequests:  blocksRequests,
+		otherRequests:   int(otherRequests.Load()),
 		minedClears:     recorder.clears.Load(),
 		client:          client,
 		mainChain:       mainChain,
@@ -487,4 +504,20 @@ func TestBuildHeaderCache_RejectsFirstHeaderNotLinkedToAncestor(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a mis-linked first header is a peer fault: %v", err)
 		require.Contains(t, err.Error(), "does not link to common ancestor")
 	})
+}
+
+// TestCatchup_HeaderWithWrongDifficultyIsRejectedBeforeAnyBodyFetch covers bitcoin-sv/teranode#4582
+// against a real sqlitememory blockchain store. The peer offers a fork of depth 5 on b5 whose first
+// header declares bits other than the ones the chain requires. Its whole adjustment window is in
+// the store, which the header precheck used to skip, leaving the subtree prewarm and the block
+// fetch to run first. Catchup must reject it at the header precheck, charge the peer as malicious,
+// and request nothing but headers.
+func TestCatchup_HeaderWithWrongDifficultyIsRejectedBeforeAnyBodyFetch(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerWrongBits)
+
+	require.Error(t, run.err)
+	require.True(t, errors.IsMaliciousResponseError(run.err), "wrong difficulty bits are a malicious peer: %v", run.err)
+	require.Contains(t, run.err.Error(), "incorrect difficulty bits")
+	require.Zero(t, run.otherRequests, "nothing but headers may be requested for a rejected offer")
+	requireRejectedWithoutSideEffects(t, run)
 }

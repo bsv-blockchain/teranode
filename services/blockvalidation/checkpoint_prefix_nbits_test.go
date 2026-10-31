@@ -12,6 +12,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
@@ -112,14 +113,15 @@ func difficulty1ChildOfHonestParent(ctx context.Context, t *testing.T, client bl
 // that were supposed to cover it does:
 //
 //   - the direct peer path has no header-level difficulty pipeline at all;
-//   - catch-up has one, but validateHeaderChainDifficulty DEFERS every header whose full 144-block
-//     window is not inside the fetched run — the first header and roughly its first 146 successors —
-//     naming this very check as the downstream cover for them. Narrowing the exemption to catch-up
-//     therefore composed the two skips into a hole rather than closing it.
+//   - catch-up has one, but validateHeaderChainDifficulty used to DEFER every header whose full
+//     144-block window was not inside the fetched run — the first header and roughly its first 146
+//     successors — naming this very check as the downstream cover for them. Narrowing the exemption
+//     to catch-up therefore composed the two skips into a hole rather than closing it.
 //
-// Both subtests below assert the same thing from the two delivery shapes, and the catch-up one
-// asserts the composition directly: the real precheck is run over the fetched header run and shown
-// to PASS the bad chain, after which the body validator must be the thing that rejects it.
+// Both subtests below assert the same thing from the two delivery shapes. The catch-up precheck now
+// judges every header (bitcoin-sv/teranode#4582) and rejects this chain itself; the catch-up subtest
+// asserts that, and that the body validator still rejects it too, so neither check leans on the
+// other.
 func TestValidateBlock_BelowCheckpoint_ExpectedNBitsAlwaysEnforced(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -143,7 +145,7 @@ func TestValidateBlock_BelowCheckpoint_ExpectedNBitsAlwaysEnforced(t *testing.T)
 		requireNothingPersisted(ctx, t, client, child.Hash())
 	})
 
-	t.Run("catch-up delivery inside the precheck's skipped window is rejected too", func(t *testing.T) {
+	t.Run("catch-up delivery near the anchor is rejected by both the precheck and the body check", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -153,19 +155,14 @@ func TestValidateBlock_BelowCheckpoint_ExpectedNBitsAlwaysEnforced(t *testing.T)
 		parent := storeHonestPrefixParent(ctx, t, client, tSettings)
 		child := difficulty1ChildOfHonestParent(ctx, t, client, parent)
 
-		_, anchorMeta, err := client.GetBlockHeader(ctx, tSettings.ChainCfgParams.GenesisHash)
-		require.NoError(t, err)
+		// This fetched run is two headers long, so every header in it is closer to the anchor than
+		// the 144-block window depth. The precheck reads that window from the store and must still
+		// reject the second header for carrying the wrong difficulty bits.
+		err := validateHeaderChainDifficulty(ctx, ulogger.TestLogger{}, tSettings, client, tSettings.ChainCfgParams.GenesisHash,
+			[]*model.BlockHeader{parent.Header, child.Header})
+		require.True(t, errors.IsMaliciousResponseError(err), "the header precheck must cover near-anchor headers, got %v", err)
 
-		// The composition, asserted against the REAL precheck rather than described. This fetched
-		// run is two headers long, so every header in it is closer to the anchor than the 144-block
-		// window depth and validateHeaderChainDifficulty skips all of them — it returns nil for a
-		// chain whose second header carries the wrong difficulty bits. Catch-up's own doc comment
-		// names the body-level check as the cover for exactly these headers.
-		require.NoError(t,
-			validateHeaderChainDifficulty(tSettings, anchorMeta, []*model.BlockHeader{parent.Header, child.Header}),
-			"fixture precondition: the header precheck does NOT cover this block, which is why the body check must")
-
-		// So the body validator has to be what rejects it, even on the catch-up path.
+		// And the body validator rejects it independently, even on the catch-up path.
 		err = bv.ValidateBlockWithOptions(ctx, child, "http://localhost", &ValidateBlockOptions{
 			CachedHeaders:           []*model.BlockHeader{parent.Header},
 			IsCatchupMode:           true,
@@ -174,7 +171,7 @@ func TestValidateBlock_BelowCheckpoint_ExpectedNBitsAlwaysEnforced(t *testing.T)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 		require.ErrorContains(t, err, "incorrect difficulty bits",
-			"catch-up must not be exempt: its header precheck defers near-anchor headers to this check")
+			"catch-up must not be exempt from the body check either")
 
 		requireNothingPersisted(ctx, t, client, child.Hash())
 	})

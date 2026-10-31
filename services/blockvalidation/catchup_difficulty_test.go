@@ -1,8 +1,8 @@
 package blockvalidation
 
 import (
-	"encoding/hex"
-	"math/big"
+	"context"
+	"net/url"
 	"os"
 	"testing"
 
@@ -12,6 +12,8 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
@@ -29,273 +31,216 @@ func daaSettings(t *testing.T, base chaincfg.Params) *settings.Settings {
 	return tSettings
 }
 
-func mustDecodeHex(t *testing.T, s string) []byte {
+// newDifficultyStore returns an empty sqlitememory blockchain store for tSettings' chain; the
+// store inserts the genesis block itself.
+func newDifficultyStore(t *testing.T, tSettings *settings.Settings) blockchain_store.Store {
 	t.Helper()
 
-	b, err := hex.DecodeString(s)
+	store, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
+
+	return store
+}
+
+// storeDifficultyHeaders stores headers in order as main-chain blocks; the store takes each height
+// from the parent. Only the header fields matter to the difficulty rules, so every block reuses the
+// genesis coinbase, changed so the store does not take it for a second genesis.
+func storeDifficultyHeaders(t *testing.T, tSettings *settings.Settings, store blockchain_store.Store, headers []*model.BlockHeader) {
+	t.Helper()
+
+	genesis, err := model.NewBlockFromMsgBlock(tSettings.ChainCfgParams.GenesisBlock, nil)
 	require.NoError(t, err)
 
-	return b
-}
+	genesis.CoinbaseTx.LockTime = 1
 
-// buildHeader builds a minimal header carrying only the fields the DAA check reads
-// (timestamp and difficulty bits). Linkage/PoW are validated elsewhere.
-func buildHeader(ts uint32, bits *model.NBit) *model.BlockHeader {
-	return &model.BlockHeader{
-		Version:        1,
-		HashPrevBlock:  &chainhash.Hash{},
-		HashMerkleRoot: &chainhash.Hash{},
-		Timestamp:      ts,
-		Bits:           *bits,
-		Nonce:          0,
+	for _, h := range headers {
+		_, _, err = store.StoreBlock(t.Context(), &model.Block{Header: h, CoinbaseTx: genesis.CoinbaseTx, TransactionCount: 1}, "test")
+		require.NoError(t, err)
 	}
 }
 
-// buildConstantChain builds n contiguous headers spaced exactly spacing seconds apart,
-// all carrying bits. Anchored at a common ancestor at height H with arbitrary chainwork
-// (only chainwork differences within the window matter to the DAA).
-func buildConstantChain(n int, spacing uint32, bits *model.NBit) (*model.BlockHeaderMeta, []*model.BlockHeader) {
-	anchor := &model.BlockHeaderMeta{
-		Height:    200000,
-		ChainWork: new(big.Int).Lsh(big.NewInt(1), 200).Bytes(),
+// honestDifficultyChain builds n headers on top of genesis, each carrying the bits the
+// store-backed calculator demands for it, and returns them indexed by height (genesis at 0).
+//
+// The calculator reads ancestry through the store's SQL, not through the branch source the code
+// under test uses, so it is an independent oracle for what every header must carry. timeAt gives
+// the timestamp at each height.
+func honestDifficultyChain(t *testing.T, tSettings *settings.Settings, n int, timeAt func(height uint32, prev []*model.BlockHeader) uint32) []*model.BlockHeader {
+	t.Helper()
+
+	store := newDifficultyStore(t, tSettings)
+
+	d, err := blockchain.NewDifficulty(store, ulogger.TestLogger{}, tSettings)
+	require.NoError(t, err)
+
+	genesis, err := model.NewBlockFromMsgBlock(tSettings.ChainCfgParams.GenesisBlock, nil)
+	require.NoError(t, err)
+
+	headers := []*model.BlockHeader{genesis.Header}
+
+	for height := uint32(1); height <= uint32(n); height++ { //nolint:gosec // a fixture size
+		parent := headers[height-1]
+		ts := timeAt(height, headers)
+
+		bits, err := d.CalcNextWorkRequired(t.Context(), parent, height-1, int64(ts))
+		require.NoError(t, err)
+
+		h := &model.BlockHeader{
+			Version:        1,
+			HashPrevBlock:  parent.Hash(),
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      ts,
+			Bits:           *bits,
+			Nonce:          height,
+		}
+
+		storeDifficultyHeaders(t, tSettings, store, []*model.BlockHeader{h})
+
+		headers = append(headers, h)
 	}
 
-	baseTime := uint32(1_600_000_000)
-	headers := make([]*model.BlockHeader, n)
-
-	for i := range n {
-		headers[i] = buildHeader(baseTime+uint32(i+1)*spacing, bits)
-	}
-
-	return anchor, headers
+	return headers
 }
 
+// irregularTime spaces blocks unevenly, on average faster than the target so the DAA moves off the
+// pow limit, and every eleventh block repeats the timestamp of the block two back while the one
+// between is later. That is the equal-time median-of-three case whose tie-break must match the
+// store's ordering.
+func irregularTime(height uint32, prev []*model.BlockHeader) uint32 {
+	if height >= 2 && height%11 == 0 {
+		return prev[height-2].Timestamp
+	}
+
+	return prev[height-1].Timestamp + 300 + (height*137)%400
+}
+
+// withTamperedBits returns a copy of h declaring bits instead of its own.
+func withTamperedBits(t *testing.T, h *model.BlockHeader, bits string) *model.BlockHeader {
+	t.Helper()
+
+	nBits, err := model.NewNBitFromString(bits)
+	require.NoError(t, err)
+	require.NotEqual(t, h.Bits, *nBits, "fixture precondition: the tampered bits must differ")
+
+	tampered := *h
+	tampered.Bits = *nBits
+
+	return &tampered
+}
+
+// daaFixture is an honest chain of 170 headers on mainnet rules with the modern DAA from genesis,
+// and a node that has stored the first 160 of them.
+func daaFixture(t *testing.T) (*settings.Settings, blockchain_store.Store, []*model.BlockHeader) {
+	t.Helper()
+
+	tSettings := daaSettings(t, chaincfg.MainNetParams)
+	chain := honestDifficultyChain(t, tSettings, 170, irregularTime)
+
+	powLimit := chain[0].Bits
+	require.NotEqual(t, powLimit, chain[170].Bits, "fixture precondition: the DAA must have moved off the pow limit")
+
+	trunk := newDifficultyStore(t, tSettings)
+	storeDifficultyHeaders(t, tSettings, trunk, chain[1:161])
+
+	return tSettings, trunk, chain
+}
+
+func validateFixtureRun(t *testing.T, tSettings *settings.Settings, trunk blockchain.HeaderSource, anchor *model.BlockHeader, headers []*model.BlockHeader) error {
+	t.Helper()
+
+	return validateHeaderChainDifficulty(t.Context(), ulogger.TestLogger{}, tSettings, trunk, anchor.Hash(), headers)
+}
+
+// TestValidateHeaderChainDifficulty_HonestRunAcrossTheStoredWindowPasses checks a run whose
+// adjustment windows lie almost entirely in the store: every header gets the bits the store-backed
+// calculator gave it.
+func TestValidateHeaderChainDifficulty_HonestRunAcrossTheStoredWindowPasses(t *testing.T) {
+	tSettings, trunk, chain := daaFixture(t)
+
+	require.NoError(t, validateFixtureRun(t, tSettings, trunk, chain[160], chain[161:]))
+}
+
+// TestValidateHeaderChainDifficulty_HeaderExtendingTheTipWithEasyBitsIsRejected is the attack in
+// bitcoin-sv/teranode#4582: a single header on top of our tip, mined against a target the peer
+// chose. Its whole adjustment window is in the store, which the check used to skip.
+func TestValidateHeaderChainDifficulty_HeaderExtendingTheTipWithEasyBitsIsRejected(t *testing.T) {
+	tSettings, trunk, chain := daaFixture(t)
+
+	err := validateFixtureRun(t, tSettings, trunk, chain[160], []*model.BlockHeader{withTamperedBits(t, chain[161], "207fffff")})
+	require.Error(t, err)
+	require.True(t, errors.IsMaliciousResponseError(err), "expected malicious response error, got %v", err)
+	require.ErrorContains(t, err, "expected "+chain[161].Bits.String(), "the expected bits must be the store-backed calculator's")
+}
+
+// TestValidateHeaderChainDifficulty_ShortForkWithEasyBitsIsRejected offers a three-header fork
+// rooted three blocks below the tip whose last header declares the pow limit.
+func TestValidateHeaderChainDifficulty_ShortForkWithEasyBitsIsRejected(t *testing.T) {
+	tSettings, trunk, chain := daaFixture(t)
+
+	fork := []*model.BlockHeader{chain[158], chain[159], withTamperedBits(t, chain[160], chain[0].Bits.String())}
+
+	err := validateFixtureRun(t, tSettings, trunk, chain[157], fork)
+	require.Error(t, err)
+	require.True(t, errors.IsMaliciousResponseError(err), "expected malicious response error, got %v", err)
+}
+
+// TestValidateHeaderChainDifficulty_UnjudgeableRunFailsClosed checks that a run the calculator
+// cannot judge is refused without blaming the peer: an anchor the store does not hold, and a run
+// that does not link to its anchor.
+func TestValidateHeaderChainDifficulty_UnjudgeableRunFailsClosed(t *testing.T) {
+	tSettings, trunk, chain := daaFixture(t)
+
+	err := validateFixtureRun(t, tSettings, trunk, chain[165], chain[166:])
+	require.Error(t, err, "an anchor the store does not hold")
+	require.False(t, errors.IsMaliciousResponseError(err))
+
+	err = validateFixtureRun(t, tSettings, trunk, chain[160], chain[162:])
+	require.Error(t, err, "a run that does not link to its anchor")
+	require.False(t, errors.IsMaliciousResponseError(err))
+}
+
+// TestValidateHeaderChainDifficulty_HistoricalTestnet runs real testnet headers from genesis, across
+// the pre-DAA rules and testnet's minimum-difficulty rule, against a store holding only genesis.
 func TestValidateHeaderChainDifficulty_HistoricalTestnet(t *testing.T) {
 	tSettings := test.CreateBaseTestSettings(t)
 	params := chaincfg.TestNetParams
 	tSettings.ChainCfgParams = &params
+
 	data, err := os.ReadFile("../blockchain/testdata/testnet_headers_0_547.bin")
 	require.NoError(t, err)
 	require.Len(t, data, 548*80)
-	headers := make([]*model.BlockHeader, 547)
+
+	headers := make([]*model.BlockHeader, 548)
 	for i := range headers {
-		headers[i], err = model.NewBlockHeaderFromBytes(data[(i+1)*80 : (i+2)*80])
+		headers[i], err = model.NewBlockHeaderFromBytes(data[i*80 : (i+1)*80])
 		require.NoError(t, err)
 	}
-	require.NoError(t, validateHeaderChainDifficulty(tSettings, &model.BlockHeaderMeta{Height: 0}, headers))
-}
 
-func TestValidateHeaderChainDifficulty_STNPreservesExistingRules(t *testing.T) {
-	s := test.CreateBaseTestSettings(t)
-	params := chaincfg.StnParams
-	s.ChainCfgParams = &params
-	bits, err := model.NewNBitFromString("180a097a")
-	require.NoError(t, err)
-	anchor, headers := buildConstantChain(300, 600, bits)
-	anchor.Height = 1000 // STN used DAA here before this historical testnet fix.
-	require.NoError(t, validateHeaderChainDifficulty(s, anchor, headers))
-	headers[200].Bits = *powLimitNBit(s)
-	require.True(t, errors.IsMaliciousResponseError(validateHeaderChainDifficulty(s, anchor, headers)))
-}
+	trunk := newDifficultyStore(t, tSettings)
 
-func TestValidateHeaderChainDifficulty_DAAActivation(t *testing.T) {
-	tSettings := daaSettings(t, chaincfg.MainNetParams)
-	bits, err := model.NewNBitFromString("180a097a")
-	require.NoError(t, err)
-	for _, count := range []int{200, 201} {
-		anchor, headers := buildConstantChain(count, 600, bits)
-		tSettings.ChainCfgParams.DaaForkHeight = anchor.Height + 200
-		headers[count-1].Bits = *powLimitNBit(tSettings)
-		err := validateHeaderChainDifficulty(tSettings, anchor, headers)
-		if count == 200 {
-			require.NoError(t, err, "historical targets are deferred to full-block validation")
-		} else {
-			require.True(t, errors.IsMaliciousResponseError(err), "modern DAA must run at its parent-height activation")
-		}
-	}
-}
+	require.NoError(t, validateFixtureRun(t, tSettings, trunk, headers[0], headers[1:]))
 
-// TestValidateHeaderChainDifficulty_ValidConstantChain proves the DAA check accepts a
-// steady-state chain: constant difficulty with blocks mined exactly on the target spacing
-// must reproduce the same target, so no header is rejected.
-func TestValidateHeaderChainDifficulty_ValidConstantChain(t *testing.T) {
-	tSettings := daaSettings(t, chaincfg.MainNetParams)
-
-	startBits, err := model.NewNBitFromString("180a097a")
-	require.NoError(t, err)
-
-	anchor, headers := buildConstantChain(300, 600, startBits)
-
-	require.NoError(t, validateHeaderChainDifficulty(tSettings, anchor, headers))
-}
-
-// TestValidateHeaderChainDifficulty_RejectsEasyBits feeds an otherwise-valid chain a single
-// header (deep enough that its full window is in memory) with artificially easy nBits, and
-// asserts it is rejected as malicious — the core protection this change adds.
-func TestValidateHeaderChainDifficulty_RejectsEasyBits(t *testing.T) {
-	tSettings := daaSettings(t, chaincfg.MainNetParams)
-
-	startBits, err := model.NewNBitFromString("180a097a")
-	require.NoError(t, err)
-
-	anchor, headers := buildConstantChain(300, 600, startBits)
-
-	// Baseline must be valid so the failure below is attributable to the tampering.
-	require.NoError(t, validateHeaderChainDifficulty(tSettings, anchor, headers))
-
-	easyBits, err := model.NewNBitFromString("207fffff")
-	require.NoError(t, err)
-
-	// Index 200 is far past the 144-block window, so its DAA target is computed entirely
-	// from earlier (untampered) in-memory headers.
-	headers[200].Bits = *easyBits
-
-	err = validateHeaderChainDifficulty(tSettings, anchor, headers)
-	require.Error(t, err)
+	headers[547] = withTamperedBits(t, headers[547], "207fffff")
+	err = validateFixtureRun(t, tSettings, trunk, headers[0], headers[1:])
 	require.True(t, errors.IsMaliciousResponseError(err), "expected malicious response error, got %v", err)
 }
 
-// TestValidateHeaderChainDifficulty_RegtestSkips confirms that on a no-adjustment network
-// (regtest) any difficulty is accepted, matching CalcNextWorkRequired's behaviour.
-func TestValidateHeaderChainDifficulty_RegtestSkips(t *testing.T) {
-	tSettings := test.CreateBaseTestSettings(t) // RegressionNetParams: NoDifficultyAdjustment
+// TestValidateHeaderChainDifficulty_NoAdjustmentChain checks a chain that never adjusts difficulty
+// (regtest) the way full-block validation does: each header must repeat its parent's bits.
+func TestValidateHeaderChainDifficulty_NoAdjustmentChain(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
 	require.True(t, tSettings.ChainCfgParams.NoDifficultyAdjustment)
 
-	easyBits, err := model.NewNBitFromString("207fffff")
-	require.NoError(t, err)
+	chain := honestDifficultyChain(t, tSettings, 5, func(height uint32, prev []*model.BlockHeader) uint32 {
+		return prev[height-1].Timestamp + 600
+	})
 
-	anchor, headers := buildConstantChain(300, 600, easyBits)
+	trunk := newDifficultyStore(t, tSettings)
+	storeDifficultyHeaders(t, tSettings, trunk, chain[1:3])
 
-	require.NoError(t, validateHeaderChainDifficulty(tSettings, anchor, headers))
-}
+	require.NoError(t, validateFixtureRun(t, tSettings, trunk, chain[2], chain[3:]))
 
-// TestValidateHeaderChainDifficulty_ShortChainSkips confirms that when the chain is shorter
-// than a full adjustment window, no header is checked here (the downstream full-block check
-// covers those), so even wrong bits are not rejected at this stage.
-func TestValidateHeaderChainDifficulty_ShortChainSkips(t *testing.T) {
-	tSettings := daaSettings(t, chaincfg.MainNetParams)
-
-	easyBits, err := model.NewNBitFromString("207fffff")
-	require.NoError(t, err)
-
-	// 100 < window(144) + median lookback, so nothing is checkable in memory.
-	anchor, headers := buildConstantChain(100, 600, easyBits)
-
-	require.NoError(t, validateHeaderChainDifficulty(tSettings, anchor, headers))
-}
-
-// TestValidateHeaderChainDifficulty_TestnetMinDifficulty confirms the testnet
-// minimum-difficulty rule is honoured: a block mined more than 2*spacing after its parent
-// is expected to carry the pow-limit target, and is accepted when it does.
-func TestValidateHeaderChainDifficulty_TestnetMinDifficulty(t *testing.T) {
-	base := chaincfg.MainNetParams
-	base.ReduceMinDifficulty = true
-
-	tSettings := daaSettings(t, base)
-
-	startBits, err := model.NewNBitFromString("180a097a")
-	require.NoError(t, err)
-
-	// Make the delayed block the last header so nothing downstream depends on its
-	// irregular timestamp; every earlier header is a steady-state block.
-	anchor, headers := buildConstantChain(201, 600, startBits)
-	last := len(headers) - 1
-
-	powLimit := powLimitNBit(tSettings)
-
-	// The last block arrives more than 2*spacing after its parent, so the min-difficulty
-	// rule requires it to carry the pow-limit target.
-	headers[last].Timestamp = headers[last-1].Timestamp + 3*600
-	headers[last].Bits = *powLimit
-
-	require.NoError(t, validateHeaderChainDifficulty(tSettings, anchor, headers))
-
-	// If that same delayed block does NOT carry the pow-limit target, reject it.
-	headers[last].Bits = *startBits
-	err = validateHeaderChainDifficulty(tSettings, anchor, headers)
-	require.Error(t, err)
+	err := validateFixtureRun(t, tSettings, trunk, chain[2], []*model.BlockHeader{withTamperedBits(t, chain[3], "1d00ffff")})
 	require.True(t, errors.IsMaliciousResponseError(err), "expected malicious response error, got %v", err)
-}
-
-// TestValidateHeaderChainDifficulty_EqualTimestampMedianTie exercises the specific
-// case fixed in ChiR1: two blocks two apart at a window boundary sharing a timestamp
-// (with the middle one higher), which triggers the unstable sort's tie-break. With the
-// fixed oldest-first ordering, median3 selects the same block as the store would,
-// ensuring DAA parity.
-func TestValidateHeaderChainDifficulty_EqualTimestampMedianTie(t *testing.T) {
-	tSettings := daaSettings(t, chaincfg.MainNetParams)
-
-	// Build blocks for indices 0-149 (the first block where DAA check runs is i=147).
-	// We construct timestamps where blocks 5 and 7 (examined by median3(7)) share a
-	// timestamp, to test the tie-break ordering in a checkable region.
-	// Height of block at index i in catchup is anchor.Height + 1 + i.
-	anchor := &model.BlockHeaderMeta{
-		Height:    200000,
-		ChainWork: new(big.Int).Lsh(big.NewInt(1), 200).Bytes(),
-	}
-
-	startBits, err := model.NewNBitFromString("180a097a")
-	require.NoError(t, err)
-
-	baseTime := uint32(1_600_000_000)
-	headers := make([]*model.BlockHeader, 150)
-
-	// Build blocks 0-149 with timestamps that create the tie at 5, 6, 7.
-	// Blocks 5 and 7 share a timestamp, block 6 is higher (triggering sort's tie-break).
-	for i := range 150 {
-		var ts uint32
-		if i < 5 {
-			ts = baseTime + uint32((i+1)*600)
-		} else if i == 5 {
-			ts = baseTime + 1 + uint32((5+1)*600) // time T
-		} else if i == 6 {
-			ts = baseTime + 1 + uint32((5+1)*600) + 300 // time T+300
-		} else if i == 7 {
-			ts = baseTime + 1 + uint32((5+1)*600) // time T again
-		} else {
-			ts = baseTime + uint32((i+1)*600)
-		}
-		headers[i] = buildHeader(ts, startBits)
-	}
-
-	// With the fixed oldest-first ordering, median3(7) examines blocks [5,6,7] ordered
-	// as [5,6,7] (oldest-first). The unstable sort will preserve this order since it
-	// only compares by time and has two equal values; it selects s[1]=block 6 as median.
-	// With the buggy newest-first ordering [7,6,5], the tie-break might reorder them
-	// differently, potentially selecting a different median. This test validates that
-	// the fix produces consistent results.
-	//
-	// We use constant bits throughout since all blocks are deep before the full 144-block
-	// DAA window is needed (DAA checks start at i=147), so the checkable headers in this
-	// shortened chain don't trigger full DAA recalculation.
-	require.NoError(t, validateHeaderChainDifficulty(tSettings, anchor, headers))
-}
-
-// TestComputeTarget_MatchesDifficultyMethod is a guard on the ComputeTarget extraction:
-// the exported free function must return exactly what the store-backed path produced.
-func TestComputeTarget_MatchesDifficultyMethod(t *testing.T) {
-	tSettings := daaSettings(t, chaincfg.MainNetParams)
-
-	firstBits, _ := model.NewNBitFromString("1808de5f")
-	first := &model.SuitableBlock{
-		NBits:     firstBits.CloneBytes(),
-		Time:      1704647599,
-		ChainWork: mustDecodeHex(t, "0000000000000000000000000000000000000000014fde9a5605193885731ee4"),
-	}
-
-	lastBits, _ := model.NewNBitFromString("180a097a")
-	last := &model.SuitableBlock{
-		NBits:     lastBits.CloneBytes(),
-		Time:      1704738562,
-		ChainWork: mustDecodeHex(t, "0000000000000000000000000000000000000000014fed8ff37cff135c70f4bb"),
-	}
-
-	got, err := blockchain.ComputeTarget(tSettings, first, last)
-	require.NoError(t, err)
-
-	// Same inputs and expectation as blockchain.TestCalcNextRequiredDifficulty, proving the
-	// extracted free function matches the store-backed path exactly.
-	expected, err := model.NewNBitFromString("180a2268")
-	require.NoError(t, err)
-	require.Equal(t, expected.String(), got.String())
 }

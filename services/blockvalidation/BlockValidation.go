@@ -2228,12 +2228,13 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// is true for EVERY height in 1..highest — and the two places that were supposed to cover
 		// the gap do not:
 		//
-		//   - Catch-up's header precheck (validateCatchupHeaderDifficulty) deliberately DEFERS every
-		//     header whose full 144-block window is not inside the fetched run — the first header
-		//     and roughly its first 146 successors — plus every pre-DAA header, and it returns
-		//     immediately on chains with no difficulty adjustment. Its own doc comment names this
-		//     check as the downstream cover for exactly those headers, so skipping here removed the
-		//     only check they ever got.
+		//   - Catch-up's header precheck (validateCatchupHeaderDifficulty) used to DEFER every header
+		//     whose full 144-block window was not inside the fetched run — the first header and
+		//     roughly its first 146 successors — plus every pre-DAA header, and it returned
+		//     immediately on chains with no difficulty adjustment, naming this check as the cover for
+		//     exactly those headers. It now judges every header against the store
+		//     (bitcoin-sv/teranode#4582), but only for blocks that arrive through catch-up, and this
+		//     check stays authoritative for the rest.
 		//   - Catch-up routes blocks certified by a checkpoint verified IN THIS RUN to
 		//     quickValidateBlock, which gates on catchupCtx.highestCheckpointHeight — the verified
 		//     height, not the configured one. That routing is not absolute: tryQuickValidation falls

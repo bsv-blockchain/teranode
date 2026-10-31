@@ -350,8 +350,10 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 
 	// Step 9.5: Validate header-chain difficulty (DAA) before fetching full blocks.
 	// Header-fetch validation only checks each header's PoW against its own nBits; this
-	// recomputes the DAA-required nBits from the header chain and rejects a peer that
-	// supplied a self-consistent low-difficulty chain.
+	// computes the required nBits for every header, reading the window below the common
+	// ancestor from the store, and rejects a peer that supplied a header mined against a
+	// target of its own choosing. It must stay ahead of step 10, whose subtree prewarm
+	// fetches block data before any block is validated.
 	if err = u.validateCatchupHeaderDifficulty(ctx, catchupCtx); err != nil {
 		return err
 	}
