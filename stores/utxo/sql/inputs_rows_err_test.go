@@ -30,8 +30,8 @@ func TestGetUnbatchedSurfacesInputsIterationError(t *testing.T) {
 		WithArgs(hash[:]).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "version", "lock_time", "fee", "size_in_bytes", "coinbase",
-			"frozen", "conflicting", "locked", "unmined_since", "inserted_at",
-		}).AddRow(7, 1, 0, 100, 250, false, false, false, false, nil, "2026-09-15 00:00:00"))
+			"frozen", "conflicting", "locked", "unmined_since", "cohort", "inserted_at",
+		}).AddRow(7, 1, 0, 100, 250, false, false, false, false, nil, 0, "2026-09-15 00:00:00"))
 
 	iterationErr := sql.ErrConnDone
 
