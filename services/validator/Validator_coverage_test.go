@@ -15,6 +15,7 @@ import (
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -913,6 +914,11 @@ func TestValidator_ValidateInternal_TxNotFoundError_ExistingTx(t *testing.T) {
 		}).
 		Return(nil)
 
+	// The grace additionally requires the mined block to be on the current chain.
+	blockchainMock := &blockchain.Mock{}
+	blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, existingMeta.BlockIDs).Return(true, nil)
+	v.blockchainClient = blockchainMock
+
 	options := &Options{}
 	txMetaData, err := v.validateInternal(ctx, tx, 100, options)
 
@@ -943,13 +949,16 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 		return tx, coinbaseTx
 	}
 
-	setupValidator := func(t *testing.T, tx *bt.Tx, coinbaseTx *bt.Tx, getMetaResult *meta.Data, getMetaErr error) (*Validator, *utxo.MockUtxostore) {
+	setupValidator := func(t *testing.T, tx *bt.Tx, coinbaseTx *bt.Tx, getMetaResult *meta.Data, getMetaErr error, onCurrentChain bool) (*Validator, *utxo.MockUtxostore) {
 		ctx := context.Background()
 		logger := ulogger.TestLogger{}
 		mockStore := &utxo.MockUtxostore{}
 		settings := test.CreateBaseTestSettings(t)
 
-		validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, nil)
+		blockchainMock := &blockchain.Mock{}
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(onCurrentChain, nil).Maybe()
+
+		validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, blockchainMock)
 		require.NoError(t, err)
 		v := validator.(*Validator)
 
@@ -970,10 +979,10 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 		return v, mockStore
 	}
 
-	t.Run("shortcut allowed when mined and not flagged", func(t *testing.T) {
+	t.Run("shortcut allowed when mined on current chain and not flagged", func(t *testing.T) {
 		tx, coinbaseTx := makeTxAndParent(t)
 		existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}, Conflicting: false, Locked: false}
-		v, mockStore := setupValidator(t, tx, coinbaseTx, existingMeta, nil)
+		v, mockStore := setupValidator(t, tx, coinbaseTx, existingMeta, nil, true)
 
 		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
@@ -983,10 +992,23 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
+	t.Run("shortcut denied when mined block lost a reorg (not on current chain)", func(t *testing.T) {
+		tx, coinbaseTx := makeTxAndParent(t)
+		staleMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}, Conflicting: false, Locked: false}
+		v, mockStore := setupValidator(t, tx, coinbaseTx, staleMeta, nil, false)
+
+		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.Error(t, err)
+		require.Nil(t, txMetaData)
+		require.True(t, errors.Is(err, errors.ErrTxNotFound), "expected wrapped ErrTxNotFound, got: %v", err)
+		mockStore.AssertExpectations(t)
+	})
+
 	t.Run("shortcut denied when not yet mined (BlockIDs empty)", func(t *testing.T) {
 		tx, coinbaseTx := makeTxAndParent(t)
 		notYetMined := &meta.Data{Tx: tx, BlockIDs: nil, Conflicting: false, Locked: false}
-		v, mockStore := setupValidator(t, tx, coinbaseTx, notYetMined, nil)
+		v, mockStore := setupValidator(t, tx, coinbaseTx, notYetMined, nil, true)
 
 		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
@@ -1000,7 +1022,7 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 	t.Run("shortcut denied when conflicting", func(t *testing.T) {
 		tx, coinbaseTx := makeTxAndParent(t)
 		conflicting := &meta.Data{Tx: tx, BlockIDs: []uint32{1}, Conflicting: true, Locked: false}
-		v, mockStore := setupValidator(t, tx, coinbaseTx, conflicting, nil)
+		v, mockStore := setupValidator(t, tx, coinbaseTx, conflicting, nil, true)
 
 		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
@@ -1014,7 +1036,7 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 	t.Run("shortcut denied when locked", func(t *testing.T) {
 		tx, coinbaseTx := makeTxAndParent(t)
 		locked := &meta.Data{Tx: tx, BlockIDs: []uint32{1}, Conflicting: false, Locked: true}
-		v, mockStore := setupValidator(t, tx, coinbaseTx, locked, nil)
+		v, mockStore := setupValidator(t, tx, coinbaseTx, locked, nil, true)
 
 		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
@@ -1027,7 +1049,7 @@ func TestValidate_TxNotFoundShortcut(t *testing.T) {
 
 	t.Run("shortcut denied when GetMeta itself fails", func(t *testing.T) {
 		tx, coinbaseTx := makeTxAndParent(t)
-		v, mockStore := setupValidator(t, tx, coinbaseTx, nil, errors.NewTxNotFoundError("meta not found"))
+		v, mockStore := setupValidator(t, tx, coinbaseTx, nil, errors.NewTxNotFoundError("meta not found"), true)
 
 		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 

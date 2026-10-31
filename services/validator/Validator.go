@@ -989,6 +989,19 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// gates selected the same single call and the first read as a gate while
 		// gating nothing.
 		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
+			if errors.Is(err, errors.ErrTxMissingParent) {
+				txMeta, blessed, fatalErr := v.dahEvictedParentGrace(ctx, tx, txID)
+				if fatalErr != nil {
+					span.RecordError(fatalErr)
+
+					return nil, fatalErr
+				}
+
+				if blessed {
+					return txMeta, nil
+				}
+			}
+
 			err = errors.NewProcessingError("[Validate][%s] error getting transaction input block heights", txID, err)
 			span.RecordError(err)
 
@@ -1293,21 +1306,15 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// create phase can surface ErrTxNotFound (e.g. an internal parent lookup) MUST
 			// NOT let it escape untagged, or a failed create gets misread here as a
 			// DAH-evicted parent and the tx is wrongly treated as blessed.
-			//
-			// The parent transaction was not found. This can legitimately happen when the parent has been DAH-evicted
-			// long after the child was mined. Only short-circuit if the stored metadata confirms prior full validation:
-			//   - tx has been included in at least one block (BlockIDs non-empty), AND
-			//   - tx is NOT marked conflicting, AND
-			//   - tx is NOT locked
-			// Otherwise, surface the original ErrTxNotFound — a "tx exists in store" alone is not proof of validation
-			// (a re-org or DAH window could expose a stale or mid-flight record).
-			txMetaData = &meta.Data{}
-			if metaErr := v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); metaErr == nil {
-				if len(txMetaData.BlockIDs) > 0 && !txMetaData.Conflicting && !txMetaData.Locked {
-					v.logger.Warnf("[Validate][%s] parent tx DAH-evicted, child already mined and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
+			txMeta, blessed, fatalErr := v.dahEvictedParentGrace(decoupledCtx, tx, txID)
+			if fatalErr != nil {
+				span.RecordError(fatalErr)
 
-					return txMetaData, nil
-				}
+				return nil, fatalErr
+			}
+
+			if blessed {
+				return txMeta, nil
 			}
 		}
 
@@ -1772,6 +1779,81 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 	}
 
 	return nil
+}
+
+// dahEvictedParentGrace reports whether a missing-parent failure can be absorbed
+// because the transaction itself is already fully validated and mined on the
+// CURRENT chain.
+//
+// A parent record can legitimately be gone from the UTXO store when it was
+// DAH-evicted (or its partition was lost) long after this child was mined. Only
+// short-circuit if the stored metadata confirms prior full validation:
+//   - tx has been included in at least one block (BlockIDs non-empty), AND
+//   - at least one of those blocks is on the CURRENT chain (BlockIDs alone are
+//     not proof: a block that lost a reorg keeps its stale ID — only
+//     invalidated blocks get BlockIDs cleared via UnsetMined), AND
+//   - tx is NOT marked conflicting, AND
+//   - tx is NOT locked
+//
+// Under those conditions the record is the durable result of a prior full
+// validation (scripts run, inputs consumed) whose block the node accepted on
+// its current chain, so returning it without re-running validation or
+// re-recording spends is sound:
+//   - Skipping the script/policy re-check cannot change the outcome — it ran
+//     when the record was created, and re-running could only fail on
+//     since-pruned data, which is the wedge this grace exists to break.
+//   - Skipping spend recording is safe because there is nothing to record ON:
+//     the parent record is absent. The child's spends WERE recorded on the
+//     parent before it vanished. The parent cannot "come back" with
+//     unspent-looking outputs through any consistent path: DAH eviction only
+//     ever deletes records whose outputs were ALL spent and mined, so a
+//     restored copy shows them spent; and a reseed after partition loss
+//     rebuilds the UTXO set from persisted chain state, in which this child's
+//     block has already consumed those outputs. Only restoring a stale backup
+//     over live state could resurrect an unspent-looking output — an
+//     operator-induced consistency break that no validate-time bookkeeping
+//     can defend against.
+//
+// Failure semantics: a clean not-found (child record absent) simply denies the
+// grace, and the caller surfaces the original missing-parent error. A STORE or
+// BLOCKCHAIN fault, however, is returned as fatalErr — a DB read error is not
+// a verdict about the transaction, and reclassifying it as "invalid: missing
+// parent" would fail blocks (and feed the BLOCK_INCOMPLETE cap) on transient
+// infrastructure blips. Without a blockchain client (some embedded/test
+// wirings) the grace fails closed.
+//
+// This is the single source of truth for the grace, shared by the extend/heights
+// step and the spend step so their tolerance for evaporated parents cannot drift.
+func (v *Validator) dahEvictedParentGrace(ctx context.Context, tx *bt.Tx, txID string) (txMeta *meta.Data, blessed bool, fatalErr error) {
+	txMetaData := &meta.Data{}
+	if metaErr := v.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), txMetaData); metaErr != nil {
+		if !errors.Is(metaErr, errors.ErrTxNotFound) {
+			return nil, false, errors.NewStorageError("[Validate][%s] DAH-evicted-parent grace: meta read failed (degraded store?)", txID, metaErr)
+		}
+
+		return nil, false, nil
+	}
+
+	if len(txMetaData.BlockIDs) == 0 || txMetaData.Conflicting || txMetaData.Locked {
+		return nil, false, nil
+	}
+
+	if v.blockchainClient == nil {
+		return nil, false, nil
+	}
+
+	onCurrentChain, chainErr := v.blockchainClient.CheckBlockIsInCurrentChain(ctx, txMetaData.BlockIDs)
+	if chainErr != nil {
+		return nil, false, errors.NewServiceError("[Validate][%s] DAH-evicted-parent grace: current-chain check failed", txID, chainErr)
+	}
+
+	if !onCurrentChain {
+		return nil, false, nil
+	}
+
+	v.logger.Warnf("[Validate][%s] parent tx DAH-evicted, child already mined on current chain and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
+
+	return txMetaData, true, nil
 }
 
 // getUtxoBlockHeightsAndExtendTx returns the block height of each input's parent
