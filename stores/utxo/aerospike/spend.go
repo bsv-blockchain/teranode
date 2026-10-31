@@ -1120,13 +1120,14 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 // shared backend used by sendSpendBatchLua's Lua route and by the expression path's
 // retry-through-Lua handler. Callers must supply a batch without conflicting claims
 // on the same outpoint. This method does not split batches itself.
+// A panic reaches sendSpendBatchLua, which answers the parts that did not run.
 func (s *Store) executeLuaSpendBatch(batch []*batchSpend, outcome *spendBreakerOutcome) {
-	s.executeLuaSpendBatchContext(s.ctx, batch, outcome)
+	s.runLuaSpendBatch(s.ctx, batch, outcome)
 }
 
 // executeLuaSpendBatchContext keeps recovery writes synchronous and bounds the network request
 // by the compensation deadline. Recovery always uses the conditional Lua writer.
-func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*batchSpend, outcome *spendBreakerOutcome) {
+func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*batchSpend) {
 	// Recovery dispatches directly, outside go-batcher. Preserve completion on a client
 	// or response-parser panic just as the normal spend dispatch does.
 	defer func() {
@@ -1136,6 +1137,11 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 			}
 		})
 	}()
+
+	s.runLuaSpendBatch(parentCtx, batch, &spendBreakerOutcome{})
+}
+
+func (s *Store) runLuaSpendBatch(parentCtx context.Context, batch []*batchSpend, outcome *spendBreakerOutcome) {
 	if len(batch) == 0 {
 		return
 	}
