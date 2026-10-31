@@ -588,6 +588,9 @@ func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMalicio
 
 // IsPeerUnhealthy returns whether a peer is currently considered unhealthy
 // based on reputation and success-rate signals from the centralized registry.
+// The reputation cut-off is blockchain.MinUsablePeerReputation, shared with
+// sync-peer eligibility and peer selection, so a peer picked as the sync peer
+// is not then refused as its catchup source.
 func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealthyRequest) (*p2p_api.IsPeerUnhealthyResponse, error) {
 	if req.PeerId == "" {
 		return &p2p_api.IsPeerUnhealthyResponse{
@@ -626,7 +629,7 @@ func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealt
 		}, nil
 	}
 
-	if peerInfo.ReputationScore < 40 {
+	if peerInfo.ReputationScore < blockchain.MinUsablePeerReputation {
 		return &p2p_api.IsPeerUnhealthyResponse{
 			IsUnhealthy:     true,
 			Reason:          fmt.Sprintf("low reputation score: %.2f", peerInfo.ReputationScore),

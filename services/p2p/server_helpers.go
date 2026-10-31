@@ -1309,7 +1309,7 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 		expiresAt: now.Add(reputationCacheTTL),
 	})
 
-	if peerInfo.ReputationScore < 20.0 {
+	if peerInfo.ReputationScore < blockchain.MinUsablePeerReputation {
 		s.logger.Debugf("[%s] ignoring notification from low reputation peer %s (score: %.2f)", messageType, from, peerInfo.ReputationScore)
 		return true
 	}

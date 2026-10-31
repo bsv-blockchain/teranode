@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
@@ -351,7 +352,7 @@ func SelectAlternativePeer(
 		}
 
 		// Skip peers with very low reputation
-		if peer.ReputationScore < 20.0 {
+		if peer.ReputationScore < blockchain.MinUsablePeerReputation {
 			continue
 		}
 
@@ -441,7 +442,7 @@ func GetPeersAtMaxHeight(
 		}
 
 		// Skip peers with very low reputation
-		if peer.ReputationScore < 20.0 {
+		if peer.ReputationScore < blockchain.MinUsablePeerReputation {
 			continue
 		}
 

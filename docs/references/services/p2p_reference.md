@@ -415,7 +415,7 @@ Checks if a peer has been marked as malicious.
 func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealthyRequest) (*p2p_api.IsPeerUnhealthyResponse, error)
 ```
 
-Checks if a peer is considered unhealthy based on reputation score and recent failures.
+Checks if a peer is considered unhealthy: its reputation score is below `blockchain.MinUsablePeerReputation` (20, the same cut-off sync-peer eligibility and peer selection use), or it has more than 10 recorded interactions and under half of them succeeded. Block validation uses the answer to decide whether to use the peer as a catchup source. A peer refused only for this reason is still tried when no alternative peer can serve the block.
 
 **Parameters**:
 
