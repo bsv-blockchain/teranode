@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -21,8 +22,11 @@ func TestSQLGetState(t *testing.T) {
 		s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
 		require.NoError(t, err)
 
+		// A key never written is not found, as a code a caller can match with errors.Is,
+		// over gRPC too; the store error's text is kept for callers that match on it.
 		_, err = s.GetState(context.Background(), "test")
-		require.ErrorIs(t, err, sql.ErrNoRows)
+		require.ErrorIs(t, err, errors.ErrNotFound)
+		require.ErrorIs(t, err, sql.ErrNoRows, "callers matching the raw error still match")
 
 		err = s.SetState(context.Background(), "test", []byte("test data"))
 		require.NoError(t, err)

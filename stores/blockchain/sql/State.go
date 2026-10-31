@@ -5,7 +5,9 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 )
 
@@ -40,6 +42,12 @@ func (s *SQL) GetState(ctx context.Context, key string) ([]byte, error) {
 	if err = s.db.QueryRowContext(ctx, q, key).Scan(
 		&data,
 	); err != nil {
+		// A key never written is not found, as a code that survives gRPC; the wrapped error
+		// keeps sql.ErrNoRows' text for callers that match on it.
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.NewNotFoundError("no state for key %s", key, err)
+		}
+
 		return nil, err
 	}
 

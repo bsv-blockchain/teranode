@@ -417,7 +417,7 @@ func (m *MockUtxostore) PendingConflictIntents(ctx context.Context) ([]ConflictI
 
 // MarkTransactionsOnLongestChain mocks the marking of transactions as being on the longest chain.
 // Returns the configured mock response for longest chain marking operations.
-func (m *MockUtxostore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+func (m *MockUtxostore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...MarkLongestChainOption) error {
 	args := m.Called(ctx, txHashes, onLongestChain)
 	return args.Error(0)
 }

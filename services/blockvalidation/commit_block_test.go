@@ -32,6 +32,7 @@ import (
 // The block has no subtrees so unlockSubtreeTransactionsIfNeeded is a no-op.
 func newCommitBlockHarness(t *testing.T) (*BlockValidation, *model.Block, context.Context) {
 	t.Helper()
+	initPrometheusMetrics()
 
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}

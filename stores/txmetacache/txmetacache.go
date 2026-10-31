@@ -1503,8 +1503,8 @@ func (t *TxMetaCache) PendingConflictIntents(ctx context.Context) ([]utxo.Confli
 //
 // Returns:
 // - Error if the operation fails
-func (t *TxMetaCache) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
-	return t.utxoStore.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
+func (t *TxMetaCache) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
+	return t.utxoStore.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain, opts...)
 }
 
 // SetBlockHeight updates the current block height in the underlying store.

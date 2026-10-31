@@ -82,7 +82,7 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 
 		var found map[utxo.Outpoint]utxo.ParentOutput
 
-		err := retryReadOnLockError(ctx, ulogger.TestLogger{}, len(chunk), func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, "[ParentOutputsForValidation]", func() error {
 			attempts++
 			if attempts < parentOutputsReadRetries {
 				return lockErr
@@ -106,7 +106,7 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 	t.Run("a lock that never clears returns the lock error", func(t *testing.T) {
 		attempts := 0
 
-		err := retryReadOnLockError(ctx, ulogger.TestLogger{}, len(chunk), func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, "[ParentOutputsForValidation]", func() error {
 			attempts++
 			return lockErr
 		})
@@ -118,7 +118,7 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 		attempts := 0
 		other := errors.NewStorageError("no such table: outputs")
 
-		err := retryReadOnLockError(ctx, ulogger.TestLogger{}, len(chunk), func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, "[ParentOutputsForValidation]", func() error {
 			attempts++
 			return other
 		})
@@ -130,7 +130,7 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 		cctx, cancel := context.WithCancel(ctx)
 		attempts := 0
 
-		err := retryReadOnLockError(cctx, ulogger.TestLogger{}, len(chunk), func() error {
+		err := retryOnLockError(cctx, ulogger.TestLogger{}, parentOutputsReadRetries, "[ParentOutputsForValidation]", func() error {
 			attempts++
 			cancel()
 
@@ -139,4 +139,32 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled)
 		require.Equal(t, 1, attempts)
 	})
+}
+
+// A lock error on a parent-output chunk is retried by ParentOutputsForValidation itself, not
+// returned as a per-outpoint fault. The hook refuses the chunk's first read with the error
+// SQLite's shared cache raises for a lock cycle; without the retry at the call site every
+// outpoint of the chunk comes back with that error.
+func TestParentOutputsForValidationRetriesLockErrorFromChunk(t *testing.T) {
+	ctx := context.Background()
+	db, tx := setup(ctx, t)
+
+	_, err := db.Create(ctx, tx, 0)
+	require.NoError(t, err)
+
+	refusals := 1
+	db.parentOutputsReadHook = func() error {
+		if refusals > 0 {
+			refusals--
+			return errors.NewStorageError("database table is locked: database is deadlocked (6)")
+		}
+
+		return nil
+	}
+
+	answers, err := db.ParentOutputsForValidation(ctx, []utxo.Outpoint{{TxID: *tx.TxIDChainHash(), Vout: 0}})
+	require.NoError(t, err)
+	require.Len(t, answers, 1)
+	require.NoError(t, answers[0].Err, "the refused read is retried")
+	require.Zero(t, refusals, "precondition: the first read was refused")
 }

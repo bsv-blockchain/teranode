@@ -102,16 +102,19 @@ type batchSpend struct {
 
 // Store implements the UTXO store interface using a SQL database backend.
 type Store struct {
-	logger        ulogger.Logger
-	settings      *settings.Settings
-	db            *usql.DB
-	storeURL      *url.URL
-	engine        string
-	ctx           context.Context
-	spendBatcher  *batcher.Batcher[batchSpend]
-	getBatcher    *batcher.Batcher[batchGetItem]
-	createBatcher *batcher.Batcher[batchCreateItem]
-	unlockBatcher *batcher.Batcher[batchUnlockItem]
+	logger ulogger.Logger
+	// parentOutputsReadHook, when set by a test, runs before each parent-output chunk read
+	// and fails the read with its error. Always nil in production.
+	parentOutputsReadHook func() error
+	settings              *settings.Settings
+	db                    *usql.DB
+	storeURL              *url.URL
+	engine                string
+	ctx                   context.Context
+	spendBatcher          *batcher.Batcher[batchSpend]
+	getBatcher            *batcher.Batcher[batchGetItem]
+	createBatcher         *batcher.Batcher[batchCreateItem]
+	unlockBatcher         *batcher.Batcher[batchUnlockItem]
 
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
@@ -2414,8 +2417,32 @@ func isDeadlock(err error) bool {
 	if errors.As(err, &sqliteErr) && usql.IsSQLiteLockCode(sqliteErr.Code()) {
 		return true
 	}
+	// A teranode error keeps only the text of a driver error it wraps, so a
+	// PostgreSQL deadlock wrapped before it gets here is matched by its SQLSTATE.
 	msg := err.Error()
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
+	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked") ||
+		strings.Contains(msg, "(SQLSTATE "+usql.PgErrDeadlockDetected+")")
+}
+
+// retryOnLockError runs op up to attempts times while it fails with an error
+// isDeadlock recognises, and returns its last error. what names the operation
+// in the warning logged before each retry. op must be safe to run again after
+// such a failure: a failed statement or rolled-back transaction holds no locks.
+func retryOnLockError(ctx context.Context, logger ulogger.Logger, attempts int, what string, op func() error) error {
+	for attempt := 1; ; attempt++ {
+		err := op()
+		if err == nil || !isDeadlock(err) || attempt >= attempts {
+			return err
+		}
+
+		logger.Warnf("%s lock error (attempt %d/%d), retrying: %v", what, attempt, attempts, err)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt) * 10 * time.Millisecond):
+		}
+	}
 }
 
 // sendSpendBatch is the batcher callback that processes a batch of spend operations
@@ -3637,8 +3664,15 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 		default:
 		}
 
-		chunkResult, err := s.setMinedMultiChunk(ctx, hashes[i:end], minedBlockInfo)
+		var chunkResult map[chainhash.Hash][]uint32
 
+		err := retryOnLockError(ctx, s.logger, setMinedMultiRetries, "[SetMinedMulti] chunk", func() error {
+			var err error
+
+			chunkResult, err = s.setMinedMultiChunk(ctx, hashes[i:end], minedBlockInfo)
+
+			return err
+		})
 		if err != nil {
 			return nil, errors.NewStorageError("SQL error in SetMinedMulti (chunk %d-%d): %v", i, end-1, err)
 		}
@@ -3650,6 +3684,10 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 	return resultMap, nil
 }
+
+// setMinedMultiRetries bounds how many times one SetMinedMulti chunk is tried
+// when the database refuses it with a lock error.
+const setMinedMultiRetries = 3
 
 // setMinedMultiChunk processes a single chunk of hashes (up to maxINClauseSize).
 // Uses portable IN ($1,$2,...,$N) clauses that work on both PostgreSQL and SQLite.
@@ -5238,7 +5276,7 @@ func (s *Store) existingHashes(ctx context.Context, q string, args []interface{}
 	return found, rows.Err()
 }
 
-func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
 	if len(txHashes) == 0 {
 		return nil
 	}
@@ -5386,10 +5424,15 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		attempted, totalUpdated, errorCount, missingCount, onLongestChain)
 
 	if missingCount > 0 {
-		if !onLongestChain {
+		switch skipMissing := utxo.NewMarkLongestChainOptions(opts...).SkipMissing; {
+		case !onLongestChain && !skipMissing:
 			s.logger.Fatalf("CRITICAL: %d MISSING transactions during MarkTransactionsOnLongestChain(false) - data integrity compromised, first: %v",
 				missingCount, firstMissing)
-		} else {
+		case skipMissing:
+			// Expected: the caller's records may have been pruned since it read them.
+			s.logger.Warnf("[MarkTransactionsOnLongestChain] skipped %d transactions no longer in the store, first: %v",
+				missingCount, firstMissing)
+		default:
 			s.logger.Errorf("[MarkTransactionsOnLongestChain] skipped %d transactions the store does not hold, first: %v",
 				missingCount, firstMissing)
 		}

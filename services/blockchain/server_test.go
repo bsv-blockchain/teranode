@@ -4,6 +4,7 @@ package blockchain
 import (
 	"bytes"
 	"context"
+	stdsql "database/sql"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -2333,6 +2334,22 @@ func TestGetState(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, resp)
 		require.Contains(t, err.Error(), "forced store error")
+	})
+
+	t.Run("missing key is not found over gRPC", func(t *testing.T) {
+		storeURL, err := url.Parse("sqlitememory:///")
+		require.NoError(t, err)
+
+		store, err := sql.New(logger, storeURL, tSettings)
+		require.NoError(t, err)
+
+		server, err := New(ctx, logger, tSettings, store, nil)
+		require.NoError(t, err)
+
+		_, err = server.GetState(ctx, &blockchain_api.GetStateRequest{Key: "never-written"})
+		require.Error(t, err)
+		require.ErrorIs(t, errors.UnwrapGRPC(err), errors.ErrNotFound, "a client can tell a missing key from a failed read")
+		require.ErrorIs(t, errors.UnwrapGRPC(err), stdsql.ErrNoRows, "callers matching the raw error still match")
 	})
 
 	t.Run("success - returns state", func(t *testing.T) {

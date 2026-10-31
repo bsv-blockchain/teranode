@@ -117,8 +117,11 @@ func runReorgScenario(t *testing.T, storeType, scenario string, expectedBefore, 
 	// Step 1: Mine to height > 1000 (required for large reorg path)
 	t.Log("Step 1: Mining to height > 1000...")
 	var forkPointHeight uint32
-	_, err := td.CallRPC(ctx, "generate", []any{1005})
-	require.NoError(t, err)
+	// In chunks: a single generate of 1005 blocks outlasts the 30s RPC timeout on Aerospike.
+	for range 5 {
+		_, err := td.CallRPC(ctx, "generate", []any{201})
+		require.NoError(t, err)
+	}
 
 	currentHeight, _, err := td.BlockchainClient.GetBestHeightAndTime(ctx)
 	require.NoError(t, err)

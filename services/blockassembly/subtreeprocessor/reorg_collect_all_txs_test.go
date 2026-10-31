@@ -31,7 +31,7 @@ type markRecordingStore struct {
 	markedOn []chainhash.Hash
 }
 
-func (s *markRecordingStore) MarkTransactionsOnLongestChain(_ context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
+func (s *markRecordingStore) MarkTransactionsOnLongestChain(_ context.Context, hashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
 	if onLongestChain {
 		s.mu.Lock()
 		s.markedOn = append(s.markedOn, hashes...)

@@ -30,14 +30,14 @@ type markRecorderStore struct {
 	itemErrs map[chainhash.Hash]error
 }
 
-func (s *markRecorderStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+func (s *markRecorderStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
 	if !onLongestChain {
 		s.mu.Lock()
 		s.markedFalse = append(s.markedFalse, txHashes...)
 		s.mu.Unlock()
 	}
 
-	return s.Store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
+	return s.Store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain, opts...)
 }
 
 func (s *markRecorderStore) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaData, f ...fields.FieldName) error {

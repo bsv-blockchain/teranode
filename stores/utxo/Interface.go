@@ -499,6 +499,35 @@ func WithSkipUTXOHashCheck(b bool) CreateOption {
 	return optSkipUTXOHashCheckFalse
 }
 
+// MarkLongestChainOptions configures MarkTransactionsOnLongestChain.
+type MarkLongestChainOptions struct {
+	// SkipMissing makes a record missing from the store a logged skip instead of fatal for
+	// onLongestChain=false.
+	SkipMissing bool
+}
+
+// MarkLongestChainOption is a functional option for MarkTransactionsOnLongestChain.
+type MarkLongestChainOption func(*MarkLongestChainOptions)
+
+// WithSkipMissing is for a caller whose records may legitimately have been pruned since it
+// read them, such as block validation's overtaken-tip repair, which works on old blocks
+// while the pruner runs. Everyone else keeps a missing record fatal: it means corruption.
+func WithSkipMissing() MarkLongestChainOption {
+	return func(o *MarkLongestChainOptions) {
+		o.SkipMissing = true
+	}
+}
+
+// NewMarkLongestChainOptions applies opts to a zero MarkLongestChainOptions.
+func NewMarkLongestChainOptions(opts ...MarkLongestChainOption) *MarkLongestChainOptions {
+	o := &MarkLongestChainOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
+
+	return o
+}
+
 // WithCreateOnly makes SpendAndCreate skip the spend phase: only the
 // transaction's outputs and metadata are stored (coinbase, seeding, and batch
 // flows whose inputs are spent elsewhere).
@@ -891,8 +920,9 @@ type Store interface {
 	// MarkTransactionsOnLongestChain marks transactions as being on the longest chain or not.
 	// When onLongestChain is true, the unminedSince field is unset (transaction is mined).
 	// When onLongestChain is false, an existing unminedSince is kept; only an absent value is
-	// stamped, with BackdatedUnminedSince (issue 1768).
-	MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error
+	// stamped, with BackdatedUnminedSince (issue 1768). A record missing from the store is
+	// fatal for onLongestChain=false unless WithSkipMissing is given.
+	MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...MarkLongestChainOption) error
 
 	// internal state functions
 

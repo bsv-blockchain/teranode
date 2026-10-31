@@ -1071,7 +1071,7 @@ func (m *MockUTXOStore) CompleteConflictIntent(ctx context.Context, intentID cha
 func (m *MockUTXOStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
 	return nil, nil
 }
-func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
 	return nil
 }
 func (m *MockUTXOStore) SetBlockHeight(height uint32) error            { return nil }

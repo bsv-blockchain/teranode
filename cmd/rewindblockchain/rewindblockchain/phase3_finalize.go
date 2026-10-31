@@ -59,8 +59,8 @@ func (e *env) resetBlockAssemblerState(ctx context.Context, pf *preflightResult)
 func (e *env) readBlockPersisterHeight(ctx context.Context) (uint32, bool, error) {
 	existing, err := e.blockchainStore.GetState(ctx, blockPersisterHeightKey)
 	if err != nil {
-		// SQL blockchain store returns sql.ErrNoRows directly for missing keys;
-		// future implementations may wrap into errors.ErrNotFound.
+		// The SQL blockchain store returns errors.ErrNotFound wrapping sql.ErrNoRows
+		// for a missing key; either match is enough.
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errors.ErrNotFound) {
 			e.logger.Debugf("state[%s] not present: %v", blockPersisterHeightKey, err)
 			return 0, false, nil

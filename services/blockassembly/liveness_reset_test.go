@@ -87,12 +87,12 @@ type probeUtxoStore struct {
 	scanIterator  utxo.ConsistencyScanIterator
 }
 
-func (s *probeUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+func (s *probeUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
 	if !onLongestChain && s.onMarkUnmined != nil {
 		s.onMarkUnmined()
 	}
 
-	return s.Store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
+	return s.Store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain, opts...)
 }
 
 // ScanInconsistentUnminedTxs stands in the synthetic scan when one is set. The

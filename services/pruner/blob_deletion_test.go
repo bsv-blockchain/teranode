@@ -3,6 +3,7 @@ package pruner
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"fmt"
 	"net/http/httptest"
 	"net/url"
@@ -41,6 +42,11 @@ func newMockBlockchainClient() *mockBlockchainClient {
 		nextID:             1,
 		acquiredBatches:    make(map[string][]int64),
 	}
+}
+
+// GetState answers as a node that has never held pruning for an overtaken-tip repair.
+func (m *mockBlockchainClient) GetState(context.Context, string) ([]byte, error) {
+	return nil, sql.ErrNoRows
 }
 
 func (m *mockBlockchainClient) ScheduleBlobDeletion(ctx context.Context, blobKey []byte, fileType string, storeType storetypes.BlobStoreType, deleteAtHeight uint32) (int64, bool, error) {
@@ -546,6 +552,17 @@ func TestBlobDeletionIdempotency(t *testing.T) {
 type blobDeletionServiceClient struct {
 	*blockchain.Mock
 	service *blockchain.Blockchain
+}
+
+// GetState goes through the real blockchain service, as the gRPC client does: no
+// overtaken-tip repair hold has been written, so the pruner must read the key as missing.
+func (c *blobDeletionServiceClient) GetState(ctx context.Context, key string) ([]byte, error) {
+	resp, err := c.service.GetState(ctx, &blockchain_api.GetStateRequest{Key: key})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	return resp.Data, nil
 }
 
 func (c *blobDeletionServiceClient) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {

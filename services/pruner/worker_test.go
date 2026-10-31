@@ -2,15 +2,21 @@ package pruner
 
 import (
 	"context"
+	"database/sql"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	blockassembly_api "github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	prunerstore "github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -179,6 +185,8 @@ func TestWaitForBlockMinedStatusProceeds(t *testing.T) {
 	logger := ulogger.New("test")
 
 	blockchainMock := &blockchain.Mock{}
+	// No overtaken-tip repair hold.
+	blockchainMock.On("GetState", mock.Anything, model.OvertakenTipRepairHoldKey).Return([]byte(nil), sql.ErrNoRows).Maybe()
 	blockAssemblyMock := &blockassembly.Mock{}
 
 	server := &Server{
@@ -234,6 +242,8 @@ func TestWaitForBlockMinedStatusTimeout(t *testing.T) {
 	logger := ulogger.New("test")
 
 	blockchainMock := &blockchain.Mock{}
+	// No overtaken-tip repair hold.
+	blockchainMock.On("GetState", mock.Anything, model.OvertakenTipRepairHoldKey).Return([]byte(nil), sql.ErrNoRows).Maybe()
 	blockAssemblyMock := &blockassembly.Mock{}
 
 	server := &Server{
@@ -333,6 +343,8 @@ func testSkipDuringCatchupSkipsInState(t *testing.T, state blockchain.FSMStateTy
 	logger := ulogger.New("test")
 
 	blockchainMock := &blockchain.Mock{}
+	// No overtaken-tip repair hold.
+	blockchainMock.On("GetState", mock.Anything, model.OvertakenTipRepairHoldKey).Return([]byte(nil), sql.ErrNoRows).Maybe()
 	blockchainMock.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
 
 	server := &Server{
@@ -383,6 +395,8 @@ func TestSkipDuringCatchupProceedsWhenRunning(t *testing.T) {
 	logger := ulogger.New("test")
 
 	blockchainMock := &blockchain.Mock{}
+	// No overtaken-tip repair hold.
+	blockchainMock.On("GetState", mock.Anything, model.OvertakenTipRepairHoldKey).Return([]byte(nil), sql.ErrNoRows).Maybe()
 	running := blockchain.FSMStateRUNNING
 	blockchainMock.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
 
@@ -462,6 +476,8 @@ func TestStart_FSMContextCancellation(t *testing.T) {
 	ctx := context.Background()
 
 	mockBlockchainClient := &blockchain.Mock{}
+	// No overtaken-tip repair hold.
+	mockBlockchainClient.On("GetState", mock.Anything, model.OvertakenTipRepairHoldKey).Return([]byte(nil), sql.ErrNoRows).Maybe()
 	mockBlockchainClient.On("WaitUntilFSMTransitionFromIdleState", mock.Anything).Return(context.Canceled)
 
 	server := &Server{
@@ -762,4 +778,325 @@ func TestSkipPreserveParentsStillPrunes(t *testing.T) {
 	}
 
 	mockStore.AssertNotCalled(t, "GetPrunableUnminedTxIterator", mock.Anything)
+}
+
+// repairHoldClient answers GetState for the overtaken-tip repair hold with whatever hold
+// holds, or with next after the first read when next is set; it records blob deletion batch
+// requests and makes no other blockchain call.
+type repairHoldClient struct {
+	blockchain.ClientI
+	hold     atomic.Pointer[repairHoldAnswer]
+	next     atomic.Pointer[repairHoldAnswer]
+	reads    atomic.Int32
+	acquired atomic.Int32
+}
+
+func (c *repairHoldClient) AcquireBlobDeletionBatch(context.Context, uint32, int, int, []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	c.acquired.Add(1)
+	return "", nil, nil
+}
+
+type repairHoldAnswer struct {
+	data []byte
+	err  error
+}
+
+func (c *repairHoldClient) GetState(_ context.Context, key string) ([]byte, error) {
+	if key != model.OvertakenTipRepairHoldKey {
+		return nil, errors.NewProcessingError("unexpected state key %s", key)
+	}
+
+	a := c.hold.Load()
+	if c.reads.Add(1) > 1 && c.next.Load() != nil {
+		a = c.next.Load()
+	}
+
+	return a.data, a.err
+}
+
+func newRepairHoldTestServer(ctx context.Context, client *repairHoldClient, pruneSvc *recordingPruner) *Server {
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return(emptyIterator{}, nil)
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	server := newPhase1TestServer(ctx, mockStore, pruneSvc, false)
+	server.blockchainClient = client
+
+	return server
+}
+
+// While block validation holds pruning for an overtaken block whose repair has not
+// finished, the pruner deletes nothing: no DAH deletion and no blob deletion, and the height
+// is not advanced. Once the hold is released, the next block prunes as usual.
+func TestRepairHoldSkipsDeletion(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	held := model.EncodeOvertakenTipRepairHold([]model.HeldBlock{{Hash: chainhash.HashH([]byte("b")), ID: 7, Height: 90}})
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: held})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+
+	skippedBefore := getCounterValue(t, prunerSkipped, "overtaken_tip_repair_hold")
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	require.Eventually(t, func() bool {
+		return getCounterValue(t, prunerSkipped, "overtaken_tip_repair_hold") == skippedBefore+1
+	}, 2*time.Second, 10*time.Millisecond, "the cycle is counted as held")
+
+	require.Empty(t, pruneSvc.calls, "no DAH deletion while held")
+	require.Empty(t, server.blobNotify, "no blob deletion while held")
+	require.Equal(t, uint32(0), server.lastProcessedHeight.Load(), "the height is retried")
+	require.Equal(t, float64(1), testutil.ToFloat64(prunerOvertakenTipRepairHeldBlocks))
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+	server.pruneNotify <- pruneSignal{blockHeight: 102, blockHash: chainhash.Hash{}}
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(102), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("pruning did not resume once the hold was released")
+	}
+
+	require.Equal(t, float64(0), testutil.ToFloat64(prunerOvertakenTipRepairHeldBlocks))
+}
+
+// A node whose block validation has never held pruning has no hold record: that is not a
+// hold.
+func TestRepairHoldMissingIsNotHeld(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{err: errors.NewNotFoundError("no state for key %s", model.OvertakenTipRepairHoldKey, sql.ErrNoRows)})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(101), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("a missing hold record held pruning")
+	}
+}
+
+// A hold that cannot be read may be holding: the cycle deletes nothing and is retried.
+func TestRepairHoldReadErrorHolds(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{err: errors.NewServiceError("blockchain unavailable")})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+
+	errsBefore := getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold")
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	require.Eventually(t, func() bool {
+		return getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold") == errsBefore+1
+	}, 2*time.Second, 10*time.Millisecond)
+
+	require.Empty(t, pruneSvc.calls, "no DAH deletion when the hold cannot be read")
+	require.Equal(t, uint32(0), server.lastProcessedHeight.Load())
+}
+
+// A hold written while a cycle's phase 1 runs must still stop that cycle's phase 2: the hold
+// is read again just before deleting.
+func TestRepairHoldReadAgainBeforePhase2(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+	client.next.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold([]model.HeldBlock{{Hash: chainhash.HashH([]byte("b")), ID: 7, Height: 90}})})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+
+	skippedBefore := getCounterValue(t, prunerSkipped, "overtaken_tip_repair_hold")
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	require.Eventually(t, func() bool {
+		return getCounterValue(t, prunerSkipped, "overtaken_tip_repair_hold") == skippedBefore+1
+	}, 2*time.Second, 10*time.Millisecond, "the cycle is held by the second read")
+
+	require.Empty(t, pruneSvc.calls, "no DAH deletion")
+	require.Equal(t, uint32(0), server.lastProcessedHeight.Load())
+}
+
+// The blob deletion worker checks the hold itself: a signal queued before the hold was
+// written, or a pass already under way, must not delete an overtaken block's subtrees while
+// its repair still needs them.
+func TestRepairHoldStopsBlobDeletion(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold([]model.HeldBlock{{Hash: chainhash.HashH([]byte("b")), ID: 7, Height: 90}})})
+
+	server := newRepairHoldTestServer(ctx, client, &recordingPruner{calls: make(chan uint32, 1)})
+	server.settings.Pruner.BlobDeletionBatchSize = 10
+
+	server.processBlobDeletionsAtHeight(101, chainhash.Hash{})
+	require.Zero(t, client.acquired.Load(), "no deletion batch is taken while held")
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	server.processBlobDeletionsAtHeight(102, chainhash.Hash{})
+	require.NotZero(t, client.acquired.Load(), "deletion resumes once the hold is released")
+}
+
+// blockingPruner blocks Prune until its context is done or release is closed, and reports
+// whether the context was cancelled.
+type blockingPruner struct {
+	prunerstore.Service
+	started   chan struct{}
+	release   chan struct{}
+	cancelled atomic.Bool
+	calls     chan uint32
+}
+
+func (p *blockingPruner) Prune(ctx context.Context, height uint32, _ string) (int64, error) {
+	p.calls <- height
+	close(p.started)
+
+	select {
+	case <-ctx.Done():
+		p.cancelled.Store(true)
+		return 0, ctx.Err()
+	case <-p.release:
+		return 0, nil
+	}
+}
+
+// A hold written while phase 2 is already deleting stops the deletion: the pruner watches the
+// hold while Prune runs and cancels it, and the height is retried.
+func TestRepairHoldCancelsRunningPrune(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	pruneSvc := &blockingPruner{started: make(chan struct{}), release: make(chan struct{}), calls: make(chan uint32, 2)}
+	defer close(pruneSvc.release)
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return(emptyIterator{}, nil)
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	server := newPhase1TestServer(ctx, mockStore, nil, false)
+	server.prunerService = pruneSvc
+	server.blockchainClient = client
+	server.repairHoldPollInterval = 10 * time.Millisecond
+	server.repairHoldRecheckInterval = time.Hour
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	select {
+	case <-pruneSvc.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("phase 2 did not start")
+	}
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold([]model.HeldBlock{{Hash: chainhash.HashH([]byte("b")), ID: 7, Height: 90}})})
+
+	require.Eventually(t, pruneSvc.cancelled.Load, 2*time.Second, 10*time.Millisecond, "the running deletion is cancelled")
+	require.Never(t, func() bool { return server.lastProcessedHeight.Load() != 0 }, 200*time.Millisecond, 20*time.Millisecond, "the height is retried")
+}
+
+// On an idle chain, a held height is pruned once the hold is released, without waiting for
+// another block.
+func TestRepairHoldReleaseResumesIdlePruning(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold([]model.HeldBlock{{Hash: chainhash.HashH([]byte("b")), ID: 7, Height: 90}})})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
+
+	require.Never(t, func() bool { return len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond, "precondition: held")
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(101), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held height was not pruned once the hold was released")
+	}
+}
+
+// On mainnet and testnet the pruner refuses to start when the gap between the UTXO retention
+// and the unmined retention is below the deepest fork the node accepts (CoinbaseMaturity): a
+// hold written after a cycle's last check would then not be enough to protect a due parent.
+// Other networks only log it.
+func TestInitRefusesInsufficientRepairHoldSlack(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		params chaincfg.Params
+		refuse bool
+	}{
+		{"mainnet", chaincfg.MainNetParams, true},
+		{"testnet", chaincfg.TestNetParams, true},
+		{"regtest", chaincfg.RegressionNetParams, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := tc.params
+			server := &Server{
+				logger: ulogger.TestLogger{},
+				settings: &settings.Settings{
+					ChainCfgParams:             &params,
+					GlobalBlockHeightRetention: 150,
+					UtxoStore:                  settings.UtxoStoreSettings{UnminedTxRetention: 100},
+				},
+			}
+
+			err := server.Init(context.Background())
+			require.Error(t, err, "no UTXO store is set, so Init fails either way")
+
+			if tc.refuse {
+				require.Contains(t, err.Error(), "repair hold slack")
+			} else {
+				require.NotContains(t, err.Error(), "repair hold slack")
+			}
+		})
+	}
 }

@@ -255,6 +255,11 @@ func TestCheckMarkNotOnLongestChain(t *testing.T) {
 	txOtherChain := createMinedTx(t, ctx, store, 2, otherChainID)    // on current chain -> keep
 	txForked := createMinedTx(t, ctx, store, 3, forkedChainID)       // not on current chain -> mark false
 
+	// Only in the invalid block, but already unmined (block validation's unsetMined got there
+	// first): marking it is a no-op, so it must not be returned.
+	txAlreadyUnmined := createMinedTx(t, ctx, store, 4, invalidBlockID)
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txAlreadyUnmined}, false))
+
 	invalidBlock := &model.Block{
 		ID:     invalidBlockID,
 		Height: 1,
@@ -268,7 +273,7 @@ func TestCheckMarkNotOnLongestChain(t *testing.T) {
 		},
 	}
 
-	input := []chainhash.Hash{txOnlyInvalid, txRecent, txOtherChain, txForked}
+	input := []chainhash.Hash{txOnlyInvalid, txRecent, txOtherChain, txForked, txAlreadyUnmined}
 	result, err := stp.checkMarkNotOnLongestChain(ctx, invalidBlock, input)
 	require.NoError(t, err)
 

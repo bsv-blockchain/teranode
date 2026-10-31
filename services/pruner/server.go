@@ -70,6 +70,14 @@ type Server struct {
 	lastProcessedHeight atomic.Uint32
 	lastPersistedHeight atomic.Uint32
 	pruneNotify         chan pruneSignal
+
+	// repairHoldPollInterval is how often phase 2 checks the overtaken-tip repair hold while
+	// it deletes, and repairHoldRecheckInterval how long a held height waits before it is
+	// tried again; zero means the defaults. repairHoldRetry is the pending retry, owned by the
+	// pruner processor.
+	repairHoldPollInterval    time.Duration
+	repairHoldRecheckInterval time.Duration
+	repairHoldRetry           *time.Timer
 	stats               *gocore.Stat
 
 	// Blob deletion
@@ -108,6 +116,10 @@ func New(
 // block persisted notifications for coordination with the block persister service.
 func (s *Server) Init(ctx context.Context) error {
 	s.ctx = ctx
+
+	if err := s.checkRepairHoldSlack(); err != nil {
+		return err
+	}
 
 	// Initialize metrics
 	initPrometheusMetrics()

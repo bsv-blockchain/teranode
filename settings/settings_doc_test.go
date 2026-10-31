@@ -901,7 +901,7 @@ var checkedRowsPerDoc = map[string]int{
 	"blockassembly_settings.md":     44,
 	"blockchain_settings.md":        11,
 	"blockpersister_settings.md":    9,
-	"blockvalidation_settings.md":   71,
+	"blockvalidation_settings.md":   72,
 	"coinbase_settings.md":          21,
 	"faucet_settings.md":            1,
 	"legacy_settings.md":            28,

@@ -393,8 +393,8 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 	return intents, err
 }
 
-func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
-	err := s.store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
+func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
+	err := s.store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain, opts...)
 	s.logger.Debugf("[UTXOStore][logger][MarkTransactionsOnLongestChain] txHashes %v onLongestChain %v err %v : %s", txHashes, onLongestChain, err, caller())
 
 	return err

@@ -69,6 +69,7 @@ loader (0, false and false), so for these keys the two agree. The
 | MaxBlocksBehindBlockAssembly | int | 20 | blockvalidation_maxBlocksBehindBlockAssembly | **CRITICAL** - Max blocks behind block assembly |
 | PeriodicProcessingInterval | time.Duration | 1m | blockvalidation_periodic_processing_interval | Periodic processing interval |
 | RecentBlockIDsLimit | uint64 | 50000 | blockvalidation_recentBlockIDsLimit | **CRITICAL** - Fast-path double-spend checking window |
+| TipRepairSliceSize | int | 250000 | blockvalidation_tipRepairSliceSize | Transactions per overtaken-tip repair step on the setMined worker; bounds how long a step delays the next block's mined status. The pruner deletes nothing until the repair has finished |
 | MaxParallelForks | int | 4 | blockvalidation_max_parallel_forks | Maximum parallel fork processing |
 | MaxTrackedForks | int | 1000 | blockvalidation_max_tracked_forks | Maximum total forks tracked |
 | NearForkThreshold | int | 0 | blockvalidation_near_fork_threshold | Near fork detection (0=coinbase maturity/2) |

@@ -20,6 +20,9 @@ var (
 	// prunerPreserveParentsFailing counts consecutive cycles whose Phase 1 failed; Phase 2
 	// deletes nothing while it is above zero, so alert when it stays up
 	prunerPreserveParentsFailing prometheus.Gauge
+	// prunerOvertakenTipRepairHeldBlocks is the number of overtaken blocks block validation
+	// holds pruning for; nothing is deleted while above zero.
+	prunerOvertakenTipRepairHeldBlocks prometheus.Gauge
 
 	// Blob deletion metrics
 	blobDeletionScheduledTotal  *prometheus.CounterVec
@@ -111,6 +114,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "pruner",
 			Name:      "active",
 			Help:      "Whether the pruner is currently active (1) or idle (0)",
+		},
+	)
+
+	prunerOvertakenTipRepairHeldBlocks = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "pruner",
+			Name:      "overtaken_tip_repair_held_blocks",
+			Help:      "Overtaken blocks whose mined-status repair block validation has not finished; nothing is deleted while above zero. Stuck above zero means a block's subtree cannot be read or its repair keeps failing",
 		},
 	)
 

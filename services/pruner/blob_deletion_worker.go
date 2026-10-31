@@ -65,6 +65,13 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 		return
 	}
 
+	// An overtaken block's repair still needs its subtrees. The pruner does not signal while
+	// held, but a signal queued before the hold was written still arrives here; the next one
+	// after the hold is released deletes everything queued up to its height.
+	if s.overtakenTipRepairHeld(ctx, blockHashStr, blockHeight) {
+		return
+	}
+
 	// Apply safety window: only delete blobs that are safetyWindow blocks behind the triggering height
 	safetyWindow := s.settings.Pruner.BlobDeletionSafetyWindow
 	if safetyWindow > 0 {

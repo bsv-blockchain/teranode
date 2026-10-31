@@ -326,7 +326,7 @@ func (m *NullStore) PendingConflictIntents(ctx context.Context) ([]utxo.Conflict
 	return nil, nil
 }
 
-func (m *NullStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+func (m *NullStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
 	return nil
 }
 

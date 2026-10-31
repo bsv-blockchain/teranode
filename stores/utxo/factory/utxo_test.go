@@ -205,7 +205,7 @@ func (m *MockUTXOStore) PendingConflictIntents(ctx context.Context) ([]utxo.Conf
 	return nil, nil
 }
 
-func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+func (m *MockUTXOStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
 	args := m.Called(ctx, txHashes, onLongestChain)
 	return args.Error(0)
 }
