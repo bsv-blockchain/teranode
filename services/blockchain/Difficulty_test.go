@@ -197,6 +197,49 @@ func TestCalculateDifficulty(t *testing.T) {
 	}
 }
 
+// TestComputeTarget_NegativeTimespanClampsToMinimum verifies that a window whose last
+// suitable block is older than its first is clamped to the 72-block minimum, as
+// bitcoin-sv does in int64, rather than wrapping in uint32 to the 288-block maximum.
+func TestComputeTarget_NegativeTimespanClampsToMinimum(t *testing.T) {
+	firstBits, _ := model.NewNBitFromString("180d589d")                                                       // 800000
+	firstChainwork, _ := hex.DecodeString("000000000000000000000000000000000000000001483b3cc42a76ae3dc13792") // 800000
+	lastBits, _ := model.NewNBitFromString("180f0e84")                                                        // 800144
+	lastChainwork, _ := hex.DecodeString("0000000000000000000000000000000000000000014844e5fe3b17bb6cc37242")  // 800144
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = &chaincfg.MainNetParams
+	spacing := uint32(tSettings.ChainCfgParams.TargetTimePerBlock.Seconds())
+
+	computeAt := func(t *testing.T, firstTime, lastTime uint32) model.NBit {
+		first := &model.SuitableBlock{NBits: firstBits.CloneBytes(), Time: firstTime, ChainWork: firstChainwork}
+		last := &model.SuitableBlock{NBits: lastBits.CloneBytes(), Time: lastTime, ChainWork: lastChainwork}
+		nBits, err := ComputeTarget(tSettings, first, last)
+		require.NoError(t, err)
+
+		return *nBits
+	}
+
+	tests := map[string]struct {
+		firstTime uint32
+		lastTime  uint32
+	}{
+		"one second backwards": {firstTime: 1688957834, lastTime: 1688957833},
+		"one hour backwards":   {firstTime: 1688957834, lastTime: 1688957834 - 3600},
+		"wrap into unclamped":  {firstTime: math.MaxUint32, lastTime: 100000},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			minClamp := computeAt(t, 1688957834, 1688957834+72*spacing)
+			maxClamp := computeAt(t, 1688957834, 1688957834+288*spacing)
+			require.NotEqual(t, minClamp, maxClamp)
+
+			got := computeAt(t, tc.firstTime, tc.lastTime)
+			require.Equal(t, minClamp, got)
+		})
+	}
+}
+
 type testData struct {
 	height    uint32
 	time      int64
