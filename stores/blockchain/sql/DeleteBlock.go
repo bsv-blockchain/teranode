@@ -8,6 +8,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -62,8 +63,26 @@ func (s *SQL) DeleteBlock(ctx context.Context, blockHash *chainhash.Hash) error 
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
-	res, err := s.db.ExecContext(ctx, `DELETE FROM blocks WHERE hash = $1`, blockHash.CloneBytes())
-	if err != nil {
+	// Deleting the best block moves the best tip down. The delete and the low-water mark
+	// of that drop commit together, under the lock every writer of the mark holds, so
+	// block assembly replays from the new best instead of from a block that is gone.
+	s.slowPathMu.Lock()
+	defer s.slowPathMu.Unlock()
+
+	var res sql.Result
+
+	if err := s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		before, hadBefore, execErr := bestTipKey(ctx, tx)
+		if execErr != nil {
+			return execErr
+		}
+
+		if res, execErr = tx.ExecContext(ctx, `DELETE FROM blocks WHERE hash = $1`, blockHash.CloneBytes()); execErr != nil {
+			return execErr
+		}
+
+		return s.recordBestTipDrop(ctx, tx, before, hadBefore)
+	}); err != nil {
 		return errors.NewStorageError("error deleting block", err)
 	}
 

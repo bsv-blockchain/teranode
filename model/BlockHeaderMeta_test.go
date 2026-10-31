@@ -2,6 +2,7 @@ package model
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -85,5 +86,26 @@ func TestNewBlockHeaderMetaFromBytes(t *testing.T) {
 
 		require.NoError(t, err)
 		require.Equal(t, b, meta.Bytes())
+	})
+
+	t.Run("empty miner keeps the peer id", func(t *testing.T) {
+		processedAt := time.Unix(1700000000, 0)
+		bhm := &BlockHeaderMeta{
+			ID:          1,
+			Height:      2,
+			Miner:       "",
+			PeerID:      "peerX",
+			ChainWork:   []byte{7, 8, 9, 10},
+			ProcessedAt: &processedAt,
+		}
+
+		meta, err := NewBlockHeaderMetaFromBytes(bhm.Bytes())
+		require.NoError(t, err)
+
+		require.Equal(t, "", meta.Miner)
+		require.Equal(t, "peerX", meta.PeerID)
+		require.NotNil(t, meta.ProcessedAt)
+		require.Equal(t, processedAt.Unix(), meta.ProcessedAt.Unix())
+		require.Equal(t, bhm.Bytes(), meta.Bytes())
 	})
 }

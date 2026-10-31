@@ -281,6 +281,50 @@ func (m *Mock) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint
 	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
 }
 
+// errBetterBlocksNotMocked is what BlocksBetterThan returns when a test set no expectation for
+// it: the answer of a blockchain service that does not have the method, which keeps a caller
+// such as block assembly on its best-header path, as before the method existed. A test that
+// wants the replay sets an expectation, or uses a real store.
+var errBetterBlocksNotMocked = errors.NewServiceUnavailableError("blocks better than not mocked")
+
+// hasExpectation reports whether a test set an expectation for the named method. It reads only
+// the Method field of each expected call. BlocksBetterThan and ClearBestTipLowWater check it
+// before m.Called, because testify's unexpected-call path formats every argument, including a
+// context another goroutine may be writing, and the race detector reports that read.
+func (m *Mock) hasExpectation(method string) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == method {
+			return true
+		}
+	}
+
+	return false
+}
+
+// BlocksBetterThan mocks the BlocksBetterThan method
+func (m *Mock) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if !m.hasExpectation("BlocksBetterThan") {
+		return nil, nil, errBetterBlocksNotMocked
+	}
+
+	args := m.Called(ctx, after, from, minHeight, limit)
+
+	if args.Error(2) != nil {
+		return nil, nil, args.Error(2)
+	}
+
+	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
+}
+
+// ClearBestTipLowWater mocks the ClearBestTipLowWater method
+func (m *Mock) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	if !m.hasExpectation("ClearBestTipLowWater") {
+		return nil
+	}
+
+	return m.Called(ctx, expected).Error(0)
+}
+
 // GetBlockHeadersByHeight mocks the GetBlockHeadersByHeight method
 func (m *Mock) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, startHeight, endHeight)
@@ -1169,6 +1213,22 @@ func (m *mockBlockClient) GetBlockHeadersFromHeight(
 ) (*blockchain_api.GetBlockHeadersFromHeightResponse, error) {
 	m.lastGetBlockHeadersFromHeightReq = in
 	return m.responseGetBlockHeadersFromHeight, m.err
+}
+
+func (m *mockBlockClient) BlocksBetterThan(
+	ctx context.Context,
+	in *blockchain_api.BlocksBetterThanRequest,
+	opts ...grpc.CallOption,
+) (*blockchain_api.BlocksBetterThanResponse, error) {
+	return &blockchain_api.BlocksBetterThanResponse{}, m.err
+}
+
+func (m *mockBlockClient) ClearBestTipLowWater(
+	ctx context.Context,
+	in *blockchain_api.ClearBestTipLowWaterRequest,
+	opts ...grpc.CallOption,
+) (*emptypb.Empty, error) {
+	return &emptypb.Empty{}, m.err
 }
 
 func (m *mockBlockClient) GetBlockHeadersByHeight(

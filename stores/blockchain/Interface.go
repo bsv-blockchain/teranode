@@ -266,6 +266,23 @@ type Store interface {
 	// Returns: Slice of BlockHeaders, slice of BlockHeaderMetas, and any error encountered
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
 
+	// BlocksBetterThan returns the valid blocks that sort better than after in the order the
+	// best tip is picked by (chain_work DESC, peer_id ASC, id ASC), worst first. When from is not
+	// nil it also returns the valid blocks that sort better than or level with from.
+	// Parameters:
+	//   - ctx: Context for the operation
+	//   - after: Return blocks that sort better than this
+	//   - from: Optional; also return blocks that sort better than or level with this
+	//   - minHeight: Skip blocks below this height
+	//   - limit: Maximum number of blocks to return
+	// Returns: BlockHeaders and BlockHeaderMetas of the same length, and any error encountered
+	BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
+	// ClearBestTipLowWater deletes the best tip's low-water mark (state key
+	// model.BestTipLowWaterStateKey) if it still holds expected. A drop recorded after the
+	// caller read the mark changes it, and the delete is then a no-op.
+	ClearBestTipLowWater(ctx context.Context, expected []byte) error
+
 	// GetBlockHeadersByHeight retrieves block headers between two heights.
 	// Parameters:
 	//   - ctx: Context for the operation

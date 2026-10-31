@@ -66,6 +66,13 @@ func txSpending(parent chainhash.Hash) *bt.Tx {
 	return tx
 }
 
+func validationTestInpoints(t *testing.T, parent chainhash.Hash) subtreepkg.TxInpoints {
+	t.Helper()
+	inpoints, err := subtreepkg.NewTxInpointsFromInputs(txSpending(parent).Inputs)
+	require.NoError(t, err)
+	return inpoints
+}
+
 // ----------------------------------------------------------------------------
 // BA-STARTUP-008 — CheckBlockAssemblyValidateInputs / CheckInputValidation
 // ----------------------------------------------------------------------------
@@ -161,7 +168,7 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 
 		// T spends parent:0, not yet conflicting.
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 		// parent:0 is recorded as spent by a different ("winner") tx.
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 			Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&winnerHash, 0)}}, nil)
@@ -285,7 +292,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseA_SpentByDifferentTxCascades(
 	mockStore := new(utxostore.MockUtxostore)
 	// T metadata: one input spending parentHash:0, not yet conflicting.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-		Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+		Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 	// parent:0 is spent by a different ("winner") tx.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 		Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&winnerHash, 0)}}, nil)
@@ -331,7 +338,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 	mockStore := new(utxostore.MockUtxostore)
 	// T metadata.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-		Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+		Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 	// parent:0 is spent by T itself (matches) -> fall through to case 2.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.Utxos)).
 		Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&txHash, 0)}}, nil)
@@ -385,7 +392,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_MissingParentIsLogged(t *testing.
 	t.Run("store error", func(t *testing.T) {
 		mockStore := new(utxostore.MockUtxostore)
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 			Return(nil, errors.NewTxNotFoundError("%s not found", parentHash.String()))
 
@@ -411,7 +418,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_MissingParentIsLogged(t *testing.
 	t.Run("nil parent without error", func(t *testing.T) {
 		mockStore := new(utxostore.MockUtxostore)
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 			Return(nil, nil)
 

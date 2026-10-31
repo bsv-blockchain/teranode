@@ -2,13 +2,16 @@ package blockassembly
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/mock"
@@ -67,6 +70,7 @@ func TestLoadUnminedTransactions_IsReloadSelectsEntryPoint(t *testing.T) {
 				}}
 
 				mockIterator := new(utxo.MockUnminedTxIterator)
+				mockIterator.On("Close").Return(nil).Maybe()
 				mockIterator.On("Next", mock.Anything).Return(txs, nil).Once()
 				mockIterator.On("Next", mock.Anything).Return(nil, nil).Maybe()
 
@@ -117,4 +121,59 @@ func TestLoadUnminedTransactions_IsReloadSelectsEntryPoint(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Validation must retain the bounded parallel store reads after the iterator
+// closes. Four requests rendezvous before any returns; serial validation fails.
+func TestLoadUnminedTransactions_ValidatesConcurrentlyAfterClose(t *testing.T) {
+	initPrometheusMetrics()
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.OnRestartValidateParentChain = false
+	settings.BlockAssembly.UnminedTxDiskSortEnabled = false
+	txs := make([]*utxo.UnminedTransaction, 8)
+	for i := range txs {
+		txs[i] = &utxo.UnminedTransaction{Node: &subtree.Node{Hash: chainhash.HashH([]byte{byte(i)})}}
+	}
+	var closed atomic.Bool
+	var active, maxActive atomic.Int32
+	ready := make(chan struct{})
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	it := new(utxo.MockUnminedTxIterator)
+	it.On("Next", mock.Anything).Return(txs, nil).Once()
+	it.On("Next", mock.Anything).Return(nil, nil).Once()
+	it.On("Close").Run(func(mock.Arguments) { closed.Store(true) }).Return(nil).Once()
+	store := new(utxo.MockUtxostore)
+	store.On("GetUnminedTxIterator").Return(it, nil).Once()
+	store.On("Get", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		requested := args.Get(2).([]fields.FieldName)
+		require.Contains(t, requested, fields.TxInpoints)
+		require.NotContains(t, requested, fields.Tx, "validation must not fetch full transaction outputs")
+		require.True(t, closed.Load(), "validation must wait for iterator close")
+		n := active.Add(1)
+		defer active.Add(-1)
+		for old := maxActive.Load(); n > old && !maxActive.CompareAndSwap(old, n); old = maxActive.Load() {
+		}
+		if n == 4 {
+			select {
+			case <-ready:
+			default:
+				close(ready)
+			}
+		}
+		select {
+		case <-ready:
+		case <-ctx.Done():
+		}
+	}).Return(nil, nil).Times(len(txs))
+	stp := &subtreeprocessor.MockSubtreeProcessor{}
+	stp.On("FlushDiskTxMapForLoad", mock.Anything, true).Return(nil).Once()
+	bc := &blockchain.Mock{}
+	bc.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
+	ba := &BlockAssembler{utxoStore: store, logger: ulogger.TestLogger{}, settings: settings, subtreeProcessor: stp, blockchainClient: bc}
+	ba.setBestBlockHeader(nil, 100)
+	require.NoError(t, ba.loadUnminedTransactions(ctx, true, true))
+	require.Equal(t, int32(4), maxActive.Load(), "validation should use four bounded workers")
+	store.AssertExpectations(t)
+	it.AssertExpectations(t)
 }

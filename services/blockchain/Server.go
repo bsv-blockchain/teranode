@@ -2172,6 +2172,75 @@ func (b *Blockchain) GetBlockHeadersFromHeight(ctx context.Context, req *blockch
 	}, nil
 }
 
+// BlocksBetterThan returns the valid blocks that sort better than a key in the best-tip order, worst first.
+func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.BlocksBetterThanRequest) (*blockchain_api.BlocksBetterThanResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "BlocksBetterThan",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	if req.Limit == 0 {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid limit %d, must be 1 to %d", req.Limit, b.maxBlockHeadersPerRequest()))
+	}
+
+	after, err := model.NewBestTipKeyFromBytes(req.After)
+	if err != nil {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid after key", err))
+	}
+
+	var from *model.BestTipKey
+
+	if len(req.From) > 0 {
+		key, keyErr := model.NewBestTipKeyFromBytes(req.From)
+		if keyErr != nil {
+			return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[Blockchain][BlocksBetterThan] invalid from key", keyErr))
+		}
+
+		from = &key
+	}
+
+	// Return a bounded page instead of rejecting a first-party caller's larger
+	// preferred page size. The caller continues from the last block it handled.
+	limit := req.Limit
+	if maximum := b.maxBlockHeadersPerRequest(); uint64(limit) > maximum {
+		limit = uint32(maximum) //nolint:gosec // maximum is smaller than the uint32 request
+	}
+
+	blockHeaders, metas, err := b.store.BlocksBetterThan(ctx, after, from, req.MinHeight, limit)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	blockHeaderBytes := make([][]byte, len(blockHeaders))
+	for i, blockHeader := range blockHeaders {
+		blockHeaderBytes[i] = blockHeader.Bytes()
+	}
+
+	metasBytes := make([][]byte, len(metas))
+	for i, meta := range metas {
+		metasBytes[i] = meta.Bytes()
+	}
+
+	return &blockchain_api.BlocksBetterThanResponse{
+		BlockHeaders: blockHeaderBytes,
+		Metas:        metasBytes,
+	}, nil
+}
+
+// ClearBestTipLowWater deletes the best tip's low-water mark if it still holds the expected bytes.
+func (b *Blockchain) ClearBestTipLowWater(ctx context.Context, req *blockchain_api.ClearBestTipLowWaterRequest) (*emptypb.Empty, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "ClearBestTipLowWater",
+		tracing.WithParentStat(b.stats),
+	)
+	defer deferFn()
+
+	if err := b.store.ClearBestTipLowWater(ctx, req.Expected); err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &emptypb.Empty{}, nil
+}
+
 // GetBlockHeadersByHeight retrieves block headers between two specified heights.
 func (b *Blockchain) GetBlockHeadersByHeight(ctx context.Context, req *blockchain_api.GetBlockHeadersByHeightRequest) (*blockchain_api.GetBlockHeadersByHeightResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "GetBlockHeadersByHeight",

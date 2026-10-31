@@ -622,6 +622,14 @@ func (m *MockStore) GetBlockHeadersFromHeight(ctx context.Context, height, limit
 	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
 }
 
+func (m *MockStore) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+}
+
+func (m *MockStore) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	return nil
+}
+
 // GetBlockHeadersByHeight retrieves block headers within a specified height range.
 // This method returns headers and metadata for all blocks between startHeight and endHeight (inclusive).
 //

@@ -90,6 +90,12 @@ service BlockchainAPI {
   // GetBlockHeadersFromHeight retrieves block headers starting from a specific height.
   rpc GetBlockHeadersFromHeight(GetBlockHeadersFromHeightRequest) returns (GetBlockHeadersFromHeightResponse) {}
 
+  // BlocksBetterThan returns the valid blocks that sort better than a key in the best-tip order, worst first.
+  rpc BlocksBetterThan(BlocksBetterThanRequest) returns (BlocksBetterThanResponse) {}
+
+  // ClearBestTipLowWater deletes the best tip's low-water mark if it still holds the expected bytes.
+  rpc ClearBestTipLowWater(ClearBestTipLowWaterRequest) returns (google.protobuf.Empty) {}
+
   // GetBlockHeadersByHeight retrieves block headers between two specified heights.
   rpc GetBlockHeadersByHeight(GetBlockHeadersByHeightRequest) returns (GetBlockHeadersByHeightResponse) {}
 
@@ -383,6 +389,25 @@ message GetBlockHeadersFromHeightRequest {
 message GetBlockHeadersFromHeightResponse {
   repeated bytes blockHeaders = 1;  // List of serialized block headers
   repeated bytes metas = 2;         // List of serialized metadata
+}
+
+// BlocksBetterThanRequest requests the valid blocks that sort better than a key in the best-tip order.
+message BlocksBetterThanRequest {
+  bytes after = 1;       // Serialised model.BestTipKey: return blocks that sort better than it
+  bytes from = 2;        // Optional serialised model.BestTipKey: also return blocks at or above it
+  uint32 minHeight = 3;  // Skip blocks below this height
+  uint32 limit = 4;      // Maximum number of blocks to return
+}
+
+// BlocksBetterThanResponse contains the blocks, worst first.
+message BlocksBetterThanResponse {
+  repeated bytes blockHeaders = 1;  // List of serialized block headers
+  repeated bytes metas = 2;         // List of serialized metadata
+}
+
+// ClearBestTipLowWaterRequest names the low-water mark bytes the caller read.
+message ClearBestTipLowWaterRequest {
+  bytes expected = 1;  // The mark is deleted only if it still holds these bytes
 }
 
 // GetBlockHeadersByHeightRequest requests headers between two heights.

@@ -4883,7 +4883,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 
 	for idx, conflictingTxHash := range txHashes {
 		// get the extended tx
-		txMeta, err := s.Get(ctx, &conflictingTxHash)
+		txMeta, err := s.Get(ctx, &conflictingTxHash, fields.Tx, fields.Utxos)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -4906,39 +4906,13 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 			affectedParentSpends = append(affectedParentSpends, spend)
 		}
 
-		for vOut, output := range txMeta.Tx.Outputs {
-			if output == nil {
-				// A hole: Outputs is indexed by vout, and a snapshot-seeded
-				// transaction has no row for the vouts already spent when the
-				// snapshot was taken. There is no output to derive a utxo hash from
-				// and nothing to unspend.
-				continue
-			}
-
-			vOutUint32, err := safeconversion.IntToUint32(vOut)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			utxoHash, err = util.UTXOHashFromOutput(&conflictingTxHash, output, vOutUint32)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			spend := &utxo.Spend{
-				TxID:     &conflictingTxHash,
-				Vout:     vOutUint32,
-				UTXOHash: utxoHash,
-			}
-
-			// optimize to get all in 1 query
-			spendResponse, err := s.GetSpend(ctx, spend)
-			if err != nil {
-				return nil, nil, err
-			}
-
-			if spendResponse.Status == int(utxo.Status_SPENT) && spendResponse.SpendingData != nil && spendResponse.SpendingData.TxID != nil {
-				spendingTxHashes = append(spendingTxHashes, *spendResponse.SpendingData.TxID)
+		// Read the actual spend edges, independent of the parent's flags.
+		// GetSpend reports CONFLICTING while clearing a conflict, hiding the
+		// SPENT status and preventing UnmarkConflictingRecursively from reaching
+		// descendants. The full metadata already contains the stored edges.
+		for _, spendingData := range txMeta.SpendingDatas {
+			if spendingData != nil && spendingData.TxID != nil && !spendingData.TxID.IsEqual(&subtree.FrozenBytesTxHash) {
+				spendingTxHashes = append(spendingTxHashes, *spendingData.TxID)
 			}
 		}
 	}

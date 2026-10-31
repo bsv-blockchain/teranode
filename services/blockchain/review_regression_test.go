@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	sqlstore "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -229,4 +230,36 @@ func TestClientGetBlockHeaderIDs_AboveHeaderCap(t *testing.T) {
 		})
 		require.Equal(t, codes.InvalidArgument, status.Code(err), "full headers remain capped")
 	}
+}
+
+func TestBlocksBetterThan_ClampsConfiguredPageSize(t *testing.T) {
+	fixture := setup(t)
+	genesis, genesisMeta, err := fixture.server.store.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	for height := uint32(1); height <= 3; height++ {
+		block := createTestBlockAtHeight(fixture, t, height, 1000000+height*600)
+		_, _, err = fixture.server.store.StoreBlock(t.Context(), block, "")
+		require.NoError(t, err)
+	}
+	fixture.server.settings.BlockChain.MaxBlockHeadersPerRequest = 1
+	after := model.NewBestTipKey(genesis, genesisMeta)
+	for height := uint32(1); height <= 3; height++ {
+		page, err := fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: after.Bytes(), Limit: 1000})
+		require.NoError(t, err)
+		require.Len(t, page.BlockHeaders, 1)
+		require.Len(t, page.Metas, 1)
+		header, err := model.NewBlockHeaderFromBytes(page.BlockHeaders[0])
+		require.NoError(t, err)
+		meta, err := model.NewBlockHeaderMetaFromBytes(page.Metas[0])
+		require.NoError(t, err)
+		require.Equal(t, height, meta.Height, "worst first")
+		after = model.NewBestTipKey(header, meta)
+	}
+	end, err := fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: after.Bytes(), Limit: 1000})
+	require.NoError(t, err)
+	require.Empty(t, end.BlockHeaders)
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: after.Bytes()})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: []byte{9}, Limit: 1})
+	require.Equal(t, codes.InvalidArgument, status.Code(err), "a malformed key is rejected")
 }

@@ -141,6 +141,38 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Block assembly replays every block that may have been the best tip, so a branch
+  that was the best chain only briefly is moved forward and back through the pool.**
+  There is no schema change. Block assembly keeps its place in the order the
+  blockchain store already picks the best tip by (most chain work, then lowest peer
+  id, then lowest block id, served by the existing `idx_chain_work_valid` index) and
+  on each wake-up moves through the valid blocks that sort better, instead of jumping
+  to the best header. A write that moves the best tip down, `InvalidateBlock` or
+  `DeleteBlock`, records the block the tip dropped to as a low-water mark under a new
+  key in the blockchain `state` table, `BestTipLowWater`, in the same transaction,
+  together with the block that was the best tip when it dropped; block assembly also
+  replays from that mark and clears it once it has passed it. A dropped tip block
+  assembly never applied (a branch invalidated before block assembly looked) makes it
+  run one reset first, so that branch's block-only transactions are reloaded into the
+  pool instead of waiting for the next reset or restart.
+  `DeleteBlock` now takes the same lock as `InvalidateBlock` and runs in one
+  transaction. Valid fork blocks that sort better but were never the tip are moved
+  to as well, so a fork race can cost extra reorgs; the pool still ends right. The
+  blockchain service gains the `BlocksBetterThan` and `ClearBestTipLowWater` RPCs,
+  which require the admin API key like every other. Block assembly keeps its
+  position under a new state key, `BlockAssemblerBestTipPos`, and a new setting,
+  `blockassembly_reconcileInterval` (default `30s`, `0` turns it off), checks for a
+  missed tip change when no block notification arrived for that long, and replays only
+  if the tip moved. Upgrade in any order: block assembly against an older blockchain
+  service follows the best header as before, asking again once a minute, and an
+  older binary ignores the new state keys, so a rollback needs no step.
+  SQL-backed block assembly also retains valid unmined transactions during an
+  input-validated reset, and resets undo conflicting-spender swaps before reloading
+  the pool. Historical resets visit their recorded target; externally requested
+  resets finish pending history before serving a populated mining candidate. No
+  configuration change is required. Setting the reconcile interval to `0` disables
+  ordinary polling; recovery of an unfinished reset still retries. Reload input validation keeps four parallel readers after closing the iterator, requests only input points, then applies conflict cascades serially. A reset that fails before its tx map rotation leaves the old pool in service and the replay carries on from its position. When the replay after a reset fails three passes in a row, block assembly gives the remaining history up, follows the best header and builds candidates from the pool the reset loaded; `teranode_blockassembly_processing_stuck_total{reason="best_tip_reset_replay_abandoned"}` counts each time, so alert on it. If that reset rotated its tx map and then failed its reload, the pool may be partial: block assembly retries the reload on every later replay pass and counts each failed retry as `reason="best_tip_reset_reload"`. A past best tip whose move would take block assembly back over best-chain blocks at least coinbase maturity below the best tip is not moved to: its branch-only transactions are marked unmined where they lie and the pool is reloaded, so no confirmed spend of a coinbase is deleted. Resets skip conflict winners the UTXO store has already pruned. (#2074)
+
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**
   Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop
