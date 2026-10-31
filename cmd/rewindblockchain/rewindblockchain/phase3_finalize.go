@@ -4,16 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"strconv"
+	"strings"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
+	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 )
 
 const (
-	blockPersisterHeightKey   = "BlockPersisterHeight"
-	utxoPersisterLastHeightFn = "lastProcessed.dat"
+	blockPersisterHeightKey = "BlockPersisterHeight"
 )
 
 // phase3Finalize rewrites persisted state keys and triggers cache /
@@ -27,7 +30,7 @@ func (e *env) phase3Finalize(ctx context.Context, pf *preflightResult) error {
 		return err
 	}
 
-	if err := e.deleteUTXOPersisterLastProcessed(ctx); err != nil {
+	if err := e.deleteUTXOPersisterLastProcessed(ctx, pf); err != nil {
 		return err
 	}
 
@@ -151,32 +154,143 @@ func (e *env) resetBlockPersisterHeight(ctx context.Context, pf *preflightResult
 	return nil
 }
 
-// deleteUTXOPersisterLastProcessed removes the file the utxo persister uses
-// to track its position. On next startup it will recompute from block
-// data — which is the correct behaviour post-rewind.
-//
-// NOTE: this Del does not currently match what the persister writes, and never
-// has. services/utxopersister/Server.go:772,826 uses the BLOCK store with
-// options.WithFilename("lastProcessed") and options.WithNoHashPrefix(), which
-// resolves to <blockstore>/lastProcessed.dat. This call uses the SUBTREE store
-// with filename "lastProcessed.dat", and ConstructFilename appends "." +
-// fileType, so it targets <subtreestore>/lastProcessed.dat.dat — a different
-// store and a different name. The Del is best-effort, so the miss is swallowed
-// by the Debugf below. Fixing it needs the block store, which resolveStores
-// does not open; tracked in #1353 rather than widened into the hashPrefix fix.
-//
-// WithNoHashPrefix does more than keep this path byte-identical now that the
-// store carries the node's hashPrefix (see newSubtreeStore). Without it
-// CalculatePrefix would derive "la" from the filename "lastProcessed.dat", and
-// ConstructFilename MkdirAlls the prefix folder on every call including Del
-// (stores/blob/options/Options.go:397-401) — so each rewind would leave a stray
-// empty <subtreestore>/la/ behind while still deleting nothing.
-func (e *env) deleteUTXOPersisterLastProcessed(ctx context.Context) error {
-	key := []byte(utxoPersisterLastHeightFn)
-	if err := e.subtreeStore.Del(ctx, key, fileformat.FileTypeDat,
-		options.WithFilename(utxoPersisterLastHeightFn), options.WithNoHashPrefix()); err != nil {
-		// Best-effort. Log and continue.
-		e.logger.Debugf("delete utxo-persister lastProcessed.dat: %v", err)
+// utxoMarkerFileOptions addresses the UTXO persister's lastProcessed marker
+// exactly as the persister does (services/utxopersister/Server.go): the BLOCK
+// store, a nil key, filename utxopersister.LastProcessedFilename and no hash
+// prefix, which resolves to <blockstore>/lastProcessed.dat.
+func utxoMarkerFileOptions() []options.FileOption {
+	return []options.FileOption{options.WithFilename(utxopersister.LastProcessedFilename), options.WithNoHashPrefix()}
+}
+
+// readUTXOPersisterMarker reads the persister's lastProcessed marker from the
+// block store. known is true when the marker is present and decodes as the
+// decimal height the persister writes; parseErr is true when it is present but
+// undecodable (which bricks the persister's next start until removed). A missing
+// marker, an absent block store, or a read failure all return (0,false,false):
+// nothing actionable. Read in preflight so the operator learns the plan before
+// the destructive phases run, not after.
+func (e *env) readUTXOPersisterMarker(ctx context.Context) (height uint64, known, parseErr bool) {
+	if e.blockStore == nil {
+		return 0, false, false
 	}
+
+	b, err := e.blockStore.Get(ctx, nil, fileformat.FileTypeDat, utxoMarkerFileOptions()...)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			return 0, false, false
+		}
+		e.logger.Warnf("could not read the utxo-persister lastProcessed marker: %v", err)
+		return 0, false, false
+	}
+
+	h, perr := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
+	if perr != nil {
+		return 0, false, true
+	}
+	return h, true, false
+}
+
+// deleteUTXOPersisterLastProcessed removes the UTXO persister's lastProcessed
+// marker when it sits above the rewind target (or is unparseable) AND the
+// operator opted in with --reset-utxo-persister. The persister trails the tip
+// and refuses to move its marker backwards (services/utxopersister/Server.go),
+// so a marker above the rewound tip stalls it on next start; deleting it makes
+// the persister recompute from block data — a rebuild from genesis.
+//
+// That rebuild is safe ONLY when the node has full per-block delta history back
+// to genesis. A UTXO-seeded node has no deltas below its seed height, so the
+// rebuild stalls at ErrNotFound (processNextBlock treats it as "wait") and the
+// persister never advances. The tool cannot distinguish the two cases — no seed
+// height is recorded — so deleting is gated behind Options.ResetUTXOPersister
+// (the operator asserting full history) rather than done by default. A marker at
+// or below the target still matches the blocks the rewind kept and is always
+// left alone. preflight has already read and reported the marker; this acts on
+// pf for the resolved old-marker-block hash, re-reading the marker itself so the
+// decision is made against the live file. Best-effort throughout: a rewind whose
+// destructive phases already ran must not fail on a marker-cleanup hiccup.
+func (e *env) deleteUTXOPersisterLastProcessed(ctx context.Context, pf *preflightResult) error {
+	if e.blockStore == nil {
+		e.logger.Debugf("no block store supplied; not touching the utxo-persister lastProcessed marker")
+		return nil
+	}
+
+	marker := utxoMarkerFileOptions()
+
+	b, err := e.blockStore.Get(ctx, nil, fileformat.FileTypeDat, marker...)
+	if err != nil {
+		if errors.Is(err, errors.ErrNotFound) {
+			// A missing marker is the normal case, but an unmounted or
+			// mis-pathed block store looks identical (the file backend's
+			// MkdirAll just makes an empty dir), so say so at Info rather than
+			// hiding it at Debug: if the operator expected a marker here, the
+			// block store path is the thing to check.
+			e.logger.Infof("no utxo-persister lastProcessed marker at <blockstore>/%s.dat; nothing to reset (if you expected one, verify the block store path is mounted and correct)", utxopersister.LastProcessedFilename)
+			return nil
+		}
+
+		e.logger.Warnf("could not read the utxo-persister lastProcessed marker; if it exists and is above target %d, re-run with --reset-utxo-persister or delete <blockstore>/lastProcessed.dat by hand so the persister recomputes: %v", pf.target, err)
+		return nil
+	}
+
+	raw := strings.TrimSpace(string(b))
+	existing, parseErr := strconv.ParseUint(raw, 10, 32)
+
+	// A present-but-valid marker at/below the target is still correct for the
+	// kept chain; never touch it.
+	if parseErr == nil && existing <= uint64(pf.target) {
+		e.logger.Infof("utxo-persister lastProcessed marker is %d, at/below target %d; leaving it untouched", existing, pf.target)
+		return nil
+	}
+
+	// From here the marker is above the target or unparseable — the stale case
+	// this tool cleans up. An unparseable marker also bricks the persister's
+	// next start (readLastHeight returns the ParseUint error), so resetting it
+	// has the same safe outcome as the above-target case.
+	if !e.opts.ResetUTXOPersister {
+		if parseErr != nil {
+			e.logger.Warnf("utxo-persister lastProcessed marker %q is unparseable and will block the persister's next start; re-run with --reset-utxo-persister to delete it (safe only with full delta history to genesis), or fix <blockstore>/lastProcessed.dat by hand", raw)
+		} else {
+			e.logger.Warnf("utxo-persister lastProcessed marker is %d, above target %d; LEAVING it in place. The persister will stall on a marker above the rewound chain. Deleting it forces a rebuild from genesis, safe ONLY if this node has full per-block delta history to genesis (a seeded node has none below its seed height and will stall). If you have full history, re-run with --reset-utxo-persister; otherwise reset the persister by hand.", existing, pf.target)
+		}
+		return nil
+	}
+
+	if err = e.blockStore.Del(ctx, nil, fileformat.FileTypeDat, marker...); err != nil {
+		e.logger.Warnf("could not delete the utxo-persister lastProcessed marker; delete <blockstore>/lastProcessed.dat by hand so the persister rebuilds from genesis: %v", err)
+		return nil
+	}
+
+	if parseErr != nil {
+		e.logger.Infof("deleted the unparseable utxo-persister lastProcessed marker %q; the persister will rebuild from genesis on its next start", raw)
+	} else {
+		e.logger.Infof("deleted the utxo-persister lastProcessed marker (was %d, above target %d); the persister will rebuild from genesis on its next start", existing, pf.target)
+	}
+
+	// Clean up the stale utxo-set files for the old marker block. The persister
+	// only deletes the PREVIOUS block's set as it advances and never genesis's
+	// (Server.go), so after a reset the set/headers/set-hash for the rewound-away
+	// marker block leak forever — a full UTXO set is many GB on mainnet. Its hash
+	// was resolved in preflight while the block was still on the main chain.
+	if pf.utxoMarkerHash != nil {
+		e.cleanupStaleUTXOSet(ctx, pf.utxoMarkerHash)
+	} else if parseErr == nil {
+		e.logger.Warnf("could not resolve the hash of the old marker block (height %d) to clean up its utxo-set files; if <blockstore>/<hash>.utxo-set exists for that block, remove it by hand", existing)
+	}
+
 	return nil
+}
+
+// cleanupStaleUTXOSet best-effort deletes the utxo-set, utxo-set-hash and
+// utxo-headers files keyed off the given block hash. A missing file is fine
+// (the set may legitimately not exist); any other failure is logged, not fatal.
+func (e *env) cleanupStaleUTXOSet(ctx context.Context, hash *chainhash.Hash) {
+	for _, ft := range []fileformat.FileType{fileformat.FileTypeUtxoSet, fileformat.FileTypeUtxoSetHash, fileformat.FileTypeUtxoHeaders} {
+		if err := e.blockStore.Del(ctx, hash[:], ft); err != nil {
+			if !errors.Is(err, errors.ErrNotFound) {
+				e.logger.Warnf("could not delete stale %s for old marker block %s: %v", ft, hash.String(), err)
+			}
+			continue
+		}
+		e.logger.Infof("deleted stale %s for old marker block %s", ft, hash.String())
+	}
 }

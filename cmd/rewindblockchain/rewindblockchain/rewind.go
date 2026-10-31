@@ -29,13 +29,16 @@ type Stats struct {
 	Duration               time.Duration
 }
 
-// Stores bundles the three backend stores used by Rewind. Tests can pass
+// Stores bundles the backend stores used by Rewind. Tests can pass
 // pre-constructed stores via Options.Stores; production callers leave it nil
 // and Rewind opens stores from settings.
 type Stores struct {
 	Blockchain blockchain.Store
 	UTXO       utxo.Store
 	Subtree    blob.Store
+	// Block is where the UTXO persister keeps its lastProcessed marker, which
+	// Phase 3 deletes. Optional when Stores is supplied: nil skips the delete.
+	Block blob.Store
 }
 
 // Rewind executes all four phases.
@@ -63,6 +66,7 @@ func Rewind(ctx context.Context, logger ulogger.Logger, s *settings.Settings, op
 		blockchainStore: stores.Blockchain,
 		utxoStore:       stores.UTXO,
 		subtreeStore:    stores.Subtree,
+		blockStore:      stores.Block,
 		opts:            opts,
 		stats:           stats,
 		concurrency:     concurrency,
@@ -147,11 +151,70 @@ func resolveStores(ctx context.Context, logger ulogger.Logger, s *settings.Setti
 		return nil, false, err
 	}
 
+	// Best-effort, like the delete it serves: a block store the tool cannot
+	// open must not stop a rewind that does not otherwise need it.
+	blockStore, err := newBlockStore(logger, s)
+	if err != nil {
+		logger.Warnf("could not open the block store, so the utxo-persister lastProcessed marker will not be deleted (delete <blockstore>/lastProcessed.dat by hand): %v", err)
+		blockStore = nil
+	}
+
 	return &Stores{
 		Blockchain: blockchainStore,
 		UTXO:       utxoStore,
 		Subtree:    subtreeStore,
+		Block:      blockStore,
 	}, true, nil
+}
+
+// defaultBlockHashPrefix matches daemon.GetBlockStore's default
+// (daemon/daemon_stores.go): a block store URL with no ?hashPrefix sharded
+// -2, i.e. a two-character hash SUFFIX (<store>/<last2>/<hash>.<ext>). Negative
+// because the file backend reads a negative HashPrefix as a suffix shard.
+const defaultBlockHashPrefix = -2
+
+// blockHashPrefix resolves the hash prefix for the block store, mirroring
+// daemon.GetBlockStore: default -2, overridden by ?hashPrefix= on the URL.
+func blockHashPrefix(blockStoreURL *url.URL) (int, error) {
+	v := blockStoreURL.Query().Get("hashPrefix")
+	if v == "" {
+		return defaultBlockHashPrefix, nil
+	}
+
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, errors.NewConfigurationError("blockstore hashPrefix config error", err)
+	}
+
+	return parsed, nil
+}
+
+// newBlockStore opens the block blob store at the node's configured URL, with
+// the same hash prefix the daemon applies (daemon.GetBlockStore). The UTXO
+// persister's lastProcessed marker is read and written with
+// options.WithNoHashPrefix(), so that per-call option overrides the store
+// prefix for the marker regardless — but Phase 3's stale utxo-set cleanup Dels
+// by block hash, and those files were written by the persister under the
+// daemon's prefix, so the store must carry it or the Del resolves a flat path,
+// silently misses the sharded file (the file backend's Del returns nil on a
+// miss), and leaks the multi-GB set. The daemon's block-height tracker and
+// deletion scheduler are not needed while the node is stopped.
+func newBlockStore(logger ulogger.Logger, s *settings.Settings) (blob.Store, error) {
+	if s.Block.BlockStore == nil {
+		return nil, errors.NewConfigurationError("blockstore config not found")
+	}
+
+	hashPrefix, err := blockHashPrefix(s.Block.BlockStore)
+	if err != nil {
+		return nil, err
+	}
+
+	blockStore, err := blob.NewStore(logger, s.Block.BlockStore, options.WithHashPrefix(hashPrefix))
+	if err != nil {
+		return nil, errors.NewConfigurationError("failed to open block store", err)
+	}
+
+	return blockStore, nil
 }
 
 // defaultSubtreeHashPrefix matches daemon.GetSubtreeStore's default
@@ -224,6 +287,7 @@ type env struct {
 	blockchainStore blockchain.Store
 	utxoStore       utxo.Store
 	subtreeStore    blob.Store
+	blockStore      blob.Store
 	opts            Options
 	stats           *Stats
 	concurrency     int
