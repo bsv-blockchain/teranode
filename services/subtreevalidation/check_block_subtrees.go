@@ -550,6 +550,11 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 		}, nil
 	}
 
+	prometheusBlockMissingSubtrees.Add(float64(len(missingSubtrees)))
+	prometheusBlockMissingSubtreesOutstanding.Add(float64(len(missingSubtrees)))
+
+	defer prometheusBlockMissingSubtreesOutstanding.Sub(float64(len(missingSubtrees)))
+
 	u.logger.Infof("[CheckBlockSubtrees] Found %d missing subtrees for block %s, proceeding with validation", len(missingSubtrees), block.Hash().String())
 
 	// Post-CSV candidate-parent MTP for the validator's consensus-path

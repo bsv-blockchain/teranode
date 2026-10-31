@@ -41,6 +41,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/p2p"
+	"github.com/bsv-blockchain/teranode/services/probe"
 	"github.com/bsv-blockchain/teranode/services/propagation"
 	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -107,6 +108,7 @@ type TestOptions struct {
 	EnableValidator         bool
 	EnableBlockPersister    bool
 	EnablePruner            bool
+	EnableProbe             bool
 	SettingsOverrideFunc    func(*settings.Settings)
 	SkipRemoveDataDir       bool
 	StartDaemonDependencies bool
@@ -446,6 +448,11 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	// Tests that need a specific key still override it below via SettingsOverrideFunc.
 	appSettings.GRPCAdminAPIKey = "teranode-testdaemon-admin-key"
 
+	if opts.EnableProbe {
+		appSettings.Probe.HTTPListenAddress = "127.0.0.1:0"
+		appSettings.Probe.StatePath = filepath.Join(path, "probe_state.json")
+	}
+
 	// Override with test settings...
 	if opts.SettingsOverrideFunc != nil {
 		opts.SettingsOverrideFunc(appSettings)
@@ -564,6 +571,10 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 		if opts.EnablePruner {
 			services = append(services, "-pruner=1")
+		}
+
+		if opts.EnableProbe {
+			services = append(services, "-probe=1")
 		}
 
 		readyCh := make(chan struct{})
@@ -768,6 +779,19 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	}
 
 	return td
+}
+
+func (td *TestDaemon) ProbeAddress(t *testing.T) string {
+	service, err := td.d.ServiceManager.GetService("Probe")
+	require.NoError(t, err)
+
+	server, ok := service.(*probe.Server)
+	require.True(t, ok)
+
+	addr := server.Addr()
+	require.NotEmpty(t, addr)
+
+	return addr
 }
 
 // Stop stops the TestDaemon instance and cleans up resources.

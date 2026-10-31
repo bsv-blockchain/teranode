@@ -2219,6 +2219,15 @@ func (b *BlockAssembler) onResetDone(storageTriggered bool, resp subtreeprocesso
 //   - []*util.Subtree: Associated subtrees
 //   - error: Any error encountered during retrieval
 func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningCandidate, []*subtree.Subtree, error) {
+	candidate, subtrees, err := b.getMiningCandidate(ctx)
+	if err == nil {
+		prometheusBlockAssemblerLastMiningCandidateTime.SetToCurrentTime()
+	}
+
+	return candidate, subtrees, err
+}
+
+func (b *BlockAssembler) getMiningCandidate(ctx context.Context) (*model.MiningCandidate, []*subtree.Subtree, error) {
 	ctx, _, deferFn := tracing.Tracer("blockassembly").Start(ctx, "GetMiningCandidate",
 		tracing.WithParentStat(b.stats),
 		tracing.WithHistogram(prometheusBlockAssemblyGetMiningCandidateDuration),

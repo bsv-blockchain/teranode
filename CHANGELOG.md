@@ -912,6 +912,24 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **New read-only Probe service and two new tx meta cache gauges.** Every node
+  publishes two new gauges after the upgrade: `teranode_tx_meta_cache_bytes` (bytes
+  the tx meta cache uses now) and `teranode_tx_meta_cache_capacity_bytes` (bytes it
+  can use). A ring cache reads full after its first pass, which is normal. Dashboards
+  and alerts that list every series see these two; no action is required.
+
+  The new `probe` service serves a live dashboard of one node. It is off by default
+  (`startProbe = false`) and nothing changes until an operator enables it with
+  `-probe=1` or `startProbe = true`. When it is enabled, `probe_authToken` must be set:
+  with an empty token the node refuses to start. The service adds the `probe_*`
+  settings (`probe_httpListenAddress` default `localhost:8100`, `probe_sampleInterval`,
+  `probe_slowSampleInterval`, `probe_baselineWarmup`, `probe_snoozeDefault`,
+  `probe_alarmLogRetention`, `probe_metricsTargets`, `probe_statePath`,
+  `probe_aerospikeURL`, `probe_postgresURL`, `probe_postgresDiskCapacityGB`,
+  `probe_floors`) and a Blockchain subscriber named `probe`. Operators who enable the
+  probe set a long random token, keep the default localhost bind or put a TLS reverse
+  proxy in front, and read `docs/topics/services/probe.md`. (#2078)
+
 - **Peer subtrees announced during a catchup are validated afterwards instead of
   lost.** While catching up, the subtree validator used to drop every
   peer-announced subtree, so the next block arrived with all of them unvalidated

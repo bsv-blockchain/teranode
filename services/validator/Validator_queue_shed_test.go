@@ -1028,9 +1028,12 @@ func TestValidate_ExistingTxHandling(t *testing.T) {
 		initPrometheusMetrics()
 
 		observedBefore := testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined)
+		existingBefore := testutil.ToFloat64(prometheusValidatorExistingTx)
 
 		_, err = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
 		require.NoError(t, err, "the contract is unchanged: the resubmit still returns success")
+		require.Equal(t, existingBefore+1, testutil.ToFloat64(prometheusValidatorExistingTx),
+			"a transaction the store already holds is counted as skipped")
 		require.Equal(t, 0, baStore.calls, "the resubmit must not re-drive the handoff")
 		require.Equal(t, 0, spy.unlockCalls, "the resubmit must not mutate lock state")
 

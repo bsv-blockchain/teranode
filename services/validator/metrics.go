@@ -244,6 +244,10 @@ var (
 	// ever needs a behavioural answer, since the store cannot distinguish its
 	// causes.
 	prometheusValidatorExistingTxLockedUnmined prometheus.Counter
+
+	// prometheusValidatorExistingTx counts transactions skipped because the UTXO
+	// store already holds them.
+	prometheusValidatorExistingTx prometheus.Counter
 )
 
 // Synchronization primitives
@@ -615,6 +619,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "existing_tx_locked_unmined_total",
 			Help:      "Number of resubmits that found an existing transaction record locked, unmined and not conflicting",
+		},
+	)
+
+	prometheusValidatorExistingTx = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "existing_tx_total",
+			Help:      "Number of transactions skipped because the UTXO store already holds them",
 		},
 	)
 }

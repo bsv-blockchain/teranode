@@ -1094,6 +1094,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	if txMetaData, spentUtxos, err = v.spendAndCreateInUtxoStore(decoupledCtx, tx, blockHeight, addToBlockAssembly, validationOptions); err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// create phase: the tx already exists in the store
+			prometheusValidatorExistingTx.Inc()
+
 			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
 
 			txMetaData = &meta.Data{}

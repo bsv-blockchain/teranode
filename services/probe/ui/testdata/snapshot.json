@@ -1,0 +1,174 @@
+{
+  "time": "2026-10-28T11:35:12Z",
+  "node": "teranode1",
+  "fsm": "CATCHINGBLOCKS",
+  "tip": 912437,
+  "peerTip": 912440,
+  "ingress": {
+    "propagationTxPerSec": {"v": 4100, "st": "ok"},
+    "subtreeIntakePerSec": {"v": 210, "st": "warn"},
+    "peers": {"v": 38, "st": "ok"},
+    "rejectedPerSec": {"v": 12, "st": "ok"},
+    "subtreeQueue": {"v": 1840, "st": "warn"},
+    "subtreeQueueOldestSec": {"v": 42, "st": "warn", "note": "Calibrating"}
+  },
+  "validator": {
+    "validatedPerSec": {"v": 3900, "st": "warn"},
+    "latencyP99Sec": {"v": 0.64, "st": "crit", "normal": 0.045},
+    "queueFill": {"v": 0.94, "st": "crit"},
+    "spendBatchFill": {"v": 0.78, "st": "warn"},
+    "errorsPerSec": {"v": 0, "st": "ok"}
+  },
+  "cache": {
+    "hitRate": {"v": 0.61, "st": "crit", "normal": 0.96},
+    "missesPerSec": {"v": 4300, "st": "crit"},
+    "evictionsPerSec": {"v": 2900, "st": "warn"},
+    "insertionsPerSec": {"v": 1200, "st": "ok"},
+    "fill": {"v": 0.92, "st": "warn"},
+    "currentGenFrac": {"v": 0.36, "st": "ok"},
+    "previousGenFrac": {"v": 0.64, "st": "warn"},
+    "entriesMillions": {"v": 118, "st": "ok"},
+    "sizeGB": {"v": 7.4, "st": "ok"},
+    "capacityGB": {"v": 8, "st": "ok"}
+  },
+  "assembly": {
+    "paused": {"v": 1, "st": "warn", "note": "reorging"},
+    "tipLagBlocks": {"v": 3, "st": "warn"},
+    "queueHeadAgeSec": {"v": 42, "st": "warn"},
+    "transactions": {"v": 1250000, "st": "ok"},
+    "ingestQueueFill": {"v": 0.17, "st": "ok"},
+    "subtreeFill": {"v": 0, "st": "nodata", "note": "no data", "age": 12}
+  },
+  "chain": {
+    "forkDepth": {"v": 3, "st": "warn"},
+    "persisterBehind": {"v": 0, "st": "ok"},
+    "subscribersDropped": {"v": 0, "st": "ok"},
+    "blocksWaiting": [912438, 912439, 912440]
+  },
+  "stores": {
+    "aerospike": {
+      "configured": true,
+      "diskFill": {"v": 0.71, "st": "warn"},
+      "sizeGB": {"v": 1840, "st": "ok"},
+      "readP99Sec": {"v": 0.038, "st": "crit", "normal": 0.0012},
+      "readsPerSec": {"v": 31000, "st": "ok"},
+      "writesPerSec": {"v": 4200, "st": "ok"},
+      "commitsPerSec": {"v": 0, "st": "nodata", "note": "no data"}
+    },
+    "postgres": {
+      "configured": false,
+      "diskFill": {"v": 0, "st": "nodata", "note": "no data"},
+      "sizeGB": {"v": 0, "st": "nodata", "note": "no data"},
+      "readP99Sec": {"v": 0, "st": "nodata", "note": "no data"},
+      "readsPerSec": {"v": 0, "st": "nodata", "note": "no data"},
+      "writesPerSec": {"v": 0, "st": "nodata", "note": "no data"},
+      "commitsPerSec": {"v": 0, "st": "nodata", "note": "no data"}
+    }
+  },
+  "lanes": {
+    "tx": {
+      "alreadySeenPerSec": {"v": 310, "st": "ok"}
+    },
+    "subtrees": {
+      "alreadyKnownPerSec": {"v": 12, "st": "ok"},
+      "completedPerSec": {"v": 198, "st": "ok"},
+      "missingTxsPerSec": {"v": 1950, "st": "ok"},
+      "txsFetchedAvg": {"v": 9.4, "st": "ok"}
+    },
+    "blocks": {
+      "announcedTotal": {"v": 6, "st": "ok"},
+      "validatedTotal": {"v": 5, "st": "ok"},
+      "missingSubtrees": {"v": 0, "st": "ok"},
+      "missingSubtreesPerSec": {"v": 0, "st": "ok"}
+    },
+    "mining": {
+      "candidatesPerSec": {"v": 0.2, "st": "ok"},
+      "candidateAgeSec": {"v": 4, "st": "ok"},
+      "solutionsTotal": {"v": 2, "st": "ok"}
+    }
+  },
+  "blobs": {
+    "subtree": {
+      "readsPerSec": {"v": 410, "st": "ok"},
+      "writesPerSec": {"v": 198, "st": "ok"},
+      "errorsPerSec": {"v": 0, "st": "ok"},
+      "readP99Sec": {"v": 0.012, "st": "ok"},
+      "writeP99Sec": {"v": 0.03, "st": "ok"}
+    },
+    "block": {
+      "readsPerSec": {"v": 2.5, "st": "ok"},
+      "writesPerSec": {"v": 0.2, "st": "ok"},
+      "errorsPerSec": {"v": 0, "st": "ok"},
+      "readP99Sec": {"v": 0, "st": "nodata", "note": "no data"},
+      "writeP99Sec": {"v": 0, "st": "nodata", "note": "no data"}
+    }
+  },
+  "kafka": [
+    {"topic": "subtrees", "lag": 1840},
+    {"topic": "txmeta", "lag": 0},
+    {"topic": "blocks", "lag": 0},
+    {"topic": "rejectedtx", "lag": null}
+  ],
+  "flows": [
+    {"id": "tx-input", "from": "ingress", "to": "validator", "label": "tx input", "rate": {"v": 4100, "st": "ok"}},
+    {"id": "subtrees", "from": "ingress", "to": "assembly", "label": "subtrees", "rate": {"v": 210, "st": "warn"}, "lag": 1840},
+    {"id": "txmeta", "from": "validator", "to": "cache", "label": "txmeta", "rate": {"v": 3900, "st": "ok"}, "lag": 0},
+    {"id": "lookups", "from": "cache", "to": "stores", "label": "lookups", "rate": {"v": 11100, "st": "warn"}},
+    {"id": "validated", "from": "validator", "to": "assembly", "label": "validated", "rate": {"v": 0, "st": "idle"}},
+    {"id": "blocks", "from": "assembly", "to": "chain", "label": "blocks", "rate": {"v": 0.2, "st": "warn"}, "lag": 3},
+    {"id": "blocks-final", "from": "chain", "to": "stores", "label": "blocks-final", "rate": {"v": 0, "st": "nodata", "note": "no data", "age": 30}, "lag": 0},
+    {"id": "utxo-ops", "from": "validator", "to": "stores", "label": "UTXO ops", "rate": {"v": 31000, "st": "crit"}},
+    {"id": "block-writes", "from": "chain", "to": "stores", "label": "block writes", "rate": {"v": 14, "st": "ok"}}
+  ],
+  "alarms": [
+    {
+      "id": "validator-queue-fill",
+      "stage": "validator",
+      "title": "Validator queue is filling",
+      "body": "The Validator cannot process transactions as fast as they arrive. Its internal queue grows. Look at the tx meta cache hit rate and Aerospike read latency. During catch-up, the Validator also checks the transactions of each queued block.",
+      "textId": "validator-queue-fill",
+      "severity": "crit",
+      "raisedAt": "2026-10-28T11:24:02Z",
+      "startOfChain": false,
+      "snoozed": false,
+      "drilldowns": [{"label": "Open Validator details", "path": "#/stage/validator"}]
+    },
+    {
+      "id": "cache-hit-rate",
+      "stage": "cache",
+      "title": "Tx meta cache hit rate is low",
+      "body": "Fewer lookups hit the tx meta cache than normal. Each miss reads the UTXO store, so Aerospike load and Validator latency rise. A cache that is full is normal, because ring caches stay full after their first pass. The live signals are the hit rate and the eviction rate. Look at the eviction rate and the share of entries from the previous generation.",
+      "textId": "cache-hit-rate",
+      "severity": "crit",
+      "raisedAt": "2026-10-28T11:19:00Z",
+      "startOfChain": true,
+      "snoozed": false,
+      "drilldowns": [
+        {"label": "Open cache details", "path": "#/stage/cache"},
+        {"label": "Open Aerospike details", "path": "#/stage/stores"}
+      ]
+    },
+    {
+      "id": "subtree-queue-age",
+      "stage": "ingress",
+      "title": "Subtrees wait too long",
+      "body": "The oldest queued subtree waits longer than normal. Subtree validation does not keep up with the subtrees that peers announce. Look at the Validator queue and the tx meta cache hit rate.",
+      "textId": "subtree-queue-age",
+      "severity": "warn",
+      "raisedAt": "2026-10-28T11:28:40Z",
+      "startOfChain": false,
+      "snoozed": true,
+      "drilldowns": [{"label": "Open ingress details", "path": "#/stage/ingress"}]
+    }
+  ],
+  "calibration": {"ready": false, "until": "2026-10-28T11:38:00Z", "fraction": 0.6},
+  "drainSeconds": 540,
+  "drainGrowing": false,
+  "sources": [
+    {"name": "metrics", "ok": true},
+    {"name": "chain", "ok": true},
+    {"name": "aerospike", "ok": true},
+    {"name": "kafka", "ok": false, "age": 34},
+    {"name": "postgres", "ok": true}
+  ]
+}

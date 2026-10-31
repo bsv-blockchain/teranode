@@ -38,6 +38,7 @@ const (
 	CategoryLegacy            = "Legacy"
 	CategoryPolicy            = "Policy"
 	CategoryPruner            = "Pruner"
+	CategoryProbe             = "Probe"
 	CategoryRPC               = "RPC"
 	CategoryUtxoStore         = "UtxoStore"
 	CategoryPropagation       = "Propagation"
@@ -67,6 +68,7 @@ func AllCategories() []string {
 		CategoryLegacy,
 		CategoryPolicy,
 		CategoryPruner,
+		CategoryProbe,
 		CategoryRPC,
 		CategoryUtxoStore,
 		CategoryPropagation,

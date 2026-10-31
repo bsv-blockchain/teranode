@@ -36,6 +36,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -257,11 +258,19 @@ func TestCheckBlockSubtrees(t *testing.T) {
 			BaseUrl: "http://localhost8090", // This will fail HTTP request
 		}
 
+		InitPrometheusMetrics()
+
+		missingBefore := testutil.ToFloat64(prometheusBlockMissingSubtrees)
+		outstandingBefore := testutil.ToFloat64(prometheusBlockMissingSubtreesOutstanding)
+
 		response, err := server.CheckBlockSubtrees(context.Background(), request)
 		require.Error(t, err)
 		assert.Nil(t, response)
 		// The error message will vary depending on network conditions, but it should be a processing error
 		assert.Contains(t, err.Error(), "failed to load subtree batch")
+
+		require.Equal(t, missingBefore+1, testutil.ToFloat64(prometheusBlockMissingSubtrees))
+		require.Equal(t, outstandingBefore, testutil.ToFloat64(prometheusBlockMissingSubtreesOutstanding))
 	})
 
 	t.Run("SubtreeExistsError", func(t *testing.T) {

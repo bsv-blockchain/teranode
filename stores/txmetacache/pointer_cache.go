@@ -411,12 +411,13 @@ func (c *PointerCache) Reset() {
 // are left untouched.
 // Implements cacheBackend.
 func (c *PointerCache) UpdateStats(s *Stats) {
-	var entries, totalAdded uint64
+	var entries, slots, totalAdded uint64
 
 	for _, b := range c.buckets {
 		b.mu.RLock()
 		entries += uint64(len(b.m))
 		b.mu.RUnlock()
+		slots += uint64(len(b.ring))
 		totalAdded += b.added.Load()
 	}
 
@@ -424,4 +425,6 @@ func (c *PointerCache) UpdateStats(s *Stats) {
 	s.TotalMapSize += entries
 	s.TotalElementsAdded += totalAdded
 	s.CurrentGenEntries += entries
+	s.Bytes += entries * pointerCacheAvgEntryBytes
+	s.CapacityBytes += slots * pointerCacheAvgEntryBytes
 }

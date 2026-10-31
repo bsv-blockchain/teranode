@@ -416,6 +416,8 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_tx_meta_cache_current_gen_entries`  | Gauge | Number of entries in the current generation of the tx meta cache |
 | `teranode_tx_meta_cache_previous_gen_entries` | Gauge | Number of valid entries from the previous generation in the tx meta cache |
 | `teranode_tx_meta_cache_lane_waits`           | Gauge | Number of times a `lockfree` cache writer found every lane busy; should stay 0 |
+| `teranode_tx_meta_cache_bytes`                | Gauge | Bytes of the cache capacity that hold entries: the ring position (the full ring after the first wrap) on the ring backends, entries x 320 on `pointer`, bytes written since reset (capped at the ring size) on `lockfree`. Updated every 5 s |
+| `teranode_tx_meta_cache_capacity_bytes`       | Gauge | Usable capacity that `teranode_tx_meta_cache_bytes` is measured against: chunk ring size on the ring backends, ring slots x 320 on `pointer`, lane ring size on `lockfree`. Fill = bytes / capacity_bytes |
 | `teranode_tx_meta_cache_tombstoned_writes_evicted_total` | Counter | Writes of a tx demoted to conflicting that were dropped, or evicted right after landing when the demotion arrived during the write: a txmeta ADD consumed after the demotion's DELETE (they travel on different partitions), or a read-through write whose store read raced the demotion. Non-zero means the race happened and was absorbed |
 
 ## Aerospike Service Metrics
