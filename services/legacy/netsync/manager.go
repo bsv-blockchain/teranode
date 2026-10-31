@@ -650,6 +650,10 @@ type SyncManager struct {
 	// handled; pipelineBlockDelete treats such a block as parked. Guarded by settlingMu.
 	accepting map[chainhash.Hash]int
 
+	// announced remembers the blocks most recently announced to legacy peers, by the
+	// blocks-final consumer or the reconciler; see runBlockAnnounceReconciler.
+	announced recentAnnouncements
+
 	ctx          context.Context
 	logger       ulogger.Logger
 	settings     *settings.Settings
@@ -4708,6 +4712,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	sm.startKafkaListeners(ctx, nil)
 
+	go sm.runBlockAnnounceReconciler(ctx, blockAnnounceReconcileInterval)
+
 	return &sm, nil
 }
 
@@ -4896,20 +4902,8 @@ func (sm *SyncManager) processBlocksFinalMessage(msg *kafka.KafkaMessage) error 
 		return nil
 	}
 
-	// create wireBlockHeader
-	wireBlockHeader := header.ToWireBlockHeader()
-
 	sm.logger.Infof("[kafkaBlocksFinalListener] received block final message from Kafka: %s, %s", hash, header.String())
-	sm.peerNotifier.RelayInventory(wire.NewInvVect(wire.InvTypeBlock, hash), wireBlockHeader)
-	sm.peerNotifier.BlockConnected()
-
-	// Raise the known height of every peer that announced this block, as btcd's handleBlockMsg
-	// does. Without it a peer's height moved only when it announced a block whose header this
-	// node already had, so at the tip startSync could find no peer ahead and nothing re-asked a
-	// block whose park record was dropped (2026-10-10, 13 minutes at 970,502).
-	if height, err := safeconversion.Uint32ToInt32(blockMsg.Height); err == nil && height > 0 {
-		sm.peerNotifier.UpdatePeerHeights(hash, height, nil)
-	}
+	sm.announceBlock(hash, header.ToWireBlockHeader(), blockMsg.Height)
 
 	return nil
 }
