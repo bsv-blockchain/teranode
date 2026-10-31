@@ -18,6 +18,7 @@ var (
 	prometheusLegacyNetsyncParkedBlocks              prometheus.Gauge
 	prometheusLegacyNetsyncParkedBytes               prometheus.Gauge
 	prometheusLegacyNetsyncOrphansAbandoned          prometheus.Counter
+	prometheusLegacyNetsyncRelayedTxDropped          prometheus.Counter
 	prometheusLegacyNetsyncOrphanTime                prometheus.Histogram
 
 	// prometheusLegacyNetsyncFrontierRaces counts blocks asked of a second peer because the
@@ -46,6 +47,13 @@ var (
 	// prometheusLegacyNetsyncParkDispositions counts applyParkDisposition calls by
 	// the row's name. See block_park_policy.go.
 	prometheusLegacyNetsyncParkDispositions *prometheus.CounterVec
+
+	// prometheusLegacyNetsyncInvDropped counts transaction announcements
+	// dropped without a UTXO store lookup, in hashes, by reason, and
+	// prometheusLegacyNetsyncInvQueuedHashes is the hashes queued for a lookup
+	// or being looked up. See inv_queue.go.
+	prometheusLegacyNetsyncInvDropped      *prometheus.CounterVec
+	prometheusLegacyNetsyncInvQueuedHashes prometheus.Gauge
 
 	prometheusMetricsInitOnce sync.Once
 )
@@ -147,6 +155,14 @@ func _initPrometheusMetrics() {
 		Help:      "Orphan transactions dropped for good: evicted from the orphan pool and still invalid on the final validation attempt",
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncOrphansAbandoned)
+
+	prometheusLegacyNetsyncRelayedTxDropped = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "relayed_tx_dropped_total",
+		Help:      "Transactions relayed by legacy peers and dropped unvalidated because the relay queue was full or over its byte budget",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncRelayedTxDropped)
 
 	prometheusLegacyNetsyncOrphanTime = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "teranode",
@@ -277,4 +293,24 @@ func _initPrometheusMetrics() {
 	for _, d := range parkDispositionRows {
 		prometheusLegacyNetsyncParkDispositions.WithLabelValues(d.name)
 	}
+
+	prometheusLegacyNetsyncInvDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "inv_dropped_total",
+		Help:      "Transaction announcements from legacy peers dropped without a UTXO store lookup, in hashes, by reason: the peer was over its share, the node was over legacy_invQueueMaxHashes, or the store read failed",
+	}, []string{"reason"})
+	prometheus.MustRegister(prometheusLegacyNetsyncInvDropped)
+
+	for _, reason := range invDropReasons {
+		prometheusLegacyNetsyncInvDropped.WithLabelValues(reason)
+	}
+
+	prometheusLegacyNetsyncInvQueuedHashes = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy_netsync",
+		Name:      "inv_queued_hashes",
+		Help:      "Transaction announcements from legacy peers queued for a UTXO store lookup or being looked up, in hashes; legacy_invQueueMaxHashes bounds it",
+	})
+	prometheus.MustRegister(prometheusLegacyNetsyncInvQueuedHashes)
 }

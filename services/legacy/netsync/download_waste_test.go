@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,7 +65,7 @@ func TestAPeerDroppedWithBlocksOwedIsCounted(t *testing.T) {
 	sm := streamManager(t)
 
 	p := newTestPeer(t, "10.0.0.7:8333")
-	sm.peerStates.Set(p, &peerSyncState{requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Hour)})
+	sm.peerStates.Set(p, &peerSyncState{})
 
 	require.True(t, sm.blockDownloads.Add(p, chainhash.Hash{0x63}))
 	require.True(t, sm.blockDownloads.Add(p, chainhash.Hash{0x64}))

@@ -269,6 +269,9 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_legacy_netsync_process_block` | Histogram | The time taken to process a block |
 | `teranode_legacy_netsync_orphans` | Gauge | The number of orphan transactions |
 | `teranode_legacy_netsync_orphans_abandoned_total` | Counter | Orphan transactions dropped for good: evicted from the orphan pool and still invalid on the final validation attempt |
+| `teranode_legacy_netsync_relayed_tx_dropped_total` | Counter | Transactions relayed by legacy peers and dropped unvalidated because the relay queue was full or over its byte budget |
+| `teranode_legacy_netsync_inv_dropped_total` | CounterVec | Transaction announcements from legacy peers dropped without a UTXO store lookup, in hashes, by reason (label `reason`): `peer_share` when the peer was over its share, `node_cap` when the node was over `legacy_invQueueMaxHashes`, `lookup_failed` when the store read failed |
+| `teranode_legacy_netsync_inv_queued_hashes` | Gauge | Transaction announcements from legacy peers queued for a UTXO store lookup or being looked up, in hashes; `legacy_invQueueMaxHashes` bounds it |
 | `teranode_legacy_netsync_orphan_time` | Histogram | The time taken to process an orphan transaction |
 | `teranode_legacy_netsync_parked_blocks` | Gauge | The number of downloaded blocks held on disk waiting for their parent |
 | `teranode_legacy_netsync_parked_bytes` | Gauge | Bytes the park bills for the blocks it holds: a block parked off the wire at its wire size, a block recovered from disk after a restart at its converted record's size; `bytes_ahead` is what the backstop reads |

@@ -63,7 +63,6 @@ func newUnlockSyncManager(t *testing.T, validationClient *validator.MockValidato
 	sm.peerStates.Set(peer, &peerSyncState{
 		syncCandidate: true,
 		requestQueue:  txmap.NewSyncedSlice[wire.InvVect](10),
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Minute),
 	})
 
 	return sm, peer

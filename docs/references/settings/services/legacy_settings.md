@@ -30,6 +30,8 @@ context), and `${LEGACY_GRPC_PORT}` is `8099`.
 | ConnectPeers | []string | [] | not set | legacy_connect_peers | Pipe-separated peers to dial. A non-empty list puts the node in connect-only mode |
 | OrphanEvictionDuration | time.Duration | 10m | not set | legacy_orphanEvictionDuration | How long an orphan transaction is held. On eviction it gets one last validation attempt |
 | MaxOrphanTxs | int | 100 | not set | legacy_maxOrphanTxs | Cap on orphan transactions held in memory. Inserting past the cap evicts the oldest by insertion time. 0 leaves the pool unbounded |
+| RelayTxBytesBudget | int64 | 268435456 | not set | legacy_relayTxBytesBudget | Serialized bytes of relayed transactions queued for validation or being validated. A transaction over it is dropped and counted; zero or a negative value means one transaction at a time. The node holds about three times this while transactions are being validated |
+| InvQueueMaxHashes | int | 400000 | not set | legacy_invQueueMaxHashes | Announced transaction hashes queued for a UTXO store lookup or being looked up, node-wide; one peer may hold 100000 at once. Announcements over either limit are dropped and counted. Below 4096 falls back to the default with a warning; zero is not unbounded |
 | PrintInvMessages | bool | false | false | legacy_printInvMessages | Log every inventory message sent and received |
 | GRPCAddress | string | "" | `localhost:${LEGACY_GRPC_PORT}` | legacy_grpcAddress | Address other services dial to reach the legacy service. Client creation fails when empty |
 | AllowBlockPriority | bool | true | true | legacy_allowBlockPriority | Negotiate the BSV multistream BlockPriority policy, which carries block traffic on its own TCP stream. False also refuses an inbound createstream |

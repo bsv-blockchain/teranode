@@ -197,3 +197,55 @@ func TestExpiringMap_CleanEvictionSendDoesNotBlockUnderLock(t *testing.T) {
 	_, ok := m.Get("k")
 	require.False(t, ok, "expired item should be evicted")
 }
+
+// TestExpiringMap_SetIfAbsent pins the one-lock insert the legacy announcement
+// workers use to claim a hash: a present key is left alone, an absent one is
+// written, and an entry past its expiry that the sweeper has not yet removed
+// counts as absent, as it does for Get.
+func TestExpiringMap_SetIfAbsent(t *testing.T) {
+	m := New[string, int](time.Hour)
+	defer m.Stop()
+
+	require.True(t, m.SetIfAbsent("a", 1), "an absent key is inserted")
+	require.False(t, m.SetIfAbsent("a", 2), "a present key is left alone")
+
+	v, ok := m.Get("a")
+	require.True(t, ok)
+	require.Equal(t, 1, v)
+
+	// Expire the entry by hand so the sweeper cannot race the assertion.
+	m.mu.Lock()
+	m.items["a"].expiry = time.Now().Add(-time.Second).UnixNano()
+	m.mu.Unlock()
+
+	require.True(t, m.SetIfAbsent("a", 3), "an expired entry not yet swept counts as absent")
+
+	v, ok = m.Get("a")
+	require.True(t, ok)
+	require.Equal(t, 3, v)
+}
+
+// TestExpiringMap_WithRandomEviction_HoldsTheCap pins the second cap policy:
+// at the cap, an arbitrary entry goes rather than the oldest, so an insert
+// costs one map step rather than a scan of every entry.
+func TestExpiringMap_WithRandomEviction_HoldsTheCap(t *testing.T) {
+	m := New[int, int](time.Hour).WithMaxSize(100).WithRandomEviction()
+	defer m.Stop()
+
+	for i := 0; i < 1000; i++ {
+		m.Set(i, i)
+	}
+
+	require.Equal(t, 100, m.Len())
+
+	require.True(t, m.SetIfAbsent(5000, 1))
+	require.Equal(t, 100, m.Len(), "SetIfAbsent honours the cap")
+
+	before := m.Len()
+	m.Set(5000, 2)
+	require.Equal(t, before, m.Len(), "updating a present key evicts nothing")
+
+	v, ok := m.Get(5000)
+	require.True(t, ok)
+	require.Equal(t, 2, v)
+}

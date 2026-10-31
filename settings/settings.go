@@ -763,6 +763,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ConnectPeers:                     getMultiString("legacy_connect_peers", "|", []string{}, alternativeContext...),
 			OrphanEvictionDuration:           getDuration("legacy_orphanEvictionDuration", 10*time.Minute, alternativeContext...),
 			MaxOrphanTxs:                     getInt("legacy_maxOrphanTxs", 100, alternativeContext...),
+			RelayTxBytesBudget:               getInt64("legacy_relayTxBytesBudget", 268435456, alternativeContext...),
+			InvQueueMaxHashes:                getInt("legacy_invQueueMaxHashes", 400000, alternativeContext...),
 			PrintInvMessages:                 getBool("legacy_printInvMessages", false, alternativeContext...),
 			GRPCAddress:                      getString("legacy_grpcAddress", "", alternativeContext...),
 			AllowBlockPriority:               getBool("legacy_allowBlockPriority", true, alternativeContext...),

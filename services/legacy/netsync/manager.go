@@ -93,6 +93,32 @@ const (
 	// hashes to store in memory.
 	maxRejectedTxns = 10_000
 
+	// txInvLookupChunk sizes the transaction announcement path in inv_queue.go
+	// in three places: admitTxInvs cuts a message's transaction items into
+	// chunks of at most this many for invQueue, takeInvBatch stops coalescing
+	// queued chunks, which may come from several peers, once a batch holds this
+	// many, and lookupInvBatch reads a batch from the UTXO store in
+	// BatchDecorate slices of at most this many. Each item used to get its own
+	// goroutine and its own Get: one inv message carries up to 50,000 items and
+	// each message is handled on its own goroutine, and on Hetzner mainnet on
+	// 2026-10-19 that reached 223,118 goroutines, 88,563 of them queued on one
+	// peer's known-inventory lock, before the cgroup killed the node. Now
+	// checkTxInvs only marks the items known and queues them, and the
+	// invLookupWorkers do the reads. 4096 matches utxostore_getBatcherSize in
+	// settings.conf, the batch the per-item Gets were being collected into.
+	txInvLookupChunk = 4096
+
+	// relayTxMinWorkers is the floor on the workers that validate relayed
+	// transactions; relayTxWorkerCount raises it to keep the validation path's
+	// batchers full. Each relayed transaction used to get its own goroutine with
+	// no ceiling, because OnTx queues without waiting for a reply.
+	relayTxMinWorkers = 1024
+
+	// relayTxQueueFactor sizes the relayed-transaction queue as a multiple of
+	// the worker count, so a burst of several batches is absorbed rather than
+	// dropped.
+	relayTxQueueFactor = 4
+
 	// recentlyFailedBlocksMaxTracked bounds recentlyFailedBlocks. Legacy sync
 	// only has a handful of failing block hashes in flight, but capping the map
 	// guarantees a pathological stream of distinct failing hashes can never grow
@@ -186,6 +212,8 @@ type txMsg struct {
 	tx    *bsvutil.Tx
 	peer  *peerpkg.Peer
 	reply chan struct{}
+	// size is the serialized size QueueTx charged to relayTxBytes.
+	size int64
 }
 
 // isCurrentMsg is a message type to be sent across the message channel for
@@ -232,7 +260,10 @@ type blockRequestOrigin struct {
 type peerSyncState struct {
 	syncCandidate bool
 	requestQueue  *txmap.SyncedSlice[wire.InvVect]
-	requestedTxns *expiringmap.ExpiringMap[chainhash.Hash, struct{}]
+
+	// queuedInvs is the transaction announcements from this peer queued for a
+	// UTXO store lookup or being looked up; admitTxInvs bounds it by invShare.
+	queuedInvs atomic.Int64
 
 	// requestQueueMu serialises the drain of requestQueue.
 	//
@@ -785,6 +816,47 @@ type SyncManager struct {
 	// legacy_maxBlocksInTransitPerPeer (see pipelineBlockSlotPeerAllowance).
 	blockPrefetchBudget      *semaphore.Weighted
 	blockPrefetchBudgetSlots int64
+
+	// relayTxQueue holds relayed transactions for the relayTxWorkers workers
+	// that validate them, and relayTxBytes the serialized bytes of those queued
+	// or being validated. QueueTx never waits on the queue: a transaction that
+	// finds it full, or over the byte budget, is dropped. Built in New; the
+	// workers are started by blockHandler.
+	//
+	// relayTxBytesBudget, from legacy_relayTxBytesBudget, bounds relayTxBytes.
+	// The queue bounds the count, and a count alone would let a peer relaying
+	// large transactions hold gigabytes. A transaction that would take the
+	// total over the budget is dropped, unless nothing else is held, so one
+	// transaction larger than the budget is still taken; zero or a negative
+	// budget therefore means one transaction at a time. The budget counts
+	// serialized bytes once, and a transaction inside a worker holds about
+	// three times that (its parsed wire form, a serialized copy, the bt.Tx).
+	relayTxQueue       chan *txMsg
+	relayTxWorkers     int
+	relayTxBytes       atomic.Int64
+	relayTxBytesBudget int64
+
+	// awaitingRegistration holds, for each peer NewPeer has handed to the
+	// block handler and handleNewPeerMsg has not yet registered, the relayed
+	// transactions QueueTx took from that peer in the meantime. The handshake
+	// does not wait for registration, so a peer's first transactions can reach
+	// QueueTx before it is in peerStates, and handleTxMsg discards a
+	// transaction from a peer it does not know. Holding them here until
+	// handleNewPeerMsg finishes keeps "registered before its transactions are
+	// handled", which the shared msgChan gave when transactions went through
+	// it. Held transactions keep their bytes charged to relayTxBytes, and a
+	// peer holds at most cap(relayTxQueue) of them. awaitingRegistrationMu
+	// guards the map, which NewPeer makes on first use.
+	awaitingRegistrationMu sync.Mutex
+	awaitingRegistration   map[*peerpkg.Peer][]*txMsg
+
+	// invQueue holds chunks of transaction announcements for the
+	// invLookupWorkers workers, and invQueued the hashes in it or being looked
+	// up, bounded by invQueueCap from legacy_invQueueMaxHashes. See
+	// inv_queue.go. Built in New; the workers are started by blockHandler.
+	invQueue    chan *invChunk
+	invQueueCap int
+	invQueued   atomic.Int64
 
 	// inFlightBlocks is the dedup half of the same block-admission gate whose
 	// other half is blockPrefetchBudget. It holds the hash of every block that is
@@ -1482,6 +1554,7 @@ func (sm *SyncManager) isSyncCandidate(peer *peerpkg.Peer) bool {
 func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	// Ignore if in the process of shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
+		sm.releaseHeldTxs(peer, false, "sync manager stopping before the peer was registered")
 		return
 	}
 
@@ -1489,8 +1562,12 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	// drained from msgChan, don't insert it into peerStates at all. Pairs
 	// with the Connected() guard in startSync to close the window during
 	// which a dead pointer can sit in the map waiting for a donePeerMsg.
+	// Its held transactions are dropped, as handleTxMsg would have dropped
+	// them for coming from a peer it does not know.
 	if !peer.Connected() {
 		sm.logger.Debugf("[handleNewPeerMsg] peer %s already disconnected before registration, skipping", peer.String())
+		sm.releaseHeldTxs(peer, false, "peer disconnected before it was registered")
+
 		return
 	}
 
@@ -1516,7 +1593,6 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	state := &peerSyncState{
 		syncCandidate: isSyncCandidate,
 		requestQueue:  txmap.NewSyncedSlice[wire.InvVect](maxRequestedBlocks),
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](10 * time.Second), // allow the node 10 seconds to respond to the tx request
 	}
 
 	// The height the peer advertised about itself during the handshake. It is
@@ -1533,6 +1609,9 @@ func (sm *SyncManager) handleNewPeerMsg(peer *peerpkg.Peer) {
 	state.noteBestKnownHeight(peer.StartingHeight())
 
 	sm.peerStates.Set(peer, state)
+
+	// Only now, with the peer in peerStates, may its transactions be handled.
+	sm.releaseHeldTxs(peer, true, "")
 
 	// Start syncing by choosing the best candidate if needed.
 	if isSyncCandidate && sm.loadSyncPeer() == nil {
@@ -1806,11 +1885,6 @@ func (sm *SyncManager) handleDonePeerMsg(peer *peerpkg.Peer) {
 // entries in the global map — were never consulted at all. A block owed by a
 // peer that has gone was therefore owed forever, and was never asked for again.
 func (sm *SyncManager) clearRequestedState(peer *peerpkg.Peer, state *peerSyncState) {
-	// Drop the transactions we were waiting on, then stop the map's cleanup
-	// goroutine. Clear before Stop: after Stop nothing sweeps it any more.
-	state.requestedTxns.Clear()
-	state.requestedTxns.Stop()
-
 	// Release every block this peer owed us. Nothing needs telling: the
 	// wanted-range pass recomputes what it wants and who owes it on every call, so
 	// a released block is simply unowed on the next pass rather than needing to
@@ -1860,7 +1934,7 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 
 	peer := tmsg.peer
 
-	state, exists := sm.peerStates.Get(peer)
+	_, exists := sm.peerStates.Get(peer)
 	if !exists {
 		sm.logger.Warnf("Received tx message from unknown peer %s", peer)
 		return
@@ -1910,7 +1984,6 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	// already knows about it and as such we shouldn't have any more
 	// instances of trying to fetch it, or we failed to insert and thus
 	// we'll retry next time we get an inv.
-	state.requestedTxns.Delete(*txHash)
 	sm.requestedTxns.Delete(*txHash)
 
 	if err != nil {
@@ -3412,41 +3485,70 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		processInvs = true
 	}
 
-	wg := sync.WaitGroup{}
-
 	// Request the advertised inventory if we don't already have it.  Also,
 	// request parent blocks of orphans if we receive one we already have.
 	// Finally, attempt to detect potential stalls due to long side chains
 	// we already have and request more blocks to prevent them.
+	//
+	// Blocks go first, in serial and in message order, in a pass of their own.
+	// The transaction pass below hands up to 50,000 items to the lookup
+	// workers, and a block announcement must never wait behind even that,
+	// whatever its position in the message. That includes the getdata for a
+	// block this node does not have: processInvMsg only queues it, so it is
+	// sent here, straight after the block pass.
 	for i, iv := range invVects {
 		if iv.Type == wire.InvTypeBlock {
-			// process blocks in serial
 			sm.processInvMsg(i, iv, processInvs, peer, exists, state, lastBlock)
+		}
+	}
+
+	if lastBlock != -1 {
+		// Request as much as possible at once. Anything that won't fit into
+		// the request will be requested on the next inv message.
+		gdmsg := sm.drainRequestQueue(peer, state)
+
+		if len(gdmsg.InvList) > 0 {
+			sm.logger.Debugf("[handleInvMsg] Requesting %d items from %s", len(gdmsg.InvList), peer)
+			peer.QueueMessage(gdmsg, nil)
+		}
+	}
+
+	// Outside RUNNING every transaction item is dropped unchecked, as
+	// processInvMsg does, and every type other than block and transaction is
+	// dropped in every state. The items are queued for the lookup workers,
+	// which send the getdata for whatever the store lacks, so there is
+	// nothing left for this goroutine to send.
+	if processInvs {
+		sm.checkTxInvs(peer, state, invVects)
+	}
+}
+
+// checkTxInvs marks every transaction item in invVects as known for the peer
+// and hands the items to the announcement queue in chunks of
+// txInvLookupChunk, where the lookup workers find the ones the UTXO store
+// lacks and ask the peer for them (inv_queue.go). It does no store read and
+// never waits, so the goroutine handling the message ends at once; each item
+// used to cost a goroutine and a Get, and on 2026-10-19 that reached 223,118
+// goroutines. A chunk over the peer's share or the node cap is dropped and
+// counted there.
+func (sm *SyncManager) checkTxInvs(peer *peerpkg.Peer, state *peerSyncState, invVects []*wire.InvVect) {
+	txInvs := make([]*wire.InvVect, 0, len(invVects))
+
+	for _, iv := range invVects {
+		if iv.Type != wire.InvTypeTx {
 			continue
 		}
 
-		// process all remaining inv vectors in parallel
-		wg.Add(1)
-
-		go func(i int, iv *wire.InvVect) {
-			defer wg.Done()
-
-			// Ignore unsupported inventory types.
-			sm.processInvMsg(i, iv, processInvs, peer, exists, state, lastBlock)
-		}(i, iv)
+		peer.AddKnownInventory(iv)
+		txInvs = append(txInvs, iv)
 	}
 
-	// wait for all inv vectors to be processed
-	wg.Wait()
-
-	// Request as much as possible at once.  Anything that won't fit into
-	// the request will be requested on the next inv message.
-	gdmsg := sm.drainRequestQueue(peer, state)
-
-	if len(gdmsg.InvList) > 0 {
-		sm.logger.Debugf("[handleInvMsg] Requesting %d items from %s", len(gdmsg.InvList), peer)
-		peer.QueueMessage(gdmsg, nil)
+	// Ignore inventory when we're in headers-first mode.
+	if len(txInvs) == 0 || sm.headersFirstMode.Load() {
+		return
 	}
+
+	sm.admitTxInvs(peer, state, txInvs)
 }
 
 // drainRequestQueue turns as much of a peer's announcement queue as it can into
@@ -3534,18 +3636,15 @@ outside:
 			}
 
 		case wire.InvTypeTx:
-			// Request the transaction if there is not already a pending request.
-			if _, requested := sm.requestedTxns.Get(iv.Hash); !requested {
-				if err := gdmsg.AddInvVect(iv); err != nil {
-					sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
-					break outside
-				}
-
-				sm.requestedTxns.Set(iv.Hash, struct{}{})
-				state.requestedTxns.Set(iv.Hash, struct{}{})
-
-				numRequested++
+			// Marked in requestedTxns by lookupInvBatch before the store read
+			// that put it here, so no check and no mark: a check here would
+			// skip every transaction the worker asked for.
+			if err := gdmsg.AddInvVect(iv); err != nil {
+				sm.logger.Warnf(unexpectedFailureAddingInventoryMsg, err)
+				break outside
 			}
+
+			numRequested++
 		}
 
 		// Dealt with one way or the other, so it comes off the queue. Every path
@@ -3696,6 +3795,16 @@ func (sm *SyncManager) blockHandler() {
 		sm.dispatcher = newBlockDispatcher(sm)
 	}
 
+	// The relayed-transaction workers stop on quit, as this handler does.
+	for i := 0; i < sm.relayTxWorkers; i++ {
+		go sm.relayTxWorker()
+	}
+
+	// So do the announcement lookup workers; see inv_queue.go.
+	for i := 0; i < invLookupWorkers; i++ {
+		go sm.invLookupWorker()
+	}
+
 	// start the block queue handler
 	sm.consumerDone = make(chan struct{})
 
@@ -3776,15 +3885,6 @@ out:
 					msg.reply <- struct{}{}
 				}
 
-			case *txMsg:
-				go func(msg *txMsg) {
-					// process tx messages in parallel
-					sm.handleTxMsg(msg)
-					if msg.reply != nil {
-						msg.reply <- struct{}{}
-					}
-				}(msg)
-
 			case *blockOnDiskMsg:
 				// A body already on disk. No budget to release and no reply to
 				// send: the read loop was free the moment the bytes landed.
@@ -3823,6 +3923,10 @@ out:
 	// waiter on handlerDone (Stop, and the tests that run the handler) see them finished.
 	sm.handlerLoops.Wait()
 
+	// Registrations still in msgChan will not be handled now, so nothing will
+	// release what their peers hold.
+	sm.dropAllHeldTxs()
+
 	close(sm.handlerDone)
 	sm.logger.Infof("Block handler done")
 }
@@ -3836,12 +3940,20 @@ func (sm *SyncManager) NewPeer(peer *peerpkg.Peer, done chan struct{}) {
 		}
 		return
 	}
+
+	// Before the message is sent, so that a transaction the peer relays as
+	// soon as this returns is held for the registration rather than handled
+	// against a peer the sync manager does not know yet.
+	sm.markAwaitingRegistration(peer)
+
 	sm.msgChan <- &newPeerMsg{peer: peer, reply: done}
 }
 
-// QueueTx adds the passed transaction message and peer to the block handling
-// queue. Responds to the done channel argument after the tx message is
-// processed.
+// QueueTx adds the passed transaction message and peer to the relayed
+// transaction queue, or drops it when the queue is full or over its byte
+// budget. A transaction from a peer whose registration has not been handled
+// yet is held until it is (see awaitingRegistration). Responds to the done
+// channel argument once the tx message is processed, or once it is dropped.
 func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan struct{}) {
 	// Don't accept more transactions if we're shutting down.
 	if atomic.LoadInt32(&sm.shutdown) != 0 {
@@ -3851,7 +3963,168 @@ func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan str
 		return
 	}
 
-	sm.msgChan <- &txMsg{tx: tx, peer: peer, reply: done}
+	// Never waits, because this runs on the peer's read loop, which also
+	// carries its blocks. A transaction over the byte budget or with the queue
+	// full is dropped: an unmined transaction is not consensus-critical, and it
+	// arrives again from another peer or in the block that mines it. The bytes
+	// are given back by relayTxWorker once handleTxMsg returns, or by
+	// releaseHeldTxs for a held transaction it drops. Holding a transaction
+	// for its peer's registration does not wait either: it appends under a
+	// mutex held only for the append.
+	size := int64(tx.MsgTx().SerializeSize())
+
+	if held := sm.relayTxBytes.Add(size); held-size > 0 && held > sm.relayTxBytesBudget {
+		sm.relayTxBytes.Add(-size)
+		sm.dropRelayedTx(tx, peer, done, "relayed transaction bytes over budget")
+
+		return
+	}
+
+	msg := &txMsg{tx: tx, peer: peer, reply: done, size: size}
+
+	if awaiting, held := sm.holdUntilRegistered(msg); awaiting {
+		if !held {
+			sm.relayTxBytes.Add(-size)
+			sm.dropRelayedTx(tx, peer, done, "peer not registered yet and holding its limit of transactions")
+		}
+
+		return
+	}
+
+	select {
+	case sm.relayTxQueue <- msg:
+	default:
+		sm.relayTxBytes.Add(-size)
+		sm.dropRelayedTx(tx, peer, done, "relayed transaction queue full")
+	}
+}
+
+// markAwaitingRegistration records that peer's registration is on its way to
+// the block handler, so QueueTx holds the peer's transactions until
+// handleNewPeerMsg has run for it. Marking a peer already awaiting keeps what
+// it holds.
+func (sm *SyncManager) markAwaitingRegistration(peer *peerpkg.Peer) {
+	sm.awaitingRegistrationMu.Lock()
+	defer sm.awaitingRegistrationMu.Unlock()
+
+	if sm.awaitingRegistration == nil {
+		sm.awaitingRegistration = make(map[*peerpkg.Peer][]*txMsg)
+	}
+
+	if _, ok := sm.awaitingRegistration[peer]; !ok {
+		sm.awaitingRegistration[peer] = nil
+	}
+}
+
+// holdUntilRegistered holds msg for its peer's registration. awaiting reports
+// whether the peer is awaiting one; held whether msg was taken, which it is
+// unless the peer already holds cap(relayTxQueue) transactions, as many as
+// the queue can take when the registration releases them. A transaction
+// whose peer is not awaiting is left to the caller.
+func (sm *SyncManager) holdUntilRegistered(msg *txMsg) (awaiting, held bool) {
+	sm.awaitingRegistrationMu.Lock()
+	defer sm.awaitingRegistrationMu.Unlock()
+
+	queued, awaiting := sm.awaitingRegistration[msg.peer]
+	if !awaiting {
+		return false, false
+	}
+
+	if len(queued) >= cap(sm.relayTxQueue) {
+		return true, false
+	}
+
+	sm.awaitingRegistration[msg.peer] = append(queued, msg)
+
+	return true, true
+}
+
+// releaseHeldTxs ends peer's wait for registration and gives back what it
+// held. handleNewPeerMsg calls it on every return. When registered, the
+// transactions go to the relay queue, after the peer is in peerStates; any the
+// queue has no room for are dropped. Otherwise every one is dropped for
+// reason. A dropped transaction's bytes are given back and its done channel
+// answered, as QueueTx does for its own drops.
+func (sm *SyncManager) releaseHeldTxs(peer *peerpkg.Peer, registered bool, reason string) {
+	sm.awaitingRegistrationMu.Lock()
+	held := sm.awaitingRegistration[peer]
+	delete(sm.awaitingRegistration, peer)
+	sm.awaitingRegistrationMu.Unlock()
+
+	for _, msg := range held {
+		why := reason
+
+		if registered {
+			select {
+			case sm.relayTxQueue <- msg:
+				continue
+			default:
+				why = "relayed transaction queue full"
+			}
+		}
+
+		sm.relayTxBytes.Add(-msg.size)
+		sm.dropRelayedTx(msg.tx, msg.peer, msg.reply, why)
+	}
+}
+
+// dropAllHeldTxs drops the transactions of every peer still awaiting
+// registration when the block handler stops, since the registrations still in
+// msgChan will not be handled, and answers their done channels.
+func (sm *SyncManager) dropAllHeldTxs() {
+	sm.awaitingRegistrationMu.Lock()
+	peers := make([]*peerpkg.Peer, 0, len(sm.awaitingRegistration))
+
+	for peer := range sm.awaitingRegistration {
+		peers = append(peers, peer)
+	}
+	sm.awaitingRegistrationMu.Unlock()
+
+	for _, peer := range peers {
+		sm.releaseHeldTxs(peer, false, "sync manager stopping before the peer was registered")
+	}
+}
+
+// dropRelayedTx counts and logs a relayed transaction QueueTx did not queue,
+// and answers its done channel as if it had been handled.
+func (sm *SyncManager) dropRelayedTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan struct{}, reason string) {
+	prometheusLegacyNetsyncRelayedTxDropped.Inc()
+	sm.logger.Debugf("[QueueTx] dropping relayed tx %s from %s: %s", tx.Hash(), peer, reason)
+
+	if done != nil {
+		done <- struct{}{}
+	}
+}
+
+// relayTxWorker validates relayed transactions from relayTxQueue until quit
+// closes. blockHandler starts relayTxWorkers of them.
+func (sm *SyncManager) relayTxWorker() {
+	for {
+		select {
+		case <-sm.quit:
+			return
+		case msg := <-sm.relayTxQueue:
+			sm.handleTxMsg(msg)
+			sm.relayTxBytes.Add(-msg.size)
+
+			if msg.reply != nil {
+				msg.reply <- struct{}{}
+			}
+		}
+	}
+}
+
+// relayTxWorkerCount sizes the relayed-transaction worker pool. Validating a
+// transaction feeds batchers that collect one item per transaction: the UTXO
+// store's create and spend batchers, and the validator client's batch when the
+// validator is remote. A pool smaller than a batch never fills one, so every
+// batch waits out its timer and the pool caps throughput below the unbounded
+// goroutines it replaces. Twice the largest batch keeps one batch filling while
+// the one before it is in flight.
+func relayTxWorkerCount(tSettings *settings.Settings) int {
+	largest := max(tSettings.UtxoStore.StoreBatcherSize, tSettings.UtxoStore.SpendBatcherSize, tSettings.Validator.SendBatchSize)
+
+	return max(relayTxMinWorkers, 2*largest)
 }
 
 // AcquireBlockPrefetch reserves one admission slot for blockHash, which the
@@ -4510,15 +4783,21 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, err
 	}
 
+	invCap := invQueueMaxHashes(logger, tSettings)
+
 	sm := SyncManager{
 		ctx:          ctx,
 		settings:     tSettings,
 		peerNotifier: config.PeerNotifier,
 		// txMemPool:     config.TxMemPool,
-		orphanTxs:      expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
-		chainParams:    config.ChainParams,
-		rejectedTxns:   txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
-		requestedTxns:  expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),   // give peers 10 seconds to respond
+		orphanTxs:    expiringmap.New[chainhash.Hash, *orphanTxAndParents](tSettings.Legacy.OrphanEvictionDuration).WithMaxSize(tSettings.Legacy.MaxOrphanTxs),
+		chainParams:  config.ChainParams,
+		rejectedTxns: txmap.NewSyncedMap[chainhash.Hash, struct{}](maxRejectedTxns), // limit map size to maxRejectedTxns
+		// Hashes being looked up or asked for; ten seconds for a peer to answer
+		// a getdata. Capped at the announcement queue cap with one-step
+		// eviction, because a flood of unique hashes fills it at the lookup
+		// rate times ten seconds; an eviction costs one duplicate request.
+		requestedTxns:  expiringmap.New[chainhash.Hash, struct{}](10 * time.Second).WithMaxSize(invCap).WithRandomEviction(),
 		blockDownloads: newBlockDownloadTracker(assignmentCeiling),
 		peerStates:     txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState](),
 		// progressLogger:  newBlockProgressLogger("Processed", log),
@@ -4590,6 +4869,15 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	sm.blockPrefetchBudgetSlots = capacity
 	sm.blockPrefetchBudget = semaphore.NewWeighted(capacity)
+
+	sm.relayTxWorkers = relayTxWorkerCount(tSettings)
+	sm.relayTxQueue = make(chan *txMsg, relayTxQueueFactor*sm.relayTxWorkers)
+	sm.relayTxBytesBudget = tSettings.Legacy.RelayTxBytesBudget
+	logger.Infof("[legacy] relayed transactions: %d validation workers, queue of %d, %d MiB budget",
+		sm.relayTxWorkers, cap(sm.relayTxQueue), sm.relayTxBytesBudget>>20)
+	sm.initInvQueue(invCap)
+	logger.Infof("[legacy] transaction announcements: %d lookup workers, queue of %d hashes, per-peer share %d",
+		invLookupWorkers, sm.invQueueCap, sm.invShare())
 	logger.Infof("[legacy] streaming pipeline active: download admission budget sized as %d block slots (maxBlocksInTransitPerPeer=%d x %d)",
 		capacity, tSettings.Legacy.MaxBlocksInTransitPerPeer, pipelineBlockSlotPeerAllowance)
 

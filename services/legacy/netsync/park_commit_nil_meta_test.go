@@ -2,13 +2,11 @@ package netsync
 
 import (
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +24,7 @@ func TestNoteCommittedParkedBlock_NilMetaKeepsHeightUnknown(t *testing.T) {
 	sm.peerStates = txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState]()
 
 	p := newTestPeer(t, "localhost:18491")
-	state := &peerSyncState{requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Hour)}
+	state := &peerSyncState{}
 	sm.peerStates.Set(p, state)
 
 	entry := parkedBlock{hash: chainhash.HashH([]byte("nil-meta-parked")), height: 0, peer: p}
