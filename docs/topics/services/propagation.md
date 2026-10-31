@@ -31,6 +31,16 @@ At a glance, the Propagation service:
 
 The gRPC protocol is the primary communication method, although HTTP is also accepted.
 
+The service accepts transactions on three ingress transports. `Start` (`services/propagation/Server.go`) starts each one from its own setting:
+
+| Transport | Setting | Code default | `settings.conf` | Access controls |
+|---|---|---|---|---|
+| gRPC | `propagation_grpcListenAddress` | empty | `:${PROPAGATION_GRPC_PORT}` | Ban list interceptor; gRPC security level (`security_level_grpc`) |
+| HTTP (`/tx`, `/txs`) | `propagation_httpListenAddress` | empty (off) | `:${PROPAGATION_HTTP_PORT}` (on) | Ban list middleware; rate limit (`propagation_httpRateLimit`, default 1024 per second); body limit (`propagation_httpBodyLimit`, default 100MB) |
+| UDP6 multicast | `ipv6_addresses`, on the interface in `ipv6_interface` (default `en0`) | empty (off) | not set (off) | Source allowlist only (`propagation_ipv6_allowed_sources`; empty accepts every source) |
+
+The gRPC server is the call that holds the service open, so the service always starts it. HTTP and UDP6 start only when their setting is not empty. The UDP6 listener binds port 9999 on each configured multicast address and reads datagrams of at most 512 bytes. It has no ban list and no rate limit. Its only control is the source allowlist, so set `propagation_ipv6_allowed_sources` when UDP6 is on.
+
 - `startHTTPServer`: This function is designed to start a network listener for the HTTP protocol. Each function configures and starts a server to listen for incoming connections and requests on specific network addresses and ports. For example, the HTTP endpoints are `/tx`, `/txs`, and `/health`.
 
 A node can start multiple parallel instances of the Propagation service. This translates into multiple pods within a Kubernetes cluster. Each instance will have its own gRPC server, and will be able to receive and propagate transactions independently. GRPC load balancing allows to distribute the load across the multiple instances.
