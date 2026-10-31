@@ -13,6 +13,8 @@ under "Not breaking, but worth knowing" where they look alarming but are not.
 
 ## [Unreleased]
 
+- **UTXO pruning retains mined records longer when the cached tip lags.** SQL and Aerospike deletion-date writers floor new or updated stamps at the highest recorded mined height plus retention. Operators may see higher storage usage during catchup; allow capacity for the retention window. Existing stamps are not backfilled and existing dangling references are not repaired. This is the prevention split of PR #1681 (replacement #2009); the draft still requires the Aerospike pagination follow-up fix before deployment.
+
 Entries marked "shipped in v0.16.0" were already in the v0.16.0 release (2026-10-05).
 Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier release, they apply in full.
 
