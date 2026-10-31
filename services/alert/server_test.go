@@ -3,7 +3,11 @@ package alert
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"testing"
@@ -12,11 +16,21 @@ import (
 	"github.com/bsv-blockchain/go-alert-system/app/config"
 	"github.com/bsv-blockchain/go-alert-system/app/models"
 	"github.com/bsv-blockchain/go-alert-system/app/models/model"
+	"github.com/bsv-blockchain/go-alert-system/app/p2p"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/go-sdk/util"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/libp2p/go-libp2p"
+	dht "github.com/libp2p/go-libp2p-kad-dht"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/core/protocol"
+	ma "github.com/multiformats/go-multiaddr"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -517,4 +531,145 @@ func TestServer_syncGenesisKeys(t *testing.T) {
 		require.ErrorContains(t, err, "error activating public key")
 	})
 
+}
+
+// TestServer_Start_survivesOversizedSyncFrame sends the alert sync stream handler that
+// Start registers length prefixes it must reject before allocating: a uint64-max VarInt,
+// which panics make() in the stream's reader goroutine and kills the process on
+// go-alert-system before v0.3.0, and one byte over the 2 MiB default frame cap. The
+// server must close each stream and still answer a well-formed sync request afterwards.
+func TestServer_Start_survivesOversizedSyncFrame(t *testing.T) {
+	// initDHT dials the public IPFS bootstrap peers on top of the configured one; empty them
+	// so the server bootstraps off the local attacker host only
+	defaultBootstrapPeers := dht.DefaultBootstrapPeers
+	dht.DefaultBootstrapPeers = nil
+	t.Cleanup(func() { dht.DefaultBootstrapPeers = defaultBootstrapPeers })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	attacker, err := libp2p.New(libp2p.ListenAddrStrings("/ip4/127.0.0.1/tcp/0"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = attacker.Close() })
+
+	serverKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+	serverKeyBytes, err := serverKey.Raw()
+	require.NoError(t, err)
+	serverID, err := peer.IDFromPrivateKey(serverKey)
+	require.NoError(t, err)
+
+	port := freeTCPPort(t)
+	protocolID := protocol.ID("/alert/test/1.0.0")
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Alert.GenesisKeys = upstreamNetwork(t, "mainnet").GenesisKeys[:3]
+	tSettings.Alert.ProtocolID = string(protocolID)
+	tSettings.Alert.P2PPort = port
+	tSettings.Alert.P2PPrivateKey = hex.EncodeToString(serverKeyBytes)
+	tSettings.Alert.P2PBootstrapPeer = fmt.Sprintf("%s/p2p/%s", attacker.Addrs()[0], attacker.ID())
+	tSettings.Alert.P2PAllowPrivateIPs = true
+
+	storeURL, err := url.Parse("sqlitememory:///test_oversized_sync_frame")
+	require.NoError(t, err)
+	tSettings.Alert.StoreURL = storeURL
+
+	// TestLogger, not ErrorTestLogger: the library logs each rejected frame at error level
+	server := New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil)
+	require.NoError(t, server.loadConfig(ctx, models.BaseModels, true))
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- server.Start(ctx, make(chan struct{})) }()
+	t.Cleanup(func() {
+		cancel()
+
+		// the library's DHT bootstrap loop ignores ctx, so a server that never reached the
+		// attacker host would block here forever
+		select {
+		case err := <-startErr:
+			require.NoError(t, err)
+		case <-time.After(30 * time.Second):
+			t.Error("alert server did not stop")
+		}
+
+		require.NoError(t, server.Stop(context.Background()))
+	})
+
+	attacker.Peerstore().AddAddr(serverID, ma.StringCast(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port)), peerstore.PermanentAddrTTL)
+
+	// the handler is only registered once the server's DHT has bootstrapped, so retry until
+	// protocol negotiation succeeds
+	openStream := func(t *testing.T) network.Stream {
+		var stream network.Stream
+
+		require.Eventually(t, func() bool {
+			var streamErr error
+			stream, streamErr = attacker.NewStream(ctx, serverID, protocolID)
+			return streamErr == nil
+		}, 30*time.Second, 100*time.Millisecond)
+
+		t.Cleanup(func() { _ = stream.Reset() })
+
+		return stream
+	}
+
+	oversizedFrames := map[string][]byte{
+		// 0xff marker followed by uint64 max
+		"uint64 max": {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+		// 0xfe marker followed by 2 MiB + 1 as a little-endian uint32
+		"one byte over the 2 MiB default": {0xfe, 0x01, 0x00, 0x20, 0x00},
+	}
+
+	for name, frame := range oversizedFrames {
+		t.Run(name, func(t *testing.T) {
+			stream := openStream(t)
+
+			_, err := stream.Write(frame)
+			require.NoError(t, err)
+
+			// the server must close the stream without sending anything back, not leave it open
+			// until the sync timeout: a clean EOF reads as a nil error, a hang as a yamux timeout
+			require.NoError(t, stream.SetReadDeadline(time.Now().Add(10*time.Second)))
+			reply, err := io.ReadAll(stream)
+			require.NoError(t, err, "server did not close the stream")
+			require.Empty(t, reply)
+		})
+	}
+
+	t.Run("a well-formed sync request is still answered", func(t *testing.T) {
+		stream := openStream(t)
+
+		request := p2p.SyncMessage{Type: p2p.IWantLatest}
+		writer := util.NewWriter()
+		writer.WriteIntBytes(request.Serialize())
+		_, err := stream.Write(writer.Buf)
+		require.NoError(t, err)
+
+		require.NoError(t, stream.SetReadDeadline(time.Now().Add(10*time.Second)))
+
+		var length util.VarInt
+		_, err = length.ReadFrom(stream)
+		require.NoError(t, err)
+
+		body := make([]byte, length)
+		_, err = io.ReadFull(stream, body)
+		require.NoError(t, err)
+
+		reply, err := p2p.NewSyncMessageFromBytes(body)
+		require.NoError(t, err)
+		require.Equal(t, byte(p2p.IGotLatest), reply.Type)
+	})
+}
+
+// freeTCPPort returns a TCP port that was free on localhost when it was checked.
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+
+	return port
 }
