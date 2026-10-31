@@ -333,7 +333,7 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.4 // indirect
 	golang.org/x/exp v0.0.0-20261007192929-f45ad48fbe92 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
 	golang.org/x/tools v0.51.0 // indirect
@@ -382,10 +382,10 @@ require (
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
 	github.com/bsv-blockchain/go-p2p-message-bus v0.1.28
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
-	github.com/bsv-blockchain/go-sdk v1.7.2
+	github.com/bsv-blockchain/go-sdk v1.7.3
 	github.com/bsv-blockchain/go-subtree v1.6.3
 	github.com/bsv-blockchain/go-tx-map v1.5.1
-	github.com/bsv-blockchain/go-wire v1.4.0
+	github.com/bsv-blockchain/go-wire v1.5.0
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.4.0
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0

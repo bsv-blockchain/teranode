@@ -219,17 +219,19 @@ func (w *subtreeWriter) Emit(ctx context.Context) subtreeEmitFunc {
 			delete(w.pending, index)
 
 			key := writtenSubtree{Hash: *root, FileType: fileformat.FileTypeSubtreeData}
-			w.registry().attempt(key)
 
-			switch err = file.Commit(ctx, root[:], options.WithDeleteAt(w.deleteAt()), options.WithExclusivePublish()); {
-			case err == nil:
-				w.created(key)
-			case errors.Is(err, errors.ErrBlobAlreadyExists):
-				// Another block's file: Commit has discarded ours, and theirs is left alone.
-				w.adopt(key)
-			default:
-				w.registry().abandoned(key)
-				return errors.NewStorageError("[subtreeWriter][%s] failed committing %s", root, fileformat.FileTypeSubtreeData, err)
+			if err = w.attempt(key, func() (bool, error) {
+				switch commitErr := file.Commit(ctx, root[:], options.WithDeleteAt(w.deleteAt()), options.WithExclusivePublish()); {
+				case commitErr == nil:
+					return true, nil
+				case errors.Is(commitErr, errors.ErrBlobAlreadyExists):
+					// Another block's file: Commit has discarded ours, and theirs is left alone.
+					return false, nil
+				default:
+					return false, errors.NewStorageError("[subtreeWriter][%s] failed committing %s", root, fileformat.FileTypeSubtreeData, commitErr)
+				}
+			}); err != nil {
+				return err
 			}
 		} else {
 			artefacts = append([]struct {
@@ -240,23 +242,48 @@ func (w *subtreeWriter) Emit(ctx context.Context) subtreeEmitFunc {
 
 		for _, artefact := range artefacts {
 			key := writtenSubtree{Hash: *root, FileType: artefact.fileType}
-			w.registry().attempt(key)
 
-			created, putErr := w.put(ctx, *root, artefact.fileType, artefact.write)
-			if putErr != nil {
-				w.registry().abandoned(key)
-				return putErr
-			}
-
-			if created {
-				w.created(key)
-			} else {
-				w.adopt(key)
+			if err = w.attempt(key, func() (bool, error) {
+				return w.put(ctx, *root, artefact.fileType, artefact.write)
+			}); err != nil {
+				return err
 			}
 		}
 
 		return nil
 	}
+}
+
+// attempt writes key through write inside the registry's attempt on it, and ends
+// the attempt with what write reports: created, adopted when the file was
+// already there, or abandoned when write fails. Abandoned also when write
+// panics: an attempt left open keeps key pending, and every later cleanup of the
+// file is refused until its delete-at-height.
+func (w *subtreeWriter) attempt(key writtenSubtree, write func() (created bool, err error)) error {
+	w.registry().attempt(key)
+
+	ended := false
+
+	defer func() {
+		if !ended {
+			w.registry().abandoned(key)
+		}
+	}()
+
+	created, err := write()
+	if err != nil {
+		return err
+	}
+
+	if created {
+		w.created(key)
+	} else {
+		w.adopt(key)
+	}
+
+	ended = true
+
+	return nil
 }
 
 // registry is the adoption registry this writer marks in: the manager's, or one of its own.
@@ -327,7 +354,7 @@ func (w *subtreeWriter) put(ctx context.Context, root chainhash.Hash, fileType f
 		return false, errors.NewStorageError("[subtreeWriter][%s] failed to create %s file", root, fileType, err)
 	}
 
-	if err = write(storer); err != nil {
+	if err = writeOrAbort(storer, write, root, fileType); err != nil {
 		storer.Abort(errors.NewProcessingError("[subtreeWriter][%s] write failed for %s", root, fileType))
 
 		// The key was taken between NewFileStorer's existence check and the store's own
@@ -352,6 +379,21 @@ func (w *subtreeWriter) put(ctx context.Context, root chainhash.Hash, fileType f
 	}
 
 	return true, nil
+}
+
+// writeOrAbort runs write against storer and, if write panics, aborts storer
+// before the panic goes on up. Unaborted, the store's write goroutine waits on the
+// pipe for good, and with it a process-wide file-store write permit.
+func writeOrAbort(storer *filestorer.FileStorer, write func(io.Writer) error, root chainhash.Hash, fileType fileformat.FileType) error {
+	defer func() {
+		if p := recover(); p != nil {
+			storer.Abort(errors.NewProcessingError("[subtreeWriter][%s] write panicked for %s", root, fileType))
+
+			panic(p)
+		}
+	}()
+
+	return write(storer)
 }
 
 // deleteAt is the height at which this block's subtree files may be removed.

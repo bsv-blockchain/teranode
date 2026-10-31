@@ -5,6 +5,7 @@ import (
 	"context"
 	stderrors "errors"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -233,6 +234,272 @@ func TestPeer_AStoreFaultAtTheSinkKeepsTheConnection(t *testing.T) {
 	require.Equal(t, int64(0), sm.waste.dupDrained.Load(), "and not as a drained duplicate")
 	require.Positive(t, sm.waste.bytesWasted.Load(), "the body's bytes were received and lost")
 	require.True(t, sm.takeLocalFaultDrain(hash), "the mark is waiting for handleBlockOnDiskMsg")
+}
+
+// recordWritePanickingStore is recordWriteFailingStore's panicking twin: the
+// converted record's write panics instead of failing, standing in for a bug under
+// the conversion. A subtree write cannot stand in for one: the file storer writes
+// on its own goroutine, where no recover on the read loop can reach a panic.
+type recordWritePanickingStore struct {
+	blob.Store
+}
+
+func (s *recordWritePanickingStore) Set(ctx context.Context, key []byte, fileType fileformat.FileType, value []byte, opts ...options.FileOption) error {
+	if fileType == fileformat.FileTypeBlock {
+		panic("store exploded")
+	}
+
+	return s.Store.Set(ctx, key, fileType, value, opts...)
+}
+
+// panicOnceReader serves r and panics on the first read that passes at, as a bug
+// in the middle of the transaction loop would. Later reads go on normally, so the
+// drain after the panic can read the rest of the body off the wire. Reads are
+// short, as off a socket, or the stream's buffer would take the whole body in
+// its first read and the panic would land before the loop.
+type panicOnceReader struct {
+	r        io.Reader
+	at, read int
+	done     bool
+}
+
+func (p *panicOnceReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b[:min(len(b), 64)])
+	p.read += n
+
+	if !p.done && p.read > p.at {
+		p.done = true
+
+		panic("conversion exploded")
+	}
+
+	return n, err
+}
+
+// countingSubtreeStore counts the subtree structure files written through it.
+type countingSubtreeStore struct {
+	blob.Store
+	written *atomic.Int64
+}
+
+func (s *countingSubtreeStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
+	err := s.Store.SetFromReader(ctx, key, fileType, reader, opts...)
+	if err == nil && fileType == fileformat.FileTypeSubtreeToCheck {
+		s.written.Add(1)
+	}
+
+	return err
+}
+
+// TestPeer_APanicUnderTheSinkIsALocalFaultAndKeepsTheConnection: a panic under
+// the conversion is a bug of this node's, so it takes the route every other local
+// sink fault takes (TestPeer_AStoreFaultAtTheSinkKeepsTheConnection). The rest of
+// the body is drained, the peer stays connected, nothing of the block is left on
+// disk, the drain is marked so the block is asked for again, and the block's
+// stream leaves the registry. A stream left behind keeps blockHeldLocally true for
+// the hash, and no path asks for the block again until a restart.
+func TestPeer_APanicUnderTheSinkIsALocalFaultAndKeepsTheConnection(t *testing.T) {
+	realStore := memory.New()
+	sm := newPipelineParkManager(t, &recordWritePanickingStore{Store: realStore}, 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.streams = newStreamRegistry()
+
+	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
+	roots := goodRunSubtreeRoots(t, msgBlock, hash)
+
+	sender, receiver, onDisk, pings := streamingPeerPair(t, sm, 24)
+	require.True(t, sm.blockDownloads.Add(receiver, hash))
+
+	sender.QueueMessage(msgBlock, nil)
+	sender.QueueMessage(wire.NewMsgPing(42), nil)
+
+	select {
+	case <-pings:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the message after the block was never handled: the panic was not absorbed as a local fault")
+	}
+
+	require.True(t, receiver.Connected(), "a panic of this node's own must not disconnect the peer that delivered the block")
+
+	var msg *peerpkg.MsgBlockOnDisk
+	select {
+	case msg = <-onDisk:
+	default:
+		t.Fatal("the block never reached OnBlockOnDisk")
+	}
+
+	require.Equal(t, hash, msg.Hash)
+	require.False(t, msg.Converted)
+
+	requireNothingOfTheBlockOnDisk(t, realStore, hash, roots)
+
+	require.False(t, sm.streams.arriving(hash), "the stream must leave the registry, or the block is never asked for again")
+	require.Equal(t, int64(1), sm.waste.localFaultDrained.Load(), "the drain is counted as this node's own fault")
+	require.True(t, sm.takeLocalFaultDrain(hash), "the mark is waiting for handleBlockOnDiskMsg")
+}
+
+// TestSink_APanicMidTransactionLoopIsALocalFault is the same rule for a panic in
+// the middle of the transaction loop, after subtree files exist and while a
+// conversion is registered: driven through the sink chain the wire layer is
+// handed, so every wrapper between the read loop and the conversion is in it.
+func TestSink_APanicMidTransactionLoopIsALocalFault(t *testing.T) {
+	store := memory.New()
+	var written atomic.Int64
+	sm := newPipelineParkManager(t, &countingSubtreeStore{Store: store, written: &written}, 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.streams = newStreamRegistry()
+
+	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
+	roots := goodRunSubtreeRoots(t, msgBlock, hash)
+	body := blockBodyBytes(t, bsvutil.NewBlock(msgBlock))
+	owner := owingPeer(t, sm, hash, 25)
+
+	var sink func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error)
+
+	sm.installStreamingBlockPath(func(s func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error),
+		_ func(chainhash.Hash, *wire.BlockHeader, uint64) error, _ func(chainhash.Hash, bool) error,
+	) {
+		sink = s
+	})
+
+	src := &panicOnceReader{r: bytes.NewReader(body), at: len(body) * 4 / 5}
+
+	var (
+		converted bool
+		err       error
+	)
+
+	require.NotPanics(t, func() {
+		converted, err = sink(hash, &msgBlock.Header, peerpkg.NewDeliveryReader(src, owner), sinkPayloadLen(body))
+	})
+	require.NoError(t, err, "a local fault leaves the sink as a drain, not a read error")
+	require.False(t, converted)
+	require.Equal(t, len(body), src.read, "the rest of the body was drained off the wire")
+	require.Positive(t, written.Load(), "sanity: subtree files were on disk when the panic came, or their cleanup is asserted against nothing")
+
+	requireNothingOfTheBlockOnDisk(t, store, hash, roots)
+
+	require.False(t, sm.streams.arriving(hash), "the stream must leave the registry, or the block is never asked for again")
+	require.Equal(t, int64(1), sm.waste.localFaultDrained.Load())
+	require.True(t, sm.takeLocalFaultDrain(hash))
+}
+
+// TestSink_RepeatedPanicsOnOneBlockStopAskingForIt bounds the local-fault route
+// for a panic. Each drain asks for the block again at once, so a panic every copy
+// of the block meets, a bug of ours on its bytes or bytes a peer crafted to meet
+// one, would have every owner send the whole body again forever.
+//
+// One host's first panic on a block is taken as this node's. Its second costs it
+// its connection, and nothing more: one host cannot have a block written off,
+// as one host cannot by declaring it oversize (notePolicyDecline). Once
+// sinkPanicLimit different hosts have met a panic on it, the block is marked
+// recently failed, and every later panic on it costs its sender the connection
+// at once, until the block commits.
+func TestSink_RepeatedPanicsOnOneBlockStopAskingForIt(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.streams = newStreamRegistry()
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, map[string]struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+	t.Cleanup(sm.sinkPanics.Stop)
+
+	msgBlock, hash := regtestStreamedBlock(t, sm, 40)
+	body := blockBodyBytes(t, bsvutil.NewBlock(msgBlock))
+
+	var sink func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error)
+
+	sm.installStreamingBlockPath(func(s func(chainhash.Hash, *wire.BlockHeader, io.Reader, int64) (bool, error),
+		_ func(chainhash.Hash, *wire.BlockHeader, uint64) error, _ func(chainhash.Hash, bool) error,
+	) {
+		sink = s
+	})
+
+	deliver := func(from *peerpkg.Peer) error {
+		src := &panicOnceReader{r: bytes.NewReader(body), at: len(body) / 2}
+		_, err := sink(hash, &msgBlock.Header, peerpkg.NewDeliveryReader(src, from), sinkPayloadLen(body))
+
+		return err
+	}
+
+	requirePeersFault := func(err error) {
+		t.Helper()
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the delivering peer's, so the read loop drops it: %v", err)
+		require.False(t, isLocalSinkFault(err))
+		require.NotContains(t, err.Error(), "conversion exploded", "the panic text stays in this node's log; the error is echoed to the peer")
+	}
+
+	marked := func() bool {
+		_, failed := sm.recentlyFailedBlocks.Get(hash)
+		return failed
+	}
+
+	first := owingPeer(t, sm, hash, 26)
+	require.NoError(t, deliver(first), "a host's first panic is this node's fault")
+	requirePeersFault(deliver(first))
+	require.False(t, marked(), "one host cannot have the block written off")
+
+	for i := 1; i < sinkPanicLimit; i++ {
+		other := owingPeer(t, sm, hash, uint8(26+i)) //nolint:gosec // a handful of peers
+
+		err := deliver(other)
+		if i < sinkPanicLimit-1 {
+			require.NoError(t, err)
+			require.False(t, marked())
+
+			continue
+		}
+
+		requirePeersFault(err)
+	}
+
+	require.True(t, marked(), "the block is not asked for again for a while")
+
+	requirePeersFault(deliver(owingPeer(t, sm, hash, uint8(26+sinkPanicLimit)))) //nolint:gosec // a handful of peers
+}
+
+// A copy whose sender is not known, the side copy a takeover converts from
+// disk, has no vote: counted under no host, it would disconnect the next host on
+// its first panic and stand in for a host of its own. It stays a local fault.
+func TestRecoveredSinkPanic_ACopyWithNoKnownSenderHasNoVote(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, map[string]struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.sinkPanics.Stop)
+
+	h := chainhash.HashH([]byte("a block converted from a side copy"))
+
+	for range sinkPanicLimit + 1 {
+		err := sm.recoveredSinkPanic(h, nil, "exploded")
+		require.True(t, isLocalSinkFault(err), "no known sender, no verdict against one: %v", err)
+	}
+
+	_, counted := sm.sinkPanics.Get(h)
+	require.False(t, counted)
+}
+
+// TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked: the
+// direct re-ask above the final checkpoint does not ask for a block marked
+// recently failed. The mark is what bounds a panic every copy of the block
+// meets (recoveredSinkPanic), and asking again would go on fetching it.
+func TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.peerStates = txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState]()
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+	sm.headersFirstMode.Store(false)
+
+	local, _, rec := connectRacePeer(t, 23, 0)
+
+	h := chainhash.HashH([]byte("a block marked recently failed"))
+	require.True(t, sm.blockDownloads.Add(local, h))
+	sm.recentlyFailedBlocks.Set(h, struct{}{})
+	sm.noteLocalFaultDrain(h)
+
+	sm.handleBlockOnDiskMsg(&blockOnDiskMsg{body: peerpkg.BlockBody{Hash: h}, peer: local})
+
+	require.Never(t, func() bool { return rec.count() > 0 }, 300*time.Millisecond, 10*time.Millisecond, "no getdata for a marked block")
 }
 
 // TestPipelineSink_ABodyCutMidTransactionIsADeliveryFaultNotAnInvalidBlock pins

@@ -822,19 +822,27 @@ func (p *blockPark) Delete(ctx context.Context, entry parkedBlock) {
 		return
 	}
 
-	p.mu.Lock()
+	// Unlocked by defer: this runs on a peer's read loop (pipelineBlockDelete), where a
+	// panic is recovered, and a lock left held would stop every caller of the park.
+	out, mine := func() (bool, bool) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
 
-	claim, out := p.out[entry.hash]
-	if out && claim != entry.claim {
-		p.mu.Unlock()
+		claim, out := p.out[entry.hash]
+		if out && claim != entry.claim {
+			return out, false
+		}
+
+		p.releaseLocked(entry.hash)
+		p.setGauges()
+
+		return out, true
+	}()
+	if !mine {
 		p.logger.Warnf("[blockPark][%s] not deleting the converted record: the block is handed out and this copy is not the taker's", entry.hash)
 
 		return
 	}
-
-	p.releaseLocked(entry.hash)
-	p.setGauges()
-	p.mu.Unlock()
 
 	delCtx, cancel := p.storeCtx(ctx)
 	defer cancel()

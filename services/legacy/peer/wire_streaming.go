@@ -275,6 +275,9 @@ func readBlockMessage(lr *io.LimitedReader, length uint64) (wire.Message, error)
 		// for every fault of this node's own; once it is shutting down it lets
 		// any code through (absorbLocalSinkFault), and the server is already
 		// closing every connection, so the "malformed" disconnect costs nothing.
+		// The one code it lets through while live is the bound on panics under
+		// the conversion (netsync recoveredSinkPanic), where the disconnect is
+		// the point.
 		return nil, deleteOrphanedBody(hash, converted, errors.NewProcessingError("streaming block %s: could not store the body", hash, err))
 	}
 

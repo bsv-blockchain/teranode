@@ -1157,6 +1157,18 @@ func (sm *SyncManager) trackBlockStreams(inner func(chainhash.Hash, *wire.BlockH
 
 		sm.streams.add(s)
 
+		// Removed and counted as failed even when inner panics: a stream left registered keeps
+		// blockHeldLocally true for the hash, and nothing asks for the block again.
+		finished := false
+
+		defer func() {
+			if !finished {
+				sm.streams.finish(s, time.Now(), false)
+				sm.waste.streamsFailed.Add(1)
+				sm.waste.bytesWasted.Add(s.read.Load())
+			}
+		}()
+
 		converted, err := inner(hash, header, countingReader{r: r, s: s}, n)
 
 		now = time.Now()
@@ -1165,10 +1177,16 @@ func (sm *SyncManager) trackBlockStreams(inner func(chainhash.Hash, *wire.BlockH
 		// bytes counted never reach n, and a test against n counted no stream as complete.
 		complete := err == nil
 		sm.streams.finish(s, now, complete)
+		finished = true
 
-		sm.streams.mu.Lock()
-		drained := s.path == admitRawDuplicate || s.path == admitLocalFault || s.path == admitNotOwed
-		sm.streams.mu.Unlock()
+		// Every section under sm.streams.mu below unlocks by defer: a panic in one is
+		// recovered further up the read loop, and a lock left held stops every peer.
+		drained := func() bool {
+			sm.streams.mu.Lock()
+			defer sm.streams.mu.Unlock()
+
+			return s.path == admitRawDuplicate || s.path == admitLocalFault || s.path == admitNotOwed
+		}()
 
 		switch {
 		case !complete:
@@ -1189,9 +1207,14 @@ func (sm *SyncManager) trackBlockStreams(inner func(chainhash.Hash, *wire.BlockH
 
 		// The committed tip is read only for a download worth reporting: it is a blockchain
 		// call, and this runs on the peer's read loop for every block.
-		sm.streams.mu.Lock()
-		_, worth := s.report(now, s.height)
-		sm.streams.mu.Unlock()
+		report := func(tip int32) (string, bool) {
+			sm.streams.mu.Lock()
+			defer sm.streams.mu.Unlock()
+
+			return s.report(now, tip)
+		}
+
+		_, worth := report(s.height)
 
 		if worth {
 			// The lead is only printed for a block whose height is known, so the
@@ -1201,9 +1224,7 @@ func (sm *SyncManager) trackBlockStreams(inner func(chainhash.Hash, *wire.BlockH
 				tip, _, _ = sm.committedTip()
 			}
 
-			sm.streams.mu.Lock()
-			line, _ := s.report(now, tip)
-			sm.streams.mu.Unlock()
+			line, _ := report(tip)
 
 			sm.logger.Infof("[blockDownload][%s] %s", hash, line)
 		}

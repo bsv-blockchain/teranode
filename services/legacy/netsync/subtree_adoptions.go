@@ -246,15 +246,17 @@ func (a *subtreeAdoptions) deleteUnlessAdopted(ctx context.Context, store blob.S
 	c.deleting = done
 	a.mu.Unlock()
 
-	err := store.Del(ctx, key.Hash[:], key.FileType)
+	// Deferred so a Del that panics still ends the delete: left marked deleting, the
+	// key holds every later attempt on it for good.
+	defer func() {
+		a.mu.Lock()
+		c.deleting = nil
+		close(done)
+		a.tidyLocked(key, c)
+		a.mu.Unlock()
+	}()
 
-	a.mu.Lock()
-	c.deleting = nil
-	close(done)
-	a.tidyLocked(key, c)
-	a.mu.Unlock()
-
-	return false, err
+	return false, store.Del(ctx, key.Hash[:], key.FileType)
 }
 
 // size is the number of files the registry is tracking, for tests.
