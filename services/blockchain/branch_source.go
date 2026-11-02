@@ -1,4 +1,4 @@
-package netsync
+package blockchain
 
 import (
 	"context"
@@ -6,47 +6,54 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/util"
 )
 
-// cachedHeader is what the header cache keeps about one header it holds above
-// the committed tip, so the difficulty calculator can read it as it reads a
-// stored block: the header, its height and its cumulative chain work, 32 bytes
-// big-endian, the form the store keeps chain_work in.
-type cachedHeader struct {
-	header    *model.BlockHeader
-	height    int32
-	chainWork [32]byte
+// BranchHeader is what a branch holds about one header above the trunk, so the
+// difficulty calculator can read it as it reads a stored block: the header, its
+// height and its cumulative chain work, 32 bytes big-endian, the form the store
+// keeps chain_work in.
+type BranchHeader struct {
+	Header    *model.BlockHeader
+	Height    uint32
+	ChainWork []byte
 }
 
-// branchSource is the blockchain.HeaderSource the header rules judge a cached
-// header with: lookup answers for headers held above the committed tip, and
-// trunk, the store or the blockchain client, answers for everything committed.
-// A walk that starts in the cache crosses into the trunk at the first parent the
-// cache does not hold, which is where every cached run is rooted.
+// branchSource is a HeaderSource over headers that are not stored: lookup
+// answers for the headers the branch holds, and trunk, the store or the
+// blockchain client, answers for everything committed. A walk that starts in
+// the branch crosses into the trunk at the first parent the branch does not
+// hold, which is where every branch is rooted.
 type branchSource struct {
-	trunk  blockchain.HeaderSource
-	lookup func(hash chainhash.Hash) (*cachedHeader, bool)
+	trunk  HeaderSource
+	lookup func(hash chainhash.Hash) (*BranchHeader, bool)
 }
 
-var _ blockchain.HeaderSource = (*branchSource)(nil)
+var _ HeaderSource = (*branchSource)(nil)
 
-func (s *branchSource) meta(c *cachedHeader) *model.BlockHeaderMeta {
-	return &model.BlockHeaderMeta{Height: uint32(c.height), ChainWork: append([]byte(nil), c.chainWork[:]...)} //nolint:gosec // a cached height is above the tip, never negative
+// NewBranchSource returns a HeaderSource that answers from lookup for the
+// headers it holds and from trunk for the rest. It lets CalcNextWorkRequiredFrom
+// judge a header whose ancestry is partly not stored yet, such as one in the
+// legacy header cache or one fetched from a peer during catchup.
+func NewBranchSource(trunk HeaderSource, lookup func(hash chainhash.Hash) (*BranchHeader, bool)) HeaderSource {
+	return &branchSource{trunk: trunk, lookup: lookup}
 }
 
-// GetBlockHeader answers from the cache, then the trunk.
+func (s *branchSource) meta(c *BranchHeader) *model.BlockHeaderMeta {
+	return &model.BlockHeaderMeta{Height: c.Height, ChainWork: append([]byte(nil), c.ChainWork...)}
+}
+
+// GetBlockHeader answers from the branch, then the trunk.
 func (s *branchSource) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	if c, ok := s.lookup(*hash); ok {
-		return c.header, s.meta(c), nil
+		return c.Header, s.meta(c), nil
 	}
 
 	return s.trunk.GetBlockHeader(ctx, hash)
 }
 
 // GetBlockHeaders returns hash and then its ancestors, newest first, taking
-// what the cache holds and asking the trunk for the rest in one call.
+// what the branch holds and asking the trunk for the rest in one call.
 func (s *branchSource) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, count uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	headers := make([]*model.BlockHeader, 0, count)
 	metas := make([]*model.BlockHeaderMeta, 0, count)
@@ -59,9 +66,9 @@ func (s *branchSource) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash
 			break
 		}
 
-		headers = append(headers, c.header)
+		headers = append(headers, c.Header)
 		metas = append(metas, s.meta(c))
-		cur = *c.header.HashPrevBlock
+		cur = *c.Header.HashPrevBlock
 	}
 
 	if remaining := count - uint64(len(headers)); remaining > 0 {
@@ -77,7 +84,7 @@ func (s *branchSource) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash
 	return headers, metas, nil
 }
 
-// GetHashOfAncestorBlock walks depth parents back through the cache and hands
+// GetHashOfAncestorBlock walks depth parents back through the branch and hands
 // whatever depth is left to the trunk, which returns errors.ErrNotFound when the
 // chain is shorter, exactly as it would for a stored block.
 func (s *branchSource) GetHashOfAncestorBlock(ctx context.Context, hash *chainhash.Hash, depth int) (*chainhash.Hash, error) {
@@ -89,7 +96,7 @@ func (s *branchSource) GetHashOfAncestorBlock(ctx context.Context, hash *chainha
 			return s.trunk.GetHashOfAncestorBlock(ctx, &cur, depth)
 		}
 
-		cur = *c.header.HashPrevBlock
+		cur = *c.Header.HashPrevBlock
 		depth--
 	}
 
@@ -97,9 +104,9 @@ func (s *branchSource) GetHashOfAncestorBlock(ctx context.Context, hash *chainha
 }
 
 // GetSuitableBlock is the store's GetSuitableBlock (stores/blockchain/sql/
-// GetSuitableBlock.go) over the cache: hash and its two parents, in the store's
+// GetSuitableBlock.go) over the branch: hash and its two parents, in the store's
 // order (oldest first, its ORDER BY depth DESC), sorted by time with the same
-// sorting network, and the middle one returned. A hash the cache does not hold
+// sorting network, and the middle one returned. A hash the branch does not hold
 // is the trunk's to answer whole.
 func (s *branchSource) GetSuitableBlock(ctx context.Context, hash *chainhash.Hash) (*model.SuitableBlock, error) {
 	if _, ok := s.lookup(*hash); !ok {
