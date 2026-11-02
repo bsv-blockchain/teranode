@@ -1787,7 +1787,9 @@ func TestBanHandlers_DoNotBlockThePeerLoopWhenTheBanListenerIsBehind(t *testing.
 				banChan: bl.Subscribe(),
 			}
 
-			// The listener is behind: its subscription is full.
+			// The listener is behind: its subscription is full. Each bl.Add below
+			// therefore leaves its publishing goroutine blocked for the rest of the
+			// test binary, by design: that is the production state being modelled.
 			for len(s.banChan) < cap(s.banChan) {
 				s.banChan <- p2p.BanEvent{Action: "add", IP: "192.0.2.1"}
 			}

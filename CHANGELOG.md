@@ -914,13 +914,17 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 - **Legacy bans now disconnect connected peers, and the ban list no longer leaks
   goroutines.** The legacy service's ban listener only started at shutdown, so a
-  ban recorded while the node ran (a `setban`, a misbehaving peer, the feeler's
-  non-BSV bans) never disconnected a peer that was already connected, and once the
-  listener's 100-event buffer filled every later ban left a goroutine blocked for
-  the life of the process. The listener now runs alongside the peer loop: a ban
-  disconnects every connected legacy peer at the banned host or inside the banned
-  subnet, as `setban` was documented to. The peer loop no longer blocks on a ban
-  event, which with that buffer full would have frozen it on the next ban.
+  ban recorded while the node ran (a misbehaving peer, the feeler's non-BSV bans,
+  or a `setban` when the ban reaches this process's ban list) never disconnected a
+  peer that was already connected, and once the listener's 100-event buffer filled
+  every later ban left a goroutine blocked for the life of the process. The
+  listener now runs alongside the peer loop: a ban disconnects every connected
+  inbound or automatic outbound legacy peer at the banned host or inside the
+  banned subnet. Persistent peers (`addnode`, and every peer in `connect`-only
+  mode) are not disconnected, as before; that is an accepted limit, since
+  disconnecting one would also drop its `addnode` request for good. The peer loop
+  no longer blocks on a ban event, which with that buffer full would have frozen
+  it on the next ban.
   `legacy_upnp`, which had the same start-up ordering bug, now maps the port while
   the node runs instead of only at shutdown.
 

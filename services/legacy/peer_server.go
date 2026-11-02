@@ -499,7 +499,9 @@ type server struct {
 
 	// runPeerLoop is the loop Start runs in the foreground until shutdown. Nil
 	// means peerHandler; tests substitute a loop that needs no address, sync or
-	// connection manager, so they can check what Start runs alongside it.
+	// connection manager, so they can check what Start runs alongside it. A
+	// substitute must call s.wg.Done() when it returns, as peerHandler does, to
+	// balance the s.wg.Add(1) Start makes for it.
 	runPeerLoop func()
 
 	// feelerAttempted and feelerVerified count probes launched and probes that
@@ -4131,6 +4133,8 @@ func (s *server) handleBanEvent(ctx context.Context, event p2p.BanEvent) {
 			return false
 		}
 
+		// Fast path. The ban list sets Subnet to a /32 or /128 for a bare
+		// host, so Contains below covers this case too.
 		if host == event.IP {
 			return true
 		}
