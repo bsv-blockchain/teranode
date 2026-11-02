@@ -234,6 +234,15 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 				return nil
 			}
 
+			// Only a block that does not extend the best block can fork below a
+			// checkpoint the best chain has passed; one that extends it sits above
+			// every such checkpoint. Checked here, under slowPathMu and in the
+			// insert's transaction, so a tip that passed the checkpoint while the
+			// block was being validated is still seen.
+			if forkErr := s.rejectForkBelowPassedCheckpoint(ctx, tx, block.Hash(), height); forkErr != nil {
+				return forkErr
+			}
+
 			reconcile := func() error { return s.reconcileOnMainChain(ctx, tx) }
 			if s.reconcileHook != nil {
 				reconcile = s.reconcileHook
@@ -478,6 +487,36 @@ func (s *SQL) getPreviousBlockInfo(ctx context.Context, prevBlockHash chainhash.
 	}
 
 	return id, chainWork, height, invalid, nil
+}
+
+// rejectForkBelowPassedCheckpoint returns a BlockInvalid error when a block at height
+// is below a checkpoint the best valid block has reached: bitcoin-sv's
+// bad-fork-prior-to-checkpoint. Callers hold slowPathMu, so the best block cannot
+// move between this read and their write. Blocks above the highest checkpoint
+// skip the lookup.
+func (s *SQL) rejectForkBelowPassedCheckpoint(ctx context.Context, exec execQuerier, hash *chainhash.Hash, height uint32) error {
+	if s.chainParams == nil || !model.BelowCheckpoint(s.chainParams.Checkpoints, height) {
+		return nil
+	}
+
+	var bestHeight uint32
+
+	q := `
+		SELECT height
+		FROM blocks
+		WHERE invalid = false
+		ORDER BY chain_work DESC, peer_id ASC, id ASC
+		LIMIT 1
+	`
+	if err := exec.QueryRowContext(ctx, q).Scan(&bestHeight); err != nil {
+		return errors.NewStorageError("[%s] failed to read the best block height for the checkpoint fork rule", hash.String(), err)
+	}
+
+	if model.ForkBelowCheckpoint(s.chainParams.Checkpoints, height, bestHeight) {
+		return errors.NewBlockInvalidError("[%s] bad-fork-prior-to-checkpoint: block height %d is below a checkpoint the best block (height %d) has passed", hash.String(), height, bestHeight)
+	}
+
+	return nil
 }
 
 // execQuerier is the subset of database calls storeBlock needs. Both *usql.DB and

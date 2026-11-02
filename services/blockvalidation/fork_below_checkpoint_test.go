@@ -2,9 +2,11 @@ package blockvalidation
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -139,4 +141,59 @@ type passingSubtreeValidationClient struct {
 func (c *passingSubtreeValidationClient) CheckBlockSubtrees(context.Context, *model.Block, string, string, bool) error {
 	c.checkBlockSubtreesCalls.Add(1)
 	return nil
+}
+
+// TestValidateBlock_StoredForkBelowCheckpoint pins the checkpoint fork rule on a block that
+// is already stored as valid: one that is not on the main chain below a checkpoint the tip
+// has passed is refused, while a main-chain block (an ancestor of the checkpoint) still
+// returns as already validated.
+func TestValidateBlock_StoredForkBelowCheckpoint(t *testing.T) {
+	for _, onMainChain := range []bool{false, true} {
+		t.Run(fmt.Sprintf("onMainChain=%v", onMainChain), func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx := context.Background()
+
+			utxoStore, subtreeValidationClient, _, txStore, subtreeStore, cleanup := setup(t)
+			defer cleanup()
+
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockValidation.OptimisticMining = false
+
+			// Checkpoint at 1000, block at height 1, tip at 1500.
+			block, mockBlockchain, _ := belowCheckpointPoWFixture(t, tSettings)
+
+			for _, call := range mockBlockchain.ExpectedCalls {
+				switch call.Method {
+				case "GetBlockExists":
+					call.ReturnArguments = mock.Arguments{true, nil}
+				case "GetBestBlockHeader":
+					call.ReturnArguments[1] = &model.BlockHeaderMeta{Height: 1500}
+				}
+			}
+
+			mockBlockchain.On("GetBlockHeader", mock.Anything, block.Header.Hash()).
+				Return(block.Header, &model.BlockHeaderMeta{Height: block.Height}, nil)
+
+			mainChainHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{0x02}}
+			if onMainChain {
+				mainChainHeader = block.Header
+			}
+
+			mockBlockchain.On("GetBlockHeadersFromHeight", mock.Anything, block.Height, uint32(1)).
+				Return([]*model.BlockHeader{mainChainHeader}, []*model.BlockHeaderMeta{{Height: block.Height}}, nil)
+
+			bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+			err := bv.ValidateBlock(ctx, block, "test")
+			if onMainChain {
+				require.NoError(t, err)
+				return
+			}
+
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got: %v", err)
+			require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+		})
+	}
 }

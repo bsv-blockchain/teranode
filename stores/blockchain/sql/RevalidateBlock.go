@@ -32,6 +32,16 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
+	// An invalid fork below a checkpoint the best chain has passed stays invalid.
+	var height uint32
+	if err = s.db.QueryRowContext(ctx, `SELECT height FROM blocks WHERE hash = $1`, blockHash.CloneBytes()).Scan(&height); err != nil {
+		return errors.NewStorageError("error reading height of block %s", blockHash.String(), err)
+	}
+
+	if err = s.rejectForkBelowPassedCheckpoint(ctx, s.db, blockHash, height); err != nil {
+		return err
+	}
+
 	// Update the block to valid (not invalid) and clear the mined_set flag.
 	q := `
 		UPDATE blocks
