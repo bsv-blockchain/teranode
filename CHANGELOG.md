@@ -141,6 +141,45 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
+  background, and block storage can wait for the repair.** `InvalidateBlock`,
+  `RevalidateBlock`, the startup rebuild and two `StoreBlock` paths used to log a
+  failed write to the `on_main_chain` column and carry on, leaving chain membership
+  and the by-height readers wrong until a restart. They now record the failure, every
+  reader of the column takes its slower parent-link walk until the repair lands, and a
+  background loop retries the repair, waiting 1 s after the first failed attempt and
+  doubling to 30 s. Attempts are not capped while they keep failing: giving up would
+  leave every reader on the slow walk until a restart. Every `StoreBlock` call takes one
+  lock, so whenever a repair holds it or a `StoreBlock` holding it waits on a repair, all
+  block storage waits, not one block.
+    - A repair that only needs the rows near the tip holds that lock for up to 30 s per
+      attempt.
+    - On SQLite a repair that walks the whole chain also holds the lock, for up to 30 min
+      per attempt, because SQLite admits one writer at a time and `StoreBlock` would
+      otherwise fail after its 5 s busy timeout.
+    - On PostgreSQL the whole-chain repair runs without the lock, and never takes it
+      however often it is overlapped, but a `StoreBlock` that reorganises the chain and
+      needs a row the walk has already updated waits for the walk to commit, up to
+      30 min, while it holds the lock.
+    - The startup rebuild runs without the lock on both engines.
+    - A chain change that commits while an unlocked walk (the startup rebuild or the
+      PostgreSQL whole-chain repair) runs makes the walk's result untrusted. A
+      `StoreBlock` reorg names the lowest height it can have moved, so the repair that
+      follows is a walk from that height under the lock, run at once, bounded like the
+      repair near the tip. An `InvalidateBlock` or `RevalidateBlock` cannot name a
+      height, so the walk runs again in full and unlocked after the backoff. A startup
+      overlap becomes an owed repair handled the same way. Under a steady stream of
+      operator invalidations the repair can stay owed; readers stay on the slow walk
+      meanwhile, which costs speed, not correctness. Only writes that committed, or
+      whose commit failed and so may have landed, count as chain changes.
+    - The startup goroutine waits at most 10 s for the lock to check for an overlap. If
+      something holds it longer, it records an owed repair instead.
+
+  Operators can watch
+  `teranode_blockchain_sql_on_main_chain_repair_pending` (above 0 while a repair is
+  owed) and `teranode_blockchain_sql_on_main_chain_write_failures{path}`. No action is
+  needed. (#2049)
+
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**
   Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop
