@@ -68,6 +68,7 @@ func TestForkBelowCheckpoint(t *testing.T) {
 		{name: "tip exactly at highest checkpoint", checkpoints: cps, blockHeight: 1999, tipHeight: 2000, want: true},
 		{name: "tip past all checkpoints, block above them", checkpoints: cps, blockHeight: 2001, tipHeight: 3000, want: false},
 		{name: "negative-height checkpoint ignored", checkpoints: []chaincfg.Checkpoint{{Height: -5}}, blockHeight: 1, tipHeight: 10, want: false},
+		{name: "genesis has no parent to fork from", checkpoints: cps, blockHeight: 0, tipHeight: 3000, want: false},
 	}
 
 	for _, tt := range tests {

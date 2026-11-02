@@ -47,8 +47,13 @@ func BelowCheckpoint(checkpoints []chaincfg.Checkpoint, height uint32) bool {
 // checkpoint the tip (tipHeight) has already reached: bitcoin-sv's
 // bad-fork-prior-to-checkpoint. Checkpoints above the tip do not count, so initial sync
 // is unaffected. A block AT a checkpoint height is left to the exact hash check
-// (catchup.ValidateHeaderAgainstCheckpoints).
+// (catchup.ValidateHeaderAgainstCheckpoints). Genesis (height 0) has no parent to fork
+// from, as in BelowCheckpoint.
 func ForkBelowCheckpoint(checkpoints []chaincfg.Checkpoint, blockHeight, tipHeight uint32) bool {
+	if blockHeight == 0 {
+		return false
+	}
+
 	for _, cp := range checkpoints {
 		if cp.Height < 0 {
 			continue

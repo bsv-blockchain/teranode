@@ -243,18 +243,21 @@ func (s *SQL) StoreBlock(ctx context.Context, block *model.Block, peerID string,
 		// concrete type (SQLSTATE, SQLite result code), and a teranode error keeps
 		// only the message, so wrapping first would hide SQLITE_LOCKED or a 40001
 		// from it. The errors are typed after RetryTx returns.
+		// Read the best block before the insert, so the new row cannot be its own best.
+		// slowPathMu, held for the whole call, is what keeps it from moving before the
+		// insert; reading inside the transaction while storeBlock reads its parent on
+		// another connection deadlocks SQLite.
+		var bestHeight uint32
+		if !storeBlockOptions.Invalid {
+			if bestErr := s.readBestValidHeight(ctx, s.db, &bestHeight); bestErr != nil {
+				return 0, 0, errors.NewStorageError("[%s] failed to read the best block height for the checkpoint fork rule", block.Hash().String(), bestErr)
+			}
+		}
+
 		err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
 			var storeErr error
 
 			reconcileErr = nil
-
-			// Read the best block before the insert, so the new row cannot be its own best.
-			var bestHeight uint32
-			if !storeBlockOptions.Invalid {
-				if bestErr := s.readBestValidHeight(ctx, tx, &bestHeight); bestErr != nil {
-					return errors.NewStorageError("[%s] failed to read the best block height for the checkpoint fork rule", block.Hash().String(), bestErr)
-				}
-			}
 
 			newBlockID, height, _, storedInvalid, storeErr = s.storeBlock(ctx, tx, block, peerID, storeBlockOptions, onMainChain)
 			if storeErr != nil {

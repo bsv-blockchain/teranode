@@ -237,8 +237,13 @@ func (m *MockSubtreeProcessor) TxEra() (lo, hi uint32, ok bool) {
 	return 0, 0, false
 }
 
+// RestartDroppedTxs implements Interface.RestartDroppedTxs. A no-op.
+func (m *MockSubtreeProcessor) RestartDroppedTxs() func(bool) {
+	return func(bool) {}
+}
+
 // FilterUnminedTxEra implements Interface.FilterUnminedTxEra: admits everything.
-func (m *MockSubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction) []*utxostore.UnminedTransaction {
+func (m *MockSubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, _ []uint32) []*utxostore.UnminedTransaction {
 	return txs
 }
 

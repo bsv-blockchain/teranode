@@ -1757,8 +1757,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	// clear remove map to prevent memory leak - entries for transactions that were
-	// never dequeued would otherwise accumulate indefinitely across resets
-	stp.removeMap = txmap.NewSplitSwissMap(256, 16)
+	// never dequeued would otherwise accumulate indefinitely across resets. Cleared in
+	// place: GetRemoveMapLength reads the field from other goroutines.
+	stp.removeMap.Clear()
 
 	// reset tx count
 	stp.setTxCountFromSubtrees()
@@ -3141,8 +3142,6 @@ func (stp *SubtreeProcessor) AddNodesDirectlyReportOnly(txs []*utxostore.Unmined
 }
 
 func (stp *SubtreeProcessor) addNodesDirectly(txs []*utxostore.UnminedTransaction, skipNotification bool, failOnMapErr bool) (err error) {
-	txs = stp.FilterUnminedTxEra(txs)
-
 	if len(txs) == 0 {
 		return nil
 	}
@@ -6572,6 +6571,8 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
+	stp.forgetMinedDroppedTxs(transactionMap)
 
 	// Process conflicting transactions
 	var conflictingHashes map[chainhash.Hash]struct{}

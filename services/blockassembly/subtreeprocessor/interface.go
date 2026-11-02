@@ -70,8 +70,13 @@ type Interface interface {
 	// admits every height.
 	TxEra() (lo, hi uint32, ok bool)
 
-	// FilterUnminedTxEra returns the reloaded transactions the template admits.
-	FilterUnminedTxEra(txs []*utxostore.UnminedTransaction) []*utxostore.UnminedTransaction
+	// FilterUnminedTxEra returns the reloaded transactions the template admits, given the
+	// height each was validated at.
+	FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, validatedHeights []uint32) []*utxostore.UnminedTransaction
+
+	// RestartDroppedTxs starts a reload's own record of the transactions kept out; finish
+	// keeps it when the reload succeeded and restores the previous one when it did not.
+	RestartDroppedTxs() (finish func(reloaded bool))
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.

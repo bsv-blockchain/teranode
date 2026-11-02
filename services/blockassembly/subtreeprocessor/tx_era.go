@@ -134,9 +134,9 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 }
 
 // FilterUnminedTxEra returns the reloaded transactions admitTxLocked accepts, in the order
-// given. Each is tagged with its unmined_since: the height it was created, and so validated,
-// at; for a transaction a reorg moved back, the height of the reorg.
-func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction) []*utxostore.UnminedTransaction {
+// given. validatedHeights holds, per transaction, the height it was validated at (0 when
+// unknown); block assembly derives it (see BlockAssembler.reloadValidatedHeights).
+func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction, validatedHeights []uint32) []*utxostore.UnminedTransaction {
 	if stp.txEra.Load() == nil && stp.droppedCount.Load() == 0 {
 		return txs
 	}
@@ -148,8 +148,8 @@ func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransact
 
 	for i, tx := range txs {
 		var height uint32
-		if tx.UnminedSince > 0 {
-			height = uint32(tx.UnminedSince) //nolint:gosec // a block height
+		if i < len(validatedHeights) {
+			height = validatedHeights[i]
 		}
 
 		admitted := stp.admitTxLocked(tx.Hash, tx.TxInpoints, height)
@@ -168,4 +168,51 @@ func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransact
 	}
 
 	return kept
+}
+
+// RestartDroppedTxs starts a reload's own record of dropped transactions. A reload
+// re-derives every drop from the UTXO store, which no longer lists a dropped parent a block
+// has mined since, so its records replace the old ones. The returned finish keeps the new
+// records when the reload succeeded and puts the old ones back when it did not, so a
+// failed reload cannot let a queued child of a dropped parent in. The processor does not
+// dequeue while a reset reloads.
+func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
+	stp.droppedMu.Lock()
+	prev := stp.droppedTxs
+	stp.droppedTxs = nil
+	stp.droppedCount.Store(0)
+	stp.droppedMu.Unlock()
+
+	return func(reloaded bool) {
+		if reloaded {
+			return
+		}
+
+		stp.droppedMu.Lock()
+		defer stp.droppedMu.Unlock()
+
+		for hash := range prev {
+			stp.recordDroppedLocked(hash)
+		}
+	}
+}
+
+// forgetMinedDroppedTxs forgets the dropped transactions a block mines. They are confirmed,
+// so their descendants are validated against them under the next block's rules and must
+// not stay out for the drop. A block made only of this node's own subtrees has no map, and
+// mines nothing that was dropped: a dropped transaction never entered them.
+func (stp *SubtreeProcessor) forgetMinedDroppedTxs(mined *SortedHashSet) {
+	if mined == nil || stp.droppedCount.Load() == 0 {
+		return
+	}
+
+	stp.droppedMu.Lock()
+	defer stp.droppedMu.Unlock()
+
+	for hash := range stp.droppedTxs {
+		if mined.Exists(hash) {
+			delete(stp.droppedTxs, hash)
+			stp.droppedCount.Add(-1)
+		}
+	}
 }

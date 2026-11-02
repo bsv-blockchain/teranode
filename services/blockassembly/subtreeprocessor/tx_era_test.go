@@ -2,6 +2,7 @@ package subtreeprocessor
 
 import (
 	"context"
+	"math"
 	"net/url"
 	"testing"
 	"time"
@@ -34,6 +35,22 @@ func newTxEraFixture() txEraFixture {
 		inEra:      chainhash.HashH([]byte("tx-era-in-era")),
 		untagged:   chainhash.HashH([]byte("tx-era-untagged")),
 	}
+}
+
+// unminedSinceHeights tags reloaded transactions with their unmined_since, as block
+// assembly does for those never mined.
+func unminedSinceHeights(txs []*utxostore.UnminedTransaction) []uint32 {
+	heights := make([]uint32, len(txs))
+	for i, tx := range txs {
+		heights[i] = uint32(tx.UnminedSince) //nolint:gosec // test heights
+	}
+
+	return heights
+}
+
+// filterUnmined runs FilterUnminedTxEra with unmined_since heights.
+func filterUnmined(stp *SubtreeProcessor, txs []*utxostore.UnminedTransaction) []*utxostore.UnminedTransaction {
+	return stp.FilterUnminedTxEra(txs, unminedSinceHeights(txs))
 }
 
 func inpointsWithParent(parent chainhash.Hash) *subtreepkg.TxInpoints {
@@ -104,13 +121,13 @@ func TestTxEra_ReloadDropsOtherRulesAndDescendants(t *testing.T) {
 		return &utxostore.UnminedTransaction{Node: &subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1}, TxInpoints: inpoints, UnminedSince: unminedSince}
 	}
 
-	require.NoError(t, stp.AddNodesDirectly([]*utxostore.UnminedTransaction{
+	require.NoError(t, stp.AddNodesDirectly(filterUnmined(stp, []*utxostore.UnminedTransaction{
 		unmined(f.parent, &subtreepkg.TxInpoints{}, 99),
 		unmined(f.inEra, &subtreepkg.TxInpoints{}, 150),
 		unmined(f.untagged, &subtreepkg.TxInpoints{}, 0),
 		unmined(f.child, inpointsWithParent(f.parent), 150),
 		unmined(f.grandchild, inpointsWithParent(f.child), 150),
-	}, true))
+	}), true))
 
 	f.requireOnlyAdmitted(t, stp)
 }
@@ -145,10 +162,10 @@ func TestTxEra_ReadmittedParentReleasesItsDescendants(t *testing.T) {
 		return &utxostore.UnminedTransaction{Node: &subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1}, TxInpoints: inpoints, UnminedSince: unminedSince}
 	}
 
-	kept := stp.FilterUnminedTxEra([]*utxostore.UnminedTransaction{unmined(f.parent, &subtreepkg.TxInpoints{}, 99)})
+	kept := filterUnmined(stp, []*utxostore.UnminedTransaction{unmined(f.parent, &subtreepkg.TxInpoints{}, 99)})
 	require.Empty(t, kept)
 
-	kept = stp.FilterUnminedTxEra([]*utxostore.UnminedTransaction{
+	kept = filterUnmined(stp, []*utxostore.UnminedTransaction{
 		unmined(f.parent, &subtreepkg.TxInpoints{}, 150),
 		unmined(f.child, inpointsWithParent(f.parent), 150),
 	})
@@ -237,4 +254,96 @@ func TestTxEra_MoveBackKeepsOutABlockUnderOtherRules(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTxEra_MinedDroppedParentReleasesItsDescendants pins that a dropped transaction a block
+// then mines is forgotten. Its descendants are validated against the confirmed parent under
+// the next block's rules, and must not stay out of the template because of the drop.
+func TestTxEra_MinedDroppedParentReleasesItsDescendants(t *testing.T) {
+	f := newCatchUpQueueFixture(t, true)
+	f.stp.SetTxEra(150)
+
+	// Only the block may clear the record: drop the fixture's queued copy of txA, whose
+	// re-admission would.
+	for {
+		if _, ok := f.stp.queue.dequeueBatch(math.MaxInt64); !ok {
+			break
+		}
+	}
+
+	unmined := func(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, unminedSince int) *utxostore.UnminedTransaction {
+		return &utxostore.UnminedTransaction{Node: &subtreepkg.Node{Hash: hash, Fee: 1, SizeInBytes: 1}, TxInpoints: inpoints, UnminedSince: unminedSince}
+	}
+
+	// txA validated under other rules, then mined by another miner in block1.
+	require.Empty(t, filterUnmined(f.stp, []*utxostore.UnminedTransaction{unmined(f.txA, &subtreepkg.TxInpoints{}, 99)}))
+
+	require.NoError(t, f.stp.reorgBlocks(t.Context(), []*model.Block{}, []*model.Block{f.block1, f.block2}))
+
+	child := chainhash.HashH([]byte("tx-era-child-of-mined"))
+	require.Len(t, filterUnmined(f.stp, []*utxostore.UnminedTransaction{unmined(child, inpointsWithParent(f.txA), 150)}), 1,
+		"a child of a dropped parent that has since been mined must be admitted")
+}
+
+// TestTxEra_RestartDroppedTxs pins the reload's handling of the dropped set: a reload
+// re-derives it from the UTXO store, so records it does not find again (a parent mined
+// meanwhile) are gone after a successful reload, and kept after a failed one.
+func TestTxEra_RestartDroppedTxs(t *testing.T) {
+	for _, reloaded := range []bool{true, false} {
+		stp := newTestSubtreeProcessorForDequeueStaleness(t, context.Background())
+		stp.SetTxEra(150)
+
+		f := newTxEraFixture()
+
+		require.Empty(t, filterUnmined(stp, []*utxostore.UnminedTransaction{
+			{Node: &subtreepkg.Node{Hash: f.parent}, TxInpoints: &subtreepkg.TxInpoints{}, UnminedSince: 99},
+		}))
+
+		finish := stp.RestartDroppedTxs()
+		finish(reloaded)
+
+		kept := filterUnmined(stp, []*utxostore.UnminedTransaction{
+			{Node: &subtreepkg.Node{Hash: f.child}, TxInpoints: inpointsWithParent(f.parent), UnminedSince: 150},
+		})
+
+		if reloaded {
+			require.Len(t, kept, 1, "a reload that did not find the parent again forgets it")
+		} else {
+			require.Empty(t, kept, "a failed reload keeps the records it was replacing")
+		}
+	}
+}
+
+// TestReset_RemoveMapReadDuringReset pins that a reset empties the remove map in place: the
+// block assembly state endpoint reads its length from another goroutine, and a reset
+// replacing the field raced with it (a smoke run caught it once era changes made resets
+// routine on regtest).
+func TestReset_RemoveMapReadDuringReset(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stp := newTestSubtreeProcessorForDequeueStaleness(t, ctx)
+	stp.InitCurrentBlockHeader(blockHeader)
+	stp.Start(ctx)
+	t.Cleanup(func() { stp.Stop(ctx) })
+
+	require.NoError(t, stp.removeMap.Put(chainhash.HashH([]byte("to-remove")), 1))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+
+		for ctx.Err() == nil {
+			_ = stp.GetRemoveMapLength()
+		}
+	}()
+
+	for i := 0; i < 5; i++ {
+		require.NoError(t, stp.Reset(stp.GetCurrentBlockHeader(), nil, nil, false, nil).Err)
+	}
+
+	cancel()
+	<-done
+
+	require.Zero(t, stp.GetRemoveMapLength(), "the reset empties the remove map")
 }

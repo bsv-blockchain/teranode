@@ -798,36 +798,47 @@ func waitForBestBlockHash(ctx context.Context, blockchainClient blockchain.Clien
 func mineRegtestP2SHActivationBlock(t *testing.T, ctx context.Context, ba *BlockAssembly) {
 	t.Helper()
 
-	tip, _, err := ba.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
+	mineBlocks(t, ctx, ba, 1)
+}
+
+// mineBlocks mines n blocks on the tip and waits for block assembly to finish with the last.
+func mineBlocks(t *testing.T, ctx context.Context, ba *BlockAssembly, n int) {
+	t.Helper()
 
 	bits, err := model.NewNBitFromString("207fffff")
 	require.NoError(t, err)
 
-	coinbaseTx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030100002f6d312d65752f605f77009f74384816a31807ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
-	require.NoError(t, err)
+	for i := 0; i < n; i++ {
+		tip, tipMeta, err := ba.blockchainClient.GetBestBlockHeader(ctx)
+		require.NoError(t, err)
 
-	block := &model.Block{
-		Header: &model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  tip.Hash(),
-			HashMerkleRoot: &chainhash.Hash{},
-			Nonce:          99,
-			Bits:           *bits,
-			Timestamp:      uint32(time.Now().Unix()) - 60, //nolint:gosec
-		},
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: 1,
-		Subtrees:         []*chainhash.Hash{},
+		coinbaseTx := bt.NewTx()
+		require.NoError(t, coinbaseTx.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+		coinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x03, byte(tipMeta.Height + 1), byte((tipMeta.Height + 1) >> 8), 0x00, 0x2f, 0x74, 0x2f})
+		coinbaseTx.AddOutput(&bt.Output{Satoshis: 5000000000, LockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE})})
+
+		block := &model.Block{
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  tip.Hash(),
+				HashMerkleRoot: &chainhash.Hash{},
+				Nonce:          uint32(99 + i), //nolint:gosec
+				Bits:           *bits,
+				Timestamp:      tip.Timestamp + 1,
+			},
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}
+
+		require.NoError(t, ba.blockchainClient.AddBlock(ctx, block, "", options.WithMinedSet(true)))
+		require.NoError(t, waitForBestBlockHash(ctx, ba.blockchainClient, block.Hash(), 10*time.Second))
+
+		require.Eventually(t, func() bool {
+			header, _ := ba.blockAssembler.CurrentBlock()
+			return header != nil && header.Hash().IsEqual(block.Hash()) && ba.blockAssembler.GetCurrentRunningState() == StateRunning
+		}, 10*time.Second, 10*time.Millisecond, "block assembly did not finish with block %d", tipMeta.Height+1)
 	}
-
-	require.NoError(t, ba.blockchainClient.AddBlock(ctx, block, "", options.WithMinedSet(true)))
-	require.NoError(t, waitForBestBlockHash(ctx, ba.blockchainClient, block.Hash(), 10*time.Second))
-
-	require.Eventually(t, func() bool {
-		header, _ := ba.blockAssembler.CurrentBlock()
-		return header != nil && header.Hash().IsEqual(block.Hash()) && ba.blockAssembler.GetCurrentRunningState() == StateRunning
-	}, 10*time.Second, 50*time.Millisecond, "block assembly did not finish with block 1")
 }
 
 // TestTxRulesChange_RebuildsTheTemplate pins issue 4940's activation-height case: a
@@ -837,6 +848,8 @@ func mineRegtestP2SHActivationBlock(t *testing.T, ctx context.Context, ba *Block
 // keeps the old one out; a transaction validated for the new next height is admitted. The
 // rebuild follows the rules the template was loaded under, so it also runs when something
 // else moved the subtree processor to the new rules first, and on the sequential reload.
+// The chain crosses Genesis (height 100): a height-1 tag, the first rules change on regtest,
+// cannot be told from a reorg's backdated unmined_since.
 func TestTxRulesChange_RebuildsTheTemplate(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -893,25 +906,41 @@ func TestTxRulesChange_RebuildsTheTemplate(t *testing.T) {
 				return tx.TxIDChainHash()
 			}
 
-			// Validated for height 1, the next block on genesis.
-			oldRules := add(newTx(11), 1)
+			// Up to Genesis-2, so the next block, 99, is the last one before Genesis.
+			mineBlocks(t, ctx, ba, 98)
+
+			// Validated for height 99, the next block.
+			oldRules := add(newTx(11), 99)
 			require.Eventually(t, func() bool { return inCandidate(oldRules) }, 5*time.Second, 50*time.Millisecond)
 
-			// Already validated for height 2, ahead of block assembly: kept out until block 1
-			// moves the rules to it, then the rebuild's reload brings it in.
-			ahead := add(newTx(13), 2)
+			// Already validated for height 100, ahead of block assembly: kept out until block
+			// 99 moves the rules to it, then the rebuild's reload brings it in.
+			ahead := add(newTx(13), 100)
+
+			// A parent kept out earlier and mined elsewhere since: the rebuild's reload does
+			// not find it unmined, so it must forget the drop and let its children in.
+			minedElsewhere := chainhash.HashH([]byte("dropped-then-mined-elsewhere"))
+			require.Empty(t, ba.blockAssembler.subtreeProcessor.FilterUnminedTxEra([]*utxostore.UnminedTransaction{
+				{Node: &subtree.Node{Hash: minedElsewhere}, TxInpoints: &subtree.TxInpoints{}},
+			}, []uint32{1}))
 
 			if tt.rulesMovedFirst {
-				ba.blockAssembler.subtreeProcessor.SetTxEra(2)
+				ba.blockAssembler.subtreeProcessor.SetTxEra(100)
 			}
 
-			mineRegtestP2SHActivationBlock(t, ctx, ba)
+			mineBlocks(t, ctx, ba, 1)
 
-			newRules := add(newTx(12), 2)
+			newRules := add(newTx(12), 100)
 			require.Eventually(t, func() bool { return inCandidate(newRules) }, 5*time.Second, 50*time.Millisecond)
 			require.Eventually(t, func() bool { return inCandidate(ahead) }, 5*time.Second, 50*time.Millisecond,
 				"the reload admits a transaction validated under the new rules")
 			require.False(t, inCandidate(oldRules), "a transaction validated before the rules changed must leave the template")
+
+			child := chainhash.HashH([]byte("child-of-dropped-then-mined"))
+			require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: child, Fee: 111}},
+				[]*subtree.TxInpoints{{ParentTxHashes: []chainhash.Hash{minedElsewhere}}}, []uint32{100}))
+			require.Eventually(t, func() bool { return inCandidate(&child) }, 5*time.Second, 50*time.Millisecond,
+				"the rebuild forgets a drop its reload no longer finds")
 		})
 	}
 }

@@ -168,11 +168,14 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       at: new field `validated_height` on `AddTxRequest` and `validated_heights` on
       `AddTxBatchColumnarRequest`. Block assembly drops a transaction whose height falls
       under other rules than the next block's, and every queued or reloaded descendant of
-      it, including the transactions of a block a reorg moves back. A reload uses
-      `unmined_since`, the height a transaction was created at. For a transaction a reorg
-      moved back it is the reorg height instead (on Aerospike, the reorg height less
-      `utxostore_unminedTxRetention`), so across an activation height such a
-      transaction can be kept out, or let in, on the next reload. A new counter,
+      it, including the transactions of a block a reorg moves back. A reload tags a
+      transaction mined in blocks off the main chain with those blocks' height, and any
+      other with its `unmined_since`, the height it was created at. A reorg or an
+      invalidation backdates `unmined_since` to the tip less
+      `utxostore_unminedTxRetention`, or 1; such a value is read as unknown, and the
+      transaction is admitted as before. A drop is forgotten
+      once a block mines the transaction or a reload no longer finds it unmined, so its
+      descendants are admitted again. A new counter,
       `teranode_subtreeprocessor_tx_era_dropped_total`, counts the drops.
     - When a new block moves the next height under other rules, block assembly rebuilds
       its template from the UTXO store. Mining candidates stay empty while it does. On
