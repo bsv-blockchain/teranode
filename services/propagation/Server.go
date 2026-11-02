@@ -564,7 +564,12 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 							defer func() { <-ps.udpWorkerPool }()
 							if _, err := ps.ProcessTransaction(ctx, &propagation_api.ProcessTransactionRequest{
 								Tx: txb,
-							}); err != nil {
+							}); err != nil && !errors.Is(err, errors.ErrServiceUnavailable) {
+								// ProcessTransaction has already logged every failure except a
+								// syncing refusal, which the gate logs once per interval. Its
+								// gRPC wrapping drops the refusal's marker but keeps the code,
+								// so skipping ERR_SERVICE_UNAVAILABLE here only drops a
+								// repeat of a line already written.
 								ps.logger.Errorf("error processing transaction: %v", err)
 							}
 						}(txBytes.Bytes())
@@ -800,6 +805,35 @@ func httpStatusForTxError(err error) int {
 	}
 }
 
+// syncRefusalDataKey marks the error the unmined-transaction gate's refusal
+// returns. Store and blob timeouts share its ERR_SERVICE_UNAVAILABLE code, so
+// the code alone cannot tell a syncing refusal from a real fault, and only the
+// refusal may skip the per-transaction ERROR log and keep a /txs batch at 503.
+const syncRefusalDataKey = "unmined_tx_refused_while_syncing"
+
+// newSyncRefusalError returns the error for a transaction the gate refused
+// because the node is syncing (issue 2003).
+func newSyncRefusalError(txID string) error {
+	e := errors.NewServiceUnavailableError("[ProcessTransaction][%s] node is syncing and accepts no unmined transactions until it reaches the chain tip", txID)
+	e.SetData(syncRefusalDataKey, true)
+
+	return e
+}
+
+// isSyncRefusal reports whether err is the gate's syncing refusal. The gate
+// already counts and rate-limits its own log line, so callers use this to
+// avoid logging every refused transaction again.
+func isSyncRefusal(err error) bool {
+	var e *errors.Error
+	if !errors.As(err, &e) {
+		return false
+	}
+
+	refused, _ := e.GetData(syncRefusalDataKey).(bool)
+
+	return refused
+}
+
 // handleMultipleTx handles multiple transactions on the /txs endpoint.
 // This method creates and returns an HTTP handler function for processing
 // batches of transactions submitted via HTTP POST. The handler implements
@@ -986,8 +1020,12 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 		// dominates and forces 500 — the client cannot fix it by resubmitting;
 		// otherwise the first client-error (4xx) status in submission order wins,
 		// so a batch of pure tx rejections is a client error (e.g. 400) rather
-		// than a misleading 500.
+		// than a misleading 500. A syncing refusal is the exception among the
+		// 5xx: when it is the only kind, the batch answers 503, so the client
+		// knows to resubmit once the node has caught up (issue 2003).
 		aggStatus := http.StatusOK
+		sawServerFault := false
+		sawSyncRefusal := false
 
 		for i, err := range errSlots[:nextSlot] {
 			if err == nil {
@@ -1004,11 +1042,20 @@ func (ps *PropagationServer) handleMultipleTx(_ context.Context) echo.HandlerFun
 			errMsgs = append(errMsgs, failureLine(txSlots[i], err))
 
 			switch {
+			case isSyncRefusal(err):
+				sawSyncRefusal = true
 			case txStatus >= http.StatusInternalServerError:
-				aggStatus = http.StatusInternalServerError
+				sawServerFault = true
 			case aggStatus < http.StatusBadRequest:
 				aggStatus = txStatus
 			}
+		}
+
+		switch {
+		case sawServerFault:
+			aggStatus = http.StatusInternalServerError
+		case sawSyncRefusal:
+			aggStatus = http.StatusServiceUnavailable
 		}
 
 		if earlyExitMsg != "" {
@@ -1179,7 +1226,10 @@ func (ps *PropagationServer) ProcessTransaction(ctx context.Context, req *propag
 	ctxLogger.Debugf("[ProcessTransaction] processing transaction request")
 
 	if _, err := ps.processTransaction(ctx, req); err != nil {
-		ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
+		// The gate logs syncing refusals itself, at most once per interval.
+		if !isSyncRefusal(err) {
+			ctxLogger.Errorf("[ProcessTransaction] failed to process transaction: %v", err)
+		}
 
 		return nil, errors.WrapGRPCPublic(err)
 	}
@@ -1269,8 +1319,11 @@ func (ps *PropagationServer) ProcessTransactionBatch(ctx context.Context, req *p
 			if _, err := ps.processTransaction(txCtx, &propagation_api.ProcessTransactionRequest{
 				Tx: tx,
 			}); err != nil {
-				// Use context-aware logger for trace correlation
-				ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
+				// The gate logs syncing refusals itself, at most once per
+				// interval. Use context-aware logger for trace correlation.
+				if !isSyncRefusal(err) {
+					ps.logger.WithTraceContext(txCtx).Errorf("[ProcessTransactionBatch] failed to process transaction %d: %v", idx, err)
+				}
 
 				response.Errors[idx] = errors.WrapPublic(err)
 			} else {
@@ -1394,7 +1447,7 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	// dropped before anything is written (issue 2003). The status is 503, so a
 	// client knows to resubmit once the node has caught up.
 	if ps.unminedTxGate.Refuses(ctx, btTx.TxIDChainHash()) {
-		return errors.NewServiceUnavailableError("[ProcessTransaction][%s] node is syncing and accepts no unmined transactions until it reaches the chain tip", btTx.TxID())
+		return newSyncRefusalError(btTx.TxID())
 	}
 
 	// Do not allow propagation of coinbase transactions

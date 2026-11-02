@@ -145,15 +145,19 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `CATCHINGBLOCKS`, propagation (gRPC, HTTP `/tx` and `/txs`, UDP), the validator's
   Kafka consumer, legacy `tx` messages and the legacy orphan-eviction retry, and RPC
   `sendrawtransaction` all drop the transaction before anything is stored. Propagation
-  answers HTTP 503 with `SERVICE_UNAVAILABLE`; `sendrawtransaction` answers RPC error
+  answers HTTP 503 with `SERVICE_UNAVAILABLE` on `/tx`, and on `/txs` when refusals are
+  the batch's only server-side failures (any other 5xx in the batch still makes it 500).
+  gRPC callers get `SERVICE_UNAVAILABLE` for each refused transaction, and propagation
+  writes no per-transaction ERROR line for a refusal. `sendrawtransaction` answers RPC error
   -10, the code bitcoind uses during initial block download; legacy peers get no
   reject message. A short catch-up from `RUNNING` also moves the FSM to
   `CATCHINGBLOCKS`, so a node at the tip refuses for the length of that catch-up too.
   A cached `IDLE`, which a node reads while the blockchain service restarts, still
   accepts. Clients that submit to a node during a sync must resubmit once it reaches
   `RUNNING`. Refusals are counted in
-  `teranode_unmined_transactions_refused_while_syncing_total{route}`. Propagation's
-  HTTP status for any other `SERVICE_UNAVAILABLE` error moves from 500 to 503 as well.
+  `teranode_unmined_transactions_refused_while_syncing_total{route}`. On `/tx`,
+  propagation's HTTP status for any other `SERVICE_UNAVAILABLE` error moves from 500 to
+  503 as well.
   Block and subtree validation are not gated and still validate a block's own
   transactions during catch-up. (#2094)
 

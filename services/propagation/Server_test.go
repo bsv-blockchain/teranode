@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2048,6 +2049,135 @@ func TestProcessTransaction_RefusedWhileSyncing(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, getErr, "an accepted tx is in the UTXO store")
 			require.InDelta(t, refusedBefore, ps.unminedTxGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// errorCountingLogger counts ERROR-level lines, so a test can assert that a
+// path logs, or does not log, at that level.
+type errorCountingLogger struct {
+	ulogger.TestLogger
+	errorLines atomic.Int32
+}
+
+func (l *errorCountingLogger) Errorf(_ string, _ ...interface{}) {
+	l.errorLines.Add(1)
+}
+
+func (l *errorCountingLogger) WithTraceContext(_ context.Context) ulogger.Logger {
+	return l
+}
+
+// newGatedPropagationServer returns a server whose gate reads the given FSM
+// state and whose validator rejects every transaction it reaches as invalid.
+func newGatedPropagationServer(t *testing.T, state blockchain.FSMStateType, logger ulogger.Logger) *PropagationServer {
+	t.Helper()
+
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+	txStore, err := null.New(ulogger.TestLogger{})
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Propagation.GRPCListenAddress = ""
+	tSettings.Propagation.HTTPListenAddress = ""
+
+	return &PropagationServer{
+		logger:        logger,
+		settings:      tSettings,
+		validator:     &orderedErrValidator{},
+		txStore:       txStore,
+		unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain.UnminedTxRoutePropagation),
+	}
+}
+
+// TestHandleMultipleTx_RefusedWhileSyncing pins the /txs status for issue
+// 2003: a batch the gate refuses answers 503, the retry-later signal, and not
+// the 500 that other server faults force. In RUNNING the same batch reaches the
+// validator, so the status is the validator's 400.
+func TestHandleMultipleTx_RefusedWhileSyncing(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 4)
+
+	body := make([]byte, 0, 1024)
+	for _, tx := range txs[1:] {
+		body = append(body, tx.ExtendedBytes()...)
+	}
+
+	for _, tt := range []struct {
+		state      blockchain.FSMStateType
+		wantStatus int
+	}{
+		{blockchain.FSMStateCATCHINGBLOCKS, http.StatusServiceUnavailable},
+		{blockchain.FSMStateRUNNING, http.StatusBadRequest},
+	} {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			ps := newGatedPropagationServer(t, tt.state, ulogger.TestLogger{})
+
+			refusedBefore := ps.unminedTxGate.RefusedTotal()
+
+			req := httptest.NewRequest(http.MethodPost, "/txs", bytes.NewReader(body))
+			rec := httptest.NewRecorder()
+			c := echo.New().NewContext(req, rec)
+			c.SetPath("/txs")
+
+			require.NoError(t, ps.handleMultipleTx(t.Context())(c))
+			require.Equal(t, tt.wantStatus, rec.Code, "body=%q", rec.Body.String())
+
+			wantRefused := refusedBefore
+			if tt.state == blockchain.FSMStateCATCHINGBLOCKS {
+				wantRefused += float64(len(txs) - 1)
+			}
+
+			require.InDelta(t, wantRefused, ps.unminedTxGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// TestProcessTransactionGRPC_SyncRefusalNotLoggedPerTx pins that the gRPC
+// intakes write no ERROR line for a transaction the gate refuses; the gate's
+// own throttled line covers it. The RUNNING case proves the counting logger
+// does see the ERROR lines a real failure still writes.
+func TestProcessTransactionGRPC_SyncRefusalNotLoggedPerTx(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	txs := transactions.CreateTestTransactionChainWithCount(t, 4)
+
+	items := make([]*propagation_api.BatchTransactionItem, 0, len(txs)-1)
+	for _, tx := range txs[1:] {
+		items = append(items, &propagation_api.BatchTransactionItem{Tx: tx.ExtendedBytes()})
+	}
+
+	for _, tt := range []struct {
+		state      blockchain.FSMStateType
+		wantCode   errors.ERR
+		wantErrors int32
+	}{
+		{blockchain.FSMStateCATCHINGBLOCKS, errors.ERR_SERVICE_UNAVAILABLE, 0},
+		// One line from ProcessTransaction plus one per batch item.
+		{blockchain.FSMStateRUNNING, errors.ERR_TX_INVALID, int32(1 + len(items))},
+	} {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			logger := &errorCountingLogger{}
+			ps := newGatedPropagationServer(t, tt.state, logger)
+
+			_, err := ps.ProcessTransaction(t.Context(), &propagation_api.ProcessTransactionRequest{Tx: txs[1].ExtendedBytes()})
+			require.Error(t, err)
+
+			resp, err := ps.ProcessTransactionBatch(t.Context(), &propagation_api.ProcessTransactionBatchRequest{Items: items})
+			require.NoError(t, err)
+			require.Len(t, resp.Errors, len(items))
+
+			for idx, txErr := range resp.Errors {
+				require.NotNil(t, txErr, "item %d", idx)
+				require.Equal(t, tt.wantCode, txErr.Code, "item %d", idx)
+			}
+
+			require.Equal(t, tt.wantErrors, logger.errorLines.Load())
 		})
 	}
 }
