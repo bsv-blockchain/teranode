@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/txrules"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
 	"github.com/bsv-blockchain/teranode/services/validator"
@@ -397,7 +398,7 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 // block assembly. Only when the FSM state allows it (stateFeeds: RUNNING, or a
 // short catchup from RUNNING that keeps the hand-off), only when the block is
 // not above tip+1, and only when the block's height and tip+1 share the same
-// transaction rules (validator.SameTxRules): the txs are validated at the
+// transaction rules (txrules.SameTxRules): the txs are validated at the
 // block's own height, while assembly mines them at tip+1 without re-checking
 // them. A side block in an older era (below Genesis or Chronicle) would otherwise
 // put txs into the template that the rest of the network rejects (issue 4940),
@@ -421,7 +422,7 @@ func (u *Server) feedsBlockAssembly(ctx context.Context, stateFeeds bool, blockH
 
 	next := tipMeta.Height + 1
 
-	if blockHeight > next || !validator.SameTxRules(u.settings.ChainCfgParams, blockHeight, next) {
+	if blockHeight > next || !txrules.SameTxRules(u.settings.ChainCfgParams, blockHeight, next) {
 		return false, nil, nil
 	}
 

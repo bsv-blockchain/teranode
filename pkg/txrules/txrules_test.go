@@ -1,6 +1,7 @@
-package validator
+package txrules
 
 import (
+	"math"
 	"testing"
 
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -51,4 +52,40 @@ func TestSameTxRules_BIP68FollowsCSVHeight(t *testing.T) {
 
 	require.False(t, SameTxRules(&params, 699, 700))
 	require.True(t, SameTxRules(&params, 700, 701))
+}
+
+// TestEraBounds pins the range of heights that share the rules of a given height, at the
+// boundaries TestSameTxRules pins.
+func TestEraBounds(t *testing.T) {
+	tests := []struct {
+		name   string
+		params *chaincfg.Params
+		h      uint32
+		lo, hi uint32
+	}{
+		{"regtest between Genesis and Chronicle", &chaincfg.RegressionNetParams, 150, 100, 199},
+		{"regtest at Genesis", &chaincfg.RegressionNetParams, 100, 100, 199},
+		{"regtest between CSV and BIP66", &chaincfg.RegressionNetParams, 1000, 576, 1250},
+		{"regtest past every activation", &chaincfg.RegressionNetParams, 5000, 1351, math.MaxInt32 - 1},
+		{"mainnet first UAHF block", &chaincfg.MainNetParams, 478559, 478559, 504031},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lo, hi, ok := EraBounds(tt.params, tt.h)
+			require.True(t, ok)
+			require.Equal(t, tt.lo, lo)
+			require.Equal(t, tt.hi, hi)
+		})
+	}
+
+	_, _, ok := EraBounds(&chaincfg.Params{Name: "unknown"}, 150)
+	require.False(t, ok, "a network BDK does not know has no bounds")
+}
+
+// TestSameTxRules_MempoolSentinelHeight pins that a height at BDK's mempool sentinel is
+// refused before it reaches the engine, which aborts the process on it.
+func TestSameTxRules_MempoolSentinelHeight(t *testing.T) {
+	require.False(t, SameTxRules(&chaincfg.RegressionNetParams, 150, math.MaxInt32))
+	require.False(t, SameTxRules(&chaincfg.RegressionNetParams, math.MaxUint32, 150))
 }

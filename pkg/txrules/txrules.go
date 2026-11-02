@@ -1,12 +1,20 @@
-package validator
+// Package txrules tells whether two block heights validate transactions under the same
+// consensus rules, as the BDK script engine applies them. It sits below the validator and
+// block assembly so both can use it.
+package txrules
 
 import (
+	"math"
+	"sort"
 	"sync"
 
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bsv-blockchain/go-chaincfg"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 )
+
+// maxBlockHeight is BDK's mempool-height sentinel: every block height is below it.
+const maxBlockHeight = math.MaxInt32
 
 // flagEngineKey identifies a BDK engine by everything that sets its flags: the
 // network and the two activation heights teranode overrides.
@@ -18,6 +26,19 @@ type flagEngineKey struct {
 
 // flagEngines caches one BDK engine per flagEngineKey for SameTxRules.
 var flagEngines sync.Map
+
+// BDKChainName maps a teranode network name to the BDK chain name, or "" for a network
+// BDK does not know.
+func BDKChainName(params *chaincfg.Params) string {
+	return map[string]string{
+		"mainnet":     "main",
+		"stn":         "stn",
+		"tstn":        "tstn",
+		"teratestnet": "teratestnet",
+		"testnet":     "test",
+		"regtest":     "regtest",
+	}[params.Name]
+}
 
 // SameTxRules reports whether a transaction valid at height a is checked under the
 // same consensus rules at height b: BDK computes the same consensus script flags
@@ -33,6 +54,12 @@ func SameTxRules(params *chaincfg.Params, a, b uint32) bool {
 
 	se := flagEngine(params)
 	if se == nil {
+		return false
+	}
+
+	// BDK reads MaxInt32 as its mempool-height sentinel and aborts the process on it, so
+	// no height at or above it reaches the engine.
+	if hi >= maxBlockHeight {
 		return false
 	}
 
@@ -56,10 +83,31 @@ func SameTxRules(params *chaincfg.Params, a, b uint32) bool {
 	return true
 }
 
+// EraBounds returns the lowest and highest heights that share the transaction rules of
+// height h (SameTxRules), so a caller can test many heights against h with two integer
+// comparisons. Rules only change at activation heights and never revert, so the set is one
+// contiguous range, found by binary search. ok is false for a network BDK does not know.
+func EraBounds(params *chaincfg.Params, h uint32) (lo, hi uint32, ok bool) {
+	if !SameTxRules(params, h, h) {
+		return 0, 0, false
+	}
+
+	// Lowest x in [0, h] with SameTxRules(x, h).
+	lo = uint32(sort.Search(int(h)+1, func(x int) bool { return SameTxRules(params, uint32(x), h) })) //nolint:gosec // x <= h <= MaxInt32
+
+	// Highest x in [h, maxBlockHeight) with SameTxRules(h, x): one below the first that
+	// differs, or maxBlockHeight-1 past the last activation.
+	span := maxBlockHeight - 1 - int(h)
+	first := sort.Search(span+1, func(i int) bool { return !SameTxRules(params, h, h+uint32(i)) }) //nolint:gosec // i <= span
+	hi = h + uint32(first) - 1                                                                     //nolint:gosec // first >= 1, since SameTxRules(h, h)
+
+	return lo, hi, true
+}
+
 // flagEngine returns the cached BDK engine for params, creating it on first use.
 func flagEngine(params *chaincfg.Params) *bdkscript.TxValidator {
 	key := flagEngineKey{
-		network:   getBDKChainNameFromParams(nil, params),
+		network:   BDKChainName(params),
 		genesis:   params.GenesisActivationHeight,
 		chronicle: params.ChronicleActivationHeight,
 	}
