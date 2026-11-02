@@ -2301,6 +2301,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			switch {
 			case blessed:
 			case item.idempotent:
+				spend.Idempotent = true
 				idempotentSpends = append(idempotentSpends, spend)
 			default:
 				spentSpends = append(spentSpends, spend)

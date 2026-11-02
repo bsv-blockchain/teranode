@@ -1081,6 +1081,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 		switch {
 		case blessed:
 		case item.idempotent:
+			spend.Idempotent = true
 			result.idempotentSpends = append(result.idempotentSpends, spend)
 		default:
 			result.spentSpends = append(result.spentSpends, spend)

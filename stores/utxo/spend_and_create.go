@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -150,6 +151,12 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	}
 
 	md, err := s.Create(ctx, tx, blockHeight, opts...)
+	if err == nil && anyIdempotent(spends) {
+		if err = recheckRecreated(ctx, logger, s, tx, blockHeight, options.IgnoreFlags); err != nil {
+			return nil, spends, err
+		}
+	}
+
 	if err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// the tx already exists; leave the spends in place for the caller to decide
@@ -171,6 +178,84 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	}
 
 	return md, spends, nil
+}
+
+// anyIdempotent reports whether any spend matched an output that already
+// recorded exactly that spend.
+func anyIdempotent(spends []*Spend) bool {
+	for _, sp := range spends {
+		if sp != nil && sp.Idempotent {
+			return true
+		}
+	}
+
+	return false
+}
+
+// completeDeleter is the store method recheckRecreated removes a recreated
+// record with. Both in-tree stores implement it.
+type completeDeleter interface {
+	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
+}
+
+// recheckRecreated closes the window between the spend and the create of a
+// replayed transaction, after a create that succeeded over an idempotent spend.
+//
+// A rebroadcast of a mined, fully spent transaction C has its spends accepted
+// as idempotent, since every parent output already names C. If the pruner
+// writes C's markers and deletes C after that spend and before the create, the
+// create finds no record and writes C again, with outputs a confirmed
+// descendant already consumed. Nothing rejects, so no caller compensates.
+//
+// The pruner writes a child's markers before it deletes the child, so a create
+// that found C gone can see them now. Spending again asks the store exactly
+// that: the spend answers a marker ahead of an idempotent match, and otherwise
+// matches every input again and writes nothing. On the pruned answer the record
+// this call just created is deleted and the answer returned, leaving the
+// historical spends in place as a normal prune does.
+//
+// Any other failure of the recheck also deletes the record, because the
+// record can no longer be vouched for and a later attempt would find it and
+// stop at ErrTxExists. The spends stay: they are idempotent matches, which a
+// retry matches again. The deletion runs detached and bounded, like the
+// rollback.
+//
+// Only a spend that matched an existing record is rechecked, so a transaction
+// seen for the first time pays nothing.
+func recheckRecreated(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags) error {
+	_, recheckErr := s.Spend(ctx, tx, blockHeight, ignoreFlags)
+	if recheckErr == nil {
+		return nil
+	}
+
+	deleter, ok := s.(completeDeleter)
+	if !ok {
+		return errors.NewStorageError("SpendAndCreate: recheck after create failed and the store cannot remove the created record", recheckErr)
+	}
+
+	bound := defaultSequentialRollbackTimeout
+
+	if b, ok := s.(spendRollbackBounded); ok && b.SpendRollbackTimeout() > 0 {
+		bound = b.SpendRollbackTimeout()
+	}
+
+	delCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+	defer cancel()
+
+	if err := retryStoreCall(delCtx, func() error {
+		err := deleter.DeleteComplete(delCtx, tx.TxIDChainHash())
+		if err != nil && (errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound)) {
+			return nil
+		}
+
+		return err
+	}); err != nil {
+		logger.Errorf("[SpendAndCreate] %s was created over a spend the recheck refused, and could not be removed; it remains in the store: %v", tx.TxIDChainHash().String(), err)
+
+		return errors.NewStorageError("SpendAndCreate: could not remove %s after its recheck failed", tx.TxIDChainHash().String(), errors.Join(recheckErr, err))
+	}
+
+	return recheckErr
 }
 
 // unspendDetached runs unspendWithRetry under a context that ignores ctx's

@@ -183,6 +183,11 @@ type Spend struct {
 
 	// error is the error that occurred during the spend operation
 	Err error `json:"err,omitempty"`
+
+	// Idempotent is set by a successful Spend when the output already recorded
+	// exactly this spend, so the call wrote nothing for it. SequentialSpendAndCreate
+	// reads it to recheck a create that may have recreated a pruned transaction.
+	Idempotent bool `json:"-"`
 }
 
 // Clone creates a deep copy of the Spend struct.
@@ -193,8 +198,9 @@ func (s *Spend) Clone() *Spend {
 	}
 
 	clone := &Spend{
-		Vout: s.Vout,
-		Err:  s.Err,
+		Vout:       s.Vout,
+		Err:        s.Err,
+		Idempotent: s.Idempotent,
 	}
 
 	if s.TxID != nil {
