@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	bt "github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -93,7 +94,7 @@ func newAncestryGuardHarness(t *testing.T, loserBlockIDs []uint32, loserIsOnAnce
 
 	// The winner is conflicting and its counter-spender is the loser.
 	h.mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
-		Return(&meta.Data{Conflicting: true}, nil)
+		Return(&meta.Data{Conflicting: true, Tx: bt.NewTx()}, nil)
 	h.mockUtxoStore.On("GetCounterConflicting", mock.Anything, mock.Anything).
 		Return([]chainhash.Hash{h.loser}, nil)
 

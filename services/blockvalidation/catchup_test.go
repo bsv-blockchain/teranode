@@ -1491,8 +1491,11 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		httpmock.ActivateNonDefault(util.HTTPClient())
 		defer httpmock.DeactivateAndReset()
 
-		// Simulate server returning headers in chunks
+		// Simulate server returning headers in chunks. Each chunk continues the chain from the
+		// last header of the one before, as a real peer's does: the header fetch rejects a chunk
+		// that does not build on the last header it holds.
 		callCount := 0
+		prevHash := bestBlock.Header.Hash()
 		httpmock.RegisterResponder(
 			"GET",
 			`=~^http://test-peer/headers_from_common_ancestor/.*`,
@@ -1501,7 +1504,6 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 				// Create valid headers for testing
 				numHeaders := 10000
 				headers := make([]*model.BlockHeader, numHeaders)
-				prevHash := bestBlock.Header.Hash()
 
 				// Create a valid difficulty setting
 				nBits, _ := model.NewNBitFromString("207fffff") // minimum difficulty
@@ -1536,6 +1538,9 @@ func TestCatchupIntegrationScenarios(t *testing.T) {
 		assert.LessOrEqual(t, len(result.Headers), 100000)
 		assert.Contains(t, result.StopReason, "Memory limit reached")
 		assert.False(t, result.ReachedTarget)
+		// Ten chunks of 10,000 fill the 100,000 cap and the eleventh would overflow it, so the
+		// cap, not the iteration limit, ends the fetch.
+		require.Equal(t, 11, callCount, "the accumulated-header cap must end the fetch")
 	})
 
 	t.Run("Context Cancellation During Catchup", func(t *testing.T) {
@@ -4677,6 +4682,7 @@ func TestCatchup_ReportsValidatedHeaderChainWorkAfterHeaderValidation(t *testing
 	).Maybe()
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("stop after validated progress report"))
+	expectFSMRunning(mockBlockchainClient)
 
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
@@ -4939,6 +4945,8 @@ func TestFetchAndValidateBlocks_FSMRejectsWhenNotRunning(t *testing.T) {
 	// from an invalid source state (so CATCHUPBLOCKS event is invalid)
 	mockBlockchainClient.ExpectedCalls = filterMockCalls(mockBlockchainClient.ExpectedCalls, "CatchUpBlocks")
 	mockBlockchainClient.On("CatchUpBlocks", mock.Anything).Return(errors.NewStateError("event CATCHUPBLOCKS inappropriate in current state IDLE"))
+	idle := blockchain.FSMStateIDLE
+	mockBlockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&idle, nil).Maybe()
 	mockBlockchainClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, errors.NewBlockNotFoundError("not stored"))
 
 	blocks := testhelpers.CreateTestBlockChain(t, 3)

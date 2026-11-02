@@ -18,6 +18,41 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — action required before upgrading
 
+- **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
+  recovery if a transaction affected by rollback or reverse processing is still
+  confirmed in any current-chain block, or if that check fails. The WAL remains
+  available for diagnosis. A stale forward intent that was applied and has at least
+  one winner confirmed on the current chain keeps the applied state and is completed
+  without a rollback, as a reorg keeps a transaction of an orphaned block; this also
+  covers a partial re-mine. When BlockAssembly never reached that block, startup
+  reverses the winners that the current chain does not confirm. A confirmed winner
+  that no longer owns its inputs keeps the intent pending. Pruned parents of confirmed
+  winners no longer block startup; current-chain confirmation authorizes those inputs. The parent locks it still
+  holds are released. A rollback leaves an input that the operation freed with a
+  later owner outside the operation, and the loser that spent it stays conflicting. Failed
+  WAL cleanup is now returned and counted in
+  `teranode_utxo_conflict_wal_completion_failures_total`. Affected operators must
+  resolve the pending recovery instead of clearing the WAL or restarting an old
+  build. This does not repair previously corrupted UTXO state. (#2023)
+
+- **Conflict recovery extends the UTXO WAL format and store interface.** SQL stores
+  add recovery and lock-owner columns; Aerospike stores add durable checklist
+  records. External `utxo.Store` implementations must implement
+  `SaveConflictRecovery`, `LoadConflictRecovery`, `RestoreConflictSpends`,
+  `SetConflictLocks`, and `ReleaseConflictLocks`. Upgrade BlockAssembly with its
+  store implementation. Do not downgrade while new conflict intents are pending.
+  A forward intent is now keyed by its block hash, so acknowledgement needs no WAL
+  scan; a record written by an older build keeps its old key. Store callers that add
+  a winner that is still Conflicting to a block with a pending forward intent now
+  receive an error. A winner that is already applied is dropped. Finish the
+  saved result's subtree and queue updates and acknowledge the intent with
+  `CompleteConflictIntentsForBlock` before submitting additional Conflicting winners. Legacy
+  forward intents have no before-image and require operator repair;
+  unresolved intents now prevent BlockAssembly startup, and so does an intent whose
+  replay failed at startup, even when its checklist reads finished. Preserve the WAL
+  and store backup for diagnosis instead of deleting the pending record. See
+  [recovery guidance](docs/topics/conflict-recovery.md). (#2023)
+
 - **`CheckBlockSubtrees` gRPC errors keep Teranode error codes.** Storage and
   consensus errors include gRPC status metadata. Invalid URLs give `InvalidArgument`
   status. External clients must use `errors.UnwrapGRPC` to read the error chain
@@ -125,6 +160,64 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   gets the old unconditional write. Either way the race stays open until both services
   run the new version. A client that calls `SetBlockMinedSet` with the field set must
   handle `ERR_STATE_ERROR`. (#2018)
+
+- **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
+  background, and block storage can wait for the repair.** `InvalidateBlock`,
+  `RevalidateBlock`, the startup rebuild and two `StoreBlock` paths used to log a
+  failed write to the `on_main_chain` column and carry on, leaving chain membership
+  and the by-height readers wrong until a restart. They now record the failure, every
+  reader of the column takes its slower parent-link walk until the repair lands, and a
+  background loop retries the repair, waiting 1 s after the first failed attempt and
+  doubling to 30 s. Attempts are not capped while they keep failing: giving up would
+  leave every reader on the slow walk until a restart. Every `StoreBlock` call takes one
+  lock, so whenever a repair holds it or a `StoreBlock` holding it waits on a repair, all
+  block storage waits, not one block.
+    - A repair that only needs the rows near the tip holds that lock for up to 30 s per
+      attempt.
+    - On SQLite a repair that walks the whole chain also holds the lock, for up to 30 min
+      per attempt, because SQLite admits one writer at a time and `StoreBlock` would
+      otherwise fail after its 5 s busy timeout.
+    - On PostgreSQL the whole-chain repair runs without the lock, and never takes it
+      however often it is overlapped, but a `StoreBlock` that reorganises the chain and
+      needs a row the walk has already updated waits for the walk to commit, up to
+      30 min, while it holds the lock.
+    - The startup rebuild runs without the lock on both engines.
+    - A chain change that commits while an unlocked walk (the startup rebuild or the
+      PostgreSQL whole-chain repair) runs makes the walk's result untrusted. A
+      `StoreBlock` reorg names the lowest height it can have moved, so the repair that
+      follows is a walk from that height under the lock, run at once, bounded like the
+      repair near the tip. An `InvalidateBlock` or `RevalidateBlock` cannot name a
+      height, so the walk runs again in full and unlocked after the backoff. A startup
+      overlap becomes an owed repair handled the same way. Under a steady stream of
+      operator invalidations the repair can stay owed; readers stay on the slow walk
+      meanwhile, which costs speed, not correctness. Only writes that committed, or
+      whose commit failed and so may have landed, count as chain changes.
+    - The startup goroutine waits at most 10 s for the lock to check for an overlap. If
+      something holds it longer, it records an owed repair instead.
+
+  Operators can watch
+  `teranode_blockchain_sql_on_main_chain_repair_pending` (above 0 while a repair is
+  owed) and `teranode_blockchain_sql_on_main_chain_write_failures{path}`. No action is
+  needed. (#2049)
+
+- **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
+  assembly, and catch-up no longer fetches a chain with less work than the best tip.**
+  Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop
+  handing transactions to block assembly in that state. A running node that fetched a
+  short competing branch therefore wrote the branch's transactions to the UTXO store but
+  not to the pool, and a child spending one of them could enter the pool without its
+  parent. A catch-up that starts from `RUNNING` and fetches at most
+  `blockvalidation_catchup_keep_block_assembly_max_blocks` blocks (new, default 6) now
+  keeps the hand-off on; such a run uses the level path, never the batched catch-up path.
+  Set the value to 0 to restore the old behaviour. Separately, catch-up now ends as a
+  no-op, charging no peer, when the header fetch reached the announced block and the
+  whole offered chain has less cumulative work than the best tip; equal work is still
+  fetched. The check runs after the existing fork checks, so a fork deeper than coinbase
+  maturity and the deep-fork secret-mining case are still refused with an error and
+  charged as before. In a mixed-version deploy, a subtree validation older than its block
+  validation ignores the new request field and keeps the hand-off off. The existing block-context queue-shed policy still accepts and unlocks
+  a transaction without a template entry on `ErrThresholdExceeded`; durable recovery
+  from that case is not added here. (#2075, partially addresses #2067)
 
 - **Catch-up quick validation waits for each block's `.subtree` writes before it commits
   the block, and a shutdown waits for a block's in-flight commit.** A block was stored with
@@ -397,6 +490,19 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   route rejects the block as invalid. A block that spends a UTXO this node has frozen,
   or that hits a UTXO hash mismatch in this node's store, stays a local fault.
   (#2022)
+
+- **Catchup rejects headers that do not form one chain on the common ancestor.**
+  Before, a peer could offer headers whose first entry built on some other stored
+  block, and catchup carried on under the wrong heights with only a warning. Now
+  catchup stops before it touches local state, and the error is coded
+  `NETWORK_INVALID_RESPONSE`, so it is charged to the peer. A header batch whose
+  headers do not link to each other, or that does not build on the last header of
+  the batch before it, is rejected the same way as soon as it arrives, before the
+  fetch is counted as a success for the peer. Catchup also now clears
+  `mined_set` on the blocks a fork replaces only after every header check has
+  passed, just before it fetches blocks, so a fork rejected by a later check, or a
+  peer with nothing past the ancestor, no longer un-stamps the node's own blocks.
+  No action needed. (#2034)
 
 - **This release removes four Aerospike pruner metrics.** External monitoring systems must
   remove queries for `utxo_pruner_parents_skipped_pruned_total`,
@@ -832,13 +938,36 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   invalid transaction is; the retryable error is returned only when nothing is
   proven. A block that used to retry indefinitely may now be rejected on the first
   attempt. This includes a walk over the `utxostore_conflictingChildrenMaxNodes`
-  budget that already reached a mined member: raising the setting no longer
-  changes that verdict. The fresh-path change also reaches `ValidateSubtreeInternal`,
+  budget that already reached a mined counter-conflicting transaction (a
+  conflicting transaction, a counter-spender or a counter-spender's descendant;
+  the conflicting transactions' own descendants are only checked for frozen
+  outputs): raising the setting no longer changes that verdict. The fresh-path change also reaches `ValidateSubtreeInternal`,
   so `CheckSubtreeFromBlock` and live peer subtrees return a proven conflict as
   `TX_INVALID` too. On the live path, `subtreeMessageHandler` now logs it at error
   level ("error processing kafka message") where it logged a "Context canceled,
   skipping" warning, so operators will see new error-level log lines for such
   subtrees. Nothing to configure. (bsv-blockchain/teranode#2052)
+
+- **Conflict-check failures in subtree validation are no longer reported as
+  context cancellations.** Two follow-ups to the entry above, both in subtree
+  validation's conflict check:
+  - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
+    live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
+    walk limit, a frozen output, an input out of range and the fail-fast
+    missing-tx threshold are no longer wrapped as a context cancellation. Each is
+    still retried and never charged to a peer. What changes is how they show up:
+    on the live path `subtreeMessageHandler` logs them at error level ("error
+    processing kafka message") where it logged a "Context canceled, skipping"
+    warning, and a catch-up run that ends on the walk limit, a frozen output or an
+    out-of-range input records `local_processing_fault` instead of
+    `local_context_cancelled` as its last error type. A missing record, a
+    cancelled check, and a record the store could not decode keep the old
+    classification.
+  - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
+    the check's context is cancelled while it runs, as the cached path and
+    blessing a missing transaction already did. Before, it was retried.
+
+  Nothing to configure. (bsv-blockchain/teranode#2066)
 
 ### Not breaking, but worth knowing
 
@@ -855,6 +984,32 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `teranode_subtreevalidation_skipped_peer_subtrees_total{outcome}` (recorded,
   evicted, expired, requeued, dropped, replayed, replay_failed). Set the key to `0` for the previous
   behaviour. (#2055)
+
+- **A failed `ProcessConflicting` no longer wedges block assembly, and its error is
+  capped.** The old rollback cleared `Conflicting` on every transaction the cascade
+  visited, including winners that were already flagged. Every retry then failed with
+  `tx is not conflicting`. The operation now saves a recovery checklist before it
+  changes any state. Rollback restores the recorded spend owners and flags. A retry
+  of a run that already applied returns the saved result. The returned loser set
+  never contains a winner. The forward rollback accepts the winners' own block as
+  confirmation, and still refuses a winner that is confirmed in any other
+  current-chain block. A parent locked by another holder is no longer a reason to
+  fail the operation: the operation neither takes nor releases that lock. The
+  `MANUAL INTERVENTION REQUIRED` error lists the first 20 rollback failures and a
+  count of the rest, instead of one entry per transaction. Log searches that counted
+  `rollback step 2 (re-spend` entries find no such entry now. Nodes that are already
+  wedged are not repaired by this change. (#2023)
+
+- **Mining candidates no longer build on a stale block assembly tip.** When block
+  assembly is idle but its tip differs from the Blockchain service tip,
+  `GetMiningCandidate` now returns an empty candidate on the Blockchain service tip.
+  Before, it returned a full candidate on the old tip, so a miner produced orphan
+  blocks. The new counter `teranode_blockassembly_stale_tip_candidates_total` and
+  the Warn log fire only when the gap lasts more than 10 seconds at the same
+  block assembly tip. A shorter gap is the normal delay before block assembly
+  hears of a new block. A block assembly tip that is ahead of the Blockchain service
+  tip is not counted. Alert on a sustained non-zero rate. If the Blockchain service
+  tip cannot be read, the candidate is built as before. (#2023)
 
 - **Mining candidates no longer build on the old tip during a reorg.** While block
   assembly is in the `reorging`, `reconciling` or `resetting` state, it can still

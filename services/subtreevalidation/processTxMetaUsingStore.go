@@ -26,6 +26,12 @@ import (
 
 const errProcessTxMetaContextDone = "[processTxMetaUsingStore] context done"
 
+// errProcessTxMetaSettle prefixes every settle failure settledError returns, on
+// both branches, under a cancellation wrap or under the failure's own code. It
+// does not say the context is done: the cancellation wrap also covers a missing
+// record or a decode fault while ctx is live (keepsCancellation).
+const errProcessTxMetaSettle = "[processTxMetaUsingStore]"
+
 var TxMetaFieldsForDecorate = []fields.FieldName{fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.Conflicting, fields.BlockIDs, fields.Creating}
 
 // txMetaFieldsForBlockValidation is TxMetaFieldsForDecorate without TxInpoints.
@@ -354,7 +360,7 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 		}
 
 		if err := u.settleCollectedConflictingTxs(ctx, g.Wait(), &conflicting, txMetaSlice, blockIds); err != nil {
-			return int(missed.Load()), settledError(ctx, "[processTxMetaUsingStore]", err)
+			return int(missed.Load()), settledError(ctx, errProcessTxMetaSettle, err)
 		}
 
 		return int(missed.Load()), nil
@@ -440,7 +446,7 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 		}
 
 		if err := u.settleCollectedConflictingTxs(ctx, g.Wait(), &conflicting, txMetaSlice, blockIds); err != nil {
-			return int(missed.Load()), settledError(ctx, errProcessTxMetaContextDone, err)
+			return int(missed.Load()), settledError(ctx, errProcessTxMetaSettle, err)
 		}
 
 		return int(missed.Load()), nil
@@ -448,17 +454,72 @@ func (u *Server) processTxMetaUsingStoreAllowing(ctx context.Context, txHashes [
 }
 
 // settledError is the error processTxMetaUsingStore returns for what
-// settleCollectedConflictingTxs returned. Every failure keeps the ContextCanceled
-// wrap it has always had, and so its class at every caller, except a proven
-// conflict: that is a verdict on the block, and under ContextCanceled block
-// validation took it for this node's own cancellation and retried the block
-// (blockvalidation's isRecoverableBlockMessageError, and catchup's
-// releaseCatchupLock). Once ctx is done the caller has given up, and even a
-// proven conflict keeps the wrap.
+// settleCollectedConflictingTxs returned.
+//
+// A proven conflict is a verdict on the block and leaves as TX_INVALID. Under a
+// ContextCanceled wrap block validation took it for this node's own cancellation
+// and retried the block (blockvalidation's isRecoverableBlockMessageError, and
+// catchup's releaseCatchupLock). It leaves as TX_INVALID even once ctx is done, as
+// on the cached path and in blessMissingTransaction: the verdict needs a member
+// whose record was read and lists a block of the candidate chain, and a read that
+// failed, cancelled or not, is never counted as mined.
+//
+// Any other failure is this node's own, and is wrapped as a cancellation only
+// where block validation needs the wrap to treat it as one (keepsCancellation).
+//
+// Every failure leaves with message on top, as ValidateSubtreeInternal expects.
+// One that is not wrapped as a cancellation keeps its own code there (prefixed).
 func settledError(ctx context.Context, message string, err error) error {
-	if ctx.Err() == nil && provenConflict(err) {
+	if !provenConflict(err) && keepsCancellation(ctx, err) {
+		return errors.NewContextCanceledError(message, err)
+	}
+
+	return prefixed(message, err)
+}
+
+// prefixed puts message on top of err under err's own code, so errors.Is and
+// every caller's classification of err are unchanged. An err that is not itself
+// an *errors.Error leaves as it is: a wrap would have to flatten it to text.
+func prefixed(message string, err error) error {
+	var top *errors.Error
+	if !errors.As(err, &top) || error(top) != err {
 		return err
 	}
 
-	return errors.NewContextCanceledError(message, err)
+	return errors.New(top.Code(), message, top)
+}
+
+// keepsCancellation reports whether settledError wraps a failure that is not a
+// proven conflict as a cancellation. It reads codes, never error text, so a store
+// fault whose text names a deadline while ctx is live leaves as a store fault.
+//
+//   - ctx.Err(): ctx is done, so the failure is this node's own cancellation.
+//   - ERR_CONTEXT_CANCELED: the failure is already one, from a read that gave up
+//     on a done errgroup ctx.
+//   - ERR_TX_NOT_FOUND: a record this node no longer holds, not the peer's fault.
+//   - ERR_TX_INVALID under another code: a record this node could not decode.
+//
+// Without the wrap, block validation already retries a store fault
+// (ERR_STORAGE_ERROR, or a local service fault), the threshold
+// (ERR_THRESHOLD_EXCEEDED), and a processing error carrying no code it reads as
+// the peer's: the walk limit, a frozen output, an input out of range. The wrap only
+// mislabelled those as cancellations. The last two arms still need it:
+//
+//   - A missing record (ERR_TX_NOT_FOUND). ValidateBlock turns it into a transient
+//     block-incomplete error, a code catch-up reads as the peer's, so without the
+//     wrap catch-up would signal a peer failure, which rotates the sync peer, and
+//     fetch the block from other peers, for a record this node pruned.
+//   - A TX_INVALID under another code, such as a record the aerospike store read
+//     but could not decode. The wrap keeps the Kafka path retrying the block and
+//     keeps catch-up from charging the peer or reporting it malicious. It does not
+//     keep the peer from being struck: ValidateBlock's infrastructure guard
+//     matches context.Canceled, not ERR_CONTEXT_CANCELED, so the decode fault
+//     still gets a corrupt verdict and penalizeCorruptBlockPeer, on the Kafka
+//     path and in catch-up alike. That is pre-existing, and
+//     TestValidateBlock_ProvenConflictIsNotACancellation pins it.
+func keepsCancellation(ctx context.Context, err error) bool {
+	return ctx.Err() != nil ||
+		errors.Is(err, errors.ErrContextCanceled) ||
+		errors.Is(err, errors.ErrTxNotFound) ||
+		errors.Is(err, errors.ErrTxInvalid)
 }

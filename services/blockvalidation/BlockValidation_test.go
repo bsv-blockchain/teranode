@@ -271,16 +271,17 @@ func (m *MockSubtreeValidationClient) CheckSubtreeFromBlock(ctx context.Context,
 	return nil
 }
 
-func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
+func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string, keepBlockAssemblyHandoff bool) error {
 	blockBytes, err := block.Bytes()
 	if err != nil {
 		return errors.NewServiceError("failed to serialize block for subtree validation", err)
 	}
 
 	request := subtreevalidation_api.CheckBlockSubtreesRequest{
-		Block:   blockBytes,
-		BaseUrl: baseURL,
-		PeerId:  peerID,
+		Block:                    blockBytes,
+		BaseUrl:                  baseURL,
+		PeerId:                   peerID,
+		KeepBlockAssemblyHandoff: keepBlockAssemblyHandoff,
 	}
 
 	_, err = m.server.CheckBlockSubtrees(ctx, &request)
@@ -301,6 +302,13 @@ func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, bl
 // proper test isolation. Each configure func adjusts the settings the stores and
 // the subtree validation server are built with.
 func setup(t *testing.T, configure ...func(*settings.Settings)) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
+	return setupWithSubtreeValidationStore(t, nil, configure...)
+}
+
+// setupWithSubtreeValidationStore is setup, with the subtree validation server
+// reading the UTXO store through wrap, when wrap is not nil. The returned store
+// is the unwrapped one.
+func setupWithSubtreeValidationStore(t *testing.T, wrap func(utxostore.Store) utxostore.Store, configure ...func(*settings.Settings)) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	httpmock.RegisterResponder(
@@ -351,7 +359,12 @@ func setup(t *testing.T, configure ...func(*settings.Settings)) (utxostore.Store
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidationStore := utxostore.Store(utxoStore)
+	if wrap != nil {
+		subtreeValidationStore = wrap(utxoStore)
+	}
+
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, subtreeValidationStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -1731,7 +1744,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			Subtrees: make([]*chainhash.Hash, 0),
 		}
 
-		err = blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000")
+		err = blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000", false)
 		require.NoError(t, err)
 	})
 
@@ -1756,7 +1769,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000"))
+		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000", false))
 	})
 
 	t.Run("fallback to series", func(t *testing.T) {
@@ -1789,7 +1802,7 @@ func Test_validateBlockSubtrees(t *testing.T) {
 			},
 		}
 
-		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000"))
+		require.NoError(t, blockValidation.validateBlockSubtrees(t.Context(), block, "", "http://localhost:8000", false))
 
 		// check that the subtree validation was called 3 times
 		assert.Len(t, subtreeValidationClient.Calls, 1)
@@ -3600,6 +3613,8 @@ func setupRevalidateBlockTest(t *testing.T) (*BlockValidation, *model.Block, *bl
 
 	mockBlockchain.On("GetBlock", mock.Anything, mock.Anything).Return(block, nil)
 	mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{100}, nil)
+	// reValidateBlock waits for the parent to be mined before block.Valid reads tx BlockIDs.
+	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
 	return bv, block, mockBlockchain, coinbaseTx
 }
@@ -3612,7 +3627,7 @@ func TestBlockValidation_reValidateBlock_Success(t *testing.T) {
 		baseURL: "test",
 	}
 
-	err := bv.reValidateBlock(blockData)
+	err := bv.reValidateBlock(context.Background(), blockData)
 	require.NoError(t, err)
 }
 
@@ -3655,7 +3670,7 @@ func TestBlockValidation_reValidateBlock_InvalidBlock(t *testing.T) {
 		baseURL: "test",
 	}
 
-	err = bv.reValidateBlock(blockData)
+	err = bv.reValidateBlock(context.Background(), blockData)
 	require.Error(t, err)
 
 	invalidateBlockCallCount := 0
