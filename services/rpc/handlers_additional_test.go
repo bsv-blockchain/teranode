@@ -6199,7 +6199,7 @@ func (m *mockBlockAssemblyClient) Health(ctx context.Context, checkLiveness bool
 	}
 	return 200, "OK", nil
 }
-func (m *mockBlockAssemblyClient) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+func (m *mockBlockAssemblyClient) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, _ uint32) (bool, error) {
 	return true, nil
 }
 func (m *mockBlockAssemblyClient) RemoveTx(ctx context.Context, hash *chainhash.Hash) error {

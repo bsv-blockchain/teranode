@@ -48,6 +48,11 @@ var (
 	// non-zero value means a client's batch size is above this pod's normalized cap.
 	prometheusSubtreeProcessorOversizeBatchAdmitted prometheus.Counter
 
+	// prometheusSubtreeProcessorTxEraDropped counts transactions kept out of the template
+	// because they were validated under other consensus rules than the next block's, or
+	// descend from one that was.
+	prometheusSubtreeProcessorTxEraDropped prometheus.Counter
+
 	// prometheusSubtreeProcessorDiskTxMapErrors counts disk tx map storage errors
 	// that surface after an operation's commit point, where the underlying state
 	// change has already been applied and cannot be rolled back. These are logged
@@ -282,6 +287,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "subtreeprocessor",
 			Name:      "oversize_batch_admitted_total",
 			Help:      "Number of batches larger than the whole item cap admitted alone onto an empty ingest queue",
+		},
+	)
+
+	prometheusSubtreeProcessorTxEraDropped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "tx_era_dropped_total",
+			Help:      "Number of transactions kept out of the template because they were validated under other consensus rules than the next block's, or descend from one that was",
 		},
 	)
 

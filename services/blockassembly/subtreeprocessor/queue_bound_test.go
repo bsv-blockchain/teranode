@@ -40,11 +40,11 @@ func Test_enqueueBatchIfRoom_refusesPastLimit(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(100)
 
 	// A batch that lands exactly on the limit is admitted (100 is not > 100).
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100)))
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100), nil))
 	require.Equal(t, int64(100), q.length())
 
 	// A further batch would cross the limit: refused, no accounting change.
-	require.False(t, q.enqueueBatchIfRoom(mkNodes(1), mkInpoints(1)))
+	require.False(t, q.enqueueBatchIfRoom(mkNodes(1), mkInpoints(1), nil))
 	require.Equal(t, int64(100), q.length(), "refused batch must not change length")
 
 	// Only the first batch was ever published: draining yields exactly one.
@@ -62,7 +62,7 @@ func Test_enqueueBatchIfRoom_unboundedNeverRefuses(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(0)
 
 	for i := 0; i < 1000; i++ {
-		require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100)))
+		require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100), nil))
 	}
 
 	require.Equal(t, int64(100_000), q.length(), "unbounded queue accounts every item")
@@ -72,7 +72,7 @@ func Test_enqueueBatchIfRoom_unboundedNeverRefuses(t *testing.T) {
 func Test_enqueueBatchIfRoom_accountsInItems(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(1000)
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100)))
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(100), mkInpoints(100), nil))
 	require.Equal(t, int64(100), q.length(), "length counts items, not batches")
 }
 
@@ -134,7 +134,7 @@ func Test_enqueueBatchIfRoom_plateauUnderContention(t *testing.T) {
 			defer wg.Done()
 
 			for i := 0; i < perProducer; i++ {
-				if q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems)) {
+				if q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems), nil) {
 					accepted.Add(1)
 				} else {
 					rejected.Add(1)
@@ -216,7 +216,7 @@ func Test_enqueueBatchIfRoom_rollbackDrainsToZero(t *testing.T) {
 			defer wg.Done()
 
 			for i := 0; i < perProducer; i++ {
-				if q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems)) {
+				if q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems), nil) {
 					accepted.Add(1)
 				}
 			}
@@ -270,7 +270,7 @@ func Test_enqueueBatchIfRoom_reservedVsPublishedInvariant(t *testing.T) {
 	q.clock = fixedClock{t: tPre}
 
 	for i := 0; i < preBatches; i++ {
-		require.True(t, q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems)))
+		require.True(t, q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems), nil))
 	}
 
 	const preItems = int64(preBatches * batchItems)
@@ -287,7 +287,7 @@ func Test_enqueueBatchIfRoom_reservedVsPublishedInvariant(t *testing.T) {
 	// than chase it. This is the concrete "no chasing ingest" case.
 	tPost := time.UnixMilli(tEntry).UTC()
 	q.clock = fixedClock{t: tPost}
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems)),
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(batchItems), mkInpoints(batchItems), nil),
 		"post-entry publish must have room")
 
 	// Churn: always-failing reservations (n > maxItems can never fit, even from
@@ -310,7 +310,7 @@ func Test_enqueueBatchIfRoom_reservedVsPublishedInvariant(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				if q.enqueueBatchIfRoom(mkNodes(maxItems+1), mkInpoints(maxItems+1)) {
+				if q.enqueueBatchIfRoom(mkNodes(maxItems+1), mkInpoints(maxItems+1), nil) {
 					churnPublished.Store(true)
 				}
 			}
@@ -458,12 +458,12 @@ func Test_normalizeMaxQueueItems_logsEnforcedBound(t *testing.T) {
 func Test_enqueueBatchIfRoom_oversizeBatchAdmittedOnEmptyQueue(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(10)
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)),
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25), nil),
 		"a batch bigger than the whole cap must be admitted alone rather than wedge forever")
 	require.Equal(t, int64(25), q.length(), "the ceiling is transiently exceeded by exactly this batch")
 
 	// The overshoot is bounded to one batch: the queue is no longer empty.
-	require.False(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)))
+	require.False(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25), nil))
 	require.Equal(t, int64(25), q.length(), "the refused batch's reservation was rolled back")
 
 	// Once drained, the next over-size batch is admitted again.
@@ -472,7 +472,7 @@ func Test_enqueueBatchIfRoom_oversizeBatchAdmittedOnEmptyQueue(t *testing.T) {
 	require.Equal(t, 25, len(batch.nodes))
 	require.Equal(t, int64(0), q.length())
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)),
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25), nil),
 		"an empty queue admits the next over-size batch, so the producer keeps making progress")
 }
 
@@ -482,9 +482,9 @@ func Test_enqueueBatchIfRoom_oversizeBatchAdmittedOnEmptyQueue(t *testing.T) {
 func Test_enqueueBatchIfRoom_oversizeBatchRefusedWhenQueueNotEmpty(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(10)
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(5), mkInpoints(5)))
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(5), mkInpoints(5), nil))
 
-	require.False(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25)))
+	require.False(t, q.enqueueBatchIfRoom(mkNodes(25), mkInpoints(25), nil))
 	require.Equal(t, int64(5), q.length(), "the rollback is complete: only the fitting batch is accounted")
 
 	// And nothing beyond the fitting batch was published.
@@ -502,8 +502,8 @@ func Test_enqueueBatchIfRoom_oversizeBatchRefusedWhenQueueNotEmpty(t *testing.T)
 func Test_enqueueBatchIfRoom_normalOverflowStillRefused(t *testing.T) {
 	q := NewLockFreeQueueWithLimit(10)
 
-	require.True(t, q.enqueueBatchIfRoom(mkNodes(6), mkInpoints(6)))
-	require.False(t, q.enqueueBatchIfRoom(mkNodes(6), mkInpoints(6)),
+	require.True(t, q.enqueueBatchIfRoom(mkNodes(6), mkInpoints(6), nil))
+	require.False(t, q.enqueueBatchIfRoom(mkNodes(6), mkInpoints(6), nil),
 		"a batch that fits the cap but not the remaining room is still refused")
 	require.Equal(t, int64(6), q.length())
 }

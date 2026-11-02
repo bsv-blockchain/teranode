@@ -2001,6 +2001,14 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 					return errors.NewBlockInvalidError("[ValidateBlock][%s] block already exists as invalid", block.Header.Hash().String())
 				}
 
+				// A stored valid block can be a fork accepted before the tip passed a
+				// checkpoint above it. It is not validated again, but it is no longer valid.
+				if blockMeta != nil {
+					if err = u.rejectStoredForkBelowCheckpoint(ctx, block.Header, blockMeta.Height); err != nil {
+						return err
+					}
+				}
+
 				ctxLogger.Warnf("[ValidateBlock][%s] tried to validate existing valid block", block.Header.Hash().String())
 				return nil
 			}
@@ -2136,14 +2144,21 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// and the operator revalidation endpoint carry authoritative heights), so this reads a
 		// trusted height. Run before the (expensive) header/subtree work so a checkpoint-
 		// conflicting block costs nothing. On the catchup path the header was already checked,
-		// so this is a cheap, harmless re-assertion. (Rejecting sub-checkpoint forks at
-		// non-checkpoint heights — the fork-depth rule — is a separate, broader change.)
+		// so this is a cheap, harmless re-assertion. Forks below a checkpoint at non-checkpoint
+		// heights are rejected by rejectForkBelowCheckpoint, right below.
 		if err = catchup.ValidateHeaderAgainstCheckpoints(block.Header, block.Height, u.settings.ChainCfgParams.Checkpoints); err != nil {
 			if !opts.IsRevalidation {
 				u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, err.Error())
 			}
 
 			return errors.NewBlockInvalidError("[ValidateBlock][%s] block conflicts with hardcoded checkpoint", block.Hash().String(), err)
+		}
+
+		// Fork-below-checkpoint rule, before any subtree work. The non-optimistic path runs it
+		// again just before the block is stored, in case the tip passes a checkpoint while the
+		// subtrees validate.
+		if err = u.rejectForkBelowCheckpoint(ctx, block, opts, baseURL); err != nil {
+			return err
 		}
 
 		// Use cached headers if available (during catchup), otherwise fetch from blockchain.
@@ -2850,6 +2865,18 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 
 			u.logger.Infof("[ValidateBlock][%s] validating block DONE", block.Hash().String())
 
+			// Re-check the checkpoint fork rule: the tip can pass a checkpoint while the
+			// subtrees validate. Like the store below, it must not fail on a cancelled
+			// parent context after the subtree work is done.
+			recheckCtx, recheckCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err = u.rejectForkBelowCheckpoint(recheckCtx, block, opts, baseURL)
+			recheckCancel()
+
+			if err != nil {
+				releaseBlockNodes(block)
+				return err
+			}
+
 			// if valid, store the block (or update it if revalidating)
 			u.logger.Infof("[ValidateBlock][%s] adding block to blockchain", block.Hash().String())
 
@@ -3033,6 +3060,77 @@ func (u *BlockValidation) storeInvalidBlock(ctx context.Context, block *model.Bl
 	}
 
 	u.kafkaNotifyBlockInvalid(block, reason, peerID, peerURL)
+}
+
+// rejectForkBelowCheckpoint applies bitcoin-sv's bad-fork-prior-to-checkpoint rule
+// (gap-analysis 4697): a block below a checkpoint the tip has already passed is invalid.
+// Such a block is validated at its own height, so below Genesis or Chronicle its txs get
+// the older script rules (issue 4940). Only blocks at or below the highest checkpoint can
+// trip it, so the tip lookup is skipped for every block above it. ValidateBlock runs it
+// before subtree work and, on the non-optimistic path, again just before storing the
+// block, since the tip can pass a checkpoint in between during initial sync. The
+// optimistic path stores the block before any subtree work, right after the first check.
+func (u *BlockValidation) rejectForkBelowCheckpoint(ctx context.Context, block *model.Block, opts *ValidateBlockOptions, baseURL string) error {
+	checkpoints := u.settings.ChainCfgParams.Checkpoints
+	if !model.BelowCheckpoint(checkpoints, block.Height) {
+		return nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get best block header for the checkpoint fork rule", block.Hash().String(), err)
+	}
+
+	if !model.ForkBelowCheckpoint(checkpoints, block.Height, tipMeta.Height) {
+		return nil
+	}
+
+	reason := fmt.Sprintf("bad-fork-prior-to-checkpoint: block height %d is below a checkpoint the tip (height %d) has passed", block.Height, tipMeta.Height)
+
+	if !opts.IsRevalidation {
+		u.rejectFinalHeaderVerdict(block, opts.PeerID, baseURL, reason)
+	}
+
+	return errors.NewBlockInvalidError("[ValidateBlock][%s] %s", block.Hash().String(), reason)
+}
+
+// rejectStoredForkBelowCheckpoint applies the checkpoint fork rule to a block already stored as
+// valid at height: one below a checkpoint the tip has passed that is not the main-chain block
+// at its height is a fork, and is refused. A main-chain block there is an ancestor of the
+// checkpoint and passes. Nothing is persisted and no peer is struck: the block was valid when
+// it was stored.
+func (u *BlockValidation) rejectStoredForkBelowCheckpoint(ctx context.Context, header *model.BlockHeader, height uint32) error {
+	checkpoints := u.settings.ChainCfgParams.Checkpoints
+	if !model.BelowCheckpoint(checkpoints, height) {
+		return nil
+	}
+
+	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get best block header for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	if !model.ForkBelowCheckpoint(checkpoints, height, tipMeta.Height) {
+		return nil
+	}
+
+	// The block's own id, then whether that id is on the main chain. Height alone does not
+	// say: the store keeps fork blocks at the same heights.
+	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, header.Hash(), 1)
+	if err != nil || len(ids) == 0 {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get the block id for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	onMainChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, ids[:1])
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to check the block is on the main chain for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	if onMainChain {
+		return nil
+	}
+
+	return errors.NewBlockInvalidError("[ValidateBlock][%s] bad-fork-prior-to-checkpoint: stored block at height %d is below a checkpoint the tip (height %d) has passed and is not on the main chain", header.Hash().String(), height, tipMeta.Height)
 }
 
 // rejectFinalHeaderVerdict handles a FINAL verdict reached before the body is bound to the

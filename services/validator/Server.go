@@ -676,6 +676,13 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.OutpointOnlySpend = *req.OutpointOnlySpend
 	}
 
+	if req.BlockAssemblyCandidateHeight != nil && req.BlockAssemblyCandidateMedianTime != nil {
+		opts.BlockAssemblyCandidate = &BlockAssemblyCandidate{
+			Height:         *req.BlockAssemblyCandidateHeight,
+			MedianTimePast: *req.BlockAssemblyCandidateMedianTime,
+		}
+	}
+
 	return opts, nil
 }
 

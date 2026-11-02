@@ -117,7 +117,7 @@ func newBatchedFixture(t *testing.T, state blockchain.FSMStateType) *batchedFixt
 	localClient, err := blockchain.NewLocalClient(logger, tSettings, &blockchainstore.MockStore{}, subtreeStore, base)
 	require.NoError(t, err)
 
-	blockchainClient := &fsmStateOverrideClient{ClientI: localClient, state: state}
+	blockchainClient := &fsmStateOverrideClient{ClientI: localClient, state: state, tipHeight: batchedTestHeight - 1}
 
 	txmeta := kafka.NewKafkaAsyncProducerMockWithBuffer(10_000)
 

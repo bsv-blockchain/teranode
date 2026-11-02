@@ -205,6 +205,14 @@ type SubtreeProcessor struct {
 	// settings contains the configuration parameters for the processor
 	settings *settings.Settings
 
+	// txEra is the range of validated heights admitted to the template; nil admits all.
+	// droppedTxs holds the transactions kept out, so their descendants are kept out too.
+	// See tx_era.go.
+	txEra        atomic.Pointer[txEra]
+	droppedMu    sync.Mutex
+	droppedTxs   map[chainhash.Hash]struct{}
+	droppedCount atomic.Int64
+
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
 
@@ -1133,6 +1141,9 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						dequeueBatches = append(dequeueBatches, batch)
 					}
 
+					// Before the parallel filter: descendants are found in queue order.
+					stp.filterTxEra(dequeueBatches)
+
 					if len(dequeueBatches) == 0 {
 						stp.setCurrentRunningState(StateRunning)
 						// Sleep briefly to avoid busy-wait when queue is empty.
@@ -1746,8 +1757,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	// clear remove map to prevent memory leak - entries for transactions that were
-	// never dequeued would otherwise accumulate indefinitely across resets
-	stp.removeMap = txmap.NewSplitSwissMap(256, 16)
+	// never dequeued would otherwise accumulate indefinitely across resets. Cleared in
+	// place: GetRemoveMapLength reads the field from other goroutines.
+	stp.removeMap.Clear()
 
 	// reset tx count
 	stp.setTxCountFromSubtrees()
@@ -3051,11 +3063,12 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
+//   - validatedHeights: Height each node was validated at, or nil when untagged
 //
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
-func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
-	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints)
+func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) bool {
+	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints, validatedHeights)
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
@@ -5584,17 +5597,25 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	flatInpoints := make([]*subtreepkg.TxInpoints, 0, blockNodeCount)
 	flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
 
+	// The block's transactions were validated at its height: keep out the ones under other
+	// rules than the next block's, as on every other way into the template.
+	stp.droppedMu.Lock()
 	for idx, subtreeNodes := range subtreesNodes {
 		startIdx := 0
 		if idx == 0 {
 			startIdx = 1 // skip coinbase in first subtree
 		}
 		for i := startIdx; i < len(subtreeNodes); i++ {
+			if !stp.admitTxLocked(subtreeNodes[i].Hash, &subtreeMetaTxInpoints[idx][i], block.Height) {
+				continue
+			}
+
 			flatHashes = append(flatHashes, subtreeNodes[i].Hash)
 			flatInpoints = append(flatInpoints, &subtreeMetaTxInpoints[idx][i])
 			flatNodes = append(flatNodes, subtreeNodes[i])
 		}
 	}
+	stp.droppedMu.Unlock()
 
 	if len(flatHashes) > 0 {
 		wasSet := make([]bool, len(flatHashes))
@@ -6551,6 +6572,8 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 		return nil, nil, nil, err
 	}
 
+	stp.forgetMinedDroppedTxs(transactionMap)
+
 	// Process conflicting transactions
 	var conflictingHashes map[chainhash.Hash]struct{}
 	losingTxHashesMap, conflictingHashes, err = stp.processConflictingTransactions(ctx, block, conflictingNodes, processedConflictingHashesMap)
@@ -6992,6 +7015,8 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 		itemsProcessed += int64(len(batch.nodes))
 
 		if chunkItems >= maxItems {
+			stp.filterTxEra(chunk)
+
 			if err := fn(chunk); err != nil {
 				return err
 			}
@@ -7001,6 +7026,8 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	}
 
 	if len(chunk) > 0 {
+		stp.filterTxEra(chunk)
+
 		return fn(chunk)
 	}
 

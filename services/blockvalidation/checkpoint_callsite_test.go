@@ -52,8 +52,10 @@ func TestCheckpointValidationCallSites(t *testing.T) {
 					client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, settings, store, nil, nil)
 					require.NoError(t, err)
 
-					// Reach a synthetic checkpoint through real SQL chain state. A new fork
-					// at height one must no longer inherit the historical difficulty skip.
+					// Build real SQL chain state up to height 2, below a synthetic checkpoint at
+					// 3 that the tip has not reached yet (a checkpoint the tip has passed rejects
+					// the fork outright, see TestValidateBlock_RejectsForkBelowCheckpoint). A new
+					// fork at height one must no longer inherit the historical difficulty skip.
 					prev := settings.ChainCfgParams.GenesisHash
 					for height := uint32(1); height <= 2; height++ {
 						header := settings.ChainCfgParams.GenesisBlock.Header
@@ -68,7 +70,7 @@ func TestCheckpointValidationCallSites(t *testing.T) {
 						require.NoError(t, client.AddBlock(ctx, block, "test"))
 						prev = block.Hash()
 					}
-					settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 2, Hash: prev}}
+					settings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 3, Hash: &chainhash.Hash{3}}}
 					_, best, err := client.GetBestBlockHeader(ctx)
 					require.NoError(t, err)
 					require.Equal(t, uint32(2), best.Height)

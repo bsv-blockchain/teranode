@@ -83,11 +83,13 @@ type ClientI interface {
 	//   - hash: Transaction hash
 	//   - fee: Transaction fee in satoshis
 	//   - size: Transaction size in bytes
+	//   - validatedHeight: Block height the transaction was validated at, or 0 when unknown;
+	//     block assembly drops a transaction validated under other rules than its next block's
 	//
 	// Returns:
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
-	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error)
+	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error)
 
 	// RemoveTx removes a transaction from block assembly.
 	//
@@ -242,11 +244,13 @@ type Store interface {
 	//   - hash: Transaction hash
 	//   - fee: Transaction fee in satoshis
 	//   - size: Transaction size in bytes
+	//   - validatedHeight: Block height the transaction was validated at, or 0 when unknown;
+	//     block assembly drops a transaction validated under other rules than its next block's
 	//
 	// Returns:
 	//   - bool: True if storage was successful
 	//   - error: Any error encountered during storage
-	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error)
+	Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error)
 
 	// RemoveTx removes a transaction from storage.
 	//

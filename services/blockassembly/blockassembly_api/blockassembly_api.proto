@@ -142,6 +142,7 @@ message AddTxRequest {
   uint32 locktime = 2; // the earliest time a transaction can be mined into a block
   repeated bytes utxos = 5; // the UTXOs consumed by this transaction
   bytes txInpoints = 6; // a serialized list of input outpoints for this transaction
+  uint32 validated_height = 7; // the block height the transaction was validated at; 0 = untagged. Block assembly drops a tagged transaction whose height falls under other consensus rules than its next block's. An older sender leaves it 0 and its transactions are admitted as before.
 }
 
 // Request for adding a batch of transactions to the mining candidate block.
@@ -222,6 +223,10 @@ message AddTxBatchColumnarRequest {
   //
   // Assigned a fresh field number (11) — see note on field 10.
   repeated uint32 vout_idxs_tx_offsets = 11;
+
+  // Per-transaction validated block height, as AddTxRequest.validated_height. Empty when
+  // the sender tags nothing (an older sender); otherwise one entry per transaction.
+  repeated uint32 validated_heights = 12;
 }
 
 // Request for retrieving a mining candidate block template.

@@ -968,8 +968,9 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// enabled in RUNNING): a floater child blessed at the candidate
 		// height and added to assembly is the same transaction policy-mode
 		// admission would have accepted into assembly anyway (policy
-		// substitutes tip+1 for unconfirmed parents — equal to the candidate
-		// height at the tip, and era flags cannot differ post-Genesis).
+		// substitutes tip+1 for unconfirmed parents). Assembly is fed only
+		// when the candidate height and tip+1 share the same transaction
+		// rules; see feedsBlockAssembly.
 		// Accepted-block txs are mined-removed from assembly as always.
 		validatorOptions := []validator.Option{
 			validator.WithSkipPolicyChecks(true),
@@ -987,11 +988,19 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 
 		// While catching up blocks, disable adding transactions to block
 		// assembly: bulk-history txs do not belong in our template. In
-		// RUNNING, assembly stays enabled so txs from a legacy-bridge tip
-		// block survive in the mempool if the block loses a reorg.
-		// IDLE is included: an operator STOP can land while catchup is running.
-		if *currentState != blockchain.FSMStateRUNNING {
+		// RUNNING, assembly stays enabled so txs from a legacy-bridge block
+		// survive in the mempool if the block loses a reorg, unless the block
+		// is above tip+1 or under different transaction rules from tip+1. See
+		// feedsBlockAssembly.
+		feeds, baCandidate, err := u.feedsBlockAssembly(ctx, *currentState == blockchain.FSMStateRUNNING, request.BlockHeight, previousBlockHash)
+		if err != nil {
+			return false, errors.NewProcessingError("[CheckSubtree] Failed to decide block assembly feed", err)
+		}
+
+		if !feeds {
 			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
+		} else if baCandidate != nil {
+			validatorOptions = append(validatorOptions, validator.WithBlockAssemblyCandidate(baCandidate))
 		}
 
 		// Call the validateSubtreeInternal method

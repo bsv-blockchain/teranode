@@ -8,7 +8,9 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 // inpointsForParents builds wire-format TxInpoints bytes for tests with
@@ -476,4 +478,80 @@ func TestAddTxBatchColumnar_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.True(t, resp.Ok)
+}
+
+// heightRecordingSubtreeProcessor records the validated heights each enqueued batch carries.
+type heightRecordingSubtreeProcessor struct {
+	*subtreeprocessor.MockSubtreeProcessor
+	heights [][]uint32
+}
+
+func (r *heightRecordingSubtreeProcessor) AddBatchIfRoom(_ []subtreepkg.Node, _ []*subtreepkg.TxInpoints, validatedHeights []uint32) bool {
+	r.heights = append(r.heights, validatedHeights)
+	return true
+}
+
+// TestAddTx_HandsTheValidatedHeightToTheSubtreeProcessor pins the tag every ingest handler
+// carries to the subtree processor, which keeps out a transaction validated under other
+// rules than the next block's.
+func TestAddTx_HandsTheValidatedHeightToTheSubtreeProcessor(t *testing.T) {
+	ba, _ := setupServer(t)
+
+	recorder := &heightRecordingSubtreeProcessor{MockSubtreeProcessor: &subtreeprocessor.MockSubtreeProcessor{}}
+	original := ba.blockAssembler.subtreeProcessor
+	ba.blockAssembler.subtreeProcessor = recorder
+	t.Cleanup(func() { ba.blockAssembler.subtreeProcessor = original })
+
+	txid := func(b byte) []byte { h := chainhash.Hash{b}; return h[:] }
+
+	noInpoints, err := (&subtreepkg.TxInpoints{}).Serialize()
+	require.NoError(t, err)
+
+	_, err = ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{Txid: txid(1), Fee: 1, Size: 1, TxInpoints: noInpoints, ValidatedHeight: 101})
+	require.NoError(t, err)
+
+	_, err = ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{TxRequests: []*blockassembly_api.AddTxRequest{
+		{Txid: txid(2), Fee: 1, Size: 1, TxInpoints: noInpoints, ValidatedHeight: 102},
+		{Txid: txid(3), Fee: 1, Size: 1, TxInpoints: noInpoints, ValidatedHeight: 103},
+	}})
+	require.NoError(t, err)
+
+	client := &Client{}
+	columnar, err := client.convertToColumnarFormat([]*batchItem{
+		{req: &blockassembly_api.AddTxRequest{Txid: txid(4), Fee: 1, Size: 1, TxInpoints: noInpoints, ValidatedHeight: 104}},
+		{req: &blockassembly_api.AddTxRequest{Txid: txid(5), Fee: 1, Size: 1, TxInpoints: noInpoints, ValidatedHeight: 105}},
+	})
+	require.NoError(t, err)
+
+	// Through the wire encoding, as the client sends it.
+	wire, err := proto.Marshal(columnar)
+	require.NoError(t, err)
+
+	decoded := &blockassembly_api.AddTxBatchColumnarRequest{}
+	require.NoError(t, proto.Unmarshal(wire, decoded))
+
+	_, err = ba.AddTxBatchColumnar(context.Background(), decoded)
+	require.NoError(t, err)
+
+	require.Equal(t, [][]uint32{{101}, {102, 103}, {104, 105}}, recorder.heights)
+}
+
+// TestAddTxBatchColumnar_ValidatesValidatedHeightsLength verifies that validated_heights is
+// either empty or one entry per transaction.
+func TestAddTxBatchColumnar_ValidatesValidatedHeightsLength(t *testing.T) {
+	ba, _ := setupServer(t)
+
+	noInpoints, err := (&subtreepkg.TxInpoints{}).Serialize()
+	require.NoError(t, err)
+
+	client := &Client{}
+	txid := chainhash.Hash{1}
+	req, err := client.convertToColumnarFormat([]*batchItem{{req: &blockassembly_api.AddTxRequest{Txid: txid[:], Fee: 1, Size: 1, TxInpoints: noInpoints}}})
+	require.NoError(t, err)
+
+	req.ValidatedHeights = []uint32{1, 2}
+
+	_, err = ba.AddTxBatchColumnar(context.Background(), req)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "validated_heights")
 }

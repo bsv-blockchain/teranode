@@ -766,6 +766,28 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 		mockBlockchainClient.AssertNotCalled(t, "SendNotification", mock.Anything, mock.Anything)
 	})
 
+	t.Run("ForkBelowPassedCheckpoint", func(t *testing.T) {
+		// The fork leaves our chain at 100, below the checkpoint at 120 that the tip (150) has
+		// passed: bitcoin-sv's bad-fork-prior-to-checkpoint. The offered chain is refused before
+		// any block is fetched, so a block of it that is already stored is never reached either.
+		server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 150)
+		defer cleanup()
+
+		params := *server.settings.ChainCfgParams
+		params.Checkpoints = []chaincfg.Checkpoint{{Height: 120, Hash: &chainhash.Hash{0x01}}}
+		server.settings.ChainCfgParams = &params
+		server.settings.ChainCfgParams.CoinbaseMaturity = 100
+		server.settings.BlockValidation.SecretMiningThreshold = 1000
+
+		before := blockFetches()
+		err := server.catchup(context.Background(), targetBlock, "peer-4697", "http://peer")
+
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+		require.Equal(t, before, blockFetches(), "no block of the fork may be fetched")
+		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
+	})
+
 	t.Run("SecretMiningDepth", func(t *testing.T) {
 		// Fork depth 180 - 100 = 80 <= CoinbaseMaturity (100) so validateForkDepth passes,
 		// but blocksBehind 80 > SecretMiningThreshold (50) => checkSecretMining rejects.

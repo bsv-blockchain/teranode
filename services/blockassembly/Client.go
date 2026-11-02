@@ -303,17 +303,18 @@ func (s *Client) Health(ctx context.Context, checkLiveness bool) (int, string, e
 // Returns:
 //   - bool: True if storage was successful
 //   - error: Any error encountered during storage
-func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints) (bool, error) {
+func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint64, txInpoints subtree.TxInpoints, validatedHeight uint32) (bool, error) {
 	txInpointsBytes, err := txInpoints.Serialize()
 	if err != nil {
 		return false, err
 	}
 
 	req := &blockassembly_api.AddTxRequest{
-		Txid:       hash[:],
-		Fee:        fee,
-		Size:       size,
-		TxInpoints: txInpointsBytes,
+		Txid:            hash[:],
+		Fee:             fee,
+		Size:            size,
+		TxInpoints:      txInpointsBytes,
+		ValidatedHeight: validatedHeight,
 	}
 
 	if s.batchSize == 0 {
@@ -630,6 +631,7 @@ func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api
 	txidsPacked := make([]byte, batchSize*32)
 	fees := make([]uint64, batchSize)
 	sizes := make([]uint64, batchSize)
+	validatedHeights := make([]uint32, batchSize)
 	parentTxOffsets := make([]uint32, batchSize+1)
 	voutIdxsTxOffsets := make([]uint32, batchSize+1)
 
@@ -660,6 +662,7 @@ func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api
 		copy(txidsPacked[i*32:(i+1)*32], req.Txid)
 		fees[i] = req.Fee
 		sizes[i] = req.Size
+		validatedHeights[i] = req.ValidatedHeight
 
 		// Deserialize TxInpoints on the Client side
 		txInpoints, err := subtree.NewTxInpointsFromBytes(req.TxInpoints)
@@ -699,6 +702,7 @@ func (s *Client) convertToColumnarFormat(batch []*batchItem) (*blockassembly_api
 		ParentTxOffsets:      parentTxOffsets,
 		VoutIdxsPacked:       voutIdxsPacked,
 		VoutIdxsTxOffsets:    voutIdxsTxOffsets,
+		ValidatedHeights:     validatedHeights,
 	}, nil
 }
 

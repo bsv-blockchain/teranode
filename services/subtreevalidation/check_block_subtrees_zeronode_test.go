@@ -72,6 +72,7 @@ func zeroNodeTestBlock(t *testing.T, subtreeHash *chainhash.Hash) *subtreevalida
 func TestCheckBlockSubtrees_RejectsZeroNodeLocalRead(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
@@ -108,6 +109,7 @@ func TestCheckBlockSubtrees_RejectsZeroNodeFetch(t *testing.T) {
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
@@ -136,6 +138,7 @@ func TestCheckBlockSubtrees_RejectsZeroNodeFetch(t *testing.T) {
 func TestCheckBlockSubtrees_ZeroNodeLocalReadIsLocal(t *testing.T) {
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
@@ -163,6 +166,7 @@ func TestCheckBlockSubtrees_MisplacedCoinbasePlaceholderIsAPeerFault(t *testing.
 
 	server, cleanup := setupTestServer(t)
 	defer cleanup()
+	mockBestBlockHeader(server)
 
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).

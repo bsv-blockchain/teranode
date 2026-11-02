@@ -141,6 +141,55 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **A block below a checkpoint the tip has passed is rejected.** Block validation now
+  applies bitcoin-sv's `bad-fork-prior-to-checkpoint` rule. A block whose height is
+  below a checkpoint the current tip has reached fails validation with that reason
+  before its transactions are checked. Nothing is persisted, and the invalid-block
+  notification strikes the peer that sent it. Initial sync is unaffected: checkpoints
+  above the tip do not count. The blockchain store enforces the same rule when it
+  stores a block that does not extend the best block, and `reconsiderblock` leaves such
+  a fork invalid. A catch-up refuses an offered chain that forks below a passed
+  checkpoint before it fetches any block, and a stored valid block below a passed
+  checkpoint that is not on the main chain is no longer reported as already validated.
+  Nothing to configure. (#2069)
+
+- **Block assembly keeps out transactions validated under other consensus rules than
+  the next block's.** Block assembly mines a transaction without checking it again.
+  A transaction validated for a height on the other side of an activation height
+  (Genesis, Chronicle, CSV, BIP65, BIP66, P2SH, UAHF or DAA, as the script engine
+  applies them) is now kept out of the template, and so are its descendants:
+    - Subtree validation hands a block's transactions to block assembly only when the
+      block is not above the next height to mine (tip+1) and both heights fall under the
+      same rules. For a block whose parent is not the tip, each transaction must also be
+      final at tip+1 against the tip's median time past, and, between CSV and Genesis,
+      must carry no active BIP68 relative lock. Otherwise it is stored without a template
+      entry.
+    - The validator now tells block assembly the height it validated each transaction
+      at: new field `validated_height` on `AddTxRequest` and `validated_heights` on
+      `AddTxBatchColumnarRequest`. Block assembly drops a transaction whose height falls
+      under other rules than the next block's, and every queued or reloaded descendant of
+      it, including the transactions of a block a reorg moves back. A reload tags a
+      transaction mined in blocks off the main chain with those blocks' height, and any
+      other with its `unmined_since`, the height it was created at. A reorg or an
+      invalidation backdates `unmined_since` to the tip less
+      `utxostore_unminedTxRetention`, or 1; such a value is read as unknown, and the
+      transaction is admitted as before. A drop is forgotten
+      once a block mines the transaction or a reload no longer finds it unmined, so its
+      descendants are admitted again. A new counter,
+      `teranode_subtreeprocessor_tx_era_dropped_total`, counts the drops.
+    - When a new block moves the next height under other rules, block assembly rebuilds
+      its template from the UTXO store. Mining candidates stay empty while it does. On
+      regtest this also happens once at block 1, because the script engine enables P2SH
+      at height 2.
+    - The validator gRPC request has two new fields, `block_assembly_candidate_height`
+      and `block_assembly_candidate_median_time`. The HTTP `/tx` endpoint refuses both.
+  In a mixed-version deploy, an older validator sends no height and its transactions
+  are admitted as before, and an older block assembly ignores the field. With
+  `blockassembly_storeTxInpointsForSubtreeMeta` off, block assembly has no parent
+  hashes, so it cannot find the descendants of a dropped transaction. A dropped
+  transaction stays in the UTXO store and is not resubmitted. Nothing to configure.
+  (#2069)
+
 - **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
   background, and block storage can wait for the repair.** `InvalidateBlock`,
   `RevalidateBlock`, the startup rebuild and two `StoreBlock` paths used to log a
@@ -931,21 +980,21 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 - **Conflict-check failures in subtree validation are no longer reported as
   context cancellations.** Two follow-ups to the entry above, both in subtree
   validation's conflict check:
-  - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
-    live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
-    walk limit, a frozen output, an input out of range and the fail-fast
-    missing-tx threshold are no longer wrapped as a context cancellation. Each is
-    still retried and never charged to a peer. What changes is how they show up:
-    on the live path `subtreeMessageHandler` logs them at error level ("error
-    processing kafka message") where it logged a "Context canceled, skipping"
-    warning, and a catch-up run that ends on the walk limit, a frozen output or an
-    out-of-range input records `local_processing_fault` instead of
-    `local_context_cancelled` as its last error type. A missing record, a
-    cancelled check, and a record the store could not decode keep the old
-    classification.
-  - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
-    the check's context is cancelled while it runs, as the cached path and
-    blessing a missing transaction already did. Before, it was retried.
+    - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
+      live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
+      walk limit, a frozen output, an input out of range and the fail-fast
+      missing-tx threshold are no longer wrapped as a context cancellation. Each is
+      still retried and never charged to a peer. What changes is how they show up:
+      on the live path `subtreeMessageHandler` logs them at error level ("error
+      processing kafka message") where it logged a "Context canceled, skipping"
+      warning, and a catch-up run that ends on the walk limit, a frozen output or an
+      out-of-range input records `local_processing_fault` instead of
+      `local_context_cancelled` as its last error type. A missing record, a
+      cancelled check, and a record the store could not decode keep the old
+      classification.
+    - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
+      the check's context is cancelled while it runs, as the cached path and
+      blessing a missing transaction already did. Before, it was retried.
 
   Nothing to configure. (bsv-blockchain/teranode#2066)
 

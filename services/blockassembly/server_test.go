@@ -249,7 +249,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))}))
+			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))}, nil))
 		}
 
 		require.Eventually(t, func() bool {
@@ -559,7 +559,7 @@ func TestTxCount(t *testing.T) {
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, nil))
 		}
 
 		// Wait for processing - expect initial count + 3 added transactions
@@ -582,7 +582,7 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, nil))
 		}
 
 		// Wait for transactions to be processed
@@ -1405,7 +1405,7 @@ func TestRemoveTxIntensive(t *testing.T) {
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}}))
+		}}, []*subtreepkg.TxInpoints{{}}, nil))
 
 		// Wait for it to be added
 		time.Sleep(10 * time.Millisecond)
@@ -1553,7 +1553,7 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, nil))
 		}
 
 		time.Sleep(50 * time.Millisecond) // Allow processing
@@ -2109,7 +2109,7 @@ func TestRemoveTxEdgeCases(t *testing.T) {
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}}))
+		}}, []*subtreepkg.TxInpoints{{}}, nil))
 
 		// Now remove it to cover the success path
 		req := &blockassembly_api.RemoveTxRequest{

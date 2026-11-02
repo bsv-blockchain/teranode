@@ -306,6 +306,12 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
+	// Step 4.1: Refuse a chain that forks below a checkpoint the tip has passed, before any
+	// of its blocks is fetched or skipped as already stored.
+	if err = u.validateForkBelowCheckpoint(catchupCtx); err != nil {
+		return err
+	}
+
 	// Step 5: Check for secret mining attempts
 	if err = u.checkSecretMining(ctx, catchupCtx); err != nil {
 		return err
@@ -1155,6 +1161,31 @@ func (u *Server) validateForkDepth(catchupCtx *CatchupContext) error {
 	u.logger.Infof("[catchup][%s] Fork depth %d is within coinbase maturity limit of %d", catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth, u.settings.ChainCfgParams.CoinbaseMaturity)
 
 	return nil
+}
+
+// validateForkBelowCheckpoint applies bitcoin-sv's bad-fork-prior-to-checkpoint rule to the
+// offered chain: its first block after the common ancestor must not sit below a checkpoint the
+// tip has reached. Checked on headers, as bitcoin-sv does, so a block of such a chain that is
+// already stored is refused with the rest rather than skipped as known.
+func (u *Server) validateForkBelowCheckpoint(catchupCtx *CatchupContext) error {
+	if catchupCtx.commonAncestorMeta == nil || catchupCtx.bestBlockMeta == nil {
+		return nil
+	}
+
+	firstForkHeight := catchupCtx.commonAncestorMeta.Height + 1
+	if !model.ForkBelowCheckpoint(u.settings.ChainCfgParams.Checkpoints, firstForkHeight, catchupCtx.bestBlockMeta.Height) {
+		return nil
+	}
+
+	u.logger.Errorf("[catchup][%s] bad-fork-prior-to-checkpoint: chain forks at height %d, below a checkpoint the tip (height %d) has passed", catchupCtx.blockUpTo.Hash().String(), firstForkHeight, catchupCtx.bestBlockMeta.Height)
+
+	u.recordMaliciousAttempt(catchupCtx.peerID, "bad_fork_prior_to_checkpoint")
+
+	if prometheusCatchupErrors != nil {
+		prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "bad_fork_prior_to_checkpoint").Inc()
+	}
+
+	return errors.NewServiceError("[catchup][%s] bad-fork-prior-to-checkpoint: chain forks at height %d, below a checkpoint the tip (height %d) has passed", catchupCtx.blockUpTo.Hash().String(), firstForkHeight, catchupCtx.bestBlockMeta.Height)
 }
 
 // checkSecretMining detects if the peer withheld blocks (secret mining attack).

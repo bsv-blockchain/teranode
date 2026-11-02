@@ -381,7 +381,7 @@ type recoveryBAStore struct {
 
 var _ blockassembly.Store = (*recoveryBAStore)(nil)
 
-func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
+func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints, _ uint32) (bool, error) {
 	f.calls++
 
 	if f.cancelCaller != nil {

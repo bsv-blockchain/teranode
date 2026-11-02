@@ -1086,7 +1086,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	// the option blockAssemblyDisabled is false by default
 	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
-	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
+	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly &&
+		v.minableAtBlockAssemblyCandidate(tx, txID, validationOptions.BlockAssemblyCandidate)
 
 	// spend the tx's inputs and create its outputs + metadata in one store
 	// operation; the store reverses the spends if the create fails (except on
@@ -1366,10 +1367,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		}
 
 		blockAssemblyData := &blockassembly.Data{
-			TxIDChainHash: *tx.TxIDChainHash(),
-			Fee:           txMetaData.Fee,
-			Size:          uint64(tx.Size()), // nolint:gosec
-			TxInpoints:    txInpoints,
+			TxIDChainHash:   *tx.TxIDChainHash(),
+			Fee:             txMetaData.Fee,
+			Size:            uint64(tx.Size()), // nolint:gosec
+			TxInpoints:      txInpoints,
+			ValidatedHeight: blockHeight,
 		}
 
 		// On the Kafka ingest path a queue-full shed is worth waiting out rather
@@ -2343,6 +2345,47 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 	return txMetaData, spends, nil
 }
 
+// minableAtBlockAssemblyCandidate reports whether a side block's transaction may be handed
+// to block assembly, which mines it at candidate without re-checking it. It must be final
+// there (nLockTime against the candidate height and the tip's median time past), and where
+// BIP68 applies it must carry no active relative lock: its parents can sit at other heights, or
+// be unmined, on the tip's chain. A nil candidate means the block extends the tip, so the
+// transaction was validated in the candidate's own context.
+func (v *Validator) minableAtBlockAssemblyCandidate(tx *bt.Tx, txID string, candidate *BlockAssemblyCandidate) bool {
+	if candidate == nil {
+		return true
+	}
+
+	if err := util.IsTransactionFinal(tx, candidate.Height, candidate.MedianTimePast); err != nil {
+		v.logger.Debugf("[Validate][%s] not final at the block assembly candidate (height %d), accepted without a template entry: %v", txID, candidate.Height, err)
+		return false
+	}
+
+	// BIP68 applies from CSV up to Genesis (TxValidator.sequenceLocks).
+	params := v.settings.ChainCfgParams
+	if candidate.Height >= params.CSVHeight && candidate.Height < params.GenesisActivationHeight && hasActiveRelativeLock(tx) {
+		v.logger.Debugf("[Validate][%s] active relative lock on a side block's transaction, accepted without a template entry", txID)
+		return false
+	}
+
+	return true
+}
+
+// hasActiveRelativeLock reports whether any input of tx carries a BIP68 relative lock.
+func hasActiveRelativeLock(tx *bt.Tx) bool {
+	if tx.Version < 2 {
+		return false
+	}
+
+	for _, input := range tx.Inputs {
+		if input.SequenceNumber&SequenceLockTimeDisableFlag == 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
 // sendToBlockAssembler sends validated transaction data to the block assembler.
 // Returns error if block assembly integration fails.
 //
@@ -2396,7 +2439,7 @@ func (v *Validator) sendToBlockAssembler(ctx context.Context, bData *blockassemb
 	v.logger.Debugf("[Validator] sending tx %s to block assembler", bData.TxIDChainHash.String())
 	// }
 
-	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints); err != nil {
+	if _, err := v.blockAssembler.Store(ctx, &bData.TxIDChainHash, bData.Fee, bData.Size, bData.TxInpoints, bData.ValidatedHeight); err != nil {
 		// A queue-full shed must keep its resource-exhausted classification so it
 		// surfaces as ResourceExhausted (retry gate skips it) rather than being
 		// masked as a generic service fault (Internal). Every other failure is a
@@ -3101,9 +3144,10 @@ func (v *Validator) validateTransaction(ctx context.Context, tx *bt.Tx, blockHei
 	// enabled in RUNNING for reorg resilience. The combination is safe: a
 	// floater child blessed at the candidate height and added to assembly is
 	// the same tx policy-mode admission would have accepted into assembly
-	// (policy substitutes tip+1 for unconfirmed parents — equal to the
-	// candidate height at the tip; era flags cannot differ post-Genesis), and
-	// accepted-block txs are mined-removed from assembly as always.
+	// (policy substitutes tip+1 for unconfirmed parents; subtreevalidation
+	// feeds assembly only when the candidate height and tip+1 share the same
+	// transaction rules), and accepted-block txs are mined-removed from
+	// assembly as always.
 	if validationOptions.UnconfirmedParentsAtCandidateHeight {
 		utxoHeights = resolveUnconfirmedParentsAtCandidateHeight(utxoHeights, blockHeight)
 	}
