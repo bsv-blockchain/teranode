@@ -141,6 +141,22 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **A syncing node refuses unmined transactions at every intake.** While the FSM is
+  `CATCHINGBLOCKS`, propagation (gRPC, HTTP `/tx` and `/txs`, UDP), the validator's
+  Kafka consumer, legacy `tx` messages and the legacy orphan-eviction retry, and RPC
+  `sendrawtransaction` all drop the transaction before anything is stored. Propagation
+  answers HTTP 503 with `SERVICE_UNAVAILABLE`; `sendrawtransaction` answers RPC error
+  -10, the code bitcoind uses during initial block download; legacy peers get no
+  reject message. A short catch-up from `RUNNING` also moves the FSM to
+  `CATCHINGBLOCKS`, so a node at the tip refuses for the length of that catch-up too.
+  A cached `IDLE`, which a node reads while the blockchain service restarts, still
+  accepts. Clients that submit to a node during a sync must resubmit once it reaches
+  `RUNNING`. Refusals are counted in
+  `teranode_unmined_transactions_refused_while_syncing_total{route}`. Propagation's
+  HTTP status for any other `SERVICE_UNAVAILABLE` error moves from 500 to 503 as well.
+  Block and subtree validation are not gated and still validate a block's own
+  transactions during catch-up. (#PRNUM)
+
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**
   Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop
@@ -892,21 +908,21 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 - **Conflict-check failures in subtree validation are no longer reported as
   context cancellations.** Two follow-ups to the entry above, both in subtree
   validation's conflict check:
-  - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
-    live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
-    walk limit, a frozen output, an input out of range and the fail-fast
-    missing-tx threshold are no longer wrapped as a context cancellation. Each is
-    still retried and never charged to a peer. What changes is how they show up:
-    on the live path `subtreeMessageHandler` logs them at error level ("error
-    processing kafka message") where it logged a "Context canceled, skipping"
-    warning, and a catch-up run that ends on the walk limit, a frozen output or an
-    out-of-range input records `local_processing_fault` instead of
-    `local_context_cancelled` as its last error type. A missing record, a
-    cancelled check, and a record the store could not decode keep the old
-    classification.
-  - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
-    the check's context is cancelled while it runs, as the cached path and
-    blessing a missing transaction already did. Before, it was retried.
+    - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
+      live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
+      walk limit, a frozen output, an input out of range and the fail-fast
+      missing-tx threshold are no longer wrapped as a context cancellation. Each is
+      still retried and never charged to a peer. What changes is how they show up:
+      on the live path `subtreeMessageHandler` logs them at error level ("error
+      processing kafka message") where it logged a "Context canceled, skipping"
+      warning, and a catch-up run that ends on the walk limit, a frozen output or an
+      out-of-range input records `local_processing_fault` instead of
+      `local_context_cancelled` as its last error type. A missing record, a
+      cancelled check, and a record the store could not decode keep the old
+      classification.
+    - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
+      the check's context is cancelled while it runs, as the cached path and
+      blessing a missing transaction already did. Before, it was retried.
 
   Nothing to configure. (bsv-blockchain/teranode#2066)
 

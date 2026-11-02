@@ -156,6 +156,13 @@ type Server struct {
 	// It is the ONLY handle on consumerCtx, which is why setConsumerContext
 	// cancels the pair it replaces rather than overwriting both fields.
 	consumerCancel context.CancelFunc
+
+	// unminedTxGate drops every transaction taken from the validator Kafka topic
+	// while the node syncs (issue 2003). Only the Kafka consumer consults it: the
+	// gRPC and HTTP endpoints also serve block and subtree validation during
+	// catch-up, which must go on validating a block's own transactions. nil
+	// accepts everything.
+	unminedTxGate *blockchain.UnminedTxGate
 }
 
 // setConsumerContext installs the consumer context and its cancel function,
@@ -234,6 +241,7 @@ func NewServer(logger ulogger.Logger, tSettings *settings.Settings, utxoStore ut
 		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
 		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
 		blockAssemblyClient:                 blockAssemblyClient,
+		unminedTxGate:                       blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRouteValidatorKafka),
 	}
 }
 
@@ -468,6 +476,14 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 		v.logger.Errorf("[Validator] failed to parse transaction from bytes: %v", err)
 
 		return err
+	}
+
+	// A syncing node stores no unmined transaction (issue 2003). The message is
+	// dropped, and nil commits its offset: a transaction held until RUNNING would
+	// be hours old when the node caught up. Propagation refuses at its own intake,
+	// so this catches what was already on the topic when the sync began.
+	if v.unminedTxGate.Refuses(consumerCtx, tx.TxIDChainHash()) {
+		return nil
 	}
 
 	height := kafkaMsg.Height

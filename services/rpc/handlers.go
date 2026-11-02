@@ -890,6 +890,16 @@ func handleSendRawTransaction(ctx context.Context, s *RPCServer, cmd interface{}
 
 	s.logger.Debugf("tx to send: %v", tx)
 
+	// A syncing node stores no unmined transaction, not even the blob (issue
+	// 2003). -10 is the code bitcoind uses for a call it refuses during initial
+	// block download, so a client already handling that one needs no change.
+	if s.unminedTxGate.Refuses(ctx, tx.TxIDChainHash()) {
+		return nil, &bsvjson.RPCError{
+			Code:    bsvjson.ErrRPCClientInInitialDownload,
+			Message: "node is syncing and accepts no unmined transactions until it reaches the chain tip",
+		}
+	}
+
 	// Store the transaction in blob store first (following the pattern from propagation service)
 	if s.txStore != nil {
 		err = s.txStore.Set(ctx, tx.TxIDChainHash().CloneBytes(), fileformat.FileTypeTx, tx.SerializeBytes())

@@ -678,6 +678,14 @@ type SyncManager struct {
 	blockValidation   blockvalidation.Interface
 	blockAssembly     blockassembly.ClientI
 	legacyKafkaInvCh  chan *kafka.Message
+
+	// txGate and orphanEvictionGate drop unmined transactions while the node
+	// syncs (issue 2003): txGate for a tx message a peer sends, announced or not,
+	// and orphanEvictionGate for the last validation an orphan gets when the pool
+	// evicts it. Announcements need no gate of their own, handleInvMsg asks for a
+	// transaction only in RUNNING. nil accepts everything.
+	txGate             *teranodeblockchain.UnminedTxGate
+	orphanEvictionGate *teranodeblockchain.UnminedTxGate
 	// legacyKafkaInvProducer is retained (DC11) so SyncManager.Stop() can stop it
 	// synchronously; without a field there is no handle to flush it on shutdown.
 	legacyKafkaInvProducer kafka.KafkaAsyncProducerI
@@ -1876,6 +1884,21 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	// interoperability.
 	txHash := tmsg.tx.Hash()
 
+	// A syncing node stores no unmined transaction (issue 2003). This is the one
+	// legacy route the inv gate does not cover: a peer may send tx without an
+	// inv, and BitcoinJ-style wallets do. The tx is dropped without a reject
+	// message and without a rejectedTxns entry, because it is not invalid, and
+	// a peer that announces it again once the node is RUNNING gets asked for it.
+	// SV Node does validate an unsolicited tx during IBD, but its mempool is an
+	// overlay that never removes a coin from the chainstate; teranode has no such
+	// overlay, so it needs the stricter rule.
+	if sm.txGate.Refuses(ctx, txHash) {
+		state.requestedTxns.Delete(*txHash)
+		sm.requestedTxns.Delete(*txHash)
+
+		return
+	}
+
 	// Ignore transactions that we have already rejected.  Do not
 	// send a reject message here because if the transaction was already
 	// rejected, the transaction was unsolicited.
@@ -2052,6 +2075,55 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 		// process any orphan transactions that were waiting for this transaction to be accepted
 		sm.processOrphanTransactions(ctx, orphanTx.tx.TxIDChainHash(), acceptedTxs)
 	}
+}
+
+// evictOrphan is the orphan pool's eviction function. It gives the evicted
+// orphan one last validation, then lets it go whatever the result.
+func (sm *SyncManager) evictOrphan(txHash chainhash.Hash, orphanTx *orphanTxAndParents) bool {
+	// An orphan parked while RUNNING can be evicted after the node falls back
+	// into a sync, and this last attempt would then store it (issue 2003). It
+	// is dropped instead, counted by the gate rather than as abandoned.
+	if sm.orphanEvictionGate.Refuses(sm.ctx, &txHash) {
+		return true
+	}
+
+	// try to process one last time
+	// passing in block height 0, which will default to utxo store block height in validator
+	if _, err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
+		// ErrTxUnlockFailed means the orphan was ACCEPTED - spent, created and delivered to
+		// block assembly - and only an unlock is outstanding, so it is not a validation
+		// failure. Every other Validate call site branches on this code; leaving it out here
+		// costs a misleading "failed to validate" line for a transaction the node took.
+		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			sm.logger.Debugf("evicted orphan transaction %v, it was accepted with its unlock pending", txHash)
+		} else {
+			// The tx is now dropped for good: it never validated and nothing will
+			// retry it. This is the event that hid the #1214 ghost-spender incident
+			// for ~40 hours, so every abandonment is counted — the metric is the
+			// dashboard signal.
+			//
+			// Only ErrTxMissingParent is demoted to Debugf: the orphan outlived its
+			// wait for a parent that never arrived, which is the normal outcome for a
+			// chunk of orphans during initial sync and carries no operator signal.
+			// ErrTxLocked stays at WARN even though the parking path treats it as an
+			// orphan class alongside ErrTxMissingParent — it means the parent's record
+			// is still two-phase-commit locked pending block-assembly ack, a window
+			// measured in milliseconds, so a lock that outlived the whole orphan TTL
+			// is anomalous rather than routine. Everything else (policy rejection,
+			// storage failure) stays at WARN for the obvious reason.
+			prometheusLegacyNetsyncOrphansAbandoned.Inc()
+
+			if errors.Is(err, errors.ErrTxMissingParent) {
+				sm.logger.Debugf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+			} else {
+				sm.logger.Warnf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
+			}
+		}
+	} else {
+		sm.logger.Debugf("evicted orphan transaction %v", txHash)
+	}
+
+	return true
 }
 
 // isCurrent returns whether the sync manager believes it is synced with the chain.
@@ -4539,6 +4611,9 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		subtreeValidation: subtreeValidation,
 		blockValidation:   blockValidation,
 		blockAssembly:     blockAssembly,
+
+		txGate:             teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyTx),
+		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
 	}
 
 	// Where every downloaded block is converted to and committed from. Not
@@ -4604,45 +4679,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	// set an eviction function for orphan transactions
 	// this will be called when an orphan transaction is evicted from the map
-	sm.orphanTxs.WithEvictionFunction(func(txHash chainhash.Hash, orphanTx *orphanTxAndParents) bool {
-		// try to process one last time
-		// passing in block height 0, which will default to utxo store block height in validator
-		if _, err := sm.validationClient.Validate(sm.ctx, orphanTx.tx, 0); err != nil {
-			// ErrTxUnlockFailed means the orphan was ACCEPTED - spent, created and delivered to
-			// block assembly - and only an unlock is outstanding, so it is not a validation
-			// failure. Every other Validate call site branches on this code; leaving it out here
-			// costs a misleading "failed to validate" line for a transaction the node took.
-			if errors.Is(err, errors.ErrTxUnlockFailed) {
-				sm.logger.Debugf("evicted orphan transaction %v, it was accepted with its unlock pending", txHash)
-			} else {
-				// The tx is now dropped for good: it never validated and nothing will
-				// retry it. This is the event that hid the #1214 ghost-spender incident
-				// for ~40 hours, so every abandonment is counted — the metric is the
-				// dashboard signal.
-				//
-				// Only ErrTxMissingParent is demoted to Debugf: the orphan outlived its
-				// wait for a parent that never arrived, which is the normal outcome for a
-				// chunk of orphans during initial sync and carries no operator signal.
-				// ErrTxLocked stays at WARN even though the parking path treats it as an
-				// orphan class alongside ErrTxMissingParent — it means the parent's record
-				// is still two-phase-commit locked pending block-assembly ack, a window
-				// measured in milliseconds, so a lock that outlived the whole orphan TTL
-				// is anomalous rather than routine. Everything else (policy rejection,
-				// storage failure) stays at WARN for the obvious reason.
-				prometheusLegacyNetsyncOrphansAbandoned.Inc()
-
-				if errors.Is(err, errors.ErrTxMissingParent) {
-					sm.logger.Debugf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
-				} else {
-					sm.logger.Warnf("orphan transaction %v abandoned after eviction, never validated: %v", txHash, err)
-				}
-			}
-		} else {
-			sm.logger.Debugf("evicted orphan transaction %v", txHash)
-		}
-
-		return true
-	})
+	sm.orphanTxs.WithEvictionFunction(sm.evictOrphan)
 
 	// add the number of orphan transactions to the prometheus metric
 	go func() {

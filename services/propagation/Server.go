@@ -118,12 +118,16 @@ const udpWorkerPoolSize = 100
 // transactions simultaneously through the same server instance.
 type PropagationServer struct {
 	propagation_api.UnsafePropagationAPIServer
-	logger                       ulogger.Logger
-	settings                     *settings.Settings
-	stats                        *gocore.Stat
-	txStore                      blob.Store
-	validator                    validator.Interface
-	blockchainClient             blockchain.ClientI
+	logger           ulogger.Logger
+	settings         *settings.Settings
+	stats            *gocore.Stat
+	txStore          blob.Store
+	validator        validator.Interface
+	blockchainClient blockchain.ClientI
+	// unminedTxGate drops every incoming transaction while the node syncs
+	// (issue 2003). All intakes, gRPC, HTTP /tx and /txs and UDP, reach
+	// processTransactionInternal, which consults it. nil accepts everything.
+	unminedTxGate                *blockchain.UnminedTxGate
 	validatorKafkaProducerClient kafka.KafkaAsyncProducerI
 	httpServer                   *echo.Echo
 	validatorHTTPAddr            *url.URL
@@ -173,6 +177,7 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, txStore blob.Store
 		txStore:                      txStore,
 		validator:                    validatorClient,
 		blockchainClient:             blockchainClient,
+		unminedTxGate:                blockchain.NewUnminedTxGate(logger, blockchainClient, blockchain.UnminedTxRoutePropagation),
 		validatorKafkaProducerClient: validatorKafkaProducerClient,
 		validatorHTTPAddr:            tSettings.Validator.HTTPAddress,
 		banList:                      banList,
@@ -773,6 +778,10 @@ func httpStatusForTxError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, errors.ErrTxMissingParent):
 		return http.StatusUnprocessableEntity
+	case errors.Is(err, errors.ErrServiceUnavailable):
+		// The node is syncing and refused the tx at intake (issue 2003).
+		// Nothing was stored; a resubmit after catch-up is accepted.
+		return http.StatusServiceUnavailable
 	case errors.Is(err, errors.ErrThresholdExceeded):
 		// Block assembly shed the tx because its ingest queue is full. The tx is
 		// durably stored but not yet in a template; a resubmit re-drives the
@@ -1380,6 +1389,13 @@ func (ps *PropagationServer) processTransactionInternal(ctx context.Context, btT
 	// covers HTTP /tx, gRPC, and HTTP /txs (which parses with ReadFrom and
 	// calls this directly), so one hash replaces all of them.
 	btTx.SetTxHash(btTx.TxIDChainHash())
+
+	// A syncing node stores no unmined transaction, not even the blob: it is
+	// dropped before anything is written (issue 2003). The status is 503, so a
+	// client knows to resubmit once the node has caught up.
+	if ps.unminedTxGate.Refuses(ctx, btTx.TxIDChainHash()) {
+		return errors.NewServiceUnavailableError("[ProcessTransaction][%s] node is syncing and accepts no unmined transactions until it reaches the chain tip", btTx.TxID())
+	}
 
 	// Do not allow propagation of coinbase transactions
 	if btTx.IsCoinbase() {

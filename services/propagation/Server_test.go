@@ -1988,3 +1988,66 @@ func TestPropagationServer_Start_FSMContextCancellation(t *testing.T) {
 	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
 	mockBlockchainClient.AssertExpectations(t)
 }
+
+// TestProcessTransaction_RefusedWhileSyncing pins issue 2003 on propagation:
+// in CATCHINGBLOCKS a transaction is refused with 503 and the UTXO store never
+// sees it, while RUNNING and a cached IDLE both accept it. IDLE accepts because
+// it is what a healthy node at the tip reads while the blockchain service
+// restarts.
+func TestProcessTransaction_RefusedWhileSyncing(t *testing.T) {
+	tracing.SetupMockTracer()
+	initPrometheusMetrics()
+
+	for _, tt := range []struct {
+		state   blockchain.FSMStateType
+		refuses bool
+	}{
+		{blockchain.FSMStateCATCHINGBLOCKS, true},
+		{blockchain.FSMStateRUNNING, false},
+		{blockchain.FSMStateIDLE, false},
+	} {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			ctx := context.Background()
+
+			validatorInstance, utxoStore := setupRealValidator(t, ctx)
+
+			state := tt.state
+			blockchainClient := &blockchain.Mock{}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+			txStore, err := null.New(ulogger.TestLogger{})
+			require.NoError(t, err)
+
+			ps := &PropagationServer{
+				logger:        ulogger.TestLogger{},
+				settings:      test.CreateBaseTestSettings(t),
+				validator:     validatorInstance,
+				txStore:       txStore,
+				unminedTxGate: blockchain.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain.UnminedTxRoutePropagation),
+			}
+
+			txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+			_, _, err = utxoStore.SpendAndCreate(ctx, txs[0], 1, utxo.WithCreateOnly())
+			require.NoError(t, err)
+
+			refusedBefore := ps.unminedTxGate.RefusedTotal()
+
+			_, err = ps.processTransaction(ctx, &propagation_api.ProcessTransactionRequest{Tx: txs[1].ExtendedBytes()})
+
+			_, getErr := utxoStore.Get(ctx, txs[1].TxIDChainHash())
+
+			if tt.refuses {
+				require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+				require.Equal(t, http.StatusServiceUnavailable, httpStatusForTxError(err))
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "a refused tx must not reach the UTXO store")
+				require.InDelta(t, refusedBefore+1, ps.unminedTxGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.NoError(t, getErr, "an accepted tx is in the UTXO store")
+			require.InDelta(t, refusedBefore, ps.unminedTxGate.RefusedTotal(), 0)
+		})
+	}
+}
