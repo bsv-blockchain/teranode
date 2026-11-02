@@ -128,6 +128,9 @@ type minedOnChainBlock struct {
 	passes     int
 	nextPass   time.Time
 	passHeight uint32
+	// gone lists the subtrees found gone from the store, so a block that a reorg moves off
+	// the chain and back counts each of them once.
+	gone []chainhash.Hash
 }
 
 // clearPending has the block's next unmark job read all of it again.
@@ -205,7 +208,7 @@ func (t *minedOnChainTracker) track(hash chainhash.Hash, id, height uint32) {
 	// stamped stays: if this write fails before clearing the re-marked txs again, the remine
 	// job is what marks them mined, and a remine over txs already mined writes nothing.
 	t.nextGen++
-	t.blocks[hash] = minedOnChainBlock{id: id, height: height, gen: t.nextGen, failures: t.blocks[hash].failures, stamped: t.blocks[hash].stamped}
+	t.blocks[hash] = minedOnChainBlock{id: id, height: height, gen: t.nextGen, failures: t.blocks[hash].failures, stamped: t.blocks[hash].stamped, gone: t.blocks[hash].gone}
 }
 
 // seed watches a block found by the restart seed. A block already watched keeps its state.
@@ -268,6 +271,31 @@ func (t *minedOnChainTracker) update(hash chainhash.Hash, gen uint64, fn func(*m
 	}
 }
 
+// markGone records that a subtree of the block is gone and reports whether it is the first
+// time, so it is counted once however many jobs meet it.
+func (t *minedOnChainTracker) markGone(hash chainhash.Hash, subtree chainhash.Hash) bool {
+	if t == nil {
+		return true
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	b, ok := t.blocks[hash]
+	if !ok {
+		return true
+	}
+
+	if slices.Contains(b.gone, subtree) {
+		return false
+	}
+
+	b.gone = append(slices.Clip(b.gone), subtree)
+	t.blocks[hash] = b
+
+	return true
+}
+
 func (t *minedOnChainTracker) drop(hash chainhash.Hash) {
 	if t == nil {
 		return
@@ -316,6 +344,15 @@ const (
 	// chain, for those that still carry the block's id.
 	remineJob
 )
+
+// goneSubtreeEffect says what a gone subtree leaves wrong in a job of this kind.
+func (k tipRepairJobKind) goneSubtreeEffect() string {
+	if k == remineJob {
+		return "its txs may stay marked not on the longest chain while their block is on it"
+	}
+
+	return "its txs may stay marked mined while off the longest chain"
+}
 
 // tipRepairJob is a repair in progress over one block, worked through one subtree, and
 // within a subtree one slice of txs, per step. Only the current subtree's tx hashes are
@@ -976,9 +1013,14 @@ func (u *BlockValidation) jobStep(ctx context.Context, blockchainClient blockcha
 			switch {
 			case isPermanentRepairError(err):
 				// Gone for good: nothing can name its txs again, so holding pruning for it would
-				// only delay the loss. It is given up, as a gone block is (repairFailed).
-				u.logger.Errorf("[repairOvertakenTips][%s] giving up subtree %s, it is gone; its txs may stay marked mined while off the longest chain: %v", job.hash.String(), subtreeHash.String(), err)
-				prometheusBlockValidationTipRepairAbandoned.WithLabelValues("subtree").Inc()
+				// only delay the loss. It is given up, as a gone block is (repairFailed), and
+				// counted once per block.
+				if u.minedOnChain.markGone(job.hash, *subtreeHash) {
+					u.logger.Errorf("[repairOvertakenTips][%s] giving up subtree %s, it is gone; %s: %v", job.hash.String(), subtreeHash.String(), job.kind.goneSubtreeEffect(), err)
+					prometheusBlockValidationTipRepairAbandoned.WithLabelValues("subtree").Inc()
+				} else {
+					u.logger.Warnf("[repairOvertakenTips][%s] skipping subtree %s, still gone; %s", job.hash.String(), subtreeHash.String(), job.kind.goneSubtreeEffect())
+				}
 			case ctx.Err() == nil && job.subtreeFailures >= tipRepairMaxAttempts:
 				u.logger.Errorf("[repairOvertakenTips][%s] setting subtree %s aside after %d failed loads, it is read again later: %v", job.hash.String(), subtreeHash.String(), job.subtreeFailures, err)
 				job.unreadable = append(job.unreadable, subtreeHash)

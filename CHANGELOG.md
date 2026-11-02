@@ -179,9 +179,10 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   again on every block and holds pruning until it reads or the block leaves the
   1000-block repair window. A subtree or block that is gone from its store can never be
   read: a gone subtree is given up at once, and a gone block after 10 attempts, both
-  counted in `teranode_blockvalidation_tip_repair_abandoned_total`. Their transactions
-  may stay marked mined while off the chain, and the pruner can then delete parents they
-  need. `teranode_pruner_overtaken_tip_repair_held_blocks` and
+  counted in `teranode_blockvalidation_tip_repair_abandoned_total` (a gone subtree once
+  per block, however often a reorg moves the block). Their transactions may stay marked
+  mined while off the chain, and the pruner can then delete parents they need; if the
+  block comes back onto the chain, they may stay marked not on it. `teranode_pruner_overtaken_tip_repair_held_blocks` and
   `teranode_blockvalidation_tip_repair_subtrees_set_aside` show a hold; a hold that stays
   above zero means a subtree file is corrupt or a store keeps failing, and disk use grows
   until it is resolved. A repair that keeps failing no longer stops healthy blocks: their

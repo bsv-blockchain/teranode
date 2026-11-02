@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -66,4 +67,41 @@ func TestMarkTransactionsOnLongestChain_MissingIsSkippedNotFatal(t *testing.T) {
 
 	_ = store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*missing, txHash}, false)
 	require.Positive(t, rec.fatals.Load(), "a missing tx marked not on the longest chain is still fatal")
+}
+
+// With WithSkipMissing, marking not on the longest chain skips a tx the store no longer holds
+// instead of exiting: the overtaken-tip repair reads a block's txs, and the pruner may delete
+// some before it marks them. The txs the store holds are still marked.
+func TestMarkTransactionsOnLongestChain_SkipMissingNotOnLongestChain(t *testing.T) {
+	rec := &fatalRecorder{ErrorTestLogger: ulogger.NewErrorTestLogger(t)}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, rec)
+	defer deferFn()
+
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(100))
+
+	tx, err := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17032dff0c2f71646c6e6b2f5e931c7f7b6199adf35e1300ffffffff01d15fa012000000001976a91417db35d440a673a218e70a5b9d07f895facf50d288ac00000000")
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, tx, 100, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	txHash := *tx.TxIDChainHash()
+
+	meta, err := store.Get(ctx, &txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Zero(t, meta.UnminedSince, "precondition: mined")
+
+	missing, err := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
+	require.NoError(t, err)
+
+	require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*missing, txHash}, false, utxo.WithSkipMissing()))
+	require.Zero(t, rec.fatals.Load(), "a missing tx is skipped, not fatal")
+
+	meta, err = store.Get(ctx, &txHash, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, meta.UnminedSince, "the tx the store holds is still marked")
 }

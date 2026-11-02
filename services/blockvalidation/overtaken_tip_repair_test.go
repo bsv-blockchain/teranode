@@ -2394,6 +2394,35 @@ func TestRepairOvertakenTips_GoneSubtreeGivenUp(t *testing.T) {
 	require.InDelta(t, before+1, testutil.ToFloat64(prometheusBlockValidationTipRepairAbandoned.WithLabelValues("subtree")), 0, "and is counted")
 }
 
+// TestRepairOvertakenTips_GoneSubtreeCountedOnce: a block that a reorg moves off the chain and
+// back runs an unmark job and then a remine job, and both meet its gone subtree. It is one
+// subtree lost, so it is counted once.
+func TestRepairOvertakenTips_GoneSubtreeCountedOnce(t *testing.T) {
+	f := newOvertakeFixtureWithLaterSubtree(t)
+	bv := f.newBlockValidation(t)
+
+	require.NoError(t, bv.setTxMinedStatus(f.ctx, f.blockB.Hash()))
+	_ = f.overtakeB(t)
+
+	gone := f.erroringReads(f.subtreeStore, 0, 1<<30, errors.NewNotFoundError("subtree is gone"))
+	bv.subtreeStore = gone
+
+	before := testutil.ToFloat64(prometheusBlockValidationTipRepairAbandoned.WithLabelValues("subtree"))
+
+	_, err := drainTipRepair(t, bv)
+	require.NoError(t, err)
+	require.InDelta(t, before+1, testutil.ToFloat64(prometheusBlockValidationTipRepairAbandoned.WithLabelValues("subtree")), 0, "precondition: counted by the unmark job")
+
+	left := gone.fail.Load()
+
+	f.extendB(t)
+
+	_, err = drainTipRepair(t, bv)
+	require.NoError(t, err)
+	require.Less(t, gone.fail.Load(), left, "precondition: the remine job met the gone subtree too")
+	require.InDelta(t, before+1, testutil.ToFloat64(prometheusBlockValidationTipRepairAbandoned.WithLabelValues("subtree")), 0, "the same gone subtree is not counted again")
+}
+
 // TestRepairOvertakenTips_HoldReadBackBeforeAnyOnChainWrite: after a restart, the blocks a
 // hold recorded are read back on the first setTxMined, even when that block is off the chain
 // and tracks nothing, so their repair, and the release of the hold, does not wait for the
@@ -2462,4 +2491,19 @@ func TestSetTxMinedStatus_EmptyHoldSurvivesTheWire(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, meta.MinedSet)
 	require.Empty(t, f.heldBlocks(t))
+}
+
+// A block written on the chain again is tracked with a new gen, and keeps the subtrees found
+// gone, so a later job does not count them again.
+func TestMinedOnChainTracker_GoneSurvivesRetrack(t *testing.T) {
+	tr := newMinedOnChainTracker()
+	block := chainhash.HashH([]byte("block"))
+	subtree := chainhash.HashH([]byte("subtree"))
+
+	tr.track(block, 1, 10)
+	require.True(t, tr.markGone(block, subtree), "first time")
+	require.False(t, tr.markGone(block, subtree), "same job again")
+
+	tr.track(block, 1, 10)
+	require.False(t, tr.markGone(block, subtree), "after the block is tracked again")
 }

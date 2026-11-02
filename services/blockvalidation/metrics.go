@@ -294,7 +294,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "tip_repair_abandoned_total",
-			Help:      "Overtaken blocks (kind=block) and their subtrees (kind=subtree) the overtaken-tip repair gave up because they are gone. Their txs may stay marked mined while off the longest chain, and the pruner can delete parents those txs need; nothing can name them without the data.",
+			Help:      "Overtaken blocks (kind=block) and their subtrees (kind=subtree) the overtaken-tip repair gave up because they are gone, each subtree counted once per block. Their txs may keep the wrong status: marked mined while off the longest chain, where the pruner can delete parents they need, or marked not on the longest chain after their block came back onto it; nothing can name them without the data.",
 		},
 		[]string{"kind"},
 	)
