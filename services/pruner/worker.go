@@ -337,6 +337,12 @@ func (s *Server) overtakenTipRepairHeld(ctx context.Context, blockHashStr string
 			return false
 		}
 
+		// Cut short by the caller's own cancellation: not a failed read, and nothing is
+		// deleted on it.
+		if ctx.Err() != nil {
+			return true
+		}
+
 		s.logger.Errorf("[pruner][%s:%d] failed to read the overtaken-tip repair hold, deleting nothing this cycle: %v", blockHashStr, blockHeight, err)
 		prunerErrors.WithLabelValues("overtaken_tip_repair_hold").Inc()
 
@@ -443,6 +449,11 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			s.logger.Infof("Stopping pruner processor")
+
+			if s.repairHoldRetry != nil {
+				s.repairHoldRetry.Stop()
+			}
+
 			return
 
 		case sig := <-s.pruneNotify:

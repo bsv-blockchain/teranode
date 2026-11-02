@@ -1605,3 +1605,81 @@ func TestRepairHoldFirstCycleRecordFailureIsRetried(t *testing.T) {
 		t.Fatal("the held height was not retried after its first cycle's record write failed")
 	}
 }
+
+// A hold record that cannot be decoded may list blocks, so it holds: nothing is deleted.
+func TestRepairHoldUndecodableHolds(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: []byte{0x7f, 0x01}})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+	server.repairHoldRecheckInterval = time.Hour
+
+	before := getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold")
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101}
+
+	require.Eventually(t, func() bool { return getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold") > before },
+		2*time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond, "nothing is deleted")
+	require.Zero(t, client.acquired.Load(), "no blob deletion")
+}
+
+// A hold read cut short by the cycle's own cancellation, such as the watcher's read when phase
+// 2 finishes, is not a failed read: it is not logged or counted as one.
+func TestRepairHoldCancelledReadIsNotAnError(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{err: context.Canceled})
+
+	server := newRepairHoldTestServer(context.Background(), client, &recordingPruner{calls: make(chan uint32, 1)})
+
+	before := getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold")
+
+	require.True(t, server.overtakenTipRepairHeld(ctx, "x", 1), "a read that did not complete holds")
+	require.Equal(t, before, getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold"))
+}
+
+// Slack equal to CoinbaseMaturity leaves no gap phase 1 may miss: off mainnet and testnet the
+// cooldown is then off (checkRepairHoldSlack reports it). One block more allows a gap of one.
+func TestPhase1GapLimitSlackBoundary(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tc := range []struct {
+		name      string
+		retention uint32
+		pruned    bool
+	}{
+		{"slack equals maturity", 244, true},
+		{"slack one above maturity", 245, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			server, pruneSvc := newPhase1GapTestServer(t, ctx)
+			params := chaincfg.RegressionNetParams
+			params.CoinbaseMaturity = 100
+			server.settings.ChainCfgParams = &params
+			server.settings.GlobalBlockHeightRetention = tc.retention
+
+			go server.prunerProcessor(ctx)
+
+			if tc.pruned {
+				requirePruned(t, server, pruneSvc, 900000)
+			} else {
+				requirePhase2Skipped(t, server, pruneSvc, 900000)
+			}
+		})
+	}
+}

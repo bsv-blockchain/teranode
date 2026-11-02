@@ -87,8 +87,9 @@ const (
 )
 
 // tipRepairExpired reports whether a tracked block at height has left the window. Each slice
-// reads main-chain ids with GetBlockHeaderIDs(best, tipRepairWindow), which covers best down
-// to best-tipRepairWindow+1; a block below that would look off chain while it is not.
+// reads the main chain's tipRepairWindow headers ending at best (mainChainHeaders), which
+// cover best down to best-tipRepairWindow+1; a block below that would look off chain while it
+// is not.
 func tipRepairExpired(height, bestHeight uint32) bool {
 	return height+tipRepairWindow <= bestHeight
 }
@@ -556,6 +557,10 @@ func (u *BlockValidation) seedMinedOnChainTrackerLocked(ctx context.Context, blo
 			u.minedOnChain.seed(*header.Hash(), meta.ID, meta.Height)
 		}
 
+		if len(recent) == 0 {
+			break
+		}
+
 		lowest := recent[len(recent)-1].Height
 		if int64(len(recent)) < page || lowest == 0 {
 			break
@@ -594,16 +599,18 @@ func (u *BlockValidation) holdRecordedLocked(ctx context.Context, blockchainClie
 		return false, errors.NewServiceError("[repairOvertakenTips] failed to read the pruning hold", err)
 	}
 
-	u.tipRepairHoldChecked = true
-
-	if len(data) == 0 {
-		return false, nil
+	// One that cannot be decoded may list blocks: seed, which logs it, and write it again.
+	// Only a hold that lists nothing is checked for good; one that lists blocks is read again
+	// until the seed has tracked them, so a failed seed does not wait for the next block.
+	if len(data) > 0 {
+		if held, err := model.DecodeOvertakenTipRepairHold(data); err != nil || len(held) > 0 {
+			return true, nil
+		}
 	}
 
-	// One that cannot be decoded may list blocks: seed, which logs it, and write it again.
-	held, err := model.DecodeOvertakenTipRepairHold(data)
+	u.tipRepairHoldChecked = true
 
-	return err != nil || len(held) > 0, nil
+	return false, nil
 }
 
 // seedHeldBlocksLocked tracks the blocks a hold recorded before the restart lists. No record

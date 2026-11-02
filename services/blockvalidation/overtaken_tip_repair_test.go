@@ -52,6 +52,10 @@ type overtakeTestStore struct {
 
 	markedTrueMu sync.Mutex
 	markedTrue   []chainhash.Hash // every hash passed to MarkTransactionsOnLongestChain(true)
+
+	// marksWithoutSkipMissing counts the MarkTransactionsOnLongestChain calls, by direction,
+	// that would treat a tx pruned since the repair read it as corruption.
+	marksWithoutSkipMissing [2]atomic.Int32
 }
 
 func (s *overtakeTestStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxostore.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
@@ -68,6 +72,15 @@ func (s *overtakeTestStore) SetMinedMulti(ctx context.Context, hashes []*chainha
 }
 
 func (s *overtakeTestStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxostore.MarkLongestChainOption) error {
+	if !utxostore.NewMarkLongestChainOptions(opts...).SkipMissing {
+		dir := 0
+		if onLongestChain {
+			dir = 1
+		}
+
+		s.marksWithoutSkipMissing[dir].Add(1)
+	}
+
 	if onLongestChain {
 		s.markedTrueMu.Lock()
 		s.markedTrue = append(s.markedTrue, txHashes...)
@@ -1006,6 +1019,8 @@ func TestRepairOvertakenTips_SeedFailures(t *testing.T) {
 // older than the repair window.
 type farBestClient struct {
 	blockchain.ClientI
+	// best is the height reported for the best block; zero means far past the window.
+	best uint32
 }
 
 func (c *farBestClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
@@ -1013,6 +1028,11 @@ func (c *farBestClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHea
 	if meta != nil {
 		far := *meta
 		far.Height += 2 * tipRepairWindow
+
+		if c.best != 0 {
+			far.Height = c.best
+		}
+
 		meta = &far
 	}
 
@@ -2506,4 +2526,106 @@ func TestMinedOnChainTracker_GoneSurvivesRetrack(t *testing.T) {
 
 	tr.track(block, 1, 10)
 	require.False(t, tr.markGone(block, subtree), "after the block is tracked again")
+}
+
+// TestRepairOvertakenTips_WindowEdge: through the repair slice, a block tipRepairWindow-1
+// below the best block is still repaired, and one tipRepairWindow below it is dropped.
+func TestRepairOvertakenTips_WindowEdge(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		below    uint32
+		repaired bool
+	}{
+		{"inside", tipRepairWindow - 1, true},
+		{"at the edge", tipRepairWindow, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newOvertakeFixture(t)
+			bv := f.newBlockValidation(t)
+
+			require.NoError(t, bv.setTxMinedStatus(f.ctx, f.blockB.Hash()))
+			_ = f.overtakeB(t)
+
+			_, metaB, err := f.blockchainClient.GetBlockHeader(f.ctx, f.blockB.Hash())
+			require.NoError(t, err)
+
+			bv.blockchainClient = &farBestClient{ClientI: f.blockchainClient, best: metaB.Height + tc.below}
+
+			_, err = drainTipRepair(t, bv)
+			require.NoError(t, err)
+
+			if tc.repaired {
+				require.NotZero(t, f.unminedSince(t, f.bOnly), "repaired inside the window")
+			} else {
+				_, tracked := bv.minedOnChain.snapshot()[*f.blockB.Hash()]
+				require.False(t, tracked, "dropped at the edge")
+				require.Zero(t, f.unminedSince(t, f.bOnly), "and not repaired")
+			}
+		})
+	}
+}
+
+// TestRepairOvertakenTips_MarksSkipMissing: both repair writes skip a tx the pruner deleted
+// after the repair read it. Without the option a missing tx is fatal to the store.
+func TestRepairOvertakenTips_MarksSkipMissing(t *testing.T) {
+	f := newOvertakeFixture(t)
+	bv := f.newBlockValidation(t)
+
+	require.NoError(t, bv.setTxMinedStatus(f.ctx, f.blockB.Hash()))
+	_ = f.overtakeB(t)
+
+	_, err := drainTipRepair(t, bv)
+	require.NoError(t, err)
+	require.NotZero(t, f.unminedSince(t, f.bOnly), "precondition: the unmark job wrote")
+	require.Zero(t, f.store.marksWithoutSkipMissing[0].Load(), "the unmark job skips missing txs")
+
+	f.extendB(t)
+
+	_, err = drainTipRepair(t, bv)
+	require.NoError(t, err)
+	require.Zero(t, f.unminedSince(t, f.bOnly), "precondition: the remine job wrote")
+	require.Zero(t, f.store.marksWithoutSkipMissing[1].Load(), "the remine job skips missing txs")
+}
+
+// failingHoldReadClient fails the failOn-th read of the pruning hold.
+type failingHoldReadClient struct {
+	blockchain.ClientI
+	failOn int32
+	reads  atomic.Int32
+}
+
+func (c *failingHoldReadClient) GetState(ctx context.Context, key string) ([]byte, error) {
+	if key == model.OvertakenTipRepairHoldKey && c.reads.Add(1) == c.failOn {
+		return nil, errors.NewStorageError("injected hold read failure")
+	}
+
+	return c.ClientI.GetState(ctx, key)
+}
+
+// TestRepairOvertakenTips_HoldSeedRetriedAfterReadFailure: after a restart, the first read
+// finds a hold listing blocks and the seed's read of it fails. The next slice must seed again,
+// not take the hold as already handled and wait for the next block.
+func TestRepairOvertakenTips_HoldSeedRetriedAfterReadFailure(t *testing.T) {
+	f := newOvertakeFixture(t)
+	bv := f.newBlockValidation(t)
+
+	require.NoError(t, bv.setTxMinedStatus(f.ctx, f.blockB.Hash()))
+	_ = f.overtakeB(t)
+
+	f.store.failMarkFalse.Store(1 << 30)
+	settleTipRepair(t, bv, func() bool { return false })
+	require.Equal(t, []chainhash.Hash{*f.blockB.Hash()}, f.heldBlocks(t), "precondition: B is held")
+
+	f.store.failMarkFalse.Store(0)
+
+	restarted := f.newBlockValidation(t)
+	restarted.blockchainClient = &failingHoldReadClient{ClientI: f.blockchainClient, failOn: 2}
+
+	_, err := drainTipRepair(t, restarted)
+	require.Error(t, err, "precondition: the seed's read failed")
+
+	_, err = drainTipRepair(t, restarted)
+	require.NoError(t, err)
+	require.NotZero(t, f.unminedSince(t, f.bOnly), "B is repaired without waiting for a block")
+	require.Empty(t, f.heldBlocks(t), "and the hold is released")
 }
