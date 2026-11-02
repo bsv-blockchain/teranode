@@ -2435,8 +2435,8 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 		toDelete = append(toDelete, deletion)
 	}
 
-	toDelete, pagesHeld := s.dropPagesOfPresentMasters(toDelete)
-	heldBack += pagesHeld
+	toDelete, pagesUnread := s.dropPagesOfPresentMasters(toDelete)
+	heldBack += pagesUnread
 
 	// survivors are the children whose record delete the server refused, and
 	// unanswered those whose delete may not have happened. Either way the record
@@ -2504,8 +2504,10 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 }
 
 // dropPagesOfPresentMasters removes from deletions every pagination record
-// scanned on its own whose master record is still present, and returns how many
-// it removed.
+// scanned on its own whose master record is not known to be gone. It returns how
+// many of those it kept back because the master could not be read; a page whose
+// master is present is not counted, since that master's own deletion, or its
+// own hold-back, already accounts for it.
 //
 // The hold-back in flushCleanupBatches is keyed on the transaction, but it is
 // filled per chunk from the master's inputs, and only the master carries them.
@@ -2527,6 +2529,7 @@ func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pe
 	readPolicy := aerospike.NewBatchReadPolicy()
 
 	keep := make([]bool, len(deletions))
+	unread := 0
 
 	for i, deletion := range deletions {
 		keep[i] = true
@@ -2538,6 +2541,7 @@ func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pe
 		masterKey, err := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(deletion.txHash, 0))
 		if err != nil {
 			keep[i] = false
+			unread++
 
 			continue
 		}
@@ -2558,6 +2562,10 @@ func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pe
 			}
 
 			keep[pages[j]] = false
+
+			if batchRec.Err != nil || batchRec.ResultCode != types.OK {
+				unread++
+			}
 		}
 	}
 
@@ -2569,7 +2577,7 @@ func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pe
 		}
 	}
 
-	return kept, len(deletions) - len(kept)
+	return kept, unread
 }
 
 // markParents writes the replay markers for the queued parent records, keeping

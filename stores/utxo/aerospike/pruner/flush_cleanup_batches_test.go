@@ -406,7 +406,7 @@ func TestFlushCleanupBatches_PageScannedWithItsMasterGoesWithTheMaster(t *testin
 
 	heldBack, flushErr := s.flushCleanupBatches(context.Background(), updates, deletions, nil)
 	require.NoError(t, flushErr)
-	require.Equal(t, 1, heldBack, "the page entry is dropped, because its master is present")
+	require.Equal(t, 0, heldBack, "the page goes with its master, so nothing is held back")
 
 	for name, key := range map[string]*aerospike.Key{"master": masterKey, "page": pageKey} {
 		exists, err := client.Exists(nil, key)
@@ -458,11 +458,7 @@ func TestFlushCleanupBatches_PageWaitsForItsMaster(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.masterPresent, exists)
 
-			if tc.masterPresent {
-				require.Equal(t, 1, heldBack)
-			} else {
-				require.Equal(t, 0, heldBack)
-			}
+			require.Equal(t, 0, heldBack, "a page kept for a present master is accounted for by that master, not counted here")
 		})
 	}
 }
