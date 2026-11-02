@@ -48,16 +48,19 @@ func TestSpendAndCreateRecheckRemovesARecreatedPrunedTransaction(t *testing.T) {
 	require.NoError(t, store.SetBlockHeight(1000))
 
 	for i, tc := range []struct {
-		name   string
-		pruned bool
+		name         string
+		pruned       bool
+		parentPruned bool
 	}{
 		{name: "pruned in the window", pruned: true},
 		{name: "idempotent retry, nothing pruned"},
+		{name: "parent pruned too", pruned: true, parentPruned: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			seed := []string{
 				"cccc666666666666666666666666666666666666666666666666666666666666",
 				"dddd666666666666666666666666666666666666666666666666666666666666",
+				"eeee666666666666666666666666666666666666666666666666666666666666",
 			}[i]
 
 			parent := bt.NewTx()
@@ -83,10 +86,20 @@ func TestSpendAndCreateRecheckRemovesARecreatedPrunedTransaction(t *testing.T) {
 				parentKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parent.TxIDChainHash().CloneBytes())
 				require.NoError(t, err)
 
+				if tc.parentPruned {
+					// The parent is gone before the call, so the spend is
+					// blessed on C's record, and the recheck must not bless it
+					// on the record this call wrote.
+					require.NoError(t, store.DeleteComplete(ctx, parent.TxIDChainHash()))
+				}
+
 				wrapped.prune = func() {
-					require.NoError(t, client.Put(nil, parentKey, aerospike.BinMap{
-						fields.DeletedChildren.String(): map[interface{}]interface{}{child.TxIDChainHash().String(): true},
-					}))
+					if !tc.parentPruned {
+						require.NoError(t, client.Put(nil, parentKey, aerospike.BinMap{
+							fields.DeletedChildren.String(): map[interface{}]interface{}{child.TxIDChainHash().String(): true},
+						}))
+					}
+
 					require.NoError(t, store.DeleteComplete(ctx, child.TxIDChainHash()))
 				}
 			}
@@ -94,6 +107,13 @@ func TestSpendAndCreateRecheckRemovesARecreatedPrunedTransaction(t *testing.T) {
 			_, _, err = utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, wrapped, child, 1000)
 
 			_, getErr := store.Get(ctx, child.TxIDChainHash())
+
+			if tc.parentPruned {
+				require.ErrorIs(t, err, errors.ErrTxNotFound, "the replay must be answered")
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "the recreated record must be removed again")
+
+				return
+			}
 
 			if tc.pruned {
 				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay must be answered as pruned")

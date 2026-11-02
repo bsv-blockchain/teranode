@@ -2300,6 +2300,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			// blessed input wrote nothing and has no row to reverse.
 			switch {
 			case blessed:
+				spend.Blessed = true
 			case item.idempotent:
 				spend.Idempotent = true
 				idempotentSpends = append(idempotentSpends, spend)

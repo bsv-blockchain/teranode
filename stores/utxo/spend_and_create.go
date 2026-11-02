@@ -151,7 +151,7 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	}
 
 	md, err := s.Create(ctx, tx, blockHeight, opts...)
-	if err == nil && anyIdempotent(spends) {
+	if err == nil && anyMatched(spends) {
 		if err = recheckRecreated(ctx, logger, s, tx, blockHeight, options.IgnoreFlags); err != nil {
 			return nil, spends, err
 		}
@@ -180,11 +180,13 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	return md, spends, nil
 }
 
-// anyIdempotent reports whether any spend matched an output that already
-// recorded exactly that spend.
-func anyIdempotent(spends []*Spend) bool {
+// anyMatched reports whether any spend wrote nothing because the store already
+// answered for it: an output that recorded exactly that spend (Idempotent), or
+// a missing parent accepted on the strength of the spender's own record
+// (Blessed).
+func anyMatched(spends []*Spend) bool {
 	for _, sp := range spends {
-		if sp != nil && sp.Idempotent {
+		if sp != nil && (sp.Idempotent || sp.Blessed) {
 			return true
 		}
 	}
@@ -199,38 +201,52 @@ type completeDeleter interface {
 }
 
 // recheckRecreated closes the window between the spend and the create of a
-// replayed transaction, after a create that succeeded over an idempotent spend.
+// replayed transaction, after a create that succeeded over a spend the store
+// had already answered for.
 //
 // A rebroadcast of a mined, fully spent transaction C has its spends accepted
-// as idempotent, since every parent output already names C. If the pruner
-// writes C's markers and deletes C after that spend and before the create, the
+// without writing anything: as idempotent, since every surviving parent output
+// already names C, or as blessed, since a parent is gone but C's record is
+// there. If the pruner deletes C after that spend and before the create, the
 // create finds no record and writes C again, with outputs a confirmed
 // descendant already consumed. Nothing rejects, so no caller compensates.
 //
 // The pruner writes a child's markers before it deletes the child, so a create
 // that found C gone can see them now. Spending again asks the store exactly
-// that: the spend answers a marker ahead of an idempotent match, and otherwise
-// matches every input again and writes nothing. On the pruned answer the record
-// this call just created is deleted and the answer returned, leaving the
-// historical spends in place as a normal prune does.
+// that: the spend answers a marker ahead of an idempotent match. The recheck
+// sets RequireParentOutputs, so a missing parent is not blessed by the record
+// this call just wrote, which is what lets a C whose parents were pruned too be
+// caught, and so the recheck never reverses an idempotent match.
 //
-// Any other failure of the recheck also deletes the record, because the
-// record can no longer be vouched for and a later attempt would find it and
-// stop at ErrTxExists. The spends stay: they are idempotent matches, which a
-// retry matches again. The deletion runs detached and bounded, like the
-// rollback.
+// Only a replay answer (IsReplayAnswer: the marker, or a parent that is gone)
+// deletes the record this call created. A parent that existed at the spend and
+// is gone at the recheck was pruned in between, and is pruned only once fully
+// spent and buried, so the transaction is the pruned one. The record is deleted
+// detached and bounded, like the rollback, and the answer returned. The
+// historical spends stay, as a normal prune leaves them. Any other failure of
+// the recheck says nothing about a replay, and a concurrent caller may already
+// have accepted the record as existing, so the record is kept and the failure
+// only logged.
 //
-// Only a spend that matched an existing record is rechecked, so a transaction
-// seen for the first time pays nothing.
+// Only a transaction whose spend the store had already answered for is
+// rechecked, so a transaction seen for the first time pays nothing.
 func recheckRecreated(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags) error {
+	ignoreFlags.RequireParentOutputs = true
+
 	_, recheckErr := s.Spend(ctx, tx, blockHeight, ignoreFlags)
 	if recheckErr == nil {
 		return nil
 	}
 
+	if !IsReplayAnswer(recheckErr) {
+		logger.Warnf("[SpendAndCreate] %s: recheck after create failed, keeping the created record: %v", tx.TxIDChainHash().String(), recheckErr)
+
+		return nil
+	}
+
 	deleter, ok := s.(completeDeleter)
 	if !ok {
-		return errors.NewStorageError("SpendAndCreate: recheck after create failed and the store cannot remove the created record", recheckErr)
+		return errors.NewStorageError("SpendAndCreate: %s recreated a pruned transaction and the store cannot remove it", tx.TxIDChainHash().String(), recheckErr)
 	}
 
 	bound := defaultSequentialRollbackTimeout
@@ -250,9 +266,9 @@ func recheckRecreated(ctx context.Context, logger ulogger.Logger, s SequentialSt
 
 		return err
 	}); err != nil {
-		logger.Errorf("[SpendAndCreate] %s was created over a spend the recheck refused, and could not be removed; it remains in the store: %v", tx.TxIDChainHash().String(), err)
+		logger.Errorf("[SpendAndCreate] %s recreated a pruned transaction and could not remove it; it remains in the store: %v", tx.TxIDChainHash().String(), err)
 
-		return errors.NewStorageError("SpendAndCreate: could not remove %s after its recheck failed", tx.TxIDChainHash().String(), errors.Join(recheckErr, err))
+		return errors.NewStorageError("SpendAndCreate: could not remove recreated pruned transaction %s", tx.TxIDChainHash().String(), errors.Join(recheckErr, err))
 	}
 
 	return recheckErr

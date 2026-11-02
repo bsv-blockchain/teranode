@@ -1080,6 +1080,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 		// blessed input wrote nothing and has no record to reverse.
 		switch {
 		case blessed:
+			spend.Blessed = true
 		case item.idempotent:
 			spend.Idempotent = true
 			result.idempotentSpends = append(result.idempotentSpends, spend)

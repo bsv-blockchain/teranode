@@ -188,6 +188,12 @@ type Spend struct {
 	// exactly this spend, so the call wrote nothing for it. SequentialSpendAndCreate
 	// reads it to recheck a create that may have recreated a pruned transaction.
 	Idempotent bool `json:"-"`
+
+	// Blessed is set by a successful Spend when the parent was gone and the
+	// spend was accepted because the spending transaction's own record exists,
+	// so the call wrote nothing for it. SequentialSpendAndCreate rechecks a
+	// create over it, as for Idempotent.
+	Blessed bool `json:"-"`
 }
 
 // Clone creates a deep copy of the Spend struct.
@@ -201,6 +207,7 @@ func (s *Spend) Clone() *Spend {
 		Vout:       s.Vout,
 		Err:        s.Err,
 		Idempotent: s.Idempotent,
+		Blessed:    s.Blessed,
 	}
 
 	if s.TxID != nil {
@@ -246,9 +253,10 @@ type IgnoreFlags struct {
 	// spending transaction already has a record. Without it the store reads that record as
 	// proof the spends were made in an earlier attempt and the parent has since been pruned
 	// ("already blessed"), which holds only when records are created after their spends. Set
-	// ONLY by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
+	// by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
 	// whose records the first wave created before any of those spends, so the record proves
 	// nothing. Its first-wave combined calls spend before they create and leave it unset.
+	// SequentialSpendAndCreate's recheck after a create sets it for the same reason.
 	//
 	// Both stores also decide a failed call's rollback by error class (IsSpendRollbackError)
 	// rather than on a record-existence probe, which would always find the first wave's
