@@ -284,60 +284,108 @@ var rpcUnimplemented = map[string]struct{}{
 	"preciousblock": {},
 }
 
-// Commands that are available to a limited user
-var rpcLimited = map[string]struct{}{
-	// Websockets commands
-	"loadtxfilter":          {},
-	"notifyblocks":          {},
-	"notifynewtransactions": {},
-	"notifyreceived":        {},
-	"notifyspent":           {},
-	"rescan":                {},
-	"rescanblocks":          {},
-	"session":               {},
+// rpcAccess classifies who may call an RPC method.
+type rpcAccess int
 
-	// Websockets AND HTTP/S commands
-	"help": {},
+const (
+	// rpcAccessAdmin methods are callable only with the admin credential.
+	rpcAccessAdmin rpcAccess = iota
 
-	// HTTP/S-only commands
-	"createrawtransaction":  {},
-	"decoderawtransaction":  {},
-	"decodescript":          {},
-	"estimatefee":           {},
-	"getbestblock":          {},
-	"getbestblockhash":      {},
-	"getblock":              {},
-	"getblockcount":         {},
-	"getblockhash":          {},
-	"getblockheader":        {},
-	"getcfilter":            {},
-	"getcfilterheader":      {},
-	"getcurrentnet":         {},
-	"getdifficulty":         {},
-	"getheaders":            {},
-	"getinfo":               {},
-	"getnettotals":          {},
-	"getnetworkhashps":      {},
-	"getrawmempool":         {},
-	"getrawtransaction":     {},
-	"gettxout":              {},
-	"gettxoutproof":         {},
-	"searchrawtransactions": {},
-	"sendrawtransaction":    {},
-	"submitblock":           {},
-	"uptime":                {},
-	"validateaddress":       {},
-	"verifymessage":         {},
-	"verifytxoutproof":      {},
-	"version":               {},
-	"getminingcandidate":    {},
-	"submitminingsolution":  {},
+	// rpcAccessReadOnly methods never change node state and are callable by the limited credential.
+	rpcAccessReadOnly
 
-	// BSV-specific commands
-	"freeze":   {},
-	"unfreeze": {},
-	"reassign": {},
+	// rpcAccessLimitedWrite methods change node or network state but are
+	// intentionally exposed to the limited credential (transaction and block submission, mining).
+	rpcAccessLimitedWrite
+)
+
+// rpcAccessPolicy is the single authorisation table. Every registered handler
+// must appear here. A method that is absent from the table is denied to a limited user.
+var rpcAccessPolicy = map[string]rpcAccess{
+	"addnode":               rpcAccessAdmin,
+	"clearbanned":           rpcAccessAdmin,
+	"debuglevel":            rpcAccessAdmin,
+	"freeze":                rpcAccessAdmin,
+	"generate":              rpcAccessAdmin,
+	"generatetoaddress":     rpcAccessAdmin,
+	"getaddednodeinfo":      rpcAccessAdmin,
+	"getblockbyheight":      rpcAccessAdmin,
+	"getblockchaininfo":     rpcAccessAdmin,
+	"getblocktemplate":      rpcAccessAdmin,
+	"getchaintips":          rpcAccessAdmin,
+	"getconnectioncount":    rpcAccessAdmin,
+	"getgenerate":           rpcAccessAdmin,
+	"gethashespersec":       rpcAccessAdmin,
+	"getmempoolinfo":        rpcAccessAdmin,
+	"getmininginfo":         rpcAccessAdmin,
+	"getpeerinfo":           rpcAccessAdmin,
+	"invalidateblock":       rpcAccessAdmin,
+	"isbanned":              rpcAccessAdmin,
+	"listbanned":            rpcAccessAdmin,
+	"node":                  rpcAccessAdmin,
+	"ping":                  rpcAccessAdmin,
+	"reassign":              rpcAccessAdmin,
+	"reconsiderblock":       rpcAccessAdmin,
+	"setban":                rpcAccessAdmin,
+	"setgenerate":           rpcAccessAdmin,
+	"stop":                  rpcAccessAdmin,
+	"unfreeze":              rpcAccessAdmin,
+	"verifychain":           rpcAccessAdmin,
+	"createrawtransaction":  rpcAccessReadOnly,
+	"decoderawtransaction":  rpcAccessReadOnly,
+	"decodescript":          rpcAccessReadOnly,
+	"estimatefee":           rpcAccessReadOnly,
+	"getbestblock":          rpcAccessReadOnly,
+	"getbestblockhash":      rpcAccessReadOnly,
+	"getblock":              rpcAccessReadOnly,
+	"getblockcount":         rpcAccessReadOnly,
+	"getblockhash":          rpcAccessReadOnly,
+	"getblockheader":        rpcAccessReadOnly,
+	"getcfilter":            rpcAccessReadOnly,
+	"getcfilterheader":      rpcAccessReadOnly,
+	"getcurrentnet":         rpcAccessReadOnly,
+	"getdifficulty":         rpcAccessReadOnly,
+	"getheaders":            rpcAccessReadOnly,
+	"getinfo":               rpcAccessReadOnly,
+	"getnettotals":          rpcAccessReadOnly,
+	"getnetworkhashps":      rpcAccessReadOnly,
+	"getrawmempool":         rpcAccessReadOnly,
+	"getrawtransaction":     rpcAccessReadOnly,
+	"gettxout":              rpcAccessReadOnly,
+	"gettxoutproof":         rpcAccessReadOnly,
+	"help":                  rpcAccessReadOnly,
+	"loadtxfilter":          rpcAccessReadOnly,
+	"notifyblocks":          rpcAccessReadOnly,
+	"notifynewtransactions": rpcAccessReadOnly,
+	"notifyreceived":        rpcAccessReadOnly,
+	"notifyspent":           rpcAccessReadOnly,
+	"rescan":                rpcAccessReadOnly,
+	"rescanblocks":          rpcAccessReadOnly,
+	"searchrawtransactions": rpcAccessReadOnly,
+	"session":               rpcAccessReadOnly,
+	"uptime":                rpcAccessReadOnly,
+	"validateaddress":       rpcAccessReadOnly,
+	"verifymessage":         rpcAccessReadOnly,
+	"verifytxoutproof":      rpcAccessReadOnly,
+	"version":               rpcAccessReadOnly,
+	"getminingcandidate":    rpcAccessLimitedWrite,
+	"sendrawtransaction":    rpcAccessLimitedWrite,
+	"submitblock":           rpcAccessLimitedWrite,
+	"submitminingsolution":  rpcAccessLimitedWrite,
 }
+
+// Commands that are available to a limited user, derived from rpcAccessPolicy.
+var rpcLimited = func() map[string]struct{} {
+	limited := make(map[string]struct{}, len(rpcAccessPolicy))
+
+	for method, access := range rpcAccessPolicy {
+		if access != rpcAccessAdmin {
+			limited[method] = struct{}{}
+		}
+	}
+
+	return limited
+}()
 
 // builderScript is a convenience function which is used for hard-coded scripts
 // built with the script builder.   Any errors are converted to a panic since it
@@ -634,7 +682,7 @@ type RPCServer struct {
 	authsha [sha256.Size]byte
 
 	// limitauthsha contains the SHA256 hash of the HTTP basic auth string for limited-level access
-	// This is used for authenticating clients with restricted access (read-only operations)
+	// This is used for authenticating clients with restricted access (read-only commands and the submission commands)
 	limitauthsha [sha256.Size]byte
 
 	// numClients tracks the number of connected RPC clients for connection limiting
