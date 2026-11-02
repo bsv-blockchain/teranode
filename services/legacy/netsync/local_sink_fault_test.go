@@ -478,6 +478,72 @@ func TestRecoveredSinkPanic_ACopyWithNoKnownSenderHasNoVote(t *testing.T) {
 	require.False(t, counted)
 }
 
+// Only a host this node asked for the block votes, as notePolicyDecline counts.
+// admitPipelineSink drains a copy from a sender that does not owe the block
+// first, so a sender reaches here without owing it only when its ownership
+// lapsed while the copy converted; it keeps the plain local fault and is not
+// counted, so such hosts cannot have a block written off.
+func TestRecoveredSinkPanic_AHostNotAskedForTheBlockHasNoVote(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, map[string]struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+	t.Cleanup(sm.sinkPanics.Stop)
+
+	h := chainhash.HashH([]byte("a block hosts nobody asked keep sending"))
+
+	for i := range sinkPanicLimit + 1 {
+		stranger, _, _ := connectRacePeer(t, uint8(40+i), 1000) //nolint:gosec // a handful of peers
+
+		for range 2 {
+			err := sm.recoveredSinkPanic(h, stranger, "exploded")
+			require.True(t, isLocalSinkFault(err), "a host not asked for the block has no vote: %v", err)
+		}
+	}
+
+	_, counted := sm.sinkPanics.Get(h)
+	require.False(t, counted)
+
+	_, failed := sm.recentlyFailedBlocks.Get(h)
+	require.False(t, failed, "hosts nobody asked cannot have the block written off")
+}
+
+// Once sinkPanicLimit hosts have met a panic on a block, every later panic on it
+// marks it recently failed again. recentlyFailedBlocks is shared and capped, so
+// the mark can be evicted while sinkPanics still holds the block at its limit;
+// without the re-mark the block is asked for again and every copy costs its
+// sender the connection until sinkPanics expires.
+func TestRecoveredSinkPanic_APanicAtTheLimitMarksTheBlockAgain(t *testing.T) {
+	sm := newPipelineParkManager(t, memory.New(), 8)
+	sm.blockDownloads = newBlockDownloadTracker(time.Hour)
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
+	sm.sinkPanics = expiringmap.New[chainhash.Hash, map[string]struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+	t.Cleanup(sm.sinkPanics.Stop)
+
+	h := chainhash.HashH([]byte("a block whose mark was evicted"))
+
+	for i := range sinkPanicLimit {
+		_ = sm.recoveredSinkPanic(h, owingPeer(t, sm, h, uint8(50+i)), "exploded") //nolint:gosec // a handful of peers
+	}
+
+	_, failed := sm.recentlyFailedBlocks.Get(h)
+	require.True(t, failed)
+
+	sm.recentlyFailedBlocks.Delete(h)
+
+	// A sender that does not owe the block: at the limit the drop and the mark come
+	// before the owner check, since neither is a vote.
+	stranger, _, _ := connectRacePeer(t, uint8(50+sinkPanicLimit), 1000) //nolint:gosec // a handful of peers
+
+	err := sm.recoveredSinkPanic(h, stranger, "exploded")
+	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "%v", err)
+
+	_, failed = sm.recentlyFailedBlocks.Get(h)
+	require.True(t, failed, "a panic at the limit marks the block again")
+}
+
 // TestHandleBlockOnDiskMsg_ALocalFaultDrainOfAMarkedBlockIsNotReAsked: the
 // direct re-ask above the final checkpoint does not ask for a block marked
 // recently failed. The mark is what bounds a panic every copy of the block

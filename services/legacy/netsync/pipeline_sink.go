@@ -115,14 +115,15 @@ const sinkPanicLimit = 3
 // drained, the peer kept and the block asked for again. That retry is immediate,
 // so a panic every copy of the block meets would have each owner send the whole
 // body again forever, and so the route is bounded twice over, by host as
-// notePolicyDecline counts:
+// notePolicyDecline counts, and only among hosts this node asked for the block:
 //
 //   - a host whose copy of the block already met a panic is dropped on its next
 //     one, with the block left alone: one host cannot have a block written off;
 //   - once sinkPanicLimit different hosts have, the block is marked recently
 //     failed, which stops the wanted-range pass and the direct re-ask asking for
 //     it for recentlyFailedBlocksTTL, and from then every copy that meets a panic
-//     costs its sender the connection at once, until the block commits.
+//     costs its sender the connection at once and marks the block again, until
+//     the block commits.
 //
 // Dropped means ERR_NETWORK_INVALID_RESPONSE, the delivering peer's, which the
 // wire layer types as a refused body (peer.BlockBodyRejectedError): the read
@@ -148,14 +149,36 @@ func (sm *SyncManager) recoveredSinkPanic(hash chainhash.Hash, delivered *peerpk
 
 	host := declineHost(primary)
 
+	// Only a host this node asked for the block votes, as notePolicyDecline counts.
+	// admitPipelineSink drains a copy from a sender that does not owe the block
+	// before it reaches the sink, so this holds the count to owners when the
+	// ownership lapsed while the copy converted. Read before taking sinkPanicsMu
+	// so the ledger's lock is never taken under it.
+	asked := sm.blockDownloads.HasOwner(primary, hash)
+
 	sm.sinkPanicsMu.Lock()
 	defer sm.sinkPanicsMu.Unlock()
 
 	hosts, _ := sm.sinkPanics.Get(hash)
 
-	_, again := hosts[host]
-	if len(hosts) >= sinkPanicLimit || again {
+	// The mark is set again on every panic at the limit: recentlyFailedBlocks is
+	// shared and capped, and a mark evicted while this entry still holds the block
+	// at its limit would have the block asked for again, each copy costing its
+	// sender the connection, until the entry expires.
+	if len(hosts) >= sinkPanicLimit {
+		if sm.recentlyFailedBlocks != nil {
+			sm.recentlyFailedBlocks.Set(hash, struct{}{})
+		}
+
 		return errors.NewNetworkInvalidResponseError("[pipelineBlockSink][%s] converting the block panicked again", hash)
+	}
+
+	if _, again := hosts[host]; again {
+		return errors.NewNetworkInvalidResponseError("[pipelineBlockSink][%s] converting the block panicked again", hash)
+	}
+
+	if !asked {
+		return errors.NewProcessingError("[pipelineBlockSink][%s] recovered panic converting the block", hash)
 	}
 
 	if hosts == nil {
