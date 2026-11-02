@@ -1032,6 +1032,21 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 // filtering, since this method does not re-run it and assumes every item still expects
 // exactly one response on its errCh.
 func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
+	s.executeLuaSpendBatchContext(s.ctx, batch)
+}
+
+// executeLuaSpendBatchContext keeps recovery writes synchronous and bounds the network request
+// by the compensation deadline. Recovery always uses the conditional Lua writer.
+func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*batchSpend) {
+	// Recovery dispatches directly, outside go-batcher. Preserve completion on a client
+	// or response-parser panic just as the normal spend dispatch does.
+	defer func() {
+		signalBatchPanic(recover(), batch, "executeLuaSpendBatchContext", s.logger, func(it *batchSpend, err error) {
+			if it != nil {
+				it.complete(err)
+			}
+		})
+	}()
 	if len(batch) == 0 {
 		return
 	}
@@ -1039,7 +1054,7 @@ func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
 	start := time.Now()
 	stat := gocore.NewStat("sendSpendBatchLua")
 
-	ctx, _, deferFn := tracing.Tracer("aerospike").Start(s.ctx, "sendSpendBatchLua",
+	ctx, _, deferFn := tracing.Tracer("aerospike").Start(parentCtx, "sendSpendBatchLua",
 		tracing.WithParentStat(stat),
 		tracing.WithHistogram(prometheusUtxoSpendBatch),
 	)
@@ -1059,7 +1074,7 @@ func (s *Store) executeLuaSpendBatch(batch []*batchSpend) {
 
 	batchRecords, batchRecordKeys := s.createBatchRecords(batchesByKey)
 
-	if err := s.executeSpendBatch(batchRecords, batch, batchID); err != nil {
+	if err := s.executeSpendBatchContext(ctx, batchRecords, batch, batchID); err != nil {
 		return
 	}
 
@@ -1171,8 +1186,15 @@ func (s *Store) createBatchRecords(batchesByKey map[keyIgnoreLocked][]aerospike.
 
 // executeSpendBatch executes the batch operation
 func (s *Store) executeSpendBatch(batchRecords []aerospike.BatchRecordIfc, batch []*batchSpend, batchID uint64) error {
+	return s.executeSpendBatchContext(s.ctx, batchRecords, batch, batchID)
+}
+
+func (s *Store) executeSpendBatchContext(ctx context.Context, batchRecords []aerospike.BatchRecordIfc, batch []*batchSpend, batchID uint64) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
-	err := s.batchOperate(batchPolicy, batchRecords)
+	err := boundConflictBatchPolicy(ctx, batchPolicy)
+	if err == nil {
+		err = s.batchOperate(batchPolicy, batchRecords)
+	}
 	if err != nil {
 		// complete is CAS-guarded: items already completed in prepareSpendBatches
 		// (key-creation/validation failures) are simply no-ops here, so this
@@ -1879,4 +1901,25 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 
 		batch[batchIdx].complete(nil)
 	}
+}
+
+// boundConflictBatchPolicy applies the remaining compensation budget to the actual client call.
+// Do not race the call against a timer: the caller must wait for every write to complete.
+func boundConflictBatchPolicy(ctx context.Context, policy *aerospike.BatchPolicy) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < time.Millisecond {
+			return context.DeadlineExceeded
+		}
+		if policy.TotalTimeout == 0 || policy.TotalTimeout > remaining {
+			policy.TotalTimeout = remaining
+		}
+		if policy.SocketTimeout == 0 || policy.SocketTimeout > remaining {
+			policy.SocketTimeout = remaining
+		}
+	}
+	return nil
 }

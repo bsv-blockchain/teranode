@@ -252,13 +252,17 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 }
 
 func cleanDB(t *testing.T, client *uaerospike.Client) {
+	cleanSet(t, client, aerospikeSet)
+}
+
+func cleanSet(t *testing.T, client *uaerospike.Client, set string) {
 	tSettings := test.CreateBaseTestSettings(t)
 
 	policy := util.GetAerospikeWritePolicy(tSettings, 0)
 
 	// Scan and delete all records in the set
 	scanPolicy := aerospike.NewScanPolicy()
-	recordSet, err := client.ScanAll(scanPolicy, aerospikeNamespace, aerospikeSet)
+	recordSet, err := client.ScanAll(scanPolicy, aerospikeNamespace, set)
 	require.NoError(t, err)
 
 	for result := range recordSet.Results() {
