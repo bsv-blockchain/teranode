@@ -55,6 +55,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/jellydator/ttlcache/v3"
@@ -2773,7 +2774,12 @@ func handleFreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan s
 		return nil, rpcDecodeHexError(c.TxID)
 	}
 
-	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	spend, err := s.spendForOutput(ctx, h, uint32(c.Vout)) // nolint:gosec
+	if err != nil {
+		return nil, err
+	}
+
+	if err = s.utxoStore.FreezeUTXOs(ctx, []*utxo.Spend{spend}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2822,7 +2828,12 @@ func handleUnfreeze(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 		return nil, rpcDecodeHexError(c.TxID)
 	}
 
-	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{{TxID: h, Vout: uint32(c.Vout), UTXOHash: h}}, s.settings); err != nil { // nolint:gosec
+	spend, err := s.spendForOutput(ctx, h, uint32(c.Vout)) // nolint:gosec
+	if err != nil {
+		return nil, err
+	}
+
+	if err = s.utxoStore.UnFreezeUTXOs(ctx, []*utxo.Spend{spend}, s.settings); err != nil {
 		return nil, err
 	}
 
@@ -2889,6 +2900,26 @@ func handleReassign(ctx context.Context, s *RPCServer, cmd interface{}, _ <-chan
 	}
 
 	return nil, nil
+}
+
+// spendForOutput builds a utxo.Spend for an output of a stored transaction,
+// including the UTXO hash that the store uses to verify the output.
+func (s *RPCServer) spendForOutput(ctx context.Context, txID *chainhash.Hash, vout uint32) (*utxo.Spend, error) {
+	txMeta, err := s.utxoStore.Get(ctx, txID, fields.Tx)
+	if err != nil {
+		return nil, err
+	}
+
+	if txMeta == nil || txMeta.Tx == nil || int(vout) >= len(txMeta.Tx.Outputs) {
+		return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInvalidParameter, fmt.Sprintf("output %s:%d not found", txID, vout))
+	}
+
+	utxoHash, err := util.UTXOHashFromOutput(txID, txMeta.Tx.Outputs[vout], vout)
+	if err != nil {
+		return nil, err
+	}
+
+	return &utxo.Spend{TxID: txID, Vout: vout, UTXOHash: utxoHash}, nil
 }
 
 // messageToHex serializes a wire protocol message to its binary representation
