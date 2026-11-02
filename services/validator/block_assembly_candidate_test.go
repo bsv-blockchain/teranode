@@ -63,8 +63,9 @@ func TestValidate_BlockAssemblyCandidateGatesTheHandoff(t *testing.T) {
 		{"no candidate: the block is the tip extension", 1, sequence, nil, true},
 		{"final at the candidate", 1, sequence, &BlockAssemblyCandidate{Height: blockHeight + 1, MedianTimePast: lockTime + 1}, true},
 		{"not final at the candidate", 1, sequence, &BlockAssemblyCandidate{Height: blockHeight + 1, MedianTimePast: lockTime - 1}, false},
-		{"active relative lock past CSV", 2, 0, &BlockAssemblyCandidate{Height: 1000, MedianTimePast: lockTime + 1}, false},
-		{"relative lock disabled past CSV", 2, 0xffffffff, &BlockAssemblyCandidate{Height: 1000, MedianTimePast: lockTime + 1}, true},
+		{"active relative lock between CSV and Genesis", 2, 0, &BlockAssemblyCandidate{Height: 60, MedianTimePast: lockTime + 1}, false},
+		{"relative lock disabled between CSV and Genesis", 2, 0xffffffff, &BlockAssemblyCandidate{Height: 60, MedianTimePast: lockTime + 1}, true},
+		{"relative lock past Genesis, where BIP68 no longer applies", 2, 0, &BlockAssemblyCandidate{Height: 150, MedianTimePast: lockTime + 1}, true},
 	}
 
 	for _, tt := range tests {
@@ -73,6 +74,11 @@ func TestValidate_BlockAssemblyCandidateGatesTheHandoff(t *testing.T) {
 
 			tSettings := test.CreateBaseTestSettings(t)
 			tSettings.BlockAssembly.Disabled = false
+
+			// CSV below regtest's Genesis (100), so heights 50-99 enforce BIP68.
+			params := *tSettings.ChainCfgParams
+			params.CSVHeight = 50
+			tSettings.ChainCfgParams = &params
 
 			utxoStoreURL, err := url.Parse("sqlitememory:///test")
 			require.NoError(t, err)

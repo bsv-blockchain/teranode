@@ -3141,7 +3141,7 @@ func (stp *SubtreeProcessor) AddNodesDirectlyReportOnly(txs []*utxostore.Unmined
 }
 
 func (stp *SubtreeProcessor) addNodesDirectly(txs []*utxostore.UnminedTransaction, skipNotification bool, failOnMapErr bool) (err error) {
-	txs = stp.filterUnminedTxEra(txs)
+	txs = stp.FilterUnminedTxEra(txs)
 
 	if len(txs) == 0 {
 		return nil
@@ -5598,17 +5598,25 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	flatInpoints := make([]*subtreepkg.TxInpoints, 0, blockNodeCount)
 	flatNodes := make([]subtreepkg.Node, 0, blockNodeCount)
 
+	// The block's transactions were validated at its height: keep out the ones under other
+	// rules than the next block's, as on every other way into the template.
+	stp.droppedMu.Lock()
 	for idx, subtreeNodes := range subtreesNodes {
 		startIdx := 0
 		if idx == 0 {
 			startIdx = 1 // skip coinbase in first subtree
 		}
 		for i := startIdx; i < len(subtreeNodes); i++ {
+			if !stp.admitTxLocked(subtreeNodes[i].Hash, &subtreeMetaTxInpoints[idx][i], block.Height) {
+				continue
+			}
+
 			flatHashes = append(flatHashes, subtreeNodes[i].Hash)
 			flatInpoints = append(flatInpoints, &subtreeMetaTxInpoints[idx][i])
 			flatNodes = append(flatNodes, subtreeNodes[i])
 		}
 	}
+	stp.droppedMu.Unlock()
 
 	if len(flatHashes) > 0 {
 		wasSet := make([]bool, len(flatHashes))

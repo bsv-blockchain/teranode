@@ -3113,12 +3113,19 @@ func (u *BlockValidation) rejectStoredForkBelowCheckpoint(ctx context.Context, h
 		return nil
 	}
 
-	mainHeaders, _, err := u.blockchainClient.GetBlockHeadersFromHeight(ctx, height, 1)
-	if err != nil {
-		return errors.NewServiceError("[ValidateBlock][%s] failed to get the main-chain header at height %d for the checkpoint fork rule", header.Hash().String(), height, err)
+	// The block's own id, then whether that id is on the main chain. Height alone does not
+	// say: the store keeps fork blocks at the same heights.
+	ids, err := u.blockchainClient.GetBlockHeaderIDs(ctx, header.Hash(), 1)
+	if err != nil || len(ids) == 0 {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to get the block id for the checkpoint fork rule", header.Hash().String(), err)
 	}
 
-	if len(mainHeaders) > 0 && mainHeaders[0].Hash().IsEqual(header.Hash()) {
+	onMainChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, ids[:1])
+	if err != nil {
+		return errors.NewServiceError("[ValidateBlock][%s] failed to check the block is on the main chain for the checkpoint fork rule", header.Hash().String(), err)
+	}
+
+	if onMainChain {
 		return nil
 	}
 

@@ -834,50 +834,86 @@ func mineRegtestP2SHActivationBlock(t *testing.T, ctx context.Context, ba *Block
 // transaction validated for one height stays in the template while the tip moves the next
 // block under other rules (regtest enables P2SH at height 2), unless block assembly
 // rebuilds the template. The rebuild reloads from the UTXO store under the new rules and
-// keeps the old one out; a transaction validated for the new next height is admitted.
+// keeps the old one out; a transaction validated for the new next height is admitted. The
+// rebuild follows the rules the template was loaded under, so it also runs when something
+// else moved the subtree processor to the new rules first, and on the sequential reload.
 func TestTxRulesChange_RebuildsTheTemplate(t *testing.T) {
-	_, ba, ctx, cancel, cleanup := setupTest(t)
-	defer cancel()
-	defer cleanup()
+	tests := []struct {
+		name            string
+		sequential      bool
+		rulesMovedFirst bool
+	}{
+		{name: "batched reload"},
+		{name: "sequential reload", sequential: true},
+		{name: "rules moved before the block", rulesMovedFirst: true},
+	}
 
-	inCandidate := func(hash *chainhash.Hash) bool {
-		_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
-		if err != nil {
-			return false
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, ba, ctx, cancel, cleanup := setupTest(t)
+			defer cancel()
+			defer cleanup()
 
-		for _, st := range subtrees {
-			for _, node := range st.Nodes {
-				if node.Hash.Equal(*hash) {
-					return true
-				}
+			// The test transactions spend made-up parents, which the reload's parent-chain
+			// check would drop before the rules are looked at.
+			ba.settings.BlockAssembly.OnRestartValidateParentChain = false
+
+			if tt.sequential {
+				ba.settings.BlockAssembly.UnminedLoadingBatchSize = 0
 			}
-		}
 
-		return false
+			inCandidate := func(hash *chainhash.Hash) bool {
+				_, subtrees, err := ba.blockAssembler.GetMiningCandidate(context.Background())
+				if err != nil {
+					return false
+				}
+
+				for _, st := range subtrees {
+					for _, node := range st.Nodes {
+						if node.Hash.Equal(*hash) {
+							return true
+						}
+					}
+				}
+
+				return false
+			}
+
+			// Unlocked, as the validator leaves a transaction once block assembly has it, so
+			// the rebuild's reload sees it.
+			add := func(tx *bt.Tx, height uint32) *chainhash.Hash {
+				_, _, err := ba.utxoStore.SpendAndCreate(ctx, tx, height, utxostore.WithCreateOnly(), utxostore.WithLocked(false))
+				require.NoError(t, err)
+
+				inpoints, err := subtree.NewTxInpointsFromTx(tx)
+				require.NoError(t, err)
+
+				require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}}, []*subtree.TxInpoints{&inpoints}, []uint32{height}))
+
+				return tx.TxIDChainHash()
+			}
+
+			// Validated for height 1, the next block on genesis.
+			oldRules := add(newTx(11), 1)
+			require.Eventually(t, func() bool { return inCandidate(oldRules) }, 5*time.Second, 50*time.Millisecond)
+
+			// Already validated for height 2, ahead of block assembly: kept out until block 1
+			// moves the rules to it, then the rebuild's reload brings it in.
+			ahead := add(newTx(13), 2)
+
+			if tt.rulesMovedFirst {
+				ba.blockAssembler.subtreeProcessor.SetTxEra(2)
+			}
+
+			mineRegtestP2SHActivationBlock(t, ctx, ba)
+
+			newRules := add(newTx(12), 2)
+			require.Eventually(t, func() bool { return inCandidate(newRules) }, 5*time.Second, 50*time.Millisecond)
+			require.Eventually(t, func() bool { return inCandidate(ahead) }, 5*time.Second, 50*time.Millisecond,
+				"the reload admits a transaction validated under the new rules")
+			require.False(t, inCandidate(oldRules), "a transaction validated before the rules changed must leave the template")
+		})
 	}
-
-	add := func(tx *bt.Tx, height uint32) *chainhash.Hash {
-		_, _, err := ba.utxoStore.SpendAndCreate(ctx, tx, height, utxostore.WithCreateOnly())
-		require.NoError(t, err)
-
-		inpoints, err := subtree.NewTxInpointsFromTx(tx)
-		require.NoError(t, err)
-
-		require.True(t, ba.blockAssembler.AddTxBatchIfRoom([]subtree.Node{{Hash: *tx.TxIDChainHash(), Fee: 111}}, []*subtree.TxInpoints{&inpoints}, []uint32{height}))
-
-		return tx.TxIDChainHash()
-	}
-
-	// Validated for height 1, the next block on genesis.
-	oldRules := add(newTx(11), 1)
-	require.Eventually(t, func() bool { return inCandidate(oldRules) }, 5*time.Second, 50*time.Millisecond)
-
-	mineRegtestP2SHActivationBlock(t, ctx, ba)
-
-	newRules := add(newTx(12), 2)
-	require.Eventually(t, func() bool { return inCandidate(newRules) }, 5*time.Second, 50*time.Millisecond)
-	require.False(t, inCandidate(oldRules), "a transaction validated before the rules changed must leave the template")
 }
 
 // TestShouldHandleReorgWithLongerChain verifies reorganization with extended chains.

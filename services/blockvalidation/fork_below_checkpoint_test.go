@@ -175,13 +175,11 @@ func TestValidateBlock_StoredForkBelowCheckpoint(t *testing.T) {
 			mockBlockchain.On("GetBlockHeader", mock.Anything, block.Header.Hash()).
 				Return(block.Header, &model.BlockHeaderMeta{Height: block.Height}, nil)
 
-			mainChainHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{0x02}}
-			if onMainChain {
-				mainChainHeader = block.Header
-			}
-
-			mockBlockchain.On("GetBlockHeadersFromHeight", mock.Anything, block.Height, uint32(1)).
-				Return([]*model.BlockHeader{mainChainHeader}, []*model.BlockHeaderMeta{{Height: block.Height}}, nil)
+			// A stale sibling at the same height is what a lookup by height would find.
+			mockBlockchain.On("GetBlockHeadersFromHeight", mock.Anything, mock.Anything, mock.Anything).
+				Return([]*model.BlockHeader{{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{0x02}}}, []*model.BlockHeaderMeta{{Height: block.Height}}, nil).Maybe()
+			mockBlockchain.On("GetBlockHeaderIDs", mock.Anything, block.Header.Hash(), uint64(1)).Return([]uint32{7}, nil)
+			mockBlockchain.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{7}).Return(onMainChain, nil)
 
 			bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, mockBlockchain, subtreeStore, txStore, utxoStore, nil, subtreeValidationClient)
 

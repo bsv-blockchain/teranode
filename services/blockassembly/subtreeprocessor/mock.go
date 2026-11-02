@@ -230,12 +230,17 @@ func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subt
 }
 
 // SetTxEra implements Interface.SetTxEra. A no-op, so tests need no expectation for it.
-func (m *MockSubtreeProcessor) SetTxEra(uint32) bool {
-	return false
+func (m *MockSubtreeProcessor) SetTxEra(uint32) {}
+
+// TxEra implements Interface.TxEra: no era, so nothing is ever reset for one.
+func (m *MockSubtreeProcessor) TxEra() (lo, hi uint32, ok bool) {
+	return 0, 0, false
 }
 
-// ClearDroppedTxs implements Interface.ClearDroppedTxs. A no-op.
-func (m *MockSubtreeProcessor) ClearDroppedTxs() {}
+// FilterUnminedTxEra implements Interface.FilterUnminedTxEra: admits everything.
+func (m *MockSubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction) []*utxostore.UnminedTransaction {
+	return txs
+}
 
 // AddBatchIfRoom implements Interface.AddBatchIfRoom
 func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, _ []uint32) bool {

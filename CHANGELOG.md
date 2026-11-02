@@ -161,14 +161,19 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
     - Subtree validation hands a block's transactions to block assembly only when the
       block is not above the next height to mine (tip+1) and both heights fall under the
       same rules. For a block whose parent is not the tip, each transaction must also be
-      final at tip+1 against the tip's median time past, and must carry no active BIP68
-      relative lock. Otherwise it is stored without a template entry.
+      final at tip+1 against the tip's median time past, and, between CSV and Genesis,
+      must carry no active BIP68 relative lock. Otherwise it is stored without a template
+      entry.
     - The validator now tells block assembly the height it validated each transaction
       at: new field `validated_height` on `AddTxRequest` and `validated_heights` on
       `AddTxBatchColumnarRequest`. Block assembly drops a transaction whose height falls
       under other rules than the next block's, and every queued or reloaded descendant of
-      it. A reload uses the height a transaction was created at (`unmined_since`). A new
-      counter, `teranode_subtreeprocessor_tx_era_dropped_total`, counts them.
+      it, including the transactions of a block a reorg moves back. A reload uses
+      `unmined_since`, the height a transaction was created at. For a transaction a reorg
+      moved back it is the reorg height instead (on Aerospike, the reorg height less
+      `utxostore_unminedTxRetention`), so across an activation height such a
+      transaction can be kept out, or let in, on the next reload. A new counter,
+      `teranode_subtreeprocessor_tx_era_dropped_total`, counts the drops.
     - When a new block moves the next height under other rules, block assembly rebuilds
       its template from the UTXO store. Mining candidates stay empty while it does. On
       regtest this also happens once at block 1, because the script engine enables P2SH

@@ -104,6 +104,12 @@ type BlockAssembler struct {
 	// logger provides logging functionality for the assembler
 	logger ulogger.Logger
 
+	// templateTxEra is the transaction rules the template was last loaded from the UTXO
+	// store under; nil before the first load. A block that moves the subtree processor to
+	// other rules makes the template stale until a reload succeeds. See
+	// templateTxEraIsStale.
+	templateTxEra atomic.Pointer[txEraRange]
+
 	// staleTip remembers since when block assembly has differed from the same chain tip, so a
 	// candidate is only reported as stale once the gap outlasts the normal new-block notification delay.
 	staleTip staleTipTracker
@@ -1012,9 +1018,8 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 	// define a post process function to be called after the reset is complete, but before we release the lock
 	// in the for/select in the subtreeprocessor
 	postProcessFn := func() error {
-		// The reload rebuilds the template under the target's rules and drops again every
+		// The reload rebuilds the template under the target's rules and keeps out every
 		// transaction validated under other ones.
-		b.subtreeProcessor.ClearDroppedTxs()
 		b.subtreeProcessor.SetTxEra(currentHeight + 1)
 
 		// reload the unmined transactions
@@ -1356,11 +1361,13 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		}
 	}
 
-	// The template holds transactions validated for the previous next height. When the new
-	// next height falls under other transaction rules (an activation height), rebuild it
-	// from the UTXO store, whose reload keeps out the ones validated under the old rules.
-	// Mining candidates are empty while block processing runs, so none is built in between.
-	if b.setBestBlockHeader(bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height) {
+	b.setBestBlockHeader(bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
+
+	// The template holds transactions validated for an earlier next height. When the next
+	// height falls under other transaction rules (an activation height), rebuild it from the
+	// UTXO store, whose reload keeps out the ones validated under the old rules. Mining
+	// candidates are empty while block processing runs, so none is built in between.
+	if b.templateTxEraIsStale() {
 		ctxLogger.Warnf("[BlockAssembler][%s] the next block falls under other transaction rules; rebuilding the template", bestBlockchainBlockHeader.Hash())
 
 		if err = b.reset(ctx); err != nil {
@@ -1399,9 +1406,9 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 //   - bestBlockchainBlockHeader: The new best block header to set
 //   - Height: The height of the new best block
 //
-// It also moves the subtree processor to the transaction rules of the next block, and
-// reports whether they changed (see subtreeprocessor.SetTxEra).
-func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.BlockHeader, height uint32) (txRulesChanged bool) {
+// It also moves the subtree processor to the transaction rules of the next block (see
+// subtreeprocessor.SetTxEra).
+func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.BlockHeader, height uint32) {
 	b.logger.Infof("[BlockAssembler][%s] setting best block header to height %d", bestBlockchainBlockHeader.Hash(), height)
 
 	b.bestBlock.Store(&BestBlockInfo{
@@ -1410,7 +1417,7 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 	})
 
 	if b.subtreeProcessor != nil {
-		txRulesChanged = b.subtreeProcessor.SetTxEra(height + 1)
+		b.subtreeProcessor.SetTxEra(height + 1)
 	}
 
 	// Send state change notification if a listener is registered
@@ -1432,8 +1439,33 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 			}
 		}()
 	}
+}
 
-	return txRulesChanged
+// txEraRange is a subtree processor's transaction rules: the range of validated heights it
+// admits, or ok false when it admits every height.
+type txEraRange struct {
+	lo, hi uint32
+	ok     bool
+}
+
+func (b *BlockAssembler) currentTxEra() txEraRange {
+	if b.subtreeProcessor == nil {
+		return txEraRange{}
+	}
+
+	lo, hi, ok := b.subtreeProcessor.TxEra()
+	return txEraRange{lo: lo, hi: hi, ok: ok}
+}
+
+// templateTxEraIsStale reports whether the subtree processor admits other transaction
+// rules than the ones the template was last loaded under. The template then still holds
+// transactions validated under the old rules, and must be reloaded. Comparing with the
+// last successful load, rather than reacting to a change, keeps a failed reload stale, so
+// the next block retries it.
+func (b *BlockAssembler) templateTxEraIsStale() bool {
+	built := b.templateTxEra.Load()
+
+	return built != nil && *built != b.currentTxEra()
 }
 
 // setCurrentRunningState sets the current operational state.
@@ -3537,6 +3569,15 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	)
 	defer deferFn()
 
+	// The reload filters under these rules; record them once it has succeeded.
+	loadTxEra := b.currentTxEra()
+
+	defer func() {
+		if err == nil {
+			b.templateTxEra.Store(&loadTxEra)
+		}
+	}()
+
 	// Set flag to indicate unmined transactions are being loaded
 	b.unminedTransactionsLoading.Store(true)
 	defer func() {
@@ -3891,7 +3932,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 			}
 		}
 	} else {
-		// Sequential mode: use AddDirectly for each transaction
+		// Sequential mode: use AddDirectly for each transaction. AddDirectly does not filter
+		// by transaction rules as AddNodesDirectly does, so filter here.
+		unminedTransactions = b.subtreeProcessor.FilterUnminedTxEra(unminedTransactions)
+
 		for idx, unminedTransaction := range unminedTransactions {
 			if isReload {
 				err = b.subtreeProcessor.AddDirectlyReportOnly(unminedTransaction.Node, unminedTransaction.TxInpoints, true)

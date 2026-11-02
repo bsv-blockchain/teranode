@@ -14,63 +14,63 @@ type txEra struct {
 }
 
 // SetTxEra sets the rules the template is built under to those at nextHeight, the height
-// of the next block, and reports whether they differ from the ones set before. Block
-// assembly mines a transaction without re-checking it, so one validated at a height under
-// other rules (issue 4940: a side block below Genesis or Chronicle, or a transaction in
-// flight while the tip crosses an activation height) must not reach the template. A
-// network the script engine does not know clears the era, which admits everything.
-func (stp *SubtreeProcessor) SetTxEra(nextHeight uint32) bool {
+// of the next block. Block assembly mines a transaction without re-checking it, so one
+// validated at a height under other rules (issue 4940: a side block below Genesis or
+// Chronicle, or a transaction in flight while the tip crosses an activation height) must
+// not reach the template. A network the script engine does not know clears the era, which
+// admits everything.
+func (stp *SubtreeProcessor) SetTxEra(nextHeight uint32) {
 	var next *txEra
 
 	if lo, hi, ok := txrules.EraBounds(stp.settings.ChainCfgParams, nextHeight); ok {
 		next = &txEra{lo: lo, hi: hi}
 	}
 
-	prev := stp.txEra.Swap(next)
-
-	return prev != nil && next != nil && *prev != *next
+	stp.txEra.Store(next)
 }
 
-// ClearDroppedTxs forgets the transactions kept out of the template. Called when the
-// template is rebuilt from the UTXO store, whose reload drops them again.
-func (stp *SubtreeProcessor) ClearDroppedTxs() {
-	stp.droppedMu.Lock()
-	stp.droppedTxs = nil
-	stp.droppedCount.Store(0)
-	stp.droppedMu.Unlock()
+// TxEra returns the range of validated heights the template admits, ok false when it
+// admits every height.
+func (stp *SubtreeProcessor) TxEra() (lo, hi uint32, ok bool) {
+	era := stp.txEra.Load()
+	if era == nil {
+		return 0, 0, false
+	}
+
+	return era.lo, era.hi, true
 }
 
-// admitTx reports whether a transaction validated at height (0 when untagged) may enter the
-// template: its height is under the next block's rules and none of its parents was kept
-// out. A refused transaction is recorded so its descendants are refused too, which is why
-// callers must offer transactions in queue order, parents before children.
-func (stp *SubtreeProcessor) admitTx(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, height uint32) bool {
+// admitTxLocked reports whether a transaction validated at height (0 when untagged) may
+// enter the template: its height is under the next block's rules and none of its parents
+// was kept out. A refused transaction is recorded so its descendants are refused too,
+// which is why callers offer transactions in queue order, parents before children. An
+// admitted transaction that was refused before is forgotten, so its own descendants are
+// admitted again. The caller holds droppedMu.
+func (stp *SubtreeProcessor) admitTxLocked(hash chainhash.Hash, inpoints *subtreepkg.TxInpoints, height uint32) bool {
 	if era := stp.txEra.Load(); era != nil && height != 0 && (height < era.lo || height > era.hi) {
-		stp.recordDropped(hash)
+		stp.recordDroppedLocked(hash)
 		return false
 	}
 
-	if stp.droppedCount.Load() == 0 || inpoints == nil {
+	if len(stp.droppedTxs) == 0 {
 		return true
 	}
 
-	stp.droppedMu.Lock()
-	defer stp.droppedMu.Unlock()
-
-	for _, parent := range inpoints.ParentTxHashes {
-		if _, dropped := stp.droppedTxs[parent]; dropped {
-			stp.recordDroppedLocked(hash)
-			return false
+	if inpoints != nil {
+		for _, parent := range inpoints.ParentTxHashes {
+			if _, dropped := stp.droppedTxs[parent]; dropped {
+				stp.recordDroppedLocked(hash)
+				return false
+			}
 		}
 	}
 
-	return true
-}
+	if _, dropped := stp.droppedTxs[hash]; dropped {
+		delete(stp.droppedTxs, hash)
+		stp.droppedCount.Add(-1)
+	}
 
-func (stp *SubtreeProcessor) recordDropped(hash chainhash.Hash) {
-	stp.droppedMu.Lock()
-	stp.recordDroppedLocked(hash)
-	stp.droppedMu.Unlock()
+	return true
 }
 
 func (stp *SubtreeProcessor) recordDroppedLocked(hash chainhash.Hash) {
@@ -86,11 +86,19 @@ func (stp *SubtreeProcessor) recordDroppedLocked(hash chainhash.Hash) {
 	prometheusSubtreeProcessorTxEraDropped.Inc()
 }
 
-// filterTxEra removes from the dequeued batches, in queue order, every transaction admitTx
-// refuses. It runs before any of them is added to the tx map.
+// filterTxEra removes from the dequeued batches, in queue order, every transaction
+// admitTxLocked refuses. It runs before any of them is added to the tx map.
 func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
+	stp.droppedMu.Lock()
+	defer stp.droppedMu.Unlock()
+
 	for _, b := range batches {
-		if b.validatedHeights == nil && stp.droppedCount.Load() == 0 {
+		// One height per node, or none: anything else is untagged.
+		if len(b.validatedHeights) != len(b.nodes) {
+			b.validatedHeights = nil
+		}
+
+		if b.validatedHeights == nil && len(stp.droppedTxs) == 0 {
 			continue
 		}
 
@@ -102,7 +110,7 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 				height = b.validatedHeights[i]
 			}
 
-			if !stp.admitTx(b.nodes[i].Hash, b.txInpoints[i], height) {
+			if !stp.admitTxLocked(b.nodes[i].Hash, b.txInpoints[i], height) {
 				continue
 			}
 
@@ -125,12 +133,16 @@ func (stp *SubtreeProcessor) filterTxEra(batches []*TxBatch) {
 	}
 }
 
-// filterUnminedTxEra returns the reloaded transactions admitTx accepts, tagged with the
-// height they were created at (unmined_since), in the order given.
-func (stp *SubtreeProcessor) filterUnminedTxEra(txs []*utxostore.UnminedTransaction) []*utxostore.UnminedTransaction {
+// FilterUnminedTxEra returns the reloaded transactions admitTxLocked accepts, in the order
+// given. Each is tagged with its unmined_since: the height it was created, and so validated,
+// at; for a transaction a reorg moved back, the height of the reorg.
+func (stp *SubtreeProcessor) FilterUnminedTxEra(txs []*utxostore.UnminedTransaction) []*utxostore.UnminedTransaction {
 	if stp.txEra.Load() == nil && stp.droppedCount.Load() == 0 {
 		return txs
 	}
+
+	stp.droppedMu.Lock()
+	defer stp.droppedMu.Unlock()
 
 	var kept []*utxostore.UnminedTransaction
 
@@ -140,7 +152,7 @@ func (stp *SubtreeProcessor) filterUnminedTxEra(txs []*utxostore.UnminedTransact
 			height = uint32(tx.UnminedSince) //nolint:gosec // a block height
 		}
 
-		admitted := stp.admitTx(tx.Hash, tx.TxInpoints, height)
+		admitted := stp.admitTxLocked(tx.Hash, tx.TxInpoints, height)
 
 		switch {
 		case admitted && kept != nil:
