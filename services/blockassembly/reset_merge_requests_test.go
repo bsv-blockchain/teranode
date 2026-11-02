@@ -301,8 +301,19 @@ func TestHandleResetRequests_FlagOnTheFirstRequestSurvivesTheMerge(t *testing.T)
 // blockedResetSenders counts this test's sender goroutines parked on a send to resetCh. A
 // goroutine's stack header names its state, and the sender closure's frame names the test.
 func blockedResetSenders() int {
+	// Grown until the dump fits. runtime.Stack truncates silently, and with the whole package's
+	// goroutines alive a fixed buffer can cut off the senders this counts.
 	buf := make([]byte, 1<<20)
-	buf = buf[:runtime.Stack(buf, true)]
+
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+
+		buf = make([]byte, 2*len(buf))
+	}
 
 	n := 0
 

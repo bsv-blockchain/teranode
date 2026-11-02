@@ -352,3 +352,21 @@ func (m *NullStore) ProcessExpiredPreservations(ctx context.Context, currentHeig
 func (m *NullStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
 	return nil, nil
 }
+
+func (m *NullStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *NullStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *NullStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *NullStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *NullStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return nil
+}

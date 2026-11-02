@@ -222,10 +222,27 @@ held AS (
        AND u.leaf = b.leaf
        AND u.ukey = b.ukey
        AND u.txid = b.ptxid
+),
+other_owner AS (
+    -- Requested keys whose UTXO a DIFFERENT transaction took: the journal holds a row for it
+    -- under another spender and none under this one. The record names a spender that does not
+    -- own the UTXO, so there is nothing for it to restore. Same snapshot as the other CTEs, and
+    -- the same LATERAL with an OFFSET 0 fence as live_before, so each key is one index probe on
+    -- the journal's ukey rather than a hash over the journal.
+    SELECT k.ukey
+      FROM unnest($1::uuid[], $2::bytea[], $3::bytea[]) AS k(ukey, ptxid, stxid)
+     CROSS JOIN LATERAL (
+       SELECT coalesce(bool_or(j.spending_txid = k.stxid), false) AS mine, count(*) AS n
+         FROM spend_journal j
+        WHERE j.ukey = k.ukey AND j.txid = k.ptxid
+       OFFSET 0
+     ) AS c
+     WHERE c.n > 0 AND NOT c.mine
 )
 SELECT (SELECT count(*) FROM restored),
        (SELECT count(*) FROM items),
        (SELECT count(*) FROM live_before),
+       (SELECT count(*) FROM other_owner),
        (SELECT count(*) FROM won WHERE n = 1),
        (SELECT count(*) FROM won WHERE n = 0 AND NOT has_ident),
        (SELECT count(*) FROM won WHERE n > 1),
@@ -291,13 +308,14 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 
 	var (
 		restored, requested, alreadyLive int
+		otherOwner                       int
 		repaired, noSource, ambiguous    int
 		offending                        *string
 	)
 
 	if err := dbTx.QueryRow(ctx, unspendSQL, ukeys, ptxids, stxids, extraFlags,
 		int32(fence.droppedFloor), int32(fence.fence), FlagConflicting). //nolint:gosec // heights fit int32
-		Scan(&restored, &requested, &alreadyLive, &repaired, &noSource, &ambiguous, &offending); err != nil {
+		Scan(&restored, &requested, &alreadyLive, &otherOwner, &repaired, &noSource, &ambiguous, &offending); err != nil {
 		return errors.NewStorageError("[utxoset][Unspend] restore", err)
 	}
 
@@ -332,23 +350,27 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		unspendRepaired.Add(float64(repaired))
 	}
 
-	if restored+alreadyLive != requested {
+	if restored+alreadyLive+otherOwner != requested {
 		// Silence here would be the dangerous outcome: a reorg that believes it has
 		// restored UTXOs which are in fact still missing leaves the UTXO set wrong and
 		// consensus-divergent, with nothing to indicate it. Either every requested UTXO
 		// is now accounted for -- restored by this call or already live from an earlier
 		// one -- or the caller must know it is not.
 		//
-		// The usual causes are a journal partition already reclaimed (the spend is older
-		// than retention), or a spender mismatch meaning the UTXO was re-spent by a
-		// different transaction in the meantime. alreadyLive covers the third, benign
+		// The cause is a journal partition already reclaimed: the spend is older than
+		// retention, so nothing records the UTXO at all. A spender mismatch is not part of
+		// it: when the journal shows a DIFFERENT transaction took the UTXO (otherOwner), the
+		// record is not the owner's, the UTXO is accounted for as spent by its owner, and
+		// the restore is a no-op, as on the sql and aerospike stores. A conflict rollback
+		// depends on that: it unspends every winner spend it planned, including those the
+		// winner never made because the run stopped first. alreadyLive covers the other benign
 		// cause -- a replayed Unspend on a UTXO a previous call already restored, or one
 		// nobody ever spent -- so it is never itself part of what is missing here. Those
 		// UTXOs are a full success rather than a tolerated miss: with flagAsLocked the
 		// `held` arm above has just put the hold on them, so the caller gets the UTXO
 		// unspent and held, which is the whole instruction.
-		return errors.NewProcessingError("[utxoset][Unspend] restored %d, already live %d, of %d requested; the rest are beyond journal retention or were re-spent by a different transaction",
-			restored, alreadyLive, requested)
+		return errors.NewProcessingError("[utxoset][Unspend] restored %d, already live %d, owned by another spender %d, of %d requested; the rest are beyond journal retention",
+			restored, alreadyLive, otherOwner, requested)
 	}
 
 	return nil

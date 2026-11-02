@@ -475,3 +475,21 @@ func TestAvailableDatabases_GlobalVariable(t *testing.T) {
 func (m *MockUTXOStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
 	return nil, nil
 }
+
+func (m *MockUTXOStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockUTXOStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *MockUTXOStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *MockUTXOStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return nil
+}

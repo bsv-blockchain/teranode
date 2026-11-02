@@ -26,8 +26,8 @@ import (
 // started_at forward and lose the original attempt's timestamp, which is the only thing
 // that says how long the interrupted work has been outstanding.
 const intentInsertSQL = `
-INSERT INTO conflict_intents (intent_id, kind, block_height, block_hash, tx_hashes, started_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO conflict_intents (intent_id, kind, block_height, block_hash, tx_hashes, started_at, recovery)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (intent_id) DO NOTHING`
 
 const intentDeleteSQL = `DELETE FROM conflict_intents WHERE intent_id = $1`
@@ -38,7 +38,7 @@ const intentDeleteSQL = `DELETE FROM conflict_intents WHERE intent_id = $1`
 // overlap were begun in that order, and applying the later one first would leave the
 // earlier one's decisions on top of state it was never computed against.
 const intentSelectSQL = `
-SELECT kind, block_height, block_hash, tx_hashes, started_at
+SELECT intent_id, kind, block_height, block_hash, tx_hashes, started_at
   FROM conflict_intents
  ORDER BY started_at`
 
@@ -86,6 +86,16 @@ func decodeIntentHashes(buf []byte) ([]chainhash.Hash, error) {
 func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	intentID := intent.IntentID()
 
+	var recovery []byte
+
+	if intent.Recovery != nil {
+		var err error
+
+		if recovery, err = utxo.EncodeConflictRecovery(intent.Recovery); err != nil {
+			return err
+		}
+	}
+
 	if _, err := s.pool.Exec(ctx, intentInsertSQL,
 		intentID[:],
 		string(intent.Kind),
@@ -93,6 +103,7 @@ func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictInt
 		intent.BlockHash[:],
 		encodeIntentHashes(intent.TxHashes),
 		intent.StartedAt,
+		recovery,
 	); err != nil {
 		return errors.NewStorageError("[utxoset][BeginConflictIntent] record intent %s", intentID.String(), err)
 	}
@@ -129,6 +140,7 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 
 	for rows.Next() {
 		var (
+			intentID    []byte
 			kind        string
 			blockHeight int32
 			blockHash   []byte
@@ -136,8 +148,16 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 			startedAt   int64
 		)
 
-		if err := rows.Scan(&kind, &blockHeight, &blockHash, &txHashes, &startedAt); err != nil {
+		if err := rows.Scan(&intentID, &kind, &blockHeight, &blockHash, &txHashes, &startedAt); err != nil {
 			return nil, errors.NewStorageError("[utxoset][PendingConflictIntents] scan", err)
+		}
+
+		// The row's own key, so a record an older build wrote under its key formula is still
+		// addressed by that key (utxo.ConflictIntent.ID).
+		id, idErr := chainhash.NewHash(intentID)
+		if idErr != nil {
+			return nil, errors.NewStorageError("[utxoset][PendingConflictIntents] corrupt intent_id (kind=%s height=%d startedAt=%d)",
+				kind, blockHeight, startedAt, idErr)
 		}
 
 		bh, bhErr := chainhash.NewHash(blockHash)
@@ -158,6 +178,7 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 			BlockHash:   *bh,
 			TxHashes:    hashes,
 			StartedAt:   startedAt,
+			ID:          *id,
 		})
 	}
 

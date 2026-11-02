@@ -368,6 +368,16 @@ func decorateInput(in *bt.Input, satoshis int64, script []byte, hashOverride []b
 	in.PreviousTxScript = bscript.NewFromBytes(script)
 }
 
+// itemInput is input vin of item's transaction, or nil for an item planned from spend records
+// alone (planRecordedSpends), which has no transaction to decorate or to take a claim from.
+func (p *spendPlan) itemInput(item, vin int) *bt.Input {
+	if tx := p.itemTxs[item]; tx != nil {
+		return tx.Inputs[vin]
+	}
+
+	return nil
+}
+
 // runSpendPlan issues the statement and fills in each caller's answers, including the
 // per-input errors that conflict detection reads.
 func (s *Store) runSpendPlan(ctx context.Context, q pgx.Tx, p *spendPlan) error {
@@ -403,7 +413,7 @@ func (s *Store) runSpendPlan(ctx context.Context, q pgx.Tx, p *spendPlan) error 
 		item := p.owner[k]
 		vin := p.ownerVin[k]
 
-		if in := p.itemTxs[item].Inputs[vin]; in != nil {
+		if in := p.itemInput(item, vin); in != nil {
 			// Before the overwrite, and it has to be: the overwrite is what destroys the
 			// claim this is checking.
 			if err := claimMismatch(in, p.perItem[item][vin], satoshis, script, hashOverride,
@@ -628,7 +638,7 @@ func (s *Store) namePlanSpenders(ctx context.Context, q pgx.Tx, p *spendPlan, do
 			// makes this the SECOND place the store hands a caller's claim back
 			// unexamined. It gets the same comparison as the first, against the payload
 			// the journal captured at the moment of the delete.
-			in := p.itemTxs[p.owner[k]].Inputs[p.ownerVin[k]]
+			in := p.itemInput(p.owner[k], p.ownerVin[k])
 
 			sp.Err = nil
 			sp.ConflictingTxID = nil

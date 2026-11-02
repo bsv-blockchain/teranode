@@ -320,8 +320,14 @@ CREATE TABLE IF NOT EXISTS conflict_intents (
     block_height INTEGER NOT NULL,
     block_hash   BYTEA   NOT NULL,
     tx_hashes    BYTEA   NOT NULL,
-    started_at   BIGINT  NOT NULL
+    started_at   BIGINT  NOT NULL,
+    recovery     BYTEA
 );
+
+-- recovery is a forward resolution's checklist (utxo.ConflictRecovery): the before-image of
+-- every owner and flag it changes, and how far it got. A database made before the column
+-- existed gets it here; the table holds the resolutions in flight, so the change is instant.
+ALTER TABLE conflict_intents ADD COLUMN IF NOT EXISTS recovery BYTEA;
 
 CREATE TABLE IF NOT EXISTS applied_block (
     height       INTEGER NOT NULL,

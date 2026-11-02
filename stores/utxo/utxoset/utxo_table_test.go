@@ -575,18 +575,22 @@ func TestUnspendRestoresFromJournal(t *testing.T) {
 }
 
 // TestUnspendRefusesWrongSpender is the ownership token doing its job. A stale reorg
-// record must never resurrect a UTXO that a DIFFERENT transaction has since taken.
+// record must never resurrect a UTXO that a DIFFERENT transaction has since taken. The
+// restore is a no-op success, as on the sql and aerospike stores, because the journal shows
+// the UTXO is accounted for by its owner. A UTXO with no journal row at all is the case that
+// fails: nothing says who took it, so a restore cannot be confirmed.
 func TestUnspendRefusesWrongSpender(t *testing.T) {
 	s, ctx := newTestStore(t)
 
 	parent, _, spends := spendOne(t, s, ctx, 4141, 200)
+	rightful := *spends[0].SpendingData
 
 	// claim it was spent by some other transaction
 	other := mkTx(t, 1, 1)
 	spends[0].SpendingData = spend.NewSpendingData(other.TxIDChainHash(), 0)
 
-	require.Error(t, s.Unspend(ctx, spends),
-		"a restore naming the wrong spender must fail, not resurrect the UTXO")
+	require.NoError(t, s.Unspend(ctx, spends),
+		"a restore naming a spender that does not own the UTXO is a no-op")
 
 	parentHash := parent.TxIDChainHash()
 
@@ -597,6 +601,14 @@ func TestUnspendRefusesWrongSpender(t *testing.T) {
 	var journalled int
 	require.NoError(t, s.pool.QueryRow(ctx, `SELECT count(*) FROM spend_journal WHERE txid = $1`, parentHash[:]).Scan(&journalled))
 	require.Equal(t, 1, journalled, "and its journal row must be left intact for the rightful restore")
+
+	// With the journal row gone, as past retention, even the rightful spender's restore
+	// cannot be confirmed, and it fails rather than report a UTXO it did not restore.
+	_, err := s.pool.Exec(ctx, `DELETE FROM spend_journal WHERE txid = $1`, parentHash[:])
+	require.NoError(t, err)
+
+	spends[0].SpendingData = &rightful
+	require.Error(t, s.Unspend(ctx, spends), "a UTXO with no journal row cannot be restored")
 }
 
 // TestUnspendRequiresSpender refuses to guess. Restoring on the outpoint alone could

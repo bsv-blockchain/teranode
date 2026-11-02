@@ -444,3 +444,21 @@ func (s *Store) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utx
 func (s *Store) Unwrap() utxo.Store {
 	return s.store
 }
+
+func (s *Store) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return s.store.SaveConflictRecovery(ctx, id, r)
+}
+func (s *Store) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return s.store.LoadConflictRecovery(ctx, id)
+}
+func (s *Store) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return s.store.RestoreConflictSpends(ctx, spends, height)
+}
+
+func (s *Store) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return s.store.SetConflictLocks(ctx, id, parents, locked)
+}
+
+func (s *Store) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return s.store.ReleaseConflictLocks(ctx, id, parents)
+}
