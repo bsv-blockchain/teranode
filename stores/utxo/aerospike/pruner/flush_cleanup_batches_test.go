@@ -467,6 +467,37 @@ func TestFlushCleanupBatches_PageWaitsForItsMaster(t *testing.T) {
 	}
 }
 
+// TestFlushCleanupBatches_RefusedMasterKeepsItsPages: a master M whose delete
+// the server refuses must keep its pages too. One batch is not atomic across
+// records, so a page sent alongside a refused M was deleted while M stayed and
+// its markers were withdrawn; a replay then rewrote the page with unspent
+// outputs while M answered ErrTxExists. Pages now go in a second batch, only
+// for masters the first one removed.
+//
+// As in TestFlushCleanupBatches_FailedDeleteWithdrawsMarkers, a key in a
+// namespace the server does not have stands in for the refused master.
+func TestFlushCleanupBatches_RefusedMasterKeepsItsPages(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	child := chainhash.HashH([]byte("refused-master-child"))
+
+	pageKey, err := aerospike.NewKey("test", "test", uaerospike.CalculateKeySourceInternal(&child, 1))
+	require.NoError(t, err)
+	require.NoError(t, client.Put(nil, pageKey, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()}))
+
+	refusedMaster, err := aerospike.NewKey("nosuchnamespace", "test", child.String())
+	require.NoError(t, err)
+
+	deletions := []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{refusedMaster, pageKey}}}
+
+	_, flushErr := s.flushCleanupBatches(context.Background(), map[string]*parentUpdateInfo{}, deletions, nil)
+	require.Error(t, flushErr, "a refused delete is still reported")
+
+	exists, err := client.Exists(nil, pageKey)
+	require.NoError(t, err)
+	require.True(t, exists, "the page of a master the server refused to delete must stay")
+}
+
 // TestIsPaginationRecord: processRecordChunk sets pendingDeletion.page from
 // this, so a scanned page never stands in for its master. A master carries
 // totalExtraRecs, or, from a writer that does not set it, sits under the bare

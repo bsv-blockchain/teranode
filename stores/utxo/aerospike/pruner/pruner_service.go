@@ -2516,7 +2516,8 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 // spends on that page were lost.
 //
 // A present master needs none of its pages deleted here: the master's own
-// deletion lists every page key, whichever chunk it is scanned in. So a page
+// deletion lists every page key, whichever chunk it is scanned in, and
+// executeBatchDeletions deletes them once the master is gone. So a page
 // goes on its own only once its master is definitely gone, which is the
 // leftover of an earlier cycle whose page deletes failed. A master read that
 // fails keeps the page, because the master is not known to be gone.
@@ -3267,6 +3268,14 @@ func (s *Service) isPaginationRecord(record *aerospike.Record, txHash *chainhash
 // A failed pagination-record delete does not keep its child in either set: the
 // master is what the spend path and the next scan see. Every record whose
 // delete did not definitely succeed is counted in the returned error.
+//
+// A master's pages are deleted in a second batch, and only for the masters the
+// first batch definitely removed. One batch is not atomic across records, so
+// sending a master and its pages together let a refused master keep its record
+// while its pages went. The master's markers are then withdrawn, and a replay
+// rewrote the missing pages with unspent outputs while the master answered
+// ErrTxExists. Pages of a master whose delete went unanswered stay as well: if
+// the master did go, they are leftovers the next cycle deletes on their own.
 func (s *Service) executeBatchDeletions(ctx context.Context, deletions []*pendingDeletion) (survivors, unanswered map[chainhash.Hash]struct{}, err error) {
 	if len(deletions) == 0 {
 		return nil, nil, nil
@@ -3285,6 +3294,9 @@ func (s *Service) executeBatchDeletions(ctx context.Context, deletions []*pendin
 
 		if !deletion.page {
 			masters[len(keys)] = deletion.txHash
+			keys = append(keys, deletion.keys[0])
+
+			continue
 		}
 
 		keys = append(keys, deletion.keys...)
@@ -3321,6 +3333,36 @@ func (s *Service) executeBatchDeletions(ctx context.Context, deletions []*pendin
 
 	if batchErr != nil {
 		return results.survivors, results.unanswered, errors.NewStorageError("batch deletion failed", batchErr)
+	}
+
+	pageKeys := make([]*aerospike.Key, 0)
+
+	for _, deletion := range deletions {
+		if deletion.page || len(deletion.keys) < 2 {
+			continue
+		}
+
+		if _, survived := results.survivors[*deletion.txHash]; survived {
+			continue
+		}
+
+		if _, unknown := results.unanswered[*deletion.txHash]; unknown {
+			continue
+		}
+
+		pageKeys = append(pageKeys, deletion.keys[1:]...)
+	}
+
+	if len(pageKeys) > 0 {
+		pageRecords := buildDeletionBatchRecords(pageKeys, s.utxoSetTTL, s.removalCommitLevel)
+
+		if pageErr := s.client.BatchOperate(s.batchPolicy, pageRecords); pageErr != nil {
+			s.logger.Errorf("Batch deletion of pagination records failed for %d records: %v", len(pageKeys), pageErr)
+
+			return results.survivors, results.unanswered, errors.NewStorageError("batch deletion of pagination records failed", pageErr)
+		}
+
+		results.failedRecords = append(results.failedRecords, classifyDeletionResults(pageRecords, nil).failedRecords...)
 	}
 
 	for _, rec := range results.failedRecords {
