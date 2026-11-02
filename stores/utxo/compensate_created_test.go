@@ -417,3 +417,40 @@ func TestRollbackSetLeavesCallerSliceUntouched(t *testing.T) {
 	require.Equal(t, []*Spend{fresh, idem}, rollback)
 	require.Nil(t, backing[:2][1], "the caller's spare capacity must not receive the idempotent match")
 }
+
+// TestLeftoverChecksNeedABlockLookup: confirming leftovers and adopting a block
+// id both ask which block holds an id, so with no lookup wired they fail rather
+// than guess. With no leftovers there is nothing to confirm and no lookup is
+// needed.
+func TestLeftoverChecksNeedABlockLookup(t *testing.T) {
+	ctx := context.Background()
+	blockHash := chainhash.HashH([]byte("leftover-lookup-block"))
+
+	confirmed, mismatch, err := ConfirmLeftovers(ctx, nil, &blockHash, 7, nil)
+	require.NoError(t, err)
+	require.False(t, mismatch)
+	require.Empty(t, confirmed)
+
+	_, _, err = ConfirmLeftovers(ctx, nil, &blockHash, 7, map[chainhash.Hash]struct{}{blockHash: {}})
+	require.ErrorIs(t, err, errors.ErrProcessing)
+
+	_, err = AdoptableBlockID(ctx, nil, &blockHash, 7)
+	require.ErrorIs(t, err, errors.ErrProcessing)
+}
+
+// TestRetryStoreCallStopsOnCancel: a retry waiting out its backoff gives up as
+// soon as the context ends, and says so.
+func TestRetryStoreCallStopsOnCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	calls := 0
+	err := retryStoreCall(ctx, func() error {
+		calls++
+		cancel()
+
+		return errors.NewStorageError("down")
+	})
+
+	require.ErrorIs(t, err, errors.ErrContextCanceled)
+	require.Equal(t, 1, calls)
+}

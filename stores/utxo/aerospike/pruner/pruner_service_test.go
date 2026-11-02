@@ -551,3 +551,49 @@ func TestServiceSimple(t *testing.T) {
 		assert.Nil(t, service)
 	})
 }
+
+// TestCollectDeletedChildren: a parent's deletedChildren bin adds every child it
+// names to the chunk-wide set, and a bin of the wrong shape, or a key that is
+// not a string, adds nothing rather than failing the chunk.
+func TestCollectDeletedChildren(t *testing.T) {
+	s := &Service{fieldDeletedChildren: "deletedChildren", logger: ulogger.TestLogger{}}
+
+	for _, tc := range []struct {
+		name string
+		bins aerospike.BinMap
+		want map[string]bool
+	}{
+		{"no bin", aerospike.BinMap{}, map[string]bool{}},
+		{"wrong type", aerospike.BinMap{"deletedChildren": []interface{}{"a"}}, map[string]bool{}},
+		{"string and non-string keys", aerospike.BinMap{"deletedChildren": map[interface{}]interface{}{"a": true, 7: true}}, map[string]bool{"a": true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			into := map[string]bool{}
+			s.collectDeletedChildren(tc.bins, into)
+			require.Equal(t, tc.want, into)
+		})
+	}
+}
+
+// TestExtractSpendingChildren: only a spent utxo entry, 32 bytes of utxo hash
+// and 36 of spending data with a non-zero txid, names a child. A bin that is
+// not a list, an entry that is not bytes or is short, and an unspent entry name
+// none.
+func TestExtractSpendingChildren(t *testing.T) {
+	child := chainhash.HashH([]byte("extract-child"))
+
+	spent := make([]byte, 68)
+	copy(spent[32:64], child[:])
+
+	unspent := make([]byte, 68)
+
+	require.Nil(t, extractSpendingChildren("not a list", map[string][]byte{}))
+
+	unique := map[string][]byte{}
+	got := extractSpendingChildren([]interface{}{spent, unspent, spent[:40], "x"}, unique)
+
+	require.Equal(t, []string{child.String()}, got)
+	require.Equal(t, child[:], unique[child.String()])
+	require.True(t, isZeroBytes(unspent[32:64]))
+	require.False(t, isZeroBytes(spent[32:64]))
+}

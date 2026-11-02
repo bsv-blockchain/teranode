@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -292,5 +293,98 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrInvalidArgument)
 		require.Equal(t, 0, f.spendCalls)
 		require.Equal(t, 0, f.createCalls)
+	})
+}
+
+// recheckStore answers the first Spend with spends and the recheck with
+// recheckErr, and records the recheck's flags.
+type recheckStore struct {
+	fakeSequentialStore
+	recheckErr   error
+	recheckFlags []IgnoreFlags
+}
+
+func (r *recheckStore) Spend(ctx context.Context, tx *bt.Tx, h uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error) {
+	if r.spendCalls > 0 {
+		r.spendCalls++
+		r.recheckFlags = ignoreFlags
+
+		return nil, r.recheckErr
+	}
+
+	return r.fakeSequentialStore.Spend(ctx, tx, h, ignoreFlags...)
+}
+
+// deletingRecheckStore can remove the record it created.
+type deletingRecheckStore struct {
+	recheckStore
+	deleteErr   error
+	deleteCalls int
+}
+
+func (d *deletingRecheckStore) DeleteComplete(context.Context, *chainhash.Hash) error {
+	d.deleteCalls++
+
+	return d.deleteErr
+}
+
+// TestSequentialSpendAndCreate_Recheck covers the recheck after a create over a
+// spend the store had already answered for, against fakes, for the outcomes the
+// store tests do not reach: a store that cannot delete, and a delete that fails.
+func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tx := bt.NewTx()
+	pruned := errors.NewUtxoSpendingTxPrunedError("pruned")
+
+	t.Run("a fresh spend is not rechecked", func(t *testing.T) {
+		f := &recheckStore{fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{}}, createMeta: &meta.Data{}}}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.NoError(t, err)
+		require.Equal(t, 1, f.spendCalls)
+	})
+
+	t.Run("the recheck requires parent outputs", func(t *testing.T) {
+		f := &recheckStore{fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{Blessed: true}}, createMeta: &meta.Data{}}}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, WithIgnoreLocked(true))
+		require.NoError(t, err)
+		require.Equal(t, 2, f.spendCalls)
+		require.Len(t, f.recheckFlags, 1)
+		require.True(t, f.recheckFlags[0].RequireParentOutputs)
+		require.True(t, f.recheckFlags[0].IgnoreLocked, "the caller's flags are kept")
+	})
+
+	t.Run("a store that cannot delete reports a storage error", func(t *testing.T) {
+		f := &recheckStore{fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{Idempotent: true}}, createMeta: &meta.Data{}}, recheckErr: pruned}
+
+		md, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.Nil(t, md)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+	})
+
+	t.Run("a failed delete reports a storage error", func(t *testing.T) {
+		f := &deletingRecheckStore{
+			recheckStore: recheckStore{fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{Idempotent: true}}, createMeta: &meta.Data{}}, recheckErr: pruned},
+			deleteErr:    errors.NewStorageError("down"),
+		}
+
+		md, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.Nil(t, md)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.Equal(t, deleteCreatedAttempts, f.deleteCalls)
+	})
+
+	t.Run("a delete that finds nothing returns the replay answer", func(t *testing.T) {
+		f := &deletingRecheckStore{
+			recheckStore: recheckStore{fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{Idempotent: true}}, createMeta: &meta.Data{}}, recheckErr: pruned},
+			deleteErr:    errors.NewTxNotFoundError("gone"),
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+		require.Equal(t, 1, f.deleteCalls)
 	})
 }
