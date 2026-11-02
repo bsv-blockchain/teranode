@@ -60,7 +60,14 @@ type Interface interface {
 	//
 	// Returns:
 	//   - bool: true if the batch was enqueued, false if it was refused for room
-	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool
+	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) bool
+
+	// SetTxEra sets the transaction rules the template is built under to those of the
+	// next block's height, and reports whether they changed. See tx_era.go.
+	SetTxEra(nextHeight uint32) bool
+
+	// ClearDroppedTxs forgets the transactions kept out of the template for their rules.
+	ClearDroppedTxs()
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.

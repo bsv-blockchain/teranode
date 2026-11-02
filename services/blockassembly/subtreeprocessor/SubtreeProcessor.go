@@ -205,6 +205,14 @@ type SubtreeProcessor struct {
 	// settings contains the configuration parameters for the processor
 	settings *settings.Settings
 
+	// txEra is the range of validated heights admitted to the template; nil admits all.
+	// droppedTxs holds the transactions kept out, so their descendants are kept out too.
+	// See tx_era.go.
+	txEra        atomic.Pointer[txEra]
+	droppedMu    sync.Mutex
+	droppedTxs   map[chainhash.Hash]struct{}
+	droppedCount atomic.Int64
+
 	// currentItemsPerFile specifies the maximum number of items per subtree file
 	currentItemsPerFile atomic.Int32
 
@@ -1132,6 +1140,9 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 
 						dequeueBatches = append(dequeueBatches, batch)
 					}
+
+					// Before the parallel filter: descendants are found in queue order.
+					stp.filterTxEra(dequeueBatches)
 
 					if len(dequeueBatches) == 0 {
 						stp.setCurrentRunningState(StateRunning)
@@ -3051,11 +3062,12 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
+//   - validatedHeights: Height each node was validated at, or nil when untagged
 //
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
-func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
-	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints)
+func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, validatedHeights []uint32) bool {
+	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints, validatedHeights)
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
@@ -3129,6 +3141,8 @@ func (stp *SubtreeProcessor) AddNodesDirectlyReportOnly(txs []*utxostore.Unmined
 }
 
 func (stp *SubtreeProcessor) addNodesDirectly(txs []*utxostore.UnminedTransaction, skipNotification bool, failOnMapErr bool) (err error) {
+	txs = stp.filterUnminedTxEra(txs)
+
 	if len(txs) == 0 {
 		return nil
 	}
@@ -6992,6 +7006,8 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 		itemsProcessed += int64(len(batch.nodes))
 
 		if chunkItems >= maxItems {
+			stp.filterTxEra(chunk)
+
 			if err := fn(chunk); err != nil {
 				return err
 			}
@@ -7001,6 +7017,8 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	}
 
 	if len(chunk) > 0 {
+		stp.filterTxEra(chunk)
+
 		return fn(chunk)
 	}
 

@@ -918,6 +918,7 @@ func TestMiningCandidateMainPathTimeFloored(t *testing.T) {
 		require.True(t, ba.AddTxBatchIfRoom(
 			[]subtreepkg.Node{{Hash: txHash, Fee: uint64(100), SizeInBytes: 250}},
 			[]*subtreepkg.TxInpoints{{}},
+			nil,
 		))
 	}
 

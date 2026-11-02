@@ -229,8 +229,16 @@ func (m *MockSubtreeProcessor) AddBatch(nodes []subtree.Node, txInpoints []*subt
 	m.Called(nodes, txInpoints)
 }
 
+// SetTxEra implements Interface.SetTxEra. A no-op, so tests need no expectation for it.
+func (m *MockSubtreeProcessor) SetTxEra(uint32) bool {
+	return false
+}
+
+// ClearDroppedTxs implements Interface.ClearDroppedTxs. A no-op.
+func (m *MockSubtreeProcessor) ClearDroppedTxs() {}
+
 // AddBatchIfRoom implements Interface.AddBatchIfRoom
-func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
+func (m *MockSubtreeProcessor) AddBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, _ []uint32) bool {
 	args := m.Called(nodes, txInpoints)
 	return args.Bool(0)
 }

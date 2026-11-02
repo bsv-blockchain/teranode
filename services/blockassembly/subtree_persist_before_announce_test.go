@@ -123,6 +123,7 @@ func TestSubtreesPersistedBeforeBlockAnnounced(t *testing.T) {
 		require.True(t, server.blockAssembler.AddTxBatchIfRoom(
 			[]subtreepkg.Node{{Hash: txHash, Fee: uint64(1000 + i), SizeInBytes: 250}},
 			[]*subtreepkg.TxInpoints{singleParentInpointsPtr(parentHash, uint32(i))},
+			nil,
 		))
 	}
 

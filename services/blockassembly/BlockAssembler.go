@@ -1012,6 +1012,11 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 	// define a post process function to be called after the reset is complete, but before we release the lock
 	// in the for/select in the subtreeprocessor
 	postProcessFn := func() error {
+		// The reload rebuilds the template under the target's rules and drops again every
+		// transaction validated under other ones.
+		b.subtreeProcessor.ClearDroppedTxs()
+		b.subtreeProcessor.SetTxEra(currentHeight + 1)
+
 		// reload the unmined transactions
 		if err = b.loadUnminedTransactions(ctx, true, shouldValidateInputs); err != nil {
 			return errors.NewProcessingError("[Reset] error loading unmined transactions", err)
@@ -1351,7 +1356,20 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		}
 	}
 
-	b.setBestBlockHeader(bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
+	// The template holds transactions validated for the previous next height. When the new
+	// next height falls under other transaction rules (an activation height), rebuild it
+	// from the UTXO store, whose reload keeps out the ones validated under the old rules.
+	// Mining candidates are empty while block processing runs, so none is built in between.
+	if b.setBestBlockHeader(bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height) {
+		ctxLogger.Warnf("[BlockAssembler][%s] the next block falls under other transaction rules; rebuilding the template", bestBlockchainBlockHeader.Hash())
+
+		if err = b.reset(ctx); err != nil {
+			ctxLogger.Errorf("[BlockAssembler][%s] error rebuilding the template for new transaction rules: %v", bestBlockchainBlockHeader.Hash(), err)
+			prometheusBlockAssemblyProcessingStuck.WithLabelValues("tx_rules_reset").Inc()
+
+			return
+		}
+	}
 
 	// Block assembly advanced to the chain tip we observed this round: it is no longer
 	// behind, so clear the lag gauge (issue #980, Bug B).
@@ -1380,13 +1398,20 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 // Parameters:
 //   - bestBlockchainBlockHeader: The new best block header to set
 //   - Height: The height of the new best block
-func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.BlockHeader, height uint32) {
+//
+// It also moves the subtree processor to the transaction rules of the next block, and
+// reports whether they changed (see subtreeprocessor.SetTxEra).
+func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.BlockHeader, height uint32) (txRulesChanged bool) {
 	b.logger.Infof("[BlockAssembler][%s] setting best block header to height %d", bestBlockchainBlockHeader.Hash(), height)
 
 	b.bestBlock.Store(&BestBlockInfo{
 		Header: bestBlockchainBlockHeader,
 		Height: height,
 	})
+
+	if b.subtreeProcessor != nil {
+		txRulesChanged = b.subtreeProcessor.SetTxEra(height + 1)
+	}
 
 	// Send state change notification if a listener is registered
 	b.stateChangeMu.RLock()
@@ -1407,6 +1432,8 @@ func (b *BlockAssembler) setBestBlockHeader(bestBlockchainBlockHeader *model.Blo
 			}
 		}()
 	}
+
+	return txRulesChanged
 }
 
 // setCurrentRunningState sets the current operational state.
@@ -2050,11 +2077,12 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
+//   - validatedHeights: Height each node was validated at, or nil when untagged
 //
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
-func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints)
+func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, validatedHeights []uint32) bool {
+	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints, validatedHeights)
 }
 
 // RemoveTx removes a transaction from the block assembler.
