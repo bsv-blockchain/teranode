@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="referrer" content="no-referrer"/>
+<title>Teranode probe</title>
+<link rel="stylesheet" href="style.css"/>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="topbar">
+<div id="topbar" class="topbar-slot"></div>
+<nav class="views" aria-label="Dashboard view">
+<a id="view-stages" class="view-link" href="#/">Stages</a>
+<a id="view-lanes" class="view-link" href="#/lanes">Lanes</a>
+</nav>
+<div id="banner" class="banner" role="status" hidden="hidden">Disconnected. Reconnecting.</div>
+</header>
+<div id="alarm-list" class="alarm-drop" role="region" aria-label="Alarm list" hidden="hidden"></div>
+<main id="home" class="home"><div class="empty"><p>Waiting for the first sample.</p></div></main>
+<main id="lanes-view" class="home" hidden="hidden"></main>
+<main id="stage-view" class="stage-host" hidden="hidden"></main>
+<footer id="bottombar" class="bottombar"></footer>
+<div id="sr-alarms" class="sr-only" aria-live="polite"></div>
+<section id="login" class="login" aria-labelledby="login-title" hidden="hidden">
+<form id="token-form" class="login-card" autocomplete="off">
+<h1 id="login-title">Teranode probe</h1>
+<label for="probe-access-token">Access token</label>
+<input id="probe-access-token" name="probe-access-token" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"/>
+<button type="submit" class="btn">Connect</button>
+<p id="login-msg" class="login-msg" role="alert"></p>
+<p class="login-hint">The token stays in this browser tab only.</p>
+</form>
+</section>
+</body>
+</html>

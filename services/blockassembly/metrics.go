@@ -37,6 +37,7 @@ var (
 
 	// Additional metrics for block assembler operations
 	prometheusBlockAssemblerGetMiningCandidate          prometheus.Counter
+	prometheusBlockAssemblerLastMiningCandidateTime     prometheus.Gauge
 	prometheusBlockAssemblerCandidateTimeClockSkew      prometheus.Counter
 	prometheusBlockAssemblerSubtreeCreated              prometheus.Counter
 	prometheusBlockAssemblerTransactions                prometheus.Gauge
@@ -184,6 +185,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "blockassembly",
 			Name:      "block_assembler_get_mining_candidate",
 			Help:      "Number of calls to GetMiningCandidate in the block assembler",
+		},
+	)
+
+	prometheusBlockAssemblerLastMiningCandidateTime = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "blockassembly",
+			Name:      "last_mining_candidate_timestamp_seconds",
+			Help:      "Unix time at which block assembly last served a mining candidate",
 		},
 	)
 

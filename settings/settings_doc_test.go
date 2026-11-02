@@ -394,6 +394,11 @@ var nonSettingsKeyExemptions = []nonSettingsKeyExemption{
 			"service - it has no `key` struct tag and is not in ExportMetadata()",
 	},
 	{
+		file: "probe_settings.md", key: "startProbe",
+		reason: "read directly via gocore.Config().GetBool(\"start\"+app) in daemon.go's shouldStart(), one per " +
+			"service - it has no `key` struct tag and is not in ExportMetadata()",
+	},
+	{
 		file: "pruner_settings.md", key: "pruner_IndexName",
 		reason: "read directly via a package-level `var IndexName, _ = gocore.Config().Get(\"pruner_IndexName\", " +
 			"\"pruner_dah_index\")` in stores/utxo/aerospike/pruner/pruner_service.go - it has no `key` struct " +
@@ -907,6 +912,7 @@ var checkedRowsPerDoc = map[string]int{
 	"legacy_settings.md":            28,
 	"p2p_settings.md":               46,
 	"propagation_settings.md":       13,
+	"probe_settings.md":             13,
 	"pruner_settings.md":            25,
 	"rpc_settings.md":               11,
 	"subtreevalidation_settings.md": 26,

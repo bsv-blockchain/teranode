@@ -35,6 +35,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -1587,9 +1588,15 @@ func TestBlockAssembler_GetMiningCandidate_HappyPath(t *testing.T) {
 		originalStp := ba.subtreeProcessor
 		ba.subtreeProcessor = mockStp
 
+		stampedBefore := testutil.ToFloat64(prometheusBlockAssemblerLastMiningCandidateTime)
+
 		candidate, subtrees, err := ba.GetMiningCandidate(context.Background())
 		require.NoError(t, err)
 		require.NotNil(t, candidate)
+
+		stamped := testutil.ToFloat64(prometheusBlockAssemblerLastMiningCandidateTime)
+		require.Greater(t, stamped, stampedBefore)
+		require.InDelta(t, float64(time.Now().Unix()), stamped, 5)
 
 		// Verify candidate fields
 		assert.Equal(t, uint32(1), candidate.Height) // genesis height 0 + 1
@@ -1608,6 +1615,23 @@ func TestBlockAssembler_GetMiningCandidate_HappyPath(t *testing.T) {
 		assert.Equal(t, st2.RootHash().CloneBytes(), candidate.SubtreeHashes[1])
 
 		ba.subtreeProcessor = originalStp
+	})
+
+	t.Run("does not stamp the candidate time when no candidate is served", func(t *testing.T) {
+		initPrometheusMetrics()
+		testItems := setupBlockAssemblyTest(t)
+		require.NotNil(t, testItems)
+
+		ba := testItems.blockAssembler
+		ba.bestBlock.Store(&BestBlockInfo{})
+
+		stampedBefore := testutil.ToFloat64(prometheusBlockAssemblerLastMiningCandidateTime)
+
+		candidate, _, err := ba.GetMiningCandidate(context.Background())
+		require.Error(t, err)
+		require.Nil(t, candidate)
+
+		require.Equal(t, stampedBefore, testutil.ToFloat64(prometheusBlockAssemblerLastMiningCandidateTime))
 	})
 
 	t.Run("returns candidate from incomplete subtree fallback", func(t *testing.T) {
