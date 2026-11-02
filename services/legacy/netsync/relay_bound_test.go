@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/url"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -197,19 +198,20 @@ func TestHandleInvMsg_LooksUpTransactionsInBatches(t *testing.T) {
 // in the store, including when it comes after transaction items in the same
 // message. Both outcomes of a block item are covered: a block the chain holds
 // ends in a locator lookup for a getblocks, and a block the node lacks ends in
-// a getdata.
+// a getdata, which the test reads off the wire at the peer's other end.
 func TestHandleInvMsg_BlockItemsDoNotWaitForTransactionLookups(t *testing.T) {
 	blockHash := chainhash.Hash{0xb1}
 
 	cases := []struct {
 		name string
 		// arrange sets up the chain's answer for blockHash and returns the
-		// check that the block item has been acted on.
-		arrange func(client *blockchain2.Mock, sm *SyncManager) func() bool
+		// check that the block item has been acted on. rec records every
+		// getdata the announcing peer's other end receives.
+		arrange func(client *blockchain2.Mock, sm *SyncManager, rec *getDataRecorder) func() bool
 	}{
 		{
 			name: "a block the chain holds",
-			arrange: func(client *blockchain2.Mock, _ *SyncManager) func() bool {
+			arrange: func(client *blockchain2.Mock, _ *SyncManager, _ *getDataRecorder) func() bool {
 				// The lookup fails so that no getblocks is pushed.
 				var asked atomic.Bool
 
@@ -224,23 +226,35 @@ func TestHandleInvMsg_BlockItemsDoNotWaitForTransactionLookups(t *testing.T) {
 		},
 		{
 			name: "a block the node lacks",
-			arrange: func(client *blockchain2.Mock, sm *SyncManager) func() bool {
-				// The ledger records the request as the getdata is built.
+			arrange: func(client *blockchain2.Mock, sm *SyncManager, rec *getDataRecorder) func() bool {
 				client.On("GetBlockHeader", mock.Anything, &blockHash).
 					Return(nil, nil, errors.NewNotFoundError("not in the chain"))
 
-				return func() bool { return sm.blockDownloads.RequestedWithin(blockHash, time.Hour) }
+				// The getdata as the peer receives it, not only the ledger
+				// entry made while it is built: a getdata built and never
+				// sent leaves the block unasked for.
+				return func() bool {
+					return sm.blockDownloads.RequestedWithin(blockHash, time.Hour) &&
+						slices.Contains(rec.all(), blockHash)
+				}
 			},
 		},
 	}
 
-	for _, tc := range cases {
+	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tSettings := test.CreateBaseTestSettings(t)
 			store := newLookupStore(t, tSettings, "relay_bound_block_first")
 
-			sm, p, _, client := newInvHarness(t, tSettings, store, blockchain2.FSMStateRUNNING)
-			blockActedOn := tc.arrange(client, sm)
+			sm, _, _, client := newInvHarness(t, tSettings, store, blockchain2.FSMStateRUNNING)
+
+			// A live peer, made the sync peer, so a getdata goes over a
+			// connection and can be seen arriving at the other end.
+			p, _, rec := connectRacePeer(t, uint8(160+i), 0)
+			sm.peerStates.Set(p, &peerSyncState{requestQueue: txmap.NewSyncedSlice[wire.InvVect](wire.MaxInvPerMsg)})
+			sm.storeSyncPeer(p, &syncPeerState{})
+
+			blockActedOn := tc.arrange(client, sm, rec)
 
 			// Transaction items first, the block last.
 			inv := wire.NewMsgInv()
@@ -252,7 +266,8 @@ func TestHandleInvMsg_BlockItemsDoNotWaitForTransactionLookups(t *testing.T) {
 			// items queued, having read nothing from the store itself.
 			sm.handleInvMsg(&invMsg{inv: inv, peer: p})
 
-			require.True(t, blockActedOn(), "the block item waited behind the transaction lookups")
+			require.Eventually(t, blockActedOn, 5*time.Second, 5*time.Millisecond,
+				"the block item waited behind the transaction lookups, or its getdata never reached the peer")
 			require.Zero(t, store.batches.Load(), "the handler goroutine does no store read of its own")
 			require.Equal(t, int64(2), sm.invQueued.Load())
 
