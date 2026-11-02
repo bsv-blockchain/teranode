@@ -49,9 +49,9 @@ var (
 	prometheusLegacyNetsyncParkDispositions *prometheus.CounterVec
 
 	// prometheusLegacyNetsyncInvDropped counts transaction announcements
-	// dropped without a UTXO store lookup, in hashes, by reason, and
-	// prometheusLegacyNetsyncInvQueuedHashes is the hashes queued for a lookup
-	// or being looked up. See inv_queue.go.
+	// dropped without being asked for, in hashes, by reason, and
+	// prometheusLegacyNetsyncInvQueuedHashes is the hashes charged to the node
+	// cap, from the read loop until a lookup finishes. See inv_queue.go.
 	prometheusLegacyNetsyncInvDropped      *prometheus.CounterVec
 	prometheusLegacyNetsyncInvQueuedHashes prometheus.Gauge
 
@@ -298,7 +298,7 @@ func _initPrometheusMetrics() {
 		Namespace: "teranode",
 		Subsystem: "legacy_netsync",
 		Name:      "inv_dropped_total",
-		Help:      "Transaction announcements from legacy peers dropped without a UTXO store lookup, in hashes, by reason: the peer was over its share, the node was over legacy_invQueueMaxHashes, or the store read failed",
+		Help:      "Transaction announcements from legacy peers dropped without being asked for, in hashes, by reason: the peer was over its share, the node was over legacy_invQueueMaxHashes, every handler slot was taken, or the store read failed",
 	}, []string{"reason"})
 	prometheus.MustRegister(prometheusLegacyNetsyncInvDropped)
 
@@ -310,7 +310,7 @@ func _initPrometheusMetrics() {
 		Namespace: "teranode",
 		Subsystem: "legacy_netsync",
 		Name:      "inv_queued_hashes",
-		Help:      "Transaction announcements from legacy peers queued for a UTXO store lookup or being looked up, in hashes; legacy_invQueueMaxHashes bounds it",
+		Help:      "Transaction announcements from legacy peers held from the read loop until a lookup worker finishes with them, in hashes; legacy_invQueueMaxHashes bounds it",
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncInvQueuedHashes)
 }

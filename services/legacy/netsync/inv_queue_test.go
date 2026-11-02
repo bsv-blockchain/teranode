@@ -1,16 +1,24 @@
 package netsync
 
 import (
+	"bytes"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	blockchain2 "github.com/bsv-blockchain/teranode/services/blockchain"
+	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,6 +38,13 @@ func txInvs(n int, tag byte) []*wire.InvVect {
 // inv is one transaction announcement for h.
 func inv(h chainhash.Hash) *wire.InvVect {
 	return wire.NewInvVect(wire.InvTypeTx, &h)
+}
+
+// admitTxInvs is the two production halves of admitting announcements run
+// back to back, as for a registered peer: chargeTxInvs on the read loop, then
+// queueTxChunks on the handler goroutine.
+func (sm *SyncManager) admitTxInvs(peer *peerpkg.Peer, state *peerSyncState, txInvs []*wire.InvVect) {
+	sm.queueTxChunks(peer, state, sm.chargeTxInvs(peer, txInvs))
 }
 
 // droppedInvs reads the announcement drop counter for one reason.
@@ -269,4 +284,216 @@ func TestLookupInvBatch_ReadsInSlicesOfOneChunk(t *testing.T) {
 	require.LessOrEqual(t, store.batchSize.Load(), int64(txInvLookupChunk), "no store read is larger than one chunk")
 	require.Equal(t, 2*txInvLookupChunk-1, state.requestQueue.Length(), "every hash is still asked for")
 	require.Zero(t, sm.invQueued.Load())
+}
+
+// TestNewInvMsg_ChargesTheNodeCapBeforeAHandlerRuns pins where the bound
+// starts: on the read loop, before the message waits in msgChan or a handler
+// goroutine waits on the blockchain. The message keeps only its block items,
+// the transaction items are charged to the node cap as they are cut into
+// chunks, and a chunk over the cap is dropped there and counted.
+func TestNewInvMsg_ChargesTheNodeCapBeforeAHandlerRuns(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Legacy.InvQueueMaxHashes = txInvLookupChunk
+
+	sm, p, _, _ := newInvHarness(t, tSettings, nil, blockchain2.FSMStateRUNNING)
+	before := droppedInvs(invDropNodeCap)
+
+	msg := wire.NewMsgInv()
+	require.NoError(t, msg.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &chainhash.Hash{0xb1})))
+
+	for _, iv := range txInvs(2*txInvLookupChunk, 0x01) {
+		require.NoError(t, msg.AddInvVect(iv))
+	}
+
+	got := sm.newInvMsg(msg, p)
+
+	require.Len(t, got.inv.InvList, 1, "only the block item stays in the message")
+	require.Len(t, got.txChunks, 1, "the chunk over the cap is not kept")
+	require.Equal(t, int64(txInvLookupChunk), sm.invQueued.Load(), "the kept chunk is charged before any handler runs")
+	require.Equal(t, before+float64(txInvLookupChunk), droppedInvs(invDropNodeCap))
+	require.Empty(t, sm.invQueue, "nothing is queued for a lookup before the handler resolves the peer")
+}
+
+// TestNewInvMsg_KeepsNothingOfTheDecodedMessage pins the end state of a
+// partly admitted message: the decoder puts every item in one backing array,
+// and once newInvMsg returns, nothing it built may keep that array alive,
+// including when one chunk was admitted and the next dropped. The decoded
+// array carries a finalizer, and the test waits for the collector to run it
+// while the message newInvMsg built is still in use.
+func TestNewInvMsg_KeepsNothingOfTheDecodedMessage(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Legacy.InvQueueMaxHashes = txInvLookupChunk
+
+	sm, p, _, _ := newInvHarness(t, tSettings, nil, blockchain2.FSMStateRUNNING)
+
+	var freed atomic.Bool
+
+	got := func() *invMsg {
+		src := wire.NewMsgInv()
+		require.NoError(t, src.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &chainhash.Hash{0xb1})))
+
+		for _, iv := range txInvs(2*txInvLookupChunk, 0x02) {
+			require.NoError(t, src.AddInvVect(iv))
+		}
+
+		var buf bytes.Buffer
+		require.NoError(t, src.BsvEncode(&buf, wire.ProtocolVersion, wire.BaseEncoding))
+
+		decoded := wire.NewMsgInv()
+		require.NoError(t, decoded.Bsvdecode(bytes.NewReader(buf.Bytes()), wire.ProtocolVersion, wire.BaseEncoding))
+
+		// The first item is the start of the decoder's one backing array.
+		runtime.SetFinalizer(decoded.InvList[0], func(*wire.InvVect) { freed.Store(true) })
+
+		return sm.newInvMsg(decoded, p)
+	}()
+
+	require.Eventually(t, func() bool {
+		runtime.GC()
+
+		return freed.Load()
+	}, 5*time.Second, 10*time.Millisecond, "the decoded message is still reachable from what newInvMsg built")
+
+	require.Len(t, got.inv.InvList, 1)
+	require.Equal(t, chainhash.Hash{0xb1}, got.inv.InvList[0].Hash)
+	require.Len(t, got.txChunks, 1, "one chunk admitted, one dropped at the cap")
+	require.Len(t, got.txChunks[0].items, txInvLookupChunk)
+	require.Equal(t, int64(txInvLookupChunk), sm.invQueued.Load(), "the counters charge what is held, no more")
+}
+
+// TestDispatchInvMsg_BoundsHandlersWaitingOnTheBlockchain reproduces the
+// accumulation the review of PR 2045 found: each inv message gets a handler
+// goroutine, and while the blockchain service is slow every handler waits in
+// it. Here the FSM lookup is held. A message carrying only transaction items
+// gets a handler only while fewer than invHandlerSlots are running; past that
+// it is dropped, counted, and its charge given back. A message carrying a
+// block item still gets one with every slot taken. Released, the waiting
+// handlers queue their chunks and give their slots back.
+func TestDispatchInvMsg_BoundsHandlersWaitingOnTheBlockchain(t *testing.T) {
+	sm, p, state, _ := newInvHarness(t, test.CreateBaseTestSettings(t), nil, blockchain2.FSMStateRUNNING)
+
+	var (
+		gate      = make(chan struct{})
+		gateOnce  sync.Once
+		blockSeen atomic.Bool
+		running   = blockchain2.FSMStateRUNNING
+		blockHash = chainhash.Hash{0xb1}
+		client    = &blockchain2.Mock{}
+		openGate  = func() { gateOnce.Do(func() { close(gate) }) }
+		oneTxInv  = func(i int) *wire.MsgInv {
+			return &wire.MsgInv{InvList: []*wire.InvVect{inv(chainhash.Hash{byte(i), byte(i >> 8), 0x44})}}
+		}
+	)
+
+	client.On("GetFSMCurrentState", mock.Anything).Run(func(mock.Arguments) { <-gate }).Return(&running, nil)
+	client.On("GetBlockHeader", mock.Anything, &blockHash).
+		Run(func(mock.Arguments) { blockSeen.Store(true) }).
+		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 1}, nil)
+	client.On("GetBlockLocator", mock.Anything, &blockHash, uint32(0)).
+		Return(nil, errors.NewProcessingError("no locator in this test"))
+
+	sm.blockchainClient = client
+
+	t.Cleanup(func() {
+		openGate()
+		require.Eventually(t, func() bool { return sm.invHandlers.Load() == 0 }, 5*time.Second, 5*time.Millisecond)
+	})
+
+	const over = 5
+
+	before := droppedInvs(invDropHandlersBusy)
+
+	for i := 0; i < invHandlerSlots+over; i++ {
+		sm.dispatchInvMsg(sm.newInvMsg(oneTxInv(i), p))
+	}
+
+	require.Equal(t, int64(invHandlerSlots), sm.invHandlers.Load(), "no more handlers than the slots")
+	require.Equal(t, before+over, droppedInvs(invDropHandlersBusy), "the messages over the slots are dropped and counted")
+	require.Equal(t, int64(invHandlerSlots), sm.invQueued.Load(), "the waiting handlers' hashes stay charged, the dropped ones do not")
+
+	blockInv := wire.NewMsgInv()
+	require.NoError(t, blockInv.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash)))
+	sm.dispatchInvMsg(sm.newInvMsg(blockInv, p))
+
+	require.Eventually(t, blockSeen.Load, 5*time.Second, 5*time.Millisecond, "a block announcement must get a handler with every slot taken")
+
+	openGate()
+
+	require.Eventually(t, func() bool { return sm.invHandlers.Load() == 0 }, 5*time.Second, 5*time.Millisecond, "handlers give their slots back")
+	require.Len(t, sm.invQueue, invHandlerSlots, "each released handler queued its chunk")
+	require.Equal(t, int64(invHandlerSlots), state.queuedInvs.Load())
+}
+
+// TestLookupInvBatch_ConcurrentWorkersClaimEachHashOnce pins the claim the
+// lookup workers make with SetIfAbsent before the read: eight peers announce
+// the same hashes, eight workers look the chunks up at once, and each hash is
+// read once and asked of one peer only. A Get followed by a Set lets two
+// workers both claim a hash, read it twice and ask two peers for it. The
+// window between the two is short, so the test runs twenty rounds on fresh
+// hashes; with a Get and a Set, a round shows a double claim more often than
+// not, and twenty rounds all but certainly do.
+func TestLookupInvBatch_ConcurrentWorkersClaimEachHashOnce(t *testing.T) {
+	const peers, hashes, rounds = 8, 2000, 20
+
+	tSettings := test.CreateBaseTestSettings(t)
+	store := newLookupStore(t, tSettings, "inv_queue_concurrent_claim")
+	sm, p, state, _ := newInvHarness(t, tSettings, store, blockchain2.FSMStateRUNNING)
+
+	owners := []*peerpkg.Peer{p}
+	states := []*peerSyncState{state}
+
+	for i := 1; i < peers; i++ {
+		pi, si := newHarnessPeer(t, sm)
+		owners = append(owners, pi)
+		states = append(states, si)
+	}
+
+	requestedSoFar := func() int {
+		n := 0
+		for _, s := range states {
+			n += s.requestQueue.Length()
+		}
+
+		return n
+	}
+
+	for round := 0; round < rounds; round++ {
+		shared := txInvs(hashes, byte(0x40+round))
+
+		for i := range owners {
+			sm.admitTxInvs(owners[i], states[i], shared)
+		}
+
+		require.Len(t, sm.invQueue, peers)
+
+		chunks := make([]*invChunk, 0, peers)
+		for i := 0; i < peers; i++ {
+			chunks = append(chunks, <-sm.invQueue)
+		}
+
+		readBefore, requestedBefore := store.read.Load(), requestedSoFar()
+
+		var (
+			wg    sync.WaitGroup
+			start = make(chan struct{})
+		)
+
+		for _, c := range chunks {
+			wg.Add(1)
+
+			go func(c *invChunk) {
+				defer wg.Done()
+
+				<-start
+				sm.lookupInvBatch(c)
+			}(c)
+		}
+
+		close(start)
+		wg.Wait()
+
+		require.Equal(t, int64(hashes), store.read.Load()-readBefore, "round %d: each hash must be read once across the workers", round)
+		require.Equal(t, hashes, requestedSoFar()-requestedBefore, "round %d: each hash must be asked of one peer only", round)
+		require.Zero(t, sm.invQueued.Load())
+	}
 }

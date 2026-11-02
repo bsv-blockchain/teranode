@@ -94,7 +94,7 @@ const (
 	maxRejectedTxns = 10_000
 
 	// txInvLookupChunk sizes the transaction announcement path in inv_queue.go
-	// in three places: admitTxInvs cuts a message's transaction items into
+	// in three places: chargeTxInvs cuts a message's transaction items into
 	// chunks of at most this many for invQueue, takeInvBatch stops coalescing
 	// queued chunks, which may come from several peers, once a batch holds this
 	// many, and lookupInvBatch reads a batch from the UTXO store in
@@ -103,8 +103,8 @@ const (
 	// each message is handled on its own goroutine, and on Hetzner mainnet on
 	// 2026-10-19 that reached 223,118 goroutines, 88,563 of them queued on one
 	// peer's known-inventory lock, before the cgroup killed the node. Now
-	// checkTxInvs only marks the items known and queues them, and the
-	// invLookupWorkers do the reads. 4096 matches utxostore_getBatcherSize in
+	// the handler goroutine only marks the items known and queues them, and
+	// the invLookupWorkers do the reads. 4096 matches utxostore_getBatcherSize in
 	// settings.conf, the batch the per-item Gets were being collected into.
 	txInvLookupChunk = 4096
 
@@ -262,12 +262,13 @@ type peerSyncState struct {
 	requestQueue  *txmap.SyncedSlice[wire.InvVect]
 
 	// queuedInvs is the transaction announcements from this peer queued for a
-	// UTXO store lookup or being looked up; admitTxInvs bounds it by invShare.
+	// UTXO store lookup or being looked up; queueTxChunks bounds it by
+	// invShare.
 	queuedInvs atomic.Int64
 
 	// requestQueueMu serialises the drain of requestQueue.
 	//
-	// Inv messages are dispatched one goroutine per message (blockHandler's
+	// Inv messages are dispatched one goroutine per message (dispatchInvMsg's
 	// "go sm.handleInvMsg(msg)"), so two drains for the same peer share this one
 	// queue. SyncedSlice synchronises each call but not a pair of them, and the
 	// drain reads the front without consuming it and consumes it several
@@ -867,6 +868,11 @@ type SyncManager struct {
 	invQueue    chan *invChunk
 	invQueueCap int
 	invQueued   atomic.Int64
+
+	// invHandlers is the handleInvMsg goroutines running for messages that
+	// carry only transaction items, bounded by invHandlerSlots in
+	// dispatchInvMsg.
+	invHandlers atomic.Int64
 
 	// inFlightBlocks is the dedup half of the same block-admission gate whose
 	// other half is blockPrefetchBudget. It holds the hash of every block that is
@@ -3354,9 +3360,22 @@ func (sm *SyncManager) haveInventory(invVect *wire.InvVect) (bool, error) {
 
 // handleInvMsg handles inv messages from all peers.
 // We examine the inventory advertised by the remote peer and act accordingly.
+//
+// imsg comes from newInvMsg: imsg.inv holds the block items, and the
+// transaction items are in imsg.txChunks, already charged to the node cap.
+// Every return either queues the chunks for the lookup workers or gives their
+// charge back.
 func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
-	sm.logger.Debugf("[handleInvMsg] received inv message with %d inv vectors from %s", len(imsg.inv.InvList), imsg.peer)
+	sm.logger.Debugf("[handleInvMsg] received inv message with %d block and %d transaction chunk(s) from %s", len(imsg.inv.InvList), len(imsg.txChunks), imsg.peer)
 	peer := imsg.peer
+
+	txQueued := false
+
+	defer func() {
+		if !txQueued {
+			sm.giveBackTxChunks(imsg.txChunks, "")
+		}
+	}()
 
 	state, resolved, exists := sm.peerStateResolvingPrimary(peer)
 	if !exists {
@@ -3523,42 +3542,17 @@ func (sm *SyncManager) handleInvMsg(imsg *invMsg) {
 		}
 	}
 
-	// Outside RUNNING every transaction item is dropped unchecked, as
-	// processInvMsg does, and every type other than block and transaction is
-	// dropped in every state. The items are queued for the lookup workers,
-	// which send the getdata for whatever the store lacks, so there is
-	// nothing left for this goroutine to send.
-	if processInvs {
-		sm.checkTxInvs(peer, state, invVects)
+	// Outside RUNNING, and in headers-first mode, every transaction item is
+	// ignored unchecked, as processInvMsg does, and the deferred give-back
+	// returns its charge. Otherwise the chunks go to the lookup workers, which
+	// send the getdata for whatever the store lacks, so there is nothing left
+	// for this goroutine to send. Each item used to cost a goroutine and a
+	// Get, and on 2026-10-19 that reached 223,118 goroutines (inv_queue.go).
+	if processInvs && !sm.headersFirstMode.Load() {
+		txQueued = true
+
+		sm.queueTxChunks(peer, state, imsg.txChunks)
 	}
-}
-
-// checkTxInvs marks every transaction item in invVects as known for the peer
-// and hands the items to the announcement queue in chunks of
-// txInvLookupChunk, where the lookup workers find the ones the UTXO store
-// lacks and ask the peer for them (inv_queue.go). It does no store read and
-// never waits, so the goroutine handling the message ends at once; each item
-// used to cost a goroutine and a Get, and on 2026-10-19 that reached 223,118
-// goroutines. A chunk over the peer's share or the node cap is dropped and
-// counted there.
-func (sm *SyncManager) checkTxInvs(peer *peerpkg.Peer, state *peerSyncState, invVects []*wire.InvVect) {
-	txInvs := make([]*wire.InvVect, 0, len(invVects))
-
-	for _, iv := range invVects {
-		if iv.Type != wire.InvTypeTx {
-			continue
-		}
-
-		peer.AddKnownInventory(iv)
-		txInvs = append(txInvs, iv)
-	}
-
-	// Ignore inventory when we're in headers-first mode.
-	if len(txInvs) == 0 || sm.headersFirstMode.Load() {
-		return
-	}
-
-	sm.admitTxInvs(peer, state, txInvs)
 }
 
 // drainRequestQueue turns as much of a peer's announcement queue as it can into
@@ -3901,7 +3895,7 @@ out:
 				sm.handleBlockOnDiskMsg(msg)
 
 			case *invMsg:
-				go sm.handleInvMsg(msg)
+				sm.dispatchInvMsg(msg)
 
 			case *headersMsg:
 				go sm.handleHeadersMsg(msg)
@@ -4470,8 +4464,7 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 		}
 
 		if len(invBlockMsg.InvList) > 0 {
-			netsyncInvMsg := invMsg{inv: invBlockMsg, peer: peer}
-			sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
+			sm.sendInvMsg(sm.newInvMsg(invBlockMsg, peer))
 		}
 
 		if len(invTxMsg.InvList) > 0 {
@@ -4490,8 +4483,18 @@ func (sm *SyncManager) QueueInv(inv *wire.MsgInv, peer *peerpkg.Peer) {
 			})
 		}
 	} else {
-		netsyncInvMsg := invMsg{inv: inv, peer: peer}
-		sendDuringShutdown[interface{}](sm.msgChan, &netsyncInvMsg)
+		// The transaction items are copied out and charged to the node cap
+		// here, on the read loop, before the message waits in msgChan; see
+		// newInvMsg.
+		sm.sendInvMsg(sm.newInvMsg(inv, peer))
+	}
+}
+
+// sendInvMsg hands msg to the block handler, or gives back the charge of its
+// transaction chunks when shutdown has closed the way.
+func (sm *SyncManager) sendInvMsg(msg *invMsg) {
+	if !sendDuringShutdown[interface{}](sm.msgChan, msg) {
+		sm.giveBackTxChunks(msg.txChunks, "")
 	}
 }
 
@@ -5192,8 +5195,10 @@ func (sm *SyncManager) kafkaINVListener(ctx context.Context, kafkaURL *url.URL, 
 
 		sm.logger.Debugf("[kafkaINVListener] Received INV message from Kafka from peer %s", message.PeerAddress)
 
-		// Process the INV message directly, requesting data from other nodes will be queued on the outputQueue
-		go sm.handleInvMsg(invMsg)
+		// Process the INV message directly, requesting data from other nodes
+		// will be queued on the outputQueue. Charged and dispatched as QueueInv
+		// and the block handler do, so this path is under the same bounds.
+		sm.dispatchInvMsg(sm.newInvMsg(invMsg.inv, invMsg.peer))
 
 		return nil
 	}, &sm.settings.Kafka)

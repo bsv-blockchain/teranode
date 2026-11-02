@@ -46,7 +46,9 @@ type lookupStore struct {
 	gets      atomic.Int64
 	batches   atomic.Int64
 	batchSize atomic.Int64
-	gate      chan struct{}
+	// read is the hashes read across every BatchDecorate.
+	read atomic.Int64
+	gate chan struct{}
 
 	// fail, when set, is what BatchDecorate returns instead of reading.
 	fail error
@@ -68,6 +70,7 @@ func (s *lookupStore) BatchDecorate(ctx context.Context, items []*utxo.Unresolve
 	}
 
 	s.batches.Add(1)
+	s.read.Add(int64(len(items)))
 
 	for {
 		p := s.batchSize.Load()
@@ -174,9 +177,9 @@ func TestHandleInvMsg_LooksUpTransactionsInBatches(t *testing.T) {
 		require.NoError(t, inv.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &h)))
 	}
 
-	// checkTxInvs rather than handleInvMsg, whose getdata drains the queue
-	// this test reads.
-	sm.checkTxInvs(p, state, inv.InvList)
+	// The read loop's half and the handler's half, without the rest of
+	// handleInvMsg, whose getdata drains the queue this test reads.
+	sm.queueTxChunks(p, state, sm.newInvMsg(inv, p).txChunks)
 
 	require.Zero(t, store.batches.Load(), "the handler goroutine does no store read of its own")
 	require.Len(t, sm.invQueue, 3, "the items are queued in chunks of txInvLookupChunk")
@@ -264,7 +267,7 @@ func TestHandleInvMsg_BlockItemsDoNotWaitForTransactionLookups(t *testing.T) {
 
 			// The handler returns with the block acted on and the transaction
 			// items queued, having read nothing from the store itself.
-			sm.handleInvMsg(&invMsg{inv: inv, peer: p})
+			sm.handleInvMsg(sm.newInvMsg(inv, p))
 
 			require.Eventually(t, blockActedOn, 5*time.Second, 5*time.Millisecond,
 				"the block item waited behind the transaction lookups, or its getdata never reached the peer")
@@ -289,7 +292,7 @@ func TestHandleInvMsg_SkipsTransactionItemsOutsideRunning(t *testing.T) {
 	inv := wire.NewMsgInv()
 	require.NoError(t, inv.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &chainhash.Hash{0x7a})))
 
-	sm.handleInvMsg(&invMsg{inv: inv, peer: p})
+	sm.handleInvMsg(sm.newInvMsg(inv, p))
 
 	require.Zero(t, store.gets.Load()+store.batches.Load())
 	require.Zero(t, state.requestQueue.Length())

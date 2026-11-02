@@ -15,11 +15,17 @@ import (
 // A peer's inv message names up to wire.MaxInvPerMsg transactions. Each one
 // used to get a goroutine and a store Get, and on 2026-10-19 that reached
 // 223,118 goroutines on Hetzner mainnet before the container's memory limit
-// killed the node. Now the handler goroutine cuts a message's transaction
-// items into chunks, admits each chunk against the peer's share and the node
-// cap, and pushes it onto one node-wide queue without waiting. Sixteen workers
-// drain the queue into UTXO store batch reads, and the memory the path can
-// hold is the cap, legacy_invQueueMaxHashes, times about 44 bytes a hash.
+// killed the node. Now the peer's read loop copies a message's transaction
+// items out of the decoded message in chunks and charges each chunk to the
+// node cap before the message goes to the block handler (newInvMsg). The
+// handler goroutine charges each chunk to the peer's share and pushes it onto
+// one node-wide queue without waiting (queueTxChunks), and sixteen workers
+// drain the queue into UTXO store batch reads.
+//
+// What the path holds, from the read loop until a worker finishes with a
+// chunk, is the cap, legacy_invQueueMaxHashes, times about 40 bytes a hash,
+// and at most invHandlerSlots handler goroutines that carry only transaction
+// items.
 const (
 	// invLookupWorkers is the number of goroutines that take announcements
 	// off invQueue and look them up in the UTXO store. It caps the store
@@ -29,16 +35,28 @@ const (
 	// so it is a constant rather than a setting.
 	invLookupWorkers = 16
 
+	// invHandlerSlots is the most handleInvMsg goroutines that carry only
+	// transaction items at once. A handler waits on the blockchain service
+	// (current(), and the cached FSM state), so a slow blockchain service
+	// leaves one waiting per message; the node cap bounds the hashes they
+	// carry but not their stacks, and a flood of one-hash messages costs a
+	// goroutine a hash. A handler normally finishes in about a millisecond,
+	// and the node receives a few hundred inv messages a second from twenty
+	// peers, so 1,024 is far above what an honest load keeps busy, and costs
+	// at most tens of megabytes of stacks. A message carrying a block item
+	// does not need a slot and is never refused one.
+	invHandlerSlots = 1024
+
 	// invPeerShare is the most announced hashes one peer may have queued or
 	// being looked up at once: two maximum-size announcements. It has to hold
-	// at least one whole announcement, because checkTxInvs pushes all thirteen
-	// chunks of a 50,000-hash message in microseconds and a worker releases a
-	// chunk only after a store round trip of milliseconds; a share of 32,768
-	// would drop the tail of every maximum-size message from an honest peer on
-	// an idle node. Two covers a peer sending two such messages back to back;
-	// holding more than two in flight needs the peer to deliver 7 MB of inv
-	// faster than the workers drain it, which no internet peer's link does.
-	// It is clamped to the node cap when the cap is smaller.
+	// at least one whole announcement, because queueTxChunks pushes all
+	// thirteen chunks of a 50,000-hash message in microseconds and a worker
+	// releases a chunk only after a store round trip of milliseconds; a share
+	// of 32,768 would drop the tail of every maximum-size message from an
+	// honest peer on an idle node. Two covers a peer sending two such messages
+	// back to back; holding more than two in flight needs the peer to deliver
+	// 7 MB of inv faster than the workers drain it, which no internet peer's
+	// link does. It is clamped to the node cap when the cap is smaller.
 	invPeerShare = 2 * wire.MaxInvPerMsg
 
 	// defaultInvQueueMaxHashes is the fallback for a legacy_invQueueMaxHashes
@@ -50,22 +68,24 @@ const (
 	// labels them.
 	invDropPeerShare    = "peer_share"
 	invDropNodeCap      = "node_cap"
+	invDropHandlersBusy = "handlers_busy"
 	invDropLookupFailed = "lookup_failed"
 )
 
 // invDropReasons lists every drop reason so the metric has a zero row for
 // each before the first drop.
-var invDropReasons = []string{invDropPeerShare, invDropNodeCap, invDropLookupFailed}
+var invDropReasons = []string{invDropPeerShare, invDropNodeCap, invDropHandlersBusy, invDropLookupFailed}
 
-// invChunk is up to txInvLookupChunk transaction announcements from one peer,
-// waiting on invQueue for a worker. state is the peer's registration at the
-// time of queueing. A worker compares it with the current one, so a peer that
-// reconnected while the chunk waited is not asked for hashes it announced on
-// its previous connection.
+// invChunk is up to txInvLookupChunk transaction announcements from one peer.
+// items are copies, in an array of the chunk's own, so a chunk never keeps the
+// decoded message it came from alive. state is the peer's registration at the
+// time of queueing, set by queueTxChunks. A worker compares it with the current
+// one, so a peer that reconnected while the chunk waited is not asked for
+// hashes it announced on its previous connection.
 type invChunk struct {
 	peer  *peerpkg.Peer
 	state *peerSyncState
-	items []*wire.InvVect
+	items []wire.InvVect
 }
 
 // invQueueMaxHashes returns legacy_invQueueMaxHashes, or the default with a
@@ -98,58 +118,207 @@ func (sm *SyncManager) invShare() int {
 	return min(invPeerShare, sm.invQueueCap)
 }
 
-// admitTxInvs cuts a message's transaction announcements into chunks and
-// queues each one that fits both the peer's share and the node cap. A chunk
-// that fits neither is dropped whole and counted by hashes. It never waits,
-// because it runs on the goroutine that handles the peer's message. The
-// counts it raises are given back by releaseInvChunk once a worker has
-// finished with the chunk, so they cover hashes being looked up as well as
-// hashes waiting.
-func (sm *SyncManager) admitTxInvs(peer *peerpkg.Peer, state *peerSyncState, txInvs []*wire.InvVect) {
-	share := int64(sm.invShare())
+// newInvMsg turns a decoded inv message into what the block handler is sent:
+// the block items, and the transaction items cut into chunks of
+// txInvLookupChunk and charged to the node cap. It runs on the peer's read loop
+// (QueueInv) or the Kafka listener, so it never waits.
+//
+// Both kinds of item are copied out of the decoded message. The decoder puts
+// every item of a message in one backing array, up to 50,000 of them, and a
+// pointer to any one item keeps the whole array alive; a chunk that kept such
+// pointers would hold a whole message while the counters charged it for one
+// chunk, and a dropped chunk's items would stay in memory under a counter that
+// says they are gone. With the copies nothing downstream refers to the decoded
+// message, and every transaction announcement the node holds from here until
+// a lookup worker finishes with it is charged to invQueued.
+//
+// A chunk over the node cap is dropped here and counted. The peer's share is
+// charged later, by queueTxChunks once the handler has resolved the peer's
+// state, because a peer's first messages can reach QueueInv before the block
+// handler has registered it. Transaction items are not charged in headers-first
+// mode, where handleInvMsg ignores them, and every item type other than block
+// and transaction is left out, as handleInvMsg ignores those in every state.
+func (sm *SyncManager) newInvMsg(inv *wire.MsgInv, peer *peerpkg.Peer) *invMsg {
+	var blocks, txs []*wire.InvVect
+
+	for _, iv := range inv.InvList {
+		switch iv.Type {
+		case wire.InvTypeBlock:
+			blocks = append(blocks, iv)
+		case wire.InvTypeTx:
+			txs = append(txs, iv)
+		}
+	}
+
+	msg := &invMsg{inv: &wire.MsgInv{InvList: copyInvVects(blocks)}, peer: peer}
+
+	if len(txs) > 0 && sm.invQueue != nil && !sm.headersFirstMode.Load() {
+		msg.txChunks = sm.chargeTxInvs(peer, txs)
+	}
+
+	return msg
+}
+
+// copyInvVects returns copies of items in one fresh backing array, so the
+// copies keep nothing alive of the array the items point into.
+func copyInvVects(items []*wire.InvVect) []*wire.InvVect {
+	if len(items) == 0 {
+		return nil
+	}
+
+	values := make([]wire.InvVect, len(items))
+	out := make([]*wire.InvVect, len(items))
+
+	for i, iv := range items {
+		values[i] = *iv
+		out[i] = &values[i]
+	}
+
+	return out
+}
+
+// chargeTxInvs cuts transaction announcements into chunks of
+// txInvLookupChunk and charges each to the node cap. A chunk that fits is
+// copied into an array of its own; one that does not is dropped whole and
+// counted by hashes, and nothing of it is kept. It never waits.
+func (sm *SyncManager) chargeTxInvs(peer *peerpkg.Peer, txInvs []*wire.InvVect) []*invChunk {
 	capHashes := int64(sm.invQueueCap)
+
+	var chunks []*invChunk
 
 	for start := 0; start < len(txInvs); start += txInvLookupChunk {
 		items := txInvs[start:min(start+txInvLookupChunk, len(txInvs))]
 		n := int64(len(items))
 
-		if state.queuedInvs.Add(n) > share {
-			state.queuedInvs.Add(-n)
-			sm.dropTxInvs(peer, n, invDropPeerShare)
-
-			continue
-		}
-
 		if sm.invQueued.Add(n) > capHashes {
 			sm.invQueued.Add(-n)
-			state.queuedInvs.Add(-n)
 			sm.dropTxInvs(peer, n, invDropNodeCap)
 
 			continue
 		}
 
+		values := make([]wire.InvVect, len(items))
+		for i, iv := range items {
+			values[i] = *iv
+		}
+
+		chunks = append(chunks, &invChunk{peer: peer, items: values})
+	}
+
+	prometheusLegacyNetsyncInvQueuedHashes.Set(float64(sm.invQueued.Load()))
+
+	return chunks
+}
+
+// queueTxChunks marks every announcement in chunks as known for the peer,
+// charges each chunk to the peer's share and queues it for the lookup workers.
+// A chunk over the share is dropped and counted, and its node charge given
+// back. It never waits, because it runs on the goroutine handling the peer's
+// message. The counts it leaves raised are given back by releaseInvChunk once
+// a worker has finished with the chunk, so they cover hashes being looked up
+// as well as hashes waiting.
+func (sm *SyncManager) queueTxChunks(peer *peerpkg.Peer, state *peerSyncState, chunks []*invChunk) {
+	if len(chunks) == 0 {
+		return
+	}
+
+	share := int64(sm.invShare())
+
+	for _, c := range chunks {
+		for i := range c.items {
+			peer.AddKnownInventory(&c.items[i])
+		}
+
+		n := int64(len(c.items))
+
+		if state.queuedInvs.Add(n) > share {
+			state.queuedInvs.Add(-n)
+			sm.giveBackTxChunk(c, invDropPeerShare)
+
+			continue
+		}
+
+		c.peer, c.state = peer, state
+
 		select {
-		case sm.invQueue <- &invChunk{peer: peer, state: state, items: items}:
+		case sm.invQueue <- c:
 		default:
 			// The channel is sized to the cap, so this needs a queue narrower
 			// than the cap, which production never builds.
-			sm.invQueued.Add(-n)
 			state.queuedInvs.Add(-n)
-			sm.dropTxInvs(peer, n, invDropNodeCap)
+			sm.giveBackTxChunk(c, invDropNodeCap)
 		}
 	}
 
 	prometheusLegacyNetsyncInvQueuedHashes.Set(float64(sm.invQueued.Load()))
 }
 
+// giveBackTxChunks gives back the node charge of chunks that will not be
+// queued, and counts them as dropped for reason unless reason is empty. An
+// empty reason is for announcements handleInvMsg ignores rather than drops:
+// from a peer it does not know, from a peer other than the sync peer while
+// the node is not current, outside RUNNING, or in headers-first mode. Those
+// were never counted as drops.
+func (sm *SyncManager) giveBackTxChunks(chunks []*invChunk, reason string) {
+	if len(chunks) == 0 {
+		return
+	}
+
+	for _, c := range chunks {
+		sm.giveBackTxChunk(c, reason)
+	}
+
+	prometheusLegacyNetsyncInvQueuedHashes.Set(float64(sm.invQueued.Load()))
+}
+
+// giveBackTxChunk is giveBackTxChunks for one chunk, without the gauge update.
+func (sm *SyncManager) giveBackTxChunk(c *invChunk, reason string) {
+	n := int64(len(c.items))
+	sm.invQueued.Add(-n)
+
+	if reason != "" {
+		sm.dropTxInvs(c.peer, n, reason)
+	}
+}
+
+// dispatchInvMsg starts the goroutine that handles msg, as the block handler
+// has always done for an inv message, so a slow blockchain lookup in
+// handleInvMsg never holds the block handler up. A message carrying a block
+// item always gets one, as on main: a block announcement is never dropped. A
+// message carrying only transaction items gets one only while fewer than
+// invHandlerSlots such handlers are running; otherwise its chunks are dropped
+// under handlers_busy and their node charge given back.
+func (sm *SyncManager) dispatchInvMsg(msg *invMsg) {
+	if len(msg.inv.InvList) > 0 {
+		go sm.handleInvMsg(msg)
+
+		return
+	}
+
+	if len(msg.txChunks) == 0 {
+		return
+	}
+
+	if sm.invHandlers.Add(1) > invHandlerSlots {
+		sm.invHandlers.Add(-1)
+		sm.giveBackTxChunks(msg.txChunks, invDropHandlersBusy)
+
+		return
+	}
+
+	go func() {
+		defer sm.invHandlers.Add(-1)
+
+		sm.handleInvMsg(msg)
+	}()
+}
+
 // dropTxInvs counts and logs announcements that were not, or will not be,
-// looked up. Their items were marked known for the peer before this, which
-// stops the node announcing them back, and nothing is requested: the node
-// relies on another peer announcing the transaction, or on fetching it with
-// the block that mines it.
+// looked up. Nothing is requested for them: the node relies on another peer
+// announcing the transaction, or on fetching it with the block that mines it.
 func (sm *SyncManager) dropTxInvs(peer *peerpkg.Peer, n int64, reason string) {
 	prometheusLegacyNetsyncInvDropped.WithLabelValues(reason).Add(float64(n))
-	sm.logger.Debugf("[admitTxInvs] dropping %d transaction announcements from %s: %s", n, peer, reason)
+	sm.logger.Debugf("[invQueue] dropping %d transaction announcements from %s: %s", n, peer, reason)
 }
 
 // releaseInvChunk gives a chunk's hashes back to its peer's share and to the
@@ -202,8 +371,7 @@ func (sm *SyncManager) takeInvBatch(first *invChunk) []*invChunk {
 // A failed slice unmarks itself and every slice after it so the next
 // announcement retries, and counts those hashes under lookup_failed; the
 // slices read before it are still acted on. A per-item error other than
-// not-found unmarks that hash and is counted in one warning for the batch,
-// as checkTxInvs did per chunk.
+// not-found unmarks that hash and is counted in one warning for the batch.
 func (sm *SyncManager) lookupInvBatch(first *invChunk) []*invChunk {
 	chunks := sm.takeInvBatch(first)
 
@@ -222,7 +390,9 @@ func (sm *SyncManager) lookupInvBatch(first *invChunk) []*invChunk {
 			continue
 		}
 
-		for _, iv := range c.items {
+		for i := range c.items {
+			iv := &c.items[i]
+
 			if _, rejected := sm.rejectedTxns.Get(iv.Hash); rejected {
 				continue
 			}
@@ -287,7 +457,11 @@ func (sm *SyncManager) lookupInvBatch(first *invChunk) []*invChunk {
 			}
 
 			c := owners[i]
-			c.state.requestQueue.Append(invs[i])
+
+			// A copy of its own, so the request queue does not keep the
+			// chunk's whole array alive after the worker is done with it.
+			iv := *invs[i]
+			c.state.requestQueue.Append(&iv)
 
 			if _, done := seen[c]; !done {
 				seen[c] = struct{}{}

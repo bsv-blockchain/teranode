@@ -309,16 +309,22 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   sync manager stopped; on stop, every queued transaction is answered and its bytes
   given back. With the workers busy for the validation latency L, the pool validates at
   most workers / L transactions a second, so a node whose relayed-transaction validation
-  is slow drops some of a heavy relay stream. Transaction announcements (`inv` items) are queued in chunks of 4096 behind
-  `legacy_invQueueMaxHashes` (default 400,000 hashes, eight maximum-size announcements;
-  a value below 4096 falls back to the default) and a per-peer share of 100,000 hashes,
-  and sixteen workers take whatever is queued and look it up in UTXO store batch reads
-  of up to 4096 hashes, checking the set of hashes already asked for before the read, so
-  a transaction every peer announces is read about once instead of once per peer. Announcements over either
-  limit are dropped and counted in hashes in the new
-  `teranode_legacy_netsync_inv_dropped_total` (label `reason`), and the new gauge
-  `teranode_legacy_netsync_inv_queued_hashes` shows the queue. The set of hashes asked
-  for is capped at the same number as the queue. Outside the RUNNING state, where
+  is slow drops some of a heavy relay stream. Transaction announcements (`inv` items) are
+  copied out of the decoded message on the peer's read loop in chunks of 4096 and charged
+  there to `legacy_invQueueMaxHashes` (default 400,000 hashes, eight maximum-size
+  announcements; a value below 4096 falls back to the default), so the cap covers them
+  while they wait for the sync manager as well as while they wait for a lookup. A
+  per-peer share of 100,000 hashes applies once the peer is resolved, and sixteen workers
+  take whatever is queued and look it up in UTXO store batch reads of up to 4096 hashes,
+  checking the set of hashes already asked for before the read, so a transaction every
+  peer announces is read about once instead of once per peer. A fixed limit sits beside
+  the cap: at most 1,024 goroutines handle messages carrying only transaction
+  announcements at once. Announcements over any of these limits are dropped and
+  counted in hashes in the new `teranode_legacy_netsync_inv_dropped_total` (label
+  `reason`: `peer_share`, `node_cap`, `handlers_busy`, `lookup_failed`),
+  and the new gauge `teranode_legacy_netsync_inv_queued_hashes` shows what the cap
+  holds. Block announcements are not charged and always get a handler. The set of
+  hashes asked for is capped at the same number as the queue. Outside the RUNNING state, where
   transaction announcements were already ignored without a lookup, they no longer get a
   goroutine each. Before this, each
   relayed transaction and each announced item got its own goroutine with no ceiling,
