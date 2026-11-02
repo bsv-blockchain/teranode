@@ -3,6 +3,7 @@ package pruner
 import (
 	"context"
 	"database/sql"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,14 +18,17 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
+	blockchainsql "github.com/bsv-blockchain/teranode/stores/blockchain/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	prunerstore "github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 // getCounterValue reads the current value of a prometheus counter with the given label.
@@ -1064,19 +1068,142 @@ func TestRepairHoldReleaseResumesIdlePruning(t *testing.T) {
 	}
 }
 
+var testHeldBlock = []model.HeldBlock{{Hash: chainhash.HashH([]byte("b")), ID: 7, Height: 90}}
+
+// A retry timer for a lower held height can fire after a higher height was held. Its signal
+// must not replace the higher retry, or the release prunes only the lower height and the
+// higher one waits for the next block.
+func TestRepairHoldRetryKeepsHighestHeight(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 4)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+	server.repairHoldRecheckInterval = time.Hour
+
+	done := make(chan struct{})
+	go func() {
+		server.prunerProcessor(ctx)
+		close(done)
+	}()
+
+	server.pruneNotify <- pruneSignal{blockHeight: 101}
+	require.Eventually(t, func() bool { return client.reads.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
+	server.pruneNotify <- pruneSignal{blockHeight: 102}
+	require.Eventually(t, func() bool { return client.reads.Load() == 2 }, 2*time.Second, 5*time.Millisecond)
+
+	// 101's timer fired just before 102's cycle replaced it, and its signal arrives now.
+	server.pruneNotify <- pruneSignal{blockHeight: 101, retry: true}
+	require.Eventually(t, func() bool { return client.reads.Load() == 3 }, 2*time.Second, 5*time.Millisecond)
+
+	cancel()
+	<-done
+
+	require.NotNil(t, server.repairHoldRetry, "a retry is pending")
+
+	// Release the hold and fire the pending retry now, on an idle chain.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+	server.repairHoldRetry.Reset(0)
+
+	go server.prunerProcessor(ctx2)
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(102), h, "the highest held height is the one retried")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held height was not retried")
+	}
+}
+
+// A retried height whose phase 1 fails keeps its retry: once the store recovers, the height
+// is pruned without another block.
+func TestRepairHoldRetrySurvivesPhase1Failure(t *testing.T) {
+	initPrometheusMetrics()
+	prunerPreserveParentsFailing.Set(0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return(emptyIterator{}, nil).Once()
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return((*failingIterator)(nil), errors.NewStorageError("boom")).Once()
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return(emptyIterator{}, nil)
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 4)}
+	server := newPhase1TestServer(ctx, mockStore, pruneSvc, false)
+	server.blockchainClient = client
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101}
+
+	require.Eventually(t, func() bool { return client.reads.Load() >= 1 }, 2*time.Second, 5*time.Millisecond)
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(101), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held height was not pruned after phase 1 recovered")
+	}
+
+	mockStore.AssertNumberOfCalls(t, "GetPrunableUnminedTxIterator", 3)
+}
+
+// A retried height that is still held skips the whole cycle: phase 1 already ran for it, so
+// a long hold does not rescan unmined transactions every recheck interval.
+func TestRepairHoldRetryWhileHeldSkipsPhase1(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+	server.repairHoldRecheckInterval = 5 * time.Millisecond
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101}
+
+	require.Eventually(t, func() bool { return client.reads.Load() >= 5 }, 2*time.Second, 5*time.Millisecond, "the held height is retried")
+
+	mockStore := server.utxoStore.(*utxo.MockUtxostore)
+	mockStore.AssertNumberOfCalls(t, "GetPrunableUnminedTxIterator", 1)
+	mockStore.AssertNumberOfCalls(t, "ProcessExpiredPreservations", 1)
+	require.Empty(t, pruneSvc.calls)
+}
+
 // On mainnet and testnet the pruner refuses to start when the gap between the UTXO retention
 // and the unmined retention is below the deepest fork the node accepts (CoinbaseMaturity): a
 // hold written after a cycle's last check would then not be enough to protect a due parent.
 // Other networks only log it.
 func TestInitRefusesInsufficientRepairHoldSlack(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		params chaincfg.Params
-		refuse bool
+		name      string
+		params    chaincfg.Params
+		retention uint32
+		refuse    bool
 	}{
-		{"mainnet", chaincfg.MainNetParams, true},
-		{"testnet", chaincfg.TestNetParams, true},
-		{"regtest", chaincfg.RegressionNetParams, false},
+		{"mainnet", chaincfg.MainNetParams, 150, true},
+		{"testnet", chaincfg.TestNetParams, 150, true},
+		{"regtest", chaincfg.RegressionNetParams, 150, false},
+		// Slack equal to CoinbaseMaturity leaves no room for a gap between phase 1 runs.
+		{"mainnet slack equals maturity", chaincfg.MainNetParams, 200, true},
+		{"mainnet slack above maturity", chaincfg.MainNetParams, 201, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			params := tc.params
@@ -1084,7 +1211,7 @@ func TestInitRefusesInsufficientRepairHoldSlack(t *testing.T) {
 				logger: ulogger.TestLogger{},
 				settings: &settings.Settings{
 					ChainCfgParams:             &params,
-					GlobalBlockHeightRetention: 150,
+					GlobalBlockHeightRetention: tc.retention,
 					UtxoStore:                  settings.UtxoStoreSettings{UnminedTxRetention: 100},
 				},
 			}
@@ -1099,4 +1226,262 @@ func TestInitRefusesInsufficientRepairHoldSlack(t *testing.T) {
 			}
 		})
 	}
+}
+
+// failingSetStateClient is a blockchain client whose state writes fail.
+type failingSetStateClient struct{ blockchain.ClientI }
+
+func (failingSetStateClient) SetState(context.Context, string, []byte) error {
+	return errors.NewStorageError("state write failed")
+}
+
+// serviceStateClient reads and writes blockchain state through the blockchain service's own
+// handlers, with the protobuf round trip the gRPC client adds: a missing key arrives as a
+// gRPC error and empty bytes as nil.
+type serviceStateClient struct {
+	blockchain.ClientI
+	service *blockchain.Blockchain
+}
+
+func (c *serviceStateClient) GetState(ctx context.Context, key string) ([]byte, error) {
+	resp, err := c.service.GetState(ctx, &blockchain_api.GetStateRequest{Key: key})
+	if err != nil {
+		return nil, errors.UnwrapGRPC(err)
+	}
+
+	wire, err := proto.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var got blockchain_api.StateResponse
+	if err = proto.Unmarshal(wire, &got); err != nil {
+		return nil, err
+	}
+
+	return got.Data, nil
+}
+
+func (c *serviceStateClient) SetState(ctx context.Context, key string, data []byte) error {
+	wire, err := proto.Marshal(&blockchain_api.SetStateRequest{Key: key, Data: data})
+	if err != nil {
+		return err
+	}
+
+	var req blockchain_api.SetStateRequest
+	if err = proto.Unmarshal(wire, &req); err != nil {
+		return err
+	}
+
+	if _, err = c.service.SetState(ctx, &req); err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
+// newPhase1GapTestServer builds a pruner with mainnet's CoinbaseMaturity (100), the default
+// retentions (288 and 144, so phase 1 may miss up to 44 blocks) and a blockchain service on a
+// sqlitememory store, which holds the parent preservation record.
+func newPhase1GapTestServer(t *testing.T, ctx context.Context) (*Server, *recordingPruner) {
+	t.Helper()
+
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+	params := chaincfg.MainNetParams
+	tSettings.ChainCfgParams = &params
+	tSettings.GlobalBlockHeightRetention = 288
+	tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
+	tSettings.UtxoStore.UnminedTxRetention = 144
+	tSettings.UtxoStore.ParentPreservationBlocks = 1440
+	tSettings.Pruner.MinBlockHeight = 0
+	tSettings.Pruner.SkipDuringCatchup = false
+	tSettings.Pruner.SkipPreserveParents = false
+	tSettings.Pruner.SkipProcessExpiredPreservations = false
+
+	chainURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	chainStore, err := blockchainsql.New(logger, chainURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = chainStore.Close(context.Background()) })
+
+	service, err := blockchain.New(ctx, logger, tSettings, chainStore, nil)
+	require.NoError(t, err)
+
+	client := &serviceStateClient{service: service}
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return(emptyIterator{}, nil)
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 8)}
+
+	return &Server{
+		ctx:              ctx,
+		logger:           logger,
+		settings:         tSettings,
+		utxoStore:        mockStore,
+		blockchainClient: client,
+		prunerService:    pruneSvc,
+		pruneNotify:      make(chan pruneSignal, 1),
+		blobNotify:       make(chan pruneSignal, 1),
+	}, pruneSvc
+}
+
+func setPreservationRecord(t *testing.T, s *Server, rec parentPreservationRecord) {
+	t.Helper()
+	require.NoError(t, s.blockchainClient.SetState(context.Background(), parentPreservationStateKey, rec.encode()))
+}
+
+func readPreservationRecord(t *testing.T, s *Server) parentPreservationRecord {
+	t.Helper()
+
+	data, err := s.blockchainClient.GetState(context.Background(), parentPreservationStateKey)
+	require.NoError(t, err)
+
+	rec, err := decodeParentPreservationRecord(data)
+	require.NoError(t, err)
+
+	return rec
+}
+
+// requirePhase2Skipped sends a signal and waits for its cycle to end in the phase 1 gap
+// cooldown, without deleting.
+func requirePhase2Skipped(t *testing.T, s *Server, pruneSvc *recordingPruner, height uint32) {
+	t.Helper()
+
+	before := getCounterValue(t, prunerSkipped, "phase1_gap_cooldown")
+	s.pruneNotify <- pruneSignal{blockHeight: height}
+
+	require.Eventually(t, func() bool { return getCounterValue(t, prunerSkipped, "phase1_gap_cooldown") == before+1 },
+		2*time.Second, 5*time.Millisecond, "height %d: phase 2 waits out the cooldown", height)
+	require.Empty(t, pruneSvc.calls, "height %d: nothing is deleted", height)
+}
+
+func requirePruned(t *testing.T, s *Server, pruneSvc *recordingPruner, height uint32) {
+	t.Helper()
+
+	s.pruneNotify <- pruneSignal{blockHeight: height}
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, height, h)
+	case <-time.After(2 * time.Second):
+		t.Fatalf("height %d was not pruned", height)
+	}
+}
+
+// Phase 1 last succeeded at 1000 and then failed for 100 blocks. Meanwhile a child spent
+// its parent at 1000 and stayed unmined until it was mined at 1099, so phase 1 never
+// preserved the parent, whose DAH is 1288. Once phase 1 recovers, phase 2 must not delete
+// until the child's block can no longer be overtaken (CoinbaseMaturity deep, height 1200):
+// a reorg before that makes the child unmined again and needs the parent, and a repair hold
+// written after the delete committed would be too late.
+func TestPhase1GapDelaysPhase2(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, pruneSvc := newPhase1GapTestServer(t, ctx)
+	setPreservationRecord(t, server, parentPreservationRecord{lastSuccess: 1000})
+
+	go server.prunerProcessor(ctx)
+
+	requirePhase2Skipped(t, server, pruneSvc, 1100)
+	require.Equal(t, parentPreservationRecord{lastSuccess: 1100, phase2From: 1200}, readPreservationRecord(t, server))
+
+	// Phase 1 keeps up from here, so the cooldown does not move.
+	for _, h := range []uint32{1144, 1188, 1199} {
+		requirePhase2Skipped(t, server, pruneSvc, h)
+	}
+
+	requirePruned(t, server, pruneSvc, 1200)
+}
+
+// A gap of up to retention - unmined retention - CoinbaseMaturity blocks (44 here) cannot
+// miss a parent whose child's block is still shallow, so it does not pause phase 2.
+func TestPhase1ShortGapStillPrunes(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, pruneSvc := newPhase1GapTestServer(t, ctx)
+	setPreservationRecord(t, server, parentPreservationRecord{lastSuccess: 1000})
+
+	go server.prunerProcessor(ctx)
+
+	requirePruned(t, server, pruneSvc, 1044)
+	requirePhase2Skipped(t, server, pruneSvc, 1089)
+}
+
+// The cooldown is persisted: a pruner restarted inside it keeps waiting, even though its
+// first phase 1 follows the last one closely.
+func TestPhase1GapCooldownSurvivesRestart(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, pruneSvc := newPhase1GapTestServer(t, ctx)
+	setPreservationRecord(t, server, parentPreservationRecord{lastSuccess: 1100, phase2From: 1200})
+
+	go server.prunerProcessor(ctx)
+
+	for _, h := range []uint32{1101, 1145, 1189} {
+		requirePhase2Skipped(t, server, pruneSvc, h)
+	}
+
+	requirePruned(t, server, pruneSvc, 1200)
+}
+
+// Without a record, phase 1 is taken to have last run at height 0: a new chain prunes, a node
+// upgrading at a later height waits CoinbaseMaturity blocks once.
+func TestPhase1GapWithoutRecord(t *testing.T) {
+	initPrometheusMetrics()
+
+	t.Run("new chain", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		server, pruneSvc := newPhase1GapTestServer(t, ctx)
+		go server.prunerProcessor(ctx)
+
+		requirePruned(t, server, pruneSvc, 40)
+	})
+
+	t.Run("upgraded node", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		server, pruneSvc := newPhase1GapTestServer(t, ctx)
+		go server.prunerProcessor(ctx)
+
+		requirePhase2Skipped(t, server, pruneSvc, 900000)
+		require.Equal(t, parentPreservationRecord{lastSuccess: 900000, phase2From: 900100}, readPreservationRecord(t, server))
+	})
+}
+
+// A record that cannot be written means a restart could forget a gap, so phase 2 does not
+// run in that cycle.
+func TestPhase1RecordWriteFailureSkipsPhase2(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, pruneSvc := newPhase1GapTestServer(t, ctx)
+	server.blockchainClient = failingSetStateClient{ClientI: server.blockchainClient}
+
+	before := getCounterValue(t, prunerErrors, "parent_preservation_record")
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 40}
+
+	require.Eventually(t, func() bool { return getCounterValue(t, prunerErrors, "parent_preservation_record") == before+1 },
+		2*time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
+	require.Equal(t, uint32(0), server.lastProcessedHeight.Load())
 }

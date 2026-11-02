@@ -43,6 +43,9 @@ import (
 type pruneSignal struct {
 	blockHeight uint32
 	blockHash   chainhash.Hash
+
+	// retry marks a held height tried again by its timer rather than by a new block.
+	retry bool
 }
 
 // BlobDeletionObserver is an optional callback interface for testing.
@@ -73,12 +76,18 @@ type Server struct {
 
 	// repairHoldPollInterval is how often phase 2 checks the overtaken-tip repair hold while
 	// it deletes, and repairHoldRecheckInterval how long a held height waits before it is
-	// tried again; zero means the defaults. repairHoldRetry is the pending retry, owned by the
-	// pruner processor.
+	// tried again; zero means the defaults. repairHoldRetry is the pending retry and
+	// repairHoldRetrySig the signal it sends. Both are owned by the pruner processor.
 	repairHoldPollInterval    time.Duration
 	repairHoldRecheckInterval time.Duration
 	repairHoldRetry           *time.Timer
-	stats               *gocore.Stat
+	repairHoldRetrySig        pruneSignal
+
+	// preservation is the parent preservation record (parentPreservationStateKey), read on the
+	// first successful phase 1. Owned by the pruner processor.
+	preservation *parentPreservationRecord
+
+	stats *gocore.Stat
 
 	// Blob deletion
 	blobStores           map[storetypes.BlobStoreType]blob.Store

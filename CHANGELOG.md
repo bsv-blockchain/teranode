@@ -153,13 +153,21 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   is listed; parent preservation (phase 1) still runs. A hold that appears while phase 2
   is deleting cancels it, and a held height is tried again every 30 seconds, so deletion
   resumes on its own once the repair finishes, even with no new block. A hold written
-  after a phase 2 deletion has committed cannot undo it. That deletion only reaches a
-  parent the repair needs when the overtaken block is deeper than the UTXO retention minus
-  `utxostore_unminedTxRetention`, so on mainnet and testnet the pruner now refuses to
-  start unless that gap is at least `CoinbaseMaturity` (100), the deepest fork the node
-  accepts: the defaults (288 and 144) pass, and a node that raised
-  `utxostore_unminedTxRetention` or lowered the retention must restore the gap. Other
-  networks log an error instead. A subtree of an overtaken block that cannot be read is tried
+  after a phase 2 deletion has committed cannot undo it. As long as phase 1 ran while the
+  parent's child was old and unmined, that deletion only reaches a parent the repair needs
+  when the overtaken block is deeper than the UTXO retention minus
+  `utxostore_unminedTxRetention`. So on mainnet and testnet the pruner now refuses to start
+  unless that gap is above `CoinbaseMaturity` (100), the deepest fork the node accepts: the
+  defaults (288 and 144) pass, and a node that raised `utxostore_unminedTxRetention` or
+  lowered the retention must restore the gap. Other networks log an error instead. When
+  phase 1 misses more blocks than that gap minus `CoinbaseMaturity` (44 with the defaults),
+  because it failed, was skipped or the pruner was down, phase 2 deletes nothing for the
+  next `CoinbaseMaturity` blocks (`phase1_gap_cooldown` in
+  `teranode_pruner_skipped_total`). The pruner keeps the height of its last phase 1 under
+  the blockchain state key `PrunerParentPreservation`, so a restart neither forgets nor
+  hides a gap. A node upgraded on an existing chain has no such record yet, so phase 2
+  waits 100 blocks once (about 17 hours on mainnet); blob deletion is not affected. A
+  subtree of an overtaken block that cannot be read is tried
   again on every block and holds pruning until it reads or the block leaves the
   1000-block repair window. A subtree or block that is gone from its store can never be
   read: a gone subtree is given up at once, and a gone block after 10 attempts, both
