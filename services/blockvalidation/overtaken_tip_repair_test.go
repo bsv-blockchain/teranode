@@ -241,13 +241,17 @@ func newOvertakeFixtureSubtrees(t *testing.T, withLater bool) *overtakeFixture {
 }
 
 // newBlockValidation returns a BlockValidation whose background workers have stopped, so
-// the test drives every repair slice itself (drainTipRepair) and sees them in order.
+// the test drives every repair slice itself (drainTipRepair) and sees them in order. Its
+// context is cancelled before it is built: the setMined subscription goroutine, which
+// backgroundTasks does not track, then returns without reading blockchainClient, and a test
+// may replace the client.
 func (f *overtakeFixture) newBlockValidation(t *testing.T) *BlockValidation {
 	t.Helper()
 
 	ctx, stop := context.WithCancel(f.ctx)
-	bv := f.newRunningBlockValidation(ctx)
 	stop()
+
+	bv := f.newRunningBlockValidation(ctx)
 	bv.backgroundTasks.Wait()
 
 	return bv
