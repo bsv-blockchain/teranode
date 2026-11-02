@@ -1228,11 +1228,18 @@ func TestInitRefusesInsufficientRepairHoldSlack(t *testing.T) {
 	}
 }
 
-// failingSetStateClient is a blockchain client whose state writes fail.
-type failingSetStateClient struct{ blockchain.ClientI }
+// failingSetStateClient is a blockchain client whose state writes fail until recovered is set.
+type failingSetStateClient struct {
+	blockchain.ClientI
+	recovered atomic.Bool
+}
 
-func (failingSetStateClient) SetState(context.Context, string, []byte) error {
-	return errors.NewStorageError("state write failed")
+func (c *failingSetStateClient) SetState(ctx context.Context, key string, data []byte) error {
+	if !c.recovered.Load() {
+		return errors.NewStorageError("state write failed")
+	}
+
+	return c.ClientI.SetState(ctx, key, data)
 }
 
 // serviceStateClient reads and writes blockchain state through the blockchain service's own
@@ -1473,7 +1480,7 @@ func TestPhase1RecordWriteFailureSkipsPhase2(t *testing.T) {
 	defer cancel()
 
 	server, pruneSvc := newPhase1GapTestServer(t, ctx)
-	server.blockchainClient = failingSetStateClient{ClientI: server.blockchainClient}
+	server.blockchainClient = &failingSetStateClient{ClientI: server.blockchainClient}
 
 	before := getCounterValue(t, prunerErrors, "parent_preservation_record")
 
@@ -1525,4 +1532,76 @@ func TestStaleRetrySignalIsDropped(t *testing.T) {
 
 	require.Never(t, func() bool { return client.reads.Load() > 0 || len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
 	server.utxoStore.(*utxo.MockUtxostore).AssertNotCalled(t, "GetPrunableUnminedTxIterator", mock.Anything)
+}
+
+// The first held height gets its retry even when phase 1 fails in that cycle: once the hold
+// is released and phase 1 recovers, it is pruned without another block.
+func TestRepairHoldFirstCyclePhase1FailureIsRetried(t *testing.T) {
+	initPrometheusMetrics()
+	prunerPreserveParentsFailing.Set(0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return((*failingIterator)(nil), errors.NewStorageError("boom")).Once()
+	mockStore.On("GetPrunableUnminedTxIterator", mock.Anything).Return(emptyIterator{}, nil)
+	mockStore.On("ProcessExpiredPreservations", mock.Anything, mock.Anything).Return(nil)
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 4)}
+	server := newPhase1TestServer(ctx, mockStore, pruneSvc, false)
+	server.blockchainClient = client
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101}
+
+	require.Eventually(t, func() bool { return testutil.ToFloat64(prunerPreserveParentsFailing) == 1 }, 2*time.Second, 5*time.Millisecond)
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(101), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held height was not retried after its first cycle's phase 1 failed")
+	}
+}
+
+// The first held height gets its retry even when the parent preservation record cannot be
+// written in that cycle.
+func TestRepairHoldFirstCycleRecordFailureIsRetried(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, pruneSvc := newPhase1GapTestServer(t, ctx)
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	inner := server.blockchainClient
+	require.NoError(t, inner.SetState(ctx, model.OvertakenTipRepairHoldKey, model.EncodeOvertakenTipRepairHold(testHeldBlock)))
+
+	failing := &failingSetStateClient{ClientI: inner}
+	server.blockchainClient = failing
+
+	before := getCounterValue(t, prunerErrors, "parent_preservation_record")
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 40}
+
+	require.Eventually(t, func() bool { return getCounterValue(t, prunerErrors, "parent_preservation_record") > before },
+		2*time.Second, 5*time.Millisecond)
+
+	require.NoError(t, inner.SetState(ctx, model.OvertakenTipRepairHoldKey, model.EncodeOvertakenTipRepairHold(nil)))
+	failing.recovered.Store(true)
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(40), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held height was not retried after its first cycle's record write failed")
+	}
 }

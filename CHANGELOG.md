@@ -150,18 +150,22 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   records the overtaken blocks it has not finished repairing under the blockchain state
   key `OvertakenTipRepairHold`, before it sets the mined status of the block that
   overtook them, and the pruner skips UTXO deletion (phase 2) and blob deletion while any
-  is listed; parent preservation (phase 1) still runs. A hold that appears while phase 2
-  is deleting cancels it, and a held height is tried again every 30 seconds, so deletion
-  resumes on its own once the repair finishes, even with no new block. A hold written
-  after a phase 2 deletion has committed cannot undo it. As long as phase 1 ran while the
-  parent's child was old and unmined, that deletion only reaches a parent the repair needs
-  when the overtaken block is deeper than the UTXO retention minus
+  is listed; parent preservation (phase 1) still runs. A held height is tried again every
+  30 seconds, so deletion resumes on its own once the repair finishes, even with no new
+  block. While phase 2 deletes, the pruner checks the hold every second and cancels the
+  rest of the deletion when one appears; a deletion that commits before that check, such
+  as a single SQL `DELETE`, is not cancelled. The safety of a deletion that commits before
+  a hold is seen does not rest on that check: as long as phase 1 ran while the parent's
+  child was old and unmined, such a deletion only reaches a parent the repair needs when
+  the overtaken block is deeper than the UTXO retention minus
   `utxostore_unminedTxRetention`. So on mainnet and testnet the pruner now refuses to start
   unless that gap is above `CoinbaseMaturity` (100), the deepest fork the node accepts: the
   defaults (288 and 144) pass, and a node that raised `utxostore_unminedTxRetention` or
   lowered the retention must restore the gap. Other networks log an error instead. When
   phase 1 misses more blocks than that gap minus `CoinbaseMaturity` (44 with the defaults),
-  because it failed, was skipped or the pruner was down, phase 2 deletes nothing for the
+  because it failed, was skipped, the pruner was down, or a cycle took so long that the
+  heights in between were never processed (for example during catch-up or legacy sync, with
+  the default `pruner_skipDuringCatchup=false`), phase 2 deletes nothing for the
   next `CoinbaseMaturity` blocks (`phase1_gap_cooldown` in
   `teranode_pruner_skipped_total`). The pruner keeps the height of its last phase 1 under
   the blockchain state key `PrunerParentPreservation`, so a restart neither forgets nor

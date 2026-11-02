@@ -118,9 +118,11 @@ func (s *Server) checkRepairHoldSlack() error {
 	}
 }
 
-// watchRepairHold checks the overtaken-tip repair hold while phase 2 deletes, and cancels the
-// deletion when one appears. The returned function stops the watch and reports whether it
-// cancelled.
+// watchRepairHold checks the overtaken-tip repair hold every repairHoldPollInterval while
+// phase 2 deletes, and cancels the rest of the deletion when one appears. A deletion that
+// commits before the first check is not cancelled; its safety rests on checkRepairHoldSlack
+// and phase1GapLimit, not on this watch. The returned function stops the watch and reports
+// whether it cancelled.
 func (s *Server) watchRepairHold(ctx context.Context, cancel context.CancelFunc, blockHashStr string, blockHeight uint32) func() bool {
 	interval := s.repairHoldPollInterval
 	if interval <= 0 {
@@ -516,6 +518,10 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			// Nothing is deleted until the repair finishes: no blob deletion, which would take
 			// the overtaken block's subtrees the repair reads, and no Phase 2.
 			held := s.overtakenTipRepairHeld(ctx, blockHashStr, blockHeight)
+			if held {
+				// Armed now, so a phase 1 or record failure below cannot leave it unscheduled.
+				s.retryHeldHeight(sig)
+			}
 
 			// Safety check passed - wake blob deletion worker to run concurrently with Phase 1&2.
 			// It works off the blockchain service's queued blob batches, independent of parent
@@ -637,7 +643,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			if s.prunerService != nil {
 				startTime := time.Now()
 
-				// A hold written once deletion has started cancels it: block validation may
+				// A hold seen while deletion runs cancels the rest of it: block validation may
 				// have found an overtaken block between the last check and now.
 				pruneCtx, cancelPrune := context.WithCancel(ctx)
 				heldDuringPrune := s.watchRepairHold(pruneCtx, cancelPrune, blockHashStr, blockHeight)
