@@ -159,7 +159,7 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   child was old and unmined, such a deletion only reaches a parent the repair needs when
   the overtaken block is deeper than the UTXO retention minus
   `utxostore_unminedTxRetention`. So on mainnet and testnet the pruner now refuses to start
-  unless that gap is above `CoinbaseMaturity` (100), the deepest fork the node accepts: the
+  unless that gap is above `CoinbaseMaturity` (100), the deepest fork catch-up accepts: the
   defaults (288 and 144) pass, and a node that raised `utxostore_unminedTxRetention` or
   lowered the retention must restore the gap. Other networks log an error instead. When
   phase 1 misses more blocks than that gap minus `CoinbaseMaturity` (44 with the defaults),
@@ -174,15 +174,19 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   is not affected. With `pruner_skipPreserveParents` or
   `utxostore_parentPreservationBlocks=0` phase 1 preserves nothing, so there is no
   cooldown and no protection; once preservation is turned back on, the time without it
-  counts as a gap. A
-  subtree of an overtaken block that cannot be read is tried
+  counts as a gap. `rewindblockchain` resets `PrunerParentPreservation`, so after a rewind
+  phase 2 waits 100 blocks. A reorg deeper than `CoinbaseMaturity` is not covered:
+  catch-up refuses one, but blocks of a competing chain relayed one at a time are not
+  checked for fork depth, and a parent phase 2 deleted before such a reorg stays deleted.
+  A subtree of an overtaken block that cannot be read is tried
   again on every block and holds pruning until it reads or the block leaves the
   1000-block repair window. A subtree or block that is gone from its store can never be
   read: a gone subtree is given up at once, and a gone block after 10 attempts, both
   counted in `teranode_blockvalidation_tip_repair_abandoned_total` (a gone subtree once
   per block, however often a reorg moves the block). Their transactions may stay marked
   mined while off the chain, and the pruner can then delete parents they need; if the
-  block comes back onto the chain, they may stay marked not on it. `teranode_pruner_overtaken_tip_repair_held_blocks` and
+  block comes back onto the chain, they may stay marked not on it.
+  `teranode_pruner_overtaken_tip_repair_held_blocks` and
   `teranode_blockvalidation_tip_repair_subtrees_set_aside` show a hold; a hold that stays
   above zero means a subtree file is corrupt or a store keeps failing, and disk use grows
   until it is resolved. A repair that keeps failing no longer stops healthy blocks: their
@@ -190,7 +194,10 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   are repaired after it. **A single block validation instance must write mined status
   for the chain**: the hold is one record, so two instances can release each other's
   hold. A block overtaken while block validation is down and more than 10 blocks below
-  the tip when it starts is not repaired. Upgrade the pruner no later than block
+  the tip when it starts is not repaired. If block assembly stops after marking a reorg's
+  transactions on the longest chain but before saving its position, the transactions of a
+  block that block validation already repaired can stay marked mined while off the chain;
+  nothing checks them again. Upgrade the pruner no later than block
   validation: a newer block validation with an older pruner writes the hold but nothing
   reads it. Rolling block validation back after it wrote a non-empty hold leaves the
   record in place, and a newer pruner keeps holding until block validation is upgraded

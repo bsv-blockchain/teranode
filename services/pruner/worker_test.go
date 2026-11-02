@@ -31,6 +31,22 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// runProcessor runs the pruner processor until ctx is cancelled, and makes the test wait for
+// it to return, so a cycle still running when the test ends cannot move the process-global
+// metrics the next test reads.
+func runProcessor(t *testing.T, ctx context.Context, s *Server) {
+	t.Helper()
+
+	done := make(chan struct{})
+
+	go func() {
+		s.prunerProcessor(ctx)
+		close(done)
+	}()
+
+	t.Cleanup(func() { <-done })
+}
+
 // getCounterValue reads the current value of a prometheus counter with the given label.
 // Fails the test if the metric cannot be read.
 func getCounterValue(t *testing.T, cv *prometheus.CounterVec, label string) float64 {
@@ -70,7 +86,7 @@ func TestMinBlockHeightSkipsPruning(t *testing.T) {
 	skipsBefore := getCounterValue(t, prunerSkipped, "below_min_height")
 
 	// Start the processor in a goroutine
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	// Send a signal below the minimum height - should be skipped
 	server.pruneNotify <- pruneSignal{blockHeight: 50, blockHash: chainhash.Hash{}}
@@ -125,7 +141,7 @@ func TestMinBlockHeightZeroAllowsPruning(t *testing.T) {
 	}
 
 	// Start the processor in a goroutine
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	// Send a signal at height 1 - should proceed past the min height check
 	// and the block assembly safety check (which passes when blockAssemblyClient is nil).
@@ -164,7 +180,7 @@ func TestMinBlockHeightAboveThresholdProceeds(t *testing.T) {
 	}
 
 	// Start the processor in a goroutine
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	// Send a signal above the minimum height - should proceed
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
@@ -221,7 +237,7 @@ func TestWaitForBlockMinedStatusProceeds(t *testing.T) {
 		}, nil,
 	)
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	server.pruneNotify <- pruneSignal{blockHeight: 200, blockHash: blockHash}
 
@@ -270,7 +286,7 @@ func TestWaitForBlockMinedStatusTimeout(t *testing.T) {
 	// GetBlockIsMined always returns false - block never gets mined_set=true
 	blockchainMock.On("GetBlockIsMined", mock.Anything, &blockHash).Return(false, nil)
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	server.pruneNotify <- pruneSignal{blockHeight: 300, blockHash: blockHash}
 
@@ -312,7 +328,7 @@ func TestWaitForBlockMinedStatusSkippedWhenNoBAClient(t *testing.T) {
 		},
 	}
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	server.pruneNotify <- pruneSignal{blockHeight: 400, blockHash: chainhash.Hash{0x03}}
 
@@ -366,7 +382,7 @@ func testSkipDuringCatchupSkipsInState(t *testing.T, state blockchain.FSMStateTy
 
 	skipsBefore := getCounterValue(t, prunerSkipped, "catchup_mode")
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	server.pruneNotify <- pruneSignal{blockHeight: 500, blockHash: chainhash.Hash{0x04}}
 
@@ -417,7 +433,7 @@ func TestSkipDuringCatchupProceedsWhenRunning(t *testing.T) {
 		},
 	}
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	server.pruneNotify <- pruneSignal{blockHeight: 501, blockHash: chainhash.Hash{0x05}}
 
@@ -460,7 +476,7 @@ func TestSkipDuringCatchupWithNilBlockchainClientDoesNotPanic(t *testing.T) {
 	// crashes the test binary (not recoverable via require.NotPanics since
 	// the panic occurs on a different goroutine); a passing run without a
 	// crash, receiving the blob notification below, proves the guard exists.
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	server.pruneNotify <- pruneSignal{blockHeight: 502, blockHash: chainhash.Hash{0x06}}
 
@@ -529,7 +545,7 @@ func TestProcessExpiredPreservationsPhaseRuns(t *testing.T) {
 		},
 	}
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	select {
@@ -569,7 +585,7 @@ func TestProcessExpiredPreservationsPhaseSkipped(t *testing.T) {
 		},
 	}
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	// blobNotify is signalled before the phases run; once seen, Phase 1b would have executed if enabled.
@@ -637,7 +653,7 @@ func TestPhase1FailureSkipsPhase2(t *testing.T) {
 	errsBefore := getCounterValue(t, prunerErrors, "preserve_parents")
 	skippedBefore := getCounterValue(t, prunerSkipped, "preserve_parents_failed")
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	require.Eventually(t, func() bool {
@@ -695,7 +711,7 @@ func TestPhase1FailureThenSuccessPrunes(t *testing.T) {
 	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
 	server := newPhase1TestServer(ctx, mockStore, pruneSvc, false)
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 	require.Eventually(t, func() bool { return testutil.ToFloat64(prunerPreserveParentsFailing) == 1 },
@@ -771,7 +787,7 @@ func TestSkipPreserveParentsStillPrunes(t *testing.T) {
 	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
 	server := newPhase1TestServer(ctx, mockStore, pruneSvc, true)
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	select {
@@ -848,7 +864,7 @@ func TestRepairHoldSkipsDeletion(t *testing.T) {
 
 	skippedBefore := getCounterValue(t, prunerSkipped, "overtaken_tip_repair_hold")
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	require.Eventually(t, func() bool {
@@ -887,7 +903,7 @@ func TestRepairHoldMissingIsNotHeld(t *testing.T) {
 	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
 	server := newRepairHoldTestServer(ctx, client, pruneSvc)
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	select {
@@ -913,7 +929,7 @@ func TestRepairHoldReadErrorHolds(t *testing.T) {
 
 	errsBefore := getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold")
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	require.Eventually(t, func() bool {
@@ -941,7 +957,7 @@ func TestRepairHoldReadAgainBeforePhase2(t *testing.T) {
 
 	skippedBefore := getCounterValue(t, prunerSkipped, "overtaken_tip_repair_hold")
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	require.Eventually(t, func() bool {
@@ -1023,7 +1039,7 @@ func TestRepairHoldCancelsRunningPrune(t *testing.T) {
 	server.repairHoldPollInterval = 10 * time.Millisecond
 	server.repairHoldRecheckInterval = time.Hour
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	select {
@@ -1053,7 +1069,7 @@ func TestRepairHoldReleaseResumesIdlePruning(t *testing.T) {
 	server := newRepairHoldTestServer(ctx, client, pruneSvc)
 	server.repairHoldRecheckInterval = 20 * time.Millisecond
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: chainhash.Hash{}}
 
 	require.Never(t, func() bool { return len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond, "precondition: held")
@@ -1112,7 +1128,7 @@ func TestRepairHoldRetryKeepsHighestHeight(t *testing.T) {
 	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
 	server.repairHoldRetry.Reset(0)
 
-	go server.prunerProcessor(ctx2)
+	runProcessor(t, ctx2, server)
 
 	select {
 	case h := <-pruneSvc.calls:
@@ -1145,7 +1161,7 @@ func TestRepairHoldRetrySurvivesPhase1Failure(t *testing.T) {
 	server.blockchainClient = client
 	server.repairHoldRecheckInterval = 20 * time.Millisecond
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101}
 
 	require.Eventually(t, func() bool { return client.reads.Load() >= 1 }, 2*time.Second, 5*time.Millisecond)
@@ -1176,7 +1192,7 @@ func TestRepairHoldRetryWhileHeldSkipsPhase1(t *testing.T) {
 	server := newRepairHoldTestServer(ctx, client, pruneSvc)
 	server.repairHoldRecheckInterval = 5 * time.Millisecond
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101}
 
 	require.Eventually(t, func() bool { return client.reads.Load() >= 5 }, 2*time.Second, 5*time.Millisecond, "the held height is retried")
@@ -1338,13 +1354,13 @@ func newPhase1GapTestServer(t *testing.T, ctx context.Context) (*Server, *record
 
 func setPreservationRecord(t *testing.T, s *Server, rec parentPreservationRecord) {
 	t.Helper()
-	require.NoError(t, s.blockchainClient.SetState(context.Background(), parentPreservationStateKey, rec.encode()))
+	require.NoError(t, s.blockchainClient.SetState(context.Background(), ParentPreservationStateKey, rec.encode()))
 }
 
 func readPreservationRecord(t *testing.T, s *Server) parentPreservationRecord {
 	t.Helper()
 
-	data, err := s.blockchainClient.GetState(context.Background(), parentPreservationStateKey)
+	data, err := s.blockchainClient.GetState(context.Background(), ParentPreservationStateKey)
 	require.NoError(t, err)
 
 	rec, err := decodeParentPreservationRecord(data)
@@ -1394,7 +1410,7 @@ func TestPhase1GapDelaysPhase2(t *testing.T) {
 	server, pruneSvc := newPhase1GapTestServer(t, ctx)
 	setPreservationRecord(t, server, parentPreservationRecord{lastSuccess: 1000})
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	requirePhase2Skipped(t, server, pruneSvc, 1100)
 	require.Equal(t, parentPreservationRecord{lastSuccess: 1100, phase2From: 1200}, readPreservationRecord(t, server))
@@ -1418,7 +1434,7 @@ func TestPhase1ShortGapStillPrunes(t *testing.T) {
 	server, pruneSvc := newPhase1GapTestServer(t, ctx)
 	setPreservationRecord(t, server, parentPreservationRecord{lastSuccess: 1000})
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	requirePruned(t, server, pruneSvc, 1044)
 	requirePhase2Skipped(t, server, pruneSvc, 1089)
@@ -1435,7 +1451,7 @@ func TestPhase1GapCooldownSurvivesRestart(t *testing.T) {
 	server, pruneSvc := newPhase1GapTestServer(t, ctx)
 	setPreservationRecord(t, server, parentPreservationRecord{lastSuccess: 1100, phase2From: 1200})
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	for _, h := range []uint32{1101, 1145, 1189} {
 		requirePhase2Skipped(t, server, pruneSvc, h)
@@ -1454,7 +1470,7 @@ func TestPhase1GapWithoutRecord(t *testing.T) {
 		defer cancel()
 
 		server, pruneSvc := newPhase1GapTestServer(t, ctx)
-		go server.prunerProcessor(ctx)
+		runProcessor(t, ctx, server)
 
 		requirePruned(t, server, pruneSvc, 40)
 	})
@@ -1464,7 +1480,7 @@ func TestPhase1GapWithoutRecord(t *testing.T) {
 		defer cancel()
 
 		server, pruneSvc := newPhase1GapTestServer(t, ctx)
-		go server.prunerProcessor(ctx)
+		runProcessor(t, ctx, server)
 
 		requirePhase2Skipped(t, server, pruneSvc, 900000)
 		require.Equal(t, parentPreservationRecord{lastSuccess: 900000, phase2From: 900100}, readPreservationRecord(t, server))
@@ -1484,7 +1500,7 @@ func TestPhase1RecordWriteFailureSkipsPhase2(t *testing.T) {
 
 	before := getCounterValue(t, prunerErrors, "parent_preservation_record")
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 40}
 
 	require.Eventually(t, func() bool { return getCounterValue(t, prunerErrors, "parent_preservation_record") == before+1 },
@@ -1505,11 +1521,11 @@ func TestPhase1WithoutPreservationIsNotRecorded(t *testing.T) {
 	server, pruneSvc := newPhase1GapTestServer(t, ctx)
 	server.settings.UtxoStore.ParentPreservationBlocks = 0
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 
 	requirePruned(t, server, pruneSvc, 200)
 
-	_, err := server.blockchainClient.GetState(context.Background(), parentPreservationStateKey)
+	_, err := server.blockchainClient.GetState(context.Background(), ParentPreservationStateKey)
 	require.True(t, isStateNotFound(err), "no record is written: %v", err)
 }
 
@@ -1527,7 +1543,7 @@ func TestStaleRetrySignalIsDropped(t *testing.T) {
 	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
 	server := newRepairHoldTestServer(ctx, client, pruneSvc)
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101, retry: true}
 
 	require.Never(t, func() bool { return client.reads.Load() > 0 || len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
@@ -1556,7 +1572,7 @@ func TestRepairHoldFirstCyclePhase1FailureIsRetried(t *testing.T) {
 	server.blockchainClient = client
 	server.repairHoldRecheckInterval = 20 * time.Millisecond
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101}
 
 	require.Eventually(t, func() bool { return testutil.ToFloat64(prunerPreserveParentsFailing) == 1 }, 2*time.Second, 5*time.Millisecond)
@@ -1589,7 +1605,7 @@ func TestRepairHoldFirstCycleRecordFailureIsRetried(t *testing.T) {
 
 	before := getCounterValue(t, prunerErrors, "parent_preservation_record")
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 40}
 
 	require.Eventually(t, func() bool { return getCounterValue(t, prunerErrors, "parent_preservation_record") > before },
@@ -1622,7 +1638,7 @@ func TestRepairHoldUndecodableHolds(t *testing.T) {
 
 	before := getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold")
 
-	go server.prunerProcessor(ctx)
+	runProcessor(t, ctx, server)
 	server.pruneNotify <- pruneSignal{blockHeight: 101}
 
 	require.Eventually(t, func() bool { return getCounterValue(t, prunerErrors, "overtaken_tip_repair_hold") > before },
@@ -1673,7 +1689,7 @@ func TestPhase1GapLimitSlackBoundary(t *testing.T) {
 			server.settings.ChainCfgParams = &params
 			server.settings.GlobalBlockHeightRetention = tc.retention
 
-			go server.prunerProcessor(ctx)
+			runProcessor(t, ctx, server)
 
 			if tc.pruned {
 				requirePruned(t, server, pruneSvc, 900000)

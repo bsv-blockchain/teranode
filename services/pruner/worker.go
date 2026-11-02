@@ -86,7 +86,7 @@ const (
 // its spend height plus the UTXO retention, and its child was mined within the unmined
 // retention of the spend (or the parent was preserved), so it is due at the cycle's height
 // only if the overtaken block is more than retention minus unmined retention below the tip.
-// That must exceed the deepest fork the node accepts, CoinbaseMaturity, with room left for
+// That must exceed the deepest fork catch-up accepts, CoinbaseMaturity, with room left for
 // the blocks phase 1 may miss (phase1GapLimit). On mainnet and testnet a configuration
 // without that slack is refused; elsewhere it is logged.
 func (s *Server) checkRepairHoldSlack() error {
@@ -200,11 +200,19 @@ func (s *Server) clearHeldHeightRetry(blockHeight uint32) {
 	}
 }
 
-// parentPreservationStateKey is the blockchain state key under which the pruner records the
+// ParentPreservationStateKey is the blockchain state key under which the pruner records the
 // height of its last successful phase 1 and the height from which phase 2 may delete again.
-const parentPreservationStateKey = "PrunerParentPreservation"
+const ParentPreservationStateKey = "PrunerParentPreservation"
 
-// parentPreservationRecord is the record stored under parentPreservationStateKey.
+// ForgottenParentPreservationRecord is the record that knows of no earlier phase 1 run, as if
+// none was ever recorded: the next phase 1 counts as following a gap. A tool that moves the
+// chain back below the recorded height writes it, or gaps during the sync back would be
+// measured from a height the chain no longer has.
+func ForgottenParentPreservationRecord() []byte {
+	return parentPreservationRecord{}.encode()
+}
+
+// parentPreservationRecord is the record stored under ParentPreservationStateKey.
 type parentPreservationRecord struct {
 	lastSuccess uint32
 	phase2From  uint32
@@ -234,7 +242,9 @@ func decodeParentPreservationRecord(data []byte) (parentPreservationRecord, erro
 // 1 misses more than retention - unmined retention - CoinbaseMaturity blocks, a child can be
 // mined so late in that gap that its parent falls due while the child's block can still be
 // overtaken. The repair would then need a parent phase 2 may already have deleted, and a hold
-// written after the delete committed cannot bring it back.
+// written after the delete committed cannot bring it back. Like checkRepairHoldSlack, this
+// assumes no reorg deeper than CoinbaseMaturity: catch-up refuses one, blocks relayed one at
+// a time are not checked.
 func (s *Server) phase1GapLimit() (limit, maturity uint32, ok bool) {
 	// Without preservation (pruner_skipPreserveParents, or utxostore_parentPreservationBlocks=0,
 	// where phase 1 returns without preserving), phase 1 protects no parent and no run is
@@ -285,7 +295,7 @@ func (s *Server) recordPhase1Success(ctx context.Context, blockHashStr string, b
 	rec.lastSuccess = max(rec.lastSuccess, blockHeight)
 
 	if rec != *s.preservation {
-		if err := s.blockchainClient.SetState(ctx, parentPreservationStateKey, rec.encode()); err != nil {
+		if err := s.blockchainClient.SetState(ctx, ParentPreservationStateKey, rec.encode()); err != nil {
 			return false, errors.NewStorageError("failed to write the parent preservation record", err)
 		}
 
@@ -298,7 +308,7 @@ func (s *Server) recordPhase1Success(ctx context.Context, blockHashStr string, b
 // readParentPreservationRecord reads the parent preservation record. Without one, phase 1 is
 // taken to have last run at height 0.
 func (s *Server) readParentPreservationRecord(ctx context.Context, blockHashStr string, blockHeight uint32) (parentPreservationRecord, error) {
-	data, err := s.blockchainClient.GetState(ctx, parentPreservationStateKey)
+	data, err := s.blockchainClient.GetState(ctx, ParentPreservationStateKey)
 	if err != nil {
 		if isStateNotFound(err) {
 			return parentPreservationRecord{}, nil

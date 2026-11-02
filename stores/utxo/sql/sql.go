@@ -3733,6 +3733,14 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		copy(h[:], hb)
 		existingHashes[h] = true
 	}
+
+	// An error part way through the rows would otherwise read as missing rows, which an
+	// UnsetMined write tolerates; returned, it fails the chunk, and a lock error retries it.
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, errors.NewStorageError("SQL error reading existing hashes: %v", err)
+	}
+
 	rows.Close()
 
 	// Postcondition (see stores/utxo/Interface.go SetMinedMulti docstring): when
