@@ -14,10 +14,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/rpc/bsvjson"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test/mocklogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1101,4 +1107,152 @@ func TestStandardCmdResult_PanicRecovery(t *testing.T) {
 	require.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "internal error: RPC handler panicked")
+}
+
+func TestRPCAccessPolicyCoversEveryHandler(t *testing.T) {
+	for method := range rpcHandlersBeforeInit {
+		_, ok := rpcAccessPolicy[method]
+		assert.True(t, ok, "handler %q is not classified in rpcAccessPolicy", method)
+	}
+}
+
+func TestRPCLimitedExcludesAdminMethods(t *testing.T) {
+	for _, method := range []string{"freeze", "unfreeze", "reassign", "stop", "setban", "invalidateblock", "generate"} {
+		assert.Equal(t, rpcAccessAdmin, rpcAccessPolicy[method], method)
+		assert.NotContains(t, rpcLimited, method)
+	}
+
+	for method, access := range rpcAccessPolicy {
+		_, limited := rpcLimited[method]
+		assert.Equal(t, access != rpcAccessAdmin, limited, method)
+	}
+}
+
+type utxoMutationSpy struct {
+	utxo.Store
+	freezes   atomic.Int32
+	unfreezes atomic.Int32
+	reassigns atomic.Int32
+}
+
+func (u *utxoMutationSpy) FreezeUTXOs(context.Context, []*utxo.Spend, *settings.Settings) error {
+	u.freezes.Add(1)
+	return nil
+}
+
+func (u *utxoMutationSpy) UnFreezeUTXOs(context.Context, []*utxo.Spend, *settings.Settings) error {
+	u.unfreezes.Add(1)
+	return nil
+}
+
+func (u *utxoMutationSpy) ReAssignUTXO(context.Context, *utxo.Spend, *utxo.Spend, *settings.Settings) error {
+	u.reassigns.Add(1)
+	return nil
+}
+
+func TestLimitedUserCannotMutateUTXOs(t *testing.T) {
+	adminAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("admin:adminpass"))
+	limitAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte("limited:limitpass"))
+
+	spy := &utxoMutationSpy{}
+	s := &RPCServer{
+		logger:       mocklogger.NewTestLogger(),
+		authsha:      sha256.Sum256([]byte(adminAuth)),
+		limitauthsha: sha256.Sum256([]byte(limitAuth)),
+		utxoStore:    spy,
+		statusLines:  make(map[int]string),
+		settings: &settings.Settings{
+			RPC: settings.RPCSettings{RPCTimeout: 5 * time.Second},
+		},
+	}
+	require.NoError(t, s.Init(context.Background()))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, isAdmin, err := s.checkAuth(r, true)
+		require.NoError(t, err)
+
+		s.jsonRPCRead(w, r, isAdmin)
+	}))
+	defer srv.Close()
+
+	txid := strings.Repeat("ab", 32)
+	hash := strings.Repeat("cd", 32)
+
+	bodies := map[string]string{
+		"freeze":   `{"jsonrpc":"1.0","id":1,"method":"freeze","params":["` + txid + `",0]}`,
+		"unfreeze": `{"jsonrpc":"1.0","id":1,"method":"unfreeze","params":["` + txid + `",0]}`,
+		"reassign": `{"jsonrpc":"1.0","id":1,"method":"reassign","params":["` + txid + `",0,"` + hash + `","` + hash + `"]}`,
+	}
+
+	call := func(auth, body string) string {
+		req, err := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", auth)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		defer resp.Body.Close()
+
+		var sb strings.Builder
+		buf := make([]byte, 4096)
+
+		for {
+			n, rerr := resp.Body.Read(buf)
+			sb.Write(buf[:n])
+
+			if rerr != nil {
+				break
+			}
+		}
+
+		return sb.String()
+	}
+
+	for method, body := range bodies {
+		out := call(limitAuth, body)
+		assert.Contains(t, out, "limited user not authorized for this method", method)
+	}
+
+	assert.Zero(t, spy.freezes.Load())
+	assert.Zero(t, spy.unfreezes.Load())
+	assert.Zero(t, spy.reassigns.Load())
+	call(adminAuth, bodies["reassign"])
+	assert.Equal(t, int32(1), spy.reassigns.Load(), "admin must still reach reassign")
+}
+
+type freezeSpy struct {
+	utxo.Store
+	tx     *bt.Tx
+	frozen []*utxo.Spend
+}
+
+func (f *freezeSpy) Get(context.Context, *chainhash.Hash, ...fields.FieldName) (*meta.Data, error) {
+	return &meta.Data{Tx: f.tx}, nil
+}
+
+func (f *freezeSpy) FreezeUTXOs(_ context.Context, spends []*utxo.Spend, _ *settings.Settings) error {
+	f.frozen = append(f.frozen, spends...)
+	return nil
+}
+
+func TestHandleFreezeUsesRealUTXOHash(t *testing.T) {
+	tx := bt.NewTx()
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	spy := &freezeSpy{tx: tx}
+	s := &RPCServer{logger: mocklogger.NewTestLogger(), utxoStore: spy, settings: &settings.Settings{}}
+
+	_, err := handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: tx.TxID(), Vout: 0}, nil)
+	require.NoError(t, err)
+	require.Len(t, spy.frozen, 1)
+
+	want, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, want, spy.frozen[0].UTXOHash)
+	assert.NotEqual(t, tx.TxIDChainHash(), spy.frozen[0].UTXOHash)
+
+	_, err = handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: tx.TxID(), Vout: 5}, nil)
+	require.Error(t, err)
 }

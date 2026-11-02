@@ -32,6 +32,7 @@ import (
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -296,6 +297,15 @@ func TestCallerInputError_KeepsTheParserReasonAndLogsQuietly(t *testing.T) {
 type plainErrorUtxoStore struct {
 	utxo.Store
 	err error
+}
+
+func (p *plainErrorUtxoStore) Get(context.Context, *chainhash.Hash, ...fields.FieldName) (*meta.Data, error) {
+	tx := bt.NewTx()
+	if err := tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000); err != nil {
+		return nil, err
+	}
+
+	return &meta.Data{Tx: tx}, nil
 }
 
 func (p *plainErrorUtxoStore) FreezeUTXOs(context.Context, []*utxo.Spend, *settings.Settings) error {
