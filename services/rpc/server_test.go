@@ -1116,6 +1116,18 @@ func TestRPCAccessPolicyCoversEveryHandler(t *testing.T) {
 	}
 }
 
+func TestRPCLimitedWriteMethodsArePinned(t *testing.T) {
+	var got []string
+
+	for method, access := range rpcAccessPolicy {
+		if access == rpcAccessLimitedWrite {
+			got = append(got, method)
+		}
+	}
+
+	assert.ElementsMatch(t, []string{"sendrawtransaction", "submitblock", "getminingcandidate", "submitminingsolution"}, got)
+}
+
 func TestRPCLimitedExcludesAdminMethods(t *testing.T) {
 	for _, method := range []string{"freeze", "unfreeze", "reassign", "stop", "setban", "invalidateblock", "generate"} {
 		assert.Equal(t, rpcAccessAdmin, rpcAccessPolicy[method], method)
@@ -1156,23 +1168,19 @@ func TestLimitedUserCannotMutateUTXOs(t *testing.T) {
 
 	spy := &utxoMutationSpy{}
 	s := &RPCServer{
-		logger:       mocklogger.NewTestLogger(),
-		authsha:      sha256.Sum256([]byte(adminAuth)),
-		limitauthsha: sha256.Sum256([]byte(limitAuth)),
-		utxoStore:    spy,
-		statusLines:  make(map[int]string),
+		logger:        mocklogger.NewTestLogger(),
+		authsha:       sha256.Sum256([]byte(adminAuth)),
+		limitauthsha:  sha256.Sum256([]byte(limitAuth)),
+		utxoStore:     spy,
+		statusLines:   make(map[int]string),
+		rpcMaxClients: 10,
 		settings: &settings.Settings{
 			RPC: settings.RPCSettings{RPCTimeout: 5 * time.Second},
 		},
 	}
 	require.NoError(t, s.Init(context.Background()))
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, isAdmin, err := s.checkAuth(r, true)
-		require.NoError(t, err)
-
-		s.jsonRPCRead(w, r, isAdmin)
-	}))
+	srv := httptest.NewServer(http.HandlerFunc(s.serveHTTP))
 	defer srv.Close()
 
 	txid := strings.Repeat("ab", 32)
@@ -1223,8 +1231,14 @@ func TestLimitedUserCannotMutateUTXOs(t *testing.T) {
 
 type freezeSpy struct {
 	utxo.Store
-	tx     *bt.Tx
-	frozen []*utxo.Spend
+	tx       *bt.Tx
+	frozen   []*utxo.Spend
+	unfrozen []*utxo.Spend
+}
+
+func (f *freezeSpy) UnFreezeUTXOs(_ context.Context, spends []*utxo.Spend, _ *settings.Settings) error {
+	f.unfrozen = append(f.unfrozen, spends...)
+	return nil
 }
 
 func (f *freezeSpy) Get(context.Context, *chainhash.Hash, ...fields.FieldName) (*meta.Data, error) {
@@ -1254,5 +1268,26 @@ func TestHandleFreezeUsesRealUTXOHash(t *testing.T) {
 	assert.NotEqual(t, tx.TxIDChainHash(), spy.frozen[0].UTXOHash)
 
 	_, err = handleFreeze(context.Background(), s, &bsvjson.FreezeCmd{TxID: tx.TxID(), Vout: 5}, nil)
+	require.Error(t, err)
+}
+
+func TestHandleUnfreezeUsesRealUTXOHash(t *testing.T) {
+	tx := bt.NewTx()
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	spy := &freezeSpy{tx: tx}
+	s := &RPCServer{logger: mocklogger.NewTestLogger(), utxoStore: spy, settings: &settings.Settings{}}
+
+	_, err := handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: tx.TxID(), Vout: 0}, nil)
+	require.NoError(t, err)
+	require.Len(t, spy.unfrozen, 1)
+
+	want, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[0], 0)
+	require.NoError(t, err)
+
+	assert.Equal(t, want, spy.unfrozen[0].UTXOHash)
+	assert.NotEqual(t, tx.TxIDChainHash(), spy.unfrozen[0].UTXOHash)
+
+	_, err = handleUnfreeze(context.Background(), s, &bsvjson.UnfreezeCmd{TxID: tx.TxID(), Vout: 5}, nil)
 	require.Error(t, err)
 }

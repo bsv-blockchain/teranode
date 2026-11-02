@@ -1324,6 +1324,40 @@ func jsonAuthFail(w http.ResponseWriter) {
 	http.Error(w, "401 Unauthorized.", http.StatusUnauthorized)
 }
 
+// serveHTTP authenticates an incoming HTTP request and hands it to jsonRPCRead
+// with the role that the credential grants.
+func (s *RPCServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	// Extract trace context from incoming request headers
+	ctx := r.Context()
+	ctx = otel.GetTextMapPropagator().Extract(ctx, otelPropagation.HeaderCarrier(r.Header))
+
+	// Update request with the new context
+	r = r.WithContext(ctx)
+
+	w.Header().Set("Connection", "close")
+	w.Header().Set("Content-Type", "application/json")
+
+	r.Close = true
+
+	// Limit the number of connections to max allowed.
+	if s.limitConnections(w, r.RemoteAddr) {
+		return
+	}
+
+	// Keep track of the number of connected clients.
+	s.incrementClients()
+	defer s.decrementClients()
+	_, isAdmin, err := s.checkAuth(r, true)
+
+	if err != nil {
+		jsonAuthFail(w)
+		return
+	}
+
+	// Read and respond to the request.
+	s.jsonRPCRead(w, r, isAdmin)
+}
+
 // Start initializes and launches the RPC server, binding to the configured network addresses
 // and beginning to accept and process client connections.
 //
@@ -1393,37 +1427,7 @@ func (s *RPCServer) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	rpcServeMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Extract trace context from incoming request headers
-		ctx := r.Context()
-		ctx = otel.GetTextMapPropagator().Extract(ctx, otelPropagation.HeaderCarrier(r.Header))
-
-		// Update request with the new context
-		r = r.WithContext(ctx)
-
-		w.Header().Set("Connection", "close")
-		w.Header().Set("Content-Type", "application/json")
-
-		r.Close = true
-
-		// Limit the number of connections to max allowed.
-		if s.limitConnections(w, r.RemoteAddr) {
-			return
-		}
-
-		// Keep track of the number of connected clients.
-		s.incrementClients()
-		defer s.decrementClients()
-		_, isAdmin, err := s.checkAuth(r, true)
-
-		if err != nil {
-			jsonAuthFail(w)
-			return
-		}
-
-		// Read and respond to the request.
-		s.jsonRPCRead(w, r, isAdmin)
-	})
+	rpcServeMux.HandleFunc("/", s.serveHTTP)
 
 	for _, listener := range s.listeners {
 		s.wg.Add(1)

@@ -18,6 +18,18 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — action required before upgrading
 
+- **The limited RPC credential can no longer call `freeze`, `unfreeze` or `reassign`.**
+  These methods are now admin-only. A request made with `rpc_limit_user` and
+  `rpc_limit_pass` gets "limited user not authorized for this method". The limited
+  role still has the read-only methods and `sendrawtransaction`, `submitblock`,
+  `getminingcandidate` and `submitminingsolution`. Operators who run alert
+  administration with the limited credential must use the admin credential
+  (`rpc_user` and `rpc_pass`) instead. Every method is now classified in
+  `rpcAccessPolicy`, and a method without an entry is denied to the limited role.
+  `freeze` and `unfreeze` also now compute the real UTXO hash of the output, and they
+  fail with an error if the transaction is not in the UTXO store. Before, they sent
+  the transaction ID as the hash. (#2095)
+
 - **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
   recovery if a transaction affected by rollback or reverse processing is still
   confirmed in any current-chain block, or if that check fails. The WAL remains
