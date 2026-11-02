@@ -43,7 +43,7 @@ func TestRecheckIdempotentMarkersKeepsAnsweredItemsOnFailure(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, txn.Rollback())
 
-		retryable, aborted := store.recheckIdempotentMarkers(txn, batch, resultMap, []int{1}, validationErrors)
+		retryable, aborted := store.recheckIdempotentMarkers(context.Background(), txn, batch, resultMap, []int{1}, validationErrors)
 		require.False(t, retryable)
 		require.True(t, aborted, "fixture: the re-check statement must fail")
 

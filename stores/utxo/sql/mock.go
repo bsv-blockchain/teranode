@@ -277,6 +277,9 @@ func SetupCreatePostgresSchemaSuccessMocks(mockDB *MockDB) {
 	mockDB.On("Exec", mock.MatchedBy(func(query string) bool {
 		return strings.Contains(query, "CREATE TABLE IF NOT EXISTS deleted_children")
 	}), mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
+	mockDB.On("Exec", "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS conflict_owner BYTEA", mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
+	mockDB.On("Exec", "ALTER TABLE conflict_intents ADD COLUMN IF NOT EXISTS recovery BYTEA", mock.Anything).Return(sqlmock.NewResult(0, 0), nil)
+
 }
 
 // SetupCreatePostgresSchemaErrorMocks configures mock expectations for schema creation error at specific step
