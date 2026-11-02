@@ -1671,10 +1671,11 @@ func TestServerStart_BanReachesThePeerLoopWhileRunning(t *testing.T) {
 // ban was recorded, but the banned peer stayed connected.
 func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		ban    string
-		banned []string
-		spared []string
+		name          string
+		ban           string
+		banned        []string // outbound peers
+		bannedInbound []string
+		spared        []string
 	}{
 		{
 			name:   "a host ban disconnects the peer at that host",
@@ -1693,6 +1694,16 @@ func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
 			ban:    "2001:db8::1",
 			banned: []string{"[2001:db8::1]:8333"},
 			spared: []string{"[2001:db8::2]:8333"},
+		},
+		{
+			// The peer loop answers one request by disconnecting one inbound
+			// peer and stops there, so the outbound peer at the same host is
+			// only reached by asking again.
+			name:          "a host ban disconnects both the inbound and the outbound peer at that host",
+			ban:           "10.0.0.1",
+			banned:        []string{"10.0.0.1:8333"},
+			bannedInbound: []string{"10.0.0.1:50000"},
+			spared:        []string{"10.0.0.2:8333"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1715,6 +1726,10 @@ func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
 			for i, addr := range append(append([]string{}, tc.banned...), tc.spared...) {
 				keys[addr] = int32(i)
 				state.outboundPeers.Set(int32(i), newTestOutboundPeer(t, s, addr))
+			}
+
+			for i, addr := range tc.bannedInbound {
+				state.inboundPeers.Set(int32(i), newTestInboundPeer(t, s, addr))
 			}
 
 			// Serve the peer loop's query channel, as peerHandler does.
@@ -1742,6 +1757,13 @@ func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
 					_, still := state.outboundPeers.Get(id)
 					return !still
 				}, 5*time.Second, 10*time.Millisecond, "the peer at %s is banned and must be disconnected", addr)
+			}
+
+			for i, addr := range tc.bannedInbound {
+				require.Eventually(t, func() bool {
+					_, still := state.inboundPeers.Get(int32(i))
+					return !still
+				}, 5*time.Second, 10*time.Millisecond, "the inbound peer at %s is banned and must be disconnected", addr)
 			}
 
 			for _, addr := range tc.spared {
@@ -1815,5 +1837,66 @@ func TestBanHandlers_DoNotBlockThePeerLoopWhenTheBanListenerIsBehind(t *testing.
 			require.True(t, banned, "the host is banned in the peer loop's own state")
 			require.True(t, bl.IsBanned("10.0.0.1:8333"), "and on the shared ban list")
 		})
+	}
+}
+
+// newTestInboundPeer builds an inbound serverPeer whose connection reports addr as its remote end.
+// An inbound peer only learns its address from its connection.
+func newTestInboundPeer(t *testing.T, srv *server, addr string) *serverPeer {
+	t.Helper()
+
+	remote, err := net.ResolveTCPAddr("tcp", addr)
+	require.NoError(t, err)
+
+	ours, theirs := net.Pipe()
+
+	t.Cleanup(func() {
+		_ = ours.Close()
+		_ = theirs.Close()
+	})
+
+	p := peer.NewInboundPeer(ulogger.TestLogger{}, settings.NewSettings(), &peer.Config{})
+	p.AssociateConnection(addressedConn{Conn: ours, remote: remote})
+
+	return &serverPeer{Peer: p, server: srv}
+}
+
+// A ban landing while the server shuts down never strands the listener. With the peer loop gone
+// nothing serves s.query, so a plain send on it would block the listener for good.
+func TestBanListEvent_ListenerGivesUpAtShutdown(t *testing.T) {
+	bl := emptyWritableBanList(t)
+
+	s := &server{
+		ctx:     t.Context(),
+		logger:  ulogger.TestLogger{},
+		banList: bl,
+		banChan: bl.Subscribe(),
+		query:   make(chan interface{}),
+		quit:    make(chan struct{}),
+	}
+
+	close(s.quit)
+
+	require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
+
+	var event p2p.BanEvent
+
+	select {
+	case event = <-s.banChan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ban list must publish the ban")
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		s.handleBanEvent(context.Background(), event)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ban listener must give up once the server is shutting down")
 	}
 }
