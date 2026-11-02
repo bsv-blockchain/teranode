@@ -3351,34 +3351,30 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 // reports a deadlock to retry the batch on; aborted reports that every item has
 // already been answered with a storage error.
 func (s *Store) recheckIdempotentMarkers(ctx context.Context, txn *sql.Tx, batch []*batchSpend, resultMap map[int]*spendSelectResult, idxs []int, validationErrors map[int]error) (retryable, aborted bool) {
-	var sb strings.Builder
-
-	sb.WriteString(`SELECT v.batch_idx FROM (VALUES `)
-
-	args := make([]interface{}, 0, len(idxs)*3)
-	pidx := 1
-
-	for i, bIdx := range idxs {
-		if i > 0 {
-			sb.WriteByte(',')
-		}
-
-		sb.WriteString(fmt.Sprintf("($%d::int,$%d::bytea,$%d::int)", pidx, pidx+1, pidx+2))
-		args = append(args, resultMap[bIdx].transactionID, batch[bIdx].spend.SpendingData.Bytes(), bIdx)
-		pidx += 3
-	}
-
-	sb.WriteString(`) AS v(transaction_id,spending_data,batch_idx)
+	// The items go in as three parallel arrays, so the statement is one
+	// constant whatever the batch size.
+	const q = `SELECT v.batch_idx
+		FROM unnest($1::bigint[], $2::bytea[], $3::bigint[]) AS v(transaction_id, spending_data, batch_idx)
 		WHERE EXISTS (SELECT 1 FROM deleted_children d
 		              WHERE d.parent_id = v.transaction_id
-		                AND d.child_hash = substring(v.spending_data from 1 for 32))`)
+		                AND d.child_hash = substring(v.spending_data from 1 for 32))`
+
+	transactionIDs := make([]int64, 0, len(idxs))
+	spendingData := make([][]byte, 0, len(idxs))
+	batchIdxs := make([]int64, 0, len(idxs))
+
+	for _, bIdx := range idxs {
+		transactionIDs = append(transactionIDs, int64(resultMap[bIdx].transactionID))
+		spendingData = append(spendingData, batch[bIdx].spend.SpendingData.Bytes())
+		batchIdxs = append(batchIdxs, int64(bIdx))
+	}
 
 	// An item already answered keeps its answer (failSpendBatch).
 	failAll := func(err error) {
 		failSpendBatch(batch, validationErrors, "[Spend] failed: idempotent marker re-check", err)
 	}
 
-	rows, err := txn.QueryContext(ctx, sb.String(), args...)
+	rows, err := txn.QueryContext(ctx, q, pq.Array(transactionIDs), pq.ByteaArray(spendingData), pq.Array(batchIdxs))
 	if err != nil {
 		if isDeadlock(err) {
 			return true, false

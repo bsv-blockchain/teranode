@@ -402,12 +402,12 @@ func finishPrune(txn *sql.Tx, result sql.Result) (int64, error) {
 	return deleted, nil
 }
 
-// unverifiedClaimFrom / unverifiedClaimCondition together select an input of
-// the transaction row in scope whose parent record is present but whose output
-// does not carry well-formed spending data: no such output row, NULL spending
-// data, or fewer than the 36 bytes of txid and vin. The row in scope is joined in
-// between them by alias (unverifiedClaimChild, unverifiedClaimTransactions), and
-// everything stays a compile-time constant so no query is assembled at run time.
+// The unverified-claim clause, written out in full in each query below so
+// every statement is one literal (TestUnverifiedClaimClauseIsIdentical keeps
+// the copies identical), selects an input of the transaction row in scope
+// whose parent record is present but whose output does not carry well-formed
+// spending data: no such output row, NULL spending data, or fewer than the 36
+// bytes of txid and vin.
 //
 // The clause gates the marker INSERT and the DELETE alike on both pruning paths,
 // so a held-back child gets no marker anywhere: the spend path answers a marker
@@ -419,18 +419,6 @@ func finishPrune(txn *sql.Tx, result sql.Result) (int64, error) {
 // loser always has an input that looks like a rolled-back claim, and holding it
 // back would keep it forever. It needs no marker for those inputs: a replay of
 // it meets the winner's spend and is stored as conflicting again.
-const (
-	unverifiedClaimFrom = `SELECT 1
-      FROM inputs hi
-      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
-      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
-      WHERE hi.transaction_id = `
-	unverifiedClaimCondition = `.id
-        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36)`
-
-	unverifiedClaimChild        = unverifiedClaimFrom + `child` + unverifiedClaimCondition + ` AND NOT child.conflicting`
-	unverifiedClaimTransactions = unverifiedClaimFrom + `transactions` + unverifiedClaimCondition + ` AND NOT transactions.conflicting`
-)
 
 // pruneWithoutDefensiveCheck marks and deletes every transaction past its
 // expiration, with no child-stability verification.
@@ -456,7 +444,12 @@ func (s *Service) pruneWithoutDefensiveCheck(ctx context.Context, blockHeight ui
   WHERE child.delete_at_height IS NOT NULL
     AND child.delete_at_height <= $1
     AND (child.unmined_since IS NULL OR child.conflicting)
-    AND NOT EXISTS (` + unverifiedClaimChild + `)
+    AND NOT EXISTS (SELECT 1
+      FROM inputs hi
+      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+      WHERE hi.transaction_id = child.id
+        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT child.conflicting)
   ON CONFLICT (parent_id, child_hash) DO NOTHING`
 
 	// A candidate whose claimed parent output is present but unspent, or
@@ -470,7 +463,12 @@ func (s *Service) pruneWithoutDefensiveCheck(ctx context.Context, blockHeight ui
   WHERE delete_at_height IS NOT NULL
     AND delete_at_height <= $1
     AND (unmined_since IS NULL OR conflicting)
-    AND NOT EXISTS (` + unverifiedClaimTransactions + `)`
+    AND NOT EXISTS (SELECT 1
+      FROM inputs hi
+      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+      WHERE hi.transaction_id = transactions.id
+        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT transactions.conflicting)`
 
 	// The rows the DELETE is about to refuse: its own predicate with the
 	// hold-back clause inverted. It runs before the DELETE, in the same
@@ -480,7 +478,12 @@ func (s *Service) pruneWithoutDefensiveCheck(ctx context.Context, blockHeight ui
   WHERE delete_at_height IS NOT NULL
     AND delete_at_height <= $1
     AND (unmined_since IS NULL OR conflicting)
-    AND EXISTS (` + unverifiedClaimTransactions + `)`
+    AND EXISTS (SELECT 1
+      FROM inputs hi
+      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+      WHERE hi.transaction_id = transactions.id
+        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT transactions.conflicting)`
 
 	txn, err := s.db.BeginTx(ctx, pruneTxOptions)
 	if err != nil {
@@ -587,11 +590,21 @@ func (s *Service) pruneWithDefensiveCheck(ctx context.Context, blockHeight uint3
   JOIN outputs o ON o.transaction_id = parent.id
     AND o.idx = i.previous_tx_idx
     AND substr(o.spending_data, 1, 32) = child.hash
-  WHERE NOT EXISTS (` + unverifiedClaimChild + `)
+  WHERE NOT EXISTS (SELECT 1
+      FROM inputs hi
+      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+      WHERE hi.transaction_id = child.id
+        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT child.conflicting)
   ON CONFLICT (parent_id, child_hash) DO NOTHING`
 
 	const deleteQuery = `DELETE FROM transactions WHERE id IN (SELECT id FROM utxo_prune_candidates)
-    AND NOT EXISTS (` + unverifiedClaimTransactions + `)`
+    AND NOT EXISTS (SELECT 1
+      FROM inputs hi
+      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+      WHERE hi.transaction_id = transactions.id
+        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT transactions.conflicting)`
 
 	// The candidates the DELETE is about to refuse: its own predicate with the
 	// hold-back clause inverted, run before it for the reason given in
@@ -599,7 +612,12 @@ func (s *Service) pruneWithDefensiveCheck(ctx context.Context, blockHeight uint3
 	// counted: it never made the candidates table.
 	const heldBackQuery = `SELECT count(*) FROM utxo_prune_candidates candidate
   JOIN transactions ON transactions.id = candidate.id
-  WHERE EXISTS (` + unverifiedClaimTransactions + `)`
+  WHERE EXISTS (SELECT 1
+      FROM inputs hi
+      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+      WHERE hi.transaction_id = transactions.id
+        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT transactions.conflicting)`
 
 	createCandidates := createCandidatesPortable
 	if s.engine == "postgres" {

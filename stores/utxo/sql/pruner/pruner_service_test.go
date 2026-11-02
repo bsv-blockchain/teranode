@@ -3,6 +3,7 @@ package pruner
 import (
 	"context"
 	"database/sql"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -495,4 +496,27 @@ func TestService_EdgeCases(t *testing.T) {
 		assert.NoError(t, err)
 		assert.GreaterOrEqual(t, recordsProcessed, int64(0))
 	})
+}
+
+// TestUnverifiedClaimClauseIsIdentical: the unverified-claim clause is written
+// out in full in each pruning query, so every statement is one literal. The
+// marker INSERT and the DELETE must hold back exactly the same children, or a
+// child would be deleted without its marker, or marked and kept. This pins the
+// copies to one text: twice scoped to child, four times to transactions.
+func TestUnverifiedClaimClauseIsIdentical(t *testing.T) {
+	src, err := os.ReadFile("pruner_service.go")
+	require.NoError(t, err)
+
+	clause := func(alias string) string {
+		return `SELECT 1
+      FROM inputs hi
+      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+      WHERE hi.transaction_id = ` + alias + `.id
+        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT ` + alias + `.conflicting`
+	}
+
+	require.Equal(t, 2, strings.Count(string(src), clause("child")))
+	require.Equal(t, 4, strings.Count(string(src), clause("transactions")))
+	require.Equal(t, 6, strings.Count(string(src), "LEFT JOIN outputs ho ON"), "every copy of the clause must match the text above")
 }
