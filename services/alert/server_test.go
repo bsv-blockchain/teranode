@@ -578,16 +578,24 @@ func TestServer_Start_survivesOversizedSyncFrame(t *testing.T) {
 	server := New(ulogger.TestLogger{}, tSettings, nil, nil, nil, nil, nil)
 	require.NoError(t, server.loadConfig(ctx, models.BaseModels, true))
 
-	startErr := make(chan error, 1)
-	go func() { startErr <- server.Start(ctx, make(chan struct{})) }()
+	// startDone is closed once Start returns, so both openStream and the Cleanup can wait on it
+	var startErr error
+
+	startDone := make(chan struct{})
+
+	go func() {
+		startErr = server.Start(ctx, make(chan struct{}))
+		close(startDone)
+	}()
+
 	t.Cleanup(func() {
 		cancel()
 
 		// the library's DHT bootstrap loop ignores ctx, so a server that never reached the
 		// attacker host would block here forever
 		select {
-		case err := <-startErr:
-			require.NoError(t, err)
+		case <-startDone:
+			require.NoError(t, startErr)
 		case <-time.After(30 * time.Second):
 			t.Error("alert server did not stop")
 		}
@@ -598,19 +606,26 @@ func TestServer_Start_survivesOversizedSyncFrame(t *testing.T) {
 	attacker.Peerstore().AddAddr(serverID, ma.StringCast(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", port)), peerstore.PermanentAddrTTL)
 
 	// the handler is only registered once the server's DHT has bootstrapped, so retry until
-	// protocol negotiation succeeds
+	// protocol negotiation succeeds, and fail at once with Start's error if it gave up first
 	openStream := func(t *testing.T) network.Stream {
-		var stream network.Stream
+		deadline := time.After(30 * time.Second)
 
-		require.Eventually(t, func() bool {
-			var streamErr error
-			stream, streamErr = attacker.NewStream(ctx, serverID, protocolID)
-			return streamErr == nil
-		}, 30*time.Second, 100*time.Millisecond)
+		for {
+			stream, err := attacker.NewStream(ctx, serverID, protocolID)
+			if err == nil {
+				t.Cleanup(func() { _ = stream.Reset() })
 
-		t.Cleanup(func() { _ = stream.Reset() })
+				return stream
+			}
 
-		return stream
+			select {
+			case <-startDone:
+				require.FailNow(t, "alert server stopped before its sync handler was reachable", "start error: %v", startErr)
+			case <-deadline:
+				require.FailNow(t, "alert sync handler not reachable", "last stream error: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
 	}
 
 	oversizedFrames := map[string][]byte{
