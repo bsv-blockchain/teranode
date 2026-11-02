@@ -122,6 +122,8 @@ func newInvHarness(t *testing.T, tSettings *settings.Settings, store utxo.Store,
 	}
 	sm.headersFirstMode.Store(false)
 	sm.initInvQueue(invQueueMaxHashes(ulogger.TestLogger{}, tSettings))
+	sm.invLookupWorkers = invLookupWorkerCount(ulogger.TestLogger{}, tSettings)
+	sm.invHandlerSlots = int64(invHandlerSlotCount(ulogger.TestLogger{}, tSettings))
 
 	state := &peerSyncState{
 		requestQueue: txmap.NewSyncedSlice[wire.InvVect](wire.MaxInvPerMsg),

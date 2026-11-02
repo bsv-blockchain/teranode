@@ -293,7 +293,7 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   log the failure and run with no store, then panic on first use.
 
 - **The legacy service now bounds relayed transactions and transaction announcements,
-  with two new settings.** Transactions relayed by legacy peers are validated by a fixed
+  with four new settings.** Transactions relayed by legacy peers are validated by a fixed
   pool of workers, twice the largest of `utxostore_storeBatcherSize`,
   `utxostore_spendBatcherSize` and `validator_sendBatchSize`, and never fewer than 1024
   (4096 with the defaults in `settings.conf`). They wait in a queue four times that long,
@@ -314,13 +314,14 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   there to `legacy_invQueueMaxHashes` (default 400,000 hashes, eight maximum-size
   announcements; a value below 4096 falls back to the default), so the cap covers them
   while they wait for the sync manager as well as while they wait for a lookup. A
-  per-peer share of 100,000 hashes applies once the peer is resolved, and sixteen workers
-  take whatever is queued and look it up in UTXO store batch reads of up to 4096 hashes,
+  per-peer share of 100,000 hashes applies once the peer is resolved, and
+  `legacy_invLookupWorkers` workers (default 16) take whatever is queued and look it up in UTXO store batch reads of up to 4096 hashes,
   checking the set of hashes already asked for before the read, so a transaction every
-  peer announces is read about once instead of once per peer. Two fixed limits sit beside
-  the cap: at most 1,024 goroutines handle messages carrying only transaction
-  announcements at once, and each peer's queue of missing transactions waiting for a
-  getdata holds at most 50,000. Announcements over any of these limits are dropped and
+  peer announces is read about once instead of once per peer. Two limits sit beside
+  the cap: at most `legacy_invHandlerSlots` goroutines (default 1,024) handle messages
+  carrying only transaction announcements at once, and each peer's queue of missing
+  transactions waiting for a getdata holds at most 50,000. A value below one for either
+  new setting falls back to its default with a warning. Announcements over any of these limits are dropped and
   counted in hashes in the new `teranode_legacy_netsync_inv_dropped_total` (label
   `reason`: `peer_share`, `node_cap`, `handlers_busy`, `request_queue`, `lookup_failed`),
   and the new gauge `teranode_legacy_netsync_inv_queued_hashes` shows what the cap

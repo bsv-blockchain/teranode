@@ -69,6 +69,42 @@ func TestInvQueueMaxHashes_FloorsAtOneChunk(t *testing.T) {
 	require.Equal(t, txInvLookupChunk, invQueueMaxHashes(ulogger.TestLogger{}, tSettings), "one chunk is the floor")
 }
 
+// TestInvLookupWorkerCount_LoadsTheSettingAndFloorsAtOne pins that
+// settings/settings.go loads legacy_invLookupWorkers with its default, and that
+// a value below one falls back to it: no workers would hold every queued
+// announcement against the cap forever.
+func TestInvLookupWorkerCount_LoadsTheSettingAndFloorsAtOne(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	require.Equal(t, defaultInvLookupWorkers, tSettings.Legacy.InvLookupWorkers, "settings.go loads the default")
+
+	tSettings.Legacy.InvLookupWorkers = 3
+	require.Equal(t, 3, invLookupWorkerCount(ulogger.TestLogger{}, tSettings))
+
+	tSettings.Legacy.InvLookupWorkers = 0
+	require.Equal(t, defaultInvLookupWorkers, invLookupWorkerCount(ulogger.TestLogger{}, tSettings), "zero falls back to the default")
+
+	tSettings.Legacy.InvLookupWorkers = -1
+	require.Equal(t, defaultInvLookupWorkers, invLookupWorkerCount(ulogger.TestLogger{}, tSettings), "a negative value falls back to the default")
+}
+
+// TestInvHandlerSlotCount_LoadsTheSettingAndFloorsAtOne pins that
+// settings/settings.go loads legacy_invHandlerSlots with its default, and that
+// a value below one falls back to it rather than dropping every transaction
+// announcement or meaning unbounded.
+func TestInvHandlerSlotCount_LoadsTheSettingAndFloorsAtOne(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	require.Equal(t, defaultInvHandlerSlots, tSettings.Legacy.InvHandlerSlots, "settings.go loads the default")
+
+	tSettings.Legacy.InvHandlerSlots = 3
+	require.Equal(t, 3, invHandlerSlotCount(ulogger.TestLogger{}, tSettings))
+
+	tSettings.Legacy.InvHandlerSlots = 0
+	require.Equal(t, defaultInvHandlerSlots, invHandlerSlotCount(ulogger.TestLogger{}, tSettings), "zero is not unbounded")
+
+	tSettings.Legacy.InvHandlerSlots = -1
+	require.Equal(t, defaultInvHandlerSlots, invHandlerSlotCount(ulogger.TestLogger{}, tSettings), "a negative value falls back to the default")
+}
+
 // TestAdmitTxInvs_OneMaximumMessageIsAdmittedWhole pins the case the first
 // draft of the design failed: a single 50,000-hash announcement from an honest
 // peer on an idle node is queued whole, thirteen chunks, nothing dropped.
@@ -365,12 +401,17 @@ func TestNewInvMsg_KeepsNothingOfTheDecodedMessage(t *testing.T) {
 // accumulation the review of PR 2045 found: each inv message gets a handler
 // goroutine, and while the blockchain service is slow every handler waits in
 // it. Here the FSM lookup is held. A message carrying only transaction items
-// gets a handler only while fewer than invHandlerSlots are running; past that
+// gets a handler only while fewer than legacy_invHandlerSlots are running; past that
 // it is dropped, counted, and its charge given back. A message carrying a
 // block item still gets one with every slot taken. Released, the waiting
 // handlers queue their chunks and give their slots back.
 func TestDispatchInvMsg_BoundsHandlersWaitingOnTheBlockchain(t *testing.T) {
-	sm, p, state, _ := newInvHarness(t, test.CreateBaseTestSettings(t), nil, blockchain2.FSMStateRUNNING)
+	const slots = 8
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Legacy.InvHandlerSlots = slots
+
+	sm, p, state, _ := newInvHarness(t, tSettings, nil, blockchain2.FSMStateRUNNING)
 
 	var (
 		gate      = make(chan struct{})
@@ -403,13 +444,13 @@ func TestDispatchInvMsg_BoundsHandlersWaitingOnTheBlockchain(t *testing.T) {
 
 	before := droppedInvs(invDropHandlersBusy)
 
-	for i := 0; i < invHandlerSlots+over; i++ {
+	for i := 0; i < slots+over; i++ {
 		sm.dispatchInvMsg(sm.newInvMsg(oneTxInv(i), p))
 	}
 
-	require.Equal(t, int64(invHandlerSlots), sm.invHandlers.Load(), "no more handlers than the slots")
+	require.Equal(t, int64(slots), sm.invHandlers.Load(), "no more handlers than the slots")
 	require.Equal(t, before+over, droppedInvs(invDropHandlersBusy), "the messages over the slots are dropped and counted")
-	require.Equal(t, int64(invHandlerSlots), sm.invQueued.Load(), "the waiting handlers' hashes stay charged, the dropped ones do not")
+	require.Equal(t, int64(slots), sm.invQueued.Load(), "the waiting handlers' hashes stay charged, the dropped ones do not")
 
 	blockInv := wire.NewMsgInv()
 	require.NoError(t, blockInv.AddInvVect(wire.NewInvVect(wire.InvTypeBlock, &blockHash)))
@@ -420,8 +461,8 @@ func TestDispatchInvMsg_BoundsHandlersWaitingOnTheBlockchain(t *testing.T) {
 	openGate()
 
 	require.Eventually(t, func() bool { return sm.invHandlers.Load() == 0 }, 5*time.Second, 5*time.Millisecond, "handlers give their slots back")
-	require.Len(t, sm.invQueue, invHandlerSlots, "each released handler queued its chunk")
-	require.Equal(t, int64(invHandlerSlots), state.queuedInvs.Load())
+	require.Len(t, sm.invQueue, slots, "each released handler queued its chunk")
+	require.Equal(t, int64(slots), state.queuedInvs.Load())
 }
 
 // TestLookupInvBatch_ConcurrentWorkersClaimEachHashOnce pins the claim the

@@ -19,25 +19,27 @@ import (
 // items out of the decoded message in chunks and charges each chunk to the
 // node cap before the message goes to the block handler (newInvMsg). The
 // handler goroutine charges each chunk to the peer's share and pushes it onto
-// one node-wide queue without waiting (queueTxChunks), and sixteen workers
-// drain the queue into UTXO store batch reads.
+// one node-wide queue without waiting (queueTxChunks), and
+// legacy_invLookupWorkers workers drain the queue into UTXO store batch reads.
 //
 // What the path holds, from the read loop until a worker finishes with a
 // chunk, is the cap, legacy_invQueueMaxHashes, times about 40 bytes a hash;
-// at most invHandlerSlots handler goroutines that carry only transaction items;
+// at most legacy_invHandlerSlots handler goroutines that carry only
+// transaction items;
 // and, for each peer, at most maxRequestedTxns hashes found missing and waiting
 // in its request queue for a getdata.
 const (
-	// invLookupWorkers is the number of goroutines that take announcements
-	// off invQueue and look them up in the UTXO store. It caps the store
-	// reads in flight from this path, which the review of PR 2045 asked for,
-	// and is not a memory bound (a batch coalesces to under two chunks, so
-	// sixteen workers hold at most about 20 MB in flight),
-	// so it is a constant rather than a setting.
-	invLookupWorkers = 16
+	// defaultInvLookupWorkers is the fallback for a legacy_invLookupWorkers
+	// below one, and the same number as the setting's default in
+	// settings/settings.go. The workers take announcements off invQueue and
+	// look them up in the UTXO store, so their number caps the store reads in
+	// flight from this path; a batch coalesces to under two chunks, so sixteen
+	// hold at most about 20 MB.
+	defaultInvLookupWorkers = 16
 
-	// invHandlerSlots is the most handleInvMsg goroutines that carry only
-	// transaction items at once. A handler waits on the blockchain service
+	// defaultInvHandlerSlots is the fallback for a legacy_invHandlerSlots
+	// below one, and the same number as the setting's default in
+	// settings/settings.go. A handler waits on the blockchain service
 	// (current(), and the cached FSM state), so a slow blockchain service
 	// leaves one waiting per message; the node cap bounds the hashes they
 	// carry but not their stacks, and a flood of one-hash messages costs a
@@ -46,7 +48,7 @@ const (
 	// peers, so 1,024 is far above what an honest load keeps busy, and costs
 	// at most tens of megabytes of stacks. A message carrying a block item
 	// does not need a slot and is never refused one.
-	invHandlerSlots = 1024
+	defaultInvHandlerSlots = 1024
 
 	// invPeerShare is the most announced hashes one peer may have queued or
 	// being looked up at once: two maximum-size announcements. It has to hold
@@ -99,6 +101,34 @@ func invQueueMaxHashes(logger ulogger.Logger, tSettings *settings.Settings) int 
 		logger.Warnf("[legacy] legacy_invQueueMaxHashes=%d is below one chunk of %d, using the default %d", n, txInvLookupChunk, defaultInvQueueMaxHashes)
 
 		return defaultInvQueueMaxHashes
+	}
+
+	return n
+}
+
+// invLookupWorkerCount returns legacy_invLookupWorkers, or the default with a
+// warning when the setting is below one: no workers would leave every queued
+// announcement charged to the cap forever.
+func invLookupWorkerCount(logger ulogger.Logger, tSettings *settings.Settings) int {
+	n := tSettings.Legacy.InvLookupWorkers
+	if n < 1 {
+		logger.Warnf("[legacy] legacy_invLookupWorkers=%d is below one, using the default %d", n, defaultInvLookupWorkers)
+
+		return defaultInvLookupWorkers
+	}
+
+	return n
+}
+
+// invHandlerSlotCount returns legacy_invHandlerSlots, or the default with a
+// warning when the setting is below one: no slots would drop every
+// transaction announcement, and zero is not unbounded.
+func invHandlerSlotCount(logger ulogger.Logger, tSettings *settings.Settings) int {
+	n := tSettings.Legacy.InvHandlerSlots
+	if n < 1 {
+		logger.Warnf("[legacy] legacy_invHandlerSlots=%d is below one, using the default %d", n, defaultInvHandlerSlots)
+
+		return defaultInvHandlerSlots
 	}
 
 	return n
@@ -288,7 +318,7 @@ func (sm *SyncManager) giveBackTxChunk(c *invChunk, reason string) {
 // handleInvMsg never holds the block handler up. A message carrying a block
 // item always gets one, as on main: a block announcement is never dropped. A
 // message carrying only transaction items gets one only while fewer than
-// invHandlerSlots such handlers are running; otherwise its chunks are dropped
+// sm.invHandlerSlots such handlers are running; otherwise its chunks are dropped
 // under handlers_busy and their node charge given back.
 func (sm *SyncManager) dispatchInvMsg(msg *invMsg) {
 	if len(msg.inv.InvList) > 0 {
@@ -301,7 +331,7 @@ func (sm *SyncManager) dispatchInvMsg(msg *invMsg) {
 		return
 	}
 
-	if sm.invHandlers.Add(1) > invHandlerSlots {
+	if sm.invHandlers.Add(1) > sm.invHandlerSlots {
 		sm.invHandlers.Add(-1)
 		sm.giveBackTxChunks(msg.txChunks, invDropHandlersBusy)
 
@@ -522,7 +552,7 @@ func (sm *SyncManager) sendInvRequests(touched []*invChunk) {
 }
 
 // invLookupWorker looks up queued announcements until quit closes.
-// blockHandler starts invLookupWorkers of them.
+// blockHandler starts sm.invLookupWorkers of them.
 func (sm *SyncManager) invLookupWorker() {
 	for {
 		select {

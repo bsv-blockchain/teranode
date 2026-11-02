@@ -869,17 +869,20 @@ type SyncManager struct {
 	awaitingRegistration   map[*peerpkg.Peer][]*txMsg
 
 	// invQueue holds chunks of transaction announcements for the
-	// invLookupWorkers workers, and invQueued the hashes in it or being looked
-	// up, bounded by invQueueCap from legacy_invQueueMaxHashes. See
-	// inv_queue.go. Built in New; the workers are started by blockHandler.
-	invQueue    chan *invChunk
-	invQueueCap int
-	invQueued   atomic.Int64
+	// invLookupWorkers workers, from legacy_invLookupWorkers, and invQueued
+	// the hashes in it or being looked up, bounded by invQueueCap from
+	// legacy_invQueueMaxHashes. See inv_queue.go. Built in New; the workers
+	// are started by blockHandler.
+	invQueue         chan *invChunk
+	invQueueCap      int
+	invQueued        atomic.Int64
+	invLookupWorkers int
 
 	// invHandlers is the handleInvMsg goroutines running for messages that
-	// carry only transaction items, bounded by invHandlerSlots in
-	// dispatchInvMsg.
-	invHandlers atomic.Int64
+	// carry only transaction items, bounded by invHandlerSlots, from
+	// legacy_invHandlerSlots, in dispatchInvMsg.
+	invHandlers     atomic.Int64
+	invHandlerSlots int64
 
 	// inFlightBlocks is the dedup half of the same block-admission gate whose
 	// other half is blockPrefetchBudget. It holds the hash of every block that is
@@ -3816,7 +3819,7 @@ func (sm *SyncManager) blockHandler() {
 	}
 
 	// So do the announcement lookup workers; see inv_queue.go.
-	for i := 0; i < invLookupWorkers; i++ {
+	for i := 0; i < sm.invLookupWorkers; i++ {
 		go sm.invLookupWorker()
 	}
 
@@ -4941,8 +4944,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 	logger.Infof("[legacy] relayed transactions: %d validation workers, queue of %d, %d MiB budget",
 		sm.relayTxWorkers, cap(sm.relayTxQueue), sm.relayTxBytesBudget>>20)
 	sm.initInvQueue(invCap)
-	logger.Infof("[legacy] transaction announcements: %d lookup workers, queue of %d hashes, per-peer share %d",
-		invLookupWorkers, sm.invQueueCap, sm.invShare())
+	sm.invLookupWorkers = invLookupWorkerCount(logger, tSettings)
+	sm.invHandlerSlots = int64(invHandlerSlotCount(logger, tSettings))
+	logger.Infof("[legacy] transaction announcements: %d lookup workers, %d handler slots, queue of %d hashes, per-peer share %d",
+		sm.invLookupWorkers, sm.invHandlerSlots, sm.invQueueCap, sm.invShare())
 	logger.Infof("[legacy] streaming pipeline active: download admission budget sized as %d block slots (maxBlocksInTransitPerPeer=%d x %d)",
 		capacity, tSettings.Legacy.MaxBlocksInTransitPerPeer, pipelineBlockSlotPeerAllowance)
 
