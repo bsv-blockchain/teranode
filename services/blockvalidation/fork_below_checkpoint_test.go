@@ -136,7 +136,7 @@ type passingSubtreeValidationClient struct {
 	checkBlockSubtreesCalls atomic.Int32
 }
 
-func (c *passingSubtreeValidationClient) CheckBlockSubtrees(context.Context, *model.Block, string, string) error {
+func (c *passingSubtreeValidationClient) CheckBlockSubtrees(context.Context, *model.Block, string, string, bool) error {
 	c.checkBlockSubtreesCalls.Add(1)
 	return nil
 }

@@ -2115,6 +2115,7 @@ func TestHandleGetMiningCandidateComprehensive(t *testing.T) {
 			NumTxs:              75,
 			SizeWithoutCoinbase: 25000,
 			MerkleProof:         [][]byte{{0xab, 0xcd}},
+			CoinbaseTx:          []byte{0x01, 0x00, 0x00, 0x00, 0xc0, 0xff, 0xee},
 		}
 
 		mockBlockAssemblyClient := &mockBlockAssemblyClient{
@@ -2154,9 +2155,10 @@ func TestHandleGetMiningCandidateComprehensive(t *testing.T) {
 		assert.True(t, ok)
 		assert.NotEmpty(t, coinbaseHex)
 
-		// Verify it's valid hex
-		_, err = hex.DecodeString(coinbaseHex)
-		assert.NoError(t, err)
+		// It is the coinbase block assembly keeps on the job, byte for byte, not one built here.
+		coinbase, err := hex.DecodeString(coinbaseHex)
+		require.NoError(t, err)
+		require.Equal(t, mockCandidate.CoinbaseTx, coinbase)
 	})
 
 	t.Run("successful mining candidate with verbosity 1 (includes subtree hashes)", func(t *testing.T) {
@@ -2311,7 +2313,7 @@ func TestHandleGetMiningCandidateComprehensive(t *testing.T) {
 		assert.Nil(t, result)
 	})
 
-	t.Run("coinbase creation error", func(t *testing.T) {
+	t.Run("candidate without its coinbase is an error", func(t *testing.T) {
 		mockCandidate := &model.MiningCandidate{
 			Id:                  []byte{0x01, 0x02, 0x03, 0x04},
 			PreviousHash:        []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff},
@@ -2337,7 +2339,7 @@ func TestHandleGetMiningCandidateComprehensive(t *testing.T) {
 			settings: &settings.Settings{
 				ChainCfgParams: &chaincfg.MainNetParams,
 				BlockAssembly: settings.BlockAssemblySettings{
-					MinerWalletPrivateKeys: []string{}, // Empty wallet addresses to trigger error
+					MinerWalletPrivateKeys: []string{"5KYZdUEo39z3FPrtuX2QbbwGnNP5zTd7yyr2SC1j299sBCnWjss"},
 				},
 			},
 		}
@@ -2352,7 +2354,7 @@ func TestHandleGetMiningCandidateComprehensive(t *testing.T) {
 		result, err := handleGetMiningCandidate(context.Background(), s, cmd, nil)
 		assert.Error(t, err)
 		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "no wallet addresses provided")
+		assert.Contains(t, err.Error(), "without its coinbase")
 	})
 }
 

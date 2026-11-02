@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/catchup"
@@ -72,6 +73,12 @@ type CatchupContext struct {
 	incompleteBlockHash     string // Block hash reported when a peer serves an incomplete block
 	corruptBlockHash        string // Block hash reported when a peer serves a corrupt block body
 	panicked                bool   // Set by the recover in catchup so releaseCatchupLock scores a panic as local
+
+	// keepBlockAssemblyHandoff is true when this run started from RUNNING and fetches no more
+	// than CatchupKeepBlockAssemblyMaxBlocks blocks. Subtree validation then keeps handing the
+	// run's unseen transactions to block assembly although the FSM is in CATCHINGBLOCKS, so a
+	// transaction that only a fork block carried is offered to the pool (issue 2067).
+	keepBlockAssemblyHandoff bool
 
 	// failedPeers records the peers that actually failed to serve data during this
 	// catchup cycle, deduplicated by peer ID (last error message wins). Written from
@@ -304,44 +311,12 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
-	// Step 5.5: If fork detected, reset mined_set on old blocks for transaction state consistency.
-	// This must run only AFTER the fork-depth and secret-mining safety checks pass; otherwise a peer
-	// merely announcing a deep or secretly-mined fork would un-stamp this node's own still-canonical
-	// txs for a fork that is then rejected, churning honest tx-mined state for no reorg (issue #1145).
-	if catchupCtx.forkDepth > 0 {
-		u.logger.Infof("[catchup][%s] Fork detected (depth %d), clearing mined_set on old blocks",
-			catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth)
-
-		currentHeight := catchupCtx.currentHeight
-		headers, _, err := u.blockchainClient.GetBlockHeadersByHeight(ctx,
-			catchupCtx.commonAncestorMeta.Height+1, currentHeight)
-		if err != nil {
-			u.logger.Errorf("[catchup][%s] Failed to get fork block headers: %v",
-				catchupCtx.blockUpTo.Hash().String(), err)
-		} else {
-			var clearErrors, notifyErrors int
-			for _, header := range headers {
-				if err := u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()); err != nil {
-					clearErrors++
-				} else {
-					// Send BlockMinedUnset notification to trigger immediate transaction status update
-					// This ensures BlockValidation processes the block immediately instead of waiting
-					// for the periodic job (which runs every 1 minute). Same pattern as InvalidateBlock RPC.
-					if err := u.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
-						Type: model.NotificationType_BlockMinedUnset,
-						Hash: header.Hash().CloneBytes(),
-					}); err != nil {
-						notifyErrors++
-					}
-				}
-			}
-			if clearErrors > 0 || notifyErrors > 0 {
-				u.logger.Errorf("[catchup][%s] Fork block cleanup: %d/%d clear failures, %d notification failures",
-					catchupCtx.blockUpTo.Hash().String(), clearErrors, len(headers), notifyErrors)
-			}
-			u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
-				catchupCtx.blockUpTo.Hash().String(), len(headers))
-		}
+	// Step 5.1: Refuse a chain with less work than ours, before anything is fetched or
+	// un-stamped. Both Bitcoin nodes treat such a peer as offering nothing of interest, so
+	// this ends the run as a no-op and charges no one (issue 2067). findCommonAncestor has
+	// already refused offered headers that do not link up, so the weight here is a chain's weight.
+	if u.offeredChainHasLessWork(catchupCtx) {
+		return nil
 	}
 
 	// Step 6: Filter headers to only those we need to catchup
@@ -381,6 +356,13 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
+	// Step 9.6: If a fork was detected, reset mined_set on the local blocks it replaces, for
+	// transaction state consistency. This runs only once every check on the offered chain has
+	// passed (fork depth, secret mining, linkage, checkpoints, difficulty), immediately before the
+	// blocks are fetched. Run any earlier, and a peer offering a fork that a later check rejects
+	// would un-stamp this node's own still-canonical txs for no reorg (issue #1145).
+	u.clearMinedSetOnForkedBlocks(ctx, catchupCtx)
+
 	// Step 10: Fetch and validate blocks
 	if err = u.fetchAndValidateBlocks(ctx, catchupCtx); err != nil {
 		return err
@@ -393,6 +375,50 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 	u.reportCatchupSuccess(ctx, catchupCtx.peerID, time.Since(catchupCtx.startTime))
 
 	return nil
+}
+
+// clearMinedSetOnForkedBlocks clears mined_set on the local blocks above the common ancestor and
+// sends a BlockMinedUnset notification for each, ahead of the reorg that fetchAndValidateBlocks
+// applies. It does nothing when the offered chain does not fork our own. Failures are logged, not
+// returned, as they were when this ran inline as step 5.5.
+func (u *Server) clearMinedSetOnForkedBlocks(ctx context.Context, catchupCtx *CatchupContext) {
+	if catchupCtx.forkDepth == 0 {
+		return
+	}
+
+	u.logger.Infof("[catchup][%s] Fork detected (depth %d), clearing mined_set on old blocks",
+		catchupCtx.blockUpTo.Hash().String(), catchupCtx.forkDepth)
+
+	currentHeight := catchupCtx.currentHeight
+	headers, _, err := u.blockchainClient.GetBlockHeadersByHeight(ctx,
+		catchupCtx.commonAncestorMeta.Height+1, currentHeight)
+	if err != nil {
+		u.logger.Errorf("[catchup][%s] Failed to get fork block headers: %v",
+			catchupCtx.blockUpTo.Hash().String(), err)
+	} else {
+		var clearErrors, notifyErrors int
+		for _, header := range headers {
+			if err := u.blockchainClient.ClearBlockMinedSet(ctx, header.Hash()); err != nil {
+				clearErrors++
+			} else {
+				// Send BlockMinedUnset notification to trigger immediate transaction status update
+				// This ensures BlockValidation processes the block immediately instead of waiting
+				// for the periodic job (which runs every 1 minute). Same pattern as InvalidateBlock RPC.
+				if err := u.blockchainClient.SendNotification(ctx, &blockchain_api.Notification{
+					Type: model.NotificationType_BlockMinedUnset,
+					Hash: header.Hash().CloneBytes(),
+				}); err != nil {
+					notifyErrors++
+				}
+			}
+		}
+		if clearErrors > 0 || notifyErrors > 0 {
+			u.logger.Errorf("[catchup][%s] Fork block cleanup: %d/%d clear failures, %d notification failures",
+				catchupCtx.blockUpTo.Hash().String(), clearErrors, len(headers), notifyErrors)
+		}
+		u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
+			catchupCtx.blockUpTo.Hash().String(), len(headers))
+	}
 }
 
 // handleNoNewHeaders is invoked when filterHeaders leaves zero headers to process.
@@ -490,15 +516,42 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 
 		// TODO: all of these should be using error types, and not checking the strings (!)
 		switch {
-		case ctx.panicked || isConcurrentValidationPanic(*err):
+		case ctx.panicked || isLocalPanic(*err):
 			// catchup() recovered a panic and set *err only to stop this function from recording
-			// a success (BV-STARTUP-007). Or a validation in this catchup waited in
-			// runOncePerBlock on a validation of the same block that panicked on another
-			// goroutine, and got that panic's error. A panic is a bug in this node, not evidence
-			// against the peer, so no case below may score it. It must come first: the
-			// ERR_PROCESSING error would otherwise fall through to unknown_error with isPeerError
-			// left true.
+			// a success (BV-STARTUP-007). Or an errgroup goroutine in this catchup panicked
+			// and recoverChildPanic returned its error (issue 4993). Or a validation in this
+			// catchup waited in runOncePerBlock on a validation of the same block that panicked
+			// on another goroutine, and got that panic's error. A panic is a bug in this node,
+			// not evidence against the peer, so no case below may score it. It must come first:
+			// the ERR_PROCESSING error would otherwise fall through to unknown_error with
+			// isPeerError left true.
 			errorType = "local_panic"
+			isPeerError = false
+		case isBlockCommitted(*err) || isSubtreeWritesNotLanded(*err):
+			// tryQuickValidation aborted the run on one of its two markers
+			// (bitcoin-sv/teranode#4978, bitcoin-sv/teranode#4987): a .subtree write for
+			// the block did not land, or commitBlock's AddBlock stored the block, or may
+			// have, and the run could not finish or rule out the commit. Both are this
+			// node's own storage or its own blockchain service, never the peer's, and
+			// isLocalCatchupFault already calls them local, so processCatchupChItem
+			// charges no one for them.
+			//
+			// This case must come straight after the panic case. A block_committed
+			// error is a ServiceError, which no code case below matches, so without it
+			// the error fell to the text cases: a flattened gRPC deadline from our own blockchain service was
+			// labelled local_context_cancelled only because of its wording, and a plain
+			// connection failure to it was labelled network_error and charged to the
+			// primary. It also precedes the storage case, which would otherwise take
+			// subtree_writes_not_landed (a StorageError) under the generic
+			// local_storage_fault label. Putting it this early shadows nothing
+			// peer-attributable: both markers are set only around this node's own
+			// .subtree writes, AddBlock, its existence probe and the UTXO unlock, after
+			// the block's subtree processing and coinbase checks have passed.
+			if isBlockCommitted(*err) {
+				errorType = "local_block_maybe_committed"
+			} else {
+				errorType = "local_subtree_writes_not_landed"
+			}
 			isPeerError = false
 		case errors.Is(*err, errors.ErrStorageError):
 			// A failed read or write of our own store — a torn, stale or mis-keyed
@@ -507,7 +560,8 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// storage errors, so this makes the terminal-error path agree with the
 			// per-fetch one.
 			//
-			// This case must come FIRST, and specifically ahead of the consensus
+			// This case must come first after the quick-validation marker case above,
+			// and specifically ahead of the consensus
 			// case below, because an error chain can carry both codes and errors.Is
 			// walks the whole chain. The aerospike UTXO store wraps its own bins'
 			// read failures — including a live client.Get on a paginated record —
@@ -1037,6 +1091,18 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		return errors.NewBlockInvalidError("[catchup][%s] common ancestor %s at height %d is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
 	}
 
+	// The headers after the ancestor must form one chain built on it. Every later step assigns
+	// heights as ancestor+1+index, so a first header built on some other stored block would be
+	// validated at the wrong heights (checkpoint matching included), and a break further up would
+	// only surface in the header cache. An honest peer serves every batch on the path back from
+	// one fixed tip, so a break here is the peer's fault: NetworkInvalidResponse, charged to it.
+	if commonAncestorIndex+1 < len(peerHeaders) {
+		offered := peerHeaders[commonAncestorIndex+1:]
+		if !(&catchup.CommonAncestorFinder{}).ValidateChainConnection(offered, commonAncestorHash) {
+			return errors.NewNetworkInvalidResponseError("[catchup][%s] headers offered after common ancestor %s do not link to common ancestor as one chain (first header %s has parent %s)", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), offered[0].Hash().String(), offered[0].HashPrevBlock.String())
+		}
+	}
+
 	// Calculate fork depth
 	forkDepth := uint32(0)
 	if commonAncestorMeta.Height < currentHeight {
@@ -1104,15 +1170,63 @@ func (u *Server) checkSecretMining(ctx context.Context, catchupCtx *CatchupConte
 	// The headers the peer offers beyond the common ancestor form the candidate chain
 	// whose cumulative work we weigh against our local chain. Not yet filtered at this
 	// point, so slice directly after the common ancestor index.
-	var offeredHeaders []*model.BlockHeader
-	if catchupCtx.headersFetchResult != nil {
-		peerHeaders := catchupCtx.headersFetchResult.Headers
-		if catchupCtx.commonAncestorIndex >= 0 && catchupCtx.commonAncestorIndex+1 < len(peerHeaders) {
-			offeredHeaders = peerHeaders[catchupCtx.commonAncestorIndex+1:]
-		}
+	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta, catchupCtx.bestBlockMeta, offeredHeadersAfterAncestor(catchupCtx))
+}
+
+// offeredHeadersAfterAncestor returns the peer's headers after the common ancestor: the
+// candidate chain whose cumulative work is weighed against ours.
+func offeredHeadersAfterAncestor(catchupCtx *CatchupContext) []*model.BlockHeader {
+	if catchupCtx.headersFetchResult == nil {
+		return nil
 	}
 
-	return u.checkSecretMiningFromCommonAncestor(ctx, catchupCtx.blockUpTo, catchupCtx.peerID, catchupCtx.baseURL, catchupCtx.commonAncestorHash, catchupCtx.commonAncestorMeta, catchupCtx.bestBlockMeta, offeredHeaders)
+	peerHeaders := catchupCtx.headersFetchResult.Headers
+	if catchupCtx.commonAncestorIndex >= 0 && catchupCtx.commonAncestorIndex+1 < len(peerHeaders) {
+		return peerHeaders[catchupCtx.commonAncestorIndex+1:]
+	}
+
+	return nil
+}
+
+// offeredChainHasLessWork reports whether the chain the peer offers through the announced
+// block carries less cumulative work than our best tip. Such a chain can never become the
+// best tip, so fetching it only writes transactions that no main-chain block holds, and a
+// child of one of them would then be accepted into the pool alone (issue 2067). SV Node and
+// Bitcoin Core both skip such a peer and process an unrequested block only with at least as
+// much work. Equal work is still fetched, matching both.
+//
+// The test applies only when the header fetch reached the announced block. The fetch may run
+// past it, up to the peer's registry tip, and the whole list is weighed: work only grows along
+// a linked chain, so a full list lighter than our tip means the chain through the announced
+// block is lighter too. A fetch that stopped on a cap before the announced block holds only a
+// prefix, whose work says nothing about the tip, and refusing on it would wedge a heavier fork
+// longer than the cap. Without a tip or an ancestor to weigh, it returns false and leaves the
+// run to the existing checks.
+//
+// findCommonAncestor has already checked that the list links from the common ancestor, so the
+// list cannot weigh less than the chain it claims to be by skipping a block.
+func (u *Server) offeredChainHasLessWork(catchupCtx *CatchupContext) bool {
+	bestMeta := catchupCtx.bestBlockMeta
+	if bestMeta == nil || catchupCtx.commonAncestorMeta == nil || catchupCtx.commonAncestorHash == nil ||
+		catchupCtx.headersFetchResult == nil || !catchupCtx.headersFetchResult.ReachedTarget {
+		return false
+	}
+
+	offeredHeaders := offeredHeadersAfterAncestor(catchupCtx)
+	if len(offeredHeaders) == 0 {
+		return false
+	}
+
+	localWork := new(big.Int).SetBytes(bestMeta.ChainWork)
+	offeredWork := offeredChainWork(catchupCtx.commonAncestorMeta, offeredHeaders)
+
+	if offeredWork.Cmp(localWork) >= 0 {
+		return false
+	}
+
+	u.logger.Infof("[catchup][%s] peer %s offers a chain with less work than our best tip at height %d (fork from height %d, %d headers), not fetching it", catchupCtx.blockUpTo.Hash().String(), catchupCtx.peerID, bestMeta.Height, catchupCtx.commonAncestorMeta.Height, len(offeredHeaders))
+
+	return true
 }
 
 // filterHeaders filters headers to only those after the common ancestor that we don't have.
@@ -1162,11 +1276,12 @@ func (u *Server) filterHeaders(ctx context.Context, catchupCtx *CatchupContext) 
 func (u *Server) buildHeaderCache(catchupCtx *CatchupContext) error {
 	u.logger.Debugf("[catchup][%s] Step 6: Building header chain cache", catchupCtx.blockUpTo.Hash().String())
 
-	// Verify first header connects to common ancestor
+	// Verify first header connects to common ancestor. findCommonAncestor already rejects a
+	// mis-linked offer; this guards the cache against being built from headers that bypassed it.
 	if len(catchupCtx.blockHeaders) > 0 {
 		firstHeaderParent := catchupCtx.blockHeaders[0].HashPrevBlock
 		if !firstHeaderParent.IsEqual(catchupCtx.commonAncestorHash) {
-			u.logger.Warnf("[catchup][%s] first header parent %s doesn't match common ancestor %s", catchupCtx.blockUpTo.Hash().String(), firstHeaderParent.String(), catchupCtx.commonAncestorHash.String())
+			return errors.NewNetworkInvalidResponseError("[catchup][%s] first header parent %s does not link to common ancestor %s", catchupCtx.blockUpTo.Hash().String(), firstHeaderParent.String(), catchupCtx.commonAncestorHash.String())
 		}
 	}
 
@@ -1380,6 +1495,10 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 	// Channel for async subtree file writes (only used by quick validation)
 	var writeJobsChan chan *SubtreeWriteJob
 
+	// Decide the block-assembly hand-off from the state this run starts in, before it moves to
+	// CATCHINGBLOCKS and the state no longer says where it came from.
+	catchupCtx.keepBlockAssemblyHandoff = u.keepBlockAssemblyHandoff(ctx, catchupCtx, int(size.Load()))
+
 	// Transition FSM to CATCHINGBLOCKS for all catchup (chain-extending and fork blocks).
 	// If the FSM rejects the transition, the error propagates
 	// up to the catchupCh handler which handles it gracefully without penalizing the peer.
@@ -1401,19 +1520,22 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 			numWriteWorkers = 16
 		}
 		for i := 0; i < numWriteWorkers; i++ {
-			errorGroup.Go(func() error {
+			errorGroup.Go(func() (err error) {
+				defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup] subtreeWriteWorker")
 				return u.blockValidation.subtreeWriteWorker(gCtx, writeJobsChan)
 			})
 		}
 	}
 
 	// Start fetching blocks
-	errorGroup.Go(func() error {
+	errorGroup.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup][%s] fetchBlocksConcurrently", catchupCtx.blockUpTo.Hash().String())
 		return u.fetchBlocksConcurrently(gCtx, catchupCtx, validateBlocksChan, &size)
 	})
 
 	// Start validation in parallel
-	errorGroup.Go(func() error {
+	errorGroup.Go(func() (err error) {
+		defer recoverChildPanic(u.logger, recoveredPanicPathCatchupFetch, &err, nil, "[catchup][%s] validateBlocksOnChannel", catchupCtx.blockUpTo.Hash().String())
 		if writeJobsChan != nil {
 			defer close(writeJobsChan)
 		}
@@ -1444,18 +1566,28 @@ func (u *Server) fetchAndValidateBlocks(ctx context.Context, catchupCtx *Catchup
 }
 
 // drainWriteJobs receives every subtree write job left in ch and counts it down, so a caller blocked
-// in wg.Wait() for a job no worker will ever receive is released (bitcoin-sv/teranode#4692).
+// in wg.Wait() for a job no worker will ever receive is released (bitcoin-sv/teranode#4692). Each
+// drained job was never written, so its Unwritten flag is raised first (bitcoin-sv/teranode#4978).
 //
 // Only safe to call once the producing errgroup has settled, because it relies on the channel being
-// closed to terminate. Nil-safe on both axes: ch is nil when quick validation is disabled (no worker
-// pool, no channel), and job.Done is nil for a job constructed without a barrier.
+// closed to terminate. Nil-safe on every axis: ch is nil when quick validation is disabled (no worker
+// pool, no channel), and job.Done or job.Unwritten is nil for a job constructed without a barrier.
 func drainWriteJobs(ch <-chan *SubtreeWriteJob) {
 	if ch == nil {
 		return
 	}
 
 	for job := range ch {
-		if job != nil && job.Done != nil {
+		if job == nil {
+			continue
+		}
+
+		// Never written, so flag it before releasing the waiter (bitcoin-sv/teranode#4978).
+		if job.Unwritten != nil {
+			job.Unwritten.Store(true)
+		}
+
+		if job.Done != nil {
 			job.Done.Done()
 		}
 	}
@@ -1655,6 +1787,37 @@ func (u *Server) recordMaliciousAttempt(peerID string, reason string) {
 	u.reportCatchupMalicious(context.Background(), peerID, reason)
 }
 
+// keepBlockAssemblyHandoff reports whether a catchup run of the given number of blocks should
+// keep handing unseen transactions to block assembly. Every catchup moves the FSM to
+// CATCHINGBLOCKS, and subtree validation turns the hand-off off in that state because bulk
+// history does not belong in the template. A short run from RUNNING is not bulk history: it
+// is how a running node fetches a missing ancestor or a short competing branch. Without the
+// hand-off a transaction that only a fork block carried is written to the UTXO store but never
+// reaches the pool, and a child spending it later enters the pool alone (issue 2067).
+//
+// A failed state read, or any state other than RUNNING, keeps the hand-off off, which is the
+// behaviour before this check existed.
+func (u *Server) keepBlockAssemblyHandoff(ctx context.Context, catchupCtx *CatchupContext, blocks int) bool {
+	maxBlocks := u.settings.BlockValidation.CatchupKeepBlockAssemblyMaxBlocks
+	if maxBlocks <= 0 || blocks > maxBlocks {
+		return false
+	}
+
+	state, err := u.blockchainClient.GetFSMCurrentState(ctx)
+	if err != nil || state == nil {
+		u.logger.Warnf("[catchup][%s] could not read FSM state, block assembly hand-off stays off for this run: %v", catchupCtx.blockUpTo.Hash().String(), err)
+		return false
+	}
+
+	if *state != blockchain.FSMStateRUNNING {
+		return false
+	}
+
+	u.logger.Infof("[catchup][%s] short catchup of %d blocks from RUNNING, keeping block assembly hand-off on", catchupCtx.blockUpTo.Hash().String(), blocks)
+
+	return true
+}
+
 // setFSMCatchingBlocks sets the FSM state to CATCHINGBLOCKS.
 // Notifies the blockchain service that we're syncing new blocks.
 //
@@ -1837,6 +2000,9 @@ func (u *Server) validateBlocksOnChannel(validateBlocksChan chan blockForValidat
 					// merkle mismatch is a property of the primary's own subtree list, not of whichever
 					// peer parallel fetch happened to assign a subtree to (bitcoin-sv/teranode#4692).
 					PeerID: peerID,
+					// A short run that started from RUNNING keeps handing unseen transactions to
+					// block assembly, decided once in fetchAndValidateBlocks (issue 2067).
+					KeepBlockAssemblyHandoff: catchupCtx.keepBlockAssemblyHandoff,
 				}
 
 				// Validate the block using standard validation
@@ -2142,6 +2308,75 @@ func (u *Server) tryQuickValidation(ctx context.Context, block *model.Block, cat
 			case <-ctx.Done():
 				// See the corrupt-branch comment above: skip cleanup rather than risk
 				// hanging on jobs no worker will ever receive.
+				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
+					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
+			}
+
+			return false, err
+		}
+
+		// This check must come before the local-panic one below. A panic in a post-commit
+		// unlock goroutine reaches here wrapped in the block-committed error, so err carries
+		// both markers, and the local-panic branch would sweep files that the stored block is
+		// recorded as having. Returning err unchanged keeps the panic marker, so
+		// releaseCatchupLock still labels the run local_panic.
+		//
+		// Two outcomes abort here, without a sweep, rather than fall through to the local-fault
+		// branch below. Its sweep and its fall-through are each wrong for both of them.
+		//
+		// The .subtree writes did not all land, so quickValidateBlockAsync refused to commit the
+		// block (bitcoin-sv/teranode#4978). The failing write worker has already cancelled the
+		// shared catch-up context, so normal validation would only fail on that and bury the
+		// storage fault. The block is not stored, so the next catch-up run validates it again from
+		// scratch. Do not sweep, whichever way the barrier failed. When a write failed and the
+		// barrier released, every job had been handled; when the context ended first, jobs may
+		// still be in flight and a delete could race them, as in the ctx.Done branches above.
+		// Leaving the files is harmless either way: the content is honest, every blob carries a
+		// finite DAH, and the next run rewrites it with AllowOverwrite.
+		//
+		// The block IS committed, or may be: AddBlock stored it with subtrees_set and mined_set and
+		// the post-commit unlock still failed after its retries, or AddBlock returned an error and
+		// commitBlock could not prove the block not stored, because every existence probe failed or
+		// ctx had ended (bitcoin-sv/teranode#4987). The files this
+		// attempt wrote can belong to a block recorded as having them, so a sweep can corrupt it,
+		// and normal validation would find the block stored and do nothing. No write can still be
+		// in flight: awaitSubtreeWrites returned nil before commitBlock ran, so no waitDone join is
+		// needed. If the block is stored, its outputs stay locked and nothing unlocks them later
+		// (bsv-blockchain/teranode#2015): the setMined worker skips a block with mined_set, and a
+		// stored block is skipped by catch-up and by processBlockFound.
+		// Quick validation spends locked outputs anyway (WithIgnoreLocked), so a later checkpointed
+		// block that spends them still commits. Only a spend through full validation or the
+		// validator fails, with ErrTxLocked.
+		if isSubtreeWritesNotLanded(err) || isBlockCommitted(err) {
+			u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: aborting without removing this attempt's .subtree files: %v",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
+
+			return false, err
+		}
+
+		// A goroutine of quick validation panicked (issue 4993). recoverChildPanic turned the
+		// panic into an error, so it ends up here and not in catchup's own recover. Falling
+		// through to normal validation would drop the error, and with it the local-panic
+		// marker: the run would carry on as if nothing happened, releaseCatchupLock would never
+		// reach its local_panic case, and the same bug could fire again on the next block.
+		// Stop this catch-up attempt instead and return the error unchanged.
+		//
+		// Settle and sweep exactly as the local-fault branch below does, for the same reason:
+		// the panic is this node's fault, so only quick validation's own build output is
+		// stale, and the fetched blobs stay for the retry. The cleanup error is logged, not
+		// returned, because returning it would replace the error that carries the marker.
+		if isLocalPanic(err) {
+			u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: a goroutine panicked during quick validation, aborting this catch-up attempt, see the PANIC log line: %v",
+				catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), err)
+
+			select {
+			case <-waitDone:
+				if delErr := u.removeCatchupSubtreeFiles(ctx, catchupCtx, freshlyWritten); delErr != nil {
+					u.logger.Errorf("[catchup:tryQuickValidation][%s] block %s: failed to remove this attempt's .subtree files after a local panic: %v",
+						catchupCtx.blockUpTo.Hash().String(), block.Hash().String(), delErr)
+				}
+			case <-ctx.Done():
+				// See the corrupt-branch comment above: skip cleanup rather than risk hanging.
 				u.logger.Warnf("[catchup:tryQuickValidation][%s] block %s: catch-up context cancelled while waiting for subtree writes to settle, skipping cleanup",
 					catchupCtx.blockUpTo.Hash().String(), block.Hash().String())
 			}
@@ -2463,8 +2698,13 @@ func offeredChainHasMoreWork(localChainWork []byte, commonAncestorMeta *model.Bl
 	// so SetBytes reconstructs the cumulative work value directly.
 	localWork := new(big.Int).SetBytes(localChainWork)
 
-	// Start from the common ancestor's cumulative work and add each offered block's work,
-	// mirroring work.CalculateWork (work = 2^256 / (target+1)).
+	return offeredChainWork(commonAncestorMeta, offeredHeaders).Cmp(localWork) > 0
+}
+
+// offeredChainWork returns the cumulative work of the common ancestor extended by
+// offeredHeaders: the ancestor's stored chainwork plus each offered block's work, mirroring
+// work.CalculateWork (work = 2^256 / (target+1)).
+func offeredChainWork(commonAncestorMeta *model.BlockHeaderMeta, offeredHeaders []*model.BlockHeader) *big.Int {
 	offeredWork := new(big.Int).SetBytes(commonAncestorMeta.ChainWork)
 	for _, header := range offeredHeaders {
 		if header == nil {
@@ -2475,7 +2715,7 @@ func offeredChainHasMoreWork(localChainWork []byte, commonAncestorMeta *model.Bl
 		offeredWork.Add(offeredWork, work.CalcBlockWork(bits))
 	}
 
-	return offeredWork.Cmp(localWork) > 0
+	return offeredWork
 }
 
 // validateBatchHeaders validates a batch of block headers.

@@ -1180,12 +1180,15 @@ func handleGetMiningCandidate(ctx context.Context, s *RPCServer, cmd interface{}
 	}
 
 	if c.ProvideCoinbaseTx != nil && *c.ProvideCoinbaseTx {
-		coinbaseTx, err := mc.CreateCoinbaseTxCandidate(s.settings, true)
-		if err != nil {
-			return nil, err
+		// The coinbase block assembly keeps on the candidate's job, as bitcoin-sv returns the
+		// candidate block's own coinbase. A solution submitted without a coinbase is mined with
+		// this one, so a miner that hashes it and omits it from submitminingsolution gets the block
+		// it hashed. A coinbase built here instead would be one block assembly never sees.
+		if len(mc.CoinbaseTx) == 0 {
+			return nil, bsvjson.NewRPCError(bsvjson.ErrRPCInternal.Code, "block assembly returned the candidate without its coinbase: it could not build one from miner_wallet_private_keys, or it is an older or other implementation that does not set coinbase_tx")
 		}
 
-		jsonMap["coinbase"] = hex.EncodeToString(coinbaseTx.Bytes())
+		jsonMap["coinbase"] = hex.EncodeToString(mc.CoinbaseTx)
 	}
 
 	if *c.Verbosity == uint32(1) {

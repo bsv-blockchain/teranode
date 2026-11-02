@@ -83,9 +83,10 @@ const counterConflictingBatchFanOut = 128
 // distinct roots (transactions and counter-spenders): the aggregate bound of the
 // per-transaction walks, so any block whose every per-transaction walk fit still
 // passes, however many conflicting transactions it carries. Exceeding it stops
-// the walk. If the members it reached include one mined on the candidate chain,
-// the verdict is ErrTxInvalid on the first attempt, and raising the budget does
-// not change that (see VERDICT). Otherwise it fails closed with
+// the walk, in either pass. If the counter-conflicting members it reached
+// include one mined on the candidate chain, the verdict is ErrTxInvalid on the
+// first attempt, and raising the budget does not change that (see VERDICT).
+// Otherwise it fails closed with
 // ERR_UTXO_WALK_LIMIT_EXCEEDED, retryably, and raising the budget resumes
 // progress. The price is that a single runaway cone is stopped only after that
 // many reads, not after maxNodes.
@@ -195,6 +196,9 @@ func (u *Server) checkCounterConflictingOnCurrentChainBatch(ctx context.Context,
 		fail(missingRecordsError("walked record", missing))
 	}
 
+	// A walk that stops, on its budget or on a store fault, still has the counter
+	// cone it reached mined-checked: every member of it descends from a
+	// counter-spender, so any mined one is proof.
 	counterConflicting := make(map[chainhash.Hash]struct{}, len(txs)+len(counterSpenders)+len(counterCone))
 	for _, hashes := range [][]chainhash.Hash{txs, counterSpenders, counterCone} {
 		for _, hash := range hashes {
@@ -431,7 +435,8 @@ func (u *Server) getBatch(ctx context.Context, hashes []chainhash.Hash, f ...fie
 // A failed read does not stop the others, and both results can be set: a mined
 // member, and the error of a member that could not be read. The caller decides
 // which wins. Each is the one of the lowest member hash, so neither depends on
-// read timing.
+// read timing. Cancelling the other reads after a failure would lose a mined
+// member not read yet, and with it a proven conflict.
 func (u *Server) firstMinedOnChain(ctx context.Context, members map[chainhash.Hash]struct{}, blockIds map[uint32]bool, missingPolicy missingRecordPolicy) (*chainhash.Hash, error) {
 	var (
 		mu        sync.Mutex

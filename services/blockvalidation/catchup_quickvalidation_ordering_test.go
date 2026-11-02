@@ -77,6 +77,9 @@ func TestTryQuickValidation_LocalFaultPath_WaitsForDelayedWriteBeforeCleanup(t *
 	// and the pipeline completes, then the commit fails locally.
 	suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(errors.NewProcessingError("simulated local commit failure"))
+	// The block was not stored, so commitBlock's probe after the AddBlock error keeps the
+	// local-fault route.
+	suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
 	setupQuickValidateMocks(suite)
 
 	rec := &banScoreRecorder{}
@@ -149,26 +152,26 @@ func TestTryQuickValidation_LocalFaultPath_WaitsForDelayedWriteBeforeCleanup(t *
 // TestTryQuickValidation_LocalFaultPath_SiblingWorkerErrorDoesNotHang pins the second half of the
 // ordering fix (bitcoin-sv/teranode#4692): tryQuickValidation shares its ctx with the write-worker
 // pool's own errgroup (the same gCtx created in fetchAndValidateBlocks), so a SIBLING worker's own
-// failure elsewhere in the pool cancels that context too. A bare wg.Wait() would hang forever if
-// this block's own queued job is stranded (no worker left to ever receive and Done() it); the
-// context-aware select must instead return promptly via <-ctx.Done() and skip
-// removeCatchupSubtreeFiles entirely.
+// failure elsewhere in the pool cancels that context too. This block's own queued job is stranded
+// (no worker left to ever receive and Done() it), so any bare wg.Wait() would hang forever.
 //
-// Driven from a local commit fault for the same reason as the test above: a body that does not
-// bind queues no write job at all since bitcoin-sv/teranode#4838, so there would be nothing to
-// strand.
+// Since bitcoin-sv/teranode#4978 the first wait on that job is the commit barrier in
+// quickValidateBlockAsync, ahead of AddBlock: the block must not be stored with subtrees_set while
+// its .subtree write has not landed. So the context-aware select there must return promptly, the
+// block must never reach AddBlock, and tryQuickValidation must abort with the
+// subtree-writes-not-landed marker rather than fall through, deleting nothing and striking no peer.
 //
 // No consumer is ever attached to writeJobsChan in this test, modelling every real worker having
 // already exited via its own ctx.Done() branch before draining this block's job.
 //
-// Mutation proof: replacing the select{} with a bare wg.Wait() call would hang this test until its
+// Mutation proof: replacing the barrier's select{} with a bare Wait() hangs this test until its
 // own timeout fires, reddening the "hung" failure path.
 func TestTryQuickValidation_LocalFaultPath_SiblingWorkerErrorDoesNotHang(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
 	defer suite.Cleanup()
 
-	suite.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(errors.NewProcessingError("simulated local commit failure"))
+	// No AddBlock expectation: the block must never be committed while its write is stranded,
+	// and an unexpected AddBlock call fails the mock.
 	setupQuickValidateMocks(suite)
 
 	counting := &delCountingStore{Store: suite.Server.subtreeStore}
@@ -216,11 +219,13 @@ func TestTryQuickValidation_LocalFaultPath_SiblingWorkerErrorDoesNotHang(t *test
 
 	select {
 	case res := <-resultCh:
-		require.NoError(t, res.err)
-		require.True(t, res.tryNormal, "a local fault falls back to normal validation")
+		require.True(t, isSubtreeWritesNotLanded(res.err), "a stranded write must abort with the not-landed marker: %v", res.err)
+		require.False(t, res.tryNormal, "a block whose writes did not land must not fall through to normal validation")
 	case <-time.After(5 * time.Second):
 		t.Fatal("tryQuickValidation hung waiting on a stranded write job after a sibling worker's own error cancelled the shared context")
 	}
+
+	suite.MockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	require.Equal(t, 0, counting.count(), "removeCatchupSubtreeFiles must be skipped entirely — no Del call — when the shared context is cancelled")
 	require.Empty(t, rec.struck(), "a local fault must not be charged to the serving peer")

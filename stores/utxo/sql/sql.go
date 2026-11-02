@@ -2447,13 +2447,19 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 		return
 	}
 
-	s.retrySpendBatch(batch, s.trySendSpendBatch)
+	s.retrySpendBatch(batch, func(batch []*batchSpend) bool {
+		return s.trySendSpendBatch(s.ctx, batch)
+	})
 }
 
 // retrySpendBatch runs try over batch until it reports no lock error, and
 // answers every item itself when the retries run out or the store context is
 // cancelled while waiting.
 func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) bool) {
+	s.retrySpendBatchContext(s.ctx, batch, try)
+}
+
+func (s *Store) retrySpendBatchContext(ctx context.Context, batch []*batchSpend, try func([]*batchSpend) bool) {
 	// Same budget as Create's lock retry (100ms, 200ms, 400ms). On sqlitememory a
 	// lock error is the engine breaking a cycle with a concurrent create, and a
 	// wave of concurrent creates re-forms that cycle faster than a 10-20ms
@@ -2476,9 +2482,9 @@ func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) boo
 		s.logger.Warnf("[Spend] deadlock detected (attempt %d/%d), retrying batch of %d items in %v", attempt+1, maxRetries+1, len(batch), backoff)
 
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			for _, item := range batch {
-				item.errCh <- errors.NewStorageError("[Spend] deadlock retry cancelled", s.ctx.Err())
+				item.errCh <- errors.NewStorageError("[Spend] deadlock retry cancelled", ctx.Err())
 			}
 
 			return
@@ -2495,11 +2501,11 @@ func (s *Store) retrySpendBatch(batch []*batchSpend, try func([]*batchSpend) boo
 // Returns true if the error was a retryable deadlock and the batch should be retried.
 // Returns false if the batch completed (success or non-retryable error) and results
 // have been sent to all item errCh channels.
-func (s *Store) trySendSpendBatch(batch []*batchSpend) (retryable bool) {
+func (s *Store) trySendSpendBatch(ctx context.Context, batch []*batchSpend) (retryable bool) {
 	if s.settings.UtxoStore.BatchSQLOperations && s.engine == "postgres" {
-		return s.trySendSpendBatchBulk(batch)
+		return s.trySendSpendBatchBulk(ctx, batch)
 	}
-	return s.trySendSpendBatchPerRow(batch)
+	return s.trySendSpendBatchPerRow(ctx, batch)
 }
 
 // spendUpdateRow is one output row the bulk spend UPDATE sets spending data on.
@@ -2536,8 +2542,8 @@ type spendSelectResult struct {
 }
 
 // trySendSpendBatchBulk uses bulk SELECT + bulk UPDATE for PostgreSQL.
-func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
-	txn, err := s.db.BeginTx(s.ctx, nil)
+func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) (retryable bool) {
+	txn, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		for _, item := range batch {
 			item.errCh <- errors.NewStorageError("[Spend] failed to begin transaction", err)
@@ -2570,7 +2576,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		JOIN transactions t ON t.hash = v.hash
 		JOIN outputs o ON o.transaction_id = t.id AND o.idx = v.idx`)
 
-	rows, err := txn.QueryContext(s.ctx, sb.String(), args...)
+	rows, err := txn.QueryContext(ctx, sb.String(), args...)
 	if err != nil {
 		if isDeadlock(err) {
 			return true
@@ -2839,7 +2845,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			RETURNING v.batch_idx`)
 		}
 
-		uRows, err := txn.QueryContext(s.ctx, ub.String(), updateArgs...)
+		uRows, err := txn.QueryContext(ctx, ub.String(), updateArgs...)
 		if err != nil {
 			if isDeadlock(err) {
 				return true
@@ -2919,7 +2925,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 			JOIN outputs o ON o.transaction_id = v.transaction_id AND o.idx = v.idx
 			WHERE o.spending_data = v.spending_data`)
 
-			iRows, err := txn.QueryContext(s.ctx, sb.String(), args...)
+			iRows, err := txn.QueryContext(ctx, sb.String(), args...)
 			if err != nil {
 				if isDeadlock(err) {
 					return true
@@ -3021,7 +3027,7 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 		}
 		sort.Ints(sortedParents)
 		for _, parentID := range sortedParents {
-			if err := s.setDAH(s.ctx, txn, parentID); err != nil {
+			if err := s.setDAH(ctx, txn, parentID); err != nil {
 				if isDeadlock(err) {
 					return true
 				}
@@ -3065,8 +3071,8 @@ func (s *Store) trySendSpendBatchBulk(batch []*batchSpend) (retryable bool) {
 
 // trySendSpendBatchPerRow processes a spend batch with per-row SELECT+UPDATE (original behavior).
 // Used for SQLite or when BatchSQLOperations is disabled.
-func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
-	txn, err := s.db.BeginTx(s.ctx, nil)
+func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend) (retryable bool) {
+	txn, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		for _, item := range batch {
 			item.errCh <- errors.NewStorageError("[Spend] failed to begin transaction", err)
@@ -3127,7 +3133,7 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 			spendableIn            *uint32
 		)
 
-		err = txn.QueryRowContext(s.ctx, q1, spend.TxID[:], spend.Vout).Scan(
+		err = txn.QueryRowContext(ctx, q1, spend.TxID[:], spend.Vout).Scan(
 			&transactionID, &coinbaseSpendingHeight, &utxoHash,
 			&spendingDataBytes, &frozen, &conflicting, &locked, &spendableIn,
 		)
@@ -3195,7 +3201,7 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 		}
 
 		// UPDATE outputs with optimistic locking
-		result, err := txn.ExecContext(s.ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
+		result, err := txn.ExecContext(ctx, q2, spend.SpendingData.Bytes(), transactionID, spend.Vout)
 		if err != nil {
 			if isDeadlock(err) {
 				return true // retryable
@@ -3261,7 +3267,7 @@ func (s *Store) trySendSpendBatchPerRow(batch []*batchSpend) (retryable bool) {
 	}
 	sort.Ints(sortedSpentParents)
 	for _, parentID := range sortedSpentParents {
-		if err := s.setDAH(s.ctx, txn, parentID); err != nil {
+		if err := s.setDAH(ctx, txn, parentID); err != nil {
 			if isDeadlock(err) {
 				return true
 			}
@@ -3470,7 +3476,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	q2 := `
 		UPDATE transactions
 		SET
-			locked = $2
+			locked = $2, conflict_owner = NULL
 		WHERE id = $1
 	`
 
@@ -3774,7 +3780,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 2)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				   ,unmined_since = NULL
 				   ,delete_at_height = CASE
 				        WHEN preserve_until IS NOT NULL THEN delete_at_height
@@ -3797,7 +3803,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false, unmined_since = NULL
+				SET conflict_owner = NULL, locked = false, unmined_since = NULL
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -3828,7 +3834,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -3860,7 +3866,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 			inClause3, inArgs3 := buildINClause(existingHashBytes, 1)
 			qUpdate := fmt.Sprintf(`
 				UPDATE transactions
-				SET locked = false
+				SET conflict_owner = NULL, locked = false
 				WHERE hash IN %s
 			`, inClause3)
 			if _, err = txn.ExecContext(ctx, qUpdate, inArgs3...); err != nil {
@@ -4980,7 +4986,7 @@ func (s *Store) setLockedPipelined(ctx context.Context, txHashes []chainhash.Has
 		pgxConn := driverConn.(*stdlib.Conn).Conn()
 
 		batch := &pgx.Batch{}
-		q := `UPDATE transactions SET locked = true, delete_at_height = NULL WHERE hash = $1`
+		q := `UPDATE transactions SET conflict_owner = NULL, locked = true, delete_at_height = NULL WHERE hash = $1`
 		for i := range txHashes {
 			batch.Queue(q, txHashes[i][:])
 		}
@@ -5007,7 +5013,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 		// SQLite: sequential updates
 		q := `
 			UPDATE transactions
-			SET locked = true, delete_at_height = NULL
+			SET conflict_owner = NULL, locked = true, delete_at_height = NULL
 			WHERE hash = $1
 		`
 		for _, txHash := range txHashes {
@@ -5050,7 +5056,7 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, setVal
 
 	q := `
 		UPDATE transactions
-		SET locked = false
+		SET conflict_owner = NULL, locked = false
 		WHERE hash = $1
 		RETURNING id
 	`
@@ -5102,7 +5108,7 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 		if retention == 0 {
 			// No DAH needed — simple bulk unlock
 			inClause, args := buildINClause(hashBytes, 1)
-			q := fmt.Sprintf(`UPDATE transactions SET locked = false WHERE hash IN %s`, inClause)
+			q := fmt.Sprintf(`UPDATE transactions SET conflict_owner = NULL, locked = false WHERE hash IN %s`, inClause)
 			if _, err := s.db.ExecContext(ctx, q, args...); err != nil {
 				return errors.NewStorageError("failed to bulk unlock transactions", err)
 			}
@@ -5133,7 +5139,7 @@ func (s *Store) setUnlockedBulk(ctx context.Context, txHashes []chainhash.Hash) 
 					WHERE t.hash IN %s
 				)
 				UPDATE transactions t
-				SET locked = false,
+				SET conflict_owner = NULL, locked = false,
 				    delete_at_height = CASE
 				        WHEN s.has_preserve THEN t.delete_at_height
 				        WHEN s.conflicting AND t.delete_at_height IS NULL THEN $1
@@ -5644,6 +5650,13 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not create conflict_intents table - [%+v]", err)
 	}
 
+	if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS conflict_owner BYTEA`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN IF NOT EXISTS recovery BYTEA`); err != nil {
+		return errors.NewStorageError("could not add conflict recovery column", err)
+	}
+
 	return nil
 }
 
@@ -5955,6 +5968,25 @@ func createSqliteSchema(db *usql.DB) error {
 	`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create conflict_intents table - [%+v]", err)
+	}
+
+	var ownerColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('transactions') WHERE name = 'conflict_owner'`).Scan(&ownerColumns); err != nil {
+		return err
+	}
+	if ownerColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN conflict_owner BLOB`); err != nil {
+			return err
+		}
+	}
+	var recoveryColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('conflict_intents') WHERE name = 'recovery'`).Scan(&recoveryColumns); err != nil {
+		return err
+	}
+	if recoveryColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN recovery BLOB`); err != nil {
+			return errors.NewStorageError("could not add conflict recovery column", err)
+		}
 	}
 
 	return nil

@@ -20,6 +20,10 @@ message MiningCandidate {
   uint32 num_txs = 10;
   uint64 size_without_coinbase = 11;
   repeated bytes subtree_hashes = 12;
+  // The coinbase block assembly built for this candidate and keeps on its job. A solution that
+  // omits its own coinbase is mined with this one, as in bitcoin-sv, so it is the coinbase a miner
+  // must hash when it does not supply one.
+  bytes coinbase_tx = 13;
 }
 
 // swagger:model MiningSolution

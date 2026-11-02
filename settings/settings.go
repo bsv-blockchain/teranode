@@ -473,9 +473,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SubtreeBatchPrefetchDepth:    getInt("blockvalidation_subtree_batch_prefetch_depth", 2, alternativeContext...),
 			SubtreeBatchWriteConcurrency: getInt("blockvalidation_subtree_batch_write_concurrency", 64, alternativeContext...),
 			// Dynamic peer switching and parallel fetching
-			CatchupMinThroughputKBps:    getInt("blockvalidation_catchup_min_throughput_kbps", 100, alternativeContext...),
-			CatchupParallelFetchEnabled: getBool("blockvalidation_catchup_parallel_fetch_enabled", true, alternativeContext...),
-			CatchupParallelFetchWorkers: getInt("blockvalidation_catchup_parallel_fetch_workers", 3, alternativeContext...),
+			CatchupMinThroughputKBps:          getInt("blockvalidation_catchup_min_throughput_kbps", 100, alternativeContext...),
+			CatchupParallelFetchEnabled:       getBool("blockvalidation_catchup_parallel_fetch_enabled", true, alternativeContext...),
+			CatchupParallelFetchWorkers:       getInt("blockvalidation_catchup_parallel_fetch_workers", 3, alternativeContext...),
+			CatchupKeepBlockAssemblyMaxBlocks: getInt("blockvalidation_catchup_keep_block_assembly_max_blocks", 6, alternativeContext...),
 		},
 		Validator: ValidatorSettings{
 			GRPCAddress:                          getString("validator_grpcAddress", "localhost:8081", alternativeContext...),

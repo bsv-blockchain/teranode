@@ -394,8 +394,8 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 }
 
 // feedsBlockAssembly reports whether a block's transactions may be added to
-// block assembly. Only in RUNNING (IDLE can follow an operator STOP while a
-// catchup batch is still validating historical blocks), only when the block is
+// block assembly. Only when the FSM state allows it (stateFeeds: RUNNING, or a
+// short catchup from RUNNING that keeps the hand-off), only when the block is
 // not above tip+1, and only when the block's height and tip+1 share the same
 // transaction rules (validator.SameTxRules): the txs are validated at the
 // block's own height, while assembly mines them at tip+1 without re-checking
@@ -404,8 +404,8 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 // and a height locktime final above tip+1 may not be final at tip+1. A same-era
 // block feeds even when it does not extend the tip, so the txs of a competitor
 // that loses stay in the template.
-func (u *Server) feedsBlockAssembly(ctx context.Context, state blockchain.FSMStateType, blockHeight uint32) (bool, error) {
-	if state != blockchain.FSMStateRUNNING {
+func (u *Server) feedsBlockAssembly(ctx context.Context, stateFeeds bool, blockHeight uint32) (bool, error) {
+	if !stateFeeds {
 		return false, nil
 	}
 
@@ -606,14 +606,23 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// it for both the per-batch processTransactionsInLevels pass and the
 	// validateSubtree closure below. Querying it twice (once per pipeline) could
 	// straddle an FSM transition and give the two pipelines divergent
-	// WithAddTXToBlockAssembly settings for the same block. While catching up
-	// blocks, transactions must NOT be added to block assembly.
+	// WithAddTXToBlockAssembly settings for the same block. Bulk catch-up keeps
+	// transactions out of block assembly; a short run can explicitly keep the hand-off.
 	currentState, err := u.blockchainClient.GetFSMCurrentState(ctx)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to get FSM current state", err))
 	}
 
-	addTXToBlockAssembly, err := u.feedsBlockAssembly(ctx, *currentState, block.Height)
+	// Only RUNNING feeds block assembly. IDLE can follow an operator STOP while
+	// a catchup batch is still validating historical blocks. The exception is a
+	// short catchup that started from RUNNING: block validation asks to keep the
+	// hand-off on, offering unseen fork transactions to the pool through the
+	// existing RUNNING path (including its block-context queue-shed policy).
+	// Either way the block must also pass feedsBlockAssembly's height and era gate.
+	stateFeeds := *currentState == blockchain.FSMStateRUNNING ||
+		(*currentState == blockchain.FSMStateCATCHINGBLOCKS && request.GetKeepBlockAssemblyHandoff())
+
+	addTXToBlockAssembly, err := u.feedsBlockAssembly(ctx, stateFeeds, block.Height)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to decide block assembly feed", err))
 	}
@@ -635,8 +644,13 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// each load batch is checked on all cores and written with
 	// SpendAndCreateMulti (processTransactionsBatched). That path writes before
 	// block.Valid runs, so it first proves the body is the one the header
-	// commits to.
+	// commits to. The batch path never hands transactions to block assembly, so a
+	// short catchup from RUNNING that keeps the hand-off on takes the level path.
 	checker, batched := u.batchChecker(*currentState, block.Height)
+	if addTXToBlockAssembly {
+		checker, batched = nil, false
+	}
+
 	if batched && !bodyBound {
 		if err = u.checkBlockBodyBound(ctx, request, block, peerID, dah); err != nil {
 			return nil, errors.WrapGRPC(err)
@@ -771,14 +785,12 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	//       state the floater block is invalidated/rolled back (including the
 	//       optimistically-added block), in CATCHINGBLOCKS it
 	//       stays incomplete and is retried (preserving #1031);
-	//   (c) block-assembly contamination — FSM-gated off in
-	//       CATCHINGBLOCKS (both this closure and
-	//       processTransactionsInLevels gate on the same addTXToBlockAssembly
-	//       captured once above);
-	//       in RUNNING the substitution is byte-identical to the everyday
-	//       mempool policy-mode path (substituteUnconfirmedHeights with the
-	//       candidate height ≈ tip+1), so no new class of transaction reaches
-	//       block assembly.
+	//   (c) block-assembly contamination — bulk catch-up keeps the hand-off off.
+	//       A short catch-up from RUNNING may explicitly keep it on; both this
+	//       closure and processTransactionsInLevels use the same
+	//       addTXToBlockAssembly captured once above. Kept catch-up uses the
+	//       existing RUNNING block-validation options; an unresolved mempool
+	//       floater still reaches block.Valid's membership check described above.
 	subtreeValidatorOptions := []validator.Option{
 		validator.WithSkipPolicyChecks(true),
 		validator.WithInBlock(true),
@@ -1644,8 +1656,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	// addTXToBlockAssembly is captured once by the caller (CheckBlockSubtrees)
 	// from a single FSM read, so this pass and the validateSubtree closure cannot
-	// diverge across an FSM transition. While catching up blocks it is false,
-	// disabling adding transactions to block assembly.
+	// diverge across an FSM transition. Bulk catch-up disables the hand-off; a
+	// short catch-up from RUNNING can explicitly keep it on.
 	if !addTXToBlockAssembly {
 		validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
 	}

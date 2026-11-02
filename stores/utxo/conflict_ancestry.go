@@ -61,7 +61,20 @@ func (g AncestryGuard) enabled() bool { return g.check != nil }
 type ProcessConflictingOption func(*processConflictingOptions)
 
 type processConflictingOptions struct {
-	onRefused func(loser chainhash.Hash)
+	currentChainGuard CurrentChainGuard
+	deferCompletion   bool
+	onRefused         func(loser chainhash.Hash)
+	evict             func(hashes []chainhash.Hash)
+}
+
+// WithConflictEvictor registers a callback for transactions that a successful run may have flipped
+// to Conflicting but does not return in marked: what the rollback of an earlier checklist changed,
+// also when the guard then refuses the demotion. Callers pass their txmeta cache eviction. It must
+// not block.
+func WithConflictEvictor(evict func(hashes []chainhash.Hash)) ProcessConflictingOption {
+	return func(o *processConflictingOptions) {
+		o.evict = evict
+	}
 }
 
 // WithRefusalHandler registers a callback invoked once per losing transaction
@@ -223,4 +236,15 @@ func filterAncestryConfirmedLosers(ctx context.Context, s Store, losers []chainh
 	}
 
 	return kept, refused, nil
+}
+
+// WithDeferredConflictCompletion keeps the checklist until the caller has
+// applied the returned demoted set to subtrees and its transaction queue.
+func WithDeferredConflictCompletion() ProcessConflictingOption {
+	return func(o *processConflictingOptions) { o.deferCompletion = true }
+}
+
+// WithRecoveryChainGuard protects confirmed transactions during compensation.
+func WithRecoveryChainGuard(guard CurrentChainGuard) ProcessConflictingOption {
+	return func(o *processConflictingOptions) { o.currentChainGuard = guard }
 }
