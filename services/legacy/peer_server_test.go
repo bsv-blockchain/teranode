@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -1747,6 +1748,70 @@ func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
 				_, still := state.outboundPeers.Get(keys[addr])
 				require.True(t, still, "the peer at %s is not covered by the ban", addr)
 			}
+		})
+	}
+}
+
+// Banning a peer never stalls the peer loop, however far behind the ban listener is. The ban
+// handlers used to send the ban event themselves, blocking, from inside peerHandler, on the same
+// channel the ban list publishes to a moment later. With that channel full, as it was for weeks on
+// a mainnet node, the first misbehaving peer or setban would have frozen the whole peer loop.
+func TestBanHandlers_DoNotBlockThePeerLoopWhenTheBanListenerIsBehind(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ban  func(s *server, state *peerState, sp *serverPeer)
+	}{
+		{
+			name: "a misbehaving peer",
+			ban:  func(s *server, state *peerState, sp *serverPeer) { s.handleBanPeerMsg(state, sp) },
+		},
+		{
+			name: "a ban for a set duration",
+			ban: func(s *server, state *peerState, sp *serverPeer) {
+				s.handleBanPeerForDurationMsg(state, sp, time.Now().Add(time.Hour).Unix())
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			origCfg := cfg
+			cfg = &config{BanDuration: 24 * time.Hour}
+
+			t.Cleanup(func() { cfg = origCfg })
+
+			bl := emptyWritableBanList(t)
+
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+			}
+
+			// The listener is behind: its subscription is full.
+			for len(s.banChan) < cap(s.banChan) {
+				s.banChan <- p2p.BanEvent{Action: "add", IP: "192.0.2.1"}
+			}
+
+			state := newTestPeerState()
+			sp := newTestOutboundPeer(t, s, "10.0.0.1:8333")
+			sp.ctx = t.Context()
+
+			done := make(chan struct{})
+
+			go func() {
+				tc.ban(s, state, sp)
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("banning a peer must not block the peer loop")
+			}
+
+			_, banned := state.banned.Get("10.0.0.1")
+			require.True(t, banned, "the host is banned in the peer loop's own state")
+			require.True(t, bl.IsBanned("10.0.0.1:8333"), "and on the shared ban list")
 		})
 	}
 }

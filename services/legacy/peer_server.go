@@ -2221,11 +2221,10 @@ func (s *server) handleBanPeerMsg(state *peerState, sp *serverPeer) {
 	s.logger.Infof("Banned peer %s (%s) for %v", host, direction, cfg.BanDuration)
 
 	state.banned.Set(host, time.Now().Add(cfg.BanDuration))
-	s.banChan <- p2p.BanEvent{
-		Action: "add",
-		IP:     host,
-	}
 
+	// banList.Add publishes the ban event itself, without blocking. Never send
+	// one from here as well: this runs on the peer loop, and a blocking send on
+	// a ban channel the listener has fallen behind on would freeze it.
 	err = s.banList.Add(sp.ctx, host, time.Now().Add(cfg.BanDuration))
 	if err != nil {
 		s.logger.Errorf("Failed to add ban for peer %s: %v", host, err)
@@ -2249,11 +2248,8 @@ func (s *server) handleBanPeerForDurationMsg(state *peerState, sp *serverPeer, b
 	banUntilTime := time.Unix(banUntil, 0)
 
 	state.banned.Set(host, banUntilTime)
-	s.banChan <- p2p.BanEvent{
-		Action: "add",
-		IP:     host,
-	}
 
+	// banList.Add publishes the ban event; see handleBanPeerMsg.
 	err = s.banList.Add(sp.ctx, host, banUntilTime)
 	if err != nil {
 		s.logger.Errorf("Failed to add ban for peer %s: %v", host, err)

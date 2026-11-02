@@ -912,6 +912,18 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **Legacy bans now disconnect connected peers, and the ban list no longer leaks
+  goroutines.** The legacy service's ban listener only started at shutdown, so a
+  ban recorded while the node ran (a `setban`, a misbehaving peer, the feeler's
+  non-BSV bans) never disconnected a peer that was already connected, and once the
+  listener's 100-event buffer filled every later ban left a goroutine blocked for
+  the life of the process. The listener now runs alongside the peer loop: a ban
+  disconnects every connected legacy peer at the banned host or inside the banned
+  subnet, as `setban` was documented to. The peer loop no longer blocks on a ban
+  event, which with that buffer full would have frozen it on the next ban.
+  `legacy_upnp`, which had the same start-up ordering bug, now maps the port while
+  the node runs instead of only at shutdown.
+
 - **Peer subtrees announced during a catchup are validated afterwards instead of
   lost.** While catching up, the subtree validator used to drop every
   peer-announced subtree, so the next block arrived with all of them unvalidated
