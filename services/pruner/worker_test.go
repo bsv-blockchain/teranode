@@ -1485,3 +1485,44 @@ func TestPhase1RecordWriteFailureSkipsPhase2(t *testing.T) {
 	require.Never(t, func() bool { return len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
 	require.Equal(t, uint32(0), server.lastProcessedHeight.Load())
 }
+
+// With utxostore_parentPreservationBlocks=0, phase 1 returns without preserving anything. That
+// is no successful phase 1: it must not be recorded, or fixing the setting later would hide
+// the gap in which nothing was preserved.
+func TestPhase1WithoutPreservationIsNotRecorded(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, pruneSvc := newPhase1GapTestServer(t, ctx)
+	server.settings.UtxoStore.ParentPreservationBlocks = 0
+
+	go server.prunerProcessor(ctx)
+
+	requirePruned(t, server, pruneSvc, 200)
+
+	_, err := server.blockchainClient.GetState(context.Background(), parentPreservationStateKey)
+	require.True(t, isStateNotFound(err), "no record is written: %v", err)
+}
+
+// A retry signal that arrives after its retry was cleared, from a timer that fired just
+// before, is dropped without running a cycle.
+func TestStaleRetrySignalIsDropped(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 2)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+
+	go server.prunerProcessor(ctx)
+	server.pruneNotify <- pruneSignal{blockHeight: 101, retry: true}
+
+	require.Never(t, func() bool { return client.reads.Load() > 0 || len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond)
+	server.utxoStore.(*utxo.MockUtxostore).AssertNotCalled(t, "GetPrunableUnminedTxIterator", mock.Anything)
+}

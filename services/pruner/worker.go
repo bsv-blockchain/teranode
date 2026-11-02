@@ -234,8 +234,11 @@ func decodeParentPreservationRecord(data []byte) (parentPreservationRecord, erro
 // overtaken. The repair would then need a parent phase 2 may already have deleted, and a hold
 // written after the delete committed cannot bring it back.
 func (s *Server) phase1GapLimit() (limit, maturity uint32, ok bool) {
+	// Without preservation (pruner_skipPreserveParents, or utxostore_parentPreservationBlocks=0,
+	// where phase 1 returns without preserving), phase 1 protects no parent and no run is
+	// recorded: once preservation is back, the time without it counts as a gap.
 	if s.blockchainClient == nil || s.utxoStore == nil || s.settings == nil || s.settings.ChainCfgParams == nil ||
-		s.settings.Pruner.SkipPreserveParents {
+		s.settings.Pruner.SkipPreserveParents || s.settings.UtxoStore.ParentPreservationBlocks == 0 {
 		return 0, 0, false
 	}
 
@@ -449,9 +452,12 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			}
 
 			// A pending retry is kept until a cycle at or above its height is done, so a cycle
-			// skipped for any reason below cannot drop it.
+			// skipped for any reason below cannot drop it. A retry signal with none pending
+			// comes from a timer that fired just before its retry was cleared.
 			if s.repairHoldRetry != nil {
 				s.retryHeldHeight(sig)
+			} else if sig.retry {
+				continue
 			}
 
 			// Phase 1 already ran for a retried height: while the hold lasts, skip the cycle.

@@ -165,8 +165,12 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   next `CoinbaseMaturity` blocks (`phase1_gap_cooldown` in
   `teranode_pruner_skipped_total`). The pruner keeps the height of its last phase 1 under
   the blockchain state key `PrunerParentPreservation`, so a restart neither forgets nor
-  hides a gap. A node upgraded on an existing chain has no such record yet, so phase 2
-  waits 100 blocks once (about 17 hours on mainnet); blob deletion is not affected. A
+  hides a gap. A node without that record yet, upgraded on an existing chain or pruning
+  first above height 44, waits 100 blocks once (about 17 hours on mainnet); blob deletion
+  is not affected. With `pruner_skipPreserveParents` or
+  `utxostore_parentPreservationBlocks=0` phase 1 preserves nothing, so there is no
+  cooldown and no protection; once preservation is turned back on, the time without it
+  counts as a gap. A
   subtree of an overtaken block that cannot be read is tried
   again on every block and holds pruning until it reads or the block leaves the
   1000-block repair window. A subtree or block that is gone from its store can never be
