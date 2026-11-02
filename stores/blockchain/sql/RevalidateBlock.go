@@ -38,7 +38,12 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("error reading height of block %s", blockHash.String(), err)
 	}
 
-	if err = s.rejectForkBelowPassedCheckpoint(ctx, s.db, blockHash, height); err != nil {
+	var bestHeight uint32
+	if err = s.readBestValidHeight(ctx, s.db, &bestHeight); err != nil {
+		return errors.NewStorageError("error reading the best block height for the checkpoint fork rule", err)
+	}
+
+	if err = s.rejectForkBelowPassedCheckpoint(blockHash, height, bestHeight); err != nil {
 		return err
 	}
 
