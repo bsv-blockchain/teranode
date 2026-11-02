@@ -3329,6 +3329,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 		BIP0034Height: 100000000,
 		BIP0065Height: 100000000,
 		BIP0066Height: 100000000,
+		// The stubbed client has no ancestry for the catch-up difficulty precheck to read, so the
+		// synthetic chains never adjust: each header must repeat its parent's bits.
+		NoDifficultyAdjustment: true,
 	}
 
 	mockBlockchainClient := &blockchain.Mock{}
@@ -3444,6 +3447,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 		BIP0034Height: 100000000,
 		BIP0065Height: 100000000,
 		BIP0066Height: 100000000,
+		// The stubbed client has no ancestry for the catch-up difficulty precheck to read, so the
+		// synthetic chains never adjust: each header must repeat its parent's bits.
+		NoDifficultyAdjustment: true,
 	}
 
 	mockBlockchainClient := &blockchain.Mock{}
