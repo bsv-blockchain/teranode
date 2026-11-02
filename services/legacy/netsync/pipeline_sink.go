@@ -52,7 +52,8 @@ import (
 //     (peer.BlockBodyRejectedError); once it is cancelled absorbLocalSinkFault
 //     lets any code through to the read loop, see its doc comment. The one other
 //     code that reaches it is recoveredSinkPanic's ERR_NETWORK_INVALID_RESPONSE,
-//     raised by no producer, which the read loop answers with a disconnect.
+//     raised by no producer, which takes the same typed route and so drops the
+//     association, never with a ban.
 //   - of those, exactly three refusals also wrap errors.ErrBlockBodyMismatch
 //     inside the invalid verdict, and they are the only ones the legacy peer
 //     server will ban a host for, once the wire checksum is verified, which the
@@ -124,7 +125,9 @@ const sinkPanicLimit = 3
 //     costs its sender the connection at once, until the block commits.
 //
 // Dropped means ERR_NETWORK_INVALID_RESPONSE, the delivering peer's, which the
-// read loop answers with a disconnect and never a ban. Neither error carries the
+// wire layer types as a refused body (peer.BlockBodyRejectedError): the read
+// loop drops the whole association, so a primary does not go on owing the block
+// a DATA1 sub-peer was dropped for, and never bans. Neither error carries the
 // panic value: the read loop echoes a read error's text to the peer, and what
 // crashed is for this node's log.
 func (sm *SyncManager) recoveredSinkPanic(hash chainhash.Hash, delivered *peerpkg.Peer, p any) error {

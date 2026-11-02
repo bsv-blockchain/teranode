@@ -266,7 +266,15 @@ func readBlockMessage(lr *io.LimitedReader, length uint64) (wire.Message, error)
 		// reject naming the block and drops the whole association instead of
 		// answering "malformed"; whether the host is then banned is the peer
 		// server's decision and rests on BlockBodyRejectedError.ProvenBad.
-		if errors.Is(err, errors.ErrBlockInvalid) || errors.IsBlockCorrupt(err) {
+		//
+		// The third is the sink's verdict on a block whose conversion keeps
+		// panicking (netsync recoveredSinkPanic). It is read as the outermost code
+		// only, since a network code can sit inside a fault of ours. It takes the
+		// same typed route, because what it is for is dropping the association:
+		// dropping only a DATA1 sub-peer leaves the primary owing the block. It
+		// carries no ErrBlockBodyMismatch, so it is never ProvenBad and nobody is
+		// banned for it.
+		if errors.Is(err, errors.ErrBlockInvalid) || errors.IsBlockCorrupt(err) || coded.Code() == errors.ERR_NETWORK_INVALID_RESPONSE {
 			return nil, deleteOrphanedBody(hash, converted, &BlockBodyRejectedError{Hash: hash, Err: err})
 		}
 
@@ -275,9 +283,6 @@ func readBlockMessage(lr *io.LimitedReader, length uint64) (wire.Message, error)
 		// for every fault of this node's own; once it is shutting down it lets
 		// any code through (absorbLocalSinkFault), and the server is already
 		// closing every connection, so the "malformed" disconnect costs nothing.
-		// The one code it lets through while live is the bound on panics under
-		// the conversion (netsync recoveredSinkPanic), where the disconnect is
-		// the point.
 		return nil, deleteOrphanedBody(hash, converted, errors.NewProcessingError("streaming block %s: could not store the body", hash, err))
 	}
 

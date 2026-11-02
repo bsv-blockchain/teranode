@@ -245,6 +245,8 @@ func TestReadHandshakeMessage_ReadsEveryHandshakeMessage(t *testing.T) {
 
 	version := wire.NewMsgVersion(me, you, 42, 0)
 	version.UserAgent = "/" + strings.Repeat("u", wire.MaxUserAgentLen-2) + "/"
+	// The longest association ID a BlockPriority peer may announce.
+	version.AssociationID = bytes.Repeat([]byte{1}, wire.MaxAssociationIDLen)
 
 	for _, msg := range []wire.Message{
 		version,
