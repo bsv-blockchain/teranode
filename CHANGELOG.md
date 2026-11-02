@@ -117,10 +117,15 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   higher than before on a node where those cases occur. New counters show it:
   `utxo_pruner_input_resolution_errors_total`,
   `utxo_pruner_children_held_unverified_total`, `utxo_pruner_markers_superseded_total`,
-  `utxo_pruner_marker_withdraw_failures_total` and
+  `utxo_pruner_marker_withdraw_failures_total`,
+  `utxo_pruner_parent_update_failures_total` and
   `utxo_sql_pruner_children_held_back_total`; operators should alert on a steadily
-  rising value. The Aerospike store registers a new UDF module, `teranode_v66`, on
-  startup.
+  rising value. The SQL store (Postgres and SQLite) creates a new table,
+  `deleted_children`, on startup to hold the markers: one row per pruned child per
+  surviving parent, removed when that parent is pruned, so it adds disk use in
+  proportion to the pruned transactions whose parents are still unspent. The
+  Aerospike store keeps the markers in a new bin on the parent record and registers
+  a new UDF module, `teranode_v66`, on startup.
 
   Two validator request fields are new, `spender_created_by_caller` and
   `ignore_locked`, and the gRPC client now sends `ignore_locked`, which it used to

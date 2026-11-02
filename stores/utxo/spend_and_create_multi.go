@@ -459,6 +459,14 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 		// A record the first wave created is the list's own, and a failed spend
 		// may reverse its idempotent matches with the rest. A record found in
 		// place may be a live transaction's, so only what this spend wrote is.
+		//
+		// Created answers for this call only. A retry pass of the same block
+		// finds a record its own earlier pass wrote as existing, so the store
+		// keeps that record's idempotent matches, while the caller's cleanup
+		// still counts the record as its own (quick_validate.go observe). That is
+		// deliberate: the cleanup only runs on the below-checkpoint paths, where
+		// every transaction in the list is confirmed history and historically
+		// spent each of its inputs, so keeping the matches is right either way.
 		waveOption := requireParentOutputs
 		if results[i].Created {
 			waveOption = requireParentOutputsCreated
