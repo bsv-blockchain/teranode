@@ -155,7 +155,7 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `teranode_unmined_transactions_refused_while_syncing_total{route}`. Propagation's
   HTTP status for any other `SERVICE_UNAVAILABLE` error moves from 500 to 503 as well.
   Block and subtree validation are not gated and still validate a block's own
-  transactions during catch-up. (#PRNUM)
+  transactions during catch-up. (#2094)
 
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**
