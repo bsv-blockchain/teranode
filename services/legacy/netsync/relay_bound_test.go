@@ -765,6 +765,72 @@ func TestQueueTx_HoldsAtMostAQueuesWorthPerPeer(t *testing.T) {
 	require.Equal(t, 2*size, sm.relayTxBytes.Load(), "held transactions stay charged, the dropped one does not")
 }
 
+// TestBlockHandlerStop_DropsQueuedRelayedTransactionsAndGivesBackTheirBytes
+// pins what the block handler leaves behind when it stops. The relay workers
+// stop on quit and can leave accepted transactions in the queue, and a
+// transaction held for a registration that will now never be handled stays
+// held. Every one must be answered and its bytes given back, and a
+// transaction QueueTx takes after the stop must not be queued. No workers run
+// here, so the queue holds what it was given until the stop.
+func TestBlockHandlerStop_DropsQueuedRelayedTransactionsAndGivesBackTheirBytes(t *testing.T) {
+	sm, p := newRelayHarness(t, 8, testRelayBudget)
+	sm.relayTxWorkers = 0
+
+	running := blockchain2.FSMStateRUNNING
+	client := &blockchain2.Mock{}
+	client.On("GetFSMCurrentState", mock.Anything).Return(&running, nil)
+
+	sm.blockchainClient = client
+	sm.peerStates = txmap.NewSyncedMap[*peerpkg.Peer, *peerSyncState]()
+	sm.msgChan = make(chan interface{})
+	sm.quit = make(chan struct{})
+	sm.handlerDone = make(chan struct{})
+
+	go sm.blockHandler()
+
+	awaiting, err := peerpkg.NewOutboundPeer(ulogger.TestLogger{}, sm.settings, &peerpkg.Config{}, "localhost:8334")
+	require.NoError(t, err)
+	sm.markAwaitingRegistration(awaiting)
+
+	tx := bsvutil.NewTx(wire.NewMsgTx(1))
+	size := int64(tx.MsgTx().SerializeSize())
+
+	dones := make([]chan struct{}, 0, 4)
+
+	for i := 0; i < 3; i++ {
+		done := make(chan struct{}, 1)
+		queueTxWithinDone(t, sm, tx, p, done)
+		dones = append(dones, done)
+	}
+
+	heldDone := make(chan struct{}, 1)
+	queueTxWithinDone(t, sm, tx, awaiting, heldDone)
+	dones = append(dones, heldDone)
+
+	require.Len(t, sm.relayTxQueue, 3, "harness check: three transactions queued")
+	require.Equal(t, 4*size, sm.relayTxBytes.Load(), "harness check: four transactions charged")
+
+	dropped := testutil.ToFloat64(prometheusLegacyNetsyncRelayedTxDropped)
+
+	close(sm.quit)
+	<-sm.handlerDone
+
+	for i, done := range dones {
+		waitDone(t, done, "transaction "+strconv.Itoa(i)+" was left in the relay path unanswered")
+	}
+
+	require.Empty(t, sm.relayTxQueue, "the queue must be drained")
+	require.Zero(t, sm.relayTxBytes.Load(), "every dropped transaction's bytes must be given back")
+	require.Equal(t, dropped+4, testutil.ToFloat64(prometheusLegacyNetsyncRelayedTxDropped))
+
+	late := make(chan struct{}, 1)
+	queueTxWithinDone(t, sm, tx, p, late)
+	waitDone(t, late, "a transaction after the stop was not answered")
+
+	require.Empty(t, sm.relayTxQueue, "nothing may be queued after the drain")
+	require.Zero(t, sm.relayTxBytes.Load())
+}
+
 // queueTxWithinDone is queueTxWithin with a done channel.
 func queueTxWithinDone(t *testing.T, sm *SyncManager, tx *bsvutil.Tx, p *peerpkg.Peer, done chan struct{}) {
 	t.Helper()

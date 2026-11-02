@@ -160,7 +160,7 @@ func _initPrometheusMetrics() {
 		Namespace: "teranode",
 		Subsystem: "legacy_netsync",
 		Name:      "relayed_tx_dropped_total",
-		Help:      "Transactions relayed by legacy peers and dropped unvalidated because the relay queue was full or over its byte budget",
+		Help:      "Transactions relayed by legacy peers and dropped unvalidated: the relay queue was full or over its byte budget, the peer left before it was registered, or the sync manager stopped",
 	})
 	prometheus.MustRegister(prometheusLegacyNetsyncRelayedTxDropped)
 

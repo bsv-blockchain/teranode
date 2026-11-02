@@ -836,6 +836,16 @@ type SyncManager struct {
 	relayTxBytes       atomic.Int64
 	relayTxBytesBudget int64
 
+	// relayTxMu orders QueueTx against closeRelayTxQueue, which the block
+	// handler runs as it stops. QueueTx holds it for reading from its check of
+	// relayTxClosed to the end of its enqueue, and closeRelayTxQueue holds it
+	// for writing while it sets relayTxClosed and drains the queue, so no
+	// transaction can be enqueued after the drain and left there with its
+	// bytes charged. Readers never wait on each other, so the peer's read loop
+	// waits only while the drain runs, once, at shutdown.
+	relayTxMu     sync.RWMutex
+	relayTxClosed bool
+
 	// awaitingRegistration holds, for each peer NewPeer has handed to the
 	// block handler and handleNewPeerMsg has not yet registered, the relayed
 	// transactions QueueTx took from that peer in the meantime. The handshake
@@ -3923,9 +3933,9 @@ out:
 	// waiter on handlerDone (Stop, and the tests that run the handler) see them finished.
 	sm.handlerLoops.Wait()
 
-	// Registrations still in msgChan will not be handled now, so nothing will
-	// release what their peers hold.
-	sm.dropAllHeldTxs()
+	// Nothing will take another relayed transaction off the queue or release
+	// what a peer holds for its registration, so drop them all now.
+	sm.closeRelayTxQueue()
 
 	close(sm.handlerDone)
 	sm.logger.Infof("Block handler done")
@@ -3960,6 +3970,17 @@ func (sm *SyncManager) QueueTx(tx *bsvutil.Tx, peer *peerpkg.Peer, done chan str
 		if done != nil {
 			done <- struct{}{}
 		}
+		return
+	}
+
+	// Held to the end, so closeRelayTxQueue cannot drain between the check
+	// below and the enqueue; see relayTxMu.
+	sm.relayTxMu.RLock()
+	defer sm.relayTxMu.RUnlock()
+
+	if sm.relayTxClosed {
+		sm.dropRelayedTx(tx, peer, done, "sync manager stopped")
+
 		return
 	}
 
@@ -4082,6 +4103,36 @@ func (sm *SyncManager) dropAllHeldTxs() {
 
 	for _, peer := range peers {
 		sm.releaseHeldTxs(peer, false, "sync manager stopping before the peer was registered")
+	}
+}
+
+// closeRelayTxQueue stops the relay path as the block handler stops. It marks
+// the path closed, so QueueTx drops whatever arrives from now on, then drops
+// every transaction held for a registration that will now never be handled,
+// since those registrations are still in msgChan, and every transaction still
+// in relayTxQueue, since the workers stop on quit and may leave some there. A
+// dropped transaction's bytes are given back to relayTxBytes and its done
+// channel answered. Holding relayTxMu for writing throughout means no QueueTx
+// is part-way through an enqueue while it runs and none starts one after it.
+//
+// A worker that took a transaction before quit finishes it and gives its
+// bytes back itself, so relayTxBytes reaches zero once the last one returns.
+func (sm *SyncManager) closeRelayTxQueue() {
+	sm.relayTxMu.Lock()
+	defer sm.relayTxMu.Unlock()
+
+	sm.relayTxClosed = true
+
+	sm.dropAllHeldTxs()
+
+	for {
+		select {
+		case msg := <-sm.relayTxQueue:
+			sm.relayTxBytes.Add(-msg.size)
+			sm.dropRelayedTx(msg.tx, msg.peer, msg.reply, "sync manager stopped")
+		default:
+			return
+		}
 	}
 }
 

@@ -304,10 +304,12 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   are being validated, as the setting's description explains. A transaction that finds
   the queue full or the budget spent is dropped, not waited for; the node relies on
   getting it again from another peer or in the block that mines it. Drops are counted in
-  the new `teranode_legacy_netsync_relayed_tx_dropped_total`. With the workers busy for
-  the validation latency L, the pool validates at most workers / L transactions a second,
-  so a node whose relayed-transaction validation is slow drops some of a heavy relay
-  stream. Transaction announcements (`inv` items) are queued in chunks of 4096 behind
+  the new `teranode_legacy_netsync_relayed_tx_dropped_total`, which also counts the
+  transactions dropped because their peer left before it was registered or because the
+  sync manager stopped; on stop, every queued transaction is answered and its bytes
+  given back. With the workers busy for the validation latency L, the pool validates at
+  most workers / L transactions a second, so a node whose relayed-transaction validation
+  is slow drops some of a heavy relay stream. Transaction announcements (`inv` items) are queued in chunks of 4096 behind
   `legacy_invQueueMaxHashes` (default 400,000 hashes, eight maximum-size announcements;
   a value below 4096 falls back to the default) and a per-peer share of 100,000 hashes,
   and sixteen workers take whatever is queued and look it up in UTXO store batch reads
