@@ -1600,3 +1600,153 @@ func TestAnnounceNewTransactionsReachesPeerInBatchOrder(t *testing.T) {
 
 	require.Equal(t, want, seen)
 }
+
+// A ban recorded while the server is running reaches the peer loop, which is what disconnects a
+// connected peer at the banned address. Start used to run the peer loop in the foreground and only
+// launch the ban listener after it, so the listener started at shutdown: nothing drained the ban
+// list's subscription, and once its buffer filled every further ban parked a goroutine for good.
+// A mainnet node held 694 of them after a month.
+func TestServerStart_BanReachesThePeerLoopWhileRunning(t *testing.T) {
+	bl := emptyWritableBanList(t)
+
+	s := &server{
+		ctx:                  t.Context(),
+		logger:               ulogger.TestLogger{},
+		banList:              bl,
+		banChan:              bl.Subscribe(),
+		query:                make(chan interface{}),
+		modifyRebroadcastInv: make(chan interface{}, modifyRebroadcastInvBuffer),
+		rebroadcastTip:       make(chan struct{}, 1),
+		relayInv:             make(chan relayMsg, 16),
+		quit:                 make(chan struct{}),
+	}
+
+	disconnects := make(chan disconnectNodeMsg, 1)
+
+	s.runPeerLoop = func() {
+		defer s.wg.Done()
+
+		for {
+			select {
+			case q := <-s.query:
+				if msg, ok := q.(disconnectNodeMsg); ok {
+					// No peers are connected, so answer as peerHandler would.
+					msg.reply <- errors.NewProcessingError("peer not found")
+
+					select {
+					case disconnects <- msg:
+					default:
+					}
+				}
+			case <-s.quit:
+				return
+			}
+		}
+	}
+
+	stopped := make(chan struct{})
+
+	go func() {
+		s.Start()
+		close(stopped)
+	}()
+
+	t.Cleanup(func() {
+		close(s.quit)
+		<-stopped
+	})
+
+	require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
+
+	select {
+	case <-disconnects:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a ban recorded while the server runs must reach the peer loop")
+	}
+}
+
+// A ban disconnects the connected peers it covers and no others. A peer's address carries its port
+// and a ban names a bare host or a subnet, so comparing the two as they stood matched nothing: the
+// ban was recorded, but the banned peer stayed connected.
+func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		ban    string
+		banned []string
+		spared []string
+	}{
+		{
+			name:   "a host ban disconnects the peer at that host",
+			ban:    "10.0.0.1",
+			banned: []string{"10.0.0.1:8333"},
+			spared: []string{"10.0.0.2:8333"},
+		},
+		{
+			name:   "a subnet ban disconnects every peer inside it",
+			ban:    "10.0.1.0/24",
+			banned: []string{"10.0.1.7:8333", "10.0.1.9:18333"},
+			spared: []string{"10.0.2.7:8333"},
+		},
+		{
+			name:   "an IPv6 host ban disconnects the peer at that host",
+			ban:    "2001:db8::1",
+			banned: []string{"[2001:db8::1]:8333"},
+			spared: []string{"[2001:db8::2]:8333"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bl := emptyWritableBanList(t)
+
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+				query:   make(chan interface{}),
+				quit:    make(chan struct{}),
+			}
+
+			state := newTestPeerState()
+
+			// Keyed by position: a peer with no connection has no ID of its own yet.
+			keys := make(map[string]int32)
+
+			for i, addr := range append(append([]string{}, tc.banned...), tc.spared...) {
+				keys[addr] = int32(i)
+				state.outboundPeers.Set(int32(i), newTestOutboundPeer(t, s, addr))
+			}
+
+			// Serve the peer loop's query channel, as peerHandler does.
+			go func() {
+				for {
+					select {
+					case q := <-s.query:
+						s.handleQuery(state, q)
+					case <-s.quit:
+						return
+					}
+				}
+			}()
+
+			go s.listenForBanEvents(t.Context())
+
+			t.Cleanup(func() { close(s.quit) })
+
+			require.NoError(t, bl.Add(t.Context(), tc.ban, time.Now().Add(time.Hour)))
+
+			for _, addr := range tc.banned {
+				id := keys[addr]
+
+				require.Eventually(t, func() bool {
+					_, still := state.outboundPeers.Get(id)
+					return !still
+				}, 5*time.Second, 10*time.Millisecond, "the peer at %s is banned and must be disconnected", addr)
+			}
+
+			for _, addr := range tc.spared {
+				_, still := state.outboundPeers.Get(keys[addr])
+				require.True(t, still, "the peer at %s is not covered by the ban", addr)
+			}
+		})
+	}
+}

@@ -497,6 +497,11 @@ type server struct {
 	banList           *p2p.BanList
 	banChan           chan p2p.BanEvent
 
+	// runPeerLoop is the loop Start runs in the foreground until shutdown. Nil
+	// means peerHandler; tests substitute a loop that needs no address, sync or
+	// connection manager, so they can check what Start runs alongside it.
+	runPeerLoop func()
+
 	// feelerAttempted and feelerVerified count probes launched and probes that
 	// completed a BSV version exchange. Reported on the per-probe log line so
 	// the feature's slow, statistical benefit can be checked from the logs
@@ -3237,16 +3242,27 @@ func (s *server) Start() {
 	s.wg.Add(1)
 	go s.rebroadcastHandler()
 
-	s.wg.Add(1)
-	s.peerHandler()
+	// Everything that must run alongside the peer loop is started before it,
+	// because the peer loop runs in the foreground here and only returns at
+	// shutdown. Started after it, the ban listener never ran while the server
+	// was up: nothing drained the ban list's subscription, so once its buffer
+	// filled every later ban left a goroutine blocked on the send for good, and
+	// a peer banned elsewhere was never disconnected. The listener's requests
+	// wait on s.query until the peer loop is serving it.
+	go s.listenForBanEvents(s.ctx)
 
 	if s.nat != nil {
 		s.wg.Add(1)
 		go s.upnpUpdateThread()
 	}
 
-	// Start listening for ban events
-	go s.listenForBanEvents(s.ctx)
+	s.wg.Add(1)
+
+	if s.runPeerLoop != nil {
+		s.runPeerLoop()
+	} else {
+		s.peerHandler()
+	}
 
 	s.WaitForShutdown()
 }
@@ -4104,29 +4120,57 @@ func (s *server) listenForBanEvents(ctx context.Context) {
 // handleBanEvent processes a ban event from the P2P service by disconnecting
 // peers that match the banned IP address or subnet. Only "add" ban actions
 // are processed; other actions are ignored.
-func (s *server) handleBanEvent(_ context.Context, event p2p.BanEvent) {
+func (s *server) handleBanEvent(ctx context.Context, event p2p.BanEvent) {
 	if event.Action != "add" {
 		return // We only care about new bans
 	}
 
 	s.logger.Infof("Received ban event for %s", event.IP)
 
-	// Create a message to send to the peer handler
-	disconnectMsg := disconnectNodeMsg{
-		cmp: func(sp *serverPeer) bool {
-			peerIP := net.ParseIP(sp.Addr())
-			return sp.Addr() == event.IP || (event.Subnet != nil && event.Subnet.Contains(peerIP))
-		},
-		reply: make(chan error),
+	// A peer's address carries its port; a ban names a bare host or a subnet.
+	// Compare hosts, never the raw address, or nothing ever matches.
+	covered := func(sp *serverPeer) bool {
+		host, _, err := net.SplitHostPort(sp.Addr())
+		if err != nil {
+			return false
+		}
+
+		if host == event.IP {
+			return true
+		}
+
+		return event.Subnet != nil && event.Subnet.Contains(net.ParseIP(host))
 	}
 
-	// Send the message to the peer handler
-	s.query <- disconnectMsg
+	// One request disconnects one inbound peer, or every matching outbound
+	// peer, and answers "peer not found" once nothing matches. A subnet ban can
+	// cover several peers, so ask until nothing is left. Most bans cover no
+	// connected peer at all (the feeler bans hosts it only probed), so running
+	// out of matches is the normal outcome, not an error. Each round that
+	// matches removes its peers from the lists, so the loop ends.
+	for {
+		// Buffered so the peer loop never blocks replying to a listener that
+		// has already given up at shutdown.
+		msg := disconnectNodeMsg{cmp: covered, reply: make(chan error, 1)}
 
-	// Wait for the reply
-	err := <-disconnectMsg.reply
-	if err != nil {
-		s.logger.Errorf("Error disconnecting banned peers: %v", err)
+		select {
+		case s.query <- msg:
+		case <-s.quit:
+			return
+		case <-ctx.Done():
+			return
+		}
+
+		select {
+		case err := <-msg.reply:
+			if err != nil {
+				return
+			}
+		case <-s.quit:
+			return
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
