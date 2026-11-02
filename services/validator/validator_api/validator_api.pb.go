@@ -154,6 +154,8 @@ type ValidateTransactionRequest struct {
 	UnconfirmedParentsAtCandidateHeight *bool   `protobuf:"varint,12,opt,name=unconfirmed_parents_at_candidate_height,json=unconfirmedParentsAtCandidateHeight,proto3,oneof" json:"unconfirmed_parents_at_candidate_height,omitempty"` // Resolve unconfirmed-parent heights to the candidate block height instead of failing closed (consensus-mode sentinel → MEMPOOL_HEIGHT → bad-txns-unconfirmed-input-in-block). CONSENSUS SAFETY: fail-open — the height feeds per-input script-era flag selection in BDK, and the floater backstop is block validation's parent-membership check. Compatible with add_tx_to_block_assembly=true (a floater child blessed at the candidate height equals what policy-mode admission would put in assembly anyway). Set by the legacy block-sync path (subtreevalidation checkSubtreeFromBlock, BaseUrl "legacy") and by the block-validation path (CheckBlockSubtrees, which runs after ValidateBlock's PoW checks); MUST NOT be set on peer-facing or mempool-admission paths. DEPLOYMENT SKEW (request-only field, no data migration in any direction): new sender → old validator ignores the unknown field and keeps the old fail-closed behaviour, so it stamps the unconfirmedParentHeight sentinel for genuine in-block parents and BDK rejects them with bad-txns-unconfirmed-input-in-block — this now degrades ORDINARY block validation (any block with intra-block parent chains, via the CheckBlockSubtrees setter), not just legacy catchup, for the whole skew window; old sender → new validator reconstructs absent as false (old behaviour); mixed validator fleets behind load balancing make identical legacy requests pass or wedge depending on which instance serves them. Upgrade subtreevalidation and validator together; downgrade reintroduces the wedge for future legacy catchup but corrupts nothing.
 	SkipScriptValidation                *bool   `protobuf:"varint,13,opt,name=skip_script_validation,json=skipScriptValidation,proto3,oneof" json:"skip_script_validation,omitempty"`                                                  // Skip BDK script/signature validation for transactions below the checkpoint height. Request-only. DEPLOYMENT SKEW: new sender → old validator ignores this field and performs full script validation (slower, never corrupts state); old sender → new validator reconstructs absent as false (old behaviour, full validation).
 	OutpointOnlySpend                   *bool   `protobuf:"varint,14,opt,name=outpoint_only_spend,json=outpointOnlySpend,proto3,oneof" json:"outpoint_only_spend,omitempty"`                                                           // Below-checkpoint outpoint-only spend fast path: skips parent-tx reads, fee computation, and UTXO-hash checksum. MUST travel with skip_script_validation=true; the validator enforces this invariant and returns a processing error if outpoint_only_spend is true without skip_script_validation. Request-only. DEPLOYMENT SKEW: new sender → old validator ignores this field and performs full extend+spend (slower, never corrupts state); old sender → new validator reconstructs absent as false (old behaviour, full spend).
+	BlockAssemblyCandidateHeight        *uint32 `protobuf:"varint,15,opt,name=block_assembly_candidate_height,json=blockAssemblyCandidateHeight,proto3,oneof" json:"block_assembly_candidate_height,omitempty"`                        // Height block assembly mines a side block's transaction at (tip+1). Set with field 16 only for a block that does not extend the tip; the transaction is handed to block assembly only if final there and free of active BIP68 relative locks. Request-only: an older validator ignores both and hands the transaction over as before.
+	BlockAssemblyCandidateMedianTime    *uint32 `protobuf:"varint,16,opt,name=block_assembly_candidate_median_time,json=blockAssemblyCandidateMedianTime,proto3,oneof" json:"block_assembly_candidate_median_time,omitempty"`          // The tip's median time past, paired with field 15.
 	unknownFields                       protoimpl.UnknownFields
 	sizeCache                           protoimpl.SizeCache
 }
@@ -277,6 +279,20 @@ func (x *ValidateTransactionRequest) GetOutpointOnlySpend() bool {
 		return *x.OutpointOnlySpend
 	}
 	return false
+}
+
+func (x *ValidateTransactionRequest) GetBlockAssemblyCandidateHeight() uint32 {
+	if x != nil && x.BlockAssemblyCandidateHeight != nil {
+		return *x.BlockAssemblyCandidateHeight
+	}
+	return 0
+}
+
+func (x *ValidateTransactionRequest) GetBlockAssemblyCandidateMedianTime() uint32 {
+	if x != nil && x.BlockAssemblyCandidateMedianTime != nil {
+		return *x.BlockAssemblyCandidateMedianTime
+	}
+	return 0
 }
 
 // ValidateTransactionResponse provides transaction validation results
@@ -558,7 +574,8 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\x0eHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x128\n" +
-	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x9e\b\n" +
+	"\ttimestamp\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\"\x8c\n" +
+	"\n" +
 	"\x1aValidateTransactionRequest\x12)\n" +
 	"\x10transaction_data\x18\x01 \x01(\fR\x0ftransactionData\x12!\n" +
 	"\fblock_height\x18\x02 \x01(\rR\vblockHeight\x121\n" +
@@ -573,7 +590,9 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"'unconfirmed_parents_at_candidate_height\x18\f \x01(\bH\bR#unconfirmedParentsAtCandidateHeight\x88\x01\x01\x129\n" +
 	"\x16skip_script_validation\x18\r \x01(\bH\tR\x14skipScriptValidation\x88\x01\x01\x123\n" +
 	"\x13outpoint_only_spend\x18\x0e \x01(\bH\n" +
-	"R\x11outpointOnlySpend\x88\x01\x01B\x15\n" +
+	"R\x11outpointOnlySpend\x88\x01\x01\x12J\n" +
+	"\x1fblock_assembly_candidate_height\x18\x0f \x01(\rH\vR\x1cblockAssemblyCandidateHeight\x88\x01\x01\x12S\n" +
+	"$block_assembly_candidate_median_time\x18\x10 \x01(\rH\fR blockAssemblyCandidateMedianTime\x88\x01\x01B\x15\n" +
 	"\x13_skip_utxo_creationB\x1b\n" +
 	"\x19_add_tx_to_block_assemblyB\x15\n" +
 	"\x13_skip_policy_checksB\x15\n" +
@@ -584,7 +603,9 @@ const file_services_validator_validator_api_validator_api_proto_rawDesc = "" +
 	"\t_in_blockB*\n" +
 	"(_unconfirmed_parents_at_candidate_heightB\x19\n" +
 	"\x17_skip_script_validationB\x16\n" +
-	"\x14_outpoint_only_spendJ\x04\b\n" +
+	"\x14_outpoint_only_spendB\"\n" +
+	" _block_assembly_candidate_heightB'\n" +
+	"%_block_assembly_candidate_median_timeJ\x04\b\n" +
 	"\x10\vR\x0fparent_metadata\"{\n" +
 	"\x1bValidateTransactionResponse\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12\x12\n" +

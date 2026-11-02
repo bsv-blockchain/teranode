@@ -992,13 +992,15 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// survive in the mempool if the block loses a reorg, unless the block
 		// is above tip+1 or under different transaction rules from tip+1. See
 		// feedsBlockAssembly.
-		feeds, err := u.feedsBlockAssembly(ctx, *currentState == blockchain.FSMStateRUNNING, request.BlockHeight)
+		feeds, baCandidate, err := u.feedsBlockAssembly(ctx, *currentState == blockchain.FSMStateRUNNING, request.BlockHeight, previousBlockHash)
 		if err != nil {
 			return false, errors.NewProcessingError("[CheckSubtree] Failed to decide block assembly feed", err)
 		}
 
 		if !feeds {
 			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
+		} else if baCandidate != nil {
+			validatorOptions = append(validatorOptions, validator.WithBlockAssemblyCandidate(baCandidate))
 		}
 
 		// Call the validateSubtreeInternal method

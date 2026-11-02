@@ -404,19 +404,38 @@ func (u *Server) getSubtreeToCheck(ctx context.Context, request *subtreevalidati
 // and a height locktime final above tip+1 may not be final at tip+1. A same-era
 // block feeds even when it does not extend the tip, so the txs of a competitor
 // that loses stay in the template.
-func (u *Server) feedsBlockAssembly(ctx context.Context, stateFeeds bool, blockHeight uint32) (bool, error) {
+//
+// For a block whose parent is not the tip it also returns the block assembly
+// candidate (tip+1, MTP of the tip): the validator hands such a block's tx to
+// block assembly only if it is final there. A block extending the tip returns
+// none, since its own context is the candidate's.
+func (u *Server) feedsBlockAssembly(ctx context.Context, stateFeeds bool, blockHeight uint32, parentHash *chainhash.Hash) (bool, *validator.BlockAssemblyCandidate, error) {
 	if !stateFeeds {
-		return false, nil
+		return false, nil, nil
 	}
 
-	_, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
+	tipHeader, tipMeta, err := u.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		return false, errors.NewServiceError("failed to get best block header", err)
+		return false, nil, errors.NewServiceError("failed to get best block header", err)
 	}
 
 	next := tipMeta.Height + 1
 
-	return blockHeight <= next && validator.SameTxRules(u.settings.ChainCfgParams, blockHeight, next), nil
+	if blockHeight > next || !validator.SameTxRules(u.settings.ChainCfgParams, blockHeight, next) {
+		return false, nil, nil
+	}
+
+	tipHash := tipHeader.Hash()
+	if parentHash != nil && parentHash.IsEqual(tipHash) {
+		return true, nil, nil
+	}
+
+	tipMedianTime, err := u.fetchCandidateParentMedianTime(ctx, tipHash)
+	if err != nil {
+		return false, nil, errors.NewServiceError("failed to get the median time past of the tip", err)
+	}
+
+	return true, &validator.BlockAssemblyCandidate{Height: next, MedianTimePast: tipMedianTime}, nil
 }
 
 // CheckBlockSubtrees validates every subtree a block references, fetching any it
@@ -622,7 +641,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	stateFeeds := *currentState == blockchain.FSMStateRUNNING ||
 		(*currentState == blockchain.FSMStateCATCHINGBLOCKS && request.GetKeepBlockAssemblyHandoff())
 
-	addTXToBlockAssembly, err := u.feedsBlockAssembly(ctx, stateFeeds, block.Height)
+	addTXToBlockAssembly, baCandidate, err := u.feedsBlockAssembly(ctx, stateFeeds, block.Height, block.Header.HashPrevBlock)
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("[CheckBlockSubtrees] Failed to decide block assembly feed", err))
 	}
@@ -736,7 +755,7 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 				if batched {
 					procErr = u.processTransactionsBatched(ctx, checker, allTransactions, *block.Hash(), block.Height, candidateBlockTime, candidateParentMedianTime, blockIds)
 				} else {
-					procErr = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds, addTXToBlockAssembly)
+					procErr = u.processTransactionsInLevels(ctx, allTransactions, *block.Hash(), chainhash.Hash{}, block.Height, candidateBlockTime, candidateParentMedianTime, blockIds, addTXToBlockAssembly, baCandidate)
 				}
 
 				if procErr != nil {
@@ -805,6 +824,8 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 	// closure and processTransactionsInLevels cannot diverge across a transition.
 	if !addTXToBlockAssembly {
 		subtreeValidatorOptions = append(subtreeValidatorOptions, validator.WithAddTXToBlockAssembly(false))
+	} else if baCandidate != nil {
+		subtreeValidatorOptions = append(subtreeValidatorOptions, validator.WithBlockAssemblyCandidate(baCandidate))
 	}
 
 	validateSubtree := func(validateCtx context.Context, subtreeHash chainhash.Hash) (*subtreepkg.Subtree, error) {
@@ -1547,7 +1568,7 @@ func (u *Server) readTransactionsFromSubtreeDataStream(subtree *subtreepkg.Subtr
 // the candidate block height before BDK/BIP68 consume the heights. See the
 // consensus-safety discussion on the validateSubtree closure in
 // CheckBlockSubtrees — the same three contract conditions apply here.
-func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, blockIds map[uint32]bool, addTXToBlockAssembly bool) error {
+func (u *Server) processTransactionsInLevels(ctx context.Context, allTransactions []*bt.Tx, blockHash chainhash.Hash, subtreeHash chainhash.Hash, blockHeight uint32, candidateBlockTime uint32, candidateParentMedianTime uint32, blockIds map[uint32]bool, addTXToBlockAssembly bool, baCandidate *validator.BlockAssemblyCandidate) error {
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "processTransactionsInLevels",
 		tracing.WithParentStat(u.stats),
 		tracing.WithLogMessage(u.logger, "[processTransactionsInLevels] Processing %d transactions at block height %d", len(allTransactions), blockHeight),
@@ -1660,6 +1681,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 	// short catch-up from RUNNING can explicitly keep it on.
 	if !addTXToBlockAssembly {
 		validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
+	} else if baCandidate != nil {
+		validatorOptions = append(validatorOptions, validator.WithBlockAssemblyCandidate(baCandidate))
 	}
 
 	// Pre-process validation options

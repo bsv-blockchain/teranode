@@ -348,7 +348,7 @@ func TestProcessTransactionsInLevels_UnlockFailedParentGetsUnlocked(t *testing.T
 		err:       errors.NewTxUnlockFailedError("[Validate] error marking tx as spendable", errors.NewProcessingError("context deadline exceeded")),
 	}
 
-	require.NoError(t, server.processTransactionsInLevels(ctx, []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true))
+	require.NoError(t, server.processTransactionsInLevels(ctx, []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true, nil))
 
 	store.AssertCalled(t, "SetLocked", mock.Anything, []chainhash.Hash{*tx.TxIDChainHash()}, false)
 }
@@ -403,7 +403,7 @@ func TestProcessTransactionsInLevels_InvalidSiblingDoesNotSkipUnlock(t *testing.
 		invalidFor:      *sibling.TxIDChainHash(),
 	}
 
-	err = server.processTransactionsInLevels(ctx, []*bt.Tx{accepted, sibling}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+	err = server.processTransactionsInLevels(ctx, []*bt.Tx{accepted, sibling}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true, nil)
 	require.Error(t, err, "the invalid sibling still fails the level")
 
 	store.AssertCalled(t, "SetLocked", mock.Anything, []chainhash.Hash{*accepted.TxIDChainHash()}, false)
@@ -531,7 +531,7 @@ func TestProcessTransactionsInLevels_BlockSpendRuleViolationFailsTheLevel(t *tes
 				err:       errors.NewProcessingError("[Validate] error spending utxos", tc.cause),
 			}
 
-			err = server.processTransactionsInLevels(context.Background(), []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+			err = server.processTransactionsInLevels(context.Background(), []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true, nil)
 			require.Error(t, err)
 			require.True(t, errors.Is(err, tc.cause), "the store's code must survive the re-code")
 			require.Equal(t, tc.txInvalid, errors.Is(err, errors.ErrTxInvalid))

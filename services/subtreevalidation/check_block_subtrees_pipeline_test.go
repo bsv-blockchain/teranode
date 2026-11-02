@@ -83,15 +83,17 @@ func buildMultiBatchBlock(t *testing.T, server *Server, n int) *model.Block {
 func wireMultiBatchMocks(server *Server) {
 	server.settings.SubtreeValidation.TxBatchSize = 1
 
+	tip := &model.BlockHeader{
+		Version:        1,
+		HashPrevBlock:  &chainhash.Hash{},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(time.Now().Unix()),
+		Bits:           model.NBit{},
+		Nonce:          0,
+	}
 	server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader", mock.Anything).
-		Return(&model.BlockHeader{
-			Version:        1,
-			HashPrevBlock:  &chainhash.Hash{},
-			HashMerkleRoot: &chainhash.Hash{},
-			Timestamp:      uint32(time.Now().Unix()),
-			Bits:           model.NBit{},
-			Nonce:          0,
-		}, &model.BlockHeaderMeta{ID: 100}, nil).Maybe()
+		Return(tip, &model.BlockHeaderMeta{ID: 100}, nil).Maybe()
+	mockTipHeaders(server, tip)
 	server.blockchainClient.(*blockchain.Mock).On("GetBlockHeaderIDs",
 		mock.Anything, mock.Anything, mock.Anything).
 		Return([]uint32{1, 2, 3}, nil).Maybe()
@@ -202,9 +204,10 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 			// A tip past Chronicle, so the block extends it within one era.
 			// Registered before wireMultiBatchMocks: testify serves the first match.
 			tipHeight := server.settings.ChainCfgParams.ChronicleActivationHeight + 50
+			tip := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
 			bc.On("GetBestBlockHeader", mock.Anything).
-				Return(&model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}},
-					&model.BlockHeaderMeta{ID: 100, Height: tipHeight}, nil)
+				Return(tip, &model.BlockHeaderMeta{ID: 100, Height: tipHeight}, nil)
+			mockTipHeaders(server, tip)
 
 			wireMultiBatchMocks(server)
 
@@ -243,16 +246,20 @@ func TestCheckBlockSubtrees_OnlyRunningFeedsBlockAssembly(t *testing.T) {
 // same-era competitor whose parent is not the tip must still feed, or its txs are
 // stranded when it loses: ErrTxExists keeps them out of assembly on resubmission.
 // A block above tip+1 does not feed: a height locktime final there may not be
-// final at tip+1.
+// final at tip+1. A side block's txs carry the candidate (tip+1, MTP of the tip)
+// so the validator can check their finality there; a block extending the tip
+// carries none, since its own context is the candidate's.
 func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
 	tests := []struct {
 		name        string
 		blockHeight func(genesis uint32) uint32
+		extendsTip  bool
 		feeds       bool
 	}{
-		{"side block below Genesis", func(genesis uint32) uint32 { return genesis - 1 }, false},
-		{"same-era competitor at the tip height", func(genesis uint32) uint32 { return genesis + 50 }, true},
-		{"same-era block above tip+1", func(genesis uint32) uint32 { return genesis + 52 }, false},
+		{"side block below Genesis", func(genesis uint32) uint32 { return genesis - 1 }, false, false},
+		{"same-era competitor at the tip height", func(genesis uint32) uint32 { return genesis + 50 }, false, true},
+		{"same-era block above tip+1", func(genesis uint32) uint32 { return genesis + 52 }, false, false},
+		{"block extending the tip", func(genesis uint32) uint32 { return genesis + 51 }, true, true},
 	}
 
 	for _, tt := range tests {
@@ -262,9 +269,12 @@ func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
 
 			// Registered before wireMultiBatchMocks: testify serves the first match.
 			genesis := server.settings.ChainCfgParams.GenesisActivationHeight
-			server.blockchainClient.(*blockchain.Mock).On("GetBestBlockHeader", mock.Anything).
-				Return(&model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}},
-					&model.BlockHeaderMeta{ID: 100, Height: genesis + 50}, nil)
+			tipHeader := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}, Timestamp: 1_700_000_000}
+			bc := server.blockchainClient.(*blockchain.Mock)
+			bc.On("GetBestBlockHeader", mock.Anything).
+				Return(tipHeader, &model.BlockHeaderMeta{ID: 100, Height: genesis + 50}, nil)
+			bc.On("GetBlockHeaders", mock.Anything, tipHeader.Hash(), mock.Anything).
+				Return([]*model.BlockHeader{tipHeader}, []*model.BlockHeaderMeta{{ID: 100, Height: genesis + 50}}, nil).Maybe()
 
 			wireMultiBatchMocks(server) // FSM RUNNING
 
@@ -275,6 +285,9 @@ func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
 
 			block := buildMultiBatchBlock(t, server, 1)
 			block.Header.HashPrevBlock = &chainhash.Hash{} // not the tip
+			if tt.extendsTip {
+				block.Header.HashPrevBlock = tipHeader.Hash()
+			}
 			block.Height = tt.blockHeight(genesis)
 			blockBytes, err := block.Bytes()
 			require.NoError(t, err)
@@ -291,6 +304,13 @@ func TestCheckBlockSubtrees_BlockAssemblyFeedFollowsScriptEra(t *testing.T) {
 			for _, calls := range recording.callsByTx {
 				for _, opts := range calls {
 					require.Equal(t, tt.feeds, opts.AddTXToBlockAssembly)
+
+					if !tt.feeds || tt.extendsTip {
+						require.Nil(t, opts.BlockAssemblyCandidate)
+						continue
+					}
+
+					require.Equal(t, &validator.BlockAssemblyCandidate{Height: genesis + 51, MedianTimePast: tipHeader.Timestamp}, opts.BlockAssemblyCandidate)
 				}
 			}
 		})
@@ -329,9 +349,10 @@ func TestCheckBlockSubtrees_KeepHandoffDuringShortCatchup(t *testing.T) {
 			// A tip past Chronicle, so the block extends it within one era.
 			// Registered before wireMultiBatchMocks: testify serves the first match.
 			tipHeight := server.settings.ChainCfgParams.ChronicleActivationHeight + 50
+			tip := &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
 			bc.On("GetBestBlockHeader", mock.Anything).
-				Return(&model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}},
-					&model.BlockHeaderMeta{ID: 100, Height: tipHeight}, nil)
+				Return(tip, &model.BlockHeaderMeta{ID: 100, Height: tipHeight}, nil)
+			mockTipHeaders(server, tip)
 
 			wireMultiBatchMocks(server)
 

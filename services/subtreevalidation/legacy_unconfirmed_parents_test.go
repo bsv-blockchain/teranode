@@ -33,8 +33,21 @@ func (c *fsmStateOverrideClient) GetFSMCurrentState(_ context.Context) (*blockch
 	return &state, nil
 }
 
+// overrideTipHeader is the tip fsmStateOverrideClient reports.
+var overrideTipHeader = &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}
+
 func (c *fsmStateOverrideClient) GetBestBlockHeader(_ context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
-	return &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}, &model.BlockHeaderMeta{Height: c.tipHeight}, nil
+	return overrideTipHeader, &model.BlockHeaderMeta{Height: c.tipHeight}, nil
+}
+
+// GetBlockHeaders serves the reported tip for the median-time-past lookup of a side
+// block's block assembly candidate, and delegates every other hash.
+func (c *fsmStateOverrideClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	if hash.IsEqual(overrideTipHeader.Hash()) {
+		return []*model.BlockHeader{overrideTipHeader}, []*model.BlockHeaderMeta{{Height: c.tipHeight}}, nil
+	}
+
+	return c.ClientI.GetBlockHeaders(ctx, hash, n)
 }
 
 // TestCheckSubtreeFromBlockLegacyUnconfirmedParents is the subtreevalidation
@@ -169,6 +182,9 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 				"resolution flag must be active in RUNNING too — FSM-gating it wedged testnet catch-up at 1740437")
 			require.True(t, opts.AddTXToBlockAssembly,
 				"RUNNING-state legacy blocks must keep feeding block assembly (reorg resilience) — upstream behaviour")
+			// The request's parent is not the tip, so the tx carries the candidate it
+			// would be mined in, for the validator's finality check.
+			require.Equal(t, &validator.BlockAssemblyCandidate{Height: blockHeight, MedianTimePast: overrideTipHeader.Timestamp}, opts.BlockAssemblyCandidate)
 		}
 	})
 

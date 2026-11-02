@@ -160,7 +160,7 @@ func TestBlockPathRechecksStoredConflictingTxs(t *testing.T) {
 	// the level path runs before CheckBlockSubtrees validates each subtree, and on its own for the
 	// batched path's fallbacks
 	viaLevels := func(t *testing.T, f *conflictingFixture, tx *bt.Tx) error {
-		return f.server.processTransactionsInLevels(t.Context(), []*bt.Tx{tx.Clone(), f.other.Clone()}, chainhash.Hash{}, chainhash.Hash{}, 101, 0, 0, map[uint32]bool{}, false)
+		return f.server.processTransactionsInLevels(t.Context(), []*bt.Tx{tx.Clone(), f.other.Clone()}, chainhash.Hash{}, chainhash.Hash{}, 101, 0, 0, map[uint32]bool{}, false, nil)
 	}
 
 	entryPoints := map[string]entryPoint{

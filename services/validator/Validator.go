@@ -1086,7 +1086,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 	// the option blockAssemblyDisabled is false by default
 	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
-	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
+	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly &&
+		v.minableAtBlockAssemblyCandidate(tx, txID, validationOptions.BlockAssemblyCandidate)
 
 	// spend the tx's inputs and create its outputs + metadata in one store
 	// operation; the store reverses the spends if the create fails (except on
@@ -2341,6 +2342,45 @@ func (v *Validator) spendAndCreateInUtxoStore(ctx context.Context, tx *bt.Tx, bl
 	}
 
 	return txMetaData, spends, nil
+}
+
+// minableAtBlockAssemblyCandidate reports whether a side block's transaction may be handed
+// to block assembly, which mines it at candidate without re-checking it. It must be final
+// there (nLockTime against the candidate height and the tip's median time past), and past
+// CSV it must carry no active BIP68 relative lock: its parents can sit at other heights, or
+// be unmined, on the tip's chain. A nil candidate means the block extends the tip, so the
+// transaction was validated in the candidate's own context.
+func (v *Validator) minableAtBlockAssemblyCandidate(tx *bt.Tx, txID string, candidate *BlockAssemblyCandidate) bool {
+	if candidate == nil {
+		return true
+	}
+
+	if err := util.IsTransactionFinal(tx, candidate.Height, candidate.MedianTimePast); err != nil {
+		v.logger.Debugf("[Validate][%s] not final at the block assembly candidate (height %d), accepted without a template entry: %v", txID, candidate.Height, err)
+		return false
+	}
+
+	if candidate.Height >= v.settings.ChainCfgParams.CSVHeight && hasActiveRelativeLock(tx) {
+		v.logger.Debugf("[Validate][%s] active relative lock on a side block's transaction, accepted without a template entry", txID)
+		return false
+	}
+
+	return true
+}
+
+// hasActiveRelativeLock reports whether any input of tx carries a BIP68 relative lock.
+func hasActiveRelativeLock(tx *bt.Tx) bool {
+	if tx.Version < 2 {
+		return false
+	}
+
+	for _, input := range tx.Inputs {
+		if input.SequenceNumber&SequenceLockTimeDisableFlag == 0 {
+			return true
+		}
+	}
+
+	return false
 }
 
 // sendToBlockAssembler sends validated transaction data to the block assembler.
