@@ -29,22 +29,69 @@ const (
 	deletionNotFound                       // file was already absent (idempotent success)
 )
 
+// blobPass is how a blob deletion pass ended.
+type blobPass int
+
+const (
+	blobPassDone     blobPass = iota // ran, or had nothing to delete
+	blobPassHeld                     // deleted nothing because block validation holds pruning
+	blobPassNotReady                 // stopped before reading the hold: mined status or block assembly not ready
+)
+
+// blobDeletionWorker runs a blob deletion pass for each signal. A pass skipped for an
+// overtaken-tip repair hold is tried again after repairHoldRecheckInterval, so the blobs it
+// left are deleted once the hold is released even when no new block arrives: the pruner may
+// already have finished that height, or be waiting out the phase 1 gap cooldown. A pending
+// retry is merged into the next pass, which runs at the higher of the two heights, and is kept
+// until a pass gets past the hold.
 func (s *Server) blobDeletionWorker() {
+	var (
+		retry    *time.Timer
+		retrySig pruneSignal
+	)
+
+	defer func() {
+		if retry != nil {
+			retry.Stop()
+		}
+	}()
+
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 
 		case sig := <-s.blobNotify:
+			pending := retry != nil
+			if pending {
+				retry.Stop()
+				retry = nil
+
+				if retrySig.blockHeight > sig.blockHeight {
+					sig = retrySig
+				}
+			}
+
 			s.logger.Debugf("Processing blob deletions for height %d", sig.blockHeight)
-			s.processBlobDeletionsAtHeight(sig.blockHeight, sig.blockHash)
+
+			result := s.processBlobDeletionsAtHeight(sig.blockHeight, sig.blockHash)
+			if result == blobPassHeld || (result == blobPassNotReady && pending) {
+				retrySig = sig
+				retry = time.AfterFunc(s.repairHoldRecheck(), func() {
+					select {
+					case s.blobNotify <- sig:
+					default: // a newer signal is waiting, and its pass takes this retry's height
+					}
+				})
+			}
 		}
 	}
 }
 
-func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chainhash.Hash) {
+// processBlobDeletionsAtHeight deletes the blobs due at blockHeight, less the safety window.
+func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chainhash.Hash) blobPass {
 	if s.settings.Pruner.SkipBlobDeletion {
-		return
+		return blobPassDone
 	}
 
 	ctx := s.ctx
@@ -56,20 +103,19 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 		s.logger.Debugf("[pruner][%s:%d] blob deletion: waiting for mined_set=true", blockHashStr, blockHeight)
 		if !s.waitForBlockMinedStatus(ctx, &blockHash) {
 			s.logger.Warnf("[pruner][%s:%d] blob deletion: skipped - timeout waiting for mined_set", blockHashStr, blockHeight)
-			return
+			return blobPassNotReady
 		}
 	}
 
 	// Safety check: block assembly must be running
 	if !s.checkBlockAssemblySafeForPruner(ctx, "blob deletion", blockHeight) {
-		return
+		return blobPassNotReady
 	}
 
-	// An overtaken block's repair still needs its subtrees. The pruner does not signal while
-	// held, but a signal queued before the hold was written still arrives here; the next one
-	// after the hold is released deletes everything queued up to its height.
+	// An overtaken block's repair still needs its subtrees. The worker tries this height again
+	// until the hold is released.
 	if s.overtakenTipRepairHeld(ctx, blockHashStr, blockHeight) {
-		return
+		return blobPassHeld
 	}
 
 	// Apply safety window: only delete blobs that are safetyWindow blocks behind the triggering height
@@ -77,7 +123,7 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 	if safetyWindow > 0 {
 		if blockHeight <= safetyWindow {
 			s.logger.Debugf("[pruner][%s:%d] blob deletion: skipped - block height not yet past safety window %d", blockHashStr, blockHeight, safetyWindow)
-			return
+			return blobPassDone
 		}
 	}
 
@@ -254,6 +300,8 @@ func (s *Server) processBlobDeletionsAtHeight(blockHeight uint32, blockHash chai
 	if s.blobDeletionObserver != nil {
 		s.blobDeletionObserver.OnBlobDeletionComplete(blockHeight, totalDeleted+totalNotFound, totalFail)
 	}
+
+	return blobPassDone
 }
 
 // heldStoreTypes returns the store types in misconfigured as a sorted slice, so the exclusion sent

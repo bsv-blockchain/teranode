@@ -168,11 +168,6 @@ func (s *Server) watchRepairHold(ctx context.Context, cancel context.CancelFunc,
 // is released even when no new block arrives. The retry keeps the highest height it was given:
 // a late signal from an older timer must not take a higher height's place.
 func (s *Server) retryHeldHeight(sig pruneSignal) {
-	interval := s.repairHoldRecheckInterval
-	if interval <= 0 {
-		interval = defaultRepairHoldRecheckInterval
-	}
-
 	if s.repairHoldRetry != nil {
 		s.repairHoldRetry.Stop()
 
@@ -184,12 +179,22 @@ func (s *Server) retryHeldHeight(sig pruneSignal) {
 	sig.retry = true
 	s.repairHoldRetrySig = sig
 
-	s.repairHoldRetry = time.AfterFunc(interval, func() {
+	s.repairHoldRetry = time.AfterFunc(s.repairHoldRecheck(), func() {
 		select {
 		case s.pruneNotify <- sig:
 		default: // a block signal is waiting, and its cycle arms the retry again
 		}
 	})
+}
+
+// repairHoldRecheck is how long a height held by the overtaken-tip repair hold waits before it
+// is tried again.
+func (s *Server) repairHoldRecheck() time.Duration {
+	if s.repairHoldRecheckInterval > 0 {
+		return s.repairHoldRecheckInterval
+	}
+
+	return defaultRepairHoldRecheckInterval
 }
 
 // clearHeldHeightRetry drops the pending retry once a cycle at or above its height is done.
@@ -546,16 +551,11 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 
 			// Safety check passed - wake blob deletion worker to run concurrently with Phase 1&2.
 			// It works off the blockchain service's queued blob batches, independent of parent
-			// preservation, so it runs even in a cycle whose Phase 1 fails. A held cycle skips
-			// it; the next notification deletes everything queued up to its height.
-			if !held {
-				select {
-				case <-s.blobNotify:
-				default:
-				}
-				s.blobNotify <- sig
-				s.logger.Debugf("[pruner][%s:%d] notified blob deletion worker", blockHashStr, blockHeight)
-			}
+			// preservation, so it runs even in a cycle whose Phase 1 fails. It reads the hold
+			// itself, so it is woken in a held cycle too: it deletes nothing while held and tries
+			// again on its own until the hold is released.
+			signalLatest(s.blobNotify, sig)
+			s.logger.Debugf("[pruner][%s:%d] notified blob deletion worker", blockHashStr, blockHeight)
 
 			prunerActive.Set(1)
 

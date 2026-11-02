@@ -209,7 +209,7 @@ func (s *Server) Init(ctx context.Context) error {
 
 								s.logger.Infof("[pruner][%s:%d] notified from BlockPersisted notification", blockHash.String(), height)
 
-								s.signalPruner(sig)
+								signalLatest(s.pruneNotify, sig)
 							}
 						}
 					}
@@ -253,7 +253,7 @@ func (s *Server) Init(ctx context.Context) error {
 
 					s.logger.Infof("[pruner][%s:%d] notified from Block notification", blockHash.String(), height)
 
-					s.signalPruner(sig)
+					signalLatest(s.pruneNotify, sig)
 				}
 			}
 		}
@@ -406,18 +406,18 @@ func (s *Server) triggerInitialPruning(ctx context.Context) {
 	}
 }
 
-// signalPruner hands the processor the latest signal, replacing a waiting one. The held-height
-// retry timer also sends, and can fill the slot between the drain and the send, so the send
-// never blocks: the notifier must not wait behind a running cycle.
-func (s *Server) signalPruner(sig pruneSignal) {
+// signalLatest hands a worker the latest signal on its one-slot channel, replacing a waiting
+// one. A held-height retry timer also sends, and can fill the slot between the drain and the
+// send, so the send never blocks: the sender must not wait behind a running pass.
+func signalLatest(ch chan pruneSignal, sig pruneSignal) {
 	for {
 		select {
-		case <-s.pruneNotify:
+		case <-ch:
 		default:
 		}
 
 		select {
-		case s.pruneNotify <- sig:
+		case ch <- sig:
 			return
 		default:
 		}

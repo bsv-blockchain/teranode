@@ -47,6 +47,21 @@ func runProcessor(t *testing.T, ctx context.Context, s *Server) {
 	t.Cleanup(func() { <-done })
 }
 
+// runBlobWorker runs the blob deletion worker until the server's context is cancelled, and
+// makes the test wait for it to return.
+func runBlobWorker(t *testing.T, s *Server) {
+	t.Helper()
+
+	done := make(chan struct{})
+
+	go func() {
+		s.blobDeletionWorker()
+		close(done)
+	}()
+
+	t.Cleanup(func() { <-done })
+}
+
 // getCounterValue reads the current value of a prometheus counter with the given label.
 // Fails the test if the metric cannot be read.
 func getCounterValue(t *testing.T, cv *prometheus.CounterVec, label string) float64 {
@@ -809,10 +824,14 @@ type repairHoldClient struct {
 	next     atomic.Pointer[repairHoldAnswer]
 	reads    atomic.Int32
 	acquired atomic.Int32
+	// acquiredAt is the safe height of the last blob deletion batch request.
+	acquiredAt atomic.Uint32
 }
 
-func (c *repairHoldClient) AcquireBlobDeletionBatch(context.Context, uint32, int, int, []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+func (c *repairHoldClient) AcquireBlobDeletionBatch(_ context.Context, safeHeight uint32, _ int, _ int, _ []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	c.acquiredAt.Store(safeHeight)
 	c.acquired.Add(1)
+
 	return "", nil, nil
 }
 
@@ -846,8 +865,9 @@ func newRepairHoldTestServer(ctx context.Context, client *repairHoldClient, prun
 }
 
 // While block validation holds pruning for an overtaken block whose repair has not
-// finished, the pruner deletes nothing: no DAH deletion and no blob deletion, and the height
-// is not advanced. Once the hold is released, the next block prunes as usual.
+// finished, the pruner deletes nothing in phase 2 and the height is not advanced (the blob
+// worker checks the hold itself, see TestRepairHoldStopsBlobDeletion). Once the hold is
+// released, the next block prunes as usual.
 func TestRepairHoldSkipsDeletion(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -872,7 +892,6 @@ func TestRepairHoldSkipsDeletion(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "the cycle is counted as held")
 
 	require.Empty(t, pruneSvc.calls, "no DAH deletion while held")
-	require.Empty(t, server.blobNotify, "no blob deletion while held")
 	require.Equal(t, uint32(0), server.lastProcessedHeight.Load(), "the height is retried")
 	require.Equal(t, float64(1), testutil.ToFloat64(prunerOvertakenTipRepairHeldBlocks))
 
@@ -990,6 +1009,138 @@ func TestRepairHoldStopsBlobDeletion(t *testing.T) {
 
 	server.processBlobDeletionsAtHeight(102, chainhash.Hash{})
 	require.NotZero(t, client.acquired.Load(), "deletion resumes once the hold is released")
+}
+
+// A blob deletion pass skipped for the hold is tried again once the hold is released, without
+// another block: the pruner may already have finished that height (a hold written after its
+// last read) or be waiting out the phase 1 gap cooldown, and then nothing else wakes the blob
+// worker on an idle chain. A lower signal after a reorg does not lower the retried height, and
+// the retry stops once a pass runs.
+func TestRepairHoldReleaseResumesIdleBlobDeletion(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	server := newRepairHoldTestServer(ctx, client, &recordingPruner{calls: make(chan uint32, 1)})
+	server.settings.Pruner.BlobDeletionBatchSize = 10
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	runBlobWorker(t, server)
+
+	for _, h := range []uint32{102, 101} {
+		reads := client.reads.Load()
+		server.blobNotify <- pruneSignal{blockHeight: h}
+		require.Eventually(t, func() bool { return client.reads.Load() > reads }, 2*time.Second, 5*time.Millisecond)
+	}
+
+	require.Never(t, func() bool { return client.acquired.Load() > 0 }, 100*time.Millisecond, 10*time.Millisecond, "precondition: held")
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	require.Eventually(t, func() bool { return client.acquired.Load() == 1 }, 2*time.Second, 5*time.Millisecond, "the held pass runs once the hold is released")
+	require.Equal(t, uint32(102), client.acquiredAt.Load(), "at the highest held height")
+	require.Never(t, func() bool { return client.acquired.Load() > 1 }, 100*time.Millisecond, 10*time.Millisecond, "the retry stops once a pass ran")
+}
+
+// A held cycle that enters the phase 1 gap cooldown still gets its blob deletion once the
+// hold is released, without another block, and phase 2 still waits for the cooldown to end.
+func TestRepairHoldReleaseInGapCooldownResumesBlobDeletion(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	server, pruneSvc := newPhase1GapTestServer(t, ctx)
+	client := &blobCountingClient{ClientI: server.blockchainClient}
+	server.blockchainClient = client
+	server.settings.Pruner.BlobDeletionBatchSize = 10
+	server.settings.Pruner.BlobDeletionSafetyWindow = 0
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	setPreservationRecord(t, server, parentPreservationRecord{lastSuccess: 1100, phase2From: 1200})
+	require.NoError(t, client.SetState(ctx, model.OvertakenTipRepairHoldKey, model.EncodeOvertakenTipRepairHold(testHeldBlock)))
+
+	runProcessor(t, ctx, server)
+	runBlobWorker(t, server)
+
+	requirePhase2Skipped(t, server, pruneSvc, 1150)
+	require.Never(t, func() bool { return client.acquired.Load() > 0 }, 100*time.Millisecond, 10*time.Millisecond, "precondition: held")
+
+	require.NoError(t, client.SetState(ctx, model.OvertakenTipRepairHoldKey, model.EncodeOvertakenTipRepairHold(nil)))
+
+	require.Eventually(t, func() bool { return client.acquired.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "blob deletion runs once the hold is released")
+	require.Equal(t, uint32(1150), client.acquiredAt.Load())
+	require.Never(t, func() bool { return len(pruneSvc.calls) > 0 }, 100*time.Millisecond, 10*time.Millisecond, "phase 2 waits out the cooldown")
+}
+
+// A held pass's retry survives a later pass that stops before reading the hold, because block
+// assembly has not caught up: once both are ready, the held blobs are deleted without another
+// block.
+func TestRepairHoldBlobRetrySurvivesNotReadyPass(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	ba := &baHeightClient{}
+	ba.height.Store(102)
+
+	server := newRepairHoldTestServer(ctx, client, &recordingPruner{calls: make(chan uint32, 1)})
+	server.blockAssemblyClient = ba
+	server.settings.Pruner.BlockTrigger = settings.PrunerBlockTriggerOnBlockPersisted
+	server.settings.Pruner.BlockAssemblyWaitTimeout = 50 * time.Millisecond
+	server.settings.Pruner.BlobDeletionBatchSize = 10
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	runBlobWorker(t, server)
+
+	server.blobNotify <- pruneSignal{blockHeight: 102}
+	require.Eventually(t, func() bool { return client.reads.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the pass at 102 is held")
+
+	// Block assembly is still at 102, so the pass at 103 stops before it reads the hold.
+	calls := ba.calls.Load()
+	server.blobNotify <- pruneSignal{blockHeight: 103}
+	require.Eventually(t, func() bool { return ba.calls.Load() > calls }, 2*time.Second, 5*time.Millisecond)
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+	ba.height.Store(103)
+
+	require.Eventually(t, func() bool { return client.acquired.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the held blobs are deleted once both are ready")
+	require.Equal(t, uint32(103), client.acquiredAt.Load())
+}
+
+// baHeightClient reports block assembly running at height.
+type baHeightClient struct {
+	blockassembly.ClientI
+	height atomic.Uint32
+	calls  atomic.Int32
+}
+
+func (c *baHeightClient) GetBlockAssemblyState(context.Context) (*blockassembly_api.StateMessage, error) {
+	c.calls.Add(1)
+
+	return &blockassembly_api.StateMessage{BlockAssemblyState: "running", CurrentHeight: c.height.Load()}, nil
+}
+
+// blobCountingClient records blob deletion batch requests and passes every other call on.
+type blobCountingClient struct {
+	blockchain.ClientI
+	acquired   atomic.Int32
+	acquiredAt atomic.Uint32
+}
+
+func (c *blobCountingClient) AcquireBlobDeletionBatch(_ context.Context, safeHeight uint32, _ int, _ int, _ []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
+	c.acquiredAt.Store(safeHeight)
+	c.acquired.Add(1)
+
+	return "", nil, nil
 }
 
 // blockingPruner blocks Prune until its context is done or release is closed, and reports
