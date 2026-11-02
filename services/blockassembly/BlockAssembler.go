@@ -4059,17 +4059,28 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 		if err != nil {
 			return false, false
 		}
+		if len(vouts) == 0 {
+			continue
+		}
+
+		// Read the parent once for all the outputs this tx spends from it.
+		parentMeta, err := b.utxoStore.Get(ctx, parentHash, fields.Utxos)
+		if err != nil || parentMeta == nil {
+			// Log the offending tx and parent so CheckBlockAssemblyValidateInputs is
+			// diagnosable: a pruned parent of a live unmined tx (issue 1768) surfaces here.
+			b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d parent could not be loaded (err=%v, meta nil=%t) — counting as invalid",
+				txHash.String(), parentHash.String(), vouts[0], err, parentMeta == nil)
+
+			return false, false
+		}
+
+		// The parent's conflicting children are read at most once, and only if an output is
+		// spent by this tx.
+		var counterTxMeta *meta.Data
+
+		counterLoaded := false
+
 		for _, outputIndex := range vouts {
-			parentMeta, err := b.utxoStore.Get(ctx, parentHash, fields.Utxos)
-			if err != nil || parentMeta == nil {
-				// Log the offending tx and parent so CheckBlockAssemblyValidateInputs is
-				// diagnosable: a pruned parent of a live unmined tx (issue 1768) surfaces here.
-				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d parent could not be loaded (err=%v, meta nil=%t) — counting as invalid",
-					txHash.String(), parentHash.String(), outputIndex, err, parentMeta == nil)
-
-				return false, false
-			}
-
 			vout := int(outputIndex)
 			if parentMeta.SpendingDatas == nil || vout >= len(parentMeta.SpendingDatas) {
 				continue
@@ -4092,8 +4103,15 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 			// (the one this tx replaced via ProcessConflicting) is on the current chain.
 			// This catches the scenario where ProcessConflicting incorrectly flipped a
 			// confirmed transaction to "loser" status.
-			counterTxMeta, err := b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren)
-			if err != nil || counterTxMeta == nil {
+			if !counterLoaded {
+				counterLoaded = true
+
+				if counterTxMeta, err = b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren); err != nil {
+					counterTxMeta = nil
+				}
+			}
+
+			if counterTxMeta == nil {
 				continue
 			}
 

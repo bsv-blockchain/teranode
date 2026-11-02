@@ -136,7 +136,26 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   the pool. Historical resets visit their recorded target; externally requested
   resets finish pending history before serving a populated mining candidate. No
   configuration change is required. Setting the reconcile interval to `0` disables
-  ordinary polling; recovery of an unfinished reset still retries. Reload input validation keeps four parallel readers after closing the iterator, requests only input points, then applies conflict cascades serially. A reset that fails before its tx map rotation leaves the old pool in service and the replay carries on from its position. When the replay after a reset fails three passes in a row, block assembly gives the remaining history up, follows the best header and builds candidates from the pool the reset loaded; `teranode_blockassembly_processing_stuck_total{reason="best_tip_reset_replay_abandoned"}` counts each time, so alert on it. If that reset rotated its tx map and then failed its reload, the pool may be partial: block assembly retries the reload on every later replay pass and counts each failed retry as `reason="best_tip_reset_reload"`. A past best tip whose move would take block assembly back over best-chain blocks at least coinbase maturity below the best tip is not moved to: its branch-only transactions are marked unmined where they lie and the pool is reloaded, so no confirmed spend of a coinbase is deleted. Resets skip conflict winners the UTXO store has already pruned. (#2074)
+  ordinary polling; recovery of an unfinished reset still retries. Reload input
+  validation keeps four parallel readers after closing the iterator, requests only
+  input points, then applies conflict cascades serially. A reset that fails before
+  its tx map rotation leaves the old pool in service and the replay carries on from
+  its position. When the replay after a reset fails three passes in a row, block
+  assembly gives the remaining history up, follows the best header and builds
+  candidates from the pool the reset loaded;
+  `teranode_blockassembly_processing_stuck_total{reason="best_tip_reset_replay_abandoned"}`
+  counts each time, so alert on it. If that reset rotated its tx map and then failed
+  its reload, the pool may be partial: block assembly retries the reload on every
+  later replay pass and counts each failed retry as `reason="best_tip_reset_reload"`.
+  A past best tip whose move would take block assembly back over best-chain blocks at
+  least coinbase maturity below the best tip is not moved to: its branch-only
+  transactions are marked unmined where they lie and the pool is reloaded, so no
+  confirmed spend of a coinbase is deleted. Resets skip conflict winners the UTXO
+  store has already pruned. Over gRPC, `GetBlockHeaders`,
+  `GetBlockHeadersFromHeight`, `GetBlockHeadersByHeight` and the other RPCs that
+  return a list of headers with their meta now carry the peer id and `processed_at`
+  of a block with no miner tag; before, the peer id came back empty and
+  `processed_at` was misread. (#2074)
 
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**

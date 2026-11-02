@@ -369,6 +369,50 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 	mockStp.AssertExpectations(t)
 }
 
+// A tx spending several outputs of one parent reads the parent's spends and its
+// conflicting children once each, not once per output.
+func TestBlockAssembly_ValidateUnminedTxInputs_ReadsEachParentOnce(t *testing.T) {
+	ctx := context.Background()
+
+	parentHash := chainhash.HashH([]byte("one-read-parent"))
+	txHash := chainhash.HashH([]byte("one-read-tx"))
+
+	const outputs = 5
+
+	tx := bt.NewTx()
+	spendingDatas := make([]*spend.SpendingData, outputs)
+
+	for i := uint32(0); i < outputs; i++ {
+		in := &bt.Input{PreviousTxOutIndex: i}
+		require.NoError(t, in.PreviousTxIDAdd(&parentHash))
+		tx.Inputs = append(tx.Inputs, in)
+		spendingDatas[i] = spend.NewSpendingData(&txHash, int(i))
+	}
+
+	inpoints, err := subtreepkg.NewTxInpointsFromInputs(tx.Inputs)
+	require.NoError(t, err)
+
+	mockStore := new(utxostore.MockUtxostore)
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
+		Return(&meta.Data{TxInpoints: inpoints}, nil)
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.Utxos)).
+		Return(&meta.Data{SpendingDatas: spendingDatas}, nil).Once()
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.ConflictingChildren)).
+		Return(&meta.Data{}, nil).Once()
+
+	ba := &BlockAssembler{
+		logger:    ulogger.TestLogger{},
+		settings:  createTestSettings(t),
+		utxoStore: mockStore,
+	}
+
+	ok := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+	require.True(t, ok)
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNumberOfCalls(t, "Get", 3)
+}
+
 // warnCapturingLogger records every Warnf message so a test can assert on its content.
 type warnCapturingLogger struct {
 	ulogger.TestLogger
