@@ -298,7 +298,7 @@ func _initPrometheusMetrics() {
 		Namespace: "teranode",
 		Subsystem: "legacy_netsync",
 		Name:      "inv_dropped_total",
-		Help:      "Transaction announcements from legacy peers dropped without being asked for, in hashes, by reason: the peer was over its share, the node was over legacy_invQueueMaxHashes, every handler slot was taken, or the store read failed",
+		Help:      "Transaction announcements from legacy peers dropped without being asked for, in hashes, by reason: the peer was over its share, the node was over legacy_invQueueMaxHashes, every handler slot was taken, the peer's request queue was full, or the store read failed",
 	}, []string{"reason"})
 	prometheus.MustRegister(prometheusLegacyNetsyncInvDropped)
 

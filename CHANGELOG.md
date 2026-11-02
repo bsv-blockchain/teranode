@@ -317,11 +317,12 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   per-peer share of 100,000 hashes applies once the peer is resolved, and sixteen workers
   take whatever is queued and look it up in UTXO store batch reads of up to 4096 hashes,
   checking the set of hashes already asked for before the read, so a transaction every
-  peer announces is read about once instead of once per peer. A fixed limit sits beside
+  peer announces is read about once instead of once per peer. Two fixed limits sit beside
   the cap: at most 1,024 goroutines handle messages carrying only transaction
-  announcements at once. Announcements over any of these limits are dropped and
+  announcements at once, and each peer's queue of missing transactions waiting for a
+  getdata holds at most 50,000. Announcements over any of these limits are dropped and
   counted in hashes in the new `teranode_legacy_netsync_inv_dropped_total` (label
-  `reason`: `peer_share`, `node_cap`, `handlers_busy`, `lookup_failed`),
+  `reason`: `peer_share`, `node_cap`, `handlers_busy`, `request_queue`, `lookup_failed`),
   and the new gauge `teranode_legacy_netsync_inv_queued_hashes` shows what the cap
   holds. Block announcements are not charged and always get a handler. The set of
   hashes asked for is capped at the same number as the queue. Outside the RUNNING state, where

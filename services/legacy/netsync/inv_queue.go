@@ -23,9 +23,10 @@ import (
 // drain the queue into UTXO store batch reads.
 //
 // What the path holds, from the read loop until a worker finishes with a
-// chunk, is the cap, legacy_invQueueMaxHashes, times about 40 bytes a hash,
-// and at most invHandlerSlots handler goroutines that carry only transaction
-// items.
+// chunk, is the cap, legacy_invQueueMaxHashes, times about 40 bytes a hash;
+// at most invHandlerSlots handler goroutines that carry only transaction items;
+// and, for each peer, at most maxRequestedTxns hashes found missing and waiting
+// in its request queue for a getdata.
 const (
 	// invLookupWorkers is the number of goroutines that take announcements
 	// off invQueue and look them up in the UTXO store. It caps the store
@@ -69,12 +70,13 @@ const (
 	invDropPeerShare    = "peer_share"
 	invDropNodeCap      = "node_cap"
 	invDropHandlersBusy = "handlers_busy"
+	invDropRequestQueue = "request_queue"
 	invDropLookupFailed = "lookup_failed"
 )
 
 // invDropReasons lists every drop reason so the metric has a zero row for
 // each before the first drop.
-var invDropReasons = []string{invDropPeerShare, invDropNodeCap, invDropHandlersBusy, invDropLookupFailed}
+var invDropReasons = []string{invDropPeerShare, invDropNodeCap, invDropHandlersBusy, invDropRequestQueue, invDropLookupFailed}
 
 // invChunk is up to txInvLookupChunk transaction announcements from one peer.
 // items are copies, in an array of the chunk's own, so a chunk never keeps the
@@ -368,6 +370,12 @@ func (sm *SyncManager) takeInvBatch(first *invChunk) []*invChunk {
 // peer. A hash the store turns out to hold stays marked until it expires,
 // which blocks nothing because the node holds it.
 //
+// A hash the store lacks goes to its peer's request queue unless that queue
+// already holds maxRequestedTxns transactions, one getdata's worth: then it is
+// unmarked, so another peer's announcement can fetch it, and counted under
+// request_queue. The queue only grows past what one drain sends while a block
+// at its head waits for room in the download ledger.
+//
 // A failed slice unmarks itself and every slice after it so the next
 // announcement retries, and counts those hashes under lookup_failed; the
 // slices read before it are still acted on. A per-item error other than
@@ -419,6 +427,7 @@ func (sm *SyncManager) lookupInvBatch(first *invChunk) []*invChunk {
 		touched  []*invChunk
 		seen     = make(map[*invChunk]struct{})
 		failed   int
+		full     int
 		firstErr error
 	)
 
@@ -458,6 +467,15 @@ func (sm *SyncManager) lookupInvBatch(first *invChunk) []*invChunk {
 
 			c := owners[i]
 
+			if c.state.queuedTxRequests.Add(1) > maxRequestedTxns {
+				c.state.queuedTxRequests.Add(-1)
+				sm.requestedTxns.Delete(item.Hash)
+
+				full++
+
+				continue
+			}
+
 			// A copy of its own, so the request queue does not keep the
 			// chunk's whole array alive after the worker is done with it.
 			iv := *invs[i]
@@ -468,6 +486,11 @@ func (sm *SyncManager) lookupInvBatch(first *invChunk) []*invChunk {
 				touched = append(touched, c)
 			}
 		}
+	}
+
+	if full > 0 {
+		prometheusLegacyNetsyncInvDropped.WithLabelValues(invDropRequestQueue).Add(float64(full))
+		sm.logger.Debugf("[lookupInvBatch] dropping %d missing transactions: their peers' request queues hold %d already", full, maxRequestedTxns)
 	}
 
 	if failed > 0 {

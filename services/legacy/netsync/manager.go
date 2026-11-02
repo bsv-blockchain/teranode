@@ -266,6 +266,13 @@ type peerSyncState struct {
 	// invShare.
 	queuedInvs atomic.Int64
 
+	// queuedTxRequests is the transactions in requestQueue: found missing by
+	// a lookup worker and not yet put in a getdata. lookupInvBatch bounds it
+	// by maxRequestedTxns and drainRequestQueue counts it down. Without the
+	// bound the queue grows for as long as a block at its head waits for room
+	// in the download ledger, because the drain stops at that block.
+	queuedTxRequests atomic.Int64
+
 	// requestQueueMu serialises the drain of requestQueue.
 	//
 	// Inv messages are dispatched one goroutine per message (dispatchInvMsg's
@@ -3654,6 +3661,10 @@ outside:
 		// Dealt with one way or the other, so it comes off the queue. Every path
 		// that wants to keep it has broken out above.
 		state.requestQueue.Shift()
+
+		if iv.Type == wire.InvTypeTx {
+			state.queuedTxRequests.Add(-1)
+		}
 
 		if numRequested >= maxRequestedBlocks {
 			sm.logger.Debugf("[handleInvMsg] Limiting to %d item(s) from %s", numRequested, peer)

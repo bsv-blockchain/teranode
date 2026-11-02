@@ -497,3 +497,33 @@ func TestLookupInvBatch_ConcurrentWorkersClaimEachHashOnce(t *testing.T) {
 		require.Zero(t, sm.invQueued.Load())
 	}
 }
+
+// TestLookupInvBatch_CapsAPeersRequestQueue pins the bound on a peer's
+// request queue: a missing hash goes to the queue only while it holds fewer
+// than maxRequestedTxns transactions. Past that it is unmarked, so another
+// peer's announcement can fetch it, and counted under request_queue. The
+// drain counts the queue down as it sends.
+func TestLookupInvBatch_CapsAPeersRequestQueue(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	store := newLookupStore(t, tSettings, "inv_queue_request_cap")
+	sm, p, state, _ := newInvHarness(t, tSettings, store, blockchain2.FSMStateRUNNING)
+
+	// As if a block at the head of the queue had held the drain up while
+	// transactions kept arriving behind it.
+	state.queuedTxRequests.Store(maxRequestedTxns - 2)
+
+	before := droppedInvs(invDropRequestQueue)
+
+	sm.admitTxInvs(p, state, txInvs(5, 0x01))
+	sm.lookupInvBatch(<-sm.invQueue)
+
+	require.Equal(t, 2, state.requestQueue.Length(), "only as many as fit under the cap are queued")
+	require.Equal(t, int64(maxRequestedTxns), state.queuedTxRequests.Load())
+	require.Equal(t, before+3, droppedInvs(invDropRequestQueue))
+	require.Equal(t, 2, sm.requestedTxns.Len(), "the dropped hashes are unmarked")
+
+	gdmsg := sm.drainRequestQueue(p, state)
+
+	require.Len(t, gdmsg.InvList, 2)
+	require.Equal(t, int64(maxRequestedTxns-2), state.queuedTxRequests.Load(), "the drain counts the queue down")
+}
