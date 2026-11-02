@@ -283,6 +283,22 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   owed) and `teranode_blockchain_sql_on_main_chain_write_failures{path}`. No action is
   needed. (#2049)
 
+- **Deleting a transaction record now clears the references parents hold to it.**
+  A reorg that removes a coinbase also removes the transactions spending it. Block
+  assembly now unspends each removed transaction's inputs, and removes it from its
+  parents' conflicting-children lists, before it deletes the record. Before, a surviving
+  parent could keep naming the deleted record as its spender. With
+  `pruner_utxoDefensiveEnabled` set, the pruner does the same for each conflicting
+  record it reaps, and keeps a record whose references it cannot clear until the next
+  block. With the setting off, pruner behaviour does not change. Before it deletes
+  those transactions, block assembly now saves them to the subtree store under the
+  hash of the block that was moved back (new file type `reorgDeletedTxs`, expiry as for
+  kept-aside subtree transactions). If saving fails, the move back fails and nothing is
+  deleted. When a reorg or a block assembly reset moves that block forward again, block
+  assembly recreates the saved transactions after the coinbase, and fails the move if
+  it cannot. No action is needed. Parent spends that were
+  left dangling before the upgrade are not repaired. (#1214)
+
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**
   Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop

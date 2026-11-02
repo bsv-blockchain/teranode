@@ -141,6 +141,11 @@ type Options struct {
 	// LuaPackage is the name of the registered Lua UDF module
 	LuaPackage string
 
+	// ClearParentRefs removes the references surviving parents hold to a transaction about to be
+	// deleted. In defensive mode the pruner calls it for every conflicting record it reaps and
+	// keeps a record whose references could not be cleared.
+	ClearParentRefs func(ctx context.Context, txHash *chainhash.Hash) error
+
 	// BuildAddDeletedChildrenRecord, when non-nil, takes ownership of building
 	// the per-parent BatchRecord for the parent-update phase. The parent Store
 	// supplies this so the pruner routes through the native-op wrapper
@@ -211,6 +216,7 @@ type Service struct {
 	utxoBatchSize                  int
 	blockHeightRetention           uint32
 	defensiveEnabled               bool
+	clearParentRefs                func(ctx context.Context, txHash *chainhash.Hash) error
 	defensiveBatchReadSize         int
 	chunkSize                      int
 	chunkGroupLimit                int
@@ -374,6 +380,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		utxoBatchSize:                  settings.UtxoStore.UtxoBatchSize,
 		blockHeightRetention:           settings.GetUtxoStoreBlockHeightRetention(),
 		defensiveEnabled:               settings.Pruner.UTXODefensiveEnabled,
+		clearParentRefs:                opts.ClearParentRefs,
 		defensiveBatchReadSize:         settings.Pruner.UTXODefensiveBatchReadSize,
 		chunkSize:                      settings.Pruner.UTXOChunkSize,
 		chunkGroupLimit:                settings.Pruner.UTXOChunkGroupLimit,
@@ -1087,6 +1094,18 @@ func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, ch
 					txHash.String(), unsafeChild, len(childrenHashes))
 				skippedCount++
 				continue
+			}
+		}
+
+		if s.defensiveEnabled && s.clearParentRefs != nil {
+			if conflicting, _ := rec.Record.Bins[s.fieldConflicting].(bool); conflicting {
+				if err = s.clearParentRefs(ctx, txHash); err != nil {
+					s.logger.Errorf("Defensive skip - conflicting tx %s kept, failed to clear parent references: %v", txHash.String(), err)
+
+					skippedCount++
+
+					continue
+				}
 			}
 		}
 

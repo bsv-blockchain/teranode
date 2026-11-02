@@ -1,7 +1,6 @@
 package subtreevalidation
 
 import (
-	"bytes"
 	"context"
 	"sync"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"google.golang.org/protobuf/proto"
@@ -22,35 +22,12 @@ import (
 // serializeConflictingTxs encodes the txs kept aside from a peer subtree, in subtree
 // order, the way subtreeData encodes transactions.
 func serializeConflictingTxs(txs []*bt.Tx) []byte {
-	var buf bytes.Buffer
-
-	for _, tx := range txs {
-		if tx.IsExtended() {
-			buf.Write(tx.ExtendedBytes())
-		} else {
-			buf.Write(tx.Bytes())
-		}
-	}
-
-	return buf.Bytes()
+	return util.SerializeTxList(txs)
 }
 
 // readConflictingTxs decodes a FileTypeSubtreeConflicting file.
 func readConflictingTxs(b []byte) ([]*bt.Tx, error) {
-	reader := bytes.NewReader(b)
-	txs := make([]*bt.Tx, 0, 8)
-
-	// bytes remain whenever a read starts, so any error, EOF included, means a truncated file
-	for reader.Len() > 0 {
-		tx := &bt.Tx{}
-		if _, err := tx.ReadFrom(reader); err != nil {
-			return nil, errors.NewProcessingError("[readConflictingTxs] failed to read transaction", err)
-		}
-
-		txs = append(txs, tx)
-	}
-
-	return txs, nil
+	return util.ReadTxList(b)
 }
 
 // keptAsideToPrewarm returns the txs kept aside next to subtree when its subtree data is

@@ -1876,7 +1876,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			})
 		}
 
-		if err := g.Wait(); err != nil {
+		unwindCoinbases := func() {
 			coinbaseTxsAdded.Range(func(key, value interface{}) bool {
 				// remove all the coinbase transactions we added
 				block := value.(*model.Block)
@@ -1889,8 +1889,23 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 				return true
 			})
+		}
+
+		if err := g.Wait(); err != nil {
+			unwindCoinbases()
 
 			return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
+		}
+
+		// The coinbases exist now, so the txs deleted when these blocks were moved back can be
+		// recreated. They go in block order, after every coinbase: the goroutines above ran
+		// concurrently and a tx of one block may spend another block's coinbase.
+		for _, block := range moveForwardBlocks {
+			if err := stp.restoreReorgDeletedTxs(context.Background(), block); err != nil {
+				unwindCoinbases()
+
+				return errors.NewProcessingError("[SubtreeProcessor][Reset] error restoring txs deleted when the block was moved back", err)
+			}
 		}
 
 		// Mark processed_at for all blocks. For intermediate blocks use a lightweight
@@ -1978,6 +1993,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 			if err = stp.processCoinbaseUtxos(context.Background(), block); err != nil {
 				return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
+			}
+
+			if err = stp.restoreReorgDeletedTxs(context.Background(), block); err != nil {
+				return errors.NewProcessingError("[SubtreeProcessor][Reset] error restoring txs deleted when the block was moved back", err)
 			}
 		}
 
@@ -5771,9 +5790,14 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 	if len(childSpendHashes) > 0 {
 		stp.logger.Warnf("[removeCoinbaseUtxos][%s] removing %d child spends of coinbase tx %s", block.String(), len(childSpendHashes), block.CoinbaseTx.String())
 
+		// save the txs first: if a reorg returns to this block, they are recreated from this copy
+		if err = stp.keepReorgDeletedTxs(ctx, block, childSpendHashes); err != nil {
+			return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error saving child spends of coinbase tx %s", block.String(), block.CoinbaseTx.String(), err)
+		}
+
 		// remove all the child spends from the utxo store
 		for _, childSpendHash := range childSpendHashes {
-			if err = stp.utxoStore.Delete(ctx, &childSpendHash); err != nil {
+			if err = utxostore.DeleteWithParents(ctx, stp.utxoStore, &childSpendHash); err != nil {
 				return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error deleting child spend utxo for tx %s", block.String(), childSpendHash.String(), err)
 			}
 
@@ -6613,6 +6637,10 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 			return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
 		}
 
+		if err = stp.restoreReorgDeletedTxs(ctx, block); err != nil {
+			return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error restoring txs deleted when the block was moved back", block.String(), err)
+		}
+
 		return nil, nil, nil, nil
 	}
 
@@ -6675,6 +6703,10 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	// create the coinbase after processing all other transaction operations
 	if err = stp.processCoinbaseUtxos(ctx, block); err != nil {
 		return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
+	}
+
+	if err = stp.restoreReorgDeletedTxs(ctx, block); err != nil {
+		return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error restoring txs deleted when the block was moved back", block.String(), err)
 	}
 
 	// On the foreign-block path (the `if` branch above), this point is

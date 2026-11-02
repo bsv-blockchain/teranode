@@ -3,8 +3,10 @@ package pruner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
@@ -24,6 +26,7 @@ type Service struct {
 	settings         *settings.Settings
 	db               *usql.DB
 	ctx              context.Context
+	clearParentRefs  func(ctx context.Context, txHash *chainhash.Hash) error
 }
 
 // Options contains configuration options for the cleanup service
@@ -40,6 +43,11 @@ type Options struct {
 	// SafetyWindow is the number of blocks a child must be stable before parent deletion
 	// If not specified, defaults to global_blockHeightRetention (288 blocks)
 	SafetyWindow uint32
+
+	// ClearParentRefs removes the references surviving parents hold to a transaction about to be
+	// deleted. In defensive mode the pruner calls it for every conflicting record it reaps and
+	// keeps a record whose references could not be cleared.
+	ClearParentRefs func(ctx context.Context, txHash *chainhash.Hash) error
 }
 
 // NewService creates a new cleanup service for the SQL store
@@ -69,6 +77,7 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 		settings:         tSettings,
 		db:               opts.DB,
 		ctx:              opts.Ctx,
+		clearParentRefs:  opts.ClearParentRefs,
 	}
 
 	return service, nil
@@ -158,6 +167,11 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 	} else {
 		// Defensive mode enabled - verify ALL spending children are stable before deletion
 		// This prevents orphaning any child transaction
+		kept, clearErr := s.clearConflictingParentRefs(ctx, blockHeight)
+		if clearErr != nil {
+			return 0, clearErr
+		}
+
 		deleteQuery = `
 			DELETE FROM transactions
 			WHERE id IN (
@@ -166,6 +180,7 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 				WHERE t.delete_at_height IS NOT NULL
 				  AND t.delete_at_height <= $1
 				  AND (t.unmined_since IS NULL OR t.conflicting)
+				  %s
 				  AND NOT EXISTS (
 				    -- Find ANY unstable child - if found, parent cannot be deleted
 				    -- This ensures ALL children must be stable before parent deletion
@@ -188,7 +203,9 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 				  )
 			)
 		`
-		result, err = s.db.ExecContext(ctx, deleteQuery, blockHeight, safetyWindow)
+		keptClause, keptArgs := keptHashesClause(kept, 3)
+		deleteQuery = fmt.Sprintf(deleteQuery, keptClause)
+		result, err = s.db.ExecContext(ctx, deleteQuery, append([]any{blockHeight, safetyWindow}, keptArgs...)...)
 	}
 
 	if err != nil {
@@ -224,4 +241,73 @@ func (s *Service) clearUnminedDeleteAtHeight(ctx context.Context, blockHeight ui
 	if count, err := result.RowsAffected(); err == nil && count > 0 {
 		s.logger.Infof("[pruner] cleared delete_at_height of %d unmined records", count)
 	}
+}
+
+// clearConflictingParentRefs removes parent references to every expired conflicting record, so the
+// delete that follows cannot leave a surviving parent naming a missing spender. It returns the
+// hashes whose references could not be cleared; the delete must skip them and retry next block.
+func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight uint32) ([]chainhash.Hash, error) {
+	if s.clearParentRefs == nil {
+		return nil, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT hash FROM transactions
+		WHERE delete_at_height IS NOT NULL
+		  AND delete_at_height <= $1
+		  AND conflicting
+	`, blockHeight)
+	if err != nil {
+		return nil, errors.NewStorageError("failed to list expired conflicting transactions", err)
+	}
+
+	defer rows.Close()
+
+	var hashes []chainhash.Hash
+
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return nil, errors.NewStorageError("failed to scan expired conflicting transaction", err)
+		}
+
+		hash, hashErr := chainhash.NewHash(raw)
+		if hashErr != nil {
+			continue
+		}
+
+		hashes = append(hashes, *hash)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, errors.NewStorageError("failed to read expired conflicting transactions", err)
+	}
+
+	var kept []chainhash.Hash
+
+	for i := range hashes {
+		if err = s.clearParentRefs(ctx, &hashes[i]); err != nil {
+			s.logger.Errorf("[pruner] keeping conflicting transaction %s, failed to clear parent references: %v", hashes[i].String(), err)
+
+			kept = append(kept, hashes[i])
+		}
+	}
+
+	return kept, nil
+}
+
+func keptHashesClause(kept []chainhash.Hash, firstParam int) (string, []any) {
+	if len(kept) == 0 {
+		return "", nil
+	}
+
+	placeholders := make([]string, len(kept))
+	args := make([]any, len(kept))
+
+	for i := range kept {
+		placeholders[i] = fmt.Sprintf("$%d", firstParam+i)
+		args[i] = kept[i][:]
+	}
+
+	return "AND t.hash NOT IN (" + strings.Join(placeholders, ",") + ")", args
 }
