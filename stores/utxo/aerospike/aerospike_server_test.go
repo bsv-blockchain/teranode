@@ -1723,6 +1723,10 @@ func TestSmokeTests(t *testing.T) {
 		tests.ConflictWALCrashRecovery(t, store)
 	})
 
+	t.Run("aerospike_conflict_rollback_restores_winners", func(t *testing.T) {
+		tests.ConflictRollbackRestoresWinners(t, store)
+	})
+
 	t.Run("aerospike_set_conflicting_after_create", func(t *testing.T) {
 		err := store.Delete(ctx, tests.TXHash)
 		require.NoError(t, err)

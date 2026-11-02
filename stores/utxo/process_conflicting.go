@@ -161,6 +161,20 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 		resolvedSet[h] = struct{}{}
 	}
 
+	winnerSet := make(map[chainhash.Hash]struct{}, len(conflictingTxHashes))
+	for _, winner := range conflictingTxHashes {
+		winnerSet[winner] = struct{}{}
+	}
+
+	// A resolved winner was not conflicting when this call began, so neither step
+	// 4 nor its rollback touches its flag.
+	pendingWinners := make([]chainhash.Hash, 0, len(conflictingTxHashes))
+	for _, h := range conflictingTxHashes {
+		if _, resolved := resolvedSet[h]; !resolved {
+			pendingWinners = append(pendingWinners, h)
+		}
+	}
+
 	// Crash-safety write-ahead log (#861): record the intent durably BEFORE any
 	// state mutation, and remove it once the operation completes successfully. A
 	// SIGKILL between steps (which bypasses the in-process rollback below) leaves
@@ -209,10 +223,10 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	// it. Such a refusal mutated nothing, so an intent this call made records
 	// nothing to recover. But the intent id is deterministic, so an intent that
 	// already existed belongs to an earlier run of the same list, and that run
-	// may have produced the very state refused here: a rollback clears a pending
-	// winner's conflicting flag along with the rest of step 1's cascade, since a
-	// winner is in its own counter-conflicting set. Only the seeded replay of
-	// that intent repairs it, so it stays.
+	// may have produced the very state refused here. A node upgraded with such
+	// an intent pending is the known case: before the winners were kept out of
+	// step 1, a rollback cleared a pending winner's conflicting flag. Only the
+	// seeded replay of that intent repairs it, so it stays.
 	//
 	// Every other failure keeps the intent, a transient step-0 failure included,
 	// for the same reason. Completion is best-effort: a failed delete just leaves
@@ -256,17 +270,12 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), compensationTimeout)
 		defer rollbackCancel()
 
-		// A resolved winner was not conflicting when this call began, so the
-		// rollback must not re-mark it.
-		rollbackWinners := make([]chainhash.Hash, 0, len(conflictingTxHashes))
-		for _, h := range conflictingTxHashes {
-			if _, resolved := resolvedSet[h]; !resolved {
-				rollbackWinners = append(rollbackWinners, h)
-			}
-		}
-
-		rollbackErr := rollbackProcessConflicting(rollbackCtx, s, rollbackWinners,
-			allMarkedHashes, markedAsNotSpendable, step3SuccessfulSpends, blockHeight,
+		// Step 1 never marks a winner directly, but its cascade can reach one
+		// that descends from a loser. Re-spending or clearing that winner would
+		// hand it back its loser's outpoints, so the undo of steps 1 and 2 skips
+		// every winner. A winner's flag is restored by the undo of step 4 alone.
+		rollbackErr := rollbackProcessConflicting(rollbackCtx, s, pendingWinners,
+			excludeHashes(allMarkedHashes, winnerSet), markedAsNotSpendable, step3SuccessfulSpends, blockHeight,
 			step2Committed, step4Committed)
 		if rollbackErr != nil {
 			err = errors.NewProcessingError("[ProcessConflicting] MANUAL INTERVENTION REQUIRED: original=%v rollback=%v", err, rollbackErr)
@@ -377,11 +386,6 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	// same refusal on every retry. The caller learns of it via onRefused and
 	// invalidates the block out of band, once block movement has finished.
 	if guard.enabled() {
-		winnerSet := make(map[chainhash.Hash]struct{}, len(conflictingTxHashes))
-		for _, winner := range conflictingTxHashes {
-			winnerSet[winner] = struct{}{}
-		}
-
 		keptLosers, refusedLosers, filterErr := filterAncestryConfirmedLosers(ctx, s, losingTxHashes, winnerSet, blockHash, guard)
 		if filterErr != nil {
 			return nil, nil, filterErr
@@ -413,6 +417,16 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 
 		losingTxHashes = keptLosers
 	}
+
+	// Step 1 demotes the losers only. GetCounterConflictingTxHashes seeds every
+	// winner into its own counter-conflicting set, so the set holds the winners
+	// too. Marking a pending winner changed nothing on the way forward: its flag
+	// is already set, and it frees no outpoint, because both stores unspend only
+	// an outpoint the named transaction holds. But it put the winner first in the
+	// set the rollback re-spends and then clears. So a failed call left the
+	// winner holding its loser's outpoints, not conflicting, with the loser still
+	// conflicting. Its descendants were cleared too.
+	losingTxHashes = excludeHashes(losingTxHashes, winnerSet)
 
 	// - 1: mark all losingTxHashesPerConflictingTx as conflicting + all its spending transactions recursively.
 	//   allMarkedConflicting is the BFS expansion: every hash now flagged Conflicting=true. Forwarded to callers so
@@ -450,6 +464,20 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 	markedAsNotSpendableHashesUnique := make(map[chainhash.Hash]struct{})
 	for _, spend := range affectedParentSpends {
 		markedAsNotSpendableHashesUnique[*spend.TxID] = struct{}{}
+	}
+
+	// A pending winner's parents are unlocked too, as when step 1 still marked
+	// the winner. A replay after a crash past step 2 needs it: nothing holds
+	// the contested outpoint any more, so the loser set is empty and the
+	// winner's parents are the only record of the lock step 2 took.
+	for idx, tx := range winningTxs {
+		if _, resolved := resolvedSet[conflictingTxHashes[idx]]; resolved || tx == nil {
+			continue
+		}
+
+		for _, input := range tx.Inputs {
+			markedAsNotSpendableHashesUnique[*input.PreviousTxIDChainHash()] = struct{}{}
+		}
 	}
 
 	markedAsNotSpendable = make([]chainhash.Hash, 0, len(markedAsNotSpendableHashesUnique))
@@ -1273,6 +1301,19 @@ func rollbackProcessConflicting(ctx context.Context, s Store, conflictingTxHashe
 	}
 
 	return rollbackErr
+}
+
+// excludeHashes returns hashes without the members of exclude, in order.
+func excludeHashes(hashes []chainhash.Hash, exclude map[chainhash.Hash]struct{}) []chainhash.Hash {
+	out := make([]chainhash.Hash, 0, len(hashes))
+
+	for _, h := range hashes {
+		if _, skip := exclude[h]; !skip {
+			out = append(out, h)
+		}
+	}
+
+	return out
 }
 
 // setLockedWithRetry retries SetLocked with a bounded back-off — a deliberate exception

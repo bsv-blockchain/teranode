@@ -63,7 +63,7 @@ func TestProcessConflictingRollback_Step3Failure(t *testing.T) {
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 	// 3d. SetLocked(parents, false) — undoes step 2's lock
-	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+	mockStore.On("SetLocked", mock.Anything, unlockSetOf(losingTxHash, createTestHash("prev-tx")), false).
 		Return(nil).Once()
 
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
@@ -119,7 +119,7 @@ func TestProcessConflictingRollback_RollbackAlsoFails(t *testing.T) {
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, errors.NewProcessingError("set conflicting false failed")).Once()
 	// SetLocked(false) still attempted (best-effort) and succeeds
-	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+	mockStore.On("SetLocked", mock.Anything, unlockSetOf(losingTxHash, createTestHash("prev-tx")), false).
 		Return(nil).Once()
 
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
@@ -167,9 +167,9 @@ func TestProcessConflictingRollback_Step5RetrySucceeds(t *testing.T) {
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
 	// step 5: SetLocked(false) fails twice, succeeds the third time
-	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+	mockStore.On("SetLocked", mock.Anything, unlockSetOf(losingTxHash, createTestHash("prev-tx")), false).
 		Return(errors.NewProcessingError("transient lock failure")).Twice()
-	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+	mockStore.On("SetLocked", mock.Anything, unlockSetOf(losingTxHash, createTestHash("prev-tx")), false).
 		Return(nil).Once()
 
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
@@ -215,7 +215,7 @@ func TestProcessConflictingRollback_Step5RetryExhausted(t *testing.T) {
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 
 	// step 5 fails on every attempt — 3 attempts total
-	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+	mockStore.On("SetLocked", mock.Anything, unlockSetOf(losingTxHash, createTestHash("prev-tx")), false).
 		Return(errors.NewProcessingError("persistent lock failure")).Times(3)
 
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
@@ -281,7 +281,7 @@ func TestProcessConflictingRollback_PartialStep3Spend(t *testing.T) {
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil).Once()
 	// 3d. SetLocked(parents, false) — undoes step 2's lock
-	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).
+	mockStore.On("SetLocked", mock.Anything, unlockSetOf(losingTxHash, createTestHash("prev-tx")), false).
 		Return(nil).Once()
 
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
@@ -354,13 +354,13 @@ func TestProcessConflictingRollback_CascadeDescendants(t *testing.T) {
 	// 3e. SetLocked(false) on the unique parents marked unspendable
 	mockStore.On("SetLocked", mock.Anything, mock.MatchedBy(func(hs []chainhash.Hash) bool {
 		// affectedParentSpends covers parents of both losing + descendant; both have
-		// vout=0 with TxID = losingTxHash / descendantHash, so unique parents are exactly
-		// those two hashes.
-		if len(hs) != 2 {
+		// vout=0 with TxID = losingTxHash / descendantHash. The winner's own parent,
+		// prev-tx, is unlocked too.
+		if len(hs) != 3 {
 			return false
 		}
-		seen := map[chainhash.Hash]bool{hs[0]: true, hs[1]: true}
-		return seen[losingTxHash] && seen[descendantHash]
+		seen := map[chainhash.Hash]bool{hs[0]: true, hs[1]: true, hs[2]: true}
+		return seen[losingTxHash] && seen[descendantHash] && seen[createTestHash("prev-tx")]
 	}), false).Return(nil).Once()
 
 	result, mayBeMarked, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
@@ -405,4 +405,27 @@ func TestProcessConflicting_PartialStep1ReportsFlippedHashes(t *testing.T) {
 	require.Nil(t, losers)
 	require.Equal(t, []chainhash.Hash{loserHash, childHash}, mayBeMarked)
 	mockStore.AssertExpectations(t)
+}
+
+// unlockSetOf matches a SetLocked hash list holding exactly want, in any order.
+// The unlock set is built from a map, so its order is not fixed.
+func unlockSetOf(want ...chainhash.Hash) interface{} {
+	return mock.MatchedBy(func(got []chainhash.Hash) bool {
+		if len(got) != len(want) {
+			return false
+		}
+
+		set := make(map[chainhash.Hash]struct{}, len(got))
+		for _, h := range got {
+			set[h] = struct{}{}
+		}
+
+		for _, h := range want {
+			if _, ok := set[h]; !ok {
+				return false
+			}
+		}
+
+		return true
+	})
 }

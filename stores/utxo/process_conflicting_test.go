@@ -55,7 +55,7 @@ func TestProcessConflicting_Success(t *testing.T) {
 		Return([]*Spend{}, []chainhash.Hash{}, nil)
 
 	// Mock SetLocked call
-	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
+	mockStore.On("SetLocked", mock.Anything, unlockSetOf(losingTxHash, createTestHash("prev-tx")), false).Return(nil)
 
 	// Execute test
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)
@@ -258,7 +258,7 @@ func TestProcessConflicting_SpendError(t *testing.T) {
 		Return(nil, []*Spend{}, nil).Once()
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{losingTxHash}, false).
 		Return([]*Spend{}, []chainhash.Hash{}, nil)
-	mockStore.On("SetLocked", mock.Anything, []chainhash.Hash{losingTxHash}, false).Return(nil)
+	mockStore.On("SetLocked", mock.Anything, unlockSetOf(losingTxHash, createTestHash("prev-tx")), false).Return(nil)
 
 	// Execute test
 	result, _, err := ProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, conflictingTxHashes, map[chainhash.Hash]struct{}{}, NoAncestryGuard)

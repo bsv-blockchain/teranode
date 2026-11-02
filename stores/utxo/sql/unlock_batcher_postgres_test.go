@@ -94,6 +94,18 @@ func TestConflictWALCrashRecovery_Postgres(t *testing.T) {
 	tests.ConflictWALCrashRecovery(t, store)
 }
 
+// TestConflictRollbackRestoresWinners_Postgres runs the failed-resolution
+// rollback against real Postgres, for the same reason as the harness above.
+func TestConflictRollbackRestoresWinners_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, _ := setupPostgresStore(t)
+
+	tests.ConflictRollbackRestoresWinners(t, store)
+}
+
 // TestCreateMinedUnspendableSetsDAH_Postgres is the Postgres counterpart of the
 // SQLite TestCreateMinedUnspendableSetsDAH: it exercises the real Postgres create
 // path (CTE / batcher) and asserts that a transaction created already-mined with

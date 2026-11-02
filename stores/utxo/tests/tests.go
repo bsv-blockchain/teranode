@@ -543,6 +543,81 @@ func crashSpender(t *testing.T, ctx context.Context, db utxostore.Store, parent 
 	return m.SpendingDatas[0].TxID
 }
 
+// failSpendStore fails the spend of one transaction, so ProcessConflicting
+// rolls back after an earlier winner's spend has committed.
+type failSpendStore struct {
+	utxostore.Store
+	fail chainhash.Hash
+}
+
+func (f *failSpendStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	if tx.TxIDChainHash().Equal(f.fail) {
+		return nil, nil, errors.NewStorageError("injected spend failure for %s", f.fail.String())
+	}
+
+	return f.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+// ConflictRollbackRestoresWinners pins that a failed ProcessConflicting leaves
+// every winner and loser as it found them. Each winner is in its own
+// counter-conflicting set, and the ancestry guard lists winners first, so the
+// rollback used to re-spend a winner before its loser and then clear its flag.
+// The winner came back non-conflicting and spending its loser's outpoint, which
+// ForwardResolutionApplied reads as a finished resolution.
+func ConflictRollbackRestoresWinners(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+	require.NoError(t, db.SetBlockHeight(20))
+
+	parentA := crashParentTx(0x51)
+	parentB := crashParentTx(0x52)
+
+	for _, parent := range []*bt.Tx{parentA, parentB} {
+		_, _, err := db.SpendAndCreate(ctx, parent, 1, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+		require.NoError(t, db.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+	}
+
+	loserA := crashSpendTx(t, parentA, 90000)
+	loserB := crashSpendTx(t, parentB, 90000)
+	winnerA := crashSpendTx(t, parentA, 80000)
+	winnerB := crashSpendTx(t, parentB, 80000)
+
+	for _, loser := range []*bt.Tx{loserA, loserB} {
+		_, _, err := db.SpendAndCreate(ctx, loser, db.GetBlockHeight())
+		require.NoError(t, err)
+	}
+
+	for _, winner := range []*bt.Tx{winnerA, winnerB} {
+		_, _, err := db.SpendAndCreate(ctx, winner, db.GetBlockHeight(), utxostore.WithConflicting(true), utxostore.WithCreateOnly())
+		require.NoError(t, err)
+	}
+
+	// winnerA's spend commits, then winnerB's fails, so the rollback has to undo
+	// a committed winner spend.
+	store := &failSpendStore{Store: db, fail: *winnerB.TxIDChainHash()}
+	guard := utxostore.NewAncestryGuard(func(context.Context, []uint32, *chainhash.Hash) (bool, error) {
+		return false, nil
+	})
+	winners := []chainhash.Hash{*winnerA.TxIDChainHash(), *winnerB.TxIDChainHash()}
+
+	_, _, err := utxostore.ProcessConflicting(ctx, store, 20, chainhash.Hash{}, winners, map[chainhash.Hash]struct{}{}, guard)
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "MANUAL INTERVENTION REQUIRED", "the rollback itself must succeed")
+
+	intent := utxostore.ConflictIntent{Kind: utxostore.ConflictIntentForward, BlockHeight: 20, TxHashes: winners}
+	require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
+
+	for _, pair := range []struct {
+		parent, winner, loser *bt.Tx
+	}{{parentA, winnerA, loserA}, {parentB, winnerB, loserB}} {
+		require.True(t, crashConflicting(t, ctx, db, pair.winner.TxIDChainHash()), "the winner must be conflicting again")
+		require.False(t, crashConflicting(t, ctx, db, pair.loser.TxIDChainHash()), "the loser must not be conflicting again")
+		require.NotNil(t, crashSpender(t, ctx, db, pair.parent))
+		require.Equal(t, pair.loser.TxIDChainHash().String(), crashSpender(t, ctx, db, pair.parent).String(), "the loser must hold its outpoint again")
+		require.False(t, crashLocked(t, ctx, db, pair.parent.TxIDChainHash()), "the parent must be unlocked")
+	}
+}
+
 // ConflictWALCrashRecovery is the per-step-boundary crash-restart harness for
 // the conflict-resolution WAL (#861). For each step boundary of the forward
 // (ProcessConflicting) and reverse (ReverseProcessConflicting) operations it
