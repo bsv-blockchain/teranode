@@ -372,18 +372,15 @@ func hasMarker(t *testing.T, client *uaerospike.Client, key *aerospike.Key, chil
 	return marked
 }
 
-// TestFlushCleanupBatches_RefusedStandalonePageKeepsMasterMarkers covers a
+// TestFlushCleanupBatches_PageScannedWithItsMasterGoesWithTheMaster covers a
 // chunk that holds both the master record M of a paged child C and its
 // pagination record M1, which carries its own deleteAtHeight. processRecordChunk
 // queues two deletions for C: {C, [M, M1]} for the master, whose inputs give
 // the marker on P, and {C, [M1]} for the page, which has no inputs bin and
-// queues no marker. The master delete succeeds; the server definitely refuses
-// the page entry. M is gone, so P must keep C's marker: otherwise a replay of C
-// finds no record and no marker, and is recreated as a ghost.
-//
-// As in TestFlushCleanupBatches_FailedDeleteWithdrawsMarkers, a key in a
-// namespace the server does not have stands in for the refused page record.
-func TestFlushCleanupBatches_RefusedStandalonePageKeepsMasterMarkers(t *testing.T) {
+// queues no marker. M is present when the flush starts, so the page entry is
+// dropped and M1 goes with M. P keeps C's marker: otherwise a replay of C finds
+// no record and no marker, and is recreated as a ghost.
+func TestFlushCleanupBatches_PageScannedWithItsMasterGoesWithTheMaster(t *testing.T) {
 	s, client := newFlushTestService(t)
 
 	parent := chainhash.HashH([]byte("standalone-page-parent"))
@@ -399,26 +396,75 @@ func TestFlushCleanupBatches_RefusedStandalonePageKeepsMasterMarkers(t *testing.
 	require.NoError(t, err)
 	require.NoError(t, client.Put(nil, pageKey, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()}))
 
-	refusedPage, err := aerospike.NewKey("nosuchnamespace", "test", child.String())
-	require.NoError(t, err)
-
 	updates := make(map[string]*parentUpdateInfo)
 	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
 
 	deletions := []*pendingDeletion{
-		{txHash: &child, keys: []*aerospike.Key{masterKey, pageKey}},      // the scanned master
-		{txHash: &child, keys: []*aerospike.Key{refusedPage}, page: true}, // the scanned page, refused
+		{txHash: &child, keys: []*aerospike.Key{masterKey, pageKey}},  // the scanned master
+		{txHash: &child, keys: []*aerospike.Key{pageKey}, page: true}, // the scanned page
 	}
 
-	_, flushErr := s.flushCleanupBatches(context.Background(), updates, deletions, nil)
-	require.Error(t, flushErr, "a refused delete is still reported")
+	heldBack, flushErr := s.flushCleanupBatches(context.Background(), updates, deletions, nil)
+	require.NoError(t, flushErr)
+	require.Equal(t, 1, heldBack, "the page entry is dropped, because its master is present")
 
-	masterExists, err := client.Exists(nil, masterKey)
-	require.NoError(t, err)
-	require.False(t, masterExists, "the master record was deleted")
+	for name, key := range map[string]*aerospike.Key{"master": masterKey, "page": pageKey} {
+		exists, err := client.Exists(nil, key)
+		require.NoError(t, err)
+		require.False(t, exists, "the %s record is deleted by the master's deletion", name)
+	}
 
 	require.True(t, hasMarker(t, client, parentKey, &child),
 		"the master is gone, so the parent must keep the child's replay marker")
+}
+
+// TestFlushCleanupBatches_PageWaitsForItsMaster covers a pagination record M1
+// scanned in a different chunk from its master M. The hold-back set is filled
+// per chunk from M's inputs, so a chunk holding only M1 finds nothing blocked
+// for C. While M is present, kept back for a failed marker write or a refused
+// delete, M1 must stay too: a replay of C would otherwise rewrite M1 with
+// unspent outputs while M answered ErrTxExists. Once M is gone, M1 is the
+// leftover of an earlier cycle and is deleted on its own.
+func TestFlushCleanupBatches_PageWaitsForItsMaster(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	for _, tc := range []struct {
+		name          string
+		masterPresent bool
+	}{
+		{"master present: the page stays", true},
+		{"master gone: the page is deleted", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			child := chainhash.HashH([]byte("page-waits-" + tc.name))
+
+			if tc.masterPresent {
+				putRecord(t, client, &child, aerospike.BinMap{
+					fields.TxID.String():           child.CloneBytes(),
+					fields.TotalExtraRecs.String(): 1,
+				})
+			}
+
+			pageKey, err := aerospike.NewKey("test", "test", uaerospike.CalculateKeySourceInternal(&child, 1))
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, pageKey, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()}))
+
+			deletions := []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{pageKey}, page: true}}
+
+			heldBack, flushErr := s.flushCleanupBatches(context.Background(), map[string]*parentUpdateInfo{}, deletions, nil)
+			require.NoError(t, flushErr)
+
+			exists, err := client.Exists(nil, pageKey)
+			require.NoError(t, err)
+			require.Equal(t, tc.masterPresent, exists)
+
+			if tc.masterPresent {
+				require.Equal(t, 1, heldBack)
+			} else {
+				require.Equal(t, 0, heldBack)
+			}
+		})
+	}
 }
 
 // TestIsPaginationRecord: processRecordChunk sets pendingDeletion.page from

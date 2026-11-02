@@ -2435,6 +2435,9 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 		toDelete = append(toDelete, deletion)
 	}
 
+	toDelete, pagesHeld := s.dropPagesOfPresentMasters(toDelete)
+	heldBack += pagesHeld
+
 	// survivors are the children whose record delete the server refused, and
 	// unanswered those whose delete may not have happened. Either way the record
 	// may still be present, so its external blob must stay too.
@@ -2498,6 +2501,74 @@ func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[str
 	}
 
 	return heldBack, nil
+}
+
+// dropPagesOfPresentMasters removes from deletions every pagination record
+// scanned on its own whose master record is still present, and returns how many
+// it removed.
+//
+// The hold-back in flushCleanupBatches is keyed on the transaction, but it is
+// filled per chunk from the master's inputs, and only the master carries them.
+// A page scanned in a different chunk from its master finds nothing blocked, so
+// without this a page was deleted while its master was deliberately kept for a
+// failed marker write or a refused delete. A replay then rewrote the page with
+// unspent outputs while the master answered ErrTxExists, and the historical
+// spends on that page were lost.
+//
+// A present master needs none of its pages deleted here: the master's own
+// deletion lists every page key, whichever chunk it is scanned in. So a page
+// goes on its own only once its master is definitely gone, which is the
+// leftover of an earlier cycle whose page deletes failed. A master read that
+// fails keeps the page, because the master is not known to be gone.
+func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pendingDeletion, int) {
+	pages := make([]int, 0)
+	records := make([]aerospike.BatchRecordIfc, 0)
+	readPolicy := aerospike.NewBatchReadPolicy()
+
+	keep := make([]bool, len(deletions))
+
+	for i, deletion := range deletions {
+		keep[i] = true
+
+		if !deletion.page {
+			continue
+		}
+
+		masterKey, err := aerospike.NewKey(s.namespace, s.set, uaerospike.CalculateKeySourceInternal(deletion.txHash, 0))
+		if err != nil {
+			keep[i] = false
+
+			continue
+		}
+
+		pages = append(pages, i)
+		records = append(records, aerospike.NewBatchReadHeader(readPolicy, masterKey))
+	}
+
+	if len(records) > 0 {
+		if err := s.client.BatchOperate(s.batchPolicy, records); err != nil && isBatchTransportError(err) {
+			s.logger.Warnf("Pruner kept %d pagination records this cycle: reading their master records failed: %v", len(records), err)
+		}
+
+		for j, rec := range records {
+			batchRec := rec.BatchRec()
+			if batchRec.Err != nil && batchRec.Err.Matches(types.KEY_NOT_FOUND_ERROR) {
+				continue
+			}
+
+			keep[pages[j]] = false
+		}
+	}
+
+	kept := make([]*pendingDeletion, 0, len(deletions))
+
+	for i, deletion := range deletions {
+		if keep[i] {
+			kept = append(kept, deletion)
+		}
+	}
+
+	return kept, len(deletions) - len(kept)
 }
 
 // markParents writes the replay markers for the queued parent records, keeping
