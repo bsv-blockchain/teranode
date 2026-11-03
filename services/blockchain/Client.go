@@ -1061,6 +1061,62 @@ func (c *Client) GetBlockHeadersFromHeight(ctx context.Context, height, limit ui
 	return headers, metas, nil
 }
 
+// BlocksBetterThan returns the valid blocks that sort better than after in the best-tip order, worst first.
+func (c *Client) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	req := &blockchain_api.BlocksBetterThanRequest{
+		After:     after.Bytes(),
+		MinHeight: minHeight,
+		Limit:     limit,
+	}
+
+	if from != nil {
+		req.From = from.Bytes()
+	}
+
+	resp, err := c.client.BlocksBetterThan(ctx, req)
+	if err != nil {
+		return nil, nil, false, errors.UnwrapGRPC(err)
+	}
+
+	if len(resp.Metas) != len(resp.BlockHeaders) {
+		return nil, nil, false, errors.NewProcessingError("[BlocksBetterThan] response lengths differ: %d headers, %d metas", len(resp.BlockHeaders), len(resp.Metas))
+	}
+
+	headers := make([]*model.BlockHeader, 0, len(resp.BlockHeaders))
+
+	for _, headerBytes := range resp.BlockHeaders {
+		header, err := model.NewBlockHeaderFromBytes(headerBytes)
+		if err != nil {
+			return nil, nil, false, err
+		}
+
+		headers = append(headers, header)
+	}
+
+	metas := make([]*model.BlockHeaderMeta, 0, len(resp.Metas))
+
+	for _, metaBytes := range resp.Metas {
+		meta, err := model.NewBlockHeaderMetaFromBytes(metaBytes)
+		if err != nil {
+			return nil, nil, false, err
+		}
+
+		metas = append(metas, meta)
+	}
+
+	// A server that predates the more field leaves it false, so a full page counts as more.
+	return headers, metas, resp.More || uint64(len(headers)) >= uint64(limit), nil
+}
+
+// ClearBestTipLowWater deletes the best tip's low-water mark if it still holds expected.
+func (c *Client) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	if _, err := c.client.ClearBestTipLowWater(ctx, &blockchain_api.ClearBestTipLowWaterRequest{Expected: expected}); err != nil {
+		return errors.UnwrapGRPC(err)
+	}
+
+	return nil
+}
+
 // GetBlockHeadersByHeight retrieves block headers between two specified heights.
 func (c *Client) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	resp, err := c.client.GetBlockHeadersByHeight(ctx, &blockchain_api.GetBlockHeadersByHeightRequest{

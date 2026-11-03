@@ -125,21 +125,53 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 	s.mainChainRebuilding.Add(1)
 	defer s.mainChainRebuilding.Add(-1)
 
-	if rows, err = s.db.QueryContext(ctx, q, blockHash.CloneBytes()); err != nil {
-		return nil, errors.NewStorageError("error querying blocks to invalidate", err)
+	// The update and the low-water mark of the drop it causes commit together, so a
+	// reader of the mark never misses a drop that committed. The mark is derived from
+	// the table, not from the flags the rebuild in the defer writes.
+	if err = s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		invalidatedHashes = invalidatedHashes[:0]
+
+		before, hadBefore, beforeErr := bestTipKey(ctx, tx)
+		if beforeErr != nil {
+			return beforeErr
+		}
+
+		if rows, err = tx.QueryContext(ctx, q, blockHash.CloneBytes()); err != nil {
+			return err
+		}
+
+		for rows.Next() {
+			if err = rows.Scan(&hashBytes); err != nil {
+				_ = rows.Close()
+				return err
+			}
+
+			if hash, err = chainhash.NewHash(hashBytes); err != nil {
+				_ = rows.Close()
+				return err
+			}
+
+			invalidatedHashes = append(invalidatedHashes, *hash)
+		}
+
+		if err = errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+
+		return s.recordBestTipDrop(ctx, tx, before, hadBefore)
+	}); err != nil {
+		return nil, errors.NewStorageError("error invalidating blocks", err)
 	}
 
 	defer func() {
-		// The auto-committed UPDATE was accepted, so it may have moved chain membership even
-		// if no RETURNING row reaches us, and the rebuild below writes the column too. A walk
-		// running without slowPathMu may have read its rows before these commits; noting the
-		// write after the last of them and before the lock drops makes that walk run again
-		// rather than leave its older view in place. The fork point can lie arbitrarily deep,
-		// so the note names no height. A missing block or an UPDATE the database rejected
-		// returned above and is not noted.
+		// The transaction above committed, so it may have moved chain membership, and the
+		// rebuild below writes the column too. A walk running without slowPathMu may have
+		// read its rows before these commits; noting the write after the last of them and
+		// before the lock drops makes that walk run again rather than leave its older view
+		// in place. The fork point can lie arbitrarily deep, so the note names no height. A
+		// missing block or a transaction the database rejected returned above and is not
+		// noted.
 		defer s.noteOnMainChainWrite(noRepairFloor)
-
-		err = errors.Join(err, rows.Close())
 
 		// Invalidate caches FIRST so that getBestBlockID does not return a
 		// stale best block that included the now-invalid block.
@@ -178,18 +210,6 @@ func (s *SQL) InvalidateBlock(ctx context.Context, blockHash *chainhash.Hash) (i
 			}
 		}
 	}()
-
-	for rows.Next() {
-		if err = rows.Scan(&hashBytes); err != nil {
-			return nil, errors.NewStorageError("error scanning invalidated block hash", err)
-		}
-
-		if hash, err = chainhash.NewHash(hashBytes); err != nil {
-			return nil, errors.NewStorageError("error creating hash from bytes", err)
-		}
-
-		invalidatedHashes = append(invalidatedHashes, *hash)
-	}
 
 	if len(invalidatedHashes) == 0 {
 		return nil, errors.NewStorageError("no blocks were invalidated", errors.ErrProcessing)

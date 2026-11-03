@@ -8,7 +8,6 @@ import (
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
@@ -45,9 +44,7 @@ func TestClearRequestedState_ActuallyReleasesTheHash(t *testing.T) {
 
 	p := newTestPeer(t, "localhost:18333")
 
-	state := &peerSyncState{
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Hour),
-	}
+	state := &peerSyncState{}
 	sm.peerStates.Set(p, state)
 
 	// Record the request exactly as fetchHeaderBlocks does.

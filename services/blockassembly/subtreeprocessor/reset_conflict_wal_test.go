@@ -525,9 +525,9 @@ func TestReorgBlocks_PartialRemineAfterAcceptedHeal(t *testing.T) {
 	require.False(t, conflicting(loser2))
 }
 
-// A reset does not reverse the blocks it moves back, but it retires their forward checklists, as
-// reorgBlocks does. Otherwise a checklist left by a failed acknowledgement would make the next startup
-// roll back an operation that has stayed live since. The applied state stays as it is.
+// A reset reverses the conflict resolution of the blocks it moves back and retires their forward
+// checklists, as reorgBlocks does. Otherwise a checklist left by a failed acknowledgement would make
+// the next startup roll back an operation the reverse has already undone.
 func TestReset_RetiresMovedBackForwardChecklist(t *testing.T) {
 	ctx := t.Context()
 	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, false)
@@ -564,9 +564,13 @@ func TestReset_RetiresMovedBackForwardChecklist(t *testing.T) {
 	require.NoError(t, err)
 	owner, err := store.GetSpend(ctx, spends[0])
 	require.NoError(t, err)
-	require.Equal(t, winner.TxIDChainHash(), owner.SpendingData.TxID, "a reset leaves the applied state as it is")
+	require.Equal(t, loser.TxIDChainHash(), owner.SpendingData.TxID, "the reset's reverse gives the input back to the loser")
 
 	m, err := store.Get(ctx, loser.TxIDChainHash(), fields.Conflicting)
 	require.NoError(t, err)
-	require.True(t, m.Conflicting)
+	require.False(t, m.Conflicting)
+
+	m, err = store.Get(ctx, winner.TxIDChainHash(), fields.Conflicting)
+	require.NoError(t, err)
+	require.True(t, m.Conflicting, "the reverse demotes the moved-back winner")
 }
