@@ -2,6 +2,7 @@ package utxoset
 
 import (
 	"context"
+	"slices"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -330,17 +331,70 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash,
 		return out, nil
 	}
 
+	var missing []chainhash.Hash
+
 	for _, h := range hashes {
 		if h == nil {
 			continue
 		}
 
 		if _, ok := out[*h]; !ok {
-			return nil, errors.NewTxNotFoundError("[utxoset][SetMinedMulti] %s", h.String())
+			missing = append(missing, *h)
+		}
+	}
+
+	if len(missing) > 0 {
+		if err := s.answerMinedLongAgo(ctx, missing, info, out); err != nil {
+			return nil, err
 		}
 	}
 
 	return out, nil
+}
+
+// answerMinedLongAgo answers for transactions SetMinedMulti found neither an identity row nor a
+// recent containment row for, which is a transaction mined long ago: the deep stamp deleted its
+// identity row and its containment sits below the lookup floor, so the only record of its block
+// is the pair on its UTXOs, or its undo copies once it is fully spent. A block that includes it
+// again must be told about that older block, as aerospike's setMined tells it by returning the
+// record's whole block list: model/update-tx-mined.go finds the older block on the chain and
+// marks the new block invalid. Answering "not found" instead counted as a storage error, which
+// outranks that verdict, and left the block with its mined status unset, so block assembly
+// waited behind it for good.
+//
+// The answer is the older blocks plus the asked-for block, and no containment row is written
+// for the asked-for block. The older block is at least the stamp depth below the tip, so the
+// asked-for block either has it as an ancestor and is invalid, or sits on a fork that leaves the
+// chain below it, deeper than any reorg the store recovers from.
+//
+// It runs only for hashes the store would otherwise have refused, so a normal block never
+// reaches it. A hash nothing answers for is still reported as not found.
+func (s *Store) answerMinedLongAgo(ctx context.Context, missing []chainhash.Hash, info utxo.MinedBlockInfo,
+	out map[chainhash.Hash][]uint32) error {
+	res, err := s.lookupMany(ctx, missing, false, true)
+	if err != nil {
+		return err
+	}
+
+	for _, h := range missing {
+		if ferr, failed := res.failed[h]; failed {
+			return ferr
+		}
+
+		d, ok := res.found[h]
+		if !ok || len(d.BlockIDs) == 0 {
+			return errors.NewTxNotFoundError("[utxoset][SetMinedMulti] %s", h.String())
+		}
+
+		ids := append([]uint32(nil), d.BlockIDs...)
+		if !slices.Contains(ids, info.BlockID) {
+			ids = append(ids, info.BlockID)
+		}
+
+		out[h] = ids
+	}
+
+	return nil
 }
 
 // recordMined inserts the containment rows and, on the longest chain, clears the markers. It

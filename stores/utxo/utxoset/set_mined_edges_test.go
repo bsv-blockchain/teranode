@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -108,4 +110,37 @@ func TestUnMineCountsARecordWithNoIdentityRowButNotACoinbase(t *testing.T) {
 
 	require.Equal(t, before+1, testutil.ToFloat64(noIdentityReached.WithLabelValues("un_mine")),
 		"the transaction counts, and the coinbase does not")
+}
+
+// TestSetMinedMultiTellsABlockAboutAnOlderBlockOfAHeldTransaction is a block that includes
+// again a transaction mined long ago that still holds an unspent output. The deep stamp has
+// deleted its identity row and its containment, so the only record of the older block is the
+// pair on its UTXO. SetMinedMulti must still return the older block, as aerospike's setMined
+// does, so the caller marks the new block invalid; "not found" left its mined status unset and
+// block assembly waiting behind it.
+func TestSetMinedMultiTellsABlockAboutAnOlderBlockOfAHeldTransaction(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	tx := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, tx, 100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, retireWindows(t, s, ctx, 0, map[uint32]uint32{100: 7}))
+
+	got, err := s.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs)
+	require.NoError(t, err)
+	require.Equal(t, []uint32{7}, got.BlockIDs, "fixture: only the UTXO pair still records block 7")
+
+	newHeight := s.GetBlockHeight() + 1
+	require.NoError(t, s.SetBlockHeight(newHeight))
+
+	ids, err := s.SetMinedMulti(ctx, hashes(tx), utxo.MinedBlockInfo{BlockID: 9_999, BlockHeight: newHeight, OnLongestChain: true})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{7, 9_999}, ids[*tx.TxIDChainHash()])
+
+	// A transaction the store has never held is still not found.
+	_, err = s.SetMinedMulti(ctx, hashes(mkTx(t, 1, 6_000)), utxo.MinedBlockInfo{BlockID: 9_999, BlockHeight: newHeight, OnLongestChain: true})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxNotFound), "got %v", err)
 }
