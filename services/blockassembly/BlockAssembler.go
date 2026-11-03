@@ -723,11 +723,15 @@ drain:
 	// Judge the storage outcome of this reset before replay can return an
 	// unrelated history error. A clean rotation still cured its disk fault.
 	b.onResetDone(storageTriggered, resp, err)
+	// The senders get the reset's own outcome. A failed replay afterwards is not a failed reset:
+	// the pending history stays set, and the next pass replays it from the saved position
+	// without resetting again.
 	if err == nil && b.bestTipPosKnown.Load() {
 		b.bestTipResetReplayPending.Store(true)
-		_, err = b.replayBestTipChanges(ctx)
-		if err != nil {
-			b.logger.Errorf("[BlockAssembler] reset completed but pending tip changes need retrying: %v", err)
+
+		if _, replayErr := b.replayBestTipChanges(ctx); replayErr != nil {
+			b.logger.Errorf("[BlockAssembler] reset completed but pending tip changes need retrying: %v", replayErr)
+			b.triggerReconcile()
 		}
 	}
 
@@ -4154,11 +4158,8 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 			return false, false
 		}
 
-		// The parent's conflicting children are read at most once, and only if an output is
-		// spent by this tx.
-		var counterTxMeta *meta.Data
-
-		counterLoaded := false
+		// The vout of the first output this tx spends, or -1 when it spends none of them.
+		spentVout := -1
 
 		for _, outputIndex := range vouts {
 			vout := int(outputIndex)
@@ -4179,43 +4180,44 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 				return false, true
 			}
 
-			// Case 2: spending data matches, but check if the counter-conflicting tx
-			// (the one this tx replaced via ProcessConflicting) is on the current chain.
-			// This catches the scenario where ProcessConflicting incorrectly flipped a
-			// confirmed transaction to "loser" status.
-			if !counterLoaded {
-				counterLoaded = true
-
-				if counterTxMeta, err = b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren); err != nil {
-					counterTxMeta = nil
-				}
-			}
-
-			if counterTxMeta == nil {
-				continue
-			}
-
-			for _, counterChild := range counterTxMeta.ConflictingChildren {
-				if counterChild.IsEqual(&txHash) {
-					continue
-				}
-
-				counterMeta, err := b.utxoStore.Get(ctx, &counterChild, fields.BlockIDs)
-				if err != nil || counterMeta == nil {
-					continue
-				}
-
-				for _, blockID := range counterMeta.BlockIDs {
-					if bestBlockIDsMap[blockID] {
-						b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d has counter-conflicting tx %s confirmed on chain (blockID %d) — marking conflicting",
-							txHash.String(), parentHash.String(), vout, counterChild.String(), blockID)
-
-						return false, true
-					}
-				}
+			if spentVout < 0 {
+				spentVout = vout
 			}
 		}
 
+		if spentVout < 0 {
+			continue
+		}
+
+		// Case 2: spending data matches, but check if the counter-conflicting tx
+		// (the one this tx replaced via ProcessConflicting) is on the current chain.
+		// This catches the scenario where ProcessConflicting incorrectly flipped a
+		// confirmed transaction to "loser" status. The answer is the same for every
+		// output of the parent, so it is checked once per parent.
+		counterTxMeta, err := b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren)
+		if err != nil || counterTxMeta == nil {
+			continue
+		}
+
+		for _, counterChild := range counterTxMeta.ConflictingChildren {
+			if counterChild.IsEqual(&txHash) {
+				continue
+			}
+
+			counterMeta, err := b.utxoStore.Get(ctx, &counterChild, fields.BlockIDs)
+			if err != nil || counterMeta == nil {
+				continue
+			}
+
+			for _, blockID := range counterMeta.BlockIDs {
+				if bestBlockIDsMap[blockID] {
+					b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d has counter-conflicting tx %s confirmed on chain (blockID %d) — marking conflicting",
+						txHash.String(), parentHash.String(), spentVout, counterChild.String(), blockID)
+
+					return false, true
+				}
+			}
+		}
 	}
 	return true, false
 }

@@ -166,31 +166,55 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   if the tip moved. Upgrade in any order: block assembly against an older blockchain
   service follows the best header as before, asking again once a minute, and an
   older binary ignores the new state keys, so a rollback needs no step.
-  SQL-backed block assembly also retains valid unmined transactions during an
-  input-validated reset, and resets undo conflicting-spender swaps before reloading
-  the pool. Historical resets visit their recorded target; externally requested
-  resets finish pending history before serving a populated mining candidate. No
-  configuration change is required. Setting the reconcile interval to `0` disables
-  ordinary polling; recovery of an unfinished reset still retries. Reload input
-  validation keeps four parallel readers after closing the iterator, requests only
-  input points, then applies conflict cascades serially. A reset that fails before
-  its tx map rotation leaves the old pool in service and the replay carries on from
-  its position. When the replay after a reset fails three passes in a row, block
-  assembly gives the remaining history up, follows the best header and builds
-  candidates from the pool the reset loaded;
+  Historical resets visit their recorded target. No configuration change is required.
+  Setting the reconcile interval to `0` disables ordinary polling; recovery of an
+  unfinished reset still retries. A reset that fails before its tx map rotation
+  leaves the old pool in service and the replay carries on from its position. A past
+  best tip whose move would take block assembly back over best-chain blocks is not
+  moved to when those blocks are at least coinbase maturity below the best tip, or
+  when one of them resolved a double spend and block assembly's tip is on the best
+  chain: its branch-only transactions are marked unmined where they lie and the pool
+  is reloaded. That keeps confirmed spends of a coinbase, and the conflict swaps of
+  the best chain, in place. (#2074)
+
+- **Mining candidates stay empty after a reset until block assembly has replayed the
+  tip changes left pending.** A reset moves block assembly to one target, so a branch
+  that was briefly the best tip in between is replayed after it. Until that replay
+  finishes, `GetMiningCandidate` returns an empty template for the next height, as it
+  does during a reorg. A reset that succeeds reports success to whoever asked for it
+  even when the replay after it fails; the replay is retried on the next pass without
+  a second reset. When it fails three passes in a row, block assembly gives the
+  remaining history up, follows the best header and builds candidates from the pool
+  the reset loaded;
   `teranode_blockassembly_processing_stuck_total{reason="best_tip_reset_replay_abandoned"}`
   counts each time, so alert on it. If that reset rotated its tx map and then failed
   its reload, the pool may be partial: block assembly retries the reload on every
   later replay pass and counts each failed retry as `reason="best_tip_reset_reload"`.
-  A past best tip whose move would take block assembly back over best-chain blocks at
-  least coinbase maturity below the best tip is not moved to: its branch-only
-  transactions are marked unmined where they lie and the pool is reloaded, so no
-  confirmed spend of a coinbase is deleted. Resets skip conflict winners the UTXO
-  store has already pruned. Over gRPC, `GetBlockHeaders`,
-  `GetBlockHeadersFromHeight`, `GetBlockHeadersByHeight` and the other RPCs that
-  return a list of headers with their meta now carry the peer id and `processed_at`
-  of a block with no miner tag; before, the peer id came back empty and
-  `processed_at` was misread. (#2074)
+  (#2074)
+
+- **A reset now reverses the conflict swaps of the blocks it moves back.** When a
+  block that resolved a double spend is moved back by a reset, the input goes back to
+  the transaction that lost and the winner is marked conflicting, as a reorg already
+  does. Before, a reset left the swap in place and the winner kept the input. The
+  reverse skips winners the UTXO store has already pruned and, like a reorg's, is
+  refused for a winner mined in a block of the current chain. (#2074)
+
+- **The SQL UTXO store's `SetConflicting` reports a transaction's children on every
+  call.** It now reads the stored spend edges. Before, it read each output's spend
+  status, which reads `CONFLICTING` while a conflict is being cleared, so the
+  children were hidden and a recursive unmark stopped at the parent. Aerospike
+  already behaved this way. (#2074)
+
+- **An input-validated reset on SQL keeps valid unmined transactions.** Reload input
+  validation keeps four parallel readers after closing the iterator, requests only
+  input points, then applies conflict cascades serially. It reads each parent once
+  per transaction, and its conflicting children once per parent. (#2074)
+
+- **Header lists over gRPC keep the peer id of a block with no miner tag.**
+  `GetBlockHeaders`, `GetBlockHeadersFromHeight`, `GetBlockHeadersByHeight` and the
+  other RPCs that return a list of headers with their meta now carry the peer id and
+  `processed_at` of such a block. Before, the peer id came back empty and
+  `processed_at` was misread. `GetBlockHeader` was not affected. (#2074)
 
 - **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
   background, and block storage can wait for the repair.** `InvalidateBlock`,

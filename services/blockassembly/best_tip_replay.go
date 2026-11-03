@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 )
@@ -466,7 +467,7 @@ func (b *BlockAssembler) applyBestTipChange(ctx context.Context, header *model.B
 	}
 
 	if !last && !header.HashPrevBlock.IsEqual(tip.Hash()) {
-		restamped, err := b.restampDeepStaleBranch(ctx, header, meta)
+		restamped, err := b.restampPastStaleBranch(ctx, header, meta)
 		if err != nil || restamped {
 			return err
 		}
@@ -571,28 +572,40 @@ func (b *BlockAssembler) droppedTipNeedsReset(ctx context.Context, hash chainhas
 	return !onChain, nil
 }
 
-// restampDeepStaleBranch handles a past change whose move would take block assembly back over
-// blocks of the current best chain whose coinbases may already be spent. It reports whether it
-// handled the change, in which case block assembly has not moved.
+// restampPastStaleBranch handles a past change whose move would take block assembly back over
+// blocks of the current best chain in a way that cannot be undone or cannot run. It reports
+// whether it handled the change, in which case block assembly has not moved.
 //
-// Moving back a block deletes every child spend of its coinbase (removeCoinbaseUtxos). On a real
-// reorg those spends are on the losing side. Here the blocks moved back are on the chain that
-// won, and moving forward again recreates only the coinbases, so confirmed transactions would be
-// lost and the coinbases would read as unspent. A coinbase can be spent from coinbase maturity
-// blocks above it, so a move back is safe while the best tip is less than maturity blocks above
-// the lowest block it moves back. That always holds for a change replayed from the change before
-// it, which is the move the chain itself made. It can fail when block assembly is ahead of the
-// change: after a reset straight to the best tip, after a crash late in a long pass, or on a
-// start without a persisted position.
+// Two cases need it:
+//
+//   - Coinbase spends. Moving back a block deletes every child spend of its coinbase
+//     (removeCoinbaseUtxos). On a real reorg those spends are on the losing side. Here the
+//     blocks moved back are on the chain that won, and moving forward again recreates only the
+//     coinbases, so confirmed transactions would be lost and the coinbases would read as
+//     unspent. A coinbase can be spent from coinbase maturity blocks above it, so a move back is
+//     safe while the best tip is less than maturity blocks above the lowest block it moves back.
+//     That always holds for a change replayed from the change before it, which is the move the
+//     chain itself made. It can fail when block assembly is ahead of the change: after a reset
+//     straight to the best tip, after a crash late in a long pass, or on a start without a
+//     persisted position.
+//   - Conflict swaps. Moving back a block that resolved a double spend reverses its swap, and the
+//     current-chain guard refuses to demote a winner mined in a block of the current chain. The
+//     move would fail on every pass until the replay gives its history up, which skips the branch
+//     again. That can happen at any depth: the best tip goes from X to its sibling Y and then to
+//     X's child X2, so replaying Y moves X back while X is on the best chain. It is checked only
+//     when block assembly's tip is on the best chain. A tip off it whose lowest block moved back
+//     is on it needs three branches racing before block assembly looks, and is left to fail
+//     until the history is given up.
 //
 // Such a change is applied at its own depth instead. Block assembly never applied the stale
 // branch, so it never swapped the branch's conflicts or created its coinbases, and what is left to
 // undo is the mined mark block validation gave the branch's transactions. restampStaleBranch
-// clears that mark and reloads the pool on block assembly's current tip.
-func (b *BlockAssembler) restampDeepStaleBranch(ctx context.Context, header *model.BlockHeader, meta *model.BlockHeaderMeta) (bool, error) {
+// clears that mark and reloads the pool on block assembly's current tip. It costs a pool reload,
+// so the plain move is kept for every other change.
+func (b *BlockAssembler) restampPastStaleBranch(ctx context.Context, header *model.BlockHeader, meta *model.BlockHeaderMeta) (bool, error) {
 	moveBack, moveForward, err := b.getReorgBlockHeaders(ctx, header, meta.Height)
 	if err != nil {
-		return false, errors.NewProcessingError("[restampDeepStaleBranch] error getting the path to %s", header.Hash(), err)
+		return false, errors.NewProcessingError("[restampPastStaleBranch] error getting the path to %s", header.Hash(), err)
 	}
 
 	if len(moveBack) == 0 {
@@ -601,30 +614,88 @@ func (b *BlockAssembler) restampDeepStaleBranch(ctx context.Context, header *mod
 
 	best, bestMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		return false, errors.NewProcessingError("[restampDeepStaleBranch] error getting best block header", err)
+		return false, errors.NewProcessingError("[restampPastStaleBranch] error getting best block header", err)
 	}
 
-	lowest := moveBack[len(moveBack)-1].meta
+	lowest := moveBack[len(moveBack)-1]
 	maturity := uint64(b.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec // maturity is a small positive chain parameter
 
 	// Spendable from height lowest+maturity, and the next block is bestHeight+1.
-	if uint64(bestMeta.Height)+1 < uint64(lowest.Height)+maturity {
-		return false, nil
+	pastMaturity := uint64(bestMeta.Height)+1 >= uint64(lowest.meta.Height)+maturity
+
+	// moveBack runs from block assembly's tip down to the fork point. When block assembly's tip
+	// is on the best chain, every block it moves back is.
+	checked := lowest
+	if !pastMaturity {
+		checked = moveBack[0]
 	}
 
-	onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{lowest.ID}, best.Hash())
+	onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{checked.meta.ID}, best.Hash())
 	if err != nil {
-		return false, errors.NewProcessingError("[restampDeepStaleBranch] error checking whether %s is on the best chain", moveBack[len(moveBack)-1].header.Hash(), err)
+		return false, errors.NewProcessingError("[restampPastStaleBranch] error checking whether %s is on the best chain", checked.header.Hash(), err)
 	}
 
 	if !onBest {
-		// Every block moved back is on a branch that lost, so its coinbase spends lost too.
+		// Past maturity, every block moved back is on a branch that lost, so its coinbase
+		// spends lost too. Below it, block assembly's tip is off the best chain.
 		return false, nil
 	}
 
-	b.logger.Warnf("[BlockAssembler] best tip change %d: %s is %d blocks below the best tip on a stale branch, restamping its %d blocks instead of moving back over the best chain", meta.Height, header.Hash(), bestMeta.Height-lowest.Height+1, len(moveForward))
+	reason := "past coinbase maturity"
+
+	if !pastMaturity {
+		resolved, err := b.blocksResolvedConflicts(ctx, moveBack)
+		if err != nil || !resolved {
+			return false, err
+		}
+
+		reason = "with resolved double spends"
+	}
+
+	b.logger.Warnf("[BlockAssembler] best tip change %d: %s is on a stale branch forking %d blocks below the best tip, restamping its %d blocks instead of moving back over the best chain %s", meta.Height, header.Hash(), bestMeta.Height-lowest.meta.Height+1, len(moveForward), reason)
 
 	return true, b.restampStaleBranch(ctx, moveForward, best)
+}
+
+// blocksResolvedConflicts reports whether any of the blocks lists conflicting transactions in its
+// subtrees, so that moving it back would reverse a conflict swap.
+func (b *BlockAssembler) blocksResolvedConflicts(ctx context.Context, blocks []blockHeaderWithMeta) (bool, error) {
+	for _, hm := range blocks {
+		block, err := b.blockchainClient.GetBlock(ctx, hm.header.Hash())
+		if err != nil {
+			return false, errors.NewProcessingError("[blocksResolvedConflicts] error getting block %s", hm.header.Hash(), err)
+		}
+
+		for _, subtreeHash := range block.Subtrees {
+			conflicting, err := b.subtreeConflictingNodes(ctx, subtreeHash)
+			if err != nil {
+				return false, errors.NewProcessingError("[blocksResolvedConflicts] error reading conflicting nodes of subtree %s in block %s", subtreeHash, hm.header.Hash(), err)
+			}
+
+			if len(conflicting) > 0 {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+// subtreeConflictingNodes reads the conflicting nodes of one subtree, from the stored subtree or,
+// failing that, the one still waiting to be checked, as the subtree processor does.
+func (b *BlockAssembler) subtreeConflictingNodes(ctx context.Context, subtreeHash *chainhash.Hash) ([]chainhash.Hash, error) {
+	reader, err := b.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
+	if err != nil {
+		if reader, err = b.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck); err != nil {
+			return nil, err
+		}
+	}
+
+	defer func() {
+		_ = reader.Close()
+	}()
+
+	return subtree.DeserializeSubtreeConflictingFromReader(reader)
 }
 
 // restampStaleBranch marks every transaction of the given stale blocks that no block of the best

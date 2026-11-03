@@ -397,7 +397,14 @@ func TestBlockAssembly_ValidateUnminedTxInputs_ReadsEachParentOnce(t *testing.T)
 		Return(&meta.Data{TxInpoints: inpoints}, nil)
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.Utxos)).
 		Return(&meta.Data{SpendingDatas: spendingDatas}, nil).Once()
+	// Two conflicting children, neither confirmed: each is read once, not once per output.
+	counterA := chainhash.HashH([]byte("one-read-counter-a"))
+	counterB := chainhash.HashH([]byte("one-read-counter-b"))
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.ConflictingChildren)).
+		Return(&meta.Data{ConflictingChildren: []chainhash.Hash{counterA, counterB}}, nil).Once()
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(counterA), fieldsContain(fields.BlockIDs)).
+		Return(&meta.Data{BlockIDs: []uint32{7}}, nil).Once()
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(counterB), fieldsContain(fields.BlockIDs)).
 		Return(&meta.Data{}, nil).Once()
 
 	ba := &BlockAssembler{
@@ -410,7 +417,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_ReadsEachParentOnce(t *testing.T)
 	require.True(t, ok)
 
 	mockStore.AssertExpectations(t)
-	mockStore.AssertNumberOfCalls(t, "Get", 3)
+	mockStore.AssertNumberOfCalls(t, "Get", 5)
 }
 
 // warnCapturingLogger records every Warnf message so a test can assert on its content.
