@@ -1,0 +1,12 @@
+# Broadcaster end-to-end suite for Stack A (multinode, chaos-test layout).
+# Run: compose/chaostest/chaosctl.sh scenario run --suite broadcaster-e2e --reset
+# One scenario id per line; blank lines and # comments are ignored.
+multinode-smoke
+multinode-bcast-happy-path
+multinode-bcast-double-spend
+multinode-bcast-reorg
+multinode-bcast-merkle-outage
+multinode-bcast-node-down
+multinode-bcast-broadcaster-restart
+multinode-wallet-chaos-flow
+arcade-same-height-flip-flop

@@ -1,0 +1,84 @@
+id: multinode-bcast-node-down
+name: Broadcaster with a node down - B and C carry the tx to MINED, A catches up
+description: >
+  A (teranode1: the broadcaster's first datahub and its chaintracks bootstrap) is paused. A
+  spend submitted to the broadcaster must still be accepted, reach B's and C's mempools, and be
+  MINED with a valid proof in a block B mines. When A is unpaused it must catch up to the same
+  tip and agree with the proof.
+requires: [regtest]
+roles:
+  A: teranode1   # paused
+  B: teranode2   # mines while A is down
+  C: teranode3
+params:
+  fee: 500
+steps:
+  - name: converge - mine on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 90s }
+
+  - name: fund - mine to coinbase maturity on A
+    action: mine
+    with: { node: A, blocks: 101 }
+    as: fund
+    timeout: 10m
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 120s }
+
+  - name: recipient key
+    action: newkey
+    with: { name: "bcast-nodedown-${fund.last}" }
+    as: recipient
+
+  - name: a mature coinbase
+    action: coinbase
+    with: { node: A, height: "${tip(A) - 100}" }
+    as: cb
+
+  - name: spend it to the recipient
+    action: spend
+    with: { node: A, txid: "${cb.txid}", vout: 0, key: miner, to: "${recipient.name}", fee: "${fee}" }
+    as: tx
+
+  - name: pause A
+    action: chaos
+    with: { node: A, action: pause }
+
+  - name: submit to the broadcaster with A down
+    action: submit
+    with: { target: arcade, tx: "${tx}" }
+    as: submitted
+    assert:
+      - check: expr
+        with: { left: "${submitted.accepted}", right: "true" }
+        message: the broadcaster accepted the spend with one node down
+      - { check: mempool_has, with: { node: B, txid: "${tx.txid}" }, timeout: 60s }
+      - { check: mempool_has, with: { node: C, txid: "${tx.txid}" }, timeout: 60s }
+
+  # A finding, not a failure: a hard failure here would skip the unpause and leave A paused.
+  - name: B mines it
+    action: mine
+    with: { node: B, blocks: 1 }
+    as: blk
+    assert:
+      - { check: same_tip, with: { nodes: [B, C] }, timeout: 60s }
+      - check: arcade_tx_status
+        with: { txid: "${tx.txid}", status: MINED, block: "${blk.last}", proof: true, node: B }
+        timeout: 120s
+        message: MINED through B and C while A is down
+        should: true
+
+  - name: unpause A
+    action: chaos
+    with: { node: A, action: unpause }
+    assert:
+      - check: tip_is
+        with: { node: A, hash: "${blk.last}" }
+        timeout: 120s
+        message: A caught up on the block it missed
+      - check: arcade_tx_status
+        with: { txid: "${tx.txid}", status: MINED, block: "${blk.last}", proof: true, node: A }
+        timeout: 3m
+        message: MINED once A is back, proof matches A's header

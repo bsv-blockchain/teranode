@@ -47,7 +47,7 @@ Blaster (on the active stack):
 
 Scenarios (chaos-test, on the active stack):
   scenario list                     Scenario ids the orchestrator has loaded
-  scenario run <id>... [--under-load [preset]] [--reset] [--step] [--workers N]
+  scenario run <id>... [--suite <name|file>] [--under-load [preset]] [--reset] [--step] [--workers N]
                                     Run one or more scenarios in order and follow each.
                                     --under-load starts (or keeps) the blaster first,
                                     without auto-mine (scenarios check exact heights).
@@ -560,6 +560,18 @@ scenario_run() {
       --reset) reset=true ;;
       --step) mode=step ;;
       --workers) workers="${2:?}"; shift ;;
+      --suite)
+        # A suite is a file of scenario ids, one per line (# comments allowed):
+        # a name under suites/ or a path.
+        local suite="${2:?--suite needs a name or file}"
+        [[ -f "$suite" ]] || suite="$SCRIPT_DIR/suites/$suite.txt"
+        [[ -f "$suite" ]] || die "no suite $2 (see $SCRIPT_DIR/suites)"
+        while read -r line; do
+          line="${line%%#*}"
+          line="${line//[[:space:]]/}"
+          [[ -n "$line" ]] && ids+=("$line")
+        done <"$suite"
+        shift ;;
       -*) die "scenario run: unknown flag $1" ;;
       *) ids+=("$1") ;;
     esac

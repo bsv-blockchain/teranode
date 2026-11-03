@@ -1,0 +1,74 @@
+id: multinode-bcast-happy-path
+name: Broadcaster happy path - submit, seen, mined with a proof that checks out
+description: >
+  The baseline every other broadcaster scenario builds on. A coinbase spend is submitted to the
+  broadcaster (arcade-multinode, BSV Broadcaster) and must reach SEEN_ON_NETWORK and every
+  node's mempool. After one block it must be MINED in that block with a merklePath whose root
+  equals the header merkle root on A and on C. Proves the broadcaster -> teranode ->
+  merkle-service -> callback path end to end.
+requires: [regtest]
+roles:
+  A: teranode1   # mines
+  B: teranode2
+  C: teranode3   # second header the proof is checked against
+params:
+  fee: 500
+steps:
+  - name: converge - mine on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 90s }
+
+  - name: fund - mine to coinbase maturity on A
+    action: mine
+    with: { node: A, blocks: 101 }
+    as: fund
+    timeout: 10m
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 120s }
+
+  - name: recipient key
+    action: newkey
+    with: { name: "bcast-happy-${fund.last}" }
+    as: recipient
+
+  - name: a mature coinbase
+    action: coinbase
+    with: { node: A, height: "${tip(A) - 100}" }
+    as: cb
+
+  - name: spend it to the recipient
+    action: spend
+    with: { node: A, txid: "${cb.txid}", vout: 0, key: miner, to: "${recipient.name}", fee: "${fee}" }
+    as: tx
+
+  - name: submit to the broadcaster
+    action: submit
+    with: { target: arcade, tx: "${tx}" }
+    as: submitted
+    assert:
+      - check: expr
+        with: { left: "${submitted.accepted}", right: "true" }
+        message: the broadcaster accepted the spend
+      - check: arcade_tx_status
+        with: { txid: "${tx.txid}", status: "SEEN_ON_NETWORK|SEEN_MULTIPLE_NODES" }
+        timeout: 60s
+        message: the broadcaster saw the network take it
+      - { check: mempool_has, with: { node: A, txid: "${tx.txid}" }, timeout: 60s }
+      - { check: mempool_has, with: { node: B, txid: "${tx.txid}" }, timeout: 60s }
+      - { check: mempool_has, with: { node: C, txid: "${tx.txid}" }, timeout: 60s }
+
+  - name: mine it on A
+    action: mine
+    with: { node: A, blocks: 1 }
+    as: blk
+    assert:
+      - check: arcade_tx_status
+        with: { txid: "${tx.txid}", status: MINED, block: "${blk.last}", proof: true, node: A }
+        timeout: 90s
+        message: MINED in the block A mined, proof matches A's header
+      - check: arcade_tx_status
+        with: { txid: "${tx.txid}", status: MINED, proof: true, node: C }
+        message: the same proof matches C's header
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 60s }
