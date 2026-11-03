@@ -1414,6 +1414,13 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	b.lastBestTipReplay.Store(time.Now().UnixNano())
 
 	if !b.followBestTipChanges(ctx) {
+		// A mark that could not finish after an earlier fallback is finished here: on the best
+		// tip it holds however the tip was reached, and the replay working again is no reason
+		// to drop it.
+		if b.skippedForkMarkPending {
+			b.markSkippedForkTxs(ctx)
+		}
+
 		return
 	}
 

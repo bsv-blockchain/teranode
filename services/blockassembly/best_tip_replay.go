@@ -209,12 +209,8 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 // of their blocks those with subtrees, which block validation sets before it marks a block's
 // transactions mined. Blocks below the replay floor are not read. A block is recorded once its
 // transactions are marked and not read again; one that fails is logged and read again on the
-// next fallback.
+// next pass.
 func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context) {
-	// Cleared only when the run gets through every fork block, so a run that fails is
-	// repeated on the next fallback even if that one does not move the tip.
-	b.skippedForkMarkPending = true
-
 	tip, tipHeight := b.CurrentBlock()
 
 	best, _, err := b.blockchainClient.GetBestBlockHeader(ctx)
@@ -224,11 +220,15 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context) {
 	}
 
 	if tip == nil || !tip.Hash().IsEqual(best.Hash()) {
-		// Only on the best tip is everything block assembly holds off the longest chain. The
-		// move that brings it there runs this again.
-		b.skippedForkMarkPending = false
+		// Only on the best tip is everything block assembly holds off the longest chain. A
+		// fallback move that brings it there runs this again, and so does every pass while a
+		// run is pending.
 		return
 	}
+
+	// Cleared only when the run gets through every fork block, so a run that fails is
+	// repeated on the next pass, whether or not that pass falls back.
+	b.skippedForkMarkPending = true
 
 	// GetChainTips reads its rows before it computes branch lengths, so under SQLite's shared
 	// cache it cannot deadlock against a concurrent writer.
@@ -298,13 +298,13 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context) {
 	failed := false
 
 	// Block by block, so a block that cannot be read does not hold up the others; it is not
-	// recorded, and the next fallback reads it again.
+	// recorded, and the next pass reads it again.
 	for _, fb := range forkBlocks {
 		hash := *fb.header.Hash()
 
 		hashes, err := b.blockTxHashes(ctx, fb.header)
 		if err != nil {
-			b.logger.Errorf("[BlockAssembler] error reading fork block %s to mark skipped fork transactions, trying it again on the next fallback: %v", hash, err)
+			b.logger.Errorf("[BlockAssembler] error reading fork block %s to mark skipped fork transactions, trying it again on the next pass: %v", hash, err)
 			failed = true
 
 			continue
