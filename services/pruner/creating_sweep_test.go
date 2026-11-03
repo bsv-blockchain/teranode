@@ -7,13 +7,16 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,10 +36,15 @@ type fakeSweepStore struct {
 	setConflicting []chainhash.Hash
 	unlocked       []chainhash.Hash
 	lastLimit      int
+	onUnlock       func()
 }
 
 func (f *fakeSweepStore) SetLocked(_ context.Context, txHashes []chainhash.Hash, value bool) error {
 	if !value {
+		if f.onUnlock != nil {
+			f.onUnlock()
+		}
+
 		f.unlocked = append(f.unlocked, txHashes...)
 	}
 
@@ -93,6 +101,8 @@ func (f *fakeSweepStore) SetConflicting(_ context.Context, txHashes []chainhash.
 func newSweepServer(t *testing.T, store utxo.Store) *Server {
 	t.Helper()
 
+	initPrometheusMetrics()
+
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Pruner.CreatingTxSweepMinAgeBlocks = 2
 
@@ -127,7 +137,12 @@ func TestSweepCreatingTxsRollsForward(t *testing.T) {
 		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
 	}
 
-	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+	ba := blockassembly.NewMock()
+	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+	s := newSweepServer(t, store)
+	s.blockAssemblyClient = ba
+	s.sweepCreatingTxs(context.Background(), 100)
 
 	require.Equal(t, []chainhash.Hash{hashA}, store.spends, "must attempt to spend the stale creating tx")
 	require.Equal(t, []chainhash.Hash{hashA}, store.finalized, "a successful re-spend must be finalized")
@@ -170,7 +185,119 @@ func TestSweepCreatingTxsPassesLimit(t *testing.T) {
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
 
-	require.Equal(t, creatingSweepMaxPerPass, store.lastLimit, "the sweep must bound the query to the per-pass cap")
+	require.Equal(t, defaultCreatingSweepMaxPerPass, store.lastLimit, "a zero setting must fall back to the default per-pass cap")
+}
+
+func TestSweepCreatingTxsHonorsConfiguredLimit(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	store := &fakeSweepStore{NullStore: ns}
+
+	s := newSweepServer(t, store)
+	s.settings.Pruner.CreatingTxSweepMaxPerPass = 25
+
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, 25, store.lastLimit, "the sweep must bound the query to the configured per-pass cap")
+}
+
+func TestSweepCreatingTxsRunsWithCreateFirstDisabled(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+	}
+
+	ba := blockassembly.NewMock()
+	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
+
+	s := newSweepServer(t, store)
+	s.settings.UtxoStore.UseCreateFirstOrder = false
+	s.blockAssemblyClient = ba
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.finalized, "the sweep must heal stranded records whatever the feature flag says")
+}
+
+func TestSweepCreatingTxsAnnouncesBeforeUnlock(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+	inpoints := subtree.TxInpoints{}
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA, Fee: 7, SizeInBytes: 99, TxInpoints: inpoints}},
+	}
+
+	var events []string
+
+	store.onUnlock = func() { events = append(events, "unlock") }
+
+	ba := blockassembly.NewMock()
+	ba.On("Store", mock.Anything, mock.Anything, uint64(7), uint64(99), inpoints).
+		Run(func(mock.Arguments) { events = append(events, "store") }).
+		Return(true, nil)
+
+	s := newSweepServer(t, store)
+	s.blockAssemblyClient = ba
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"store", "unlock"}, events, "block assembly must be told before the record is unlocked")
+	ba.AssertNumberOfCalls(t, "Store", 1)
+}
+
+func TestSweepCreatingTxsStoreFailureLeavesLocked(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+	}
+
+	ba := blockassembly.NewMock()
+	ba.On("Store", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(false, errors.NewServiceError("ba down"))
+
+	s := newSweepServer(t, store)
+	s.blockAssemblyClient = ba
+	s.sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.finalized, "the record is finalized before the announce")
+	require.Empty(t, store.unlocked, "a failed announce must leave the record locked")
+}
+
+func TestSweepCreatingTxsNoBlockAssemblyLeavesLocked(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.finalized)
+	require.Empty(t, store.unlocked, "without a block assembly client the tx cannot be announced, so it stays locked")
 }
 
 // TestSweepCreatingTxsHonorsCancellation is the ChiR9 cancellation guard: a cancelled
