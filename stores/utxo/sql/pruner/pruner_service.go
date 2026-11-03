@@ -135,6 +135,8 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 	return deletedCount, nil
 }
 
+const deleteHashesChunk = 1000
+
 const defensiveDeleteFilter = `t.delete_at_height IS NOT NULL
 				  AND t.delete_at_height <= $1
 				  AND (t.unmined_since IS NULL OR t.conflicting)
@@ -191,9 +193,9 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 	} else {
 		// Defensive mode enabled - verify ALL spending children are stable before deletion
 		// This prevents orphaning any child transaction
-		kept, clearErr := s.clearConflictingParentRefs(ctx, blockHeight, safetyWindow)
-		if clearErr != nil {
-			return 0, clearErr
+		conflictingClause := ""
+		if s.clearParentRefs != nil {
+			conflictingClause = "AND NOT t.conflicting"
 		}
 
 		deleteQuery = `
@@ -202,12 +204,30 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 				SELECT t.id
 				FROM transactions t
 				WHERE ` + defensiveDeleteFilter + `
-				  %s
+				  ` + conflictingClause + `
 			)
 		`
-		keptClause, keptArgs := keptHashesClause(kept, 3)
-		deleteQuery = fmt.Sprintf(deleteQuery, keptClause)
-		result, err = s.db.ExecContext(ctx, deleteQuery, append([]any{blockHeight, safetyWindow}, keptArgs...)...)
+		result, err = s.db.ExecContext(ctx, deleteQuery, blockHeight, safetyWindow)
+		if err != nil {
+			return 0, errors.NewStorageError("failed to delete transactions", err)
+		}
+
+		count, rowsErr := result.RowsAffected()
+		if rowsErr != nil {
+			return 0, errors.NewStorageError("failed to get rows affected", rowsErr)
+		}
+
+		cleared, clearErr := s.clearConflictingParentRefs(ctx, blockHeight, safetyWindow)
+		if clearErr != nil {
+			return count, clearErr
+		}
+
+		clearedCount, deleteErr := s.deleteHashes(ctx, cleared)
+		if deleteErr != nil {
+			return count, deleteErr
+		}
+
+		return count + clearedCount, nil
 	}
 
 	if err != nil {
@@ -246,9 +266,9 @@ func (s *Service) clearUnminedDeleteAtHeight(ctx context.Context, blockHeight ui
 }
 
 // clearConflictingParentRefs removes parent references to every expired conflicting record the
-// defensive delete will remove, so the delete that follows cannot leave a surviving parent naming a
-// missing spender. A record the delete skips keeps its references. It returns the hashes whose
-// references could not be cleared; the delete must skip them and retry next block.
+// defensive delete would remove, so the delete cannot leave a surviving parent naming a missing
+// spender. It returns the hashes whose references were cleared. Only those are deleted; a record whose
+// references could not be cleared is kept and retried next block.
 func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight, safetyWindow uint32) ([]chainhash.Hash, error) {
 	if s.clearParentRefs == nil {
 		return nil, nil
@@ -285,31 +305,48 @@ func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight, s
 		return nil, errors.NewStorageError("failed to read expired conflicting transactions", err)
 	}
 
-	var kept []chainhash.Hash
+	cleared := make([]chainhash.Hash, 0, len(hashes))
 
 	for i := range hashes {
 		if err = s.clearParentRefs(ctx, &hashes[i]); err != nil {
 			s.logger.Errorf("[pruner] keeping conflicting transaction %s, failed to clear parent references: %v", hashes[i].String(), err)
 
-			kept = append(kept, hashes[i])
+			continue
 		}
+
+		cleared = append(cleared, hashes[i])
 	}
 
-	return kept, nil
+	return cleared, nil
 }
 
-func keptHashesClause(kept []chainhash.Hash, firstParam int) (string, []any) {
-	if len(kept) == 0 {
-		return "", nil
+// deleteHashes deletes the records with the given hashes and returns how many rows it removed.
+func (s *Service) deleteHashes(ctx context.Context, hashes []chainhash.Hash) (int64, error) {
+	var total int64
+
+	for start := 0; start < len(hashes); start += deleteHashesChunk {
+		end := min(start+deleteHashesChunk, len(hashes))
+
+		placeholders := make([]string, end-start)
+		args := make([]any, end-start)
+
+		for i := start; i < end; i++ {
+			placeholders[i-start] = fmt.Sprintf("$%d", i-start+1)
+			args[i-start] = hashes[i][:]
+		}
+
+		result, err := s.db.ExecContext(ctx, "DELETE FROM transactions WHERE hash IN ("+strings.Join(placeholders, ",")+")", args...)
+		if err != nil {
+			return total, errors.NewStorageError("failed to delete conflicting transactions", err)
+		}
+
+		count, err := result.RowsAffected()
+		if err != nil {
+			return total, errors.NewStorageError("failed to get rows affected", err)
+		}
+
+		total += count
 	}
 
-	placeholders := make([]string, len(kept))
-	args := make([]any, len(kept))
-
-	for i := range kept {
-		placeholders[i] = fmt.Sprintf("$%d", firstParam+i)
-		args[i] = kept[i][:]
-	}
-
-	return "AND t.hash NOT IN (" + strings.Join(placeholders, ",") + ")", args
+	return total, nil
 }

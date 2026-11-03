@@ -12,11 +12,13 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -289,7 +291,8 @@ func TestReorgDeletedTxsWithoutASubtreeStore(t *testing.T) {
 	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
 	f.stp.subtreeStore = nil
 
-	require.NoError(t, f.stp.restoreReorgDeletedTxs(ctx, f.block), "nothing could have been saved, so there is nothing to restore")
+	_, restoreErr := f.stp.restoreReorgDeletedTxs(ctx, f.block)
+	require.NoError(t, restoreErr, "nothing could have been saved, so there is nothing to restore")
 
 	require.Error(t, f.stp.removeCoinbaseUtxos(ctx, f.block), "children must not be deleted when there is nowhere to save them")
 
@@ -361,9 +364,12 @@ func TestRestoreReorgDeletedTxsGivesBackTheMinedState(t *testing.T) {
 			require.Equal(t, []uint32{41}, before.BlockIDs)
 			require.Equal(t, offChain, before.UnminedSince != 0, "precondition: the tx has the chain state under test")
 
+			stp.blockchainClient.(*blockchain.Mock).On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(!offChain, nil)
+
 			require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
 			require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
-			require.NoError(t, stp.restoreReorgDeletedTxs(ctx, block))
+			_, restoreErr := stp.restoreReorgDeletedTxs(ctx, block)
+			require.NoError(t, restoreErr)
 
 			after, err := stp.utxoStore.Get(ctx, child.TxIDChainHash(), fields.UnminedSince, fields.BlockIDs, fields.BlockHeights, fields.SubtreeIdxs)
 			require.NoError(t, err)
@@ -478,7 +484,8 @@ func TestKeepReorgDeletedTxsSavesTheCurrentStateOfARestoredTx(t *testing.T) {
 
 	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
 	require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
-	require.NoError(t, stp.restoreReorgDeletedTxs(ctx, block))
+	_, restoreErr := stp.restoreReorgDeletedTxs(ctx, block)
+	require.NoError(t, restoreErr)
 
 	requireRecreatedChain(t, ctx, stp, first, second)
 
@@ -515,9 +522,242 @@ func TestKeepReorgDeletedTxsKeepsTheSavedEntryOfATxNoLongerInTheStore(t *testing
 	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
 
 	hashes := []chainhash.Hash{*first.TxIDChainHash(), *second.TxIDChainHash()}
-	require.NoError(t, stp.keepReorgDeletedTxs(ctx, block, hashes))
+	_, err := stp.keepReorgDeletedTxs(ctx, block, hashes)
+	require.NoError(t, err)
 
 	saved, err := stp.readReorgDeletedTxs(ctx, blockHash)
 	require.NoError(t, err)
 	require.Len(t, saved, 2, "the saved entries of txs absent from the store survive a retry")
+}
+
+// A saved tx whose parent was skipped when an earlier block was restored has a missing input. It is
+// skipped like a spent input, or every later restore of its block would fail the same way.
+func TestRestoreReorgDeletedTxsSkipsASavedTxWhoseParentIsMissing(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	block2 := &model.Block{
+		Height:     block.Height,
+		CoinbaseTx: block.CoinbaseTx,
+		Subtrees:   []*chainhash.Hash{},
+		Header:     childHeader(block.Header, 901),
+	}
+	block2Hash := block2.Header.Hash()
+	require.NotEqual(t, block.Header.Hash().String(), block2Hash.String())
+
+	extended := func(tx *bt.Tx) *bt.Tx {
+		meta, err := stp.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)
+		require.NoError(t, err)
+		require.NoError(t, stp.utxoStore.PreviousOutputsDecorate(ctx, meta.Tx))
+
+		return meta.Tx
+	}
+
+	file := encodeReorgDeletedTxs([]*reorgDeletedTx{{tx: extended(second), unmined: true}})
+	require.NoError(t, stp.subtreeStore.Set(ctx, block2Hash[:], fileformat.FileTypeReorgDeletedTxs, file))
+
+	require.NoError(t, utxostore.DeleteWithParents(ctx, stp.utxoStore, second.TxIDChainHash()))
+	require.NoError(t, utxostore.DeleteWithParents(ctx, stp.utxoStore, first.TxIDChainHash()))
+
+	_, restoreErr := stp.restoreReorgDeletedTxs(ctx, block2)
+	require.NoError(t, restoreErr, "a saved tx whose parent is gone must be skipped, not fail the restore")
+
+	_, err := stp.utxoStore.Get(ctx, second.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "the tx is skipped")
+
+	_, err = stp.subtreeStore.Get(ctx, block2Hash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.ErrorIs(t, err, errors.ErrNotFound, "a retry would get the same result, so the saved file is deleted")
+}
+
+// The chain state of a restored tx comes from the chain as it is now, not from the state the tx had
+// when it was deleted: a block that has left the chain no longer mines the tx.
+func TestRestoreReorgDeletedTxsRecalculatesTheChainState(t *testing.T) {
+	for _, blockOnChain := range []bool{false, true} {
+		t.Run(fmt.Sprintf("blockOnChain=%v", blockOnChain), func(t *testing.T) {
+			ctx := context.Background()
+			stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+			first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+			_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: 42, BlockHeight: 1234, SubtreeIdx: 0, OnLongestChain: true})
+			require.NoError(t, err)
+
+			before, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.UnminedSince)
+			require.NoError(t, err)
+			require.Zero(t, before.UnminedSince, "precondition: the tx was saved as mined on the longest chain")
+
+			require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+			stp.blockchainClient.(*blockchain.Mock).On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).Return(blockOnChain, nil)
+
+			require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+			_, restoreErr := stp.restoreReorgDeletedTxs(ctx, block)
+			require.NoError(t, restoreErr)
+
+			after, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.UnminedSince, fields.BlockIDs)
+			require.NoError(t, err)
+			require.Equal(t, []uint32{42}, after.BlockIDs, "the block ID stays")
+
+			if blockOnChain {
+				require.Zero(t, after.UnminedSince, "a tx in a block on the chain is on the longest chain")
+			} else {
+				require.NotZero(t, after.UnminedSince, "a tx in a block off the chain must be offered to block assembly again")
+			}
+		})
+	}
+}
+
+// removeCoinbaseUtxos locks the coinbase and its descendants. When the txs cannot be saved it stops
+// before it deletes anything, so it must not leave them locked.
+func TestRemoveCoinbaseUtxosUnlocksTheTxsWhenTheSaveFails(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	require.NoError(t, stp.subtreeStore.Set(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs, []byte{0, 9, 9}, options.WithAllowOverwrite(true)))
+
+	require.Error(t, stp.removeCoinbaseUtxos(ctx, block), "the saved file is unreadable, so the save fails")
+
+	for name, tx := range map[string]*bt.Tx{"coinbase": block.CoinbaseTx, "first": first, "second": second} {
+		txMeta, err := stp.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.Locked)
+		require.NoError(t, err, "%s was not deleted", name)
+		require.False(t, txMeta.Locked, "%s must not stay locked", name)
+	}
+}
+
+type deleteFailsOnce struct {
+	utxostore.Store
+	target chainhash.Hash
+	failed bool
+}
+
+func (s *deleteFailsOnce) Delete(ctx context.Context, hash *chainhash.Hash) error {
+	if !s.failed && *hash == s.target {
+		s.failed = true
+
+		return errors.NewStorageError("injected")
+	}
+
+	return s.Store.Delete(ctx, hash)
+}
+
+// DeleteWithParents clears the parent references of a tx before it deletes the tx. If the delete
+// fails, the coinbase output no longer names the tx, so a retry does not walk to it. The saved file
+// still lists it, and the retry must delete what the file lists.
+func TestRemoveCoinbaseUtxosRetryDeletesATxWhoseParentRefsWereCleared(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	stp.utxoStore = &deleteFailsOnce{Store: stp.utxoStore, target: *first.TxIDChainHash()}
+
+	require.Error(t, stp.removeCoinbaseUtxos(ctx, block), "the first attempt fails on the delete of the first tx")
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block), "the retry must complete")
+
+	for name, tx := range map[string]*bt.Tx{"first": first, "second": second, "coinbase": block.CoinbaseTx} {
+		_, err := stp.utxoStore.Get(ctx, tx.TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "%s must be deleted by the retry", name)
+	}
+}
+
+// A retry that finds an old saved file and a tx still in the store saves the live state of the tx,
+// not the state in the old file.
+func TestKeepReorgDeletedTxsPrefersTheLiveStateOverAnOldSavedFile(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: 42, BlockHeight: 1234, SubtreeIdx: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	extended := func(tx *bt.Tx) *bt.Tx {
+		txMeta, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)
+		require.NoError(t, getErr)
+		require.NoError(t, stp.utxoStore.PreviousOutputsDecorate(ctx, txMeta.Tx))
+
+		return txMeta.Tx
+	}
+
+	stale := encodeReorgDeletedTxs([]*reorgDeletedTx{
+		{tx: extended(first), mined: []utxostore.MinedBlockInfo{{BlockID: 7, BlockHeight: 99, SubtreeIdx: 1, OnLongestChain: true}}},
+		{tx: extended(second), unmined: true},
+	})
+	require.NoError(t, stp.subtreeStore.Set(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs, stale, options.WithAllowOverwrite(true)))
+
+	_, err = stp.keepReorgDeletedTxs(ctx, block, []chainhash.Hash{*first.TxIDChainHash(), *second.TxIDChainHash()})
+	require.NoError(t, err)
+
+	saved, err := stp.readReorgDeletedTxs(ctx, blockHash)
+	require.NoError(t, err)
+	require.Len(t, saved, 2)
+
+	for _, entry := range saved {
+		if entry.tx.TxIDChainHash().IsEqual(first.TxIDChainHash()) {
+			require.Len(t, entry.mined, 1)
+			require.Equal(t, uint32(42), entry.mined[0].BlockID, "the live state wins over the old file")
+			require.Equal(t, uint32(1234), entry.mined[0].BlockHeight)
+		}
+	}
+}
+
+func addToAssembly(t *testing.T, stp *SubtreeProcessor, tx *bt.Tx) {
+	t.Helper()
+
+	inpoints, err := subtreepkg.NewTxInpointsFromTx(tx)
+	require.NoError(t, err)
+
+	node := &subtreepkg.Node{Hash: *tx.TxIDChainHash(), Fee: tx.TotalInputSatoshis() - tx.TotalOutputSatoshis(), SizeInBytes: uint64(tx.Size())} //nolint:gosec // size is non-negative
+	require.NoError(t, stp.AddDirectly(node, &inpoints, true))
+}
+
+// A restored tx that is not on the longest chain is in the store again, and block assembly must hold
+// it again too: removeCoinbaseUtxos took it out of the assembly and left its hash in the remove map.
+func TestMoveForwardBlockPutsARestoredUnminedTxBackInBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+	addToAssembly(t, stp, first)
+
+	require.True(t, stp.currentTxMap.Exists(*first.TxIDChainHash()), "precondition: the tx is in block assembly")
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	require.False(t, stp.currentTxMap.Exists(*first.TxIDChainHash()), "precondition: the move back took the tx out of block assembly")
+	require.True(t, stp.removeMap.Exists(*first.TxIDChainHash()), "precondition: the move back marked the tx for removal")
+
+	_, _, err := stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, false, true)
+	require.NoError(t, err)
+
+	_, err = stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.Tx)
+	require.NoError(t, err, "the tx is recreated")
+
+	require.True(t, stp.currentTxMap.Exists(*first.TxIDChainHash()), "the recreated tx is back in block assembly")
+	require.False(t, stp.removeMap.Exists(*first.TxIDChainHash()), "the tx is no longer marked for removal")
+}
+
+// A reset reloads the unmined txs from the store after it applies the blocks, so a restored tx must not
+// also be added to block assembly by the apply itself.
+func TestApplyCoinbaseUtxosWithoutRequeueLeavesRestoredTxsOutOfBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+	addToAssembly(t, stp, first)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	require.NoError(t, stp.applyCoinbaseUtxos(ctx, block, false, true))
+
+	_, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.Tx)
+	require.NoError(t, err, "the tx is recreated")
+
+	require.False(t, stp.currentTxMap.Exists(*first.TxIDChainHash()), "the reset reloads it from the store, so the apply must not add it")
 }

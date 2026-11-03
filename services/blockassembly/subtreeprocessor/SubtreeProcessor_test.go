@@ -4879,7 +4879,8 @@ func TestMoveForwardBlockRestoresChildrenDeletedWhenTheBlockWasMovedBack(t *test
 
 	require.NoError(t, f.stp.processCoinbaseUtxos(ctx, f.block), "the move forward recreates the coinbase first")
 
-	require.NoError(t, f.stp.restoreReorgDeletedTxs(ctx, f.block))
+	_, restoreErr := f.stp.restoreReorgDeletedTxs(ctx, f.block)
+	require.NoError(t, restoreErr)
 
 	restored, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash(), fields.Tx)
 	require.NoError(t, err, "the child must exist again")
@@ -4889,13 +4890,15 @@ func TestMoveForwardBlockRestoresChildrenDeletedWhenTheBlockWasMovedBack(t *test
 	require.NotNil(t, spend.SpendingData, "the surviving parent's output is spent by the recreated child again")
 	require.Equal(t, f.child.TxIDChainHash().String(), spend.SpendingData.TxID.String())
 
-	require.NoError(t, f.stp.restoreReorgDeletedTxs(ctx, f.block), "restoring twice must be safe")
+	_, restoreErr = f.stp.restoreReorgDeletedTxs(ctx, f.block)
+	require.NoError(t, restoreErr, "restoring twice must be safe")
 }
 
 func TestRestoreReorgDeletedTxsIgnoresABlockWithNothingSaved(t *testing.T) {
 	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
 
-	require.NoError(t, f.stp.restoreReorgDeletedTxs(context.Background(), f.block))
+	_, restoreErr := f.stp.restoreReorgDeletedTxs(context.Background(), f.block)
+	require.NoError(t, restoreErr)
 }
 
 func TestMoveForwardBlockRecreatesChildrenOfAnEmptyBlockMovedBackEarlier(t *testing.T) {

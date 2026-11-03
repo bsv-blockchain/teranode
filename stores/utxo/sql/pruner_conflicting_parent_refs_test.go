@@ -160,3 +160,92 @@ func TestPrunerKeepsParentRefsOfAConflictingLoserItDoesNotDelete(t *testing.T) {
 	require.Equal(t, loser.TxIDChainHash().String(), after.SpendingData.TxID.String())
 	require.Equal(t, 1, countChildRefs(), "the parent still lists the kept loser as a conflicting child")
 }
+
+// A conflicting loser whose only child is itself an expired conflicting loser becomes deletable once
+// the child's references are cleared. The delete must not take it in the same cycle, because its own
+// parent references were not cleared: it is taken in the next cycle, after they are.
+func TestPrunerDeletesOnlyConflictingLosersWhoseParentRefsWereCleared(t *testing.T) {
+	ResetPrunerServiceForTests()
+	t.Cleanup(ResetPrunerServiceForTests)
+
+	ctx := t.Context()
+
+	store, parent := setup(ctx, t)
+	store.settings.Pruner.UTXODefensiveEnabled = true
+
+	middle := bt.NewTx()
+	require.NoError(t, middle.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, middle.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parent.Outputs[0].Satoshis-1000))
+	middle.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	leaf := bt.NewTx()
+	require.NoError(t, leaf.From(middle.TxIDChainHash().String(), 0, middle.Outputs[0].LockingScript.String(), middle.Outputs[0].Satoshis))
+	require.NoError(t, leaf.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", middle.Outputs[0].Satoshis-1000))
+	leaf.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err := store.Create(ctx, parent, 0)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, middle, 0)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, leaf, 0)
+	require.NoError(t, err)
+
+	spends, err := store.Spend(ctx, middle, store.GetBlockHeight()+1)
+	require.NoError(t, err)
+	require.Len(t, spends, len(middle.Inputs))
+
+	_, err = store.Spend(ctx, leaf, store.GetBlockHeight()+1)
+	require.NoError(t, err)
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*middle.TxIDChainHash(), *leaf.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	parentSpend := &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: spends[0].UTXOHash}
+
+	countChildRefs := func() int {
+		var n int
+
+		require.NoError(t, store.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM conflicting_children
+			WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1)`, parent.TxIDChainHash()[:]).Scan(&n))
+
+		return n
+	}
+
+	provider, ok := any(store).(pruner.PrunerServiceProvider)
+	require.True(t, ok)
+
+	prunerSvc, err := provider.GetPrunerService()
+	require.NoError(t, err)
+
+	_, err = prunerSvc.Prune(ctx, store.GetBlockHeight()+1000, "test")
+	require.NoError(t, err)
+
+	_, err = store.Get(ctx, leaf.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "the conflicting leaf must be reaped")
+
+	after, err := store.GetSpend(ctx, parentSpend)
+	require.NoError(t, err)
+
+	if _, getErr := store.Get(ctx, middle.TxIDChainHash()); errors.Is(getErr, errors.ErrTxNotFound) {
+		require.Nil(t, after.SpendingData, "a deleted loser must not stay named as the spender of the parent output")
+	} else {
+		require.NoError(t, getErr)
+		require.NotNil(t, after.SpendingData)
+		require.Equal(t, middle.TxIDChainHash().String(), after.SpendingData.TxID.String())
+		require.Equal(t, 1, countChildRefs(), "the kept loser stays listed as a conflicting child of the parent")
+	}
+
+	_, err = prunerSvc.Prune(ctx, store.GetBlockHeight()+1000, "test")
+	require.NoError(t, err)
+
+	_, err = store.Get(ctx, middle.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "the next cycle reaps the loser")
+
+	after, err = store.GetSpend(ctx, parentSpend)
+	require.NoError(t, err)
+	require.Nil(t, after.SpendingData, "the parent output is unspent once the loser is reaped")
+	require.Equal(t, 0, countChildRefs())
+}

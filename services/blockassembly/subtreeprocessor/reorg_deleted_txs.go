@@ -24,16 +24,23 @@ import (
 // A file left by an earlier attempt is merged in, not replaced: a retry after a partial delete finds
 // some of the txs already gone and must not lose them. A tx still in the store is saved with its
 // current state, whatever the earlier file held.
-func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *model.Block, txHashes []chainhash.Hash) error {
+//
+// It returns the hashes of every tx it saved, parents first, including those carried over from an
+// earlier file. The file is the journal of the delete: the caller deletes what the file lists.
+func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *model.Block, txHashes []chainhash.Hash) ([]chainhash.Hash, error) {
 	if stp.subtreeStore == nil {
-		return errors.NewProcessingError("[keepReorgDeletedTxs][%s] no subtree store to save %d txs in", block.String(), len(txHashes))
+		if len(txHashes) == 0 {
+			return nil, nil
+		}
+
+		return nil, errors.NewProcessingError("[keepReorgDeletedTxs][%s] no subtree store to save %d txs in", block.String(), len(txHashes))
 	}
 
 	blockHash := block.Header.Hash()
 
 	previous, err := stp.readReorgDeletedTxs(ctx, blockHash)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	savedByHash := make(map[chainhash.Hash]*reorgDeletedTx, len(previous))
@@ -60,20 +67,20 @@ func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *mod
 				continue
 			}
 
-			return errors.NewStorageError("[keepReorgDeletedTxs][%s] error getting tx %s", block.String(), txHashes[i].String(), getErr)
+			return nil, errors.NewStorageError("[keepReorgDeletedTxs][%s] error getting tx %s", block.String(), txHashes[i].String(), getErr)
 		}
 
 		if txMeta.Tx == nil {
-			return errors.NewProcessingError("[keepReorgDeletedTxs][%s] store returned no tx for %s", block.String(), txHashes[i].String())
+			return nil, errors.NewProcessingError("[keepReorgDeletedTxs][%s] store returned no tx for %s", block.String(), txHashes[i].String())
 		}
 
 		if err = stp.utxoStore.PreviousOutputsDecorate(ctx, txMeta.Tx); err != nil {
-			return errors.NewStorageError("[keepReorgDeletedTxs][%s] error decorating previous outputs of %s", block.String(), txHashes[i].String(), err)
+			return nil, errors.NewStorageError("[keepReorgDeletedTxs][%s] error decorating previous outputs of %s", block.String(), txHashes[i].String(), err)
 		}
 
 		saved, buildErr := newReorgDeletedTx(txMeta)
 		if buildErr != nil {
-			return errors.NewProcessingError("[keepReorgDeletedTxs][%s] error reading the mined state of %s", block.String(), txHashes[i].String(), buildErr)
+			return nil, errors.NewProcessingError("[keepReorgDeletedTxs][%s] error reading the mined state of %s", block.String(), txHashes[i].String(), buildErr)
 		}
 
 		seen[txHashes[i]] = struct{}{}
@@ -88,7 +95,7 @@ func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *mod
 	}
 
 	if len(entries) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	ordered := parentsFirst(entries)
@@ -96,10 +103,15 @@ func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *mod
 	dah := stp.utxoStore.GetBlockHeight() + stp.settings.GetSubtreeValidationBlockHeightRetention()
 
 	if err = stp.subtreeStore.Set(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs, encodeReorgDeletedTxs(ordered), options.WithDeleteAt(dah), options.WithAllowOverwrite(true)); err != nil {
-		return errors.NewStorageError("[keepReorgDeletedTxs][%s] error saving %d txs", block.String(), len(ordered), err)
+		return nil, errors.NewStorageError("[keepReorgDeletedTxs][%s] error saving %d txs", block.String(), len(ordered), err)
 	}
 
-	return nil
+	kept := make([]chainhash.Hash, len(ordered))
+	for i, saved := range ordered {
+		kept[i] = *saved.tx.TxIDChainHash()
+	}
+
+	return kept, nil
 }
 
 // readReorgDeletedTxs returns the txs saved for the block, or nil when none were saved.
@@ -129,16 +141,22 @@ func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash 
 // back. It runs after the block's coinbase is back in the store, so the txs can spend it again. The
 // txs were validated before they were deleted, and the block that holds them is valid, so they are
 // written without validation, as a block's txs are. A tx is skipped, and logged, when another tx now
-// spends one of its inputs or when one of its saved parents was skipped. The saved file is deleted
+// spends one of its inputs, when one of its parents is missing from the store, or when one of its saved
+// parents was skipped. A tx saved with block IDs is on the longest chain only if the current chain holds
+// those blocks, whatever its state was when it was deleted; if not, it is marked as not on the longest
+// chain so block assembly offers it again. The saved file is deleted
 // after a restore.
-func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *model.Block) error {
+//
+// It returns the txs it recreated that are not on the longest chain, so the caller can put them back
+// in block assembly. A tx that was skipped, or that already existed, is not returned.
+func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *model.Block) ([]*bt.Tx, error) {
 	txs, err := stp.readReorgDeletedTxs(ctx, block.Header.Hash())
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if len(txs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	blockHeight := block.Height
@@ -150,11 +168,14 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 	// coinbase is immature at the height of this block, so spend at the first height it is mature.
 	spendHeight := blockHeight + uint32(stp.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec // maturity is a small chain constant
 
-	// each tx is written with the block info and the on-chain state it had when it was deleted, so a
-	// tx mined in a block is not left unmined and without block IDs
+	// each tx is written with the block info it had when it was deleted and the chain state the
+	// current chain gives it, so a tx mined in a block is not left without block IDs and a tx whose
+	// block left the chain is not left on the longest chain
 	var markNotOnLongestChain []chainhash.Hash
 
 	skipped := make(map[chainhash.Hash]struct{})
+
+	var unmined []*bt.Tx
 
 	for _, saved := range txs {
 		txHash := *saved.tx.TxIDChainHash()
@@ -167,43 +188,65 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 			continue
 		}
 
+		onLongestChain := false
+
 		var createOpts []utxostore.CreateOption
 		if len(saved.mined) > 0 {
+			blockIDs := make([]uint32, len(saved.mined))
+			for i := range saved.mined {
+				blockIDs[i] = saved.mined[i].BlockID
+			}
+
+			var chainErr error
+
+			if onLongestChain, chainErr = stp.blockchainClient.CheckBlockIsInCurrentChain(ctx, blockIDs); chainErr != nil {
+				return nil, errors.NewProcessingError("[restoreReorgDeletedTxs][%s] error checking whether the blocks of tx %s are on the current chain", block.String(), txHash.String(), chainErr)
+			}
+
+			for i := range saved.mined {
+				saved.mined[i].OnLongestChain = onLongestChain
+			}
+
 			createOpts = append(createOpts, utxostore.WithMinedBlockInfo(saved.mined...))
 		}
 
-		if _, _, createErr := stp.utxoStore.SpendAndCreate(ctx, saved.tx, spendHeight, createOpts...); createErr != nil && !errors.Is(createErr, errors.ErrTxExists) {
-			if errors.Is(createErr, errors.ErrSpent) {
-				stp.logger.Errorf("[restoreReorgDeletedTxs][%s] tx %s was not recreated, another tx spends one of its inputs: %v", block.String(), txHash.String(), createErr)
+		_, _, createErr := stp.utxoStore.SpendAndCreate(ctx, saved.tx, spendHeight, createOpts...)
+		if createErr != nil && !errors.Is(createErr, errors.ErrTxExists) {
+			if errors.Is(createErr, errors.ErrSpent) || errors.Is(createErr, errors.ErrTxNotFound) {
+				stp.logger.Errorf("[restoreReorgDeletedTxs][%s] tx %s was not recreated, one of its inputs is spent by another tx or its parent is missing: %v", block.String(), txHash.String(), createErr)
 
 				skipped[txHash] = struct{}{}
 
 				continue
 			}
 
-			return errors.NewStorageError("[restoreReorgDeletedTxs][%s] tx %s was not recreated", block.String(), txHash.String(), createErr)
+			return nil, errors.NewStorageError("[restoreReorgDeletedTxs][%s] tx %s was not recreated", block.String(), txHash.String(), createErr)
 		}
 
-		if saved.unmined && len(saved.mined) > 0 {
+		if len(saved.mined) > 0 && !onLongestChain {
 			markNotOnLongestChain = append(markNotOnLongestChain, txHash)
+		}
+
+		if createErr == nil && !onLongestChain {
+			unmined = append(unmined, saved.tx)
 		}
 	}
 
 	if len(markNotOnLongestChain) > 0 {
 		if err = stp.utxoStore.MarkTransactionsOnLongestChain(ctx, markNotOnLongestChain, false); err != nil {
-			return errors.NewStorageError("[restoreReorgDeletedTxs][%s] error marking %d recreated txs as not on the longest chain", block.String(), len(markNotOnLongestChain), err)
+			return nil, errors.NewStorageError("[restoreReorgDeletedTxs][%s] error marking %d recreated txs as not on the longest chain", block.String(), len(markNotOnLongestChain), err)
 		}
 	}
 
 	blockHash := block.Header.Hash()
 
 	if delErr := stp.subtreeStore.Del(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs); delErr != nil && !errors.Is(delErr, errors.ErrNotFound) {
-		return errors.NewStorageError("[restoreReorgDeletedTxs][%s] error deleting the saved txs", block.String(), delErr)
+		return nil, errors.NewStorageError("[restoreReorgDeletedTxs][%s] error deleting the saved txs", block.String(), delErr)
 	}
 
 	stp.logger.Warnf("[restoreReorgDeletedTxs][%s] recreated %d txs deleted when the block was moved back and skipped %d", block.String(), len(txs)-len(skipped), len(skipped))
 
-	return nil
+	return unmined, nil
 }
 
 func firstSkippedParent(tx *bt.Tx, skipped map[chainhash.Hash]struct{}) *chainhash.Hash {
