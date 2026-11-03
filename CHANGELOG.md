@@ -326,7 +326,12 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `reason`: `peer_share`, `node_cap`, `handlers_busy`, `request_queue`, `lookup_failed`),
   and the new gauge `teranode_legacy_netsync_inv_queued_hashes` shows what the cap
   holds. Block announcements are not charged and always get a handler. The set of
-  hashes asked for is capped at the same number as the queue. Outside the RUNNING state, where
+  hashes asked for is capped at the same number as the queue. The cap covers only the
+  direct route: with `kafka_legacyInvConfig` set, the read loop stages transaction
+  announcements in a Kafka channel of 10,000 messages and they are charged only when the
+  Kafka listener reads them back, so the staged messages are unbounded and a full channel
+  blocks the read loop, as before this change; #2103 tracks charging them before staging.
+  Outside the RUNNING state, where
   transaction announcements were already ignored without a lookup, they no longer get a
   goroutine each. Before this, each
   relayed transaction and each announced item got its own goroutine with no ceiling,
