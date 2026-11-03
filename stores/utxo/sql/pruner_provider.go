@@ -1,11 +1,8 @@
 package sql
 
 import (
-	"context"
 	"sync"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
-	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	sqlpruner "github.com/bsv-blockchain/teranode/stores/utxo/sql/pruner"
 )
@@ -43,11 +40,9 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 
 	// Create a new pruner service
 	prunerService, err := sqlpruner.NewService(s.settings, sqlpruner.Options{
-		Logger: s.logger,
-		DB:     s.db,
-		ClearParentRefs: func(ctx context.Context, txHash *chainhash.Hash) error {
-			return utxo.ClearParentRefs(ctx, s, txHash)
-		},
+		Logger:          s.logger,
+		DB:              s.db,
+		ReapConflicting: s.reapConflicting,
 	})
 	if err != nil {
 		return nil, err

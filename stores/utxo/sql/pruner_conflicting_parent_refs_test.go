@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 
@@ -252,9 +253,9 @@ func TestPrunerDeletesOnlyConflictingLosersWhoseParentRefsWereCleared(t *testing
 	require.Equal(t, 0, countChildRefs())
 }
 
-// A conflict promotion that lands between the parent reference clear and the delete re-spends the
-// parent output and clears the conflicting flag. The delete must keep that record.
-func TestPrunerKeepsAConflictingLoserPromotedAfterItsParentRefsWereCleared(t *testing.T) {
+// A conflict promotion that lands after the pruner listed its candidates clears the conflicting flag.
+// The reap must keep that record and the spend its parent holds on it.
+func TestPrunerKeepsAConflictingLoserPromotedAfterItWasListedForReaping(t *testing.T) {
 	ctx := t.Context()
 
 	store, parent := setup(ctx, t)
@@ -278,38 +279,159 @@ func TestPrunerKeepsAConflictingLoserPromotedAfterItsParentRefsWereCleared(t *te
 	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*loser.TxIDChainHash()}, true)
 	require.NoError(t, err)
 
-	promote := func(hookCtx context.Context, txHash *chainhash.Hash) error {
-		if clearErr := utxo.ClearParentRefs(hookCtx, store, txHash); clearErr != nil {
-			return clearErr
+	reapAfterPromotion := func(hookCtx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error) {
+		if _, _, conflictErr := store.SetConflicting(hookCtx, []chainhash.Hash{txHash}, false); conflictErr != nil {
+			return false, conflictErr
 		}
 
-		if _, spendErr := store.Spend(hookCtx, loser, store.GetBlockHeight()+1); spendErr != nil {
-			return spendErr
-		}
-
-		_, _, conflictErr := store.SetConflicting(hookCtx, []chainhash.Hash{*txHash}, false)
-
-		return conflictErr
+		return store.reapConflicting(hookCtx, txHash, blockHeight, safetyWindow)
 	}
 
 	prunerSvc, err := sqlpruner.NewService(store.settings, sqlpruner.Options{
 		Logger:          store.logger,
 		DB:              store.db,
 		Ctx:             ctx,
-		ClearParentRefs: promote,
+		ReapConflicting: reapAfterPromotion,
 	})
+	require.NoError(t, err)
+
+	count, err := prunerSvc.Prune(ctx, store.GetBlockHeight()+1000, "test")
+	require.NoError(t, err)
+	require.Zero(t, count)
+
+	_, err = store.Get(ctx, loser.TxIDChainHash())
+	require.NoError(t, err, "a loser promoted after it was listed for reaping must be kept")
+
+	parentSpend := &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: spends[0].UTXOHash}
+
+	after, err := store.GetSpend(ctx, parentSpend)
+	require.NoError(t, err)
+	require.NotNil(t, after.SpendingData, "the promoted transaction still spends the parent output")
+	require.Equal(t, loser.TxIDChainHash().String(), after.SpendingData.TxID.String())
+}
+
+// While a conflict intent is pending a promotion may be about to make a conflicting record live, so
+// the pruner must keep it and its parent references until the intent completes.
+func TestPrunerDefersAConflictingReapWhileAConflictIntentIsPending(t *testing.T) {
+	ResetPrunerServiceForTests()
+	t.Cleanup(ResetPrunerServiceForTests)
+
+	ctx := t.Context()
+
+	store, parent := setup(ctx, t)
+	store.settings.Pruner.UTXODefensiveEnabled = true
+
+	loser := bt.NewTx()
+	require.NoError(t, loser.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, loser.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parent.Outputs[0].Satoshis-1000))
+	loser.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err := store.Create(ctx, parent, 0)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, loser, 0)
+	require.NoError(t, err)
+
+	spends, err := store.Spend(ctx, loser, store.GetBlockHeight()+1)
+	require.NoError(t, err)
+	require.Len(t, spends, len(loser.Inputs))
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*loser.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	intent := utxo.ConflictIntent{
+		Kind:        utxo.ConflictIntentForward,
+		BlockHeight: store.GetBlockHeight() + 1,
+		BlockHash:   chainhash.Hash{1},
+		TxHashes:    []chainhash.Hash{*loser.TxIDChainHash()},
+		StartedAt:   1,
+	}
+
+	require.NoError(t, store.BeginConflictIntent(ctx, intent))
+
+	parentSpend := &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: spends[0].UTXOHash}
+
+	countChildRefs := func() int {
+		var n int
+
+		require.NoError(t, store.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM conflicting_children
+			WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1)`, parent.TxIDChainHash()[:]).Scan(&n))
+
+		return n
+	}
+
+	provider, ok := any(store).(pruner.PrunerServiceProvider)
+	require.True(t, ok)
+
+	prunerSvc, err := provider.GetPrunerService()
 	require.NoError(t, err)
 
 	_, err = prunerSvc.Prune(ctx, store.GetBlockHeight()+1000, "test")
 	require.NoError(t, err)
 
 	_, err = store.Get(ctx, loser.TxIDChainHash())
-	require.NoError(t, err, "a loser promoted after its parent references were cleared must be kept")
+	require.NoError(t, err, "the loser must survive while a conflict intent is pending")
 
-	parentSpend := &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: spends[0].UTXOHash}
+	during, err := store.GetSpend(ctx, parentSpend)
+	require.NoError(t, err)
+	require.NotNil(t, during.SpendingData, "the parent output still names the loser")
+	require.Equal(t, loser.TxIDChainHash().String(), during.SpendingData.TxID.String())
+	require.Equal(t, 1, countChildRefs(), "the parent still lists the loser as a conflicting child")
+
+	require.NoError(t, store.CompleteConflictIntent(ctx, intent.IntentID()))
+
+	_, err = prunerSvc.Prune(ctx, store.GetBlockHeight()+1000, "test")
+	require.NoError(t, err)
+
+	_, err = store.Get(ctx, loser.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "the loser is reaped once the intent completes")
 
 	after, err := store.GetSpend(ctx, parentSpend)
 	require.NoError(t, err)
-	require.NotNil(t, after.SpendingData, "the promoted transaction spends the parent output again")
-	require.Equal(t, loser.TxIDChainHash().String(), after.SpendingData.TxID.String())
+	require.Nil(t, after.SpendingData, "the parent output is unspent once the loser is reaped")
+	require.Equal(t, 0, countChildRefs())
+}
+
+// Reaping a loser unspends an output of its parent, so the parent no longer meets the conditions for a
+// delete_at_height and the reap must clear one the parent carries.
+func TestPrunerReapClearsTheDeleteHeightOfAParentItUnspends(t *testing.T) {
+	ctx := t.Context()
+
+	store, parent := setup(ctx, t)
+	store.settings.GlobalBlockHeightRetention = 5
+	store.settings.Pruner.UTXODefensiveEnabled = true
+
+	loser := bt.NewTx()
+	require.NoError(t, loser.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, loser.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parent.Outputs[0].Satoshis-1000))
+	loser.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err := store.Create(ctx, parent, 0)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, loser, 0)
+	require.NoError(t, err)
+
+	_, err = store.Spend(ctx, loser, store.GetBlockHeight()+1)
+	require.NoError(t, err)
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*loser.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	_, err = store.db.ExecContext(ctx, `UPDATE transactions SET delete_at_height = 999999 WHERE hash = $1`, parent.TxIDChainHash()[:])
+	require.NoError(t, err)
+
+	reaped, err := store.reapConflicting(ctx, *loser.TxIDChainHash(), store.GetBlockHeight()+1000, store.settings.GlobalBlockHeightRetention)
+	require.NoError(t, err)
+	require.True(t, reaped)
+
+	var dah sql.NullInt64
+
+	require.NoError(t, store.db.QueryRowContext(ctx, `SELECT delete_at_height FROM transactions WHERE hash = $1`, parent.TxIDChainHash()[:]).Scan(&dah))
+	require.False(t, dah.Valid, "the parent has an unspent output again, so it keeps no delete_at_height")
+
+	reaped, err = store.reapConflicting(ctx, *loser.TxIDChainHash(), store.GetBlockHeight()+1000, store.settings.GlobalBlockHeightRetention)
+	require.NoError(t, err)
+	require.False(t, reaped, "a reaped record is no longer eligible")
 }

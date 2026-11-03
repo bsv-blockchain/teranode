@@ -288,10 +288,11 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   assembly now unspends each removed transaction's inputs, and removes it from its
   parents' conflicting-children lists, before it deletes the record. Before, a
   surviving parent could keep naming the deleted record as its spender. With
-  `pruner_utxoDefensiveEnabled` set, the pruner does the same for each conflicting
-  record it reaps, and deletes a conflicting record only after it cleared that
-  record's references in the same cycle. It keeps a record whose references it cannot
-  clear until the next block. With the setting off, pruner behaviour does not change.
+  `pruner_utxoDefensiveEnabled` set, the SQL pruner reaps each expired conflicting
+  record and the references its parents hold to it in one database transaction. It
+  keeps the record, and its parents' references, while a conflict intent is pending
+  and when a promotion cleared its conflicting flag. It also keeps a record it cannot
+  reap until the next block. With the setting off, pruner behaviour does not change.
   Before it deletes those transactions, block assembly now saves them to the subtree
   store under the hash of the block that was moved back (new file type
   `reorgDeletedTxs`, expiry as for kept-aside subtree transactions). If saving fails,
@@ -306,7 +307,9 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   transaction that is not on the longest chain goes back into block assembly when a
   reorg moves the block forward. If saving the transactions fails, block assembly
   unlocks them. A retry after a partial delete deletes every transaction in the saved
-  file. The saved file expires at the same height as kept-aside subtree transactions.
+  file. A retry that finds a transaction already recreated judges it by its live
+  record: block assembly leaves it alone if block validation has since mined it on the
+  current chain. The saved file expires at the same height as kept-aside subtree transactions.
   If the block returns after that, block assembly recreates nothing and does not log a
   warning. No action is needed. Parent spends that were left dangling before the
   upgrade are not repaired. (#1214)

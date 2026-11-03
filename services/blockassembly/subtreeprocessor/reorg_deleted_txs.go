@@ -147,8 +147,14 @@ func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash 
 // chain so block assembly offers it again. The saved file is deleted
 // after a restore.
 //
-// It returns the txs it recreated, or found already recreated by an earlier attempt, that are not on the
-// longest chain, so the caller can put them back in block assembly. A tx that was skipped is not returned.
+// A tx that is already in the store, because an earlier attempt recreated it, is judged by its live
+// record, not by the saved block IDs: block validation may have mined it since. If the live record is
+// mined on the current chain it is left alone. If it has block IDs that are off the chain, it is marked
+// as not on the longest chain. In both cases the live record decides, the saved file does not.
+//
+// It returns the txs it recreated, or found already recreated and not mined on the current chain, that
+// are not on the longest chain, so the caller can put them back in block assembly. A tx that was skipped
+// or that is mined on the current chain is not returned.
 func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *model.Block) ([]*bt.Tx, error) {
 	txs, err := stp.readReorgDeletedTxs(ctx, block.Header.Hash())
 	if err != nil {
@@ -223,11 +229,37 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 			return nil, errors.NewStorageError("[restoreReorgDeletedTxs][%s] tx %s was not recreated", block.String(), txHash.String(), createErr)
 		}
 
-		if len(saved.mined) > 0 && !onLongestChain {
+		markNotOnChain := len(saved.mined) > 0
+
+		if errors.Is(createErr, errors.ErrTxExists) {
+			liveOnChain, hasBlocks, liveErr := stp.existingTxChainState(ctx, txHash)
+			if liveErr != nil {
+				if errors.Is(liveErr, errors.ErrTxNotFound) {
+					stp.logger.Errorf("[restoreReorgDeletedTxs][%s] tx %s was not recreated, its record disappeared while it was restored: %v", block.String(), txHash.String(), liveErr)
+
+					skipped[txHash] = struct{}{}
+
+					continue
+				}
+
+				return nil, errors.NewStorageError("[restoreReorgDeletedTxs][%s] error reading the existing record of tx %s", block.String(), txHash.String(), liveErr)
+			}
+
+			if liveOnChain {
+				stp.logger.Infof("[restoreReorgDeletedTxs][%s] tx %s already exists and is mined on the current chain, it was left alone", block.String(), txHash.String())
+
+				continue
+			}
+
+			onLongestChain = false
+			markNotOnChain = hasBlocks
+		}
+
+		if markNotOnChain && !onLongestChain {
 			markNotOnLongestChain = append(markNotOnLongestChain, txHash)
 		}
 
-		if (createErr == nil || errors.Is(createErr, errors.ErrTxExists)) && !onLongestChain {
+		if !onLongestChain {
 			unmined = append(unmined, saved.tx)
 		}
 	}
@@ -247,6 +279,26 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 	stp.logger.Warnf("[restoreReorgDeletedTxs][%s] recreated %d txs deleted when the block was moved back and skipped %d", block.String(), len(txs)-len(skipped), len(skipped))
 
 	return unmined, nil
+}
+
+// existingTxChainState reads the record that is already in the store for a tx. It reports whether
+// the record has block IDs and whether any of them is on the current chain.
+func (stp *SubtreeProcessor) existingTxChainState(ctx context.Context, txHash chainhash.Hash) (onCurrentChain, hasBlocks bool, err error) {
+	txMeta, err := stp.utxoStore.Get(ctx, &txHash, fields.BlockIDs)
+	if err != nil {
+		return false, false, err
+	}
+
+	if len(txMeta.BlockIDs) == 0 {
+		return false, false, nil
+	}
+
+	onCurrentChain, err = stp.blockchainClient.CheckBlockIsInCurrentChain(ctx, txMeta.BlockIDs)
+	if err != nil {
+		return false, true, errors.NewProcessingError("error checking whether the blocks of tx %s are on the current chain", txHash.String(), err)
+	}
+
+	return onCurrentChain, true, nil
 }
 
 func firstSkippedParent(tx *bt.Tx, skipped map[chainhash.Hash]struct{}) *chainhash.Hash {

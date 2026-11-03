@@ -812,6 +812,106 @@ func TestApplyCoinbaseUtxosRetryRequeuesATxRecreatedByAFailedAttempt(t *testing.
 	require.False(t, exists, "the saved file is deleted by the retry")
 }
 
+func containsTx(txs []*bt.Tx, want *bt.Tx) bool {
+	for _, tx := range txs {
+		if tx.TxIDChainHash().IsEqual(want.TxIDChainHash()) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func recreateWithFailedSavedFileDelete(t *testing.T, ctx context.Context, stp *SubtreeProcessor, block *model.Block, first *bt.Tx, oldBlockID uint32) {
+	t.Helper()
+
+	_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: oldBlockID, BlockHeight: 1234, SubtreeIdx: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+	require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+
+	chainMock := stp.blockchainClient.(*blockchain.Mock)
+	chainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{oldBlockID}).Return(false, nil)
+
+	realStore := stp.subtreeStore
+	stp.subtreeStore = &delFailsOnceBlobStore{Store: realStore}
+
+	_, restoreErr := stp.restoreReorgDeletedTxs(ctx, block)
+	require.Error(t, restoreErr, "the first attempt fails on the delete of the saved file")
+
+	stp.subtreeStore = realStore
+
+	_, err = stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.Tx)
+	require.NoError(t, err, "precondition: the first attempt recreated the tx")
+}
+
+// A retry after the saved file could not be deleted finds the tx in the store. Block validation may
+// have mined it in a current-chain block since, so the live record decides, not the saved block IDs.
+func TestRestoreReorgDeletedTxsLeavesAnExistingTxMinedOnTheCurrentChainAlone(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+	recreateWithFailedSavedFileDelete(t, ctx, stp, block, first, 42)
+
+	_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: 99, BlockHeight: 1300, SubtreeIdx: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	live, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Contains(t, live.BlockIDs, uint32(99), "precondition: the live record is mined in block 99")
+
+	stp.blockchainClient.(*blockchain.Mock).On("CheckBlockIsInCurrentChain", mock.Anything, live.BlockIDs).Return(true, nil)
+
+	unminedBefore := live.UnminedSince
+
+	unmined, err := stp.restoreReorgDeletedTxs(ctx, block)
+	require.NoError(t, err)
+	require.False(t, containsTx(unmined, first), "a tx mined on the current chain is not put back in block assembly")
+
+	after, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Equal(t, live.BlockIDs, after.BlockIDs)
+	require.Equal(t, unminedBefore, after.UnminedSince, "the retry must not change the chain state of the live record")
+
+	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.False(t, exists, "the saved file is deleted by the retry")
+}
+
+func TestRestoreReorgDeletedTxsRequeuesAnExistingTxWhoseLiveBlocksLeftTheChain(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+	recreateWithFailedSavedFileDelete(t, ctx, stp, block, first, 42)
+
+	_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: 99, BlockHeight: 1300, SubtreeIdx: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	live, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs)
+	require.NoError(t, err)
+
+	stp.blockchainClient.(*blockchain.Mock).On("CheckBlockIsInCurrentChain", mock.Anything, live.BlockIDs).Return(false, nil)
+
+	unmined, err := stp.restoreReorgDeletedTxs(ctx, block)
+	require.NoError(t, err)
+	require.True(t, containsTx(unmined, first), "a tx whose blocks left the chain goes back in block assembly")
+
+	after, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, after.UnminedSince, "the record is marked as not on the longest chain")
+
+	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.False(t, exists, "the saved file is deleted by the retry")
+}
+
 type setLockedHonoursCtx struct {
 	utxostore.Store
 }

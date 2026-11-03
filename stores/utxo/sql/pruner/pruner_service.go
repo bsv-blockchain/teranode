@@ -3,7 +3,6 @@ package pruner
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -26,7 +25,7 @@ type Service struct {
 	settings         *settings.Settings
 	db               *usql.DB
 	ctx              context.Context
-	clearParentRefs  func(ctx context.Context, txHash *chainhash.Hash) error
+	reapConflicting  func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)
 }
 
 // Options contains configuration options for the cleanup service
@@ -44,10 +43,10 @@ type Options struct {
 	// If not specified, defaults to global_blockHeightRetention (288 blocks)
 	SafetyWindow uint32
 
-	// ClearParentRefs removes the references surviving parents hold to a transaction about to be
-	// deleted. In defensive mode the pruner calls it for every conflicting record it reaps and
-	// keeps a record whose references could not be cleared.
-	ClearParentRefs func(ctx context.Context, txHash *chainhash.Hash) error
+	// ReapConflicting deletes one expired conflicting record and the references its parents hold
+	// to it in one transaction. It returns false when the record is no longer eligible or when a
+	// conflict intent is pending, and the pruner then keeps the record for a later block.
+	ReapConflicting func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)
 }
 
 // NewService creates a new cleanup service for the SQL store
@@ -77,7 +76,7 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 		settings:         tSettings,
 		db:               opts.DB,
 		ctx:              opts.Ctx,
-		clearParentRefs:  opts.ClearParentRefs,
+		reapConflicting:  opts.ReapConflicting,
 	}
 
 	return service, nil
@@ -135,9 +134,9 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 	return deletedCount, nil
 }
 
-const deleteHashesChunk = 1000
-
-const defensiveDeleteFilter = `t.delete_at_height IS NOT NULL
+// DefensiveDeleteFilter selects the records the defensive pruner may delete. It takes the block height as
+// $1 and the safety window as $2 and expects the transactions table aliased as t.
+const DefensiveDeleteFilter = `t.delete_at_height IS NOT NULL
 				  AND t.delete_at_height <= $1
 				  AND (t.unmined_since IS NULL OR t.conflicting)
 				  AND NOT EXISTS (
@@ -194,7 +193,7 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 		// Defensive mode enabled - verify ALL spending children are stable before deletion
 		// This prevents orphaning any child transaction
 		conflictingClause := ""
-		if s.clearParentRefs != nil {
+		if s.reapConflicting != nil {
 			conflictingClause = "AND NOT t.conflicting"
 		}
 
@@ -203,7 +202,7 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 			WHERE id IN (
 				SELECT t.id
 				FROM transactions t
-				WHERE ` + defensiveDeleteFilter + `
+				WHERE ` + DefensiveDeleteFilter + `
 				  ` + conflictingClause + `
 			)
 		`
@@ -217,17 +216,12 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 			return 0, errors.NewStorageError("failed to get rows affected", rowsErr)
 		}
 
-		cleared, clearErr := s.clearConflictingParentRefs(ctx, blockHeight, safetyWindow)
-		if clearErr != nil {
-			return count, clearErr
+		reaped, reapErr := s.reapExpiredConflicting(ctx, blockHeight, safetyWindow)
+		if reapErr != nil {
+			return count, reapErr
 		}
 
-		clearedCount, deleteErr := s.deleteHashes(ctx, cleared, blockHeight, safetyWindow)
-		if deleteErr != nil {
-			return count, deleteErr
-		}
-
-		return count + clearedCount, nil
+		return count + reaped, nil
 	}
 
 	if err != nil {
@@ -265,22 +259,21 @@ func (s *Service) clearUnminedDeleteAtHeight(ctx context.Context, blockHeight ui
 	}
 }
 
-// clearConflictingParentRefs removes parent references to every expired conflicting record the
-// defensive delete would remove, so the delete cannot leave a surviving parent naming a missing
-// spender. It returns the hashes whose references were cleared. Only those are deleted; a record whose
-// references could not be cleared is kept and retried next block.
-func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight, safetyWindow uint32) ([]chainhash.Hash, error) {
-	if s.clearParentRefs == nil {
-		return nil, nil
+// reapExpiredConflicting reaps every expired conflicting record the defensive delete skipped. Each
+// record is reaped in its own transaction by the store, which keeps a record that was promoted or that
+// has a conflict intent pending. A record that cannot be reaped is kept and retried next block.
+func (s *Service) reapExpiredConflicting(ctx context.Context, blockHeight, safetyWindow uint32) (int64, error) {
+	if s.reapConflicting == nil {
+		return 0, nil
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT t.hash FROM transactions t
-		WHERE `+defensiveDeleteFilter+`
+		WHERE `+DefensiveDeleteFilter+`
 		  AND t.conflicting
 	`, blockHeight, safetyWindow)
 	if err != nil {
-		return nil, errors.NewStorageError("failed to list expired conflicting transactions", err)
+		return 0, errors.NewStorageError("failed to list expired conflicting transactions", err)
 	}
 
 	defer rows.Close()
@@ -290,7 +283,7 @@ func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight, s
 	for rows.Next() {
 		var raw []byte
 		if err = rows.Scan(&raw); err != nil {
-			return nil, errors.NewStorageError("failed to scan expired conflicting transaction", err)
+			return 0, errors.NewStorageError("failed to scan expired conflicting transaction", err)
 		}
 
 		hash, hashErr := chainhash.NewHash(raw)
@@ -302,64 +295,27 @@ func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight, s
 	}
 
 	if err = rows.Err(); err != nil {
-		return nil, errors.NewStorageError("failed to read expired conflicting transactions", err)
+		return 0, errors.NewStorageError("failed to read expired conflicting transactions", err)
 	}
 
-	cleared := make([]chainhash.Hash, 0, len(hashes))
+	if err = rows.Close(); err != nil {
+		return 0, errors.NewStorageError("failed to close expired conflicting transactions", err)
+	}
+
+	var reaped int64
 
 	for i := range hashes {
-		if err = s.clearParentRefs(ctx, &hashes[i]); err != nil {
-			s.logger.Errorf("[pruner] keeping conflicting transaction %s, failed to clear parent references: %v", hashes[i].String(), err)
+		ok, reapErr := s.reapConflicting(ctx, hashes[i], blockHeight, safetyWindow)
+		if reapErr != nil {
+			s.logger.Errorf("[pruner] keeping conflicting transaction %s: %v", hashes[i].String(), reapErr)
 
 			continue
 		}
 
-		cleared = append(cleared, hashes[i])
+		if ok {
+			reaped++
+		}
 	}
 
-	return cleared, nil
-}
-
-// deleteHashes deletes the records with the given hashes and returns how many rows it removed.
-// Each chunk re-checks the defensive eligibility, so a record promoted out of conflict since its
-// parent references were cleared is kept.
-func (s *Service) deleteHashes(ctx context.Context, hashes []chainhash.Hash, blockHeight, safetyWindow uint32) (int64, error) {
-	var total int64
-
-	for start := 0; start < len(hashes); start += deleteHashesChunk {
-		end := min(start+deleteHashesChunk, len(hashes))
-
-		placeholders := make([]string, end-start)
-		args := make([]any, end-start+2)
-		args[0] = blockHeight
-		args[1] = safetyWindow
-
-		for i := start; i < end; i++ {
-			placeholders[i-start] = fmt.Sprintf("$%d", i-start+3)
-			args[i-start+2] = hashes[i][:]
-		}
-
-		result, err := s.db.ExecContext(ctx, `
-			DELETE FROM transactions
-			WHERE id IN (
-				SELECT t.id
-				FROM transactions t
-				WHERE `+defensiveDeleteFilter+`
-				  AND t.conflicting
-				  AND t.hash IN (`+strings.Join(placeholders, ",")+`)
-			)
-		`, args...)
-		if err != nil {
-			return total, errors.NewStorageError("failed to delete conflicting transactions", err)
-		}
-
-		count, err := result.RowsAffected()
-		if err != nil {
-			return total, errors.NewStorageError("failed to get rows affected", err)
-		}
-
-		total += count
-	}
-
-	return total, nil
+	return reaped, nil
 }
