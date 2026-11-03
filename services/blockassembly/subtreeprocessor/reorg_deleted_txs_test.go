@@ -151,15 +151,10 @@ func TestParentsFirstOrdersAChainWhateverTheInputOrder(t *testing.T) {
 	b := spendingTx(t, a, 0, 7000)
 	c := spendingTx(t, b, 0, 6000)
 
-	byHash := map[chainhash.Hash]*bt.Tx{}
-	for _, tx := range []*bt.Tx{a, b, c} {
-		byHash[*tx.TxIDChainHash()] = tx
-	}
-
-	got := parentsFirst([]chainhash.Hash{*c.TxIDChainHash(), *a.TxIDChainHash(), *b.TxIDChainHash()}, byHash)
+	got := parentsFirst([]*reorgDeletedTx{{tx: c}, {tx: a}, {tx: b}})
 
 	require.Equal(t, []string{a.TxIDChainHash().String(), b.TxIDChainHash().String(), c.TxIDChainHash().String()},
-		[]string{got[0].TxIDChainHash().String(), got[1].TxIDChainHash().String(), got[2].TxIDChainHash().String()})
+		[]string{got[0].tx.TxIDChainHash().String(), got[1].tx.TxIDChainHash().String(), got[2].tx.TxIDChainHash().String()})
 }
 
 // A reset that moves a block back and then forward again, whether through the per-block loop or
@@ -233,4 +228,153 @@ func TestReorgDeletedTxsWithoutASubtreeStore(t *testing.T) {
 
 	_, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash())
 	require.NoError(t, err, "the child must survive")
+}
+
+func TestReorgDeletedTxsEncodingRoundTripsMinedState(t *testing.T) {
+	root := bt.NewTx()
+	require.NoError(t, root.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 10000))
+	require.NoError(t, root.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 9000))
+
+	mined := spendingTx(t, root, 0, 8000)
+	unminedTx := spendingTx(t, mined, 0, 7000)
+	neverMined := spendingTx(t, unminedTx, 0, 6000)
+
+	entries := []*reorgDeletedTx{
+		{tx: mined, mined: []utxostore.MinedBlockInfo{{BlockID: 7, BlockHeight: 101, SubtreeIdx: 2, OnLongestChain: true}, {BlockID: 9, BlockHeight: 103, SubtreeIdx: 0, OnLongestChain: true}}},
+		{tx: unminedTx, unmined: true, mined: []utxostore.MinedBlockInfo{{BlockID: 8, BlockHeight: 102, SubtreeIdx: 1}}},
+		{tx: neverMined, unmined: true},
+	}
+
+	got, err := decodeReorgDeletedTxs(encodeReorgDeletedTxs(entries))
+	require.NoError(t, err)
+	require.Len(t, got, len(entries))
+
+	for i := range entries {
+		require.Equal(t, entries[i].tx.TxIDChainHash().String(), got[i].tx.TxIDChainHash().String())
+		require.Equal(t, entries[i].unmined, got[i].unmined)
+
+		if len(entries[i].mined) == 0 {
+			require.Empty(t, got[i].mined)
+		} else {
+			require.Equal(t, entries[i].mined, got[i].mined)
+		}
+	}
+}
+
+func TestDecodeReorgDeletedTxsRejectsTruncatedData(t *testing.T) {
+	_, err := decodeReorgDeletedTxs([]byte{0, 1, 0, 0, 0})
+	require.Error(t, err, "an entry that claims a block info the data does not hold is truncated")
+
+	_, err = decodeReorgDeletedTxs([]byte{0, 1})
+	require.Error(t, err, "a header cut short is truncated")
+}
+
+// A tx that was mined when it was deleted must come back with its block IDs and without unmined_since,
+// or block assembly would take it for an unmined tx and mine it again.
+func TestRestoreReorgDeletedTxsGivesBackTheMinedState(t *testing.T) {
+	for _, offChain := range []bool{false, true} {
+		t.Run(fmt.Sprintf("offLongestChain=%v", offChain), func(t *testing.T) {
+			ctx := context.Background()
+			stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+			require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+
+			spendHeight := block.Height + uint32(stp.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec // small chain constant
+			child := spendingTx(t, block.CoinbaseTx, 0, block.CoinbaseTx.Outputs[0].Satoshis/2)
+
+			_, _, err := stp.utxoStore.SpendAndCreate(ctx, child, spendHeight, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 41, BlockHeight: 1234, SubtreeIdx: 3, OnLongestChain: true}))
+			require.NoError(t, err)
+
+			if offChain {
+				require.NoError(t, stp.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*child.TxIDChainHash()}, false))
+			}
+
+			before, err := stp.utxoStore.Get(ctx, child.TxIDChainHash(), fields.UnminedSince, fields.BlockIDs)
+			require.NoError(t, err)
+			require.Equal(t, []uint32{41}, before.BlockIDs)
+			require.Equal(t, offChain, before.UnminedSince != 0, "precondition: the tx has the chain state under test")
+
+			require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+			require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+			require.NoError(t, stp.restoreReorgDeletedTxs(ctx, block))
+
+			after, err := stp.utxoStore.Get(ctx, child.TxIDChainHash(), fields.UnminedSince, fields.BlockIDs, fields.BlockHeights, fields.SubtreeIdxs)
+			require.NoError(t, err)
+			require.Equal(t, []uint32{41}, after.BlockIDs, "the block IDs must come back")
+			require.Equal(t, []uint32{1234}, after.BlockHeights)
+			require.Equal(t, []int{3}, after.SubtreeIdxs)
+			require.Equal(t, offChain, after.UnminedSince != 0, "the tx must be unmined only if it was unmined when deleted")
+		})
+	}
+}
+
+// A tx that spends outputs descended from the coinbases of two different blocks is deleted with the
+// block moved back first, so it is saved in that block's file. Moving the blocks forward in order
+// must recreate both parents before it.
+func TestMoveForwardBlocksRecreateATxThatSpendsDescendantsOfTwoCoinbases(t *testing.T) {
+	ctx := context.Background()
+	stp, earlier := newMoveForwardCommitBoundaryProcessor(t)
+
+	later := &model.Block{
+		Height:     earlier.Height + 1,
+		CoinbaseTx: coinbaseTx2,
+		Subtrees:   []*chainhash.Hash{},
+		Header:     childHeader(earlier.Header, 777),
+	}
+
+	require.NoError(t, stp.processCoinbaseUtxos(ctx, earlier))
+	require.NoError(t, stp.processCoinbaseUtxos(ctx, later))
+
+	spendHeight := later.Height + uint32(stp.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec // small chain constant
+
+	parentOfEarlier := spendingTx(t, earlier.CoinbaseTx, 0, earlier.CoinbaseTx.Outputs[0].Satoshis/2)
+	_, _, err := stp.utxoStore.SpendAndCreate(ctx, parentOfEarlier, spendHeight)
+	require.NoError(t, err)
+
+	parentOfLater := spendingTx(t, later.CoinbaseTx, 0, later.CoinbaseTx.Outputs[0].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, parentOfLater, spendHeight)
+	require.NoError(t, err)
+
+	both := bt.NewTx()
+	require.NoError(t, both.From(parentOfEarlier.TxIDChainHash().String(), 0, parentOfEarlier.Outputs[0].LockingScript.String(), parentOfEarlier.Outputs[0].Satoshis))
+	require.NoError(t, both.From(parentOfLater.TxIDChainHash().String(), 0, parentOfLater.Outputs[0].LockingScript.String(), parentOfLater.Outputs[0].Satoshis))
+	require.NoError(t, both.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parentOfEarlier.Outputs[0].Satoshis))
+
+	for _, in := range both.Inputs {
+		in.UnlockingScript = bscript.NewFromBytes([]byte{})
+	}
+
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, both, spendHeight)
+	require.NoError(t, err)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, later))
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, earlier))
+
+	for name, tx := range map[string]*bt.Tx{"parentOfEarlier": parentOfEarlier, "parentOfLater": parentOfLater, "both": both} {
+		_, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash())
+		require.ErrorIs(t, getErr, errors.ErrTxNotFound, "precondition: %s %s was deleted", name, tx.TxIDChainHash())
+	}
+
+	for _, block := range []*model.Block{earlier, later} {
+		_, _, err = stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, false, true)
+		require.NoError(t, err)
+
+		// reorgBlocks advances the current header after each block; an empty block does not do it itself
+		stp.currentBlockHeader.Store(block.Header)
+	}
+
+	for _, tx := range []*bt.Tx{parentOfEarlier, parentOfLater, both} {
+		_, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)
+		require.NoError(t, getErr, "tx %s must exist again", tx.TxIDChainHash())
+	}
+
+	for _, in := range both.Inputs {
+		utxoHash, hashErr := util.UTXOHashFromInput(in)
+		require.NoError(t, hashErr)
+
+		spent, spendErr := stp.utxoStore.GetSpend(ctx, &utxostore.Spend{TxID: in.PreviousTxIDChainHash(), Vout: in.PreviousTxOutIndex, UTXOHash: utxoHash})
+		require.NoError(t, spendErr)
+		require.NotNil(t, spent.SpendingData)
+		require.Equal(t, both.TxIDChainHash().String(), spent.SpendingData.TxID.String())
+	}
 }

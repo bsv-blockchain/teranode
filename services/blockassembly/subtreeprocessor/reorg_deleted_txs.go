@@ -1,7 +1,10 @@
 package subtreeprocessor
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"io"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -11,7 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 )
 
 // keepReorgDeletedTxs saves the txs that removeCoinbaseUtxos is about to delete, so that moving the
@@ -27,29 +30,27 @@ func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *mod
 
 	blockHash := block.Header.Hash()
 
-	byHash := make(map[chainhash.Hash]*bt.Tx, len(txHashes))
-	order := make([]chainhash.Hash, 0, len(txHashes))
-
 	previous, err := stp.readReorgDeletedTxs(ctx, blockHash)
 	if err != nil {
 		return err
 	}
 
-	for _, tx := range previous {
-		hash := *tx.TxIDChainHash()
+	entries := make([]*reorgDeletedTx, 0, len(previous)+len(txHashes))
+	seen := make(map[chainhash.Hash]struct{}, len(previous)+len(txHashes))
 
-		if _, ok := byHash[hash]; !ok {
-			byHash[hash] = tx
-			order = append(order, hash)
+	for _, saved := range previous {
+		if _, ok := seen[*saved.tx.TxIDChainHash()]; !ok {
+			seen[*saved.tx.TxIDChainHash()] = struct{}{}
+			entries = append(entries, saved)
 		}
 	}
 
 	for i := range txHashes {
-		if _, ok := byHash[txHashes[i]]; ok {
+		if _, ok := seen[txHashes[i]]; ok {
 			continue
 		}
 
-		txMeta, getErr := stp.utxoStore.Get(ctx, &txHashes[i], fields.Tx)
+		txMeta, getErr := stp.utxoStore.Get(ctx, &txHashes[i], fields.Tx, fields.BlockIDs, fields.BlockHeights, fields.SubtreeIdxs, fields.UnminedSince)
 		if getErr != nil {
 			if errors.Is(getErr, errors.ErrTxNotFound) {
 				continue
@@ -66,18 +67,24 @@ func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *mod
 			return errors.NewStorageError("[keepReorgDeletedTxs][%s] error decorating previous outputs of %s", block.String(), txHashes[i].String(), err)
 		}
 
-		byHash[txHashes[i]] = txMeta.Tx
-		order = append(order, txHashes[i])
+		saved, buildErr := newReorgDeletedTx(txMeta)
+		if buildErr != nil {
+			return errors.NewProcessingError("[keepReorgDeletedTxs][%s] error reading the mined state of %s", block.String(), txHashes[i].String(), buildErr)
+		}
+
+		seen[txHashes[i]] = struct{}{}
+		entries = append(entries, saved)
 	}
 
-	if len(order) == 0 {
+	if len(entries) == 0 {
 		return nil
 	}
 
-	ordered := parentsFirst(order, byHash)
+	ordered := parentsFirst(entries)
+
 	dah := stp.utxoStore.GetBlockHeight() + stp.settings.GetSubtreeValidationBlockHeightRetention()
 
-	if err = stp.subtreeStore.Set(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs, util.SerializeTxList(ordered), options.WithDeleteAt(dah), options.WithAllowOverwrite(true)); err != nil {
+	if err = stp.subtreeStore.Set(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs, encodeReorgDeletedTxs(ordered), options.WithDeleteAt(dah), options.WithAllowOverwrite(true)); err != nil {
 		return errors.NewStorageError("[keepReorgDeletedTxs][%s] error saving %d txs", block.String(), len(ordered), err)
 	}
 
@@ -85,7 +92,7 @@ func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *mod
 }
 
 // readReorgDeletedTxs returns the txs saved for the block, or nil when none were saved.
-func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash *chainhash.Hash) ([]*bt.Tx, error) {
+func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash *chainhash.Hash) ([]*reorgDeletedTx, error) {
 	if stp.subtreeStore == nil {
 		return nil, nil
 	}
@@ -99,7 +106,7 @@ func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash 
 		return nil, errors.NewStorageError("[readReorgDeletedTxs][%s] error reading saved txs", blockHash.String(), err)
 	}
 
-	txs, err := util.ReadTxList(b)
+	txs, err := decodeReorgDeletedTxs(b)
 	if err != nil {
 		return nil, errors.NewProcessingError("[readReorgDeletedTxs][%s] saved txs are unreadable", blockHash.String(), err)
 	}
@@ -130,16 +137,28 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 	// coinbase is immature at the height of this block, so spend at the first height it is mature.
 	spendHeight := blockHeight + uint32(stp.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec // maturity is a small chain constant
 
-	results, err := stp.utxoStore.SpendAndCreateMulti(ctx, txs, spendHeight)
-	if err != nil {
-		return errors.NewStorageError("[restoreReorgDeletedTxs][%s] error recreating %d txs", block.String(), len(txs), err)
+	// each tx is written with the block info and the on-chain state it had when it was deleted, so a
+	// tx mined in a block is not left unmined and without block IDs
+	var markNotOnLongestChain []chainhash.Hash
+
+	for _, saved := range txs {
+		var createOpts []utxostore.CreateOption
+		if len(saved.mined) > 0 {
+			createOpts = append(createOpts, utxostore.WithMinedBlockInfo(saved.mined...))
+		}
+
+		if _, _, createErr := stp.utxoStore.SpendAndCreate(ctx, saved.tx, spendHeight, createOpts...); createErr != nil && !errors.Is(createErr, errors.ErrTxExists) {
+			return errors.NewStorageError("[restoreReorgDeletedTxs][%s] tx %s was not recreated", block.String(), saved.tx.TxIDChainHash().String(), createErr)
+		}
+
+		if saved.unmined && len(saved.mined) > 0 {
+			markNotOnLongestChain = append(markNotOnLongestChain, *saved.tx.TxIDChainHash())
+		}
 	}
 
-	for i, result := range results {
-		switch result.Status {
-		case utxostore.MultiTxCreated, utxostore.MultiTxExisted:
-		default:
-			return errors.NewProcessingError("[restoreReorgDeletedTxs][%s] tx %s was not recreated, status %d", block.String(), txs[i].TxIDChainHash().String(), result.Status, result.Err)
+	if len(markNotOnLongestChain) > 0 {
+		if err = stp.utxoStore.MarkTransactionsOnLongestChain(ctx, markNotOnLongestChain, false); err != nil {
+			return errors.NewStorageError("[restoreReorgDeletedTxs][%s] error marking %d recreated txs as not on the longest chain", block.String(), len(markNotOnLongestChain), err)
 		}
 	}
 
@@ -148,36 +167,140 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 	return nil
 }
 
-// parentsFirst returns the txs ordered so that no tx comes before a parent that is also in the set.
-func parentsFirst(hashes []chainhash.Hash, byHash map[chainhash.Hash]*bt.Tx) []*bt.Tx {
-	ordered := make([]*bt.Tx, 0, len(hashes))
-	done := make(map[chainhash.Hash]struct{}, len(hashes))
+// parentsFirst returns the entries ordered so that no tx comes before a parent that is also in the set.
+func parentsFirst(entries []*reorgDeletedTx) []*reorgDeletedTx {
+	byHash := make(map[chainhash.Hash]*reorgDeletedTx, len(entries))
+	for _, e := range entries {
+		byHash[*e.tx.TxIDChainHash()] = e
+	}
 
-	var visit func(hash chainhash.Hash)
+	ordered := make([]*reorgDeletedTx, 0, len(entries))
+	done := make(map[chainhash.Hash]struct{}, len(entries))
 
-	visit = func(hash chainhash.Hash) {
+	var visit func(e *reorgDeletedTx)
+
+	visit = func(e *reorgDeletedTx) {
+		hash := *e.tx.TxIDChainHash()
 		if _, ok := done[hash]; ok {
 			return
 		}
 
 		done[hash] = struct{}{}
 
-		tx := byHash[hash]
-
-		for _, input := range tx.Inputs {
-			parent := *input.PreviousTxIDChainHash()
-
-			if _, inSet := byHash[parent]; inSet {
+		for _, input := range e.tx.Inputs {
+			if parent, inSet := byHash[*input.PreviousTxIDChainHash()]; inSet {
 				visit(parent)
 			}
 		}
 
-		ordered = append(ordered, tx)
+		ordered = append(ordered, e)
 	}
 
-	for _, hash := range hashes {
-		visit(hash)
+	for _, e := range entries {
+		visit(e)
 	}
 
 	return ordered
+}
+
+// reorgDeletedTx is a tx saved before it was deleted, with the state to give it back: the blocks it
+// was mined in and whether it was off the longest chain. mined is empty for a tx that was never mined.
+type reorgDeletedTx struct {
+	tx      *bt.Tx
+	mined   []utxostore.MinedBlockInfo
+	unmined bool
+}
+
+const minedBlockInfoSize = 12
+
+func newReorgDeletedTx(txMeta *meta.Data) (*reorgDeletedTx, error) {
+	if len(txMeta.BlockHeights) != len(txMeta.BlockIDs) || len(txMeta.SubtreeIdxs) != len(txMeta.BlockIDs) {
+		return nil, errors.NewProcessingError("record has %d block IDs, %d block heights and %d subtree indexes", len(txMeta.BlockIDs), len(txMeta.BlockHeights), len(txMeta.SubtreeIdxs))
+	}
+
+	unmined := txMeta.UnminedSince != 0
+	mined := make([]utxostore.MinedBlockInfo, len(txMeta.BlockIDs))
+
+	for i := range txMeta.BlockIDs {
+		mined[i] = utxostore.MinedBlockInfo{
+			BlockID:        txMeta.BlockIDs[i],
+			BlockHeight:    txMeta.BlockHeights[i],
+			SubtreeIdx:     txMeta.SubtreeIdxs[i],
+			OnLongestChain: !unmined,
+		}
+	}
+
+	return &reorgDeletedTx{tx: txMeta.Tx, mined: mined, unmined: unmined}, nil
+}
+
+// encodeReorgDeletedTxs writes each entry as a flag byte, the count of block infos, the block infos
+// (block ID, height, subtree index, each a little-endian uint32) and the tx in extended format.
+func encodeReorgDeletedTxs(entries []*reorgDeletedTx) []byte {
+	var buf []byte
+
+	for _, e := range entries {
+		flags := byte(0)
+		if e.unmined {
+			flags = 1
+		}
+
+		buf = append(buf, flags)
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(e.mined))) //nolint:gosec // a tx is in few blocks
+
+		for _, m := range e.mined {
+			buf = binary.LittleEndian.AppendUint32(buf, m.BlockID)
+			buf = binary.LittleEndian.AppendUint32(buf, m.BlockHeight)
+			buf = binary.LittleEndian.AppendUint32(buf, uint32(m.SubtreeIdx)) //nolint:gosec // subtree index is small and non-negative
+		}
+
+		if e.tx.IsExtended() {
+			buf = append(buf, e.tx.ExtendedBytes()...)
+		} else {
+			buf = append(buf, e.tx.Bytes()...)
+		}
+	}
+
+	return buf
+}
+
+func decodeReorgDeletedTxs(b []byte) ([]*reorgDeletedTx, error) {
+	reader := bytes.NewReader(b)
+	entries := make([]*reorgDeletedTx, 0, 8)
+
+	for reader.Len() > 0 {
+		var head [5]byte
+		if _, err := io.ReadFull(reader, head[:]); err != nil {
+			return nil, errors.NewProcessingError("[decodeReorgDeletedTxs] truncated entry header", err)
+		}
+
+		count := binary.LittleEndian.Uint32(head[1:])
+		if uint64(count)*minedBlockInfoSize > uint64(reader.Len()) {
+			return nil, errors.NewProcessingError("[decodeReorgDeletedTxs] entry claims %d block infos, %d bytes remain", count, reader.Len())
+		}
+
+		entry := &reorgDeletedTx{unmined: head[0]&1 == 1, mined: make([]utxostore.MinedBlockInfo, count)}
+
+		for i := range entry.mined {
+			var info [minedBlockInfoSize]byte
+			if _, err := io.ReadFull(reader, info[:]); err != nil {
+				return nil, errors.NewProcessingError("[decodeReorgDeletedTxs] truncated block info", err)
+			}
+
+			entry.mined[i] = utxostore.MinedBlockInfo{
+				BlockID:        binary.LittleEndian.Uint32(info[0:]),
+				BlockHeight:    binary.LittleEndian.Uint32(info[4:]),
+				SubtreeIdx:     int(binary.LittleEndian.Uint32(info[8:])),
+				OnLongestChain: !entry.unmined,
+			}
+		}
+
+		entry.tx = &bt.Tx{}
+		if _, err := entry.tx.ReadFrom(reader); err != nil {
+			return nil, errors.NewProcessingError("[decodeReorgDeletedTxs] failed to read transaction", err)
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
 }

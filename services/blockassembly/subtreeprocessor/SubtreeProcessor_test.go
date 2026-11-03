@@ -4837,11 +4837,11 @@ func TestRemoveCoinbaseUtxosKeepsDeletedChildrenForReorgBack(t *testing.T) {
 	kept, err := f.blobStore.Get(ctx, f.block.Header.Hash()[:], fileformat.FileTypeReorgDeletedTxs)
 	require.NoError(t, err, "the deleted children must be kept under the moved-back block's hash")
 
-	txs, err := util.ReadTxList(kept)
+	saved, err := decodeReorgDeletedTxs(kept)
 	require.NoError(t, err)
-	require.Len(t, txs, 1)
-	require.Equal(t, f.child.TxIDChainHash().String(), txs[0].TxIDChainHash().String())
-	require.True(t, txs[0].IsExtended(), "the kept tx must carry its previous outputs so it can be spent again")
+	require.Len(t, saved, 1)
+	require.Equal(t, f.child.TxIDChainHash().String(), saved[0].tx.TxIDChainHash().String())
+	require.True(t, saved[0].tx.IsExtended(), "the kept tx must carry its previous outputs so it can be spent again")
 }
 
 type failingSetStore struct {

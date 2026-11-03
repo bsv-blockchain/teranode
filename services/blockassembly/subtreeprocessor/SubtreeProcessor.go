@@ -1991,12 +1991,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 				}
 			}
 
-			if err = stp.processCoinbaseUtxos(context.Background(), block); err != nil {
+			if err = stp.applyCoinbaseUtxos(context.Background(), block); err != nil {
 				return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
-			}
-
-			if err = stp.restoreReorgDeletedTxs(context.Background(), block); err != nil {
-				return errors.NewProcessingError("[SubtreeProcessor][Reset] error restoring txs deleted when the block was moved back", err)
 			}
 		}
 
@@ -5754,6 +5750,16 @@ func (stp *SubtreeProcessor) dropPrunedHashes(ctx context.Context, hashes []chai
 	return kept, nil
 }
 
+// applyCoinbaseUtxos creates the block's coinbase, then recreates the txs deleted when the block was
+// moved back: they spend the coinbase, so they come after it.
+func (stp *SubtreeProcessor) applyCoinbaseUtxos(ctx context.Context, block *model.Block) error {
+	if err := stp.processCoinbaseUtxos(ctx, block); err != nil {
+		return err
+	}
+
+	return stp.restoreReorgDeletedTxs(ctx, block)
+}
+
 // removeCoinbaseUtxos removes the coinbase UTXO and its child spends from the UTXO store.
 //
 // The nil block / nil CoinbaseTx guard exists for the rollback paths that call
@@ -6633,12 +6639,8 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 		stp.logger.Infof("[moveForwardBlock][%s] block has no subtrees, skipping processing", block.String())
 
 		// create the coinbase after processing all other transaction operations
-		if err = stp.processCoinbaseUtxos(ctx, block); err != nil {
+		if err = stp.applyCoinbaseUtxos(ctx, block); err != nil {
 			return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
-		}
-
-		if err = stp.restoreReorgDeletedTxs(ctx, block); err != nil {
-			return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error restoring txs deleted when the block was moved back", block.String(), err)
 		}
 
 		return nil, nil, nil, nil
@@ -6701,12 +6703,8 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	}
 
 	// create the coinbase after processing all other transaction operations
-	if err = stp.processCoinbaseUtxos(ctx, block); err != nil {
+	if err = stp.applyCoinbaseUtxos(ctx, block); err != nil {
 		return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
-	}
-
-	if err = stp.restoreReorgDeletedTxs(ctx, block); err != nil {
-		return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error restoring txs deleted when the block was moved back", block.String(), err)
 	}
 
 	// On the foreign-block path (the `if` branch above), this point is
