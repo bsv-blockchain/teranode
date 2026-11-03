@@ -153,8 +153,9 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   rolling upgrade, or a replay given up after three failures in a row), block assembly
   marks the transactions it holds that recent fork blocks contain as not on the longest
   chain once it reaches the best tip, after waiting for every pending `mined_set`. It
-  reads each fork block within the UTXO retention once. A reset still marks every
-  transaction in block assembly. No action needed. (#2065)
+  reads the fork blocks within the UTXO retention that block validation has processed,
+  each once; a fork block it cannot read is logged and read again on the next fallback.
+  A reset still marks every transaction in block assembly. No action needed. (#2065)
 
 - **`GetLastNBlocks` honours `fromHeight` when orphans are included.** The SQL
   blockchain store ignored `fromHeight` with `includeOrphans=true` and always returned

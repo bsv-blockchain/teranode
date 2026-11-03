@@ -1065,15 +1065,19 @@ func (c *noBestTipOrderClient) BlocksBetterThan(context.Context, model.BestTipKe
 // validation marks X mined in it; C overtakes B before block assembly looks. The replay would
 // move onto B and back. Without it block assembly follows the best header from A1 to C2, B is
 // never moved back, and X would stay marked mined, so a restart, which reloads only unmined
-// transactions, would drop it. Both ways the replay falls back are covered.
+// transactions, would drop it. Both ways the replay falls back are covered, and a fork block
+// that cannot be read does not keep B's transactions from being marked.
 func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		// positionKnown sets a replay position, which the replay then fails to move on from.
 		positionKnown bool
+		// unreadableFork adds a fork block whose subtree is gone from the subtree store.
+		unreadableFork bool
 	}{
-		{"best-tip order not served", false},
-		{"replay given up", true},
+		{"best-tip order not served", false, false},
+		{"replay given up", true, false},
+		{"another fork block cannot be read", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			initPrometheusMetrics()
@@ -1148,6 +1152,15 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 			for _, h := range c {
 				addBlockWithMinedSet(ctx, t, items, h)
 			}
+			if tc.unreadableFork {
+				// E has as much work as C, so it is read before B, and C, stored first, stays
+				// the best tip. E's subtree is gone from the subtree store.
+				gone := chainhash.HashH([]byte("gone subtree"))
+				for _, e := range buildChain(a1, 2, 63000) {
+					require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: e, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{&gone}}, "", blockchainoptions.WithSubtreesSet(true), blockchainoptions.WithMinedSet(true)))
+				}
+			}
+
 			best, _, err = items.blockchainClient.GetBestBlockHeader(ctx)
 			require.NoError(t, err)
 			require.Equal(t, c[1].Hash().String(), best.Hash().String())

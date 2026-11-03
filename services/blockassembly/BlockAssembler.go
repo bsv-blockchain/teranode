@@ -253,8 +253,10 @@ type BlockAssembler struct {
 	bestTipUnsupportedLogged atomic.Bool
 
 	// skippedForkBlocksMarked holds the fork blocks, by hash with their height, whose
-	// transactions markSkippedForkTxs has already marked. Owned by the block-processing loop.
+	// transactions markSkippedForkTxs has already marked, and skippedForkMarkPending is set
+	// while a run of it is unfinished. Both are owned by the block-processing loop.
 	skippedForkBlocksMarked map[chainhash.Hash]uint32
+	skippedForkMarkPending  bool
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -1424,11 +1426,16 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		return
 	}
 
+	before, _ := b.CurrentBlock()
+
 	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil {
 		return
 	}
 
-	b.markSkippedForkTxs(ctx)
+	// A move that left the tip where it was skipped nothing.
+	if after, _ := b.CurrentBlock(); b.skippedForkMarkPending || before == nil || !after.Hash().IsEqual(before.Hash()) {
+		b.markSkippedForkTxs(ctx)
+	}
 }
 
 // moveToBlock moves block assembly from its tip to the given block by the shortest path
