@@ -467,8 +467,8 @@ func (s *Store) runSpendPlan(ctx context.Context, q pgx.Tx, p *spendPlan) error 
 		vin := p.ownerVin[k]
 
 		// Before the overwrite, and it has to be: the overwrite is what destroys the claim this
-		// is checking. It runs for a recorded spend with no input too, so a reassigned UTXO is
-		// refused on the first write exactly as namePlanSpenders refuses it on a replay.
+		// is checking. A recorded spend with no input is checked by its UTXO hash instead
+		// (recordedClaimMismatch), the same way namePlanSpenders checks it on a replay.
 		in := p.itemInput(item, vin)
 		if err := p.claimMismatch(in, p.perItem[item][vin], satoshis, script, hashOverride,
 			p.skipClaim[item]); err != nil {
@@ -709,6 +709,19 @@ func (s *Store) namePlanSpenders(ctx context.Context, q pgx.Tx, p *spendPlan, do
 
 		if !errors.Is(sp.Err, errors.ErrSpent) {
 			continue
+		}
+
+		// A reassigned UTXO someone else took is checked for the claim before it is called a
+		// double spend, the order the aerospike store's script uses. The old owner presenting
+		// the old output is a false claim, not a competing spend: as ErrSpent it would be stored
+		// as conflicting, and a later conflict resolution could promote it into the new owner's
+		// UTXO, because a restore record with no hash is accepted.
+		if len(hashOverride) > 0 {
+			if cerr := p.claimMismatch(p.itemInput(p.owner[k], p.ownerVin[k]), sp, satoshis, script, hashOverride,
+				p.skipClaim[p.owner[k]]); cerr != nil {
+				sp.Err = cerr
+				continue
+			}
 		}
 
 		h, herr := chainhash.NewHash(spender)

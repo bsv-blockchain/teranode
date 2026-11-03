@@ -217,3 +217,31 @@ func TestProcessConflictingRollsBackALoserThatSpentAReassignedUTXO(t *testing.T)
 	require.Equal(t, loser.TxIDChainHash(), spenderOf(t, s, ctx, parent, 0), "the reassigned UTXO is back with the loser")
 	require.Equal(t, loser.TxIDChainHash(), spenderOf(t, s, ctx, parent, 1), "the contested UTXO is back with the loser")
 }
+
+// TestDoubleSpendOfAReassignedUTXOChecksTheClaimFirst is the old owner spending a reassigned
+// UTXO after its new owner already has. The claim is checked before the spent state, as the
+// aerospike store's script does, so the old owner gets a hash mismatch rather than ErrSpent. As
+// ErrSpent it would be stored as a conflicting transaction that conflict resolution could later
+// promote into the new owner's UTXO, because a restore record with no hash is accepted.
+func TestDoubleSpendOfAReassignedUTXOChecksTheClaimFirst(t *testing.T) {
+	s, ctx := newTestStore(t)
+	parent, newOutput, _, _, spendable := reassignedParent(t, s, ctx, 8_000)
+
+	newOwner := spendParentTx(t, parent, newOutput, 1_000, 0)
+	_, _, err := s.SpendAndCreate(ctx, newOwner, spendable)
+	require.NoError(t, err)
+
+	oldOwner := spendParentTx(t, parent, nil, 2_000, 0)
+	_, spends, err := s.SpendAndCreate(ctx, oldOwner, spendable)
+	require.Error(t, err)
+	require.Len(t, spends, 1)
+	require.True(t, errors.Is(spends[0].Err, errors.ErrUtxoHashMismatch), "got %v", spends[0].Err)
+	require.False(t, errors.Is(spends[0].Err, errors.ErrSpent), "got %v", spends[0].Err)
+	require.Nil(t, spends[0].ConflictingTxID, "the old owner is not a double spend of the new owner")
+
+	// The new owner, replaying its own spend, is still recognised as having taken it.
+	_, spends, err = s.SpendAndCreate(ctx, newOwner, spendable, utxo.WithSpendOnly())
+	require.NoError(t, err)
+	require.NoError(t, spends[0].Err)
+	require.Equal(t, newOwner.TxIDChainHash(), spenderOf(t, s, ctx, parent, 0))
+}
