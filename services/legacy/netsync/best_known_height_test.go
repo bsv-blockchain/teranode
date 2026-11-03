@@ -16,7 +16,6 @@ import (
 	blockchain2 "github.com/bsv-blockchain/teranode/services/blockchain"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -62,7 +61,6 @@ func registerInvPeer(sm *SyncManager, p *peerpkg.Peer, startingHeight int32) *pe
 	state := &peerSyncState{
 		syncCandidate: true,
 		requestQueue:  txmap.NewSyncedSlice[wire.InvVect](maxRequestedBlocks),
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
 	}
 	state.noteBestKnownHeight(startingHeight)
 	sm.peerStates.Set(p, state)
