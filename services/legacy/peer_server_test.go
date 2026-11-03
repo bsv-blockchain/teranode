@@ -6,6 +6,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/netsync"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -1599,4 +1601,427 @@ func TestAnnounceNewTransactionsReachesPeerInBatchOrder(t *testing.T) {
 	defer mu.Unlock()
 
 	require.Equal(t, want, seen)
+}
+
+// A ban recorded while the server is running reaches the peer loop, which is what disconnects a
+// connected peer at the banned address. Start used to run the peer loop in the foreground and only
+// launch the ban listener after it, so the listener started at shutdown: nothing drained the ban
+// list's subscription, and once its buffer filled every further ban parked a goroutine for good.
+// A mainnet node held 694 of them after a month.
+func TestServerStart_BanReachesThePeerLoopWhileRunning(t *testing.T) {
+	bl := emptyWritableBanList(t)
+
+	s := &server{
+		ctx:                  t.Context(),
+		logger:               ulogger.TestLogger{},
+		banList:              bl,
+		banChan:              bl.Subscribe(),
+		query:                make(chan interface{}),
+		modifyRebroadcastInv: make(chan interface{}, modifyRebroadcastInvBuffer),
+		rebroadcastTip:       make(chan struct{}, 1),
+		relayInv:             make(chan relayMsg, 16),
+		quit:                 make(chan struct{}),
+	}
+
+	disconnects := make(chan disconnectNodeMsg, 1)
+
+	s.runPeerLoop = func() {
+		defer s.wg.Done()
+
+		for {
+			select {
+			case q := <-s.query:
+				if msg, ok := q.(disconnectNodeMsg); ok {
+					// No peers are connected, so answer as peerHandler would.
+					msg.reply <- errors.NewProcessingError("peer not found")
+
+					select {
+					case disconnects <- msg:
+					default:
+					}
+				}
+			case <-s.quit:
+				return
+			}
+		}
+	}
+
+	stopped := make(chan struct{})
+
+	go func() {
+		s.Start()
+		close(stopped)
+	}()
+
+	t.Cleanup(func() {
+		close(s.quit)
+		<-stopped
+	})
+
+	require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
+
+	select {
+	case <-disconnects:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a ban recorded while the server runs must reach the peer loop")
+	}
+}
+
+// A ban disconnects the connected peers it covers and no others. A peer's address carries its port
+// and a ban names a bare host or a subnet, so comparing the two as they stood matched nothing: the
+// ban was recorded, but the banned peer stayed connected.
+func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ban           string
+		banned        []string // outbound peers
+		bannedInbound []string
+		spared        []string
+	}{
+		{
+			name:   "a host ban disconnects the peer at that host",
+			ban:    "10.0.0.1",
+			banned: []string{"10.0.0.1:8333"},
+			spared: []string{"10.0.0.2:8333"},
+		},
+		{
+			name:   "a subnet ban disconnects every peer inside it",
+			ban:    "10.0.1.0/24",
+			banned: []string{"10.0.1.7:8333", "10.0.1.9:18333"},
+			spared: []string{"10.0.2.7:8333"},
+		},
+		{
+			name:   "an IPv6 host ban disconnects the peer at that host",
+			ban:    "2001:db8::1",
+			banned: []string{"[2001:db8::1]:8333"},
+			spared: []string{"[2001:db8::2]:8333"},
+		},
+		{
+			// The peer loop answers one request by disconnecting one inbound
+			// peer and stops there, so the outbound peer at the same host is
+			// only reached by asking again.
+			name:          "a host ban disconnects both the inbound and the outbound peer at that host",
+			ban:           "10.0.0.1",
+			banned:        []string{"10.0.0.1:8333"},
+			bannedInbound: []string{"10.0.0.1:50000"},
+			spared:        []string{"10.0.0.2:8333"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bl := emptyWritableBanList(t)
+
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+				query:   make(chan interface{}),
+				quit:    make(chan struct{}),
+			}
+
+			state := newTestPeerState()
+
+			// Keyed by position: a peer with no connection has no ID of its own yet.
+			keys := make(map[string]int32)
+
+			for i, addr := range append(append([]string{}, tc.banned...), tc.spared...) {
+				keys[addr] = int32(i)
+				state.outboundPeers.Set(int32(i), newTestOutboundPeer(t, s, addr))
+			}
+
+			for i, addr := range tc.bannedInbound {
+				state.inboundPeers.Set(int32(i), newTestInboundPeer(t, s, addr))
+			}
+
+			// Serve the peer loop's query channel, as peerHandler does.
+			go func() {
+				for {
+					select {
+					case q := <-s.query:
+						s.handleQuery(state, q)
+					case <-s.quit:
+						return
+					}
+				}
+			}()
+
+			go s.listenForBanEvents(t.Context())
+
+			t.Cleanup(func() { close(s.quit) })
+
+			require.NoError(t, bl.Add(t.Context(), tc.ban, time.Now().Add(time.Hour)))
+
+			for _, addr := range tc.banned {
+				id := keys[addr]
+
+				require.Eventually(t, func() bool {
+					_, still := state.outboundPeers.Get(id)
+					return !still
+				}, 5*time.Second, 10*time.Millisecond, "the peer at %s is banned and must be disconnected", addr)
+			}
+
+			for i, addr := range tc.bannedInbound {
+				require.Eventually(t, func() bool {
+					_, still := state.inboundPeers.Get(int32(i))
+					return !still
+				}, 5*time.Second, 10*time.Millisecond, "the inbound peer at %s is banned and must be disconnected", addr)
+			}
+
+			for _, addr := range tc.spared {
+				_, still := state.outboundPeers.Get(keys[addr])
+				require.True(t, still, "the peer at %s is not covered by the ban", addr)
+			}
+		})
+	}
+}
+
+// An "add" event for a ban that no longer holds disconnects nothing. Add and Remove publish from
+// separate goroutines, so the add can arrive after the ban is gone, and Add takes an expiry already
+// in the past, as a BanPeer request with an "until" in the past sends. Matching the event's host
+// disconnected the peer anyway.
+func TestBanListEvent_AStaleBanDisconnectsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ban  func(t *testing.T, bl *p2p.BanList)
+	}{
+		{
+			name: "a ban that has already expired",
+			ban: func(t *testing.T, bl *p2p.BanList) {
+				require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(-time.Minute)))
+			},
+		},
+		{
+			name: "a ban removed before its event was handled",
+			ban: func(t *testing.T, bl *p2p.BanList) {
+				require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
+				require.NoError(t, bl.Remove(t.Context(), "10.0.0.1"))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bl := emptyWritableBanList(t)
+
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+				query:   make(chan interface{}),
+				quit:    make(chan struct{}),
+			}
+
+			state := newTestPeerState()
+			state.outboundPeers.Set(0, newTestOutboundPeer(t, s, "10.0.0.1:8333"))
+			state.inboundPeers.Set(0, newTestInboundPeer(t, s, "10.0.0.1:50000"))
+
+			go func() {
+				for {
+					select {
+					case q := <-s.query:
+						s.handleQuery(state, q)
+					case <-s.quit:
+						return
+					}
+				}
+			}()
+
+			t.Cleanup(func() { close(s.quit) })
+
+			tc.ban(t, bl)
+
+			// A remove event may come first; the add is the one under test.
+			var event p2p.BanEvent
+
+			for event.Action != "add" {
+				select {
+				case event = <-s.banChan:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the ban list must publish the add")
+				}
+			}
+
+			// Synchronous: once it returns, any disconnect it asked for is done.
+			s.handleBanEvent(t.Context(), event)
+
+			_, outbound := state.outboundPeers.Get(0)
+			require.True(t, outbound, "the outbound peer is not banned and must stay connected")
+
+			_, inbound := state.inboundPeers.Get(0)
+			require.True(t, inbound, "the inbound peer is not banned and must stay connected")
+		})
+	}
+}
+
+// Banning a peer never stalls the peer loop, however far behind the ban listener is. The ban
+// handlers used to send the ban event themselves, blocking, from inside peerHandler, on the same
+// channel the ban list publishes to a moment later. With that channel full, as it was for weeks on
+// a mainnet node, the first misbehaving peer or setban would have frozen the whole peer loop.
+func TestBanHandlers_DoNotBlockThePeerLoopWhenTheBanListenerIsBehind(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ban  func(s *server, state *peerState, sp *serverPeer)
+	}{
+		{
+			name: "a misbehaving peer",
+			ban:  func(s *server, state *peerState, sp *serverPeer) { s.handleBanPeerMsg(state, sp) },
+		},
+		{
+			name: "a ban for a set duration",
+			ban: func(s *server, state *peerState, sp *serverPeer) {
+				s.handleBanPeerForDurationMsg(state, sp, time.Now().Add(time.Hour).Unix())
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			origCfg := cfg
+			cfg = &config{BanDuration: 24 * time.Hour}
+
+			t.Cleanup(func() { cfg = origCfg })
+
+			bl := emptyWritableBanList(t)
+
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+			}
+
+			// The listener is behind: its subscription is full. Each bl.Add below
+			// therefore leaves its publishing goroutine blocked for the rest of the
+			// test binary, by design: that is the production state being modelled.
+			for len(s.banChan) < cap(s.banChan) {
+				s.banChan <- p2p.BanEvent{Action: "add", IP: "192.0.2.1"}
+			}
+
+			state := newTestPeerState()
+			sp := newTestOutboundPeer(t, s, "10.0.0.1:8333")
+			sp.ctx = t.Context()
+
+			done := make(chan struct{})
+
+			go func() {
+				tc.ban(s, state, sp)
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("banning a peer must not block the peer loop")
+			}
+
+			_, banned := state.banned.Get("10.0.0.1")
+			require.True(t, banned, "the host is banned in the peer loop's own state")
+			require.True(t, bl.IsBanned("10.0.0.1:8333"), "and on the shared ban list")
+		})
+	}
+}
+
+// newTestInboundPeer builds an inbound serverPeer whose connection reports addr as its remote end.
+// An inbound peer only learns its address from its connection.
+func newTestInboundPeer(t *testing.T, srv *server, addr string) *serverPeer {
+	t.Helper()
+
+	remote, err := net.ResolveTCPAddr("tcp", addr)
+	require.NoError(t, err)
+
+	ours, theirs := net.Pipe()
+
+	t.Cleanup(func() {
+		_ = ours.Close()
+		_ = theirs.Close()
+	})
+
+	p := peer.NewInboundPeer(ulogger.TestLogger{}, settings.NewSettings(), &peer.Config{})
+	p.AssociateConnection(addressedConn{Conn: ours, remote: remote})
+
+	return &serverPeer{Peer: p, server: srv}
+}
+
+// A ban landing while the server shuts down never strands the listener. With the peer loop gone
+// nothing serves s.query, so a plain send on it would block the listener for good.
+func TestBanListEvent_ListenerGivesUpAtShutdown(t *testing.T) {
+	bl := emptyWritableBanList(t)
+
+	s := &server{
+		ctx:     t.Context(),
+		logger:  ulogger.TestLogger{},
+		banList: bl,
+		banChan: bl.Subscribe(),
+		query:   make(chan interface{}),
+		quit:    make(chan struct{}),
+	}
+
+	close(s.quit)
+
+	require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
+
+	var event p2p.BanEvent
+
+	select {
+	case event = <-s.banChan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ban list must publish the ban")
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		s.handleBanEvent(context.Background(), event)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ban listener must give up once the server is shutting down")
+	}
+}
+
+// lookupFailingNAT maps the port but never reports an external address, as a gateway that
+// accepts AddPortMapping and errors on GetExternalIPAddress does.
+type lookupFailingNAT struct {
+	mappings atomic.Int32
+}
+
+func (n *lookupFailingNAT) GetExternalAddress() (net.IP, error) {
+	return nil, errors.NewProcessingError("no external address")
+}
+
+func (n *lookupFailingNAT) AddPortMapping(string, int, int, string, int) (int, error) {
+	n.mappings.Add(1)
+	return 8333, nil
+}
+
+func (n *lookupFailingNAT) DeletePortMapping(string, int, int) error { return nil }
+
+// A failed external-address lookup does not stop the UPnP thread renewing the port mapping. The
+// lookup failure skipped the timer reset, and with the timer already fired the thread waited only
+// for shutdown, so the 20-minute lease lapsed and was never renewed.
+func TestUPnPUpdateThread_KeepsRenewingAfterAFailedAddressLookup(t *testing.T) {
+	origInterval := upnpRenewInterval
+	upnpRenewInterval = 10 * time.Millisecond
+
+	t.Cleanup(func() { upnpRenewInterval = origInterval })
+
+	nat := &lookupFailingNAT{}
+
+	s := &server{
+		logger: ulogger.TestLogger{},
+		nat:    nat,
+		quit:   make(chan struct{}),
+	}
+
+	s.wg.Add(1)
+
+	go s.upnpUpdateThread()
+
+	t.Cleanup(func() {
+		close(s.quit)
+		s.wg.Wait()
+	})
+
+	require.Eventually(t, func() bool { return nat.mappings.Load() >= 3 }, 5*time.Second, 10*time.Millisecond,
+		"the port mapping must be renewed after a failed address lookup")
 }

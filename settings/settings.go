@@ -315,6 +315,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 		},
 		BlockAssembly: BlockAssemblySettings{
 			LivenessStallTimeout:                 getDuration("blockassembly_livenessStallTimeout", 0, alternativeContext...),
+			ReconcileInterval:                    getDuration("blockassembly_reconcileInterval", 30*time.Second, alternativeContext...),
 			Disabled:                             getBool("blockassembly_disabled", false, alternativeContext...),
 			GenerateTipWaitTimeout:               getDuration("blockassembly_generateTipWaitTimeout", DefaultGenerateTipWaitTimeout, alternativeContext...),
 			GRPCAddress:                          getString("blockassembly_grpcAddress", "localhost:8085", alternativeContext...),
@@ -768,6 +769,10 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ConnectPeers:                     getMultiString("legacy_connect_peers", "|", []string{}, alternativeContext...),
 			OrphanEvictionDuration:           getDuration("legacy_orphanEvictionDuration", 10*time.Minute, alternativeContext...),
 			MaxOrphanTxs:                     getInt("legacy_maxOrphanTxs", 100, alternativeContext...),
+			RelayTxBytesBudget:               getInt64("legacy_relayTxBytesBudget", 268435456, alternativeContext...),
+			InvQueueMaxHashes:                getInt("legacy_invQueueMaxHashes", 400000, alternativeContext...),
+			InvLookupWorkers:                 getInt("legacy_invLookupWorkers", 16, alternativeContext...),
+			InvHandlerSlots:                  getInt("legacy_invHandlerSlots", 1024, alternativeContext...),
 			PrintInvMessages:                 getBool("legacy_printInvMessages", false, alternativeContext...),
 			GRPCAddress:                      getString("legacy_grpcAddress", "", alternativeContext...),
 			AllowBlockPriority:               getBool("legacy_allowBlockPriority", true, alternativeContext...),

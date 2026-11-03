@@ -1314,11 +1314,12 @@ func ConflictRecoveryCancelledVerify(t *testing.T, db utxo.Store) {
 	require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
 }
 
-// ConflictRecoverySetConflictingChildren pins what SetConflicting reports as children. Both backends
-// read the spender of every output with GetSpend before they write the flag. SQL's GetSpend reports
-// an output of a Conflicting transaction as CONFLICTING, not SPENT, so SQL reports the children only
-// while the transaction is not yet Conflicting. Aerospike reports them on every call. The rollback
-// cascade relies on its first mark, which runs while the applied winners are not Conflicting.
+// ConflictRecoverySetConflictingChildren pins what SetConflicting reports as children. Aerospike
+// reads the spender of every output with GetSpend and reports the children on every call. SQL reads
+// the stored spend edges, because its GetSpend reports an output of a Conflicting transaction as
+// CONFLICTING, not SPENT, which would hide the children of a clear; so it reports them on every call
+// too. The rollback cascade relies on its first mark, which runs while the applied winners are not
+// Conflicting.
 func ConflictRecoverySetConflictingChildren(t *testing.T, db utxo.Store, reportsWhileConflicting bool) {
 	ctx := t.Context()
 	grandparent := crashParentTx(0x91)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/url"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -15,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,8 +42,7 @@ func newHeaderProvenanceManager(t *testing.T) (*SyncManager, *peer.Peer, *peerSy
 	require.NoError(t, err)
 
 	p := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
-	state := &peerSyncState{requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Hour)}
-	t.Cleanup(state.requestedTxns.Stop)
+	state := &peerSyncState{}
 
 	sm := &SyncManager{
 		ctx: context.Background(), logger: ulogger.TestLogger{}, settings: tSettings,

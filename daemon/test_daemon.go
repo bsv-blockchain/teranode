@@ -1228,6 +1228,18 @@ func (td *TestDaemon) checkTransactionsInMiningCandidate(txs ...*bt.Tx) (map[cha
 	return txFoundMap, nil
 }
 
+// CountInBlockAssembly returns how many times tx appears in the subtrees of a fresh mining
+// candidate. A candidate asked for while block assembly is processing a block or a reset is
+// empty, so a caller polling this sees 0 until that work is done.
+func (td *TestDaemon) CountInBlockAssembly(tx *bt.Tx) (int, error) {
+	txFoundMap, err := td.checkTransactionsInMiningCandidate(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	return txFoundMap[*tx.TxIDChainHash()], nil
+}
+
 // VerifyInBlockAssembly checks that the given transactions are present in the block assembly candidate's subtrees exactly once.
 func (td *TestDaemon) VerifyInBlockAssembly(t *testing.T, txs ...*bt.Tx) {
 	txFoundMap, err := td.checkTransactionsInMiningCandidate(txs...)

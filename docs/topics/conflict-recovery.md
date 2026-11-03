@@ -97,9 +97,10 @@ accepts the applied winners from the finished checklist and acknowledges the rec
 After a successful reverse, its caller retires the applied or finished forward
 record of the block and releases any parent lock that the record still owns. A reorg
 does this for all its moved-back blocks. The reverse has already committed, so a
-failed retirement is only logged. A reset does not reverse the blocks that it moves
-back, so their effects stay in the store. It retires their forward records in the
-same way, so the next startup does not roll back an operation that has stayed live.
+failed retirement is only logged. A reset reverses the blocks that it moves back in
+the same way, skipping winners the pruner has already deleted, and retires their
+forward records, so the next startup does not roll back an operation the reverse
+has already undone.
 
 A reverse can stop part way: it reversed some winners, or marked a winner
 `Conflicting` before it gave the winner's inputs back. A later re-add of the block,

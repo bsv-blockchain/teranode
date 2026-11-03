@@ -141,6 +141,109 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **A syncing node refuses unmined transactions at every intake.** While the FSM is
+  `CATCHINGBLOCKS`, propagation (gRPC, HTTP `/tx` and `/txs`, UDP), the validator's
+  Kafka consumer, legacy `tx` messages, each parked legacy orphan validated after its
+  parent is accepted, the legacy orphan-eviction retry, and RPC
+  `sendrawtransaction` all drop the transaction before anything is stored. Propagation
+  answers HTTP 503 with `SERVICE_UNAVAILABLE` on `/tx`, and on `/txs` when refusals are
+  the batch's only server-side failures (any other 5xx in the batch still makes it 500).
+  gRPC callers get `SERVICE_UNAVAILABLE` for each refused transaction, and propagation
+  writes no per-transaction ERROR line for a refusal. `sendrawtransaction` answers RPC error
+  -10, the code bitcoind uses during initial block download; legacy peers get no
+  reject message. A short catch-up from `RUNNING` also moves the FSM to
+  `CATCHINGBLOCKS`, so a node at the tip refuses for the length of that catch-up too.
+  A cached `IDLE`, which a node reads while the blockchain service restarts, still
+  accepts. Clients that submit to a node during a sync must resubmit once it reaches
+  `RUNNING`. Refusals are counted in
+  `teranode_unmined_transactions_refused_while_syncing_total{route}`. On `/tx`,
+  propagation's HTTP status for any other `SERVICE_UNAVAILABLE` error moves from 500 to
+  503 as well.
+  Block and subtree validation are not gated and still validate a block's own
+  transactions during catch-up. (#2094)
+
+- **Block assembly replays every block that may have been the best tip, so a branch
+  that was the best chain only briefly is moved forward and back through the pool.**
+  There is no schema change. Block assembly keeps its place in the order the
+  blockchain store already picks the best tip by (most chain work, then lowest peer
+  id, then lowest block id, served by the existing `idx_chain_work_valid` index) and
+  on each wake-up moves through the valid blocks that sort better, instead of jumping
+  to the best header. A write that moves the best tip down, `InvalidateBlock` or
+  `DeleteBlock`, records the block the tip dropped to as a low-water mark under a new
+  key in the blockchain `state` table, `BestTipLowWater`, in the same transaction,
+  together with the block that was the best tip when it dropped; block assembly also
+  replays from that mark and clears it once it has passed it. A dropped tip block
+  assembly never applied (a branch invalidated before block assembly looked) makes it
+  run one reset first, so that branch's block-only transactions are reloaded into the
+  pool instead of waiting for the next reset or restart.
+  `DeleteBlock` now takes the same lock as `InvalidateBlock` and runs in one
+  transaction. Valid fork blocks that sort better but were never the tip are moved
+  to as well, so a fork race can cost extra reorgs; the pool still ends right. The
+  blockchain service gains the `BlocksBetterThan` and `ClearBestTipLowWater` RPCs,
+  which require the admin API key like every other. Block assembly keeps its
+  position under a new state key, `BlockAssemblerBestTipPos`, and a new setting,
+  `blockassembly_reconcileInterval` (default `30s`, `0` turns it off), checks for a
+  missed tip change when no block notification arrived for that long, and replays only
+  if the tip moved. Upgrade in any order: block assembly against an older blockchain
+  service follows the best header as before, asking again once a minute, and an
+  older binary ignores the new state keys, so a rollback needs no step.
+  Historical resets visit their recorded target. No configuration change is required.
+  Setting the reconcile interval to `0` disables ordinary polling; recovery of an
+  unfinished reset still retries. A reset that fails before its tx map rotation
+  leaves the old pool in service and the replay carries on from its position. A past
+  best tip whose move would take block assembly back over best-chain blocks is not
+  moved to when those blocks are at least coinbase maturity below the best tip, or
+  when one of them resolved a double spend, even if block assembly's own tip has
+  since lost: its branch-only transactions are marked unmined where they lie and the
+  pool is reloaded. That keeps confirmed spends of a coinbase, and the conflict swaps
+  of the best chain, in place. During initial sync a pass per block makes the same
+  number of blockchain calls as before: one `BlocksBetterThan` read, whose response now
+  says whether more blocks follow, takes the place of the best header read. The
+  low-water mark is read after a `BlockMinedUnset` notification, on the first pass
+  after a start, and once per reconcile interval, which `0` turns off. The position is
+  saved at most every 10 seconds and on shutdown, so a crash replays up to that much
+  of blocks already handled, each a no-op. Block notifications queued behind each
+  other are handled in one pass. (#2074)
+
+- **Mining candidates stay empty after a reset until block assembly has replayed the
+  tip changes left pending.** A reset moves block assembly to one target, so a branch
+  that was briefly the best tip in between is replayed after it. Until that replay
+  finishes, `GetMiningCandidate` returns an empty template for the next height, as it
+  does during a reorg. A reset that succeeds reports success to whoever asked for it
+  even when the replay after it fails; the replay is retried on the next pass without
+  a second reset. When it fails three passes in a row, block assembly gives the
+  remaining history up, follows the best header and builds candidates from the pool
+  the reset loaded;
+  `teranode_blockassembly_processing_stuck_total{reason="best_tip_reset_replay_abandoned"}`
+  counts each time, so alert on it. If that reset rotated its tx map and then failed
+  its reload, the pool may be partial: block assembly retries the reload on every
+  later replay pass and counts each failed retry as `reason="best_tip_reset_reload"`.
+  (#2074)
+
+- **A reset now reverses the conflict swaps of the blocks it moves back.** When a
+  block that resolved a double spend is moved back by a reset, the input goes back to
+  the transaction that lost and the winner is marked conflicting, as a reorg already
+  does. Before, a reset left the swap in place and the winner kept the input. The
+  reverse skips winners the UTXO store has already pruned and, like a reorg's, is
+  refused for a winner mined in a block of the current chain. (#2074)
+
+- **The SQL UTXO store's `SetConflicting` reports a transaction's children on every
+  call.** It now reads the stored spend edges. Before, it read each output's spend
+  status, which reads `CONFLICTING` while a conflict is being cleared, so the
+  children were hidden and a recursive unmark stopped at the parent. Aerospike
+  already behaved this way. (#2074)
+
+- **An input-validated reset on SQL keeps valid unmined transactions.** Reload input
+  validation keeps four parallel readers after closing the iterator, requests only
+  input points, then applies conflict cascades serially. It reads each parent once
+  per transaction, and its conflicting children once per parent. (#2074)
+
+- **Header lists over gRPC keep the peer id of a block with no miner tag.**
+  `GetBlockHeaders`, `GetBlockHeadersFromHeight`, `GetBlockHeadersByHeight` and the
+  other RPCs that return a list of headers with their meta now carry the peer id and
+  `processed_at` of such a block. Before, the peer id came back empty and
+  `processed_at` was misread. `GetBlockHeader` was not affected. (#2074)
+
 - **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
   background, and block storage can wait for the repair.** `InvalidateBlock`,
   `RevalidateBlock`, the startup rebuild and two `StoreBlock` paths used to log a
@@ -365,6 +468,52 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   Subtree validation now refuses to start when the txmeta cache cannot be built
   (including a non-positive `subtreevalidation_txMetaTombstoneWindow`). It used to
   log the failure and run with no store, then panic on first use.
+
+- **The legacy service now bounds relayed transactions and transaction announcements,
+  with four new settings.** Transactions relayed by legacy peers are validated by a fixed
+  pool of workers, twice the largest of `utxostore_storeBatcherSize`,
+  `utxostore_spendBatcherSize` and `validator_sendBatchSize`, and never fewer than 1024
+  (4096 with the defaults in `settings.conf`). They wait in a queue four times that long,
+  and the transactions queued or being validated hold at most
+  `legacy_relayTxBytesBudget` serialized bytes, default 256 MiB, except that one
+  transaction larger than that is still taken when nothing else is held; zero means one
+  transaction at a time. The node holds about three times the budget while transactions
+  are being validated, as the setting's description explains. A transaction that finds
+  the queue full or the budget spent is dropped, not waited for; the node relies on
+  getting it again from another peer or in the block that mines it. Drops are counted in
+  the new `teranode_legacy_netsync_relayed_tx_dropped_total`, which also counts the
+  transactions dropped because their peer left before it was registered or because the
+  sync manager stopped; on stop, every queued transaction is answered and its bytes
+  given back. With the workers busy for the validation latency L, the pool validates at
+  most workers / L transactions a second, so a node whose relayed-transaction validation
+  is slow drops some of a heavy relay stream. Transaction announcements (`inv` items) are
+  copied out of the decoded message on the peer's read loop in chunks of 4096 and charged
+  there to `legacy_invQueueMaxHashes` (default 400,000 hashes, eight maximum-size
+  announcements; a value below 4096 falls back to the default), so the cap covers them
+  while they wait for the sync manager as well as while they wait for a lookup. A
+  per-peer share of 100,000 hashes applies once the peer is resolved, and
+  `legacy_invLookupWorkers` workers (default 16) take whatever is queued and look it up in UTXO store batch reads of up to 4096 hashes,
+  checking the set of hashes already asked for before the read, so a transaction every
+  peer announces is read about once instead of once per peer. Two limits sit beside
+  the cap: at most `legacy_invHandlerSlots` goroutines (default 1,024) handle messages
+  carrying only transaction announcements at once, and each peer's queue of missing
+  transactions waiting for a getdata holds at most 50,000. A value below one for either
+  new setting falls back to its default with a warning. Announcements over any of these limits are dropped and
+  counted in hashes in the new `teranode_legacy_netsync_inv_dropped_total` (label
+  `reason`: `peer_share`, `node_cap`, `handlers_busy`, `request_queue`, `lookup_failed`),
+  and the new gauge `teranode_legacy_netsync_inv_queued_hashes` shows what the cap
+  holds. Block announcements are not charged and always get a handler. The set of
+  hashes asked for is capped at the same number as the queue. The cap covers only the
+  direct route: with `kafka_legacyInvConfig` set, the read loop stages transaction
+  announcements in a Kafka channel of 10,000 messages and they are charged only when the
+  Kafka listener reads them back, so the staged messages are unbounded and a full channel
+  blocks the read loop, as before this change; #2103 tracks charging them before staging.
+  Outside the RUNNING state, where
+  transaction announcements were already ignored without a lookup, they no longer get a
+  goroutine each. Before this, each
+  relayed transaction and each announced item got its own goroutine with no ceiling,
+  and on 2026-10-19 that reached 223,118 goroutines and got the node killed for
+  exceeding its memory limit. (#2045)
 
 - **A failed revert of an invalid block's mined tags now holds block assembly until it
   succeeds.** When block validation reverts the mined tags of an invalid block and
@@ -931,25 +1080,46 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 - **Conflict-check failures in subtree validation are no longer reported as
   context cancellations.** Two follow-ups to the entry above, both in subtree
   validation's conflict check:
-  - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
-    live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
-    walk limit, a frozen output, an input out of range and the fail-fast
-    missing-tx threshold are no longer wrapped as a context cancellation. Each is
-    still retried and never charged to a peer. What changes is how they show up:
-    on the live path `subtreeMessageHandler` logs them at error level ("error
-    processing kafka message") where it logged a "Context canceled, skipping"
-    warning, and a catch-up run that ends on the walk limit, a frozen output or an
-    out-of-range input records `local_processing_fault` instead of
-    `local_context_cancelled` as its last error type. A missing record, a
-    cancelled check, and a record the store could not decode keep the old
-    classification.
-  - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
-    the check's context is cancelled while it runs, as the cached path and
-    blessing a missing transaction already did. Before, it was retried.
+    - On the fresh path (`CheckBlockSubtrees` on a new subtree, `CheckSubtreeFromBlock`,
+      live peer subtrees), a store fault, the `utxostore_conflictingChildrenMaxNodes`
+      walk limit, a frozen output, an input out of range and the fail-fast
+      missing-tx threshold are no longer wrapped as a context cancellation. Each is
+      still retried and never charged to a peer. What changes is how they show up:
+      on the live path `subtreeMessageHandler` logs them at error level ("error
+      processing kafka message") where it logged a "Context canceled, skipping"
+      warning, and a catch-up run that ends on the walk limit, a frozen output or an
+      out-of-range input records `local_processing_fault` instead of
+      `local_context_cancelled` as its last error type. A missing record, a
+      cancelled check, and a record the store could not decode keep the old
+      classification.
+    - On the fresh path a proven conflict is rejected with `TX_INVALID` even when
+      the check's context is cancelled while it runs, as the cached path and
+      blessing a missing transaction already did. Before, it was retried.
 
   Nothing to configure. (bsv-blockchain/teranode#2066)
 
 ### Not breaking, but worth knowing
+
+- **Legacy bans now disconnect connected peers, and the ban list no longer leaks
+  goroutines.** The legacy service's ban listener only started at shutdown, so a
+  ban recorded while the node ran (a misbehaving peer, the feeler's non-BSV bans,
+  or a `setban` when the ban reaches this process's ban list) never disconnected a
+  peer that was already connected, and once the listener's 100-event buffer filled
+  every later ban left a goroutine blocked for the life of the process. The
+  listener now runs alongside the peer loop: a ban disconnects every connected
+  inbound or automatic outbound legacy peer at the banned host or inside the
+  banned subnet, as long as the ban list still holds the ban when the event is
+  handled; a ban that has expired or been removed by then disconnects nothing.
+  Persistent peers (`addnode`, and every peer in `connect`-only mode) are not
+  disconnected, as before; that is an accepted limit, since disconnecting one
+  would also drop its `addnode` request for good. The peer loop no longer blocks
+  on a ban event, which with that buffer full would have frozen it on the next
+  ban.
+  `legacy_upnp`, which had the same start-up ordering bug, now maps the port while
+  the node runs instead of only at shutdown. It keeps renewing the lease after a
+  failed external-address lookup, and its HTTP calls to the gateway time out after
+  10 seconds, so a gateway that never answers no longer hangs shutdown.
+  (bsv-blockchain/teranode#2098)
 
 - **Catch-up checks the difficulty of every offered header before fetching any
   block.** The header precheck used to skip the first ~147 headers after the

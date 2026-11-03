@@ -66,6 +66,13 @@ func txSpending(parent chainhash.Hash) *bt.Tx {
 	return tx
 }
 
+func validationTestInpoints(t *testing.T, parent chainhash.Hash) subtreepkg.TxInpoints {
+	t.Helper()
+	inpoints, err := subtreepkg.NewTxInpointsFromInputs(txSpending(parent).Inputs)
+	require.NoError(t, err)
+	return inpoints
+}
+
 // ----------------------------------------------------------------------------
 // BA-STARTUP-008 — CheckBlockAssemblyValidateInputs / CheckInputValidation
 // ----------------------------------------------------------------------------
@@ -161,7 +168,7 @@ func TestBlockAssembly_CheckInputValidation(t *testing.T) {
 
 		// T spends parent:0, not yet conflicting.
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 		// parent:0 is recorded as spent by a different ("winner") tx.
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 			Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&winnerHash, 0)}}, nil)
@@ -285,7 +292,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseA_SpentByDifferentTxCascades(
 	mockStore := new(utxostore.MockUtxostore)
 	// T metadata: one input spending parentHash:0, not yet conflicting.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-		Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+		Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 	// parent:0 is spent by a different ("winner") tx.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 		Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&winnerHash, 0)}}, nil)
@@ -332,7 +339,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 	mockStore := new(utxostore.MockUtxostore)
 	// T metadata.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-		Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+		Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 	// parent:0 is spent by T itself (matches) -> fall through to case 2.
 	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.Utxos)).
 		Return(&meta.Data{SpendingDatas: []*spend.SpendingData{spend.NewSpendingData(&txHash, 0)}}, nil)
@@ -364,6 +371,58 @@ func TestBlockAssembly_ValidateUnminedTxInputs_CaseB_CounterConflictingOnChain(t
 	mockStp.AssertExpectations(t)
 }
 
+// A tx spending several outputs of one parent reads the parent's spends and its
+// conflicting children once each, not once per output.
+func TestBlockAssembly_ValidateUnminedTxInputs_ReadsEachParentOnce(t *testing.T) {
+	ctx := context.Background()
+
+	parentHash := chainhash.HashH([]byte("one-read-parent"))
+	txHash := chainhash.HashH([]byte("one-read-tx"))
+
+	const outputs = 5
+
+	tx := bt.NewTx()
+	spendingDatas := make([]*spend.SpendingData, outputs)
+
+	for i := uint32(0); i < outputs; i++ {
+		in := &bt.Input{PreviousTxOutIndex: i}
+		require.NoError(t, in.PreviousTxIDAdd(&parentHash))
+		tx.Inputs = append(tx.Inputs, in)
+		spendingDatas[i] = spend.NewSpendingData(&txHash, int(i))
+	}
+
+	inpoints, err := subtreepkg.NewTxInpointsFromInputs(tx.Inputs)
+	require.NoError(t, err)
+
+	mockStore := new(utxostore.MockUtxostore)
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
+		Return(&meta.Data{TxInpoints: inpoints}, nil)
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.Utxos)).
+		Return(&meta.Data{SpendingDatas: spendingDatas}, nil).Once()
+	// Two conflicting children, neither confirmed: each is read once, not once per output.
+	counterA := chainhash.HashH([]byte("one-read-counter-a"))
+	counterB := chainhash.HashH([]byte("one-read-counter-b"))
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), fieldsContain(fields.ConflictingChildren)).
+		Return(&meta.Data{ConflictingChildren: []chainhash.Hash{counterA, counterB}}, nil).Once()
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(counterA), fieldsContain(fields.BlockIDs)).
+		Return(&meta.Data{BlockIDs: []uint32{7}}, nil).Once()
+	mockStore.On("Get", mock.Anything, hashPtrMatcher(counterB), fieldsContain(fields.BlockIDs)).
+		Return(&meta.Data{}, nil).Once()
+
+	ba := &BlockAssembler{
+		logger:    ulogger.TestLogger{},
+		settings:  createTestSettings(t),
+		utxoStore: mockStore,
+	}
+
+	ok, err := ba.validateUnminedTxInputs(ctx, txHash, map[uint32]bool{0: true}, true)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	mockStore.AssertExpectations(t)
+	mockStore.AssertNumberOfCalls(t, "Get", 5)
+}
+
 // warnCapturingLogger records every Warnf message so a test can assert on its content.
 type warnCapturingLogger struct {
 	ulogger.TestLogger
@@ -387,7 +446,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_MissingParentIsLogged(t *testing.
 	t.Run("store error", func(t *testing.T) {
 		mockStore := new(utxostore.MockUtxostore)
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 			Return(nil, errors.NewTxNotFoundError("%s not found", parentHash.String()))
 
@@ -414,7 +473,7 @@ func TestBlockAssembly_ValidateUnminedTxInputs_MissingParentIsLogged(t *testing.
 	t.Run("nil parent without error", func(t *testing.T) {
 		mockStore := new(utxostore.MockUtxostore)
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(txHash), mock.Anything).
-			Return(&meta.Data{Tx: txSpending(parentHash), Conflicting: false}, nil)
+			Return(&meta.Data{TxInpoints: validationTestInpoints(t, parentHash), Conflicting: false}, nil)
 		mockStore.On("Get", mock.Anything, hashPtrMatcher(parentHash), mock.Anything).
 			Return(nil, nil)
 

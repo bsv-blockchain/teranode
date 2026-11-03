@@ -242,6 +242,40 @@ type BlockAssembler struct {
 	// so multiple triggers coalesce into a single reconciliation pass.
 	reconcileCh chan struct{}
 
+	// bestTipPos is the replay position: the place in the blockchain store's best-tip order of
+	// the last block block assembly handled (see replayBestTipChanges). bestTipPosKnown is
+	// false until the position has been read, and stays false against a blockchain service
+	// that does not serve that order, which leaves block assembly following the best header.
+	bestTipPos                atomic.Pointer[model.BestTipKey]
+	bestTipPosKnown           atomic.Bool
+	bestTipResetReplayPending atomic.Bool // candidates stay empty until reset's pending history succeeds or is given up
+	bestTipResetIncomplete    atomic.Bool // reset moved its target but has not finished reloading/persisting
+
+	// bestTipPosSaved is the position last persisted under BestTipPositionStateKey, and
+	// lastBestTipPosSave when a save was last tried, in Unix nanoseconds.
+	bestTipPosSaved    atomic.Pointer[model.BestTipKey]
+	lastBestTipPosSave atomic.Int64
+
+	// bestTipLowWaterQuiet is set when the last read of the low-water mark found none and no
+	// BlockMinedUnset notification arrived since, and lastBestTipLowWaterRead is when the mark
+	// was last read, in Unix nanoseconds (see readBestTipLowWaterIfDue).
+	bestTipLowWaterQuiet    atomic.Bool
+	lastBestTipLowWaterRead atomic.Int64
+
+	// lastBestTipReplay is when processNewBlockAnnouncement last ran, in Unix nanoseconds.
+	// The idle tick wakes a replay once it is older than blockassembly_reconcileInterval.
+	lastBestTipReplay atomic.Int64
+
+	// bestTipReplayFailures counts consecutive failed replay passes.
+	bestTipReplayFailures atomic.Int32
+
+	// lastBestTipProbe is when loadBestTipPosition last found the blockchain service without
+	// the best-tip order, in Unix nanoseconds. The next probe waits bestTipProbeInterval.
+	lastBestTipProbe atomic.Int64
+
+	// bestTipUnsupportedLogged is set once that finding has been logged as a warning.
+	bestTipUnsupportedLogged atomic.Bool
+
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
 
@@ -571,6 +605,12 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 				// instead of letting the grace period finish the drain.
 				b.heartbeat.Disable()
 
+				// Saves after a pass are spaced out, so save the last position now. The
+				// context is done, so the write gets a short one of its own.
+				saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bestTipPositionShutdownSaveTimeout)
+				b.saveBestTipPosition(saveCtx)
+				cancel()
+
 				// Note: We don't close blockchainSubscriptionCh here because we don't own it -
 				// it's created by the blockchain client's Subscribe method
 				return
@@ -628,24 +668,34 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 					}
 				}
 
+				// Wake a replay of the tip changes if none ran for
+				// blockassembly_reconcileInterval: a dropped subscription
+				// delivers no notification until it reconnects. The check
+				// runs outside StateReconciling, so a mining candidate asked
+				// for meanwhile is not an empty one, and a replay starts only
+				// when the tip moved.
+				if b.reconcileDue(time.Now()) && b.idleReconcileNeeded(ctx) {
+					b.triggerReconcile()
+				}
+
 			case resetReq := <-b.resetCh:
 				b.setCurrentRunningState(StateResetting)
 				b.handleResetRequests(ctx, resetReq)
-				b.setCurrentRunningState(StateRunning)
+				b.returnToRunning(ctx)
 
 			case notification := <-b.blockchainSubscriptionCh:
 				b.setCurrentRunningState(StateBlockchainSubscription)
 
-				if notification.Type == model.NotificationType_Block {
+				if b.takeBlockNotifications(notification) {
 					b.processNewBlockAnnouncement(ctx)
 				}
 
-				b.setCurrentRunningState(StateRunning)
+				b.returnToRunning(ctx)
 
 			case <-b.reconcileCh:
 				b.setCurrentRunningState(StateReconciling)
 				b.processNewBlockAnnouncement(ctx)
-				b.setCurrentRunningState(StateRunning)
+				b.returnToRunning(ctx)
 			} // select
 		} // for
 	}()
@@ -698,15 +748,38 @@ drain:
 		}
 	}
 
+	// A reset traverses only its endpoint lineages. Keep the replay position so any
+	// briefly winning branch outside those lineages is still replayed afterwards.
+	wasPending := b.bestTipResetReplayPending.Load()
+	if b.bestTipPosKnown.Load() {
+		b.bestTipResetReplayPending.Store(true)
+	}
 	resp, err := b.resetWithResponse(ctx, validateInputs)
+	if err != nil && !resp.Rotated {
+		// Nothing was discarded: block assembly is still on its old tip with its old pool,
+		// and the ordinary replay from the unchanged position carries it forward.
+		b.bestTipResetReplayPending.Store(wasPending)
+	}
+	// Judge the storage outcome of this reset before replay can return an
+	// unrelated history error. A clean rotation still cured its disk fault.
+	b.onResetDone(storageTriggered, resp, err)
+	// The senders get the reset's own outcome. A failed replay afterwards is not a failed reset:
+	// the pending history stays set, and the next pass replays it from the saved position
+	// without resetting again.
+	if err == nil && b.bestTipPosKnown.Load() {
+		b.bestTipResetReplayPending.Store(true)
+
+		if _, replayErr := b.replayBestTipChanges(ctx); replayErr != nil {
+			b.logger.Errorf("[BlockAssembler] reset completed but pending tip changes need retrying: %v", replayErr)
+			b.triggerReconcile()
+		}
+	}
 
 	// The Reset path replays moveForward blocks through the same
 	// conflict resolution, so it can queue refusals too. Unlike the
 	// reorg path this does not run inside processNewBlockAnnouncement,
 	// so nothing else would drain them until the next block arrives.
 	b.drainPendingInvalidations(ctx)
-
-	b.onResetDone(storageTriggered, resp, err)
 
 	for _, req := range batch {
 		if req.ErrCh != nil {
@@ -723,6 +796,47 @@ func (b *BlockAssembler) triggerReconcile() {
 	case b.reconcileCh <- struct{}{}:
 	default:
 	}
+}
+
+// takeBlockNotifications takes first and every notification already queued behind it, and
+// reports whether any of them calls for a replay pass. One pass covers them all, since it reads
+// every block better than the replay position. During initial sync notifications queue up while
+// block assembly works, and a pass per notification would cost calls to the blockchain service
+// for each one that finds nothing new. A BlockMinedUnset notification means a block was
+// invalidated, which may have set the low-water mark, so the next pass reads it.
+func (b *BlockAssembler) takeBlockNotifications(first *blockchain.Notification) bool {
+	replay := false
+
+	take := func(notification *blockchain.Notification) {
+		if notification == nil {
+			return
+		}
+
+		switch notification.Type {
+		case model.NotificationType_Block:
+			replay = true
+		case model.NotificationType_BlockMinedUnset:
+			b.bestTipLowWaterQuiet.Store(false)
+			replay = true
+		}
+	}
+
+	take(first)
+
+	for queued := len(b.blockchainSubscriptionCh); queued > 0; queued-- {
+		select {
+		case notification, ok := <-b.blockchainSubscriptionCh:
+			if !ok {
+				return replay
+			}
+
+			take(notification)
+		default:
+			return replay
+		}
+	}
+
+	return replay
 }
 
 // reset performs a full reset of the block assembler state by clearing all subtrees and reloading from blockchain.
@@ -825,11 +939,19 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 		return resp, errors.NewProcessingError("[Reset] error getting best block header", err)
 	}
 
+	return b.resetToBlockWithResponse(ctx, bestBlockchainBlockHeader, meta.Height, validateInputs...)
+}
+
+// resetToBlockWithResponse rebuilds assembly at the requested block, which may be a
+// historical winner being replayed rather than the blockchain service's current tip.
+func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlockchainBlockHeader *model.BlockHeader, targetHeight uint32, validateInputs ...bool) (subtreeprocessor.ResetResponse, error) {
+	var resp subtreeprocessor.ResetResponse
+
 	// reset the block assembly
 	hash, h := b.CurrentBlock()
-	b.logger.Warnf("[BlockAssembler][Reset] resetting: %d: %s -> %d: %s", h, hash.Hash(), meta.Height, bestBlockchainBlockHeader.String())
+	b.logger.Warnf("[BlockAssembler][Reset] resetting: %d: %s -> %d: %s", h, hash.Hash(), targetHeight, bestBlockchainBlockHeader.String())
 
-	moveBackBlocksWithMeta, moveForwardBlocksWithMeta, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, meta.Height)
+	moveBackBlocksWithMeta, moveForwardBlocksWithMeta, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, targetHeight)
 	if err != nil {
 		return resp, errors.NewProcessingError("[Reset] error getting reorg blocks", err)
 	}
@@ -848,14 +970,14 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 	// forward range entirely. The safety therefore rests on these being the real
 	// historical chain (gated by the checkpoint), not on the height test alone.
 	//
-	// Testing meta.Height (the target tip) alone is sufficient: it is the max
-	// height of the forward range, so meta.Height <= checkpoint implies every
+	// Testing targetHeight (the target tip) alone is sufficient: it is the max
+	// height of the forward range, so targetHeight <= checkpoint implies every
 	// forward block is <= checkpoint. A range that straddles the checkpoint has
-	// meta.Height > checkpoint and takes the full path.
+	// targetHeight > checkpoint and takes the full path.
 	highestCheckpoint := blockchain.HighestCheckpointHeight(b.settings.ChainCfgParams.Checkpoints)
-	useFastForwardReset := meta.Height <= highestCheckpoint
+	useFastForwardReset := targetHeight <= highestCheckpoint
 
-	currentHeight := meta.Height
+	currentHeight := targetHeight
 
 	moveBackBlocks := make([]*model.Block, len(moveBackBlocksWithMeta))
 	for i, withMeta := range moveBackBlocksWithMeta {
@@ -867,7 +989,7 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 		moveForwardBlocks[i] = withMeta.block
 	}
 
-	b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", meta.Height)
+	b.logger.Warnf("[BlockAssembler][Reset] resetting to new best block header: %d", targetHeight)
 
 	// make sure we have processed all pending blocks before resetting
 	if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
@@ -1082,9 +1204,22 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 	// does not depend on a lookup that can itself fail. See resetBlockHeights.
 	resetHeights := resetBlockHeights(bestBlockchainBlockHeader, currentHeight, moveBackBlocksWithMeta, moveForwardBlocksWithMeta)
 
+	wasIncomplete, wasPending := b.bestTipResetIncomplete.Load(), b.bestTipResetReplayPending.Load()
+	if b.bestTipPosKnown.Load() {
+		b.bestTipResetIncomplete.Store(true)
+		b.bestTipResetReplayPending.Store(true)
+	}
+
 	resp = b.subtreeProcessor.Reset(baBestBlockHeader, moveBackBlocks, moveForwardBlocks, useFastForwardReset, postProcessFn)
 	if resp.Err != nil {
 		b.logger.Errorf("[BlockAssembler][Reset] resetting error resetting subtree processor: %v", resp.Err)
+
+		if !resp.Rotated {
+			// The subtree processor failed before its tx map rotation, so it still holds its
+			// old tip, subtrees and pool. Nothing was discarded that a replay must rebuild.
+			b.bestTipResetIncomplete.Store(wasIncomplete)
+			b.bestTipResetReplayPending.Store(wasPending)
+		}
 		// something went wrong, we need to set the best block header in the block assembly to be the
 		// same as the subtree processor's best block header
 		stpHeader := b.subtreeProcessor.GetCurrentBlockHeader()
@@ -1155,6 +1290,8 @@ func (b *BlockAssembler) resetWithResponse(ctx context.Context, validateInputs .
 
 	_, height := b.CurrentBlock()
 	prometheusBlockAssemblyCurrentBlockHeight.Set(float64(height))
+
+	b.bestTipResetIncomplete.Store(false)
 
 	b.logger.Warnf("[BlockAssembler][Reset] resetting block assembler DONE")
 
@@ -1272,7 +1409,16 @@ func (b *BlockAssembler) waitForBlockMinedSet(ctx context.Context, blockHash *ch
 	return err
 }
 
-// processNewBlockAnnouncement updates the best block information.
+// processNewBlockAnnouncement brings block assembly to the chain's best tip. Every block
+// notification and every reconcile wake-up lands here, and the notification's own block is
+// not read: the blocks that sort better than the replay position are.
+//
+// It moves through every valid block that sorts better than the last one block assembly
+// handled, in the blockchain store's best-tip order, and from the low-water mark the store
+// records when the tip drops (replayBestTipChanges), so a branch that was the best chain only
+// briefly is moved forward and back like any other, even when block assembly was busy while
+// it won and lost. Against a blockchain service without that order it follows the best
+// header, as before.
 //
 // Parameters:
 //   - ctx: Context for cancellation
@@ -1294,6 +1440,12 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	// acquisition), and it must run AFTER movement, never during it.
 	defer b.drainPendingInvalidations(ctx)
 
+	b.lastBestTipReplay.Store(time.Now().UnixNano())
+
+	if !b.followBestTipChanges(ctx) {
+		return
+	}
+
 	// Use context-aware logger for trace correlation
 	ctxLogger := b.logger.WithTraceContext(ctx)
 
@@ -1302,6 +1454,20 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		ctxLogger.Errorf("[BlockAssembler] error getting best block header: %v", err)
 		return
 	}
+
+	_ = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta)
+}
+
+// moveToBlock moves block assembly from its tip to the given block by the shortest path
+// through their common ancestor: a single move-forward, a catch-up, an in-memory reorg, or a
+// full reset. The block need not be the best tip: the replay passes each block that may
+// have been the best tip in turn. On success block assembly's tip is the block and its
+// state is persisted.
+//
+// It logs and counts its own failures, and returns the error so the replay can stop at the
+// failed change. An ErrBlockAssemblyReset means a reset successfully rebuilt assembly on this block.
+func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHeader *model.BlockHeader, bestBlockchainBlockHeaderMeta *model.BlockHeaderMeta) (err error) {
+	ctxLogger := b.logger.WithTraceContext(ctx)
 
 	ctxLogger.Infof("[BlockAssembler][%s] new best block header: %d", bestBlockchainBlockHeader.Hash(), bestBlockchainBlockHeaderMeta.Height)
 
@@ -1330,14 +1496,14 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	switch {
 	case bestBlockAccordingToBlockchain.Hash().IsEqual(bestBlockAccordingToBlockAssembly.Hash()):
 		ctxLogger.Infof("[BlockAssembler][%s] best block header is the same as the current best block header: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
-		return
+		return nil
 
 	case !bestBlockchainBlockHeader.HashPrevBlock.IsEqual(bestBlockAccordingToBlockAssembly.Hash()):
 		moveBackBlocksWithMeta, moveForwardBlocksWithMeta, err := b.getReorgBlocks(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height)
 		if err != nil {
 			ctxLogger.Errorf("[BlockAssembler][%s] error fetching blocks for reorg/catch-up decision: %v", bestBlockchainBlockHeader.Hash(), err)
 			prometheusBlockAssemblyProcessingStuck.WithLabelValues("reorg_blocks_fetch").Inc()
-			return
+			return err
 		}
 
 		if len(moveBackBlocksWithMeta) == 0 {
@@ -1348,7 +1514,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 			if err = b.handleCatchUp(ctx, moveForwardBlocksWithMeta); err != nil {
 				ctxLogger.Errorf("[BlockAssembler][%s] error catching up: %v", bestBlockchainBlockHeader.Hash(), err)
 				prometheusBlockAssemblyProcessingStuck.WithLabelValues("catchup").Inc()
-				return
+				return err
 			}
 		} else {
 			ctxLogger.Infof("[BlockAssembler][%s] best block header is not the same as the previous best block header, reorging: %s", bestBlockchainBlockHeader.Hash(), bestBlockAccordingToBlockAssembly.Hash())
@@ -1363,7 +1529,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 					prometheusBlockAssemblyProcessingStuck.WithLabelValues("reorg").Inc()
 				}
 
-				return
+				return err
 			}
 		}
 	default:
@@ -1374,7 +1540,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		if block, err = b.blockchainClient.GetBlock(ctx, bestBlockchainBlockHeader.Hash()); err != nil {
 			ctxLogger.Errorf("[BlockAssembler][%s] error getting block from blockchain: %v", bestBlockchainBlockHeader.Hash(), err)
 			prometheusBlockAssemblyProcessingStuck.WithLabelValues("get_block").Inc()
-			return
+			return err
 		}
 
 		b.setCurrentRunningState(StateMovingUp)
@@ -1382,7 +1548,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		if err = b.subtreeProcessor.MoveForwardBlock(block); err != nil {
 			ctxLogger.Errorf("[BlockAssembler][%s] error moveForwardBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
 			prometheusBlockAssemblyProcessingStuck.WithLabelValues("moveforward").Inc()
-			return
+			return err
 		}
 	}
 
@@ -1398,6 +1564,8 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	if err = b.SetState(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		ctxLogger.Errorf("[BlockAssembler][%s] error setting state: %v", bestBlockchainBlockHeader.Hash(), err)
 	}
+
+	return nil
 }
 
 // setBestBlockHeader updates the internal best block header and height atomically.
@@ -1492,6 +1660,11 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 	if err = b.initState(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
+
+	// Read the replay position before the first wake-up, so the best tips made while block
+	// assembly was down are replayed from where it stopped.
+	b.loadBestTipPosition(ctx)
+	b.lastBestTipReplay.Store(time.Now().UnixNano())
 
 	// Wait for any pending blocks to be processed before loading unmined transactions
 	if !b.skipWaitForPendingBlocks {
@@ -2280,6 +2453,14 @@ func (b *BlockAssembler) resetAndRecord(ctx context.Context, validateInputs bool
 	return err
 }
 
+// resetToBlockAndRecord preserves the movement target when a reorg needs a reset.
+func (b *BlockAssembler) resetToBlockAndRecord(ctx context.Context, header *model.BlockHeader, height uint32, validateInputs bool) error {
+	resp, err := b.resetToBlockWithResponse(ctx, header, height, validateInputs)
+	b.onResetDone(false, resp, err)
+
+	return err
+}
+
 // onResetDone updates the disk tx map degraded state once a reset has run,
 // from how that reset ended (every reset completion path calls it):
 //   - completed without a storage error: clears degraded;
@@ -2346,7 +2527,7 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	// block assembly tip would mine on the old side of a reorg.
 	currentState := b.GetCurrentRunningState()
 	if currentState == StateBlockchainSubscription || currentState == StateMovingUp ||
-		currentState == StateReorging || currentState == StateReconciling || currentState == StateResetting {
+		currentState == StateReorging || currentState == StateReconciling || currentState == StateResetting || b.bestTipResetReplayPending.Load() {
 		b.logger.Infof("[GetMiningCandidate] Block processing in progress (state: %s), returning empty block template for new height", StateStrings[currentState])
 
 		bestBlockHeader, bestBlockMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)
@@ -2651,10 +2832,10 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		// make sure we wait for the reset to complete
 		// validateInputs=true: getConflictingNodes() may miss conflicts not stored in subtree
 		// files; validateUnminedTxInputs() independently catches them via SpendingData.
-		err = b.resetAndRecord(ctx, true)
+		err = b.resetToBlockAndRecord(ctx, header, height, true)
 
 		if err != nil {
-			b.logger.Errorf("[BlockAssembler] error resetting after large reorg: %v", err)
+			return errors.NewProcessingError("error resetting after large reorg", err)
 		}
 
 		// return an error to indicate we reset due to a large reorg
@@ -2699,7 +2880,7 @@ func (b *BlockAssembler) handleReorg(ctx context.Context, header *model.BlockHea
 		// already detected by reorgBlocks; re-running validateInputs here is redundant
 		// and currently broken (fields.Inputs alone does not populate data.Tx in the
 		// SQL store, so validateUnminedTxInputs always returns false).
-		err = b.resetAndRecord(ctx, reorgFailed)
+		err = b.resetToBlockAndRecord(ctx, header, height, reorgFailed)
 
 		if err != nil {
 			return errors.NewProcessingError("error resetting block assembly after reorg with invalid block", err)
@@ -3698,6 +3879,14 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	}
 	prometheusBlockAssemblerGetUnminedTxIteratorTime.WithLabelValues("false", "success").Observe(duration)
 	b.logger.Infof("[loadUnminedTransactions] successfully created unmined tx iterator, starting to process transactions")
+	iteratorClosed := false
+	defer func() {
+		if !iteratorClosed {
+			if closeErr := it.Close(); closeErr != nil {
+				b.logger.Warnf("[loadUnminedTransactions] error closing unmined iterator: %v", closeErr)
+			}
+		}
+	}()
 
 	unminedTransactions := make([]*utxo.UnminedTransaction, 0, 16*1024*1024) // preallocate a large slice to avoid reallocations
 	lockedTransactions := make([]chainhash.Hash, 0, 1024)
@@ -3730,10 +3919,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 		unminedTxs              []*utxo.UnminedTransaction
 		lockedTxs               []chainhash.Hash
 		markAsMinedOnLongestTxs []chainhash.Hash
-		// conflictingTxs are the transactions input validation found must be
-		// marked conflicting. The workers only collect them: the marks are
-		// written after the iterator is closed (see applyDeferredConflictMarks).
-		conflictingTxs []chainhash.Hash
 	}
 	workerResults := make([]workerResult, numWorkers)
 
@@ -3780,61 +3965,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 						}
 					}
 
-					if shouldValidateInputs {
-						validatedCount := invalidInputCount.Load() + int64(len(localResult.unminedTxs))
-						if validatedCount > 0 && validatedCount%1000 == 0 {
-							b.logger.Infof("[loadUnminedTransactions] input validation progress: %d txs checked, %d invalid", validatedCount, invalidInputCount.Load())
-						}
-
-						// The load is already failing, so nothing it would decide
-						// here is used. Not checking keeps a store outage from
-						// costing a timeout per transaction before the load returns.
-						if undecided.failing.Load() {
-							continue
-						}
-
-						// Read-only here: a conflicting mark written while the
-						// iterator's cursor is open deadlocks the SQL store on
-						// SQLite, so the mark is collected and written after the
-						// iterator is closed.
-						valid, conflicting, validateErr := b.checkUnminedTxInputsRetrying(ctx, unminedTransaction.Hash, bestBlockHeaderIDsMap, &undecided.failing)
-						if conflicting {
-							localResult.conflictingTxs = append(localResult.conflictingTxs, unminedTransaction.Hash)
-						}
-
-						if validateErr != nil {
-							if isPermanentInputCheck(validateErr) {
-								// It cannot be decided, now or by retrying, so it is left
-								// out, and the load goes on.
-								undecided.answered.Add(1)
-
-								b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs (permanent), leaving the transaction out of the candidate: %v",
-									unminedTransaction.Hash.String(), validateErr)
-								prometheusBlockAssemblerUnminedUndecidedExcluded.Inc()
-								invalidInputCount.Add(1)
-
-								continue
-							}
-
-							// Undecided, not decided: the store did not answer, even on
-							// a retry. It stays out of this load either way. Whether the
-							// load fails for it or goes on without it is undecidedLoad's
-							// call, made from how long it has been undecided.
-							if !undecided.undecided(unminedTransaction.Hash, validateErr) {
-								b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs, failing the load: %v", unminedTransaction.Hash.String(), validateErr)
-							}
-
-							continue
-						}
-
-						undecided.decided(unminedTransaction.Hash)
-
-						if !valid {
-							invalidInputCount.Add(1)
-							continue
-						}
-					}
-
 					if !b.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
 						// clear the TxInpoints to save memory if we are not using subtree meta
 						clearUnminedTxInpoints(unminedTransaction)
@@ -3867,9 +3997,6 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 			close(workChan)
 			wg.Wait()
 
-			// Conflicting marks the workers collected are dropped with the
-			// failed load: nothing was loaded from it, and the next load finds
-			// the same transactions and marks them then.
 			return errors.NewProcessingError("error getting unmined transaction", err)
 		}
 
@@ -3895,55 +4022,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	close(workChan)
 	wg.Wait()
 
-	// An input check the store could not answer fails the load, as an iterator error does.
-	// The conflicting marks the workers collected are dropped with it, for the same cause.
-	if shouldValidateInputs {
-		undecidedErr := undecided.finish()
-
-		b.undecidedMu.Lock()
-		b.undecidedSince = undecided.next()
-		b.undecidedMu.Unlock()
-
-		if undecidedErr != nil {
-			return undecidedErr
-		}
-
-		for _, p := range undecided.persistent {
-			b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs, undecided since %s, leaving the transaction out of the candidate: %v",
-				p.hash.String(), p.since.Format(time.RFC3339), p.err)
-			prometheusBlockAssemblerUnminedUndecidedExcluded.Inc()
-			invalidInputCount.Add(1)
-		}
-	}
-
-	// The loop above only exits once Next has returned an empty batch, and the
-	// SQL iterator closes its read cursor at that point, so no cursor is open
-	// for the conflicting marks written below.
-
 	b.logger.Infof("[loadUnminedTransactions] completed processing unmined transactions from iterator, merging results")
 
-	conflictingTxs := make([]chainhash.Hash, 0)
+	// Merge per-worker results into final slices
 	for idx := range workerResults {
-		conflictingTxs = append(conflictingTxs, workerResults[idx].conflictingTxs...)
-		workerResults[idx].conflictingTxs = nil
-	}
-
-	markedConflicting := b.applyDeferredConflictMarks(ctx, conflictingTxs, numWorkers)
-
-	// Merge per-worker results into final slices, leaving out anything the marks
-	// above made conflicting (see applyDeferredConflictMarks).
-	for idx := range workerResults {
-		if len(markedConflicting) > 0 {
-			workerResults[idx].unminedTxs = slices.DeleteFunc(workerResults[idx].unminedTxs, func(tx *utxo.UnminedTransaction) bool {
-				_, marked := markedConflicting[tx.Hash]
-				return marked
-			})
-			workerResults[idx].lockedTxs = slices.DeleteFunc(workerResults[idx].lockedTxs, func(h chainhash.Hash) bool {
-				_, marked := markedConflicting[h]
-				return marked
-			})
-		}
-
 		unminedTransactions = append(unminedTransactions, workerResults[idx].unminedTxs...)
 		workerResults[idx].unminedTxs = nil // Clear slice to release memory
 
@@ -3955,6 +4037,23 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	}
 
 	workerResults = nil // release memory
+
+	// Validation can mark conflicts and their descendants. Drain and close the
+	// iterator before those writes: SQLite's open read cursor otherwise blocks
+	// the write transaction, while a worker waits for it and prevents the drain.
+	if err = it.Close(); err != nil {
+		return errors.NewProcessingError("error closing unmined iterator before validation", err)
+	}
+
+	iteratorClosed = true
+
+	if shouldValidateInputs {
+		unminedTransactions, lockedTransactions, err = b.validateLoadedUnminedTxs(ctx, unminedTransactions, lockedTransactions,
+			bestBlockHeaderIDsMap, undecided, numWorkers, &invalidInputCount)
+		if err != nil {
+			return err
+		}
+	}
 
 	iteratorDuration := time.Since(iteratorStart).Seconds()
 	prometheusBlockAssemblerIteratorProcessingTime.WithLabelValues("false").Observe(iteratorDuration)
@@ -4140,6 +4239,147 @@ func clearUnminedTxInpoints(tx *utxo.UnminedTransaction) {
 	*tx.TxInpoints = subtree.TxInpoints{}
 }
 
+// validateLoadedUnminedTxs checks the inputs of every loaded transaction, with workers
+// bounded and concurrent store reads, once the unmined iterator is closed. It returns the
+// transactions and locked hashes that stay in the candidate.
+//
+// The checks only read. A transaction found conflicting is collected, and the marks are written
+// after every check has finished (applyDeferredConflictMarks), so its cascade also drops any
+// child that was checked first. An input check the store could not answer fails the load, as an
+// iterator error does, unless it has stayed undecided long enough to be left out (undecidedLoad).
+func (b *BlockAssembler) validateLoadedUnminedTxs(ctx context.Context, txs []*utxo.UnminedTransaction, locked []chainhash.Hash,
+	bestBlockHeaderIDsMap map[uint32]bool, undecided *undecidedLoad, numWorkers int, invalidInputCount *atomic.Int64) ([]*utxo.UnminedTransaction, []chainhash.Hash, error) {
+	type validationResult struct{ keep, conflicting bool }
+
+	results := make([]validationResult, len(txs))
+	work := make(chan int, numWorkers)
+
+	var (
+		wg             sync.WaitGroup
+		validatedCount atomic.Int64
+	)
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for idx := range work {
+				b.heartbeat.BeatIfStarted()
+
+				if n := validatedCount.Add(1); n%1000 == 0 {
+					b.logger.Infof("[loadUnminedTransactions] validated %d/%d unmined transactions, %d invalid", n, len(txs), invalidInputCount.Load())
+				}
+
+				// The load is already failing, so nothing it would decide here is used. Not
+				// checking keeps a store outage from costing a timeout per transaction.
+				if undecided.failing.Load() {
+					continue
+				}
+
+				hash := txs[idx].Hash
+
+				valid, conflicting, validateErr := b.checkUnminedTxInputsRetrying(ctx, hash, bestBlockHeaderIDsMap, &undecided.failing)
+				results[idx].conflicting = conflicting
+
+				if validateErr != nil {
+					if isPermanentInputCheck(validateErr) {
+						// It cannot be decided, now or by retrying, so it is left out, and the
+						// load goes on.
+						undecided.answered.Add(1)
+
+						b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs (permanent), leaving the transaction out of the candidate: %v",
+							hash.String(), validateErr)
+						prometheusBlockAssemblerUnminedUndecidedExcluded.Inc()
+						invalidInputCount.Add(1)
+
+						continue
+					}
+
+					// Undecided, not decided: the store did not answer, even on a retry. It
+					// stays out of this load either way. Whether the load fails for it or goes
+					// on without it is undecidedLoad's call, made from how long it has been
+					// undecided.
+					if !undecided.undecided(hash, validateErr) {
+						b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs, failing the load: %v", hash.String(), validateErr)
+					}
+
+					continue
+				}
+
+				undecided.decided(hash)
+
+				if !valid {
+					invalidInputCount.Add(1)
+					continue
+				}
+
+				results[idx].keep = true
+			}
+		}()
+	}
+
+	for idx := range txs {
+		work <- idx
+	}
+
+	close(work)
+	wg.Wait()
+
+	// The collected conflicting marks are dropped with a failed load, for the same cause.
+	undecidedErr := undecided.finish()
+
+	b.undecidedMu.Lock()
+	b.undecidedSince = undecided.next()
+	b.undecidedMu.Unlock()
+
+	if undecidedErr != nil {
+		return nil, nil, undecidedErr
+	}
+
+	for _, p := range undecided.persistent {
+		b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs, undecided since %s, leaving the transaction out of the candidate: %v",
+			p.hash.String(), p.since.Format(time.RFC3339), p.err)
+		prometheusBlockAssemblerUnminedUndecidedExcluded.Inc()
+		invalidInputCount.Add(1)
+	}
+
+	conflictingTxs := make([]chainhash.Hash, 0)
+
+	for idx := range txs {
+		if results[idx].conflicting {
+			conflictingTxs = append(conflictingTxs, txs[idx].Hash)
+		}
+	}
+
+	markedConflicting := b.applyDeferredConflictMarks(ctx, conflictingTxs, numWorkers)
+
+	// Leave out every transaction that failed its check, and anything the marks above made
+	// conflicting, including a child checked before its parent was marked.
+	dropped := make(map[chainhash.Hash]struct{})
+	kept := txs[:0]
+
+	for idx, tx := range txs {
+		_, marked := markedConflicting[tx.Hash]
+		if results[idx].keep && !marked {
+			kept = append(kept, tx)
+			continue
+		}
+
+		dropped[tx.Hash] = struct{}{}
+	}
+
+	clear(txs[len(kept):])
+
+	locked = slices.DeleteFunc(locked, func(h chainhash.Hash) bool {
+		_, isDropped := dropped[h]
+		return isDropped
+	})
+
+	return kept, locked, nil
+}
+
 // validateUnminedTxInputs checks that each input of an unmined transaction is still validly
 // spent by THIS transaction. Catches two cases:
 //  1. Input is spent by a DIFFERENT tx (spending data doesn't match)
@@ -4238,8 +4478,29 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 		return false, false, err
 	}
 
+	// Read each parent once for all the outputs this transaction spends from it, keeping the
+	// order the parents first appear in.
+	type parentVouts struct {
+		hash  chainhash.Hash
+		vouts []uint32
+	}
+
+	parents := make([]parentVouts, 0, len(inpoints))
+	parentIdx := make(map[chainhash.Hash]int, len(inpoints))
+
 	for _, inpoint := range inpoints {
-		parentHash := &inpoint.Hash
+		idx, seen := parentIdx[inpoint.Hash]
+		if !seen {
+			idx = len(parents)
+			parentIdx[inpoint.Hash] = idx
+			parents = append(parents, parentVouts{hash: inpoint.Hash})
+		}
+
+		parents[idx].vouts = append(parents[idx].vouts, inpoint.Index)
+	}
+
+	for i := range parents {
+		parentHash := &parents[i].hash
 
 		parentMeta, err := b.utxoStore.Get(ctx, parentHash, fields.Utxos)
 		if err != nil {
@@ -4249,7 +4510,7 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 				// this is a decision about the transaction. Logged so a pruned
 				// parent of a live unmined transaction (issue 1768) is diagnosable.
 				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d parent could not be loaded (%v) — counting as invalid",
-					txHash.String(), parentHash.String(), inpoint.Index, err)
+					txHash.String(), parentHash.String(), parents[i].vouts[0], err)
 
 				return false, false, nil
 			}
@@ -4264,27 +4525,41 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 			return false, false, errors.NewProcessingError("[validateUnminedTxInputs][%s] store returned no record and no error for parent %s", txHash.String(), parentHash.String())
 		}
 
-		vout := int(inpoint.Index)
-		if parentMeta.SpendingDatas == nil || vout >= len(parentMeta.SpendingDatas) {
-			continue
+		// The vout of the first output this tx spends, or -1 when it spends none of them.
+		spentVout := -1
+
+		for _, outputIndex := range parents[i].vouts {
+			vout := int(outputIndex)
+			if parentMeta.SpendingDatas == nil || vout >= len(parentMeta.SpendingDatas) {
+				continue
+			}
+
+			spendingData := parentMeta.SpendingDatas[vout]
+			if spendingData == nil || spendingData.TxID == nil {
+				continue
+			}
+
+			if !spendingData.TxID.IsEqual(&txHash) {
+				// Case 1: input spent by a different tx
+				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d is spent by different tx %s — marking conflicting",
+					txHash.String(), parentHash.String(), vout, spendingData.TxID.String())
+
+				return false, true, nil
+			}
+
+			if spentVout < 0 {
+				spentVout = vout
+			}
 		}
 
-		spendingData := parentMeta.SpendingDatas[vout]
-		if spendingData == nil || spendingData.TxID == nil {
+		if spentVout < 0 {
 			continue
-		}
-
-		if !spendingData.TxID.IsEqual(&txHash) {
-			// Case 1: input spent by a different tx
-			b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d is spent by different tx %s — marking conflicting",
-				txHash.String(), parentHash.String(), vout, spendingData.TxID.String())
-
-			return false, true, nil
 		}
 
 		// Case 2: spending data matches, but check if the counter-conflicting tx
 		// (the one this tx replaced via ProcessConflicting) is on the current chain.
-		counterConfirmed, err := b.counterConflictConfirmed(ctx, txHash, parentHash, vout, bestBlockIDsMap)
+		// The answer is the same for every output of the parent, so it is checked once.
+		counterConfirmed, err := b.counterConflictConfirmed(ctx, txHash, parentHash, spentVout, bestBlockIDsMap)
 		if err != nil {
 			return false, false, err
 		}
