@@ -1396,14 +1396,16 @@ SIM_PORT="${SIM_HOST_PORT:-8600}"
 SIM_DATA_DIR="$REPO_ROOT/data/multinode-chaostest"
 SIM_SCENARIOS_DIR="${SCENARIOS_DIR:-$SCRIPT_DIR/chaostest/scenarios}"
 
-# Arcade (ARC-compatible broadcaster) runs next to the orchestrator so the
-# scenarios that submit through it (freeze-skew-rpc, arcade-*) work here as on
-# chaos-test's own fleet. Same image and settings as bsv-regtest's 'arcade'
-# profile, pointed at this stack's datahubs and p2p peers; merkle-service
-# (below) sends it merkle proofs. State lives in the container
-# and goes with it, since every 'up' starts a new chain.
+# BSV Broadcaster (Arcade's successor since 0.19.0; ARC-compatible) runs next
+# to the orchestrator so the scenarios that submit through it (freeze-skew-rpc,
+# arcade-*) work here as on chaos-test's own fleet. Settings follow
+# bsv-regtest's 'arcade' profile, pointed at this stack's datahubs and p2p
+# peers; merkle-service (below) sends it merkle proofs. The container and
+# variables keep the arcade name the scenarios and wallet use. State lives in
+# the container and goes with it, since every 'up' starts a new chain.
+# ARCADE_IMAGE=ghcr.io/bsv-blockchain/arcade:latest runs the old image.
 ARCADE_CONTAINER="arcade-multinode"
-ARCADE_IMAGE="${ARCADE_IMAGE:-ghcr.io/bsv-blockchain/arcade:latest}"
+ARCADE_IMAGE="${ARCADE_IMAGE:-ghcr.io/bsv-blockchain/broadcaster:latest}"
 ARCADE_PORT="${ARCADE_HOST_PORT:-18080}"
 
 # merkle-service (chaos-test's 'merkle' profile) follows the nodes' blocks
@@ -1535,9 +1537,9 @@ PY
     --network "$network" \
     -p "$ARCADE_PORT:8080" -p "$((ARCADE_PORT + 1)):8081" \
     -p "$((ARCADE_PORT + 2)):8082" -p "$((ARCADE_PORT + 3)):8083" \
-    -v "$cfg/config.yaml:/etc/arcade/config.yaml:ro" \
+    -v "$cfg/config.yaml:/etc/bsv-broadcaster/config.yaml:ro" \
     --memory 1g \
-    "$ARCADE_IMAGE" --mode all --config /etc/arcade/config.yaml >/dev/null
+    "$ARCADE_IMAGE" --mode all --config /etc/bsv-broadcaster/config.yaml >/dev/null
   attach_planes "$ARCADE_CONTAINER" "$inv" chaosnetName arcadeChaosIP
   docker start "$ARCADE_CONTAINER" >/dev/null
 
@@ -1547,6 +1549,41 @@ PY
       echo "error: arcade did not come up; last log lines:" >&2
       docker logs --tail 30 "$ARCADE_CONTAINER" >&2 || true
       exit 1
+    fi
+    sleep 1
+  done
+}
+
+# merkle_warm registers one throwaway txid with merkle-service. Until its
+# first /watch it consumes no blocks, so the first scenario tx would wait
+# for it to replay the whole chain before arcade sees MINED. The callback
+# token goes through the environment, not argv, so it never shows in ps.
+merkle_warm() {
+  local cfg="$SIM_DATA_DIR/arcade/config.yaml" port="${MERKLE_HOST_PORT:-18090}"
+  local deadline=$((SECONDS + 60))
+  until curl -sf -m 2 "http://localhost:$port/health" >/dev/null 2>&1; do
+    if ((SECONDS > deadline)); then
+      echo "error: $MERKLE_CONTAINER did not come up; last log lines:" >&2
+      docker logs --tail 30 "$MERKLE_CONTAINER" >&2 || true
+      exit 1
+    fi
+    sleep 1
+  done
+  CALLBACK_URL=$(sed -nE 's/^callback_url: (.*)$/\1/p' "$cfg") \
+  CALLBACK_TOKEN=$(sed -nE 's/^callback_token: (.*)$/\1/p' "$cfg") \
+  python3 -I - "http://localhost:$port/watch" <<'PY'
+import json, os, secrets, sys, urllib.request
+body = {"txid": secrets.token_hex(32), "callbackUrl": os.environ["CALLBACK_URL"],
+        "callbackToken": os.environ["CALLBACK_TOKEN"]}
+req = urllib.request.Request(sys.argv[1], data=json.dumps(body).encode(),
+                             headers={"Content-Type": "application/json"}, method="POST")
+urllib.request.urlopen(req, timeout=10).read()
+PY
+  deadline=$((SECONDS + 30))
+  until docker logs "$MERKLE_CONTAINER" 2>&1 | grep -q 'starting block processor'; do
+    if ((SECONDS > deadline)); then
+      echo "warning: $MERKLE_CONTAINER has not started its block processor; the first MINED may be slow" >&2
+      return 0
     fi
     sleep 1
   done
@@ -1657,6 +1694,7 @@ with open(sys.argv[2], "w") as f:
   if $arcade; then
     merkle_up "$inv" "$network"
     arcade_up "$inv" "$network"
+    merkle_warm
     python3 -I - "$cfg/inventory.json" "$ARCADE_CONTAINER" "$ARCADE_PORT" "$MERKLE_CONTAINER" "${MERKLE_HOST_PORT:-18090}" <<'PY'
 import json, sys
 path, name, port, merkle, merkle_port = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
