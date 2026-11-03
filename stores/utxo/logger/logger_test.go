@@ -1257,3 +1257,68 @@ func TestAs_NilStore(t *testing.T) {
 	_, ok := utxo.As[*sql.Store](nil)
 	require.False(t, ok)
 }
+
+func (m *MockStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *MockStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *MockStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return nil
+}
+
+// recoveryPassthrough records the conflict recovery calls that the logging store forwards.
+type recoveryPassthrough struct {
+	utxo.Store
+	calls []string
+}
+
+func (s *recoveryPassthrough) SaveConflictRecovery(context.Context, chainhash.Hash, *utxo.ConflictRecovery) error {
+	s.calls = append(s.calls, "save")
+	return nil
+}
+
+func (s *recoveryPassthrough) LoadConflictRecovery(context.Context, chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	s.calls = append(s.calls, "load")
+	return &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryFinished}, nil
+}
+
+func (s *recoveryPassthrough) RestoreConflictSpends(context.Context, []*utxo.Spend, uint32) error {
+	s.calls = append(s.calls, "restore")
+	return nil
+}
+
+func (s *recoveryPassthrough) SetConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash, bool) error {
+	s.calls = append(s.calls, "lock")
+	return nil
+}
+
+func (s *recoveryPassthrough) ReleaseConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash) error {
+	s.calls = append(s.calls, "release")
+	return nil
+}
+
+func TestLoggerStore_ForwardsConflictRecovery(t *testing.T) {
+	inner := &recoveryPassthrough{}
+	store := New(context.Background(), ulogger.TestLogger{}, inner)
+	ctx := context.Background()
+	id := chainhash.Hash{1}
+
+	require.NoError(t, store.SaveConflictRecovery(ctx, id, nil))
+	r, err := store.LoadConflictRecovery(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, utxo.ConflictRecoveryFinished, r.Phase)
+	require.NoError(t, store.RestoreConflictSpends(ctx, nil, 1))
+	require.NoError(t, store.SetConflictLocks(ctx, id, nil, true))
+	require.NoError(t, store.ReleaseConflictLocks(ctx, id, nil))
+	require.Equal(t, []string{"save", "load", "restore", "lock", "release"}, inner.calls)
+}

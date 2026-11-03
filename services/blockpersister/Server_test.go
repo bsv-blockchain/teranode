@@ -716,6 +716,12 @@ func (m *MockBlockchainClient) GetBlockHeadersFromTill(ctx context.Context, bloc
 func (m *MockBlockchainClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
+func (m *MockBlockchainClient) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	return nil, nil, false, nil
+}
+func (m *MockBlockchainClient) ClearBestTipLowWater(ctx context.Context, expected []byte) error {
+	return nil
+}
 func (m *MockBlockchainClient) GetBlockHeadersByHeight(ctx context.Context, startHeight, endHeight uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	return nil, nil, nil
 }
@@ -1994,4 +2000,21 @@ func TestStart_ProcessingLoopStopsDuringPersistSleep(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (m *MockUTXOStore) SaveConflictRecovery(context.Context, chainhash.Hash, *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockUTXOStore) LoadConflictRecovery(context.Context, chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockUTXOStore) RestoreConflictSpends(context.Context, []*utxo.Spend, uint32) error {
+	return nil
+}
+func (m *MockUTXOStore) SetConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash, bool) error {
+	return nil
+}
+
+func (m *MockUTXOStore) ReleaseConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash) error {
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -29,7 +30,13 @@ const (
 	walBinBlockHash   = "blockHash"
 	walBinTxHashes    = "txHashes"
 	walBinStartedAt   = "startedAt"
+	// walBinKeyFormula marks a record whose key this build derives from its fields. A record
+	// without it was written by an older build, or under an explicit key, and keeps that key.
+	walBinKeyFormula = "keyFormula"
 )
+
+// walKeyFormulaVersion is the version of IntentID's derivation that this build writes.
+const walKeyFormulaVersion = 2
 
 const errWALRecordMissingBin = "[PendingConflictIntents] WAL record missing or invalid %s bin"
 
@@ -68,7 +75,7 @@ func decodeIntentHashes(buf []byte) ([]chainhash.Hash, error) {
 // BeginConflictIntent durably records an intent before the operation's first
 // state mutation. The default write policy uses RecordExistsAction=UPDATE and
 // TTLDontExpire, so re-recording the same deterministic intent id is an
-// idempotent overwrite (never a duplicate, never expires).
+// idempotent insert (preserves the existing checklist and never expires).
 func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
 	intentID := intent.IntentID()
 
@@ -87,7 +94,22 @@ func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictInt
 		aerospike.NewBin(walBinStartedAt, int(intent.StartedAt)),
 	}
 
-	if err := s.client.PutBins(util.GetAerospikeWritePolicy(s.settings, 0), key, bins...); err != nil {
+	if intent.ID == (chainhash.Hash{}) {
+		bins = append(bins, aerospike.NewBin(walBinKeyFormula, walKeyFormulaVersion))
+	}
+
+	if intent.Recovery != nil {
+		if intent.Recovery.Phase != utxo.ConflictRecoveryPlanning {
+			return errors.NewStorageError("Begin requires a planning checklist")
+		}
+		bins = append(bins, aerospike.NewBin("recoveryPhase", utxo.ConflictRecoveryPlanning))
+	}
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.RecordExistsAction = aerospike.CREATE_ONLY
+	if err := s.client.PutBins(policy, key, bins...); err != nil {
+		if err.Matches(types.KEY_EXISTS_ERROR) {
+			return nil
+		}
 		return errors.NewStorageError("[BeginConflictIntent] failed to record intent %s", intentID.String(), err)
 	}
 
@@ -97,6 +119,10 @@ func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictInt
 // CompleteConflictIntent removes the intent record once the terminal step
 // committed. Deleting an absent key is idempotent (no error).
 func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	if err := s.deleteRecoveryChunks(ctx, intentID); err != nil {
+		return err
+	}
+
 	key, err := aerospike.NewKey(s.namespace, s.conflictWALSet(), intentID[:])
 	if err != nil {
 		return errors.NewStorageError("[CompleteConflictIntent] failed to build key for intent %s", intentID.String(), err)
@@ -110,11 +136,11 @@ func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.H
 }
 
 // PendingConflictIntents scans the WAL set and returns every begun-but-not-
-// completed intent. Called once at BlockAssembler startup, so a full set scan
-// is acceptable.
+// completed intent. It reads only the root bins, never the checklist chunks:
+// callers load a checklist with LoadConflictRecovery when they need it.
 func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
 	stmt := aerospike.NewStatement(s.namespace, s.conflictWALSet())
-	stmt.BinNames = []string{walBinKind, walBinBlockHeight, walBinBlockHash, walBinTxHashes, walBinStartedAt}
+	stmt.BinNames = []string{walBinKind, walBinBlockHeight, walBinBlockHash, walBinTxHashes, walBinStartedAt, walBinKeyFormula, "recoveryDone"}
 
 	queryPolicy := aerospike.NewQueryPolicy()
 	queryPolicy.MaxRetries = 3
@@ -127,7 +153,10 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 	}
 	defer recordset.Close()
 
-	var intents []utxo.ConflictIntent
+	var (
+		intents []utxo.ConflictIntent
+		done    []chainhash.Hash
+	)
 
 	for res := range recordset.Results() {
 		if res.Err != nil {
@@ -174,13 +203,34 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 			return nil, errors.NewStorageError("[PendingConflictIntents] corrupt intent record (kind=%s height=%d startedAt=%d)", kind, blockHeight, startedAt, err)
 		}
 
-		intents = append(intents, utxo.ConflictIntent{
+		intent := utxo.ConflictIntent{
 			Kind:        utxo.ConflictIntentKind(kind),
 			BlockHeight: uint32(blockHeight),
 			BlockHash:   *bh,
 			TxHashes:    hashes,
 			StartedAt:   int64(startedAt),
-		})
+		}
+
+		// The query returns no user keys. A record that this build keyed by its fields carries the
+		// key formula. One without it was written by an older build, under that build's formula.
+		if _, derived := record.Bins[walBinKeyFormula]; !derived {
+			intent.ID = utxo.LegacyConflictIntentID(intent.Kind, intent.BlockHash, intent.BlockHeight, intent.TxHashes)
+		}
+
+		// A completed intent whose chunk cleanup was interrupted is not pending. Finish its
+		// deletion below rather than expose it as a new legacy operation.
+		if record.Bins["recoveryDone"] == true {
+			done = append(done, intent.IntentID())
+			continue
+		}
+
+		intents = append(intents, intent)
+	}
+
+	for _, id := range done {
+		if err := utxo.CompleteConflictIntent(ctx, s, id); err != nil {
+			return nil, err
+		}
 	}
 
 	return intents, nil

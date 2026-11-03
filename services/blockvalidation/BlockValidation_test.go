@@ -302,6 +302,13 @@ func (m *MockSubtreeValidationClient) CheckBlockSubtrees(ctx context.Context, bl
 // proper test isolation. Each configure func adjusts the settings the stores and
 // the subtree validation server are built with.
 func setup(t *testing.T, configure ...func(*settings.Settings)) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
+	return setupWithSubtreeValidationStore(t, nil, configure...)
+}
+
+// setupWithSubtreeValidationStore is setup, with the subtree validation server
+// reading the UTXO store through wrap, when wrap is not nil. The returned store
+// is the unwrapped one.
+func setupWithSubtreeValidationStore(t *testing.T, wrap func(utxostore.Store) utxostore.Store, configure ...func(*settings.Settings)) (utxostore.Store, subtreevalidation.Interface, blockchain.ClientI, blob.Store, blob.Store, func()) {
 	// we only need the httpClient, utxoStore and validatorClient when blessing a transaction
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	httpmock.RegisterResponder(
@@ -352,7 +359,12 @@ func setup(t *testing.T, configure ...func(*settings.Settings)) (utxostore.Store
 
 	nilConsumer := &kafka.KafkaConsumerGroup{}
 
-	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
+	subtreeValidationStore := utxostore.Store(utxoStore)
+	if wrap != nil {
+		subtreeValidationStore = wrap(utxoStore)
+	}
+
+	subtreeValidationServer, err := subtreevalidation.New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, subtreeValidationStore, validatorClient, blockchainClient, nilConsumer, nilConsumer, nil, nil)
 	if err != nil {
 		panic(err)
 	}
