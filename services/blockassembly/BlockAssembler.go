@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -3381,12 +3382,11 @@ func (b *BlockAssembler) validateParentChain(
 // and drops the child (cascading to its descendants). The stable base sort
 // preserves iterator order on ties, and the per-run reorder guarantees parents
 // precede their children regardless of iterator order.
-func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
-	sort.SliceStable(txs, func(i, j int) bool {
-		return txs[i].CreatedAt < txs[j].CreatedAt
-	})
-
-	orderEqualCreatedAtRunsParentsFirst(txs)
+//
+// It runs on every core with a radix sort (see sortUnminedByCreatedAt) and returns
+// false when it had to fall back to the comparison sort.
+func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) bool {
+	return sortUnminedByCreatedAt(txs, runtime.GOMAXPROCS(0))
 }
 
 // orderEqualCreatedAtRunsParentsFirst reorders, within each maximal run of equal
@@ -4003,7 +4003,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	b.logger.Infof("[loadUnminedTransactions] sorting %d unmined transactions by createdAt", len(unminedTransactions))
 
-	stableSortUnminedByCreatedAt(unminedTransactions)
+	if !stableSortUnminedByCreatedAt(unminedTransactions) {
+		b.logger.Warnf("[loadUnminedTransactions] CreatedAt range of %d unmined transactions too wide for the radix sort, used the comparison sort", len(unminedTransactions))
+	}
 
 	txCount := len(unminedTransactions)
 
