@@ -1554,12 +1554,14 @@ PY
   done
 }
 
-# merkle_warm registers one throwaway txid with merkle-service. Until its
-# first /watch it consumes no blocks, so the first scenario tx would wait
-# for it to replay the whole chain before arcade sees MINED. The callback
-# token goes through the environment, not argv, so it never shows in ps.
+# merkle_warm starts merkle-service's block processor. It starts only once
+# its subtree consumer has read a first message, and coinbase-only blocks
+# announce no subtrees, so until the first real tx it reads no blocks and
+# the first scenario tx waits for it to replay the whole chain (18 minutes
+# at height 1100). One placeholder message on the subtree topic starts it;
+# merkle-service logs it as undecodable and drops it.
 merkle_warm() {
-  local cfg="$SIM_DATA_DIR/arcade/config.yaml" port="${MERKLE_HOST_PORT:-18090}"
+  local port="${MERKLE_HOST_PORT:-18090}" kafka="${KAFKA_CONTAINER:-kafka-shared-multinode}"
   local deadline=$((SECONDS + 60))
   until curl -sf -m 2 "http://localhost:$port/health" >/dev/null 2>&1; do
     if ((SECONDS > deadline)); then
@@ -1569,16 +1571,7 @@ merkle_warm() {
     fi
     sleep 1
   done
-  CALLBACK_URL=$(sed -nE 's/^callback_url: (.*)$/\1/p' "$cfg") \
-  CALLBACK_TOKEN=$(sed -nE 's/^callback_token: (.*)$/\1/p' "$cfg") \
-  python3 -I - "http://localhost:$port/watch" <<'PY'
-import json, os, secrets, sys, urllib.request
-body = {"txid": secrets.token_hex(32), "callbackUrl": os.environ["CALLBACK_URL"],
-        "callbackToken": os.environ["CALLBACK_TOKEN"]}
-req = urllib.request.Request(sys.argv[1], data=json.dumps(body).encode(),
-                             headers={"Content-Type": "application/json"}, method="POST")
-urllib.request.urlopen(req, timeout=10).read()
-PY
+  echo "multinode.sh warm-up" | docker exec -i "$kafka" rpk topic produce subtree >/dev/null
   deadline=$((SECONDS + 30))
   until docker logs "$MERKLE_CONTAINER" 2>&1 | grep -q 'starting block processor'; do
     if ((SECONDS > deadline)); then
