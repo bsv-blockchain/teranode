@@ -19,6 +19,9 @@ type fakeSequentialStore struct {
 	createMeta  *meta.Data
 	createErr   error
 	finalizeErr error
+	// finalizeErrs is popped once per FinalizeTransaction call; finalizeErr applies when exhausted.
+	finalizeErrs []error
+	deleteErr    error
 	// unspendErrs is popped once per Unspend call; nil result when exhausted.
 	unspendErrs []error
 
@@ -26,6 +29,8 @@ type fakeSequentialStore struct {
 	createCalls    int
 	unspendCalls   int
 	finalizeCalls  int
+	deleteCalls    int
+	deletedHashes  []*chainhash.Hash
 	unspentWith    []*Spend
 	spendFlags     []IgnoreFlags
 	lastCreateOpts CreateOptions
@@ -80,7 +85,22 @@ func (f *fakeSequentialStore) FinalizeTransaction(_ context.Context, _ *bt.Tx) e
 	f.finalizeCalls++
 	f.callSeq = append(f.callSeq, "finalize")
 
+	if len(f.finalizeErrs) > 0 {
+		err := f.finalizeErrs[0]
+		f.finalizeErrs = f.finalizeErrs[1:]
+
+		return err
+	}
+
 	return f.finalizeErr
+}
+
+func (f *fakeSequentialStore) DeleteComplete(_ context.Context, hash *chainhash.Hash) error {
+	f.deleteCalls++
+	f.deletedHashes = append(f.deletedHashes, hash)
+	f.callSeq = append(f.callSeq, "delete")
+
+	return f.deleteErr
 }
 
 func shortenUnspendBackoff(t *testing.T) {
@@ -319,14 +339,11 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 // fakeRollForwarder scripts the CreatingRollForwarder surface (SpendAndCreate +
 // FinalizeTransaction) so RollForwardCreating can be tested in isolation.
 type fakeRollForwarder struct {
-	spends         []*Spend
-	spendErr       error
-	finalizeErr    error
-	setLockedErr   error
-	finalizeCalls  int
-	setLockedCalls int
-	setLockedValue bool
-	lastOpts       CreateOptions
+	spends        []*Spend
+	spendErr      error
+	finalizeErr   error
+	finalizeCalls int
+	lastOpts      CreateOptions
 }
 
 func (f *fakeRollForwarder) SpendAndCreate(_ context.Context, _ *bt.Tx, _ uint32, opts ...CreateOption) (*meta.Data, []*Spend, error) {
@@ -344,13 +361,6 @@ func (f *fakeRollForwarder) FinalizeTransaction(_ context.Context, _ *bt.Tx) err
 	return f.finalizeErr
 }
 
-func (f *fakeRollForwarder) SetLocked(_ context.Context, _ []chainhash.Hash, value bool) error {
-	f.setLockedCalls++
-	f.setLockedValue = value
-
-	return f.setLockedErr
-}
-
 // twoInputTx returns a tx with two (empty) inputs so AllInputsSpent has a length to match.
 func twoInputTx() *bt.Tx {
 	tx := bt.NewTx()
@@ -366,21 +376,20 @@ func TestRollForwardCreating(t *testing.T) {
 	ctx := context.Background()
 	tx := twoInputTx()
 
-	t.Run("finalizes and unlocks only after every input is re-spent", func(t *testing.T) {
+	t.Run("finalizes only after every input is re-spent and returns the spends", func(t *testing.T) {
 		f := &fakeRollForwarder{spends: []*Spend{{}, {}}}
 
-		err := RollForwardCreating(ctx, f, tx, 100)
+		spends, err := RollForwardCreating(ctx, f, tx, 100)
 		require.NoError(t, err)
 		require.True(t, f.lastOpts.SpendOnly, "roll-forward must re-run the spend-only phase")
 		require.Equal(t, 1, f.finalizeCalls, "a complete re-spend must finalize")
-		require.Equal(t, 1, f.setLockedCalls, "a rolled-forward record must be unlocked")
-		require.False(t, f.setLockedValue, "unlock means SetLocked(false)")
+		require.Equal(t, f.spends, spends, "the spends must reach the caller so it can hand the tx to block assembly")
 	})
 
 	t.Run("threads caller ignore-flags into the re-spend", func(t *testing.T) {
 		f := &fakeRollForwarder{spends: []*Spend{{}, {}}}
 
-		err := RollForwardCreating(ctx, f, tx, 100, WithIgnoreLocked(true))
+		_, err := RollForwardCreating(ctx, f, tx, 100, WithIgnoreLocked(true))
 		require.NoError(t, err)
 		require.True(t, f.lastOpts.SpendOnly, "must still be spend-only")
 		require.True(t, f.lastOpts.IgnoreFlags.IgnoreLocked, "the caller's IgnoreLocked must reach the spend, so a locked parent does not defeat recovery")
@@ -389,45 +398,35 @@ func TestRollForwardCreating(t *testing.T) {
 	t.Run("fails closed when the re-spend covers fewer inputs than the tx has", func(t *testing.T) {
 		f := &fakeRollForwarder{spends: []*Spend{{}}} // 1 spend for a 2-input tx
 
-		err := RollForwardCreating(ctx, f, tx, 100)
+		_, err := RollForwardCreating(ctx, f, tx, 100)
 		require.Error(t, err)
 		require.Equal(t, 0, f.finalizeCalls, "an incomplete re-spend must NOT finalize")
-		require.Equal(t, 0, f.setLockedCalls, "an incomplete re-spend must NOT unlock")
 	})
 
 	t.Run("fails closed on a per-input spend error", func(t *testing.T) {
 		f := &fakeRollForwarder{spends: []*Spend{{}, {Err: errors.ErrSpent}}}
 
-		err := RollForwardCreating(ctx, f, tx, 100)
+		spends, err := RollForwardCreating(ctx, f, tx, 100)
 		require.Error(t, err)
 		require.Equal(t, 0, f.finalizeCalls)
-		require.Equal(t, 0, f.setLockedCalls)
+		require.Equal(t, f.spends, spends, "the per-input errors must reach the caller")
 	})
 
 	t.Run("returns the spend error without finalizing", func(t *testing.T) {
 		f := &fakeRollForwarder{spendErr: errors.NewStorageError("spend boom")}
 
-		err := RollForwardCreating(ctx, f, tx, 100)
+		_, err := RollForwardCreating(ctx, f, tx, 100)
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.Equal(t, 0, f.finalizeCalls)
 	})
 
-	t.Run("propagates a finalize failure and does not unlock", func(t *testing.T) {
+	t.Run("propagates a finalize failure and still returns the spends", func(t *testing.T) {
 		f := &fakeRollForwarder{spends: []*Spend{{}, {}}, finalizeErr: errors.NewStorageError("finalize boom")}
 
-		err := RollForwardCreating(ctx, f, tx, 100)
+		spends, err := RollForwardCreating(ctx, f, tx, 100)
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.Equal(t, 1, f.finalizeCalls)
-		require.Equal(t, 0, f.setLockedCalls, "must not unlock if finalize failed")
-	})
-
-	t.Run("propagates an unlock failure", func(t *testing.T) {
-		f := &fakeRollForwarder{spends: []*Spend{{}, {}}, setLockedErr: errors.NewStorageError("unlock boom")}
-
-		err := RollForwardCreating(ctx, f, tx, 100)
-		require.ErrorIs(t, err, errors.ErrStorageError)
-		require.Equal(t, 1, f.finalizeCalls)
-		require.Equal(t, 1, f.setLockedCalls)
+		require.Equal(t, f.spends, spends)
 	})
 }
 
@@ -460,20 +459,102 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.False(t, md.Creating, "returned meta must reflect the finalized state")
 	})
 
-	t.Run("spend failure leaves the creating record (no finalize, no rollback)", func(t *testing.T) {
+	t.Run("spend failure reverses the partial spends then deletes the tentative record", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		free := &Spend{}
+		spent := &Spend{Err: errors.ErrSpent}
 		f := &fakeSequentialStore{
-			spends:     []*Spend{{Err: errors.ErrSpent}},
+			spends:     []*Spend{spent, free},
 			spendErr:   errors.NewUtxoError("double spend"),
 			createMeta: &meta.Data{Creating: true},
 		}
 
 		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
-		require.Equal(t, []string{"create", "spend"}, f.callSeq, "must not finalize or unspend a failed create-first tx")
+		require.Nil(t, md)
+		require.Equal(t, []string{"create", "spend", "unspend", "delete"}, f.callSeq)
 		require.Equal(t, 0, f.finalizeCalls)
-		require.Equal(t, 0, f.unspendCalls)
-		require.NotNil(t, md, "the creating record is returned for the caller/sweeper to resolve")
+		require.Equal(t, []*Spend{free}, f.unspentWith, "only the spends that succeeded are reversed")
+		require.Len(t, f.deletedHashes, 1)
+		require.Equal(t, tx.TxIDChainHash().String(), f.deletedHashes[0].String())
+		require.Len(t, spends, 2, "the caller still classifies the per-input errors")
+		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
+	})
+
+	t.Run("spend failure with nothing spent still deletes the tentative record", func(t *testing.T) {
+		f := &fakeSequentialStore{
+			spends:     []*Spend{{Err: errors.ErrSpent}},
+			spendErr:   errors.NewUtxoError("double spend"),
+			createMeta: &meta.Data{Creating: true},
+		}
+
+		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		require.ErrorIs(t, err, errors.ErrUtxoError)
+		require.Equal(t, []string{"create", "spend", "delete"}, f.callSeq)
 		require.Len(t, spends, 1)
+	})
+
+	t.Run("spend context error leaves the creating record without rollback", func(t *testing.T) {
+		for _, spendErr := range []error{
+			context.DeadlineExceeded,
+			errors.NewContextCanceledError("spend did not finish", context.Canceled),
+		} {
+			f := &fakeSequentialStore{
+				spends:     []*Spend{{}, {}},
+				spendErr:   spendErr,
+				createMeta: &meta.Data{Creating: true},
+			}
+
+			md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+			require.Error(t, err)
+			require.True(t, errors.IsContextError(err), "%v", err)
+			require.Nil(t, md)
+			require.Equal(t, []string{"create", "spend"}, f.callSeq, "the spend may still commit, so nothing is reversed or deleted")
+			require.Equal(t, 0, f.unspendCalls)
+			require.Equal(t, 0, f.deleteCalls)
+			require.Len(t, spends, 2)
+		}
+	})
+
+	t.Run("failed reversal keeps the creating record and wraps both errors", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		f := &fakeSequentialStore{
+			spends:     []*Spend{{Err: errors.ErrSpent}, {}},
+			spendErr:   errors.NewUtxoError("double spend"),
+			createMeta: &meta.Data{Creating: true},
+			unspendErrs: []error{
+				errors.NewStorageError("u1"),
+				errors.NewStorageError("u2"),
+				errors.NewStorageError("u3"),
+			},
+		}
+
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		require.Error(t, err)
+		require.Nil(t, md)
+		require.Equal(t, 3, f.unspendCalls)
+		require.Equal(t, 0, f.deleteCalls, "the record stays creating as the recovery journal")
+		require.Contains(t, err.Error(), "double spend")
+		require.Contains(t, err.Error(), "u3")
+		require.Len(t, spends, 2)
+	})
+
+	t.Run("failed delete returns the original spend error", func(t *testing.T) {
+		f := &fakeSequentialStore{
+			spends:     []*Spend{{Err: errors.ErrSpent}, {}},
+			spendErr:   errors.NewUtxoError("double spend"),
+			createMeta: &meta.Data{Creating: true},
+			deleteErr:  errors.NewStorageError("delete boom"),
+		}
+
+		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		require.ErrorIs(t, err, errors.ErrUtxoError)
+		require.NotContains(t, err.Error(), "delete boom")
+		require.Equal(t, 1, f.unspendCalls)
+		require.Equal(t, 1, f.deleteCalls)
+		require.Len(t, spends, 2)
 	})
 
 	t.Run("create ErrTxExists returns without spending", func(t *testing.T) {
@@ -484,7 +565,9 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.Equal(t, []string{"create"}, f.callSeq, "on ErrTxExists the sweeper handles recovery; no spend/finalize here")
 	})
 
-	t.Run("finalize failure returns an error (not announced as validated)", func(t *testing.T) {
+	t.Run("finalize failure after every retry returns an error and leaves the record creating", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
 		f := &fakeSequentialStore{
 			spends:      []*Spend{{}},
 			createMeta:  &meta.Data{Creating: true},
@@ -493,9 +576,28 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 
 		md, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.Error(t, err, "the inputs are spent but the tentative flag is not cleared, so the outputs are unspendable; reporting success would announce an unspendable tx")
-		require.Equal(t, []string{"create", "spend", "finalize"}, f.callSeq)
+		require.Equal(t, []string{"create", "spend", "finalize", "finalize", "finalize"}, f.callSeq)
+		require.Equal(t, 3, f.finalizeCalls)
 		require.NotNil(t, md)
 		require.True(t, md.Creating, "the record is left creating for recovery (re-encounter roll-forward / sweep / setMined)")
+		require.Equal(t, 0, f.unspendCalls)
+		require.Equal(t, 0, f.deleteCalls)
+	})
+
+	t.Run("finalize that fails twice then succeeds clears the creating flag", func(t *testing.T) {
+		shortenUnspendBackoff(t)
+
+		f := &fakeSequentialStore{
+			spends:       []*Spend{{}},
+			createMeta:   &meta.Data{Creating: true},
+			finalizeErrs: []error{errors.NewStorageError("f1"), errors.NewStorageError("f2")},
+		}
+
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		require.NoError(t, err)
+		require.Equal(t, 3, f.finalizeCalls)
+		require.False(t, md.Creating)
+		require.Len(t, spends, 1)
 	})
 
 	t.Run("caller-supplied WithCreating(true) is rejected", func(t *testing.T) {

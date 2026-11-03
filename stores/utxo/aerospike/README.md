@@ -403,7 +403,49 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   `creating` filter) finds abandoned creating records older than
   `pruner_creatingTxSweepMinAgeBlocks`; the sweeper re-spends (`SpendAndCreate(WithSpendOnly)`)
   and finalizes them, or marks double-spent losers conflicting and finalizes them.
-- **setMined** — mining a creating tx clears the flag as part of `setMined`.
+- **setMined** — a pre-flight in `SetMinedMulti` rolls a still-creating record forward
+  (re-spend, then finalize) before the mined write. The write paths no longer clear the
+  `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
+  says, so turning the flag off cannot strand creating records. Correctness rests on the
+  pre-flight, which fails closed, because the native sub-op write path's handling of the bin
+  is not verifiable from this repository.
+
+The healers (setMined pre-flight and pruner sweep) are not gated on the flag.
+
+### Sweep visibility of mined creating records
+
+The sweep selects by the `unminedSince` index. A creating record created with mined block
+info (the block-validation path) also gets `unminedSince = blockHeight`, so the sweep can
+find it. `FinalizeTransaction` removes `unminedSince` from the master record when the record
+has block IDs, on both the single-record and multi-record paths; a record without block IDs
+keeps it. While such a record is creating, the unmined iterator skips it, and
+`setDeleteAtHeight` sets no `deleteAtHeight` because the record does not count as on the
+longest chain; both are correct for a record that must not be pruned or re-added yet.
+
+### Duplicate create of a multi-record transaction
+
+When every record of a multi-record transaction already exists, the duplicate `Create`
+returns `ErrTxExists`. With `utxostore_useCreateFirstOrder` on, it leaves the `creating` flag
+untouched, because the duplicate's own options say nothing about another attempt's tentative
+record: only `FinalizeTransaction` and the roll-forward healers clear it. With the flag off,
+the legacy cleanup still clears it.
+
+### Lua package version and re-registration
+
+The Lua package name carries a version (`teranode_v63`). A UDF registered under the same
+filename is no longer trusted: at startup the registered body is read back (`udf-get`) and
+compared byte for byte with the embedded script. On a mismatch the store logs a warning with
+both SHA-1 digests and the listed hash, and registers the embedded script again
+(`RegisterUDF` overwrites). The `udf-list` `hash` field is a 40-character lowercase hex
+string, but it is not a plain SHA-1 of the file bytes, so it is only logged, never compared.
+
+### Spend of a creating record whose parent is missing
+
+If a parent is missing (`ErrTxNotFound`) and the spender record exists, creating or not, the
+input counts as already blessed. A parent is pruned only once every output is spent, so the
+input has been taken, by this tx or by a rival. A rival's take is the same exposure
+spend-first has, and the conflict path bounds it. This lets a roll-forward of a creating
+record whose parent was pruned converge.
 
 Creating records are excluded from the block-assembly unmined-restore iterator (default
 mode) and rejected as parents during parent-chain validation; the PRUNER-mode iterator

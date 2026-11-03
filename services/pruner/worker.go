@@ -325,12 +325,12 @@ func (s *Server) runPrunePhases(ctx context.Context, blockHeight uint32, blockHa
 	}
 
 	// Phase 1c: roll forward transactions abandoned in the create-first
-	// "creating" state (crash between spend and finalize). Gated on the feature
-	// so a node that never enables create-first pays no per-block scan (the
-	// query is an unminedSince index range filtered to creating server-side).
-	// Trade-off: creating records left behind after disabling the flag are not
-	// swept until it is re-enabled — acceptable given how rare they should be.
-	if s.utxoStore != nil && s.settings.UtxoStore.UseCreateFirstOrder {
+	// "creating" state (crash between spend and finalize). Not gated on the
+	// create-first flag: the consumer-side guards are unconditional, so turning
+	// the flag off must not strand mid-flight records. A store without
+	// create-first support returns nothing, which keeps the pass cheap.
+	// pruner_creatingTxSweepMinAgeBlocks = 0 disables it.
+	if s.utxoStore != nil && s.settings.Pruner.CreatingTxSweepMinAgeBlocks > 0 {
 		startTime := time.Now()
 		s.sweepCreatingTxs(ctx, blockHeight)
 		prunerDuration.WithLabelValues("creating_sweep").Observe(time.Since(startTime).Seconds())

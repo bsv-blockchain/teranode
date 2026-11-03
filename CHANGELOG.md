@@ -39,6 +39,11 @@ read every section between yours and the target.
   `teranode_validator_held_limit_shed_transactions` does. A new validator setting,
   `validator_kafkaBackpressureResumeHeldPercent` (default 80), sets where a held-count pause
   resumes. (#1593)
+- **`utxo.Store` gains `SupportsCreateFirst`, `FinalizeTransaction`, `QueryStaleCreatingTxs`,
+  `BeginCreateFirstRollback` and `DeleteRollingBack`.** Out-of-tree stores must implement them; a
+  store with no tentative state returns false, nil, nothing and false, and deletes completely. Run
+  this build on the whole fleet before enabling `utxostore_useCreateFirstOrder` (off by default):
+  an older build decodes a tentative record as fully created. (#1355)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)

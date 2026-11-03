@@ -9,11 +9,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 )
 
-// creatingSweepMaxPerPass bounds how many stale creating txs a single sweep pass
-// rolls forward. It caps both the store-side scan and the serial roll-forward loop so
-// neither grows with the unmined backlog after a crash burst; any remainder is swept on
-// the next block.
-const creatingSweepMaxPerPass = 1000
+// defaultCreatingSweepMaxPerPass is the per-pass cap used when
+// Pruner.CreatingTxSweepMaxPerPass is zero. The cap bounds both the store-side scan and
+// the serial roll-forward loop so neither grows with the unmined backlog after a crash
+// burst; any remainder is swept on the next block.
+const defaultCreatingSweepMaxPerPass = 1000
 
 // sweepCreatingTxs rolls forward transactions abandoned in the create-first
 // "creating" state: it re-runs their input spends from the stored tx bytes and
@@ -22,16 +22,24 @@ const creatingSweepMaxPerPass = 1000
 // conflicting terminal state (marked recursively, then finalized: exists,
 // conflicting, unspendable, DAH-pruned). Records it cannot roll forward (e.g. a
 // permanently locked or missing parent) are left creating — gated (unspendable) and
-// retried on a later pass. The sweep does NOT notify block assembly; the tx reaches
-// mining via subtree/mempool re-encounter, acceptable for a rare crash-recovery path.
-// Runs only when utxostore_useCreateFirstOrder is enabled (gated by the caller).
+// retried on a later pass. After finalizing, the sweep hands the tx to block assembly
+// and only then unlocks it, the order loadUnminedTransactions uses. When the announce
+// fails, or no block assembly client is configured, the record stays finalized and
+// locked so the next unmined reload restores it. Runs whatever the value of
+// utxostore_useCreateFirstOrder, so records stranded before the flag was turned off
+// still heal.
 func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	minAge := s.settings.Pruner.CreatingTxSweepMinAgeBlocks
 	if minAge == 0 || blockHeight <= minAge {
 		return
 	}
 
-	hashes, err := s.utxoStore.QueryStaleCreatingTxs(ctx, blockHeight-minAge, creatingSweepMaxPerPass)
+	maxPerPass := int(s.settings.Pruner.CreatingTxSweepMaxPerPass)
+	if maxPerPass == 0 {
+		maxPerPass = defaultCreatingSweepMaxPerPass
+	}
+
+	hashes, err := s.utxoStore.QueryStaleCreatingTxs(ctx, blockHeight-minAge, maxPerPass)
 	if err != nil {
 		s.logger.Errorf("[pruner][creating-sweep][%d] query failed: %v", blockHeight, err)
 		return
@@ -43,8 +51,8 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		return
 	}
 
-	if len(hashes) == creatingSweepMaxPerPass {
-		s.logger.Infof("[pruner][creating-sweep][%d] hit per-pass cap of %d; remaining stale creating txs will be swept next block", blockHeight, creatingSweepMaxPerPass)
+	if len(hashes) == maxPerPass {
+		s.logger.Infof("[pruner][creating-sweep][%d] hit per-pass cap of %d; remaining stale creating txs will be swept next block", blockHeight, maxPerPass)
 	}
 
 	s.logger.Infof("[pruner][creating-sweep][%d] rolling forward %d stale creating txs", blockHeight, len(hashes))
@@ -53,6 +61,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	// with a permanently locked/missing parent) is distinguishable from "more remain,
 	// caught up next block" — the reviewers' non-convergence concern.
 	progressed := 0
+	warnedNoBlockAssembly := false
 
 	for _, hash := range hashes {
 		hash := hash
@@ -62,7 +71,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			return
 		}
 
-		md, err := s.utxoStore.Get(ctx, &hash, fields.Tx, fields.Creating)
+		md, err := s.utxoStore.Get(ctx, &hash, fields.Tx, fields.Creating, fields.Fee, fields.SizeInBytes, fields.TxInpoints)
 		if err != nil {
 			s.logger.Warnf("[pruner][creating-sweep][%d] get %s failed: %v", blockHeight, hash, err)
 			continue
@@ -122,6 +131,25 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 
 		if finErr := s.utxoStore.FinalizeTransaction(ctx, md.Tx); finErr != nil {
 			s.logger.Errorf("[pruner][creating-sweep][%d] finalize %s failed: %v", blockHeight, hash, finErr)
+			prunerCreatingSweepFailures.Inc()
+
+			continue
+		}
+
+		if s.blockAssemblyClient == nil {
+			if !warnedNoBlockAssembly {
+				s.logger.Warnf("[pruner][creating-sweep][%d] no block assembly client; rolled-forward txs are not announced and stay locked", blockHeight)
+
+				warnedNoBlockAssembly = true
+			}
+
+			prunerCreatingSweepFailures.Inc()
+
+			continue
+		}
+
+		if _, storeErr := s.blockAssemblyClient.Store(ctx, &hash, md.Fee, md.SizeInBytes, md.TxInpoints); storeErr != nil {
+			s.logger.Errorf("[pruner][creating-sweep][%d] announce %s to block assembly failed, leaving it locked: %v", blockHeight, hash, storeErr)
 			prunerCreatingSweepFailures.Inc()
 
 			continue

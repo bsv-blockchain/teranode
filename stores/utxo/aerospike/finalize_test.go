@@ -118,3 +118,97 @@ func TestQueryStaleCreatingTxs(t *testing.T) {
 	require.NoError(t, err)
 	require.ElementsMatch(t, []chainhash.Hash{*staleTx.TxIDChainHash(), *freshTx.TxIDChainHash()}, hashes)
 }
+
+// TestCreatingRecordWithMinedBlockInfo_UnminedSinceLifecycle verifies the sweep can see a
+// creating record created with mined block info, and that finalize hands it back as a plain
+// mined record: unminedSince is the sweep's selector while the record is creating, and is
+// removed again once the record has block IDs and is no longer creating.
+func TestCreatingRecordWithMinedBlockInfo_UnminedSinceLifecycle(t *testing.T) {
+	for _, batchSize := range []int{0, 2} {
+		name := "single-record"
+		if batchSize > 0 {
+			name = "multi-record"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if batchSize > 0 {
+				tSettings.UtxoStore.UtxoBatchSize = batchSize
+			}
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true), utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{
+				BlockID: 7, BlockHeight: 100, SubtreeIdx: 0, OnLongestChain: true,
+			}))
+			require.NoError(t, err)
+
+			_, unminedSince := readMasterBins(t, client, store.GetNamespace(), store.GetName(), tx.TxIDChainHash())
+			require.Equal(t, 100, unminedSince, "a creating record with block IDs carries unminedSince for the sweep")
+
+			stale, err := store.QueryStaleCreatingTxs(ctx, 150, 0)
+			require.NoError(t, err)
+			require.Contains(t, stale, *tx.TxIDChainHash())
+
+			require.NoError(t, store.FinalizeTransaction(ctx, tx))
+
+			_, unminedSince = readMasterBins(t, client, store.GetNamespace(), store.GetName(), tx.TxIDChainHash())
+			require.Nil(t, unminedSince, "finalize removes unminedSince from a record that has block IDs")
+
+			it, err := store.GetUnminedTxIterator()
+			require.NoError(t, err)
+
+			require.NotContains(t, drainConflictingIterator(t, ctx, it), *tx.TxIDChainHash(), "a finalized mined record is not unmined")
+
+			stale, err = store.QueryStaleCreatingTxs(ctx, 150, 0)
+			require.NoError(t, err)
+			require.NotContains(t, stale, *tx.TxIDChainHash())
+		})
+	}
+}
+
+// TestFinalizeTransaction_KeepsUnminedSinceWithoutBlockIDs verifies finalize leaves
+// unminedSince alone on a record that has no block IDs: such a record is genuinely unmined.
+func TestFinalizeTransaction_KeepsUnminedSinceWithoutBlockIDs(t *testing.T) {
+	for _, batchSize := range []int{0, 2} {
+		name := "single-record"
+		if batchSize > 0 {
+			name = "multi-record"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if batchSize > 0 {
+				tSettings.UtxoStore.UtxoBatchSize = batchSize
+			}
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			require.NoError(t, store.FinalizeTransaction(ctx, tx))
+
+			_, unminedSince := readMasterBins(t, client, store.GetNamespace(), store.GetName(), tx.TxIDChainHash())
+			require.Equal(t, 100, unminedSince)
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+			require.False(t, got.Creating)
+		})
+	}
+}

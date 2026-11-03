@@ -731,6 +731,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipDeletions:                   getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
 			MinBlockHeight:                  getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
 			CreatingTxSweepMinAgeBlocks:     getUint32("pruner_creatingTxSweepMinAgeBlocks", 2, alternativeContext...),            // Roll forward create-first creating txs older than this many blocks (0 disables)
+			CreatingTxSweepMaxPerPass:       getUint32("pruner_creatingTxSweepMaxPerPass", 1000, alternativeContext...),           // Per-pass cap on creating txs rolled forward by the sweep (0 = 1000)
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second, alternativeContext...),
