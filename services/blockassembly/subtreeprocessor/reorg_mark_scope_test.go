@@ -20,6 +20,7 @@ import (
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -27,7 +28,8 @@ import (
 )
 
 // scopeMarkRecorder records the hashes of every MarkTransactionsOnLongestChain call, per
-// direction, and of every BatchDecorate read, and then applies the call to the real store underneath.
+// direction, and of every Get and BatchDecorate read, and then applies the call to the real store
+// underneath.
 type scopeMarkRecorder struct {
 	utxostore.Store
 
@@ -54,6 +56,14 @@ func (s *scopeMarkRecorder) BatchDecorate(ctx context.Context, unresolvedMetaDat
 	s.mu.Unlock()
 
 	return s.Store.BatchDecorate(ctx, unresolvedMetaDataSlice, fields...)
+}
+
+func (s *scopeMarkRecorder) Get(ctx context.Context, hash *chainhash.Hash, fields ...fields.FieldName) (*meta.Data, error) {
+	s.mu.Lock()
+	s.gets[*hash] = struct{}{}
+	s.mu.Unlock()
+
+	return s.Store.Get(ctx, hash, fields...)
 }
 
 func (s *scopeMarkRecorder) gotten(hash chainhash.Hash) bool {
