@@ -141,6 +141,88 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Block assembly replays every block that may have been the best tip, so a branch
+  that was the best chain only briefly is moved forward and back through the pool.**
+  There is no schema change. Block assembly keeps its place in the order the
+  blockchain store already picks the best tip by (most chain work, then lowest peer
+  id, then lowest block id, served by the existing `idx_chain_work_valid` index) and
+  on each wake-up moves through the valid blocks that sort better, instead of jumping
+  to the best header. A write that moves the best tip down, `InvalidateBlock` or
+  `DeleteBlock`, records the block the tip dropped to as a low-water mark under a new
+  key in the blockchain `state` table, `BestTipLowWater`, in the same transaction,
+  together with the block that was the best tip when it dropped; block assembly also
+  replays from that mark and clears it once it has passed it. A dropped tip block
+  assembly never applied (a branch invalidated before block assembly looked) makes it
+  run one reset first, so that branch's block-only transactions are reloaded into the
+  pool instead of waiting for the next reset or restart.
+  `DeleteBlock` now takes the same lock as `InvalidateBlock` and runs in one
+  transaction. Valid fork blocks that sort better but were never the tip are moved
+  to as well, so a fork race can cost extra reorgs; the pool still ends right. The
+  blockchain service gains the `BlocksBetterThan` and `ClearBestTipLowWater` RPCs,
+  which require the admin API key like every other. Block assembly keeps its
+  position under a new state key, `BlockAssemblerBestTipPos`, and a new setting,
+  `blockassembly_reconcileInterval` (default `30s`, `0` turns it off), checks for a
+  missed tip change when no block notification arrived for that long, and replays only
+  if the tip moved. Upgrade in any order: block assembly against an older blockchain
+  service follows the best header as before, asking again once a minute, and an
+  older binary ignores the new state keys, so a rollback needs no step.
+  Historical resets visit their recorded target. No configuration change is required.
+  Setting the reconcile interval to `0` disables ordinary polling; recovery of an
+  unfinished reset still retries. A reset that fails before its tx map rotation
+  leaves the old pool in service and the replay carries on from its position. A past
+  best tip whose move would take block assembly back over best-chain blocks is not
+  moved to when those blocks are at least coinbase maturity below the best tip, or
+  when one of them resolved a double spend, even if block assembly's own tip has
+  since lost: its branch-only transactions are marked unmined where they lie and the
+  pool is reloaded. That keeps confirmed spends of a coinbase, and the conflict swaps
+  of the best chain, in place. During initial sync a pass per block makes the same
+  number of blockchain calls as before: one `BlocksBetterThan` read, whose response now
+  says whether more blocks follow, takes the place of the best header read. The
+  low-water mark is read after a `BlockMinedUnset` notification, on the first pass
+  after a start, and once per reconcile interval, which `0` turns off. The position is
+  saved at most every 10 seconds and on shutdown, so a crash replays up to that much
+  of blocks already handled, each a no-op. Block notifications queued behind each
+  other are handled in one pass. (#2074)
+
+- **Mining candidates stay empty after a reset until block assembly has replayed the
+  tip changes left pending.** A reset moves block assembly to one target, so a branch
+  that was briefly the best tip in between is replayed after it. Until that replay
+  finishes, `GetMiningCandidate` returns an empty template for the next height, as it
+  does during a reorg. A reset that succeeds reports success to whoever asked for it
+  even when the replay after it fails; the replay is retried on the next pass without
+  a second reset. When it fails three passes in a row, block assembly gives the
+  remaining history up, follows the best header and builds candidates from the pool
+  the reset loaded;
+  `teranode_blockassembly_processing_stuck_total{reason="best_tip_reset_replay_abandoned"}`
+  counts each time, so alert on it. If that reset rotated its tx map and then failed
+  its reload, the pool may be partial: block assembly retries the reload on every
+  later replay pass and counts each failed retry as `reason="best_tip_reset_reload"`.
+  (#2074)
+
+- **A reset now reverses the conflict swaps of the blocks it moves back.** When a
+  block that resolved a double spend is moved back by a reset, the input goes back to
+  the transaction that lost and the winner is marked conflicting, as a reorg already
+  does. Before, a reset left the swap in place and the winner kept the input. The
+  reverse skips winners the UTXO store has already pruned and, like a reorg's, is
+  refused for a winner mined in a block of the current chain. (#2074)
+
+- **The SQL UTXO store's `SetConflicting` reports a transaction's children on every
+  call.** It now reads the stored spend edges. Before, it read each output's spend
+  status, which reads `CONFLICTING` while a conflict is being cleared, so the
+  children were hidden and a recursive unmark stopped at the parent. Aerospike
+  already behaved this way. (#2074)
+
+- **An input-validated reset on SQL keeps valid unmined transactions.** Reload input
+  validation keeps four parallel readers after closing the iterator, requests only
+  input points, then applies conflict cascades serially. It reads each parent once
+  per transaction, and its conflicting children once per parent. (#2074)
+
+- **Header lists over gRPC keep the peer id of a block with no miner tag.**
+  `GetBlockHeaders`, `GetBlockHeadersFromHeight`, `GetBlockHeadersByHeight` and the
+  other RPCs that return a list of headers with their meta now carry the peer id and
+  `processed_at` of such a block. Before, the peer id came back empty and
+  `processed_at` was misread. `GetBlockHeader` was not affected. (#2074)
+
 - **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
   background, and block storage can wait for the repair.** `InvalidateBlock`,
   `RevalidateBlock`, the startup rebuild and two `StoreBlock` paths used to log a
