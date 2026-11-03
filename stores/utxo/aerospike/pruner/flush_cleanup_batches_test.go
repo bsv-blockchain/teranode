@@ -797,3 +797,38 @@ func TestMarkParents_InDoubtRefusalIsAFailedWrite(t *testing.T) {
 	require.Contains(t, plan.blocked, child)
 	require.Equal(t, [][]byte{parentKey.Digest()}, withdrawnFrom, "the in-doubt record is withdrawn from, not read and stripped")
 }
+
+// TestMarkerWritesKeepTheRecordsLifetime: in TTL mode a parent can already be
+// expiring when its marker write, or a withdrawal, reaches it. Neither write
+// may give it its lifetime back, or a parent the pruner counted gone, with its
+// pages and blob removed, would live on. A record touched to expire in one
+// second must still expire after both writes.
+func TestMarkerWritesKeepTheRecordsLifetime(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	parent := chainhash.HashH([]byte{0xF1, 1})
+	child := chainhash.HashH([]byte{0xF1, 2})
+	parentKey := putRecord(t, client, &parent, spentBy(&child))
+
+	require.NoError(t, client.Touch(aerospike.NewWritePolicy(0, 60), parentKey))
+
+	expiresSoon := func(what string) {
+		header, err := client.GetHeader(nil, parentKey)
+		require.NoError(t, err)
+		require.LessOrEqual(t, header.Expiration, uint32(60), what)
+	}
+
+	expiresSoon("the touch set a short lifetime")
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	_, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+	require.True(t, hasMarker(t, client, parentKey, &child))
+	expiresSoon("the marker write kept the lifetime")
+
+	s.withdrawMarkers(updates, map[chainhash.Hash]struct{}{child: {}})
+	require.False(t, hasMarker(t, client, parentKey, &child))
+	expiresSoon("the withdrawal kept the lifetime")
+}

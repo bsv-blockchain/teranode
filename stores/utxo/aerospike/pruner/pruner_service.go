@@ -3211,6 +3211,11 @@ func (s *Service) buildVerifiedMarkerRecords(updates map[string]*parentUpdateInf
 		policy := aerospike.NewBatchWritePolicy()
 		policy.RecordExistsAction = aerospike.UPDATE_ONLY
 		policy.FilterExpression = s.markerFilter(info)
+		// A marker never changes a record's lifetime. In TTL mode the parent
+		// may be expiring in this same batch, and a write that took the
+		// namespace default would give it a full lifetime back after the
+		// pruner had already counted it gone and removed its pages and blob.
+		policy.Expiration = aerospike.TTLDontUpdate
 
 		op := aerospike.MapPutItemsOp(mapPolicy, s.fieldDeletedChildren, items)
 		batchRecords = append(batchRecords, aerospike.NewBatchWrite(policy, info.key, op))
@@ -3342,6 +3347,9 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 
 	policy := aerospike.NewBatchWritePolicy()
 	policy.RecordExistsAction = aerospike.UPDATE_ONLY
+	// Like the marker write, a withdrawal never changes a record's lifetime,
+	// so it cannot revive a parent that is expiring in TTL mode.
+	policy.Expiration = aerospike.TTLDontUpdate
 
 	records := make([]aerospike.BatchRecordIfc, 0, len(updates))
 	ownWriteFailed := make([]bool, 0, len(updates))
