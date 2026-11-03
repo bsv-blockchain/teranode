@@ -65,7 +65,7 @@ import (
 //   - ProcessingError if the headers don't form a continuous chain or during header reconstruction
 func (s *SQL) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainhash.Hash, blockHashTill *chainhash.Hash) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "sql:GetBlockHeaders",
-		tracing.WithLogMessage(s.logger, "[GetBlockHeadersFromTill] called for %s -> %s", blockHashFrom.String(), blockHashTill.String()),
+		tracing.WithDebugLogMessage(s.logger, "[GetBlockHeadersFromTill] called for %s -> %s", blockHashFrom.String(), blockHashTill.String()),
 	)
 	defer deferFn()
 
@@ -98,10 +98,14 @@ func (s *SQL) GetBlockHeadersFromTill(ctx context.Context, blockHashFrom *chainh
 		return nil, nil, err
 	}
 
-	numberOfHeaders := blockHeaderTillMeta.Height - blockHeaderFromMeta.Height + 1
+	if blockHeaderTillMeta.Height < blockHeaderFromMeta.Height {
+		return []*model.BlockHeader{}, []*model.BlockHeaderMeta{}, nil
+	}
+	numberOfHeaders := uint64(blockHeaderTillMeta.Height) - uint64(blockHeaderFromMeta.Height) + 1
+	capacity := preallocForRange(blockHeaderFromMeta.Height, blockHeaderTillMeta.Height)
 
-	blockHeaders := make([]*model.BlockHeader, 0, numberOfHeaders)
-	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, numberOfHeaders)
+	blockHeaders := make([]*model.BlockHeader, 0, capacity)
+	blockHeaderMetas := make([]*model.BlockHeaderMeta, 0, capacity)
 
 	q := `
 		WITH RECURSIVE start_block AS (

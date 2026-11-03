@@ -38,9 +38,12 @@ func TestServerOperations(t *testing.T) {
 	serverStoreURL, err := url.Parse(fmt.Sprintf("file://%s?testId=%d", tempDir, time.Now().UnixNano()))
 	require.NoError(t, err)
 
+	const serverAuthToken = "server-operations-token"
+
 	blobServer, err := NewHTTPBlobServer(
 		logger,
 		serverStoreURL,
+		serverAuthToken,
 		options.WithDefaultSubDirectory("sub"),
 	)
 	require.NoError(t, err)
@@ -59,7 +62,7 @@ func TestServerOperations(t *testing.T) {
 	clientStoreURL, err := url.Parse("http://localhost:7979")
 	require.NoError(t, err)
 
-	client, err := blobhttp.New(logger, clientStoreURL)
+	client, err := blobhttp.New(logger, clientStoreURL, options.WithHTTPAuthToken(serverAuthToken))
 	require.NoError(t, err)
 
 	t.Run("SetAndGet", func(t *testing.T) {
@@ -337,7 +340,9 @@ func newFileBackedFakeStore(t *testing.T, payload []byte) *fileBackedFakeStore {
 
 	storeURL, err := url.Parse("file://" + dir)
 	require.NoError(t, err)
-	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL)
+	// No token: this fixture only serves GETs, so a read-only server is also a check
+	// that reads are unaffected by the mutation gate.
+	srv, err := NewHTTPBlobServer(ulogger.New("rangereq"), storeURL, "")
 	require.NoError(t, err)
 	_ = srv // just used for the store construction
 
@@ -618,3 +623,149 @@ type closeCountingReader struct {
 
 func (c *closeCountingReader) Read(p []byte) (int, error) { return c.r.Read(p) }
 func (c *closeCountingReader) Close() error               { c.closeCount++; return nil }
+
+// TestGetKeyFromPath_ShortPathsDoNotPanic pins the bound check: a dot before the end of the
+// "/blob/" prefix used to slice out of range.
+func TestGetKeyFromPath_ShortPathsDoNotPanic(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+		wantKey []byte
+	}{
+		{name: "dot at root", path: "/.tx", wantErr: true},
+		{name: "dot inside prefix", path: "/blob.tx", wantErr: true},
+		{name: "empty key", path: "/blob/.tx", wantKey: []byte{}},
+		{name: "prefix not at start", path: "/x/blob/abc.tx", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var (
+				key []byte
+				err error
+			)
+
+			require.NotPanics(t, func() { key, _, err = getKeyFromPath(tt.path) })
+
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, tt.wantKey, key)
+		})
+	}
+}
+
+// TestHTTPBlobServer_ShortGetPathIsBadRequest drives the same path through the handler: GET is
+// unauthenticated, so this is reachable by anyone who can reach the listener.
+func TestHTTPBlobServer_ShortGetPathIsBadRequest(t *testing.T) {
+	server, _ := newAuthTestServer(t, "")
+
+	require.Equal(t, http.StatusBadRequest, doBlobRequest(t, server, http.MethodGet, "/.tx", "", nil))
+}
+
+// faultingStore answers every read and DAH update with err. Every other method panics, as
+// fakeRangeStore's do.
+type faultingStore struct {
+	*fakeRangeStore
+}
+
+func (s *faultingStore) SetDAH(context.Context, []byte, fileformat.FileType, uint32, ...options.FileOption) error {
+	return s.err
+}
+
+// TestHTTPBlobServer_FaultIsNotAMiss pins that the server answers 404 only for a miss. Over
+// HTTP a 404 is what the client reports to its caller as a miss, so a store that failed while
+// it looked - a storage error, whatever it wraps - must answer 500.
+func TestHTTPBlobServer_FaultIsNotAMiss(t *testing.T) {
+	const token = "fault-is-not-a-miss"
+
+	requests := map[string]func() *http.Request{
+		"GET": func() *http.Request {
+			return httptest.NewRequest(http.MethodGet, "/blob/Zm9v.testing", nil)
+		},
+		"GET with a Range": func() *http.Request {
+			req := httptest.NewRequest(http.MethodGet, "/blob/Zm9v.testing", nil)
+			req.Header.Set("Range", "bytes=0-1")
+
+			return req
+		},
+		"PATCH": func() *http.Request {
+			req := httptest.NewRequest(http.MethodPatch, "/blob/Zm9v.testing?dah=10", nil)
+			req.Header.Set("Authorization", "Bearer "+token)
+
+			return req
+		},
+	}
+
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+	}{
+		"the store does not hold the blob":  {errors.ErrNotFound, http.StatusNotFound},
+		"a not-found with context":          {errors.NewNotFoundError("no blob for this key"), http.StatusNotFound},
+		"a storage error over a not-found":  {errors.NewStorageError("longterm read failed", errors.ErrNotFound), http.StatusInternalServerError},
+		"a storage error with no not-found": {errors.NewStorageError("disk read failed"), http.StatusInternalServerError},
+		"a not-found under a storage error": {errors.NewProcessingError("decorate", errors.NewStorageError("read", errors.NewNotFoundError("x"))), http.StatusInternalServerError},
+	} {
+		for method, newRequest := range requests {
+			t.Run(name+"/"+method, func(t *testing.T) {
+				srv := &HTTPBlobServer{
+					store:     &faultingStore{&fakeRangeStore{err: tc.err}},
+					logger:    ulogger.TestLogger{},
+					authToken: token,
+				}
+
+				rr := httptest.NewRecorder()
+				srv.ServeHTTP(rr, newRequest())
+
+				require.Equal(t, tc.status, rr.Code)
+
+				if tc.status == http.StatusNotFound {
+					require.Equal(t, NotFoundMsg+"\n", rr.Body.String(), "the client reads a 404 as a miss only with this body")
+				}
+			})
+		}
+	}
+}
+
+// TestHTTPBlobServer_ClientTellsMissFromFault drives the real client against the real server,
+// so the body the server writes for a miss and the body the client accepts as one cannot drift
+// apart.
+func TestHTTPBlobServer_ClientTellsMissFromFault(t *testing.T) {
+	for name, tc := range map[string]struct {
+		storeErr error
+		miss     bool
+	}{
+		"a miss":                           {errors.ErrNotFound, true},
+		"a storage error over a not-found": {errors.NewStorageError("longterm read failed", errors.ErrNotFound), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(&HTTPBlobServer{
+				store:  &faultingStore{&fakeRangeStore{err: tc.storeErr}},
+				logger: ulogger.TestLogger{},
+			})
+			t.Cleanup(server.Close)
+
+			storeURL, err := url.Parse(server.URL)
+			require.NoError(t, err)
+
+			client, err := blobhttp.New(ulogger.TestLogger{}, storeURL, options.WithHTTPAuthToken(""))
+			require.NoError(t, err)
+
+			_, err = client.Get(context.Background(), []byte("foo"), fileformat.FileTypeTesting)
+			require.Error(t, err)
+
+			if tc.miss {
+				require.ErrorIs(t, err, errors.ErrNotFound)
+				require.NotErrorIs(t, err, errors.ErrStorageError)
+			} else {
+				require.ErrorIs(t, err, errors.ErrStorageError)
+				require.NotErrorIs(t, err, errors.ErrNotFound)
+			}
+		})
+	}
+}

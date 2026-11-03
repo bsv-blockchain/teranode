@@ -514,16 +514,16 @@ func resolveAdvertiseAddresses(logger ulogger.Logger, tSettings *settings.Settin
 		// Silent mode: no explicit announce addresses. Discoverability is
 		// removed by disabling the DHT (see NewServer), not by this branch.
 		if len(tSettings.P2P.AdvertiseAddresses) > 0 {
-			logger.Infof("[silent mode] p2p_advertise_addresses %v suppressed - nothing is announced in silent mode", tSettings.P2P.AdvertiseAddresses)
+			logger.Infof("[silent mode] p2p_advertise_addresses %v suppressed - nothing is announced in silent mode", tSettings.P2P.AdvertiseAddresses) // urlsafe: libp2p multiaddrs, which have no userinfo
 		} else {
 			logger.Infof("[silent mode] no advertise addresses announced")
 		}
 		return nil
 	case len(tSettings.P2P.AdvertiseAddresses) > 0:
-		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses)
+		logger.Infof("Using configured advertise addresses: %v", tSettings.P2P.AdvertiseAddresses) // urlsafe: libp2p multiaddrs, which have no userinfo
 		return tSettings.P2P.AdvertiseAddresses
 	default:
-		logger.Infof("No advertise addresses configured - libp2p will advertise every bound interface address (private ones included) and the public address observed by peers; p2p_share_private_addresses=%v has no effect on this", tSettings.P2P.SharePrivateAddresses)
+		logger.Infof("No advertise addresses configured - libp2p will advertise every bound interface address (private ones included) and the public address observed by peers; p2p_share_private_addresses=%v has no effect on this", tSettings.P2P.SharePrivateAddresses) // urlsafe: a bool
 		return nil
 	}
 }
@@ -1553,9 +1553,9 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 	// would exempt them from registry cleanup and let a flood of self-signed
 	// messages under fresh peer IDs grow the registry without bound.
 	if s.hasLiveConnection(from) {
-		s.addConnectedPeer(senderID, "", 0, nil, "")
+		s.addConnectedPeer(senderID, "", peerHeightClaim{}, nil, "")
 	} else {
-		s.addPeer(senderID, "", 0, nil, "")
+		s.addPeer(senderID, "", peerHeightClaim{}, nil, "")
 	}
 	s.touchLastMessageTime(senderID)
 
@@ -1568,7 +1568,7 @@ func (s *Server) updatePeerLastMessageTime(from string, originatorPeerID string)
 				return
 			}
 			// Add as gossiped peer (not connected) before updating last message time
-			s.addPeer(peerID, "", 0, nil, "")
+			s.addPeer(peerID, "", peerHeightClaim{}, nil, "")
 			s.touchLastMessageTime(peerID)
 		}
 	}
@@ -1669,7 +1669,10 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// clients. It is bounded here rather than in sanitizeNodeStatusMessage so
 	// that sanitizeAdvertisedTip still sees the value the peer actually sent.
 	notificationBestBlockHash := sanitizePeerHexString(nodeStatusMessage.BestBlockHash, maxPeerHexStringLen)
-	sanitizedBestHeight := nodeStatusMessage.BestHeight
+	// sanitizedHeights is only ever produced by sanitizeAdvertisedTip: addPeer
+	// below is gated on sanitizedTipOK, so its zero value never reaches the
+	// registry.
+	var sanitizedHeights peerHeightClaim
 	var sanitizedBestBlockHash *chainhash.Hash
 	sanitizedTipOK := false
 
@@ -1702,10 +1705,15 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 
 	if !isSelf && nodeStatusMessage.BestHeight > 0 && nodeStatusMessage.PeerID != "" {
 		var ok bool
-		sanitizedBestHeight, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
+		sanitizedHeights, sanitizedBestBlockHash, ok = s.sanitizeAdvertisedTip(nodeStatusMessage.PeerID, nodeStatusMessage.BestHeight, nodeStatusMessage.BestBlockHash, s.getLocalHeight(ctx))
 		if ok {
 			sanitizedTipOK = true
-			notificationBestHeight = sanitizedBestHeight
+			// Only the registry copy below is capped. notificationBestHeight
+			// keeps the height the peer actually advertised: the cap is a
+			// bound on what an unvalidated claim may influence, not a
+			// statement about the peer, and a node still catching up would
+			// otherwise report every peer at localHeight+maxLead — a number
+			// no peer ever sent, shown next to that peer's real tip hash.
 			notificationBestBlockHash = sanitizedBestBlockHash.String()
 		} else {
 			notificationBestHeight = 0
@@ -1781,7 +1789,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 			return
 		}
 
-		s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedBestHeight, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
+		s.addPeer(peerID, nodeStatusMessage.ClientName, sanitizedHeights, sanitizedBestBlockHash, nodeStatusMessage.BaseURL)
 		s.logger.Debugf("[handleNodeStatusTopic] Updated block hash %s for peer %s", notificationBestBlockHash, peerID)
 
 		// Update storage mode if provided
@@ -1795,7 +1803,7 @@ func (s *Server) handleNodeStatusTopic(ctx context.Context, m []byte, peerID str
 	// Also ensure the sender is in the registry
 	if !isSelf && peerID != "" {
 		if senderID, err := peer.Decode(peerID); err == nil {
-			s.addPeer(senderID, "", 0, nil, "")
+			s.addPeer(senderID, "", peerHeightClaim{}, nil, "")
 		}
 	}
 }
@@ -2921,11 +2929,12 @@ func (s *Server) GetPeers(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPe
 			addr := addrByPeerID[p.ID]
 
 			resp.Peers = append(resp.Peers, &p2p_api.Peer{
-				Id:            p.ID,
-				Addr:          addr,
-				Banscore:      p.BanScore,
-				CurrentHeight: p.Height,
-				BytesReceived: p.BytesReceived,
+				Id:               p.ID,
+				Addr:             addr,
+				Banscore:         p.BanScore,
+				CurrentHeight:    p.Height,
+				AdvertisedHeight: p.AdvertisedHeight,
+				BytesReceived:    p.BytesReceived,
 			})
 		}
 
@@ -3354,6 +3363,7 @@ func peerInfoToP2PProto(p *blockchain.PeerInfo) *p2p_api.PeerRegistryInfo {
 	return &p2p_api.PeerRegistryInfo{
 		Id:                     p.ID,
 		Height:                 p.Height,
+		AdvertisedHeight:       p.AdvertisedHeight,
 		BlockHash:              blockHashStr,
 		DataHubUrl:             p.DataHubURL,
 		BanScore:               p.BanScore,

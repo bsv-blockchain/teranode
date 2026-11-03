@@ -45,7 +45,7 @@ func TestCreateUTXOSet_WritesChecksumSidecar(t *testing.T) {
 	c.lastBlockHeight = 1
 	c.previousBlockHash = tSettings.ChainCfgParams.GenesisHash
 
-	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash)
+	us, err := GetUTXOSet(ctx, logger, tSettings, blockStore, &currentBlockHash, 1)
 	require.NoError(t, err)
 
 	require.NoError(t, us.CreateUTXOSet(ctx, c))

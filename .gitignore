@@ -122,3 +122,4 @@ teranode-dev
 .worktrees
 docs/superpowers/
 compose/generated/
+.mcp.json

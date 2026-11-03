@@ -29,12 +29,17 @@ var (
 	prometheusSubtreeProcessorRemoveTx                     prometheus.Histogram
 	prometheusSubtreeProcessorReset                        prometheus.Histogram
 	prometheusSubtreeProcessorDynamicSubtreeSize           prometheus.Gauge
-	prometheusSubtreeProcessorCurrentState                 prometheus.Gauge
-	prometheusBlockAssemblySubtreeCompleteHist             prometheus.Histogram
-	prometheusSubtreeProcessorDequeuedTxs                  prometheus.Counter
-	prometheusSubtreeProcessorDiskMapEntries               prometheus.Gauge
-	prometheusSubtreeProcessorDiskMapFilterRAM             prometheus.Gauge
-	prometheusSubtreeProcessorDiskMapDiskWritten           prometheus.Gauge
+
+	// prometheusSubtreeProcessorBlockMaxSizeResizes counts re-chunks of the queue because
+	// the first subtree exceeded blockmaxsize. A resize lasts for one block, so a steadily
+	// rising count means it repeats every block, each time rebuilding and storing the queue.
+	prometheusSubtreeProcessorBlockMaxSizeResizes prometheus.Counter
+	prometheusSubtreeProcessorCurrentState        prometheus.Gauge
+	prometheusBlockAssemblySubtreeCompleteHist    prometheus.Histogram
+	prometheusSubtreeProcessorDequeuedTxs         prometheus.Counter
+	prometheusSubtreeProcessorDiskMapEntries      prometheus.Gauge
+	prometheusSubtreeProcessorDiskMapFilterRAM    prometheus.Gauge
+	prometheusSubtreeProcessorDiskMapDiskWritten  prometheus.Gauge
 
 	// prometheusSubtreeProcessorOversizeBatchAdmitted counts batches larger than the
 	// whole item cap admitted alone onto an otherwise empty ingest queue. Such a batch
@@ -50,6 +55,11 @@ var (
 	// treat an error as "not applied" from state that already reflects it); the
 	// "where" label identifies the reporting site for troubleshooting.
 	prometheusSubtreeProcessorDiskTxMapErrors *prometheus.CounterVec
+
+	// prometheusTxMetaDeleteDropped counts txmeta DELETEs TxMetaEvictor could not
+	// publish. Each one leaves subtree validation caching a demoted tx as
+	// non-conflicting until the cache rotates it out.
+	prometheusTxMetaDeleteDropped prometheus.Counter
 )
 
 var (
@@ -202,6 +212,15 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusSubtreeProcessorBlockMaxSizeResizes = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "blockmaxsize_resizes",
+			Help:      "Number of times the queued subtrees were re-chunked because the first one exceeded blockmaxsize",
+		},
+	)
+
 	prometheusSubtreeProcessorCurrentState = promauto.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "teranode",
@@ -244,7 +263,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "subtreeprocessor",
 			Name:      "diskmap_filter_ram_bytes",
-			Help:      "Cuckoo filter memory in bytes for disk-backed transaction map",
+			Help:      "Estimated in-RAM index memory in bytes for disk-backed transaction map",
 		},
 	)
 
@@ -275,12 +294,21 @@ func _initPrometheusMetrics() {
 		},
 		[]string{"where"},
 	)
+
+	prometheusTxMetaDeleteDropped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreeprocessor",
+			Name:      "txmeta_delete_dropped_total",
+			Help:      "Txmeta cache DELETEs for txs demoted to conflicting that were dropped because the txmeta producer buffer was full or stopped",
+		},
+	)
 }
 
 // reportDiskMapStats sets Prometheus gauges for the disk-backed transaction map.
 func reportDiskMapStats(stats DiskMapStats) {
 	prometheusSubtreeProcessorDiskMapEntries.Set(float64(stats.Entries))
-	prometheusSubtreeProcessorDiskMapFilterRAM.Set(float64(stats.FilterMemBytes))
+	prometheusSubtreeProcessorDiskMapFilterRAM.Set(float64(stats.IndexMemBytes))
 	prometheusSubtreeProcessorDiskMapDiskWritten.Set(float64(stats.DiskBytesWritten))
 }
 

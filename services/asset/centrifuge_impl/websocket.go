@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -66,6 +67,20 @@ type WebsocketConfig struct {
 	// says that server will try to negotiate it with client.
 	Compression bool
 
+	// MaxConnections caps the number of concurrently live websocket connections.
+	// Zero means unlimited.
+	MaxConnections int
+
+	// MaxConnectionsPerIP caps the number of concurrently live websocket connections
+	// held by a single client IP, so MaxConnections cannot be exhausted by one
+	// client. Zero means unlimited. Ignored when ClientIP is nil and the request
+	// has no usable RemoteAddr.
+	MaxConnectionsPerIP int
+
+	// ClientIP extracts the client IP from a request for the MaxConnectionsPerIP
+	// budget. nil falls back to the request's RemoteAddr.
+	ClientIP func(r *http.Request) string
+
 	// UseWriteBufferPool enables using buffer pool for writes.
 	UseWriteBufferPool bool
 }
@@ -77,7 +92,18 @@ type WebsocketHandler struct {
 	node    *centrifuge.Node
 	upgrade *websocket.Upgrader
 	config  WebsocketConfig
+
+	liveConnections    atomic.Int64 // connections currently holding a slot
+	refusedConnections atomic.Int64 // upgrades refused because the cap was full
+	capWarnedAt        atomic.Int64 // UnixNano of the last cap-reached WARN, 0 = never
+
+	perIPMu    sync.Mutex     // guards perIPConns
+	perIPConns map[string]int // live connection count per client IP, only touched when MaxConnectionsPerIP > 0
 }
+
+// connCapWarnInterval bounds how often a refused upgrade is logged at WARN, so a client
+// retrying in a loop cannot flood the log.
+const connCapWarnInterval = 1 * time.Minute
 
 var writeBufferPool = &sync.Pool{}
 
@@ -113,9 +139,10 @@ func NewWebsocketHandler(n *centrifuge.Node, c WebsocketConfig) *WebsocketHandle
 	}
 
 	return &WebsocketHandler{
-		node:    n,
-		config:  c,
-		upgrade: upgrade,
+		node:       n,
+		config:     c,
+		upgrade:    upgrade,
+		perIPConns: make(map[string]int),
 	}
 }
 
@@ -130,9 +157,23 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	compressionLevel := s.config.CompressionLevel
 	compressionMinSize := s.config.CompressionMinSize
 
+	ip := s.clientIP(r)
+
+	// Take an admission slot before the upgrade: an upgrade that is accepted and then
+	// closed still costs a handshake and leaves the client believing it is connected.
+	if ok, capSetting, capLimit := s.acquireConnection(ip); !ok {
+		s.logConnectionRefused(capSetting, capLimit)
+		rw.Header().Set("Retry-After", "1")
+		http.Error(rw, "Asset websocket connection limit reached", http.StatusServiceUnavailable)
+
+		return
+	}
+
 	conn, err := s.upgrade.Upgrade(rw, r, nil)
 	if err != nil {
+		s.releaseConnection(ip)
 		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, "[Centrifuge] websocket upgrade error", map[string]any{"error": err.Error()}))
+
 		return
 	}
 
@@ -183,6 +224,9 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 
 	// Separate goroutine for better GC of caller's data.
 	go func() {
+		// This goroutine owns the connection lifetime, so it also owns the slot.
+		defer s.releaseConnection(ip)
+
 		opts := websocketTransportOptions{
 			pingInterval:       pingInterval,
 			writeTimeout:       writeTimeout,
@@ -247,6 +291,115 @@ func (s *WebsocketHandler) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+}
+
+// clientIP extracts the client IP for the MaxConnectionsPerIP budget, using
+// s.config.ClientIP when set (so it inherits the same trusted-proxy configuration
+// as the rest of the Asset HTTP server) and falling back to the request's
+// RemoteAddr otherwise.
+func (s *WebsocketHandler) clientIP(r *http.Request) string {
+	if s.config.ClientIP != nil {
+		return s.config.ClientIP(r)
+	}
+
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+
+	return host
+}
+
+// acquireConnection takes a slot from the concurrent-connection budget and, if
+// MaxConnectionsPerIP is set, from ip's own share of it, reporting whether both were
+// available and, on refusal, which setting's cap fired and its limit. A
+// MaxConnections/MaxConnectionsPerIP of zero means unlimited, which is the shipped
+// default and today's behaviour.
+func (s *WebsocketHandler) acquireConnection(ip string) (ok bool, capSetting string, capLimit int) {
+	limit := s.config.MaxConnections
+	if limit > 0 {
+		if s.liveConnections.Add(1) > int64(limit) {
+			s.liveConnections.Add(-1)
+			s.refusedConnections.Add(1)
+
+			return false, "asset_maxWebsocketConnections", limit
+		}
+	}
+
+	if !s.acquirePerIP(ip) {
+		if limit > 0 {
+			s.liveConnections.Add(-1)
+		}
+
+		s.refusedConnections.Add(1)
+
+		return false, "asset_maxWebsocketConnectionsPerIP", s.config.MaxConnectionsPerIP
+	}
+
+	return true, "", 0
+}
+
+// acquirePerIP takes a slot from ip's share of MaxConnectionsPerIP, reporting whether
+// one was available. A MaxConnectionsPerIP of zero, or an empty ip, means unlimited.
+func (s *WebsocketHandler) acquirePerIP(ip string) bool {
+	limit := s.config.MaxConnectionsPerIP
+	if limit <= 0 || ip == "" {
+		return true
+	}
+
+	s.perIPMu.Lock()
+	defer s.perIPMu.Unlock()
+
+	if s.perIPConns[ip] >= limit {
+		return false
+	}
+
+	s.perIPConns[ip]++
+
+	return true
+}
+
+// releaseConnection returns a slot taken by acquireConnection, including ip's
+// per-IP share. It is called exactly once per accepted upgrade, from whichever path
+// ends that connection.
+func (s *WebsocketHandler) releaseConnection(ip string) {
+	if s.config.MaxConnections > 0 {
+		s.liveConnections.Add(-1)
+	}
+
+	s.releasePerIP(ip)
+}
+
+// releasePerIP returns a slot taken by acquirePerIP.
+func (s *WebsocketHandler) releasePerIP(ip string) {
+	if s.config.MaxConnectionsPerIP <= 0 || ip == "" {
+		return
+	}
+
+	s.perIPMu.Lock()
+	defer s.perIPMu.Unlock()
+
+	if n := s.perIPConns[ip]; n <= 1 {
+		delete(s.perIPConns, ip)
+	} else {
+		s.perIPConns[ip] = n - 1
+	}
+}
+
+// logConnectionRefused reports a refused upgrade, at WARN at most once per
+// connCapWarnInterval and at DEBUG in between, so the cap being reached is always
+// visible without a retrying client being able to flood the log.
+func (s *WebsocketHandler) logConnectionRefused(capSetting string, capLimit int) {
+	fields := map[string]any{"limit": capLimit, "refused": s.refusedConnections.Load()}
+	msg := "[Centrifuge] websocket upgrade refused: " + capSetting + " reached"
+
+	last, now := s.capWarnedAt.Load(), time.Now().UnixNano()
+	if now-last >= int64(connCapWarnInterval) && s.capWarnedAt.CompareAndSwap(last, now) {
+		s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelWarn, msg, fields))
+		return
+	}
+
+	s.node.Log(centrifuge.NewLogEntry(centrifuge.LogLevelDebug, msg, fields))
 }
 
 // websocketTransport implements the transport layer for WebSocket connections.

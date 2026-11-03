@@ -156,6 +156,13 @@ type Interface interface {
 	//   - error: Any error encountered during block processing
 	MoveForwardBlock(block *model.Block) error
 
+	// PrepareBlock starts building the transaction map of a block on the current tip that is
+	// still being validated, for MoveForwardBlock to use once that block is added.
+	//
+	// Parameters:
+	//   - block: The block being validated; nothing about it is trusted
+	PrepareBlock(block *model.Block)
+
 	// DrainPendingInvalidations returns and clears the blocks whose conflict
 	// resolution was refused because demoting a losing transaction would have
 	// reversed a spend confirmed on that block's own ancestry. Such a block is
@@ -203,6 +210,14 @@ type Interface interface {
 	// call, since any operation (MoveForwardBlock, Reorg, an async removeTx
 	// or Stop) can be the one that observes the error.
 	TakeResetRequested() bool
+
+	// TakeDrainResetRequested reports, and clears, whether the queue drain the
+	// processor runs after answering MoveForwardBlock failed part-way. The txs
+	// it had taken off the queue are then in no subtree, and only a reset,
+	// which reloads unmined transactions from the UTXO store, brings them
+	// back. Unlike TakeResetRequested this is not a storage fault, so it is
+	// acted on even while the disk tx map is degraded.
+	TakeDrainResetRequested() bool
 
 	// Remove removes a specific transaction from the processor by its hash.
 	// This is used when transactions become invalid or need to be excluded.
@@ -435,12 +450,23 @@ type Interface interface {
 	// The context is used for cancellation/timeout to prevent blocking indefinitely.
 	GetIncompleteSubtreeMiningData(ctx context.Context) *PrecomputedMiningData
 
+	// DrainingAfterBlock reports whether the processor is still running the
+	// work it deferred past a MoveForwardBlock response: the drain of the
+	// queue that built up while the block was applied. Mining data taken
+	// while it is true misses those transactions.
+	DrainingAfterBlock() bool
+
 	// WaitForPendingBlocks waits for any pending block operations to complete.
 	// This ensures that all block-related processing is finalized before proceeding.
 	//
 	// Returns:
 	//   - error: Any error encountered while waiting
 	WaitForPendingBlocks(ctx context.Context) error
+
+	// RequestBlockMaxSizeCheck asks the processing goroutine to check the first queued
+	// subtree against blockmaxsize on its next iteration, resizing the queued subtrees if
+	// it no longer fits. Used after subtrees were built outside the processing loop.
+	RequestBlockMaxSizeCheck()
 
 	// Stop gracefully shuts down the SubtreeProcessor.
 	// This method cancels the processor's internal context, which triggers the main
@@ -465,6 +491,19 @@ type Interface interface {
 	// Returns:
 	//   - error: The first error encountered creating a gap block's coinbase, if any
 	ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error
+
+	// MarkRecoveredConflicts marks the given transactions as conflicting nodes in
+	// the stored subtrees of the blocks that mined them, and saves those subtrees
+	// again. Block assembly calls it at startup for the losers of a recovered
+	// conflict intent, before it drains its input queue and completes the intent.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation of the block and subtree store calls
+	//   - hashes: Hashes of the losing transactions to mark as conflicting
+	//
+	// Returns:
+	//   - error: Any error encountered while reading or saving a subtree
+	MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error
 }
 
 // TxInpointsMap defines the interface for transaction inpoints storage with hash keys.

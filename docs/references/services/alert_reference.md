@@ -241,8 +241,7 @@ The Alert Service uses a configuration structure (`config.Config`) that includes
 
 - IP and port settings
 - DHT mode
-- Protocol ID (defaults to system default if not specified)
-- Topic name (network-dependent: "bitcoin_alert_system_[network]" for non-mainnet)
+- Protocol ID, topic name and genesis keys (empty settings take the per-network default for mainnet/testnet/stn; see [Alert Settings](../settings/services/alert_settings.md))
 - Private key management
 - Peer discovery interval
 

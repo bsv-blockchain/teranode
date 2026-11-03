@@ -43,6 +43,34 @@ func TestIdle_AutomaticCatchupCannotEscapeOperatorStop(t *testing.T) {
 	requireIdleBoundaryState(t, b, store, FSMStateRUNNING)
 }
 
+// Rewind preflight requires IDLE, and a fresh node boots into CATCHINGBLOCKS.
+// STOP must park it directly, and catchup completing afterwards must not undo it.
+func TestIdle_StopFromCatchingBlocks(t *testing.T) {
+	ctx := context.Background()
+	b, store := newFSMPersistenceTestBlockchain(t, FSMStateCATCHINGBLOCKS)
+	_, err := b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_STOP})
+	require.NoError(t, err, "operator STOP must park a catching-up node")
+	requireIdleBoundaryState(t, b, store, FSMStateIDLE)
+	require.Len(t, b.notifications, 1)
+	<-b.notifications
+
+	_, runErr := b.Run(ctx, &emptypb.Empty{})
+	require.ErrorContains(t, runErr, "automatic RUN refused from IDLE", "catchup completion must not promote operator IDLE")
+	requireIdleBoundaryState(t, b, store, FSMStateIDLE)
+	require.Empty(t, b.notifications)
+
+	_, err = b.SendFSMEvent(ctx, &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_CATCHUPBLOCKS})
+	require.NoError(t, err, "explicit operator catchup must resume the parked node")
+	requireIdleBoundaryState(t, b, store, FSMStateCATCHINGBLOCKS)
+}
+
+func TestIdle_CatchupBlocksStillRejectedFromCatchingBlocks(t *testing.T) {
+	b, store := newFSMPersistenceTestBlockchain(t, FSMStateCATCHINGBLOCKS)
+	_, err := b.SendFSMEvent(context.Background(), &blockchain_api.SendFSMEventRequest{Event: blockchain_api.FSMEventType_CATCHUPBLOCKS})
+	require.Error(t, err, "removing the manual guard must not admit events the FSM has no edge for")
+	requireIdleBoundaryState(t, b, store, FSMStateCATCHINGBLOCKS)
+}
+
 func TestIdle_AutomaticCatchupFromRunningStillWorks(t *testing.T) {
 	b, store := newFSMPersistenceTestBlockchain(t, FSMStateRUNNING)
 	_, err := b.CatchUpBlocks(context.Background(), &emptypb.Empty{})

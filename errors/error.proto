@@ -62,10 +62,16 @@ enum ERR {
   TX_POLICY=39;
   TX_CONSENSUS=40;
   TX_CREATING=41;
+  TX_UNLOCK_FAILED=42;
+  // Rejected because every input that failed to spend is already spent by a different tx
+  // or is an output of a conflicting tx. Only the validator sets it; a store never does.
+  TX_REJECTED_CONFLICTING=43;
   TX_ERROR=49;
   // Service errors 50-59
   SERVICE_UNAVAILABLE=50;
   SERVICE_NOT_STARTED=51;
+  SERVICE_RATE_LIMITED=52;
+  SERVICE_NOT_READY=53;
   SERVICE_ERROR=59;
   // Storage errors 60-69
   STORAGE_UNAVAILABLE=60;
@@ -106,4 +112,11 @@ enum ERR {
   BLOCK_CORRUPT=120;
   // A block this node declined under its own local policy: never a verdict on the block or the peer.
   BLOCK_POLICY_DECLINED=121;
+  // A delivered block body, read to its declared end, that cannot be the block its header names:
+  // a merkle root the header does not carry, a duplicate transaction, or no coinbase. Either the
+  // peer built it wrong or it was damaged in transit, which only the wire checksum tells apart. The
+  // only verdict the legacy peer server will ban a host for, and only once that checksum is verified
+  // (not yet: see services/legacy/peer streamingBlockHandler). Wrapped inside the BLOCK_INVALID
+  // verdict at the sites that raise it, never the outermost code.
+  BLOCK_BODY_MISMATCH=122;
 }

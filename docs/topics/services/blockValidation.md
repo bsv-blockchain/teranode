@@ -442,6 +442,23 @@ For blocks that are below known checkpoints in the blockchain, the Block Validat
 
 The quick validation system operates in two distinct phases implemented in `quickValidateBlock()` in `services/blockvalidation/quick_validate.go`:
 
+**Body Binding (precondition):**
+
+Before either phase, the peer-supplied body is bound to the checkpoint-certified header. No block ID is assigned and no UTXO is created or spent until this succeeds:
+
+1. **Subtree-Carrying Body**: Bound by `bindSubtreeBodyToHeader()` in `services/blockvalidation/quick_validate_bind.go`
+    - Reads every subtree structure, one `SubtreeBatchSize` chunk at a time
+    - Recomputes each subtree's root from its own nodes and checks it against the subtree's key, instead of trusting the root the file claims
+    - Checks the subtree shape and scans the whole block for duplicate transactions (CVE-2012-2459)
+    - Composes the subtree roots and compares the result with the header's merkle root
+    - Reads structures only, never transaction data
+2. **Coinbase-Only Body**: Bound by `block.CheckCoinbaseOnlyBodyBound()`
+3. **Failure Classes**: Each failure keeps its own class
+    - A body whose subtrees do not compose to the header's merkle root, or that breaks the subtree shape or duplicate rules, is classified `ERR_BLOCK_CORRUPT`
+    - A local subtree blob that does not hash to its own key is a local fault instead, not a verdict on the peer's body: the blob is quarantined (deleted and the deletion confirmed), and if the deletion cannot be confirmed the attempt fails closed
+    - Storage and other infrastructure errors keep their own class
+    - A body that binds but whose coinbase is not a consensus coinbase is `ERR_BLOCK_INVALID`
+
 **Phase 1: UTXO Creation (`createAllUTXOs()`)**
 
 All UTXOs for the block's transactions are created in parallel before validation:
@@ -495,7 +512,7 @@ Quick validation provides substantial performance improvements:
 
 ##### Subtree and Transaction Processing
 
-During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in `getBlockTransactions()`):
+During quick validation, the system reconstructs subtree files and extends transactions on-demand (implemented in `readSubtree()` and `processSubtreeBatch()`):
 
 **Subtree File Generation:**
 
@@ -503,11 +520,14 @@ For each subtree in the block, the system:
 
 1. **Reads `.subtreeToCheck`**: Fetches subtree structure with transaction IDs
 2. **Reads `.subtreeData`**: Fetches raw transaction data
-3. **Validates Coinbase**: Ensures first transaction in first subtree is coinbase
-4. **Reconstructs `.subtree`**: If missing, creates full subtree with fee and size information
+3. **Checks Every Transaction Against Its Node**: Each transaction in `.subtreeData`, other than the coinbase at block position `[0][0]`, must hash to the node it occupies
+    - A structure or body that does not match its key is treated as a damaged local blob
+    - Before the attempt returns, the blob is quarantined: it is deleted and the deletion confirmed. If the deletion cannot be confirmed, the attempt fails closed and catch-up aborts without falling back to normal validation
+4. **Validates Coinbase**: Ensures first transaction in first subtree is coinbase
+5. **Reconstructs `.subtree`**: If missing, creates full subtree with fee and size information
     - Adds each transaction node with metadata from transaction
     - Stores complete subtree for future use
-5. **Generates `.subtreeMeta`**: If missing, creates metadata file with transaction inpoints
+6. **Generates `.subtreeMeta`**: If missing, creates metadata file with transaction inpoints
     - Stores input relationships for efficient lookups
     - Used by subtree validation service
 
@@ -527,25 +547,28 @@ Transactions in standard Bitcoin format are extended in-memory for validation:
 
 **Merkle Root Verification:**
 
-After processing all transactions, the system verifies:
+The merkle root is checked twice, and the first check is the one that gates mutation:
 
-```go
-if err := block.CheckMerkleRoot(ctx); err != nil {
-    return errors.NewProcessingError("merkle root mismatch")
-}
-```
+1. **Before Any Mutation**: The body binding described above
+2. **After Processing**: `validateSubtrees()` re-runs the same rules through `checkSubtreeBodyBinding()` on the subtrees rebuilt from the transactions actually read
+    - Subtree sizes, `block.CheckMerkleRoot(ctx)`, the coinbase placeholder at `[0][0]`, the duplicate-transaction scan and the coinbase shape
 
-This ensures the transactions match the block header before proceeding.
+A merkle-root mismatch is `ERR_BLOCK_CORRUPT`, not an invalid block: a body that does not bind to the header says nothing about the header's hash. The subtree-shape, coinbase-placeholder and duplicate-transaction failures are `ERR_BLOCK_CORRUPT` for the same reason. The coinbase-shape check is the exception: it runs only once the body binds, so a failure there is `ERR_BLOCK_INVALID`. See the failure classes under Body Binding.
 
 **Error Handling:**
 
-If quick validation encounters any errors:
+During catch-up, `tryQuickValidation()` in `services/blockvalidation/catchup.go` routes a failure by its class:
 
-- Removes `.subtree` files to force reprocessing
-- Falls back to normal validation automatically
-- Normal validation re-creates UTXOs and validates with full script execution
+- **Incomplete Block** (`ERR_BLOCK_INCOMPLETE`, e.g. no coinbase): Catch-up from this peer aborts. Fetched subtree files are kept for reuse
+- **Corrupt Body** (`ERR_BLOCK_CORRUPT`): The catch-up peer is penalised, every subtree file this attempt wrote (fetched and built) is removed, and catch-up aborts so the block is re-downloaded. Normal validation is not run on the same body
+- **Local Blob That Does Not Match Its Key and Could Not Be Deleted**: Catch-up aborts without falling back to normal validation and without a ban score. This attempt's own `.subtree` files are removed
+- **Any Other Failure**, including a mismatching local blob that was deleted: This attempt's own `.subtree` files are removed, and the block falls back to normal validation, which reuses the fetched `.subtreeToCheck` and `.subtreeData`
 
-For implementation details, see `quick_validate.go` in `services/blockvalidation/`.
+The removal is attempted only once this block's queued subtree writes have settled, and it is skipped if the catch-up context is cancelled first. In the corrupt and could-not-be-deleted cases a failed removal is logged and the verdict stands. In the last case a failed removal is returned instead, so catch-up aborts rather than falling back to normal validation.
+
+Nothing is rolled back. A failure after the pipeline has started leaves the UTXOs it created in the store, locked unless `blockvalidation_quick_validate_skip_utxo_lock` applies. Recovery is by retry convergence: on retry, creation returns `ErrTxExists` and the mined info is updated to the correct block ID.
+
+For implementation details, see `quick_validate.go` and `quick_validate_bind.go` in `services/blockvalidation/`.
 
 #### 2.2.4. Validating the Subtrees
 
@@ -659,7 +682,8 @@ When a block arrives whose parent is not on the current chain tip, the fork mana
 
 The fork manager enforces limits on concurrent fork processing to prevent resource exhaustion:
 
-- **maxParallelForks**: Maximum number of forks that can be processed simultaneously (default: 4, configurable via `blockvalidation_maxParallelForks`)
+- **maxParallelForks**: Maximum number of forks that can be processed simultaneously (default: 4, configurable via `blockvalidation_max_parallel_forks`)
+- **Tip slot**: Blocks that do not extend the current tip may hold at most `maxParallelForks - 1` slots, so slow fork blocks cannot occupy every worker while a chain-extending block waits. The class is the one recorded when the block was queued. With `maxParallelForks = 1` there is no reserved slot
 - **maxTrackedForks**: Maximum total number of forks to track (default: 1000, configurable via `blockvalidation_maxTrackedForks`)
 - **BlockProcessingGuard**: Automatic cleanup mechanism using Go finalizers to ensure processing locks are always released
 
@@ -738,19 +762,25 @@ When a new block is discovered via `BlockFound()`:
 
 The `WaitForBlock()` method:
 
-1. Checks fork manager to ensure processing limits not exceeded
-2. Selects highest priority block that can be processed
-3. Returns block to worker for validation
-4. Blocks waiting if no blocks available (with timeout)
+1. Skips blocks that are still in their retry delay
+2. Skips blocks whose parent is still being fetched, queued or validated. Validating a child before its parent is stored would find no parent and send it to catchup, moving the FSM to CATCHINGBLOCKS and stopping mining. This gate applies whatever the block's priority, so skip and age promotions cannot bypass it
+3. Checks fork manager to ensure processing limits, including the tip slot, are not exceeded
+4. Selects highest priority block that can be processed, claiming its processing slot before removing it from the queue, so the block is always visible as either queued or processing
+5. Returns block to worker for validation
+6. Blocks waiting if no blocks available (with timeout)
+
+When a block is announced and its parent is not stored yet but is being fetched, queued or validated, it is queued behind the parent instead of going to catchup. A parent validated outside the queue (by catchup, a gRPC `ProcessBlock` call or legacy sync) holds no worker slot, so the check also asks block validation whether the parent is still validating, and the queue is woken when that validation ends. If the parent is then the best block, its queued children take the chain-extending class. Below the checkpoint, the quick-validation paths of legacy sync and catchup skip this check. It takes the parent's class when the parent is queued or validating. A parent still being fetched has no class yet, so the child is classified on its own and takes the parent's class when the parent finishes.
 
 ##### Retry Mechanism
 
-When block validation fails due to transient errors:
+Only failures that are not a verdict on the block are retried. The worker puts the block back on the queue (`RequeueAfter()`) before releasing its processing slot, held back for a fixed delay:
 
-1. **RequeueForRetry()**: Adds block back to queue with incremented retry count
-2. **Exponential Backoff**: Each retry waits longer before reprocessing
-3. **Retry Limits**: Maximum retries configurable (default: 3)
-4. **Alternative Sources**: After failures, attempts to fetch from different peers
+1. **Failed fetch** (network or malicious-response error): retried after 5 seconds
+2. **Deadline** (validation running past a timeout such as `subtreevalidation_check_block_subtrees_timeout`): retried after 1 minute
+3. **Retry Limits**: At most `blockValidationMaxRetries` requeues per block hash (default: 3). The count resets when the block validates successfully. `0` disables these retries
+4. **Same Source**: The requeued block keeps the peer that announced it, with its original class and height
+
+Invalid blocks are never retried.
 
 ##### Alternative Source Handling
 

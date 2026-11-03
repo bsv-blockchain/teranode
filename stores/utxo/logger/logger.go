@@ -35,6 +35,11 @@ type Store struct {
 	store  utxo.Store
 }
 
+// Callers that check the store for an optional method, such as the pruner
+// service looking for a pruner, use utxo.As, which looks through the wrapper by
+// way of Unwrap. Without it, turning logging on would hide those methods.
+var _ utxo.Unwrapper = (*Store)(nil)
+
 // New creates a new logging wrapper around the provided UTXO store.
 // All operations on the returned store will be logged with detailed information
 // including method names, parameters, return values, and execution times.
@@ -297,6 +302,20 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 	return err
 }
 
+func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	results, err := s.store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
+	s.logger.Debugf("[UTXOStore][logger][SpendAndCreateMulti] txCount=%d blockHeight=%d err=%v : %s", len(txs), blockHeight, err, caller())
+
+	return results, err
+}
+
+func (s *Store) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, opts ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	answers, err := s.store.ParentOutputsForValidation(ctx, outpoints, opts...)
+	s.logger.Debugf("[UTXOStore][logger][ParentOutputsForValidation] outpoints=%d err=%v : %s", len(outpoints), err, caller())
+
+	return answers, err
+}
+
 func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
 	err := s.store.BatchPreviousOutputsDecorate(ctx, txs)
 	s.logger.Debugf("[UTXOStore][logger][BatchPreviousOutputsDecorate] txCount=%d err=%v : %s", len(txs), err, caller())
@@ -400,4 +419,27 @@ func (s *Store) ProcessExpiredPreservations(ctx context.Context, currentHeight u
 	s.logger.Debugf("[UTXOStore][logger][ProcessExpiredPreservations] currentHeight %d err %v : %s", currentHeight, err, caller())
 
 	return err
+}
+
+// Unwrap returns the wrapped store.
+func (s *Store) Unwrap() utxo.Store {
+	return s.store
+}
+
+func (s *Store) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return s.store.SaveConflictRecovery(ctx, id, r)
+}
+func (s *Store) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return s.store.LoadConflictRecovery(ctx, id)
+}
+func (s *Store) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return s.store.RestoreConflictSpends(ctx, spends, height)
+}
+
+func (s *Store) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return s.store.SetConflictLocks(ctx, id, parents, locked)
+}
+
+func (s *Store) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return s.store.ReleaseConflictLocks(ctx, id, parents)
 }

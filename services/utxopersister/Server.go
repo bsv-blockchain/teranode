@@ -519,7 +519,7 @@ func (s *Server) processNextBlock(ctx context.Context) (time.Duration, error) {
 	if s.blockStore == nil {
 		return 0, errors.NewStorageError("[UTXOPersister] Block store is not initialized")
 	}
-	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, lastWrittenUTXOSetHash)
+	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, lastWrittenUTXOSetHash, metas[0].Height)
 	if err != nil {
 		return 0, errors.NewProcessingError("[UTXOPersister] Error getting UTXOSet for block %s height %d", lastWrittenUTXOSetHash, metas[0].Height, err)
 	}
@@ -706,7 +706,7 @@ func (s *Server) BuildUTXOSetToHeight(ctx context.Context, startHeight, endHeigh
 		return errors.NewProcessingError("[UTXOPersister] error consolidating block range %d..%d", startHeight+1, endHeight, err)
 	}
 
-	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, seedHash)
+	us, err := GetUTXOSet(ctx, s.logger, s.settings, s.blockStore, seedHash, startHeight)
 	if err != nil {
 		return errors.NewProcessingError("[UTXOPersister] error getting UTXOSet handle for seed %s", seedHash.String(), err)
 	}

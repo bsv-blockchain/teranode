@@ -332,6 +332,38 @@ func (bh *BlockHeader) HasMetPowLimit(params *chaincfg.Params) error {
 		return nil
 	}
 
+	ceiling := PowLimitCeiling(params)
+
+	if target.Cmp(ceiling) > 0 {
+		return errors.NewBlockInvalidError(
+			"block nBits %s declares target %x, which is easier than the network proof-of-work limit %x",
+			bh.Bits.String(), target, ceiling)
+	}
+
+	return nil
+}
+
+// PowLimitCeiling is the easiest target a header on this chain may declare: the
+// LOOSER of params.PowLimit and the target params.PowLimitBits encodes. It is
+// the one definition behind HasMetPowLimit, netsync's streaming gate and the
+// header cache's proof-of-work check, so the three cannot disagree about which
+// headers are honest.
+//
+// Two declarations rather than one because go-chaincfg's STN parameters are not
+// self-consistent: STN pairs a roughly 2^224 PowLimit with PowLimitBits of
+// 0x207fffff (a roughly 2^255 target), and a floor on PowLimit alone would
+// refuse every header that declares STN's own minimum difficulty. On mainnet,
+// testnet and regtest the target PowLimitBits encodes is no looser than
+// PowLimit (0x1d00ffff is 0xffff * 2^208, just under mainnet's 2^224 - 1), so
+// for them this is PowLimit.
+//
+// nil when params or params.PowLimit is nil: there is no chain to bound against,
+// and every caller treats nil as "no ceiling to enforce".
+func PowLimitCeiling(params *chaincfg.Params) *big.Int {
+	if params == nil || params.PowLimit == nil {
+		return nil
+	}
+
 	ceiling := params.PowLimit
 
 	if params.PowLimitBits != 0 {
@@ -345,13 +377,7 @@ func (bh *BlockHeader) HasMetPowLimit(params *chaincfg.Params) error {
 		}
 	}
 
-	if target.Cmp(ceiling) > 0 {
-		return errors.NewBlockInvalidError(
-			"block nBits %s declares target %x, which is easier than the network proof-of-work limit %x",
-			bh.Bits.String(), target, ceiling)
-	}
-
-	return nil
+	return ceiling
 }
 
 func (bh *BlockHeader) Bytes() []byte {

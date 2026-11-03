@@ -69,6 +69,10 @@ var (
 	prometheusUtxoMapDelete prometheus.Counter
 	prometheusUtxoMapErrors *prometheus.CounterVec
 
+	prometheusUtxoPartialSpendRollbacks *prometheus.CounterVec
+	prometheusUtxoSpendRollbackFailed   prometheus.Counter
+	prometheusUtxoSpendAbortInFlight    prometheus.Counter
+
 	prometheusUtxoCreateBatch              prometheus.Histogram
 	prometheusUtxoCreateBatchSize          prometheus.Histogram
 	prometheusUtxoSpendBatch               prometheus.Histogram
@@ -87,6 +91,12 @@ var (
 	prometheusTxMetaAerospikeMapSetMinedBatch     prometheus.Counter
 	prometheusTxMetaAerospikeMapSetMinedBatchN    prometheus.Counter
 	prometheusTxMetaAerospikeMapSetMinedBatchErrN prometheus.Counter
+
+	// expired preservations whose master could not be restored after a failed child DAH follow-up
+	prometheusTxMetaAerospikeExpiredPreservationRestoreFailed prometheus.Counter
+
+	// longest-chain DAH updates whose master could not be restored after a failed page write
+	prometheusTxMetaAerospikeLongestChainRestoreFailed prometheus.Counter
 
 	// metrics for external transactions
 	prometheusTxMetaAerospikeMapGetExternal prometheus.Histogram
@@ -188,6 +198,22 @@ func _initPrometheusMetrics() {
 			Help:      "Number of txmeta set_mined_batch txs done to aerospike map",
 		},
 	)
+	prometheusTxMetaAerospikeExpiredPreservationRestoreFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "expired_preservation_restore_failed",
+			Help:      "Number of expired preservations whose master could not be restored after a failed child DAH follow-up",
+		},
+	)
+	prometheusTxMetaAerospikeLongestChainRestoreFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "longest_chain_restore_failed",
+			Help:      "Number of longest-chain DAH updates whose master could not be restored after a failed pagination-record write",
+		},
+	)
 	prometheusTxMetaAerospikeMapSetMinedBatchErrN = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
@@ -258,6 +284,41 @@ func _initPrometheusMetrics() {
 		[]string{
 			"function", // function raising the error
 			"error",    // error returned
+		},
+	)
+
+	// Rollback of partial spends is a corruption-prevention invariant (#1214), so
+	// its outcome has to be observable: "fired" means the spends were reverted,
+	// "spender_exists" means the ref was not dangling and the slots were left
+	// alone, "indeterminate" means the existence probe failed and a ref may have
+	// been left behind.
+	prometheusUtxoPartialSpendRollbacks = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_partial_spend_rollbacks",
+			Help:      "Outcome of rolling back the successful spends of a failed spend batch (fired|spender_exists|indeterminate|transient_lock|transient_creating)",
+		},
+		[]string{
+			"outcome", // utxo.RollbackOutcomes: fired | spender_exists | indeterminate | transient_lock | transient_creating
+		},
+	)
+
+	prometheusUtxoSpendRollbackFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_rollback_failed",
+			Help:      "Spends that could not be reverted by a partial-spend rollback, i.e. potential dangling spender refs left behind (a count of spends, not of calls)",
+		},
+	)
+
+	prometheusUtxoSpendAbortInFlight = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "aerospike",
+			Name:      "utxo_spend_abort_in_flight",
+			Help:      "Spend items still in flight when the batch aborted, excluded from the rollback set and applied by the dispatcher afterwards (residual dangling-ref window, see #1291)",
 		},
 	)
 

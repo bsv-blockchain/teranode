@@ -299,11 +299,27 @@ func (s *SQL) CompleteBlobDeletions(ctx context.Context, completedIDs []int64, f
 
 // AcquireBlobDeletionBatch acquires a batch with locking using SELECT...FOR UPDATE SKIP LOCKED.
 // The lockTimeoutSeconds parameter is currently unused but reserved for future use.
-func (s *SQL) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) ([]*ScheduledDeletion, error) {
+// Rows whose store_type is in excludeStoreTypes are left out.
+func (s *SQL) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []int32) ([]*ScheduledDeletion, error) {
+	args := []interface{}{height, limit}
+	condition := "delete_at_height <= $1"
+
+	if len(excludeStoreTypes) > 0 {
+		// Build placeholders for NOT IN clause ($3, $4, $5, ...), after height and limit
+		placeholders := make([]string, len(excludeStoreTypes))
+		for i, storeType := range excludeStoreTypes {
+			placeholders[i] = fmt.Sprintf("$%d", i+3)
+			args = append(args, storeType)
+		}
+
+		condition += " AND store_type NOT IN (" + strings.Join(placeholders, ",") + ")"
+	}
+
+	//#nosec G202 -- Safe: uses parameterized placeholders ($3, $4, etc), not user input
 	query := `
         SELECT id, blob_key, file_type, store_type, delete_at_height, retry_count
         FROM scheduled_blob_deletions
-        WHERE delete_at_height <= $1
+        WHERE ` + condition + `
         ORDER BY delete_at_height ASC, id ASC
         LIMIT $2
     `
@@ -313,7 +329,7 @@ func (s *SQL) AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit
 		query += "\n        FOR UPDATE SKIP LOCKED"
 	}
 
-	rows, err := s.db.QueryContext(ctx, query, height, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to acquire deletion batch", err)
 	}

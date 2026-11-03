@@ -123,6 +123,7 @@ func (t *TeranodeTestEnv) SetupDockerNodes() error {
 		mapSettings := t.TConfig.Teranode.SettingsMap()
 		for key, val := range mapSettings {
 			settings := settings.NewSettings(val)
+			settings.GRPCAdminAPIKey = "docker-e2e-test-admin-key"
 			nodeName := strings.ReplaceAll(key, "SETTINGS_CONTEXT_", "teranode")
 			svNodeName := strings.ReplaceAll(nodeName, "tera", "sv")
 			t.Nodes = append(t.Nodes, TeranodeTestClient{
@@ -646,6 +647,7 @@ func (t *TeranodeTestEnv) RestartDockerNodes(envSettings map[string]string) erro
 		order := []string{"SETTINGS_CONTEXT_1", "SETTINGS_CONTEXT_2", "SETTINGS_CONTEXT_3"}
 		for idx, key := range order {
 			settings := settings.NewSettings(envSettings[key])
+			settings.GRPCAdminAPIKey = "docker-e2e-test-admin-key"
 			t.Nodes[idx].Name = nodeNames[idx]
 			t.Nodes[idx].Settings = settings
 			t.Logger.Infof("Settings context: %s", envSettings[key])

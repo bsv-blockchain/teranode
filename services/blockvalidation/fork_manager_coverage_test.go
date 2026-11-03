@@ -49,7 +49,7 @@ func TestForkManager_GetForkStats(t *testing.T) {
 
 	// Mark a block as processing in fork1
 	blockHash := fork1.Blocks[0]
-	fm.StartProcessingBlock(blockHash)
+	fm.StartProcessingBlock(blockHash, PriorityChainExtending)
 
 	// Get stats
 	stats := fm.GetForkStats()

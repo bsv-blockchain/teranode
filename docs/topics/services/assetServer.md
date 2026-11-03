@@ -437,14 +437,15 @@ The Asset Server provides health check endpoints for monitoring and orchestratio
     - Response: Plain text with uptime information
     - Status: 200 OK when service is alive
 
-- **GET /health**: Readiness probe endpoint
-    - Checks readiness of all service dependencies
-    - Verifies HTTP server, UTXO store, transaction store, block persister store, and blockchain client
-    - Returns 200 OK when all dependencies are ready
-    - Returns 503 Service Unavailable if any dependency is not ready
-    - Response includes details about dependency status
+- **GET /health**: Dependency status endpoint
+    - Checks HTTP server, UTXO store, transaction store, block persister store, and blockchain client
+    - **By default it always returns 200 OK**, with each dependency's status in the body; a failing dependency does not change the status code
+    - Returns 503 Service Unavailable when a dependency is not ready **only if `asset_healthStrictStatus = true`**
+    - The body is the dependency JSON by default; with `asset_publicHealthDetail = false` it is the plain string `OK` or `UNAVAILABLE`
 
 **Kubernetes Integration Example:**
+
+Operator-managed deployments probe the service health port instead (`/health/readiness` and `/health/liveness` on port 8000), which already returns 503 when a dependency is unhealthy. The example below probes the Asset HTTP port directly. With the default `asset_healthStrictStatus = false`, the readiness probe on `/health` never fails. Setting it to `true` makes the probe fail whenever a dependency is unhealthy: a UTXO-store outage such as Aerospike `stop_writes` then removes every Asset pod from its Service, and peers catching up from this node lose their block and subtree source until the dependency recovers.
 
 ```yaml
 livenessProbe:
@@ -861,7 +862,7 @@ The asset service enforces a tiered rate limit as defense in depth (it does **no
 - **Peer** — requests with a valid Ed25519 signature, where the peer ID is listed in `asset_peerAuthAllowlist`. Bucketed by libp2p peer ID (not IP), so two authenticated peers behind one NAT or CDN egress get independent buckets. Rate: `asset_httpRateLimit × asset_httpPeerRateMultiplier` req/s, default `1024 × 5 = 5120`.
 - **Miner** — authenticated peers whose `BlocksReceived > 0` and `ReputationScore ≥ asset_peerMinerReputationThreshold` (default `50.0`), and who are in `asset_peerAuthAllowlist`. Either **fully exempt** (default, `asset_httpMinerRateLimit = 0`) or bucketed per peer ID at `asset_httpMinerRateLimit` req/s when set. Setting an explicit cap is recommended as defense in depth.
 
-Heavy endpoints (`/subtree*`, `/blocks/:hash`, `/block/:hash`, `/block_legacy/:hash`, `/rest/block/:hash.bin`, and `POST /subtree/:hash/txs`) carry an additional, stricter limiter at `asset_httpHeavyRateLimit` req/s (default `10`). The global and heavy limiters stack — a request must pass both.
+Heavy endpoints (`/subtree*`, `/blocks/:hash`, `/block/:hash`, `/block_legacy/:hash`, `/rest/block/:hash.bin`, `POST /subtree/:hash/txs`, and the `/headers_to_common_ancestor/:hash` variants) carry an additional, stricter limiter at `asset_httpHeavyRateLimit` req/s (default `10`). The global and heavy limiters stack — a request must pass both.
 
 **Allowlist is opt-in.** When `asset_peerAuthAllowlist` is empty (the default), peer signatures are still cryptographically verified (replay cache, body digest, freshness window all apply) but no tier elevation is granted — every authenticated peer is treated as `tierUnverified` for rate-limit purposes. Operators must explicitly list peer IDs they want to trust before any peer benefits from the elevated rate.
 

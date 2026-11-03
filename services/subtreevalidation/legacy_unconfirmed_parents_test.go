@@ -88,7 +88,7 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 
 		fsmClient := &fsmStateOverrideClient{ClientI: blockchainClient, state: fsmState}
 
-		server, err := New(context.Background(), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, recordingClient, fsmClient, nilConsumer, nilConsumer, nil, nil)
+		server, err := New(newCancelCtx(t), ulogger.TestLogger{}, tSettings, subtreeStore, txStore, utxoStore, recordingClient, fsmClient, nilConsumer, nilConsumer, nil, nil)
 		require.NoError(t, err)
 
 		return server, recordingClient
@@ -161,6 +161,26 @@ func TestCheckSubtreeFromBlockLegacyUnconfirmedParents(t *testing.T) {
 				"resolution flag must be active in RUNNING too — FSM-gating it wedged testnet catch-up at 1740437")
 			require.True(t, opts.AddTXToBlockAssembly,
 				"RUNNING-state legacy blocks must keep feeding block assembly (reorg resilience) — upstream behaviour")
+		}
+	})
+
+	t.Run("IDLE state: assembly disabled", func(t *testing.T) {
+		InitPrometheusMetrics()
+
+		// An operator STOP can park a node in IDLE while its catchup batch is
+		// still validating historical blocks. Only RUNNING may feed assembly.
+		childSubtree := singleNodeSubtree(t, childHash)
+		server, recordingClient := newServerWithFSMState(t, blockchain.FSMStateIDLE, subtreeFixture{childSubtree, childTx.ExtendedBytes()})
+
+		response, err := server.CheckSubtreeFromBlock(context.Background(), legacyRequest(childSubtree))
+		require.NoError(t, err)
+		require.True(t, response.Blessed)
+
+		recorded := recordingClient.recordedOptions(*childHash)
+		require.NotEmpty(t, recorded, "child transaction was not validated")
+
+		for _, opts := range recorded {
+			require.False(t, opts.AddTXToBlockAssembly, "IDLE must not feed block assembly")
 		}
 	})
 

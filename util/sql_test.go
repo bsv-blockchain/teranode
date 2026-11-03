@@ -737,3 +737,157 @@ func TestSQLiteConnectionString(t *testing.T) {
 		assert.Equal(t, 5000, busyTimeout, "Busy timeout should be 5000ms")
 	})
 }
+
+// boolPtr returns a pointer to b, for building PostgresSettings literals
+// where CircuitBreakerEnabled is *bool (nil means "inherit global").
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+// postgresCircuitBreakerTestSettings returns global settings with a
+// non-zero pool config so InitPostgresDB doesn't fall over on the unrelated
+// zero-value pool fields; only the circuit breaker fields vary per test.
+func postgresCircuitBreakerTestSettings(cb settings.PostgresSettings) *settings.Settings {
+	cb.MaxOpenConns = 50
+	cb.MaxIdleConns = 10
+	cb.ConnMaxLifetime = 5 * time.Minute
+	cb.ConnMaxIdleTime = time.Minute
+
+	return &settings.Settings{Postgres: cb}
+}
+
+// TestInitPostgresDB_CircuitBreakerInstalled is the load-bearing test for this
+// change: postgres_circuitBreakerEnabled=true plus non-zero thresholds must
+// actually reach db.SetCircuitBreaker inside InitPostgresDB. Before the
+// settings wiring, CircuitBreakerEnabled was permanently the Go zero value
+// (false), so this breaker was never installed on any Postgres store.
+//
+// stdlib.OpenDB() does not dial the server, so this exercises the full
+// InitPostgresDB configuration path (pool, retry, circuit breaker) without
+// needing a live Postgres connection.
+func TestInitPostgresDB_CircuitBreakerInstalled(t *testing.T) {
+	logger := &mockLogger{}
+	storeURL, err := url.Parse("postgres://user:pass@localhost:5432/testdb")
+	require.NoError(t, err)
+
+	tSettings := postgresCircuitBreakerTestSettings(settings.PostgresSettings{
+		CircuitBreakerEnabled:          boolPtr(true),
+		CircuitBreakerFailureThreshold: 5,
+		CircuitBreakerHalfOpenMax:      3,
+		CircuitBreakerCooldown:         30 * time.Second,
+		CircuitBreakerFailureWindow:    10 * time.Second,
+	})
+
+	db, err := util.InitPostgresDB(logger, storeURL, tSettings, nil)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer func() { _ = db.Close() }()
+
+	cb := db.GetCircuitBreaker()
+	require.NotNil(t, cb, "circuit breaker must be installed when enabled with valid thresholds")
+}
+
+// TestInitPostgresDB_CircuitBreakerNotInstalledByDefault pins that the
+// breaker stays uninstalled with no circuit breaker configuration at all -
+// the struct-tag defaults (Enabled=false) must not change until an operator
+// opts in.
+func TestInitPostgresDB_CircuitBreakerNotInstalledByDefault(t *testing.T) {
+	logger := &mockLogger{}
+	storeURL, err := url.Parse("postgres://user:pass@localhost:5432/testdb")
+	require.NoError(t, err)
+
+	tSettings := postgresCircuitBreakerTestSettings(settings.PostgresSettings{})
+
+	db, err := util.InitPostgresDB(logger, storeURL, tSettings, nil)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer func() { _ = db.Close() }()
+
+	require.Nil(t, db.GetCircuitBreaker(), "circuit breaker must stay uninstalled when not explicitly enabled")
+}
+
+// TestInitPostgresDB_CircuitBreakerZeroThresholdsNoOp guards the
+// NewCircuitBreaker nil-return branch (util/sql.go: Enabled=true with a
+// zero-value threshold/timing field warns and installs nothing) for callers
+// that build PostgresSettings directly, as this test does. Configuration
+// cannot reach this state: the global block always supplies non-zero
+// defaults (settings/settings.go), and a per-service override's zero
+// threshold/timing fields are replaced by those globals before InitPostgresDB
+// evaluates them. This test would still catch a regression that removed that
+// zero-fallback merge.
+func TestInitPostgresDB_CircuitBreakerZeroThresholdsNoOp(t *testing.T) {
+	logger := &mockLogger{}
+	storeURL, err := url.Parse("postgres://user:pass@localhost:5432/testdb")
+	require.NoError(t, err)
+
+	tSettings := postgresCircuitBreakerTestSettings(settings.PostgresSettings{
+		CircuitBreakerEnabled: boolPtr(true),
+	})
+
+	db, err := util.InitPostgresDB(logger, storeURL, tSettings, nil)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer func() { _ = db.Close() }()
+
+	require.Nil(t, db.GetCircuitBreaker(), "zero thresholds must not silently produce a working breaker")
+}
+
+// TestInitPostgresDB_ServiceCircuitBreakerOptOutOverridesGlobal pins the
+// per-service opt-out: a service that explicitly sets
+// CircuitBreakerEnabled=false must end up with the breaker OFF even when the
+// global default is ON. Before the *bool migration, the per-service field
+// defaulted to the Go zero value false, indistinguishable from "unset", so
+// the merge in InitPostgresDB always forced the breaker on whenever the
+// global was on - there was no way to opt a single service out.
+func TestInitPostgresDB_ServiceCircuitBreakerOptOutOverridesGlobal(t *testing.T) {
+	logger := &mockLogger{}
+	storeURL, err := url.Parse("postgres://user:pass@localhost:5432/testdb")
+	require.NoError(t, err)
+
+	tSettings := postgresCircuitBreakerTestSettings(settings.PostgresSettings{
+		CircuitBreakerEnabled:          boolPtr(true),
+		CircuitBreakerFailureThreshold: 5,
+		CircuitBreakerHalfOpenMax:      3,
+		CircuitBreakerCooldown:         30 * time.Second,
+		CircuitBreakerFailureWindow:    10 * time.Second,
+	})
+
+	servicePoolSettings := &settings.PostgresSettings{
+		CircuitBreakerEnabled: boolPtr(false),
+	}
+
+	db, err := util.InitPostgresDB(logger, storeURL, tSettings, servicePoolSettings)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer func() { _ = db.Close() }()
+
+	require.Nil(t, db.GetCircuitBreaker(), "explicit per-service false must opt out even when the global breaker is enabled")
+}
+
+// TestInitPostgresDB_ServiceCircuitBreakerUnsetInheritsGlobal pins the other
+// half of the tri-state: a service that leaves CircuitBreakerEnabled unset
+// (nil) inherits whatever the global setting is.
+func TestInitPostgresDB_ServiceCircuitBreakerUnsetInheritsGlobal(t *testing.T) {
+	logger := &mockLogger{}
+	storeURL, err := url.Parse("postgres://user:pass@localhost:5432/testdb")
+	require.NoError(t, err)
+
+	tSettings := postgresCircuitBreakerTestSettings(settings.PostgresSettings{
+		CircuitBreakerEnabled:          boolPtr(true),
+		CircuitBreakerFailureThreshold: 5,
+		CircuitBreakerHalfOpenMax:      3,
+		CircuitBreakerCooldown:         30 * time.Second,
+		CircuitBreakerFailureWindow:    10 * time.Second,
+	})
+
+	servicePoolSettings := &settings.PostgresSettings{
+		MaxOpenConns: 100, // some unrelated override; CircuitBreakerEnabled left nil
+	}
+
+	db, err := util.InitPostgresDB(logger, storeURL, tSettings, servicePoolSettings)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	defer func() { _ = db.Close() }()
+
+	require.NotNil(t, db.GetCircuitBreaker(), "unset per-service value must inherit the enabled global breaker")
+}

@@ -29,21 +29,29 @@ type LegacyPeerResponse struct {
 //
 // swagger:model PeerInfoResponse
 type PeerInfoResponse struct {
-	ID              string `json:"id"`
-	Transport       string `json:"transport"`
-	ClientName      string `json:"client_name"`
-	Height          uint32 `json:"height"`
-	BlockHash       string `json:"block_hash"`
-	DataHubURL      string `json:"data_hub_url"`
-	NetworkAddress  string `json:"network_address,omitempty"`
-	BanScore        int    `json:"ban_score"`
-	IsBanned        bool   `json:"is_banned"`
-	IsConnected     bool   `json:"is_connected"`
-	ConnectedAt     int64  `json:"connected_at"`
-	BytesSent       uint64 `json:"bytes_sent"`
-	BytesReceived   uint64 `json:"bytes_received"`
-	LastBlockTime   int64  `json:"last_block_time"`
-	LastMessageTime int64  `json:"last_message_time"`
+	ID         string `json:"id"`
+	Transport  string `json:"transport"`
+	ClientName string `json:"client_name"`
+	// Height is the peer's latest known block height. For a libp2p peer it is
+	// capped against local progress and is what sync decisions use; for a
+	// legacy (wire-protocol) peer it is the height the peer reported, uncapped,
+	// and no sync decision reads it.
+	Height uint32 `json:"height"`
+	// AdvertisedHeight is a libp2p peer's raw claim, differing from Height only
+	// while this node is catching up. It is 0 for legacy peers, which never
+	// report it, and for libp2p peers on versions that predate the field.
+	AdvertisedHeight uint32 `json:"advertised_height"`
+	BlockHash        string `json:"block_hash"`
+	DataHubURL       string `json:"data_hub_url"`
+	NetworkAddress   string `json:"network_address,omitempty"`
+	BanScore         int    `json:"ban_score"`
+	IsBanned         bool   `json:"is_banned"`
+	IsConnected      bool   `json:"is_connected"`
+	ConnectedAt      int64  `json:"connected_at"`
+	BytesSent        uint64 `json:"bytes_sent"`
+	BytesReceived    uint64 `json:"bytes_received"`
+	LastBlockTime    int64  `json:"last_block_time"`
+	LastMessageTime  int64  `json:"last_message_time"`
 
 	// Catchup metrics
 	CatchupAttempts        int64   `json:"catchup_attempts"`
@@ -60,6 +68,36 @@ type PeerInfoResponse struct {
 
 	// Legacy holds wire-protocol-only fields, absent for a libp2p peer.
 	Legacy *LegacyPeerResponse `json:"legacy,omitempty"`
+}
+
+// MinimalPeerInfoResponse is the peer shape returned when
+// asset_publicPeersDetail is off. It keeps what a client needs to find and
+// reach a peer and drops this node's private opinion of it: ban state,
+// reputation, malicious counters, per-peer traffic counters, the last catchup
+// error text and the wire-protocol fingerprint. Those tell an attacker which
+// peers this node already distrusts and how close a given peer is to being
+// banned.
+//
+// swagger:model MinimalPeerInfoResponse
+type MinimalPeerInfoResponse struct {
+	ID              string `json:"id"`
+	Transport       string `json:"transport"`
+	ClientName      string `json:"client_name"`
+	Height          uint32 `json:"height"`
+	BlockHash       string `json:"block_hash"`
+	DataHubURL      string `json:"data_hub_url"`
+	NetworkAddress  string `json:"network_address,omitempty"`
+	IsConnected     bool   `json:"is_connected"`
+	ConnectedAt     int64  `json:"connected_at"`
+	LastMessageTime int64  `json:"last_message_time"`
+}
+
+// MinimalPeersResponse is the PeersResponse counterpart for the minimal shape.
+//
+// swagger:model MinimalPeersResponse
+type MinimalPeersResponse struct {
+	Peers []MinimalPeerInfoResponse `json:"peers"`
+	Count int                       `json:"count"`
 }
 
 // PeersResponse represents the JSON response containing all peers.
@@ -100,21 +138,22 @@ func peerInfoToResponse(peer *blockchain.PeerInfo) PeerInfoResponse {
 	}
 
 	response := PeerInfoResponse{
-		ID:              peer.ID,
-		Transport:       transportLabel(peer.TransportType),
-		ClientName:      peer.ClientName,
-		Height:          peer.Height,
-		BlockHash:       blockHashStr,
-		DataHubURL:      peer.DataHubURL,
-		NetworkAddress:  peer.NetworkAddress,
-		BanScore:        int(peer.BanScore),
-		IsBanned:        peer.IsBanned,
-		IsConnected:     peer.IsConnected,
-		ConnectedAt:     timeToUnix(peer.ConnectedAt),
-		BytesSent:       peer.BytesSent,
-		BytesReceived:   peer.BytesReceived,
-		LastBlockTime:   timeToUnix(peer.LastBlockTime),
-		LastMessageTime: timeToUnix(peer.LastMessageTime),
+		ID:               peer.ID,
+		Transport:        transportLabel(peer.TransportType),
+		ClientName:       peer.ClientName,
+		Height:           peer.Height,
+		AdvertisedHeight: peer.AdvertisedHeight,
+		BlockHash:        blockHashStr,
+		DataHubURL:       peer.DataHubURL,
+		NetworkAddress:   peer.NetworkAddress,
+		BanScore:         int(peer.BanScore),
+		IsBanned:         peer.IsBanned,
+		IsConnected:      peer.IsConnected,
+		ConnectedAt:      timeToUnix(peer.ConnectedAt),
+		BytesSent:        peer.BytesSent,
+		BytesReceived:    peer.BytesReceived,
+		LastBlockTime:    timeToUnix(peer.LastBlockTime),
+		LastMessageTime:  timeToUnix(peer.LastMessageTime),
 
 		// Catchup-specific counters. The timestamps remain the generic
 		// interaction ones; catchup-scoped timestamps are not tracked.
@@ -147,6 +186,27 @@ func peerInfoToResponse(peer *blockchain.PeerInfo) PeerInfoResponse {
 	return response
 }
 
+// minimalPeerInfoToResponse converts one registry peer to its redacted JSON form.
+func minimalPeerInfoToResponse(peer *blockchain.PeerInfo) MinimalPeerInfoResponse {
+	blockHashStr := ""
+	if peer.BlockHash != nil {
+		blockHashStr = peer.BlockHash.String()
+	}
+
+	return MinimalPeerInfoResponse{
+		ID:              peer.ID,
+		Transport:       transportLabel(peer.TransportType),
+		ClientName:      peer.ClientName,
+		Height:          peer.Height,
+		BlockHash:       blockHashStr,
+		DataHubURL:      peer.DataHubURL,
+		NetworkAddress:  peer.NetworkAddress,
+		IsConnected:     peer.IsConnected,
+		ConnectedAt:     timeToUnix(peer.ConnectedAt),
+		LastMessageTime: timeToUnix(peer.LastMessageTime),
+	}
+}
+
 // GetPeers returns every peer in the centralized registry, of either transport.
 // It reads the registry directly rather than through the p2p service: the
 // registry keys legacy peers by a "legacy:host:port" string, which a libp2p
@@ -172,6 +232,23 @@ func (h *HTTP) GetPeers(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, PeersResponse{
 			Peers: []PeerInfoResponse{},
 			Count: 0,
+		})
+	}
+
+	if !h.settings.Asset.PublicPeersDetail {
+		minimalResponses := make([]MinimalPeerInfoResponse, 0, len(peers))
+
+		for _, peer := range peers {
+			if peer == nil {
+				continue
+			}
+
+			minimalResponses = append(minimalResponses, minimalPeerInfoToResponse(peer))
+		}
+
+		return c.JSON(http.StatusOK, MinimalPeersResponse{
+			Peers: minimalResponses,
+			Count: len(minimalResponses),
 		})
 	}
 

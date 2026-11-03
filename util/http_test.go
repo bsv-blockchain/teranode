@@ -2,6 +2,7 @@ package util
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net"
@@ -10,11 +11,13 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1468,6 +1471,158 @@ func TestDoHTTPRequestBodyReaderWithRetry_ContextCancelAbortsRetries(t *testing.
 		"should not fire all 6 attempts if cancelled at 50ms with 200ms+ backoffs")
 }
 
+// Requests rejected together must not retry together: the wait is jittered upwards, never
+// below the server's Retry-After.
+func TestDoHTTPRequestBodyReaderWithRetry_JittersRetryAfter(t *testing.T) {
+	const retryAfter = time.Second
+
+	var (
+		mu    sync.Mutex
+		times []time.Time
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Record only our GETs: anything else probing the loopback port must not skew the gaps.
+		if r.Method != http.MethodGet {
+			return
+		}
+
+		mu.Lock()
+		times = append(times, time.Now())
+		n := len(times)
+		mu.Unlock()
+
+		if n == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := retryConfig{maxAttempts: 2, initialDelay: 10 * time.Millisecond, maxDelay: 5 * time.Second}
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, cfg)
+	require.NoError(t, err)
+	require.NoError(t, body.Close())
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, times, 2)
+
+	gap := times[1].Sub(times[0])
+	require.GreaterOrEqual(t, gap, retryAfter-50*time.Millisecond, "jitter must never undercut Retry-After")
+	require.Less(t, gap, retryAfter+retryAfter/2+500*time.Millisecond, "jitter adds at most half")
+}
+
+// With a caller deadline the ladder stops at half of it rather than sleeping the deadline
+// away, and reports the rejection, not a context error.
+func TestDoHTTPRequestBodyReaderWithRetry_LadderSpendsAtMostHalfTheDeadline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	cfg := retryConfig{maxAttempts: 10, initialDelay: 100 * time.Millisecond, maxDelay: time.Second}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := doHTTPRequestBodyReaderWithRetry(ctx, server.URL, cfg)
+
+	// Not asserted against a tighter wall-clock bound: when another test has installed a
+	// signer, each retry also waits out the current second, which the budget does not count.
+	require.Error(t, err)
+	require.NoError(t, ctx.Err(), "the ladder must stop before the caller's deadline")
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited), "got %T: %v", err, err)
+	require.False(t, errors.IsContextError(err), "got %T: %v", err, err)
+}
+
+// A deadline that expires during an attempt that follows a rejection is reported as that
+// rejection: the peer's rate limiting is what used the time up.
+func TestDoHTTPRequestBodyReaderWithRetry_DeadlineAfterRejectionKeepsRejectionClass(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Count only our GETs: anything else probing the loopback port must not skew the count.
+		if r.Method != http.MethodGet {
+			return
+		}
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	cfg := retryConfig{maxAttempts: 4, initialDelay: 10 * time.Millisecond, maxDelay: 50 * time.Millisecond}
+
+	// Long enough to outlast the up-to-1s wait for the next second that a signer, if another
+	// test installed one, adds before the retry, so the deadline lands in the second attempt.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, err := doHTTPRequestBodyReaderWithRetry(ctx, server.URL, cfg)
+	require.Error(t, err)
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited), "got %T: %v", err, err)
+	require.False(t, errors.IsContextError(err), "got %T: %v", err, err)
+	require.Contains(t, err.Error(), "still rejected after 1 attempts", "the attempt the deadline cut short got no answer and is not counted")
+}
+
+// A deadline with no rejection before it is an ordinary timeout and stays one.
+func TestDoHTTPRequestBodyReaderWithRetry_DeadlineWithoutRejectionStaysContextError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := doHTTPRequestBodyReaderWithRetry(ctx, server.URL, testRetryConfig)
+	require.Error(t, err)
+	require.True(t, errors.IsContextError(err), "got %T: %v", err, err)
+	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "got %T: %v", err, err)
+	require.False(t, errors.Is(err, errors.ErrServiceUnavailable), "got %T: %v", err, err)
+}
+
+// A status the server did send is never relabelled: a 404 that follows a 429 stays a 404 even
+// when the deadline has also passed by the time it is returned.
+func TestDoHTTPRequestBodyReaderWithRetry_StatusAfterRejectionIsNotRelabelled(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Count only our GETs: anything else probing the loopback port must not skew the count.
+		if r.Method != http.MethodGet {
+			return
+		}
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.(http.Flusher).Flush()
+		// Hold the error body open past the caller's deadline, so the deadline has expired
+		// by the time the 404 is returned.
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	cfg := retryConfig{maxAttempts: 4, initialDelay: 10 * time.Millisecond, maxDelay: 50 * time.Millisecond}
+
+	// Long enough to outlast a signer's wait for the next second, if another test left one
+	// installed, so the 404 attempt is reached.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, err := doHTTPRequestBodyReaderWithRetry(ctx, server.URL, cfg)
+	require.Error(t, err)
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+	require.True(t, errors.Is(err, errors.ErrNotFound), "got %T: %v", err, err)
+	require.False(t, errors.Is(err, errors.ErrServiceRateLimited), "got %T: %v", err, err)
+}
+
 func TestParseRetryAfter(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -1588,4 +1743,608 @@ func TestSharedAndSafeClientsShareRedirectRule(t *testing.T) {
 			require.Equal(t, sharedErr.Error(), safeErr.Error(), "both clients must give the same reason")
 		})
 	}
+}
+
+// TestBuildHTTPErrorRedactsURLPassword covers the status-code error built for a
+// non-OK response. That message is logged and forwarded, so a URL carrying a
+// password must reach it masked. Every return is exercised: no body, a body, a
+// truncated body, and a body read that fails.
+func TestBuildHTTPErrorRedactsURLPassword(t *testing.T) {
+	const password = "canary-http-error-password"
+
+	rawURL := "http://teranode:" + password + "@blob.example:8080/subtree"
+
+	bodies := map[string]func() io.ReadCloser{
+		"no body":    func() io.ReadCloser { return nil },
+		"short body": func() io.ReadCloser { return io.NopCloser(strings.NewReader("not found")) },
+		"truncated body": func() io.ReadCloser {
+			return io.NopCloser(strings.NewReader(strings.Repeat("x", maxHTTPErrorBodyBytes+10)))
+		},
+		"failed read": func() io.ReadCloser { return io.NopCloser(failingReader{}) },
+	}
+
+	for name, body := range bodies {
+		t.Run(name, func(t *testing.T) {
+			resp := &http.Response{StatusCode: http.StatusNotFound, Body: body()}
+
+			err := buildHTTPError(resp, rawURL)
+			require.Error(t, err)
+
+			require.NotContains(t, err.Error(), password, "the URL password reached the error message")
+			require.Contains(t, err.Error(), "teranode", "the username should survive redaction")
+			require.Contains(t, err.Error(), "blob.example:8080", "the host should survive redaction")
+		})
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+// withCredentials rewrites a test server URL to carry userinfo, so the
+// assertions below are about a URL that really holds a password rather than
+// about a string that merely looks like one.
+func withCredentials(t *testing.T, serverURL, password, path string) string {
+	t.Helper()
+
+	u, err := url.Parse(serverURL)
+	require.NoError(t, err)
+
+	u.User = url.UserPassword("teranode", password)
+	u.Path = path
+
+	return u.String()
+}
+
+// requireRedacted is the assertion every branch below shares: the password is
+// gone, and enough of the URL survives that the operator can still tell which
+// peer failed.
+func requireRedacted(t *testing.T, err error, password, host string) {
+	t.Helper()
+
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), password, "the URL password reached the error message")
+	require.Contains(t, err.Error(), "teranode", "the username should survive redaction")
+	require.Contains(t, err.Error(), host, "the host should survive redaction")
+}
+
+// TestDoHTTPRequestRedactsURLPasswordOnEveryFailurePath covers the branches
+// TestBuildHTTPErrorRedactsURLPassword does not reach: the body-read timeout,
+// the body-read error, and the "returned HTML" rejection. Each formats the
+// request URL into its message, so each is a place a store password can escape.
+func TestDoHTTPRequestRedactsURLPasswordOnEveryFailurePath(t *testing.T) {
+	const password = "canary-dohttp-password"
+
+	t.Run("timed out while reading body", func(t *testing.T) {
+		// Headers first, then a body that never arrives, so the failure lands
+		// in the read select rather than in the request itself.
+		release := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "64")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-release
+		}))
+
+		defer func() {
+			close(release)
+			server.Close()
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+
+		u, err := url.Parse(server.URL)
+		require.NoError(t, err)
+
+		_, err = DoHTTPRequest(ctx, withCredentials(t, server.URL, password, "/subtree"))
+		requireRedacted(t, err, password, u.Host)
+		require.Contains(t, err.Error(), "timed out while reading body")
+	})
+
+	t.Run("failed to read body", func(t *testing.T) {
+		// Declaring more bytes than are written makes the server close the
+		// connection short, so io.ReadAll fails with an unexpected EOF.
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "1024")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("short"))
+		}))
+		defer server.Close()
+
+		u, err := url.Parse(server.URL)
+		require.NoError(t, err)
+
+		_, err = DoHTTPRequest(context.Background(), withCredentials(t, server.URL, password, "/subtree"))
+		requireRedacted(t, err, password, u.Host)
+		require.Contains(t, err.Error(), "failed to read body")
+	})
+
+	t.Run("returned HTML", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html>nope</html>"))
+		}))
+		defer server.Close()
+
+		u, err := url.Parse(server.URL)
+		require.NoError(t, err)
+
+		_, err = DoHTTPRequest(context.Background(), withCredentials(t, server.URL, password, "/subtree"))
+		requireRedacted(t, err, password, u.Host)
+		require.Contains(t, err.Error(), "returned HTML")
+	})
+}
+
+// TestDoHTTPRequestBodyReaderWithRetryRedactsAndRendersFully covers the message
+// built once the 503 ladder is exhausted. It carried three verbs and, after
+// errors.New* took lastErr as the wrapped error, only two arguments, so it
+// rendered "%!v(MISSING)" in production.
+func TestDoHTTPRequestBodyReaderWithRetryRedactsAndRendersFully(t *testing.T) {
+	const password = "canary-retry-password"
+
+	var attempts atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	cfg := retryConfig{maxAttempts: 2, initialDelay: time.Millisecond, maxDelay: time.Millisecond}
+
+	_, err = doHTTPRequestBodyReaderWithRetry(context.Background(), withCredentials(t, server.URL, password, "/subtree"), cfg)
+	requireRedacted(t, err, password, u.Host)
+
+	require.Equal(t, int32(2), attempts.Load(), "the ladder should have been exhausted")
+	require.Contains(t, err.Error(), "still rejected after 2 attempts")
+	require.NotContains(t, err.Error(), "MISSING", "the message is formatted with fewer arguments than verbs")
+	require.NotContains(t, err.Error(), "%!", "the message renders a format verb literally")
+}
+
+// TestValidateURLRejectsUnparseableURLWithoutEchoingIt pins the last message in
+// this file shaped like the leak the file was swept for: url.Parse embeds the
+// string it was given verbatim in its error, so the reason is unwrapped from it
+// rather than wrapped whole.
+//
+// No credential reaches this line today - callers pass peer base URLs, and the
+// userinfo check a few lines below rejects the rest - so this is consistency
+// with the rest of the file rather than a live exposure.
+func TestValidateURLRejectsUnparseableURLWithoutEchoingIt(t *testing.T) {
+	const password = "canary-validateurl-password"
+
+	restore := SSRFProtectionEnabled()
+	SetSSRFProtection(true)
+
+	defer SetSSRFProtection(restore)
+
+	// A space in the host is what makes url.Parse refuse it.
+	err := ValidateURL("http://teranode:" + password + "@blob server:8080/subtree")
+	require.Error(t, err)
+
+	require.NotContains(t, err.Error(), password, "the URL password reached the error message")
+	require.NotContains(t, err.Error(), "teranode:", "the URL userinfo reached the error message")
+
+	require.Contains(t, err.Error(), "invalid URL")
+	require.Contains(t, strings.ToLower(err.Error()), "invalid character",
+		"expected the parse failure reason to survive, got: %v", err)
+	require.NotContains(t, err.Error(), "%", "the message renders a format verb literally")
+
+	// A raw "#" in the password ends the authority there, and url.Parse's own
+	// reason quotes everything before it as an invalid port. The full password
+	// is never in that reason, so the assertion is on the part that used to be.
+	err = ValidateURL("http://teranode:canary-validate#url-password@blobserver:8080/subtree")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "canary-validate", "the start of the URL password reached the error message")
+	require.Contains(t, err.Error(), "invalid URL")
+}
+
+// TestDoLocalServiceHTTPRequestRejectsUnparseableURLWithoutEchoingIt covers the
+// one request path that runs no ValidateURL before building the request, so the
+// *url.Error from http.NewRequestWithContext is the first thing to see a bad URL.
+// That error quotes the URL whole. The local service URLs come from this node's
+// settings, where userinfo is a working credential.
+func TestDoLocalServiceHTTPRequestRejectsUnparseableURLWithoutEchoingIt(t *testing.T) {
+	// A space in the host is what makes url.Parse refuse it; the password is
+	// intact in the string and in a leaking error.
+	const password = "canary-localservice-password"
+
+	_, err := DoLocalServiceHTTPRequestBodyReader(context.Background(), "http://teranode:"+password+"@asset server:8090/block")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), password, "the URL password reached the error message")
+	require.NotContains(t, err.Error(), "teranode:", "the URL userinfo reached the error message")
+	require.Contains(t, err.Error(), "failed to create http request")
+	require.Contains(t, strings.ToLower(err.Error()), "invalid character",
+		"expected the parse failure reason to survive, got: %v", err)
+
+	// A raw "/" in the password ends the authority there, and net/url's own
+	// reason quotes ":canary-local" as an invalid port.
+	_, err = DoLocalServiceHTTPRequestBodyReader(context.Background(), "http://teranode:canary-local/url-password@asset:8090/block")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "canary-local", "the start of the URL password reached the error message")
+	require.NotContains(t, err.Error(), "url-password", "the URL reached the error message")
+}
+
+func TestBuildHTTPError_429MapsToRateLimited(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte("rate limit exceeded"))
+	}))
+	defer server.Close()
+
+	_, err := DoHTTPRequestBodyReader(context.Background(), server.URL)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited),
+		"429 must classify as ErrServiceRateLimited so callers can back off; got %v", err)
+	require.False(t, errors.Is(err, errors.ErrServiceUnavailable),
+		"429 must NOT be ErrServiceUnavailable - that sentinel means a fault in this node's own stack")
+	require.False(t, errors.IsTransientLocalError(err),
+		"a peer rate-limiting us is not a transient LOCAL error; netsync peer-retention keys on this")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_RetriesOn429ThenSucceeds(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("rate limit exceeded"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok-after-429"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.NoError(t, err)
+	defer body.Close()
+
+	got, err := io.ReadAll(body)
+	require.NoError(t, err)
+	require.Equal(t, "ok-after-429", string(got))
+	require.Equal(t, int32(3), atomic.LoadInt32(&attempts), "exactly two retries before success")
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ExhaustsAttemptsOnPersistent429(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	_, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited),
+		"final error must stay ErrServiceRateLimited, not collapse to ErrServiceUnavailable; got %v", err)
+	require.False(t, errors.IsTransientLocalError(err))
+	require.Equal(t, int32(testRetryConfig.maxAttempts), atomic.LoadInt32(&attempts))
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_Honors429RetryAfter(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n == 1 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	cfg := retryConfig{maxAttempts: 4, initialDelay: 10 * time.Millisecond, maxDelay: 5 * time.Second}
+
+	start := time.Now()
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, cfg)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	defer body.Close()
+	require.GreaterOrEqual(t, elapsed, time.Second-100*time.Millisecond,
+		"Retry-After=1 on a 429 must be honored over the much smaller initialDelay")
+	require.Less(t, elapsed, 3*time.Second)
+}
+
+func TestDoHTTPRequestBodyReaderWithRetry_ResendsPOSTBodyEachAttempt(t *testing.T) {
+	var attempts int32
+	bodies := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, _ := io.ReadAll(r.Body)
+		bodies <- string(got)
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(bodies)
+
+	seen := 0
+	for b := range bodies {
+		require.Equal(t, "payload", b, "the request body must be re-sent in full on every attempt")
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
+}
+
+// TestDoHTTPRequestBodyReaderWithRetry_ContentTypeOctetStreamOnEveryAttempt pins #829 on
+// the retry path: a POST body sent through the retry helper must carry
+// application/octet-stream, not application/json, on every attempt including after a
+// 429/503 - a WAF in front of asset runs its JSON body parser on a application/json
+// request and 400s on a binary payload like a packed txid batch.
+func TestDoHTTPRequestBodyReaderWithRetry_ContentTypeOctetStreamOnEveryAttempt(t *testing.T) {
+	var attempts int32
+	contentTypes := make(chan string, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		contentTypes <- r.Header.Get("Content-Type")
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(contentTypes)
+
+	seen := 0
+	for ct := range contentTypes {
+		require.Equal(t, "application/octet-stream", ct)
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
+}
+
+// TestDoHTTPRequestBodyReaderWithRetry_SignsEveryAttempt pins the other half of the same
+// defect: the retry path built its request without going through loadHTTPRequestSigner, so
+// a signed catchup POST went out unsigned and an allowlisted peer dropped to the unverified
+// rate tier.
+func TestDoHTTPRequestBodyReaderWithRetry_SignsEveryAttempt(t *testing.T) {
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+
+	SetHTTPRequestSigner(NewEd25519RequestSigner(privKey))
+	defer SetHTTPRequestSigner(NewEd25519RequestSigner(nil))
+
+	var attempts int32
+	type attemptAuth struct {
+		signature string
+		timestamp string
+	}
+	signatures := make(chan attemptAuth, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		signatures <- attemptAuth{
+			signature: r.Header.Get("X-Peer-Signature"),
+			timestamp: r.Header.Get("X-Peer-Timestamp"),
+		}
+
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	body, err := doHTTPRequestBodyReaderWithRetry(context.Background(), server.URL, testRetryConfig, []byte("payload"))
+	require.NoError(t, err)
+	defer body.Close()
+
+	close(signatures)
+
+	seenSignatures := make(map[string]struct{})
+	seenTimestamps := make(map[string]struct{})
+	seen := 0
+	for a := range signatures {
+		require.NotEmpty(t, a.signature, "every attempt must be signed")
+		seenSignatures[a.signature] = struct{}{}
+		seenTimestamps[a.timestamp] = struct{}{}
+		seen++
+	}
+
+	require.Equal(t, 3, seen)
+	// A retry sent in the same Unix second as the previous attempt would be
+	// byte-identical (Ed25519 is deterministic, and the signed timestamp has
+	// one-second resolution), so the receiver's replay cache would reject it.
+	// Every retried attempt must therefore carry a distinct signed timestamp
+	// (and therefore a distinct signature).
+	require.Len(t, seenTimestamps, 3, "each retry must be signed with a distinct timestamp")
+	require.Len(t, seenSignatures, 3, "each retry must produce a distinct signature")
+}
+
+// TestSignerSignsRequests pins which installed signers make the retry loop
+// wait out the current second: only one that actually signs. A signer with
+// no key installs cleanly but adds no signature, so there is nothing to
+// replay and no reason to delay its retries.
+func TestSignerSignsRequests(t *testing.T) {
+	require.False(t, signerSignsRequests(nil))
+	require.False(t, signerSignsRequests(NewEd25519RequestSigner(nil)))
+
+	priv, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	require.NoError(t, err)
+	require.True(t, signerSignsRequests(NewEd25519RequestSigner(priv)))
+}
+
+// TestWaitOutRetrySecondHonoursCancellationAndBackwardSteps pins two branches of
+// the same-second wait: a previous second that is not behind the clock (the same
+// second, or one ahead after a backwards clock step) makes it wait, and a
+// cancelled context ends that wait with the context's error instead of sleeping.
+func TestWaitOutRetrySecondHonoursCancellationAndBackwardSteps(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	start := time.Now()
+	err := waitOutRetrySecond(ctx, time.Now().Unix()+1)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Less(t, time.Since(start), 500*time.Millisecond, "a cancelled context must not sleep out the second")
+
+	require.NoError(t, waitOutRetrySecond(context.Background(), time.Now().Unix()-5), "a second already behind the clock needs no wait")
+
+	// A previous second far ahead of the clock (a large backwards step) is beyond
+	// maxRetrySecondWait: nothing signed recently can collide, so don't sleep it out.
+	start = time.Now()
+	require.NoError(t, waitOutRetrySecond(context.Background(), time.Now().Unix()+5))
+	require.Less(t, time.Since(start), 500*time.Millisecond, "a large backwards step must not be slept out")
+}
+
+// TestDoHTTPRequestBoundedWithRetry_RetriesOn429ThenSucceeds pins the bounded variant used by
+// the GET /subtree fetches: a peer's 429 is retried instead of failing the subtree or block.
+func TestDoHTTPRequestBoundedWithRetry_RetriesOn429ThenSucceeds(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok-after-429"))
+	}))
+	defer server.Close()
+
+	got, err := doHTTPRequestBoundedWithRetry(context.Background(), server.URL, 1024, testRetryConfig)
+	require.NoError(t, err)
+	require.Equal(t, "ok-after-429", string(got))
+	require.Equal(t, int32(3), atomic.LoadInt32(&attempts), "exactly two retries before success")
+}
+
+func TestDoHTTPRequestBoundedWithRetry_RetriesOn503ThenSucceeds(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok-after-503"))
+	}))
+	defer server.Close()
+
+	got, err := doHTTPRequestBoundedWithRetry(context.Background(), server.URL, 1024, testRetryConfig)
+	require.NoError(t, err)
+	require.Equal(t, "ok-after-503", string(got))
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts))
+}
+
+func TestDoHTTPRequestBoundedWithRetry_ExhaustsAttemptsOnPersistent429(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	_, err := doHTTPRequestBoundedWithRetry(context.Background(), server.URL, 1024, testRetryConfig)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrServiceRateLimited),
+		"final error must stay ErrServiceRateLimited; got %v", err)
+	require.Equal(t, int32(testRetryConfig.maxAttempts), atomic.LoadInt32(&attempts))
+}
+
+// TestDoHTTPRequestBoundedWithRetry_KeepsTheSizeBound — the bound applies to the body that is
+// finally served, and an oversized body is not retried: it is the peer's answer, not a rejection.
+func TestDoHTTPRequestBoundedWithRetry_KeepsTheSizeBound(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&attempts, 1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, 65))
+	}))
+	defer server.Close()
+
+	_, err := doHTTPRequestBoundedWithRetry(context.Background(), server.URL, 64, testRetryConfig)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrExternal), "an over-cap body must fail as ErrExternal; got %v", err)
+	require.Equal(t, int32(2), atomic.LoadInt32(&attempts), "the over-cap body must not be retried")
+}
+
+func TestDoHTTPRequestBoundedWithRetry_NoRetryOn404(t *testing.T) {
+	var attempts int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	_, err := doHTTPRequestBoundedWithRetry(context.Background(), server.URL, 1024, testRetryConfig)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrNotFound), "a 404 must keep its class; got %v", err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&attempts))
+}
+
+// TestDoHTTPRequestBoundedWithRetry_UsesTheRequestTimeoutPerAttempt — each attempt without a
+// caller deadline gets the plain request timeout, as DoHTTPRequestBounded does, not the much
+// longer streaming timeout the body-reader retry path uses.
+func TestDoHTTPRequestBoundedWithRetry_UsesTheRequestTimeoutPerAttempt(t *testing.T) {
+	prevRequest, prevStreaming := httpRequestTimeout, httpStreamingTimeout
+	httpRequestTimeout, httpStreamingTimeout = 100, 60_000
+	defer func() { httpRequestTimeout, httpStreamingTimeout = prevRequest, prevStreaming }()
+
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	start := time.Now()
+	_, err := doHTTPRequestBoundedWithRetry(context.Background(), server.URL, 1024, testRetryConfig)
+	require.Error(t, err)
+	require.Less(t, time.Since(start), 5*time.Second, "the attempt must time out at the request timeout")
+}
+
+func TestDoLocalServiceHTTPRequestBodyReader_DoesNotFollowRedirects(t *testing.T) {
+	var targetReceivedToken atomic.Bool
+
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Teranode-Internal-Token") != "" {
+			targetReceivedToken.Store(true)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	_, err := DoLocalServiceHTTPRequestBodyReader(context.Background(), redirector.URL,
+		map[string]string{"X-Teranode-Internal-Token": "secret"})
+
+	require.Error(t, err, "the redirect response is not a 2xx, so the caller must see an error rather than the followed body")
+	require.False(t, targetReceivedToken.Load(), "the internal token header must never reach the redirect target")
 }

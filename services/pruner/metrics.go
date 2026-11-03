@@ -17,6 +17,9 @@ var (
 	prunerDeletingChildren prometheus.Counter
 	prunerCurrentHeight    prometheus.Gauge
 	prunerActive           prometheus.Gauge
+	// prunerPreserveParentsFailing counts consecutive cycles whose Phase 1 failed; Phase 2
+	// deletes nothing while it is above zero, so alert when it stays up
+	prunerPreserveParentsFailing prometheus.Gauge
 
 	// Blob deletion metrics
 	blobDeletionScheduledTotal  *prometheus.CounterVec
@@ -62,7 +65,7 @@ func _initPrometheusMetrics() {
 			Name:      "skipped_total",
 			Help:      "Number of pruner operations skipped",
 		},
-		[]string{"reason"}, // "block_assembly_timeout", "below_min_height", "fsm_error", "catchup_mode"
+		[]string{"reason"}, // "block_assembly_timeout", "below_min_height", "fsm_error", "catchup_mode", "preserve_parents_failed"
 	)
 
 	prunerErrors = promauto.NewCounterVec(
@@ -108,6 +111,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "pruner",
 			Name:      "active",
 			Help:      "Whether the pruner is currently active (1) or idle (0)",
+		},
+	)
+
+	prunerPreserveParentsFailing = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "pruner",
+			Name:      "preserve_parents_consecutive_failures",
+			Help:      "Consecutive pruner cycles whose parent preservation (phase 1) failed; nothing is deleted while above zero",
 		},
 	)
 

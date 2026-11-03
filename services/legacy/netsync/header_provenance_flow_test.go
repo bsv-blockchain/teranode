@@ -1,11 +1,8 @@
 package netsync
 
 import (
-	"container/list"
 	"context"
-	"fmt"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -13,282 +10,173 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/go-wire"
-	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/model"
-	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
-	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
-// Use the real SQL blockchain client so provenance tests exercise inventory
-// lookups and block delivery without mocked chain state.
+// newHeaderProvenanceManager builds a SyncManager whose header provenance comes
+// from the real path: a real SQL blockchain client (so the committed tip the
+// header cache anchors on is a genuine chain read), a header cache wired to the
+// chain's checkpoints, and headers-first mode on.
+//
+// It replaces upstream's version, which seeded a header list and a stored
+// nextCheckpoint. Neither exists on this branch: a headers batch is judged
+// against the node's committed tip and against the pinned checkpoint hashes, and
+// there is nothing else to seed.
 func newHeaderProvenanceManager(t *testing.T) (*SyncManager, *peer.Peer, *peerSyncState) {
 	t.Helper()
+
 	tSettings, params := newOutpointOnlySettings(t, true, true, 33_333)
+
 	storeURL, err := url.Parse("sqlitememory:///")
 	require.NoError(t, err)
+
 	store, err := blockchainstore.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close(context.Background())) })
+
 	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
 	require.NoError(t, err)
+
 	p := peer.NewInboundPeer(ulogger.TestLogger{}, tSettings, &peer.Config{})
-	state := &peerSyncState{requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Hour)}
-	t.Cleanup(state.requestedBlocks.Stop)
+	state := &peerSyncState{requestedTxns: expiringmap.New[chainhash.Hash, struct{}](time.Hour)}
+	t.Cleanup(state.requestedTxns.Stop)
+
 	sm := &SyncManager{
 		ctx: context.Background(), logger: ulogger.TestLogger{}, settings: tSettings,
 		chainParams: params, blockchainClient: client,
-		peerStates:      txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
-		requestedBlocks: expiringmap.New[chainhash.Hash, blockRequestOrigin](time.Minute),
-		headerList:      list.New(), blockSizeTracker: newBlockSizeTracker(10),
+		peerStates:       txmap.NewSyncedMap[*peer.Peer, *peerSyncState](),
+		blockDownloads:   newBlockDownloadTracker(blockRequestAssignmentTTL),
+		blockSizeTracker: newBlockSizeTracker(10),
+		headerCache:      newHeaderCache().WithCheckpoints(params.Checkpoints),
 	}
-	t.Cleanup(sm.requestedBlocks.Stop)
 	sm.peerStates.Set(p, state)
 	sm.storeSyncPeer(p, &syncPeerState{})
 	sm.headersFirstMode.Store(true)
+
 	return sm, p, state
 }
 
-func TestHeaderProvenance_CheckpointAdvanceDoesNotVerifyTail(t *testing.T) {
-	sm, p, state := newHeaderProvenanceManager(t)
-	anchor := hashFrom(0x41)
-	checkpointHeader := wire.NewBlockHeader(1, &anchor, &chainhash.Hash{}, 0x207fffff, 0)
-	checkpointHash := checkpointHeader.BlockHash()
-	sm.nextCheckpoint = &chaincfg.Checkpoint{Height: 11_111, Hash: &checkpointHash}
-	sm.headerList.PushBack(&headerNode{height: 11_110, hash: &anchor})
-	headers := wire.NewMsgHeaders()
-	require.NoError(t, headers.AddBlockHeader(checkpointHeader))
-	sm.handleHeadersMsg(&headersMsg{headers: headers, peer: p})
-	require.True(t, sm.blockOrigin(state, checkpointHash).headerProven,
-		"matching the pinned hash must preserve the IBD fast path")
-
-	// Block delivery advances the pending checkpoint independently of header
-	// verification. No header in the next interval has matched a pinned hash.
-	sm.nextCheckpoint = &chaincfg.Checkpoint{Height: 33_333, Hash: &chainhash.Hash{0x7f}}
-	tailHeader := wire.NewBlockHeader(1, &checkpointHash, &chainhash.Hash{}, 0x207fffff, 1)
-	tailHash := tailHeader.BlockHash()
-	tail := wire.NewMsgHeaders()
-	require.NoError(t, tail.AddBlockHeader(tailHeader))
-	sm.handleHeadersMsg(&headersMsg{headers: tail, peer: p})
-	sm.fetchHeaderBlocks() // also triggered by a delayed block from the previous run
-	origin, requested := state.requestedBlocks.Get(tailHash)
-	require.True(t, requested, "exercise the production request-provenance write")
-	require.False(t, origin.headerProven, "advancing the pending checkpoint must not bless the unverified tail")
-	require.False(t, sm.quickValidationAllowed(origin, 11_112))
+// pinCheckpoint points the manager's checkpoint list, and the cache that reads
+// it, at one (height, hash) pair. Both have to move together: the cache holds its
+// own copy of the list so Fill can judge a run under the lock that installs it.
+func pinCheckpoint(sm *SyncManager, height int32, hash *chainhash.Hash) {
+	sm.chainParams.Checkpoints = []chaincfg.Checkpoint{{Height: height, Hash: hash}}
+	sm.headerCache = newHeaderCache().WithCheckpoints(sm.chainParams.Checkpoints)
 }
 
-func TestHeaderProvenance_UnmatchedCheckpointDeniesRequests(t *testing.T) {
-	sm, p, state := newHeaderProvenanceManager(t)
-	anchor := hashFrom(0x42)
-	header := wire.NewBlockHeader(1, &anchor, &chainhash.Hash{}, 0x207fffff, 0)
-	hash := header.BlockHash()
-	sm.nextCheckpoint = &chaincfg.Checkpoint{Height: 11_111, Hash: &chainhash.Hash{0x7f}}
-	sm.headerList.PushBack(&headerNode{height: 11_110, hash: &anchor})
-	headers := wire.NewMsgHeaders()
-	require.NoError(t, headers.AddBlockHeader(header))
-	sm.handleHeadersMsg(&headersMsg{headers: headers, peer: p})
-	// A failed checkpoint comparison currently leaves the node in the list.
-	// Even if another block delivery requests it, it must never acquire trust.
-	sm.fetchHeaderBlocks()
-	require.False(t, sm.blockOrigin(state, hash).headerProven)
+// proveBlockOrigin installs a GENUINE header-cache proof that blk belongs to the
+// checkpoint-certified chain: it pins a checkpoint naming blk's own (height, hash)
+// and fills the cache with a run ending at blk's own header, rooted at whatever
+// blk.MsgBlock().Header.PrevBlock already names. headerCache.Fill does the real
+// linkage and hash-comparison work here — nothing about the proof is asserted
+// directly, only arranged so the real check can succeed honestly.
+//
+// blk's height must already be set (bsvutil.Block.SetHeight) and its PrevBlock
+// must already be final: both are read here, and pipelineBlockSink and
+// prepareSubtrees both call blk.Hash() before this could still change it safely.
+//
+// Used by every fixed-round test that needs a below-checkpoint block to take the
+// quick-validation / outpoint-only / unified fast paths, which all gate on
+// blockOrigin(hash).headerProven (GHSA-gggq-8f59-4jm9) — a merged-in requirement
+// this package's pipeline tests predate.
+func proveBlockOrigin(t *testing.T, sm *SyncManager, blk *bsvutil.Block) {
+	t.Helper()
+
+	height := blk.Height()
+	require.Greater(t, height, int32(0), "genesis cannot be proven; every gate already treats it as not fast-pathable")
+
+	hash := *blk.Hash()
+	sm.chainParams.Checkpoints = []chaincfg.Checkpoint{{Height: height, Hash: &hash}}
+	sm.headerCache = newHeaderCache().WithCheckpoints(sm.chainParams.Checkpoints)
+
+	require.True(t, sm.headerCache.Fill(blk.MsgBlock().Header.PrevBlock, height, []*wire.BlockHeader{&blk.MsgBlock().Header}),
+		"the one-header run ending at blk must link and agree with the checkpoint it was just given, or this helper's own construction is broken")
+	require.True(t, sm.headerCache.Proven(hash), "sanity: the installed run must actually prove this hash")
 }
 
-func TestHandleBlockMsg_UsesPeerProvenance(t *testing.T) {
-	for _, proven := range []bool{true, false} {
-		name := "unproven peer record"
-		if proven {
-			name = "proven peer record"
-		}
-		t.Run(name, func(t *testing.T) {
-			sm, p, state := newHeaderProvenanceManager(t)
-			sm.headersFirstMode.Store(false)
-			sm.utxoStore = &outpointOnlySpyStore{NullStore: &nullstore.NullStore{}}
-			sm.settings.BlockValidation.IsParentMinedRetryMaxRetry = 0
-			// Stop immediately after the mined-set gate, before UTXO work.
-			sm.settings.BlockAssembly.MaximumMerkleItemsPerSubtree = 0
-			parentWire := makeDuplicateTxidBlock(1).MsgBlock()
-			parentWire.Header.PrevBlock = *sm.chainParams.GenesisHash
-			parent, err := model.NewBlockFromMsgBlock(parentWire, nil)
-			require.NoError(t, err)
-			require.NoError(t, sm.blockchainClient.AddBlock(sm.ctx, parent, "test"))
-			mined, err := sm.blockchainClient.GetBlockIsMined(sm.ctx, parent.Hash())
-			require.NoError(t, err)
-			require.False(t, mined)
-
-			block := makeDuplicateTxidBlock(2).MsgBlock()
-			block.Header.PrevBlock = *parent.Hash()
-			block.Header.Bits = 0x207fffff
-			for {
-				candidate, err := model.NewBlockFromMsgBlock(block, nil)
-				require.NoError(t, err)
-				if ok, _, _ := candidate.Header.HasMetTargetDifficulty(); ok {
-					break
-				}
-				block.Header.Nonce++
-			}
-			hash := block.Header.BlockHash()
-			state.requestedBlocks.Set(hash, blockRequestOrigin{headerProven: proven})
-			sm.requestedBlocks.Set(hash, blockRequestOrigin{headerProven: !proven})
-			initPrometheusMetrics()
-			err = sm.handleBlockMsg(&blockQueueMsg{block: block, blockHash: hash, peer: p})
-			require.Error(t, err)
-			if proven {
-				require.ErrorContains(t, err, "failed to partition block", "peer proof must reach HandleBlockDirect and skip the parent wait")
-			} else {
-				require.True(t, errors.Is(err, errors.ErrBlockParentNotMined), "%v", err)
-			}
-			_, exists := state.requestedBlocks.Get(hash)
-			require.False(t, exists, "delivery must consume the request record")
-		})
-	}
-}
-
-func TestHandleBlockDirect_RejectsPoWBeforeAssemblyWait(t *testing.T) {
+// The whole point of the provenance gate, driven through the production handler:
+// a headers batch that matches the pinned checkpoint hash grants the fast path to
+// the run at or below it, and to nothing above it.
+func TestHeaderProvenance_MatchedCheckpointGrantsOnlyItsPrefix(t *testing.T) {
 	sm, p, _ := newHeaderProvenanceManager(t)
-	sm.chainParams = &chaincfg.MainNetParams
-	// Any call to this mock is unexpected: both PoW rejections must precede it.
-	sm.blockAssembly = blockassembly.NewMock()
-	for _, bits := range []uint32{0x207fffff, 0} {
-		block := makeDuplicateTxidBlock(1).MsgBlock()
-		block.Header.PrevBlock = *sm.settings.ChainCfgParams.GenesisHash
-		block.Header.Bits = bits
-		if bits != 0 {
-			require.True(t, solveBlock(&block.Header, chaincfg.RegressionNetParams.PowLimit))
-		}
-		initPrometheusMetrics()
-		err := sm.HandleBlockDirect(sm.ctx, p, block.Header.BlockHash(), block, blockRequestOrigin{})
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "%v", err)
-		if bits != 0 {
-			require.ErrorContains(t, err, "block declares a target easier than the network limit")
-		} else {
-			require.ErrorContains(t, err, "block does not meet target difficulty")
-		}
+
+	genesis := *sm.chainParams.GenesisHash
+	headers, hashes := linkedRun(genesis, 6)
+
+	// Height 3 of the run, which starts one above the committed genesis tip.
+	pinCheckpoint(sm, 3, &hashes[2])
+
+	msg := wire.NewMsgHeaders()
+	for _, header := range headers {
+		require.NoError(t, msg.AddBlockHeader(header))
 	}
+
+	require.True(t, sm.fillHeaderCache(p, msg))
+
+	require.True(t, sm.blockOrigin(hashes[0]).headerProven, "below the matched checkpoint is committed by linkage to it")
+	require.True(t, sm.blockOrigin(hashes[2]).headerProven, "the checkpoint height itself is committed by the hash match")
+	require.False(t, sm.blockOrigin(hashes[3]).headerProven, "above the matched checkpoint is committed by nothing")
+
+	require.True(t, sm.quickValidationAllowed(sm.blockOrigin(hashes[0]), 1))
+	require.False(t, sm.quickValidationAllowed(sm.blockOrigin(hashes[3]), 4))
 }
 
-func TestHeaderProvenance_CheckpointBlockDelivery(t *testing.T) {
-	for _, final := range []bool{false, true} {
-		name := "next checkpoint"
-		if final {
-			name = "final checkpoint"
-		}
-		t.Run(name, func(t *testing.T) {
-			sm, p, state := newHeaderProvenanceManager(t)
-			block := makeDuplicateTxidBlock(1).MsgBlock()
-			block.Header.PrevBlock = *sm.chainParams.GenesisHash
-			block.Header.Timestamp = time.Unix(1231006505, 0)
-			// An already-stored block exercises successful delivery bookkeeping
-			// without coupling the checkpoint transition test to UTXO validation.
-			stored, err := model.NewBlockFromMsgBlock(block, nil)
-			require.NoError(t, err)
-			require.NoError(t, sm.blockchainClient.AddBlock(sm.ctx, stored, "test"))
-			hash := block.Header.BlockHash()
-			sm.chainParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1, Hash: &hash}}
-			if !final {
-				sm.chainParams.Checkpoints = append(sm.chainParams.Checkpoints, chaincfg.Checkpoint{Height: 3, Hash: &chainhash.Hash{0x7f}})
-			}
-			sm.nextCheckpoint = &sm.chainParams.Checkpoints[0]
-			sm.verifiedCheckpointHeight = 1
-			sm.headerList.PushBack(&headerNode{height: 1, hash: &hash})
-			sm.startHeader = sm.headerList.PushBack(&headerNode{height: 2, hash: &chainhash.Hash{0x44}})
-			sm.rejectedTxns = txmap.NewSyncedMap[chainhash.Hash, struct{}]()
-			state.requestedBlocks.Set(hash, blockRequestOrigin{headerProven: true})
-			sm.requestedBlocks.Set(hash, blockRequestOrigin{headerProven: true})
+// A run the node cannot tie to any pinned hash is kept — it still names heights,
+// which is what the cache is for — but it grants nothing.
+//
+// This is the case mainnet is almost always in, because the checkpoints are tens
+// of thousands of blocks apart and one reply covers two thousand. It is the
+// reason this merge is a speed regression and not merely a tightening.
+func TestHeaderProvenance_UnmatchedRunIsUsableButNeverProven(t *testing.T) {
+	sm, p, _ := newHeaderProvenanceManager(t)
 
-			require.NoError(t, sm.handleBlockMsg(&blockQueueMsg{block: block, blockHash: hash, blockHeight: 1, peer: p}))
-			if final {
-				require.Nil(t, sm.nextCheckpoint)
-				require.Zero(t, sm.verifiedCheckpointHeight)
-				require.Zero(t, sm.headerList.Len())
-				require.Nil(t, sm.startHeader)
-				require.False(t, sm.headersFirstMode.Load())
-			} else {
-				require.Equal(t, int32(3), sm.nextCheckpoint.Height)
-				require.Equal(t, int32(1), sm.verifiedCheckpointHeight)
-				require.False(t, sm.headerNodeProven(sm.startHeader.Value.(*headerNode)))
-			}
-		})
+	genesis := *sm.chainParams.GenesisHash
+	headers, hashes := linkedRun(genesis, 4)
+
+	pinCheckpoint(sm, 11_111, &chainhash.Hash{0x7f})
+
+	msg := wire.NewMsgHeaders()
+	for _, header := range headers {
+		require.NoError(t, msg.AddBlockHeader(header))
 	}
+
+	require.True(t, sm.fillHeaderCache(p, msg), "an unproven run is still the answer to where the chain goes next")
+	require.Equal(t, 4, sm.headerCache.Len())
+
+	for _, hash := range hashes {
+		require.False(t, sm.blockOrigin(hash).headerProven)
+	}
+
+	require.False(t, sm.quickValidationAllowed(sm.blockOrigin(hashes[0]), 1))
 }
 
-// Drive the actual asynchronous header handler against a shared anchor. A
-// sibling of an interior header must never inherit the matched run's proof.
-func TestHeaderProvenance_ConcurrentHeaders(t *testing.T) {
-	for attempt := 0; attempt < 100; attempt++ {
-		t.Run(fmt.Sprint(attempt), func(t *testing.T) {
-			sm, p, state := newHeaderProvenanceManager(t)
-			anchor := hashFrom(0x51)
-			sm.headerList.PushBack(&headerNode{height: 100, hash: &anchor})
-			headers := wire.NewMsgHeaders()
-			prev := anchor
-			var sibling *wire.BlockHeader
-			for i := 0; i < 64; i++ {
-				header := wire.NewBlockHeader(1, &prev, &chainhash.Hash{}, 0x207fffff, uint32(i))
-				require.NoError(t, headers.AddBlockHeader(header))
-				if i == 32 {
-					sibling = wire.NewBlockHeader(1, &prev, &chainhash.Hash{1}, 0x207fffff, 99)
-				}
-				prev = header.BlockHash()
-			}
-			sm.nextCheckpoint = &chaincfg.Checkpoint{Height: 164, Hash: &prev}
-			forgedHash := sibling.BlockHash()
-			forged := wire.NewMsgHeaders()
-			require.NoError(t, forged.AddBlockHeader(sibling))
-			start := make(chan struct{})
-			var wg sync.WaitGroup
-			for _, msg := range []*wire.MsgHeaders{headers, forged} {
-				wg.Add(1)
-				go func(msg *wire.MsgHeaders) {
-					defer wg.Done()
-					<-start
-					sm.handleHeadersMsg(&headersMsg{headers: msg, peer: p})
-				}(msg)
-			}
-			close(start)
-			wg.Wait()
-			// Drain the genuine run so a bad sibling cannot hide beyond the first
-			// request batch. Preserve the request records for the final assertion.
-			for sm.startHeader != nil {
-				// The global and peer request maps are only dedupe/admission state here.
-				// Remove genuine requests to make room for the remaining header entries.
-				for _, header := range headers.Headers {
-					state.requestedBlocks.Delete(header.BlockHash())
-				}
-				sm.fetchHeaderBlocks()
-			}
-			require.False(t, sm.blockOrigin(state, forgedHash).headerProven)
-			require.Equal(t, int32(164), sm.verifiedCheckpointHeight)
-		})
-	}
-}
+// A batch that reaches a checkpoint height with the wrong hash costs the sender
+// its connection and leaves the cache alone.
+//
+// Upstream did this in handleHeadersMsg against the header list; the branch had
+// dropped the comparison entirely, so this is the defence being put back.
+func TestHeaderProvenance_ContradictedCheckpointDisconnects(t *testing.T) {
+	sm, p, _ := newHeaderProvenanceManager(t)
 
-func TestHeaderProvenance_ConcurrentReset(t *testing.T) {
-	for attempt := 0; attempt < 50; attempt++ {
-		t.Run(fmt.Sprint(attempt), func(t *testing.T) {
-			sm, p, _ := newHeaderProvenanceManager(t)
-			anchor := hashFrom(0x52)
-			header := wire.NewBlockHeader(1, &anchor, &chainhash.Hash{}, 0x207fffff, 1)
-			hash := header.BlockHash()
-			sm.nextCheckpoint = &chaincfg.Checkpoint{Height: 101, Hash: &hash}
-			sm.headerList.PushBack(&headerNode{height: 100, hash: &anchor})
-			headers := wire.NewMsgHeaders()
-			require.NoError(t, headers.AddBlockHeader(header))
-			start := make(chan struct{})
-			var wg sync.WaitGroup
-			wg.Add(3)
-			go func() { defer wg.Done(); <-start; sm.handleHeadersMsg(&headersMsg{headers: headers, peer: p}) }()
-			go func() { defer wg.Done(); <-start; sm.resetHeaderState(&anchor, 100) }()
-			go func() { defer wg.Done(); <-start; sm.fetchHeaderBlocks() }()
-			close(start)
-			wg.Wait()
-			require.Zero(t, sm.verifiedCheckpointHeight)
-			require.Nil(t, sm.startHeader)
-			require.Equal(t, 1, sm.headerList.Len())
-		})
+	genesis := *sm.chainParams.GenesisHash
+	_, honest := linkedRun(genesis, 4)
+
+	pinCheckpoint(sm, 2, &honest[1])
+
+	forged, _ := forgedRun(genesis, 4)
+
+	msg := wire.NewMsgHeaders()
+	for _, header := range forged {
+		require.NoError(t, msg.AddBlockHeader(header))
 	}
+
+	require.False(t, sm.fillHeaderCache(p, msg))
+	require.Zero(t, sm.headerCache.Len(), "a refused batch must not be cached")
+	require.NotNil(t, sm.contradictedCheckpoint(1, genesis, forged), "the refusal must be attributable to the checkpoint, not to linkage")
 }

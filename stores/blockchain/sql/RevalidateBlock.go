@@ -42,6 +42,11 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		return errors.NewStorageError("error updating block to valid", err)
 	}
 
+	// The UPDATE committed, so this call moves chain membership; see the matching note in
+	// InvalidateBlock. Deferred so it lands after the rebuild below and before slowPathMu
+	// drops. A failed UPDATE returned above and is not noted.
+	defer s.noteOnMainChainWrite(noRepairFloor)
+
 	// RevalidateBlock, like InvalidateBlock, can move the tip across an
 	// arbitrarily deep fork point. Use the full rebuild for correctness —
 	// see the matching note in InvalidateBlock.
@@ -56,8 +61,14 @@ func (s *SQL) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) er
 		s.resetChainWalkCache()
 	}
 
+	// The UPDATE above has committed, so a failed rebuild leaves the column describing the
+	// chain before the revalidation. Record it so the background repair retries the full
+	// walk until it lands; a rebuild that lands here satisfies any earlier owed repair.
 	if rebuildErr := s.rebuildOnMainChainFlag(rebuildCtx, true); rebuildErr != nil {
 		s.logger.Errorf("RevalidateBlock: rebuildOnMainChainFlag: %v", rebuildErr)
+		s.markOnMainChainDirty(true, noRepairFloor, "revalidate_block", rebuildErr)
+	} else {
+		s.onMainChainRepaired(true)
 	}
 
 	if s.useInMemoryChainCheck {

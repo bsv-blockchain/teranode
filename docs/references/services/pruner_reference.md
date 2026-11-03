@@ -37,7 +37,9 @@ message HealthResponse {
 **Example:**
 
 ```bash
-grpcurl -plaintext localhost:8096 pruner.PrunerAPI/HealthGRPC
+# Run from a Teranode source checkout: server reflection is off by default
+grpcurl -plaintext -import-path . -proto services/pruner/pruner_api/pruner_api.proto \
+  localhost:8096 pruner.PrunerAPI/HealthGRPC
 ```
 
 **Response:**
@@ -100,7 +102,7 @@ teranode_pruner_duration_seconds{operation="dah_pruner"} 5.678
     - `block_assembly_timeout` - Timed out or errored waiting for Block Assembly to be ready
     - `below_min_height` - Block height at or below `pruner_minBlockHeight`
     - `fsm_error` - Failed to read the blockchain FSM state
-    - `catchup_mode` - Node is in the CATCHINGBLOCKS FSM state and `pruner_skipDuringCatchup` is set
+    - `catchup_mode` - Node is not in the RUNNING FSM state (CATCHINGBLOCKS, or IDLE after an operator STOP) and `pruner_skipDuringCatchup` is set
 
 **Example:**
 
@@ -364,16 +366,6 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 - Increase for high-throughput nodes with fast storage
 - Limited by Aerospike connection pool size
 
-### Operation Timeout
-
-- Default: 10 minutes (`pruner_jobTimeout`)
-- On timeout: Operation continues in background
-- Adjust based on:
-
-    - Database size
-    - Network latency
-    - Chunk configuration
-
 ### Channel Buffering
 
 - Buffer size: 1 (non-blocking)
@@ -407,8 +399,8 @@ ERROR [PreserveParents] Failed to preserve parent transaction: CRITICAL - aborti
 2. Verify UTXO store connection:
 
     ```bash
-    # Check UTXO store health
-    grpcurl -plaintext localhost:8090 asset.AssetAPI/HealthGRPC
+    # Check UTXO store health (Asset reports its dependencies over HTTP)
+    curl -s http://localhost:8090/health
     ```
 
 3. Check logs for initialization errors:

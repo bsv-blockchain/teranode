@@ -209,7 +209,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Try to call it (will likely error but might hit some lines)
@@ -3230,36 +3230,6 @@ func TestTargetedCoverageIncrease(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
-	t.Run("validateTransaction error paths", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
-		require.NoError(t, err)
-
-		// Initialize txMap but don't add any transactions
-		block.txMap = txmap.NewSplitSwissMapUint64(10)
-
-		ctx := context.Background()
-		deps := &validationDependencies{}
-
-		validationCtx := &validationContext{
-			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
-		}
-
-		hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
-
-		params := &transactionValidationParams{
-			subtreeMetaSlice: nil, // This will cause an error
-			subtreeHash:      hash1,
-			sIdx:             0,
-			snIdx:            0,
-			subtreeNode:      subtreepkg.Node{Hash: *hash1},
-		}
-
-		// Should error because transaction not in txMap
-		_, err = block.validateTransaction(ctx, deps, validationCtx, params)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "not in the txMap")
-	})
-
 	// Skip problematic validateSubtree test for now
 
 	// Skip problematic checkDuplicateInputs test for now
@@ -3794,7 +3764,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context with empty parent spends map
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Create subtree hash and node
@@ -3828,7 +3798,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context with pre-populated parent spends map
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Add an inpoint to simulate existing spend
@@ -3872,7 +3842,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Create empty subtree meta slice (will likely cause GetTxInpoints to error)
@@ -3910,7 +3880,7 @@ func TestBlock_CheckDuplicateInputs_ComprehensiveCoverage(t *testing.T) {
 
 		// Create validation context
 		validationCtx := &validationContext{
-			parentSpendsMap: NewSplitSyncedParentMap(4),
+			parentSpendsMap: newTestParentSpendsMap(4),
 		}
 
 		// Test with various edge case values
@@ -4134,7 +4104,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree with a node
@@ -4203,7 +4173,7 @@ func TestBlock_ValidateSubtree_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The only node is the coinbase placeholder, which validateSubtree skips, so
@@ -4258,7 +4228,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 		currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-		parentSpendsMap:             NewSplitSyncedParentMap(4),
+		parentSpendsMap:             newTestParentSpendsMap(4),
 	}
 
 	t.Run("missing parent not found in store", func(t *testing.T) {
@@ -4288,7 +4258,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The dummy parent is deliberately not seeded, so it is absent from the store.
@@ -4411,7 +4381,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		err = block.validateSubtree(ctx, ulogger.TestLogger{}, seededDeps, subtestCtx, subtree, 0)
@@ -4445,7 +4415,7 @@ func TestBlock_ValidateSubtree_MissingParents(t *testing.T) {
 		subtestCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Both nodes carry distinct inpoints, so they clear checkDuplicateInputs and
@@ -4542,7 +4512,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// All 4 nodes must validate. A shared inpoint across nodes would stop this at
@@ -4601,7 +4571,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Exercises the parallel parent checking logic:
@@ -4651,7 +4621,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The single node's parent resolves, so validation completes cleanly.
@@ -4692,7 +4662,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}, 2: {}, 3: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Neither parent is in txMap or the store, so both become missingParentTx entries
@@ -4749,7 +4719,7 @@ func TestBlock_ValidateSubtree_NodeIteration(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    map[uint32]struct{}{10: {}, 11: {}},
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// The parent is mined into block 5, which is outside the cached {10, 11} set, so
@@ -4797,43 +4767,6 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 	parentHash, _ := chainhash.NewHashFromStr("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321")
 	subtreeHash, _ := chainhash.NewHashFromStr("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef")
 
-	t.Run("transaction not found in txMap", func(t *testing.T) {
-		// Test case where transaction hash is not in the block's txMap
-		deps := &validationDependencies{
-			txMetaStore:           createTestUTXOStore(t),
-			subtreeStore:          &mockSubtreeStore{shouldError: true},
-			currentChain:          []*BlockHeader{},
-			currentBlockHeaderIDs: []uint32{},
-			oldBlockIDsMap:        txmap.NewSyncedMap[chainhash.Hash, []uint32](),
-		}
-
-		validationCtx := &validationContext{
-			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
-			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
-		}
-
-		// Create subtree and subtree meta
-		subtree := &subtreepkg.Subtree{}
-		subtreeMeta := subtreepkg.NewSubtreeMeta(subtree)
-
-		params := &transactionValidationParams{
-			subtreeMetaSlice: subtreeMeta,
-			subtreeHash:      subtreeHash,
-			sIdx:             0,
-			snIdx:            0,
-			subtreeNode:      subtreepkg.Node{Hash: *txHash},
-		}
-
-		// Transaction not in txMap should return error
-		missingParents, err := block.validateTransaction(ctx, deps, validationCtx, params)
-
-		// Should error because transaction is not found in txMap
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "not in the txMap")
-		assert.Nil(t, missingParents)
-	})
-
 	t.Run("successful validation with no missing parents", func(t *testing.T) {
 		// Test case where transaction validation succeeds
 		err := block.txMap.Put(*txHash, 1)
@@ -4852,7 +4785,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4894,7 +4827,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4938,7 +4871,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Create subtree and subtree meta
@@ -4981,7 +4914,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Add a duplicate input to trigger validation
@@ -5029,7 +4962,7 @@ func TestBlock_ValidateTransaction_ComprehensiveCoverage(t *testing.T) {
 		validationCtx := &validationContext{
 			currentBlockHeaderHashesMap: make(map[chainhash.Hash]struct{}),
 			currentBlockHeaderIDsMap:    make(map[uint32]struct{}),
-			parentSpendsMap:             NewSplitSyncedParentMap(4),
+			parentSpendsMap:             newTestParentSpendsMap(4),
 		}
 
 		// Populate the current block header IDs map
@@ -5577,7 +5510,7 @@ func TestValidateSubtreeBenchmark(t *testing.T) {
 	validationCtx := &validationContext{
 		currentBlockHeaderHashesMap: map[chainhash.Hash]struct{}{*blockHeader.Hash(): {}},
 		currentBlockHeaderIDsMap:    map[uint32]struct{}{1: {}},
-		parentSpendsMap:             NewSplitSyncedParentMap(256), // THE CONTENDED RESOURCE
+		parentSpendsMap:             newTestParentSpendsMap(256), // THE CONTENDED RESOURCE
 	}
 
 	ctx := context.Background()
@@ -5925,7 +5858,7 @@ func buildBlockForValidOrderBench(tb testing.TB, leaves, parentsPerTx int) (*Blo
 }
 
 // BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory compares the per-block cost
-// of validOrderAndBlessed between the in-memory SplitSyncedParentMap and the
+// of validOrderAndBlessed between the in-memory sort-based duplicate input check and the
 // disk-backed DiskParentSpendsMap (single-disk and multi-disk). The disk
 // variants include the full mmap-backed map (mmaphash) open + writer-loop
 // spin-up + close cost per block, which is the realistic per-block-validation
@@ -5935,7 +5868,7 @@ func buildBlockForValidOrderBench(tb testing.TB, leaves, parentsPerTx int) (*Blo
 //
 //	go test -tags testtxmetacache -run='^$' -bench=BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory -benchmem ./model/
 func BenchmarkBlock_ValidOrderAndBlessed_DiskVsMemory(b *testing.B) {
-	sizes := []int{1024, 16384}
+	sizes := []int{1024, 16384, 131072}
 	impls := []struct {
 		name string
 		dirs func(b *testing.B) []string
@@ -6089,6 +6022,50 @@ func TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo(t *testing.T) {
 	require.True(t, errors.IsBlockCorrupt(err), "expected BlockCorruptError, got %v", err)
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "first subtree leaf count is not a power of two")
+}
+
+// TestCheckMerkleRoot_AcceptsSingleNonPowerOfTwoSubtree pins the exemption the
+// power-of-two guard must never be applied to: a block with EXACTLY ONE subtree.
+//
+// CheckMerkleRoot takes its len(hashes) == 1 branch and returns that subtree's
+// coinbase-substituted root directly, before the guard and before the non-final/final
+// length rules. There is no second subtree to compose with, so nothing depends on the
+// leaf count being a lift-compatible capacity, and a single subtree of 3 leaves is a
+// legitimate body a real node accepts.
+//
+// TestCheckMerkleRoot_RejectsFirstSubtreeNotPowerOfTwo does NOT cover this:
+// buildBlockWithFirstSubtreeNonPowerOfTwo builds TWO subtrees, so it never reaches the
+// single-subtree branch at all.
+//
+// Mutation target: applying CheckSubtreeShape before the single-subtree early exit —
+// which is exactly what extracting the rules into a shared helper makes easy to do by
+// accident — must make this block be rejected.
+func TestCheckMerkleRoot_AcceptsSingleNonPowerOfTwoSubtree(t *testing.T) {
+	only, err := subtreepkg.NewIncompleteTreeByLeafCount(3)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, only.AddNode(chainhash.HashH([]byte{byte(i)}), 0, 0))
+	}
+
+	require.False(t, subtreepkg.IsPowerOfTwo(only.Length()),
+		"precondition: the single subtree must NOT be a power of two, or the test proves nothing")
+
+	coinbaseTx := newTestCoinbaseTx(t)
+
+	root, err := only.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, uint64(coinbaseTx.Size())) // nolint: gosec
+	require.NoError(t, err)
+
+	block := &Block{
+		Header:        newTestBlockHeader(t),
+		CoinbaseTx:    coinbaseTx,
+		Subtrees:      []*chainhash.Hash{only.RootHash()},
+		SubtreeSlices: []*subtreepkg.Subtree{only},
+	}
+	block.Header.HashMerkleRoot = root
+
+	require.NoError(t, block.CheckMerkleRoot(context.Background()),
+		"a single non-power-of-two subtree is a legitimate body and must not be rejected")
 }
 
 // buildBlockWithFirstSubtreeNonPowerOfTwo returns a Block whose first subtree

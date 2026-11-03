@@ -68,6 +68,13 @@ func newMoveForwardCommitBoundaryProcessor(t *testing.T) (*SubtreeProcessor, *mo
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
+		// A started processor finishes a moveForwardBlock (its queue drain and
+		// retired-half clear) after MoveForwardBlock has returned; a round trip
+		// through its loop waits for that before the maps are closed.
+		if stp.processorCtx.Load() != nil {
+			_ = stp.GetCurrentLength()
+		}
+
 		halves := make([]*DiskTxMap, 0, 3+len(stp.diskTxMapRetired))
 		halves = append(halves, stp.diskTxMap, stp.diskTxMapShadow, stp.diskTxMapAnchor)
 		halves = append(halves, stp.diskTxMapRetired...)
@@ -194,11 +201,9 @@ func TestMoveForwardBlock_DequeueOwnWriteFailure_LogsCountsRequestsResetButSucce
 
 	// resetSubtreeState swaps diskTxMap <-> diskTxMapShadow, so the pre-swap
 	// shadow becomes the new current map that the dequeued write above lands
-	// in. Installed on every disk shard, not just disk 0, so the test does
-	// not depend on which disk queuedTxHash happens to shard to.
-	for i := range stp.diskTxMapShadow.disks {
-		stp.diskTxMapShadow.disks[i].batch = &failingBatch{flushErr: errors.NewStorageError("flush failed")}
-	}
+	// in. Installed on every log segment, so the test does not depend on
+	// which segment queuedTxHash happens to shard to.
+	failDiskTxMapLogs(stp.diskTxMapShadow, alwaysFailWrites, nil)
 
 	originalCurrentTxMap := stp.currentTxMap
 
@@ -281,8 +286,11 @@ func TestMoveForwardBlock_Started_PostCommitMapErrorIsLoggedAndCountedButSucceed
 
 	require.Equal(t, block.Header.Hash(), stp.GetCurrentBlockHeader().Hash(), "STP must have advanced to the new block")
 
-	after := testutil.ToFloat64(prometheusSubtreeProcessorDiskTxMapErrors.WithLabelValues("moveForwardBlock_commit"))
-	require.Equal(t, before+1, after, "the post-commit error must be logged and counted by the dispatcher's own drain")
+	// The retired half is cleared after MoveForwardBlock has answered (see
+	// handleMoveForwardRequest), so its error is counted shortly after.
+	require.Eventually(t, func() bool {
+		return testutil.ToFloat64(prometheusSubtreeProcessorDiskTxMapErrors.WithLabelValues("moveForwardBlock_commit")) == before+1
+	}, 5*time.Second, 10*time.Millisecond, "the post-commit error must be logged and counted by the dispatcher's own drain")
 }
 
 // The second, cheaper pre-commit check between processRemainderTxHashes and
@@ -314,18 +322,16 @@ func TestMoveForwardBlock_RemainderCheckBeforeDequeue_QueueUntouchedOnFailure(t 
 
 	// resetSubtreeState swaps diskTxMap <-> diskTxMapShadow, so the pre-swap
 	// shadow becomes the new current map that processRemainderTxHashes' write
-	// (re-adding remainderNode) lands in. Installed on every disk shard,
+	// (re-adding remainderNode) lands in. Installed on every log segment,
 	// since which one remainderNode's hash shards to is not under this test's
 	// control.
-	for i := range stp.diskTxMapShadow.disks {
-		stp.diskTxMapShadow.disks[i].batch = &failingBatch{flushErr: errors.NewStorageError("flush failed")}
-	}
+	failDiskTxMapLogs(stp.diskTxMapShadow, alwaysFailWrites, nil)
 
 	processedConflictingHashesMap := make(map[chainhash.Hash]struct{})
 	_, _, err := stp.moveForwardBlock(context.Background(), block, false, processedConflictingHashesMap, false, true)
 	require.Error(t, err, "a remainder-pass write flush failure must fail the call before dequeue runs")
 	require.ErrorContains(t, err, "disk tx map storage error before dequeue", "must be this check's own error, not some unrelated failure")
-	require.ErrorContains(t, err, "flush failed", "and must actually be the flush failure")
+	require.ErrorContains(t, err, "write failed", "and must actually be the write failure")
 
 	require.Equal(t, int64(1), stp.queue.length(), "dequeueDuringBlockMovement must never have run: the queue is untouched")
 }

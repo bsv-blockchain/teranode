@@ -1,5 +1,16 @@
 # Blockchain Server Reference Documentation
 
+## Authentication
+
+Blockchain refuses startup without a valid `grpc_admin_api_key`, including in
+development. All BlockchainAPI and PeerRegistryService methods require `x-api-key`
+except HealthGRPC. This includes read-only calls and Subscribe. HTTP `/health` is
+public; `/invalidate/:hash` and `/revalidate/:hash` require authenticated POST
+requests. Reflection is disabled by default.
+
+See [Blockchain authentication](../../topics/services/blockchainAuthentication.md)
+for credential requirements and the required client-first upgrade order.
+
 ## Types
 
 ### Blockchain
@@ -564,7 +575,7 @@ An IDLE refusal prevents block validation from starting its fetch/validation wor
 func (b *Blockchain) Idle(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error)
 ```
 
-Transitions the FSM to the IDLE state.
+Transitions the FSM to the IDLE state from RUNNING or CATCHINGBLOCKS. A catchup already in progress is not cancelled; its automatic RUN promotion is refused once the FSM is IDLE.
 
 ## Legacy Endpoints
 
@@ -711,7 +722,7 @@ Completes multiple blob deletions in a single call. More efficient than calling 
 func (b *Blockchain) AcquireBlobDeletionBatch(ctx context.Context, req *blockchain_api.AcquireBlobDeletionBatchRequest) (*blockchain_api.AcquireBlobDeletionBatchResponse, error)
 ```
 
-Acquires a batch of deletions with locking for processing. Uses `SELECT...FOR UPDATE SKIP LOCKED` to ensure only one pruner instance processes each batch.
+Acquires a batch of deletions with locking for processing. Uses `SELECT...FOR UPDATE SKIP LOCKED` to ensure only one pruner instance processes each batch. Store types listed in `exclude_store_types` are left out of the batch, so the pruner can skip a store whose deletions it is holding without those rows filling every batch.
 
 ### CompleteBlobDeletionBatch
 

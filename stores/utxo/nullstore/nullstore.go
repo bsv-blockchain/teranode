@@ -141,6 +141,40 @@ func (m *NullStore) PreviousOutputsDecorate(_ context.Context, tx *bt.Tx) error 
 	return nil
 }
 
+// ParentOutputsForValidation answers every outpoint as mined at height 1 with
+// the null store's default outputs, matching Get, so validation against the null
+// store succeeds. An index past the default outputs is NoSuchIndex. A cancelled
+// context fails the whole call, as it does on the other stores.
+func (m *NullStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxo.Outpoint, _ ...utxo.ParentOutputOption) ([]utxo.ParentOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	answers := make([]utxo.ParentOutput, len(outpoints))
+
+	for i, op := range outpoints {
+		if int(op.Vout) >= len(nullStoreOutputs) {
+			answers[i] = utxo.ParentOutput{Status: utxo.ParentOutputNoSuchIndex}
+			continue
+		}
+
+		out := nullStoreOutputs[op.Vout]
+		answers[i] = utxo.ParentOutput{
+			Status:        utxo.ParentOutputMined,
+			Satoshis:      out.Satoshis,
+			LockingScript: out.LockingScript,
+			Height:        1,
+		}
+	}
+
+	return answers, nil
+}
+
+// SpendAndCreateMulti writes the list through DefaultSpendAndCreateMulti.
+func (m *NullStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, m, utxo.UniformSpendAndCreateMultiWidths(1), txs, blockHeight, opts...)
+}
+
 func (m *NullStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
 	for _, tx := range txs {
 		if err := m.PreviousOutputsDecorate(ctx, tx); err != nil {
@@ -305,5 +339,23 @@ func (m *NullStore) PreserveTransactions(ctx context.Context, txIDs []chainhash.
 }
 
 func (m *NullStore) ProcessExpiredPreservations(ctx context.Context, currentHeight uint32) error {
+	return nil
+}
+
+func (m *NullStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *NullStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *NullStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *NullStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *NullStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
 	return nil
 }

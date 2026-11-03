@@ -672,8 +672,10 @@ func checkBlockchainState(ctx context.Context, s *settings.Settings, clients *se
 					connected++
 				}
 
-				if peer.Height > maxHeight {
-					maxHeight = peer.Height
+				peerHeight := peer.DisplayHeight()
+
+				if peerHeight > maxHeight {
+					maxHeight = peerHeight
 				}
 			}
 
@@ -751,29 +753,27 @@ func checkServiceConsistency(stats *model.BlockStats, fsmState *blockchain.FSMSt
 	}
 
 	// Peer height vs our height - are we behind the network?
-	// During catchup this is expected, only FAIL when running.
 	if clients.p2p != nil {
 		peers, err := clients.p2p.GetPeers(ctx)
 		if err == nil {
 			var maxPeerHeight uint32
 
 			for _, peer := range peers {
-				if peer.Height > maxPeerHeight {
-					maxPeerHeight = peer.Height
+				peerHeight := peer.DisplayHeight()
+
+				if peerHeight > maxPeerHeight {
+					maxPeerHeight = peerHeight
 				}
 			}
 
 			if maxPeerHeight > 0 {
+				// behind is derived from peer-advertised heights, which nothing
+				// local has validated. Report it, but do not fail on it: one peer
+				// claiming an implausible tip would otherwise turn a healthy node red.
 				behind := int64(maxPeerHeight) - int64(chainHeight)
-				msg := fmt.Sprintf("our_height=%d, best_peer=%d", chainHeight, maxPeerHeight)
-				status := StatusOK
+				msg := fmt.Sprintf("our_height=%d, best_peer=%d (peer-reported, unvalidated)", chainHeight, maxPeerHeight)
 
-				if behind > 10 && isRunning {
-					status = StatusFAIL
-					msg += fmt.Sprintf(", behind=%d blocks", behind)
-				} else if behind > 10 {
-					msg += fmt.Sprintf(", behind=%d blocks (expected during %s)", behind, fsmState.String())
-				} else if behind > 0 {
+				if behind > 0 {
 					msg += fmt.Sprintf(", behind=%d blocks", behind)
 				} else {
 					msg += ", in sync"
@@ -782,7 +782,7 @@ func checkServiceConsistency(stats *model.BlockStats, fsmState *blockchain.FSMSt
 				results = append(results, HealthResult{
 					Service: "Chain vs Peers",
 					Address: "-",
-					Status:  status,
+					Status:  StatusOK,
 					Message: msg,
 				})
 			}

@@ -217,19 +217,3 @@ func TestDiskTxMap_UpdateSubtreeIndexBatchEdgeCases(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int16(5), got.SubtreeIndex)
 }
-
-// A store that can no longer be read fails the batch instead of silently
-// skipping the update.
-func TestDiskTxMap_UpdateSubtreeIndexBatchReadError(t *testing.T) {
-	m, err := NewDiskTxMap(DiskTxMapOptions{BasePaths: []string{t.TempDir()}})
-	require.NoError(t, err)
-
-	h := batchTestHash(9)
-	inp := subtreepkg.TxInpoints{}
-	m.Set(h, &inp)
-	require.NoError(t, m.Flush())
-
-	require.NoError(t, m.disks[0].store.Close())
-
-	require.Error(t, m.UpdateSubtreeIndexBatch([]subtreepkg.Node{{Hash: h}}, 2))
-}

@@ -252,7 +252,7 @@ func TestFileOptionsToQuery(t *testing.T) {
 		assert.Equal(t, "5", query.Get("dah"))
 		assert.Equal(t, "test.txt", query.Get("filename"))
 		assert.Equal(t, fileformat.FileTypeSubtreeMeta.String(), query.Get("fileType"))
-		assert.Equal(t, "true", query.Get("allowOverwrite"))
+		assert.Empty(t, query.Get("allowOverwrite"), "FileOptionsToQuery never emits overwrite; only HTTPStore.SetFromReader adds it, to a POST")
 	})
 }
 
@@ -275,7 +275,7 @@ func TestQueryToFileOptions(t *testing.T) {
 
 		assert.Equal(t, uint32(5), options.DAH)
 		assert.Equal(t, "test.txt", options.Filename)
-		assert.True(t, options.AllowOverwrite)
+		assert.False(t, options.AllowOverwrite, "QueryToFileOptions must never reconstruct overwrite")
 	})
 
 	t.Run("Invalid DAH", func(t *testing.T) {
@@ -287,4 +287,14 @@ func TestQueryToFileOptions(t *testing.T) {
 		options := NewFileOptions(opts...)
 		assert.Equal(t, uint32(0), options.DAH)
 	})
+}
+
+// TestQueryToFileOptions_IgnoresAllowOverwrite pins the fix for issue 4841: the server reads
+// the overwrite flag only in handleSet, for an authenticated POST, so it must never come back
+// through this function, which runs for every method.
+func TestQueryToFileOptions_IgnoresAllowOverwrite(t *testing.T) {
+	query := url.Values{"allowOverwrite": []string{"true"}}
+
+	options := NewFileOptions(QueryToFileOptions(query)...)
+	require.False(t, options.AllowOverwrite)
 }

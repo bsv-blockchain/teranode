@@ -64,6 +64,22 @@ func TestGenAllInOneTopology(t *testing.T) {
 			t.Fatalf("all-in-one settings unexpectedly contains %q", key)
 		}
 	}
+
+	// The all-in-one container publishes the block persister port too, so its
+	// loopback-default listener must be overridden here as well.
+	for nodeIdx := 1; nodeIdx <= 3; nodeIdx++ {
+		if want := blockPersisterListenOverride(nodeIdx); !strings.Contains(settings, want) {
+			t.Errorf("all-in-one settings missing line:\n  %q\nfull settings:\n%s", want, settings)
+		}
+	}
+
+	assertSplitOverridesRefValidPortVars(t, settings)
+}
+
+// blockPersisterListenOverride is the per-node line that binds the block persister HTTP
+// listener to every interface, so the port the compose file publishes reaches it.
+func blockPersisterListenOverride(nodeIdx int) string {
+	return "blockpersister_httpListenAddress.docker.teranode" + strconv.Itoa(nodeIdx) + "   = :${BLOCK_PERSISTER_HTTP_PORT}"
 }
 
 // TestGenSplitTopology asserts the split-per-service generator output:
@@ -143,6 +159,7 @@ func TestGenSplitTopology(t *testing.T) {
 			"propagation_grpcAddresses.docker.teranode" + nodeStr + "          = teranode" + nodeStr + "-propagation:${PROPAGATION_GRPC_PORT}",
 			"p2p_grpcAddress.docker.teranode" + nodeStr + "                    = teranode" + nodeStr + "-p2p:${P2P_GRPC_PORT}",
 			"p2p_grpcListenAddress.docker.teranode" + nodeStr + "              = :${P2P_GRPC_PORT}",
+			blockPersisterListenOverride(nodeIdx),
 		} {
 			if !strings.Contains(settings, want) {
 				t.Errorf("split settings missing line:\n  %q\nfull settings:\n%s", want, settings)

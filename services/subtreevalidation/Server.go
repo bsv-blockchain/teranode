@@ -6,6 +6,7 @@ package subtreevalidation
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/subtreevalidation/subtreevalidation_api"
@@ -109,7 +111,8 @@ type Server struct {
 	txmetaConsumerClient kafka.KafkaConsumerGroupI
 
 	// policyRejectedTxConsumerClient consumes policy-rejected transaction messages.
-	// These are consensus-valid transactions that our validator rejected on policy grounds.
+	// These are transactions our validator rejected on policy grounds, usually but not
+	// always consensus-valid, so they are validated in full when used.
 	// Raw tx bytes are cached locally so subtree validation can avoid HTTP fetches.
 	policyRejectedTxConsumerClient kafka.KafkaConsumerGroupI
 
@@ -117,8 +120,17 @@ type Server struct {
 	// keyed by tx hash. Checked before requesting missing txs from other miners.
 	policyRejectedTxCache *txPolicyRejectedCache
 
+	// keptAsideTxCache holds descendants of conflicting txs kept aside by subtree validation.
+	// They are only context-free checked, so they have their own byte budget and cannot
+	// evict the txs the validators rejected.
+	keptAsideTxCache *txPolicyRejectedCache
+
 	// invalidSubtreeKafkaProducer publishes invalid subtree events to Kafka
 	invalidSubtreeKafkaProducer kafka.KafkaAsyncProducerI
+
+	// conflictingTxKafkaProducer publishes kept-aside descendants of conflicting txs on the
+	// policy-rejected topic, so every subtree validator learns them
+	conflictingTxKafkaProducer kafka.KafkaAsyncProducerI
 
 	// invalidSubtreeLock is used to synchronize access to the invalid subtree producer
 	invalidSubtreeLock sync.Mutex
@@ -145,6 +157,28 @@ type Server struct {
 	// adaptiveFetch tracks whether subtreeData downloads should be skipped
 	// when transactions are expected to already be in the local UTXO store via propagation.
 	adaptiveFetch *adaptivefetch.State
+
+	// peerProbePool and blockProbePool limit txmeta cache-probe workers across
+	// all concurrent peer-subtree and block-validation lookups respectively;
+	// see probeTxMetaCache.
+	peerProbePool  probePool
+	blockProbePool probePool
+
+	// peerSubtreeAdmission bounds how many peer subtrees are validated at
+	// once; see subtreesHandler.
+	peerSubtreeAdmission admissionGate
+
+	// skippedSubtrees keeps peer subtrees announced while the node was catching up, for
+	// validation once it is RUNNING again.
+	skippedSubtrees skippedSubtrees
+
+	// replaySubtreeFn replaces the validation of a replayed subtree, after its admission, age and
+	// RUNNING checks; nil in production.
+	replaySubtreeFn func(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string) error
+
+	// watcherReplayCalledFn is called by a RUNNING watcher after its replay call returns; nil in
+	// production.
+	watcherReplayCalledFn func()
 }
 
 // New creates a new Server instance with the provided dependencies.
@@ -269,7 +303,8 @@ func New(
 
 		u.utxoStore, err = txmetacache.NewTxMetaCache(ctx, tSettings, logger, utxoStore, bucketType)
 		if err != nil {
-			logger.Errorf("Failed to create tx meta cache: %v", err)
+			// carrying on would leave the service with a nil store
+			return nil, errors.NewServiceError("failed to create tx meta cache", err)
 		}
 	} else {
 		u.utxoStore = utxoStore
@@ -281,6 +316,7 @@ func New(
 			maxMB = 64
 		}
 		u.policyRejectedTxCache = newTxPolicyRejectedCache(maxMB * 1024 * 1024)
+		u.keptAsideTxCache = newTxPolicyRejectedCache(maxMB * 1024 * 1024)
 		logger.Infof("Policy-rejected tx cache enabled (max %d MB)", maxMB)
 	}
 
@@ -298,6 +334,18 @@ func New(
 		}
 	} else {
 		logger.Infof("No Kafka topic configured for invalid subtrees")
+	}
+
+	// Kept-aside descendants of conflicting txs go on the topic the validators publish their
+	// conflicting rejections on, so a subtree validator that sees their children knows them.
+	if tSettings.Kafka.TxPolicyRejectedConfig != nil {
+		conflictingTxKafkaProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, tSettings.Kafka.TxPolicyRejectedConfig, &tSettings.Kafka)
+		if err != nil {
+			logger.Errorf("Failed to create Kafka producer for kept-aside conflicting txs: %v", err)
+		} else {
+			u.conflictingTxKafkaProducer = conflictingTxKafkaProducer
+			u.conflictingTxKafkaProducer.Start(ctx, make(chan *kafka.Message, 1_000))
+		}
 	}
 
 	// get and set the initial best block
@@ -336,8 +384,15 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 				// Cancel context before retrying to prevent leak
 				subscribeCancel()
 
-				// backoff for 5 seconds and try again
-				time.Sleep(5 * time.Second)
+				// backoff for 5 seconds and try again, but stop immediately if the
+				// caller's context is cancelled rather than blocking the shutdown
+				// path for up to 5 seconds.
+				select {
+				case <-ctx.Done():
+					ctxLogger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] exiting during backoff: %s", ctx.Err())
+					return
+				case <-time.After(5 * time.Second):
+				}
 
 				continue
 			}
@@ -354,7 +409,14 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 						// Channel closed, reconnect
 						ctxLogger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] subscription channel closed, reconnecting")
 						subscribeCancel()
-						time.Sleep(1 * time.Second)
+
+						select {
+						case <-ctx.Done():
+							ctxLogger.Warnf("[SubtreeValidation:blockchainSubscriptionListener] exiting during reconnect delay: %s", ctx.Err())
+							return
+						case <-time.After(1 * time.Second):
+						}
+
 						break subscriptionLoop
 					}
 
@@ -376,6 +438,9 @@ func (u *Server) blockchainSubscriptionListener(ctx context.Context) {
 							}
 							ctxLogger.Errorf("[SubtreeValidation:blockchainSubscriptionListener] failed to update best block: %s", err)
 						}
+
+						// A block can arrive before any peer subtree message after a catchup.
+						u.replaySkippedSubtreesIfRunning(ctx)
 					}
 				}
 			}
@@ -631,6 +696,7 @@ func (u *Server) Stop(ctx context.Context) error {
 	// flush can't block past the bounded Stop() window — the outstanding Stop()
 	// finishes the flush later if it can.
 	kafka.StopProducerCtx(ctx, u.logger, "subtreevalidation invalid-subtree", u.invalidSubtreeKafkaProducer)
+	kafka.StopProducerCtx(ctx, u.logger, "subtreevalidation conflicting-tx", u.conflictingTxKafkaProducer)
 
 	if u.policyRejectedTxConsumerClient != nil {
 		if err := u.policyRejectedTxConsumerClient.Close(); err != nil {
@@ -718,6 +784,11 @@ func (u *Server) CheckSubtreeFromBlock(ctx context.Context, request *subtreevali
 // This method is called internally by CheckSubtreeFromBlock after acquiring the
 // appropriate locks to prevent duplicate processing.
 func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevalidation_api.CheckSubtreeFromBlockRequest) (ok bool, err error) {
+	// INFO, not DEBUG: this span passes its error to deferFn, and an INFO span
+	// with a non-nil error logs at ERROR (util/tracing, logTraceMessage). The
+	// only production caller is cross-process over gRPC, so demoting this to
+	// DEBUG would leave a failing subtreevalidation replica logging nothing at
+	// all about its own failure.
 	ctx, _, deferFn := tracing.Tracer("subtreevalidation").Start(ctx, "checkSubtree",
 		tracing.WithParentStat(u.stats),
 		tracing.WithHistogram(prometheusSubtreeValidationCheckSubtree),
@@ -851,6 +922,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 			BaseURL:       request.BaseUrl,
 			TxHashes:      txHashes,
 			AllowFailFast: false,
+			FromBlock:     true,
 		}
 
 		// CheckSubtree responds to peer subtree-validation requests. The request
@@ -917,7 +989,8 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		// assembly: bulk-history txs do not belong in our template. In
 		// RUNNING, assembly stays enabled so txs from a legacy-bridge tip
 		// block survive in the mempool if the block loses a reorg.
-		if *currentState == blockchain.FSMStateCATCHINGBLOCKS {
+		// IDLE is included: an operator STOP can land while catchup is running.
+		if *currentState != blockchain.FSMStateRUNNING {
 			validatorOptions = append(validatorOptions, validator.WithAddTXToBlockAssembly(false))
 		}
 
@@ -943,6 +1016,7 @@ func (u *Server) checkSubtreeFromBlock(ctx context.Context, request *subtreevali
 		SubtreeHash:   *hash,
 		BaseURL:       request.BaseUrl,
 		AllowFailFast: false,
+		FromBlock:     true,
 	}
 
 	// Call the ValidateSubtreeInternal method
@@ -985,6 +1059,8 @@ func resolveTxMetaCacheBucketType(logger ulogger.Logger, raw string) txmetacache
 		return txmetacache.Native
 	case "pointer":
 		return txmetacache.Pointer
+	case "lockfree":
+		return txmetacache.Lockfree
 	default:
 		logger.Warnf("[SubtreeValidation] unknown txMetaCacheBucketType %q; falling back to unallocated", raw)
 		return txmetacache.Unallocated
@@ -994,8 +1070,8 @@ func resolveTxMetaCacheBucketType(logger ulogger.Logger, raw string) txmetacache
 // initialiseInvalidSubtreeKafkaProducer creates a Kafka producer for invalid subtree events
 func initialiseInvalidSubtreeKafkaProducer(ctx context.Context, logger ulogger.Logger, tSettings *settings.Settings) (*kafka.KafkaAsyncProducer, error) {
 	logger.Infof("Initializing Kafka producer for invalid subtrees topic: %s", tSettings.Kafka.InvalidSubtrees)
-	logger.Infof("InvalidBlocksConfig: %s", tSettings.Kafka.InvalidBlocksConfig)
-	logger.Infof("InvalidSubtreesConfig: %s", tSettings.Kafka.InvalidSubtreesConfig)
+	logger.Infof("InvalidBlocksConfig: %s", urlutil.Redact(tSettings.Kafka.InvalidBlocksConfig))
+	logger.Infof("InvalidSubtreesConfig: %s", urlutil.Redact(tSettings.Kafka.InvalidSubtreesConfig))
 
 	invalidSubtreeKafkaProducer, err := kafka.NewKafkaAsyncProducerFromURL(ctx, logger, tSettings.Kafka.InvalidSubtreesConfig, &tSettings.Kafka)
 	if err != nil {
@@ -1026,8 +1102,8 @@ func (u *Server) publishInvalidSubtree(ctx context.Context, subtreeHash, peerURL
 			return
 		}
 
-		if *state == blockchain_api.FSMStateType_CATCHINGBLOCKS {
-			// ignore notifications while syncing or catching up
+		if *state != blockchain_api.FSMStateType_RUNNING {
+			// ignore notifications unless caught up (IDLE can follow a STOP mid-catchup)
 			return
 		}
 	}

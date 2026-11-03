@@ -87,10 +87,13 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 	if deleteAtHeightResults, ok := bins[fields.DeleteAtHeight.String()]; ok && deleteAtHeightResults != nil {
 		switch v := deleteAtHeightResults.(type) {
 		case aerospike.OpResults:
-			s.parseDAHFromSlice([]interface{}(v), &SetMinedState{
-				OldDeleteAtHeight: state.OldDeleteAtHeight,
-				NewDeleteAtHeight: state.NewDeleteAtHeight,
-			})
+			// Batch operations return the two DAH reads (before, after) as OpResults. The result
+			// used to be parsed into a throwaway struct and dropped, so the old/new DAH stayed nil
+			// and the child-record DAH follow-up never ran on this path.
+			tempState := &SetMinedState{}
+			s.parseDAHFromSlice([]interface{}(v), tempState)
+			state.OldDeleteAtHeight = tempState.OldDeleteAtHeight
+			state.NewDeleteAtHeight = tempState.NewDeleteAtHeight
 		case []interface{}:
 			// Create temporary SetMinedState to reuse parsing logic
 			tempState := &SetMinedState{}
@@ -98,6 +101,7 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 			state.OldDeleteAtHeight = tempState.OldDeleteAtHeight
 			state.NewDeleteAtHeight = tempState.NewDeleteAtHeight
 		case int:
+			s.debugBareDAH()
 			dah := uint32(v)
 			state.OldDeleteAtHeight = &dah
 			state.NewDeleteAtHeight = &dah
@@ -261,17 +265,11 @@ func (s *Store) buildSpendOperations(
 		aerospike.AddOp(aerospike.NewBin(fields.SpentUtxos.String(), 1)),
 	)
 
-	// Set deleteAtHeight to nil initially
-	ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
-
-	// Add deleteAtHeight expression if retention is enabled
+	// Add deleteAtHeight ops if retention is enabled. The bin is not nulled first: the
+	// expressions read the existing DAH (raise, never lower; clear when ineligible; leave
+	// pagination records alone), matching the Lua setDeleteAtHeight.
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(currentBlockHeight, blockHeightRetention, false, false)
-		ops = append(ops, aerospike.ExpWriteOp(
-			fields.DeleteAtHeight.String(),
-			dahExp,
-			aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
-		))
+		ops = append(ops, s.buildDeleteAtHeightOps(currentBlockHeight, blockHeightRetention, false)...)
 	}
 
 	// Read final values after modifications
@@ -399,15 +397,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// block height so each tx's delete-at-height is stamped from its own spend
 	// height (a single batch may aggregate spends from different blocks).
 	extraRecordsByHeight := make(map[uint32][]*chainhash.Hash)
-	dahSetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
-	externalDAH := make([]struct {
-		TxID *chainhash.Hash
-		DAH  uint32
-	}, 0)
+	// Child (pagination) record DAH follow-ups, last state per txid wins.
+	var childDAH childDAHFollowUps
 
 	// Records filtered out by the expression — retried through Lua before
 	// completing them, so each item is still completed exactly once.
@@ -471,38 +462,14 @@ func (s *Store) processSpendBatchResultsExpressions(
 			if state.RecordUtxos > 0 && state.SpentUtxos == state.RecordUtxos {
 				extraRecordsByHeight[bItem.blockHeight] = append(extraRecordsByHeight[bItem.blockHeight], bItem.spend.TxID)
 			}
-		} else if state.TotalExtraRecs != nil {
-			// Master record - check DAH changes for external transactions
-			if state.External {
-				dahChanged := false
-				if state.OldDeleteAtHeight == nil && state.NewDeleteAtHeight != nil {
-					dahChanged = true
-				} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight == nil {
-					dahChanged = true
-				} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight != nil {
-					dahChanged = *state.OldDeleteAtHeight != *state.NewDeleteAtHeight
-				}
-
-				if dahChanged {
-					if state.NewDeleteAtHeight != nil {
-						dahSetItems = append(dahSetItems, struct {
-							TxID           *chainhash.Hash
-							ChildCount     int
-							DeleteAtHeight uint32
-						}{TxID: bItem.spend.TxID, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
-					}
-
-					externalDAH = append(externalDAH, struct {
-						TxID *chainhash.Hash
-						DAH  uint32
-					}{TxID: bItem.spend.TxID, DAH: func() uint32 {
-						if state.NewDeleteAtHeight != nil {
-							return *state.NewDeleteAtHeight
-						}
-						return 0
-					}()})
-				}
-			}
+		} else {
+			// Master record: queue the child-record DAH follow-up if the master DAH changed
+			childDAH.collect(bItem.spend.TxID, SetMinedState{
+				External:          state.External,
+				TotalExtraRecs:    state.TotalExtraRecs,
+				OldDeleteAtHeight: state.OldDeleteAtHeight,
+				NewDeleteAtHeight: state.NewDeleteAtHeight,
+			})
 		}
 
 		bItem.complete(nil)
@@ -536,13 +503,14 @@ func (s *Store) processSpendBatchResultsExpressions(
 		}
 	}
 
-	if len(dahSetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
-	}
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
+	postErr = errors.JoinCapped(10, postErr, applied.unsetErr, applied.setErr)
 
 	if postErr != nil {
+		// The spends were already completed, so the caller cannot see this; count it.
+		if prometheusUtxoMapErrors != nil {
+			prometheusUtxoMapErrors.WithLabelValues("SpendExpressions", "ChildDAHFollowUp").Inc()
+		}
 		s.logger.Errorf("[SPEND_BATCH_EXP] follow-up errors: %v", postErr)
 	}
 

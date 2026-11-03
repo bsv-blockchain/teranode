@@ -77,6 +77,62 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 	return msgpack.Marshal([]any{subOp, args})
 }
 
+// encodeAddDeletedChildrenPayload writes the addDeletedChildren native-op
+// payload directly. The bytes are identical to
+// encodeNativeOpPayload(subOpAddDeletedChildren, []any{hexHashes}), where
+// hexHashes holds each child's chainhash.Hash.String(): one argument, a list of
+// 64-character hex txids in display (byte-reversed) order. Writing them here
+// avoids the hex strings, the []any boxing and msgpack's reflection, which were
+// ~7% of the pruner's CPU at 2M deletes/s. TestEncodeAddDeletedChildrenPayload
+// pins the equality.
+func encodeAddDeletedChildrenPayload(children []*chainhash.Hash) []byte {
+	const hexDigits = "0123456789abcdef"
+
+	const hexLen = chainhash.HashSize * 2
+
+	// fixarray(2) + uint8(subOp) + fixarray(1) + array header (up to 5 bytes)
+	// + per child: str8 header (2 bytes) + 64 hex digits.
+	buf := make([]byte, 0, 1+2+1+5+len(children)*(2+hexLen))
+
+	buf = append(buf, 0x92, 0xcc, subOpAddDeletedChildren, 0x91)
+
+	switch n := len(children); {
+	case n < 16:
+		buf = append(buf, 0x90|byte(n))
+	case n <= 0xffff:
+		buf = append(buf, 0xdc, byte(n>>8), byte(n))
+	default:
+		buf = append(buf, 0xdd, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+	}
+
+	for _, h := range children {
+		buf = append(buf, 0xd9, hexLen)
+
+		for i := chainhash.HashSize - 1; i >= 0; i-- {
+			buf = append(buf, hexDigits[h[i]>>4], hexDigits[h[i]&0x0f])
+		}
+	}
+
+	return buf
+}
+
+// prunerAddDeletedChildrenRecord builds the pruner's per-parent
+// addDeletedChildren record. On the native path it encodes the payload directly
+// with encodeAddDeletedChildrenPayload; on the UDF path it builds the same
+// single list-of-hex-strings argument teranodeBatchRecord would.
+func (s *Store) prunerAddDeletedChildrenRecord(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, children []*chainhash.Hash) aerospike.BatchRecordIfc {
+	if s.useNativeForSubOp(subOpAddDeletedChildren) {
+		return s.nativeOpBatchWrite(policy, key, encodeAddDeletedChildrenPayload(children))
+	}
+
+	hexHashes := make([]interface{}, len(children))
+	for i, h := range children {
+		hexHashes[i] = h.String()
+	}
+
+	return s.teranodeBatchUDFRecord(policy, LuaPackage, key, "addDeletedChildren", []any{hexHashes})
+}
+
 // useNativeForSubOp decides whether a given mod-teranode sub-op may use the
 // native operate-path. It requires the setting+capability flag, and additionally
 // FENCES unspend (subOpUnspend) to the UDF/Lua path regardless of the flag.
@@ -115,8 +171,7 @@ func (s *Store) demoteNativeOnUnsupported(err error) {
 		return
 	}
 
-	var aerr aerospike.Error
-	if errors.As(err, &aerr) && aerr.Matches(types.PARAMETER_ERROR) && s.useNativeTeranodeOps.CompareAndSwap(true, false) {
+	if hasResultCode(err, types.PARAMETER_ERROR) && s.useNativeTeranodeOps.CompareAndSwap(true, false) {
 		s.logger.Errorf("[teranode-native-op] server rejected a native op with PARAMETER_ERROR; demoting to the UDF path for the rest of this process")
 	}
 }
@@ -127,8 +182,33 @@ func (s *Store) demoteNativeOnUnsupported(err error) {
 // status instead, so result handlers use this to keep both transports
 // producing identical not-found semantics.
 func isKeyNotFound(err error) bool {
+	return hasResultCode(err, types.KEY_NOT_FOUND_ERROR)
+}
+
+// hasResultCode reports whether err carries the given aerospike result code.
+//
+// The client sets every per-record batch error to a bare *AerospikeError with
+// nothing wrapped (BatchRecord.setError in aerospike-client-go v8.7.1-bsv6). The
+// pruner sees one of those for about half the parents it touches, the ones it
+// already deleted, so that shape is answered from the ResultCode field. Anything
+// else takes the full walk: teranode's errors.As, which also unwraps gRPC-wrapped
+// errors, then Matches, which follows the aerospike error's own wrapped chain.
+// The walk costs ~900ns and 10 allocations a call.
+func hasResultCode(err error, code types.ResultCode) bool {
+	if bare, ok := err.(*aerospike.AerospikeError); ok { //nolint:errorlint // exact-type fast path; anything wrapped takes errors.As below
+		if bare == nil {
+			// A typed nil carries no code; the walk below would panic formatting it.
+			return false
+		}
+
+		if bare.Unwrap() == nil {
+			return bare.ResultCode == code
+		}
+	}
+
 	var aerr aerospike.Error
-	return errors.As(err, &aerr) && aerr.Matches(types.KEY_NOT_FOUND_ERROR)
+
+	return errors.As(err, &aerr) && aerr.Matches(code)
 }
 
 // teranodeBatchRecordResponse validates one mod-teranode batch record result
@@ -209,33 +289,40 @@ func (s *Store) teranodeBatchRecord(
 				subOp, err)
 			return s.teranodeBatchUDFRecord(udfPolicy, udfPackage, key, udfFnName, args)
 		}
-		// Reuse the Store's shared filterless BatchWritePolicy (allocated once
-		// in initNativeTeranodeOps) on the hot path. The Aerospike client only
-		// reads from the policy during BatchOperate, and no caller mutates it
-		// after init.
-		writePolicy := s.nativeOpBatchWritePolicy
 
-		// Carry a caller-supplied server-side FilterExpression onto the native
-		// write so filtered-out records are skipped server-side exactly as on
-		// the UDF path. PreserveTransactions sets the deleteAtHeight/preserveUntil
-		// eligibility gate here; without carrying it the native path would write
-		// preserveUntil to every record — including the partially-spent parents
-		// the gate deliberately excludes. Allocate a per-call copy only when a
-		// filter is actually present (today only subOpPreserveUntil), leaving the
-		// shared filterless policy for the hot spend/setMined/locked ops.
-		if udfPolicy != nil && udfPolicy.FilterExpression != nil {
-			wp := *s.nativeOpBatchWritePolicy
-			wp.FilterExpression = udfPolicy.FilterExpression
-			writePolicy = &wp
-		}
-
-		return aerospike.NewBatchWrite(
-			writePolicy,
-			key,
-			aerospike.TeranodeModifyOp(nativeOpResultBin, payload),
-		)
+		return s.nativeOpBatchWrite(udfPolicy, key, payload)
 	}
 	return s.teranodeBatchUDFRecord(udfPolicy, udfPackage, key, udfFnName, args)
+}
+
+// nativeOpBatchWrite wraps an encoded mod-teranode payload in the native
+// operate-path BatchWrite.
+func (s *Store) nativeOpBatchWrite(udfPolicy *aerospike.BatchUDFPolicy, key *aerospike.Key, payload []byte) aerospike.BatchRecordIfc {
+	// Reuse the Store's shared filterless BatchWritePolicy (allocated once
+	// in initNativeTeranodeOps) on the hot path. The Aerospike client only
+	// reads from the policy during BatchOperate, and no caller mutates it
+	// after init.
+	writePolicy := s.nativeOpBatchWritePolicy
+
+	// Carry a caller-supplied server-side FilterExpression onto the native
+	// write so filtered-out records are skipped server-side exactly as on
+	// the UDF path. PreserveTransactions sets the deleteAtHeight/preserveUntil
+	// eligibility gate here; without carrying it the native path would write
+	// preserveUntil to every record — including the partially-spent parents
+	// the gate deliberately excludes. Allocate a per-call copy only when a
+	// filter is actually present (today only subOpPreserveUntil), leaving the
+	// shared filterless policy for the hot spend/setMined/locked ops.
+	if udfPolicy != nil && udfPolicy.FilterExpression != nil {
+		wp := *s.nativeOpBatchWritePolicy
+		wp.FilterExpression = udfPolicy.FilterExpression
+		writePolicy = &wp
+	}
+
+	return aerospike.NewBatchWrite(
+		writePolicy,
+		key,
+		aerospike.TeranodeModifyOp(nativeOpResultBin, payload),
+	)
 }
 
 // teranodeBatchUDFRecord is the UDF-path branch of teranodeBatchRecord.

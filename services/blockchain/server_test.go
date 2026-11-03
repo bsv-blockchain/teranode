@@ -37,6 +37,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -1828,7 +1830,7 @@ func TestGetHashOfAncestorBlock(t *testing.T) {
 	})
 }
 
-func TestGetLatestBlockHeaderFromBlockLocatorRequest(t *testing.T) {
+func TestGetLatestBlockHeaderFromBlockLocator(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -1852,14 +1854,14 @@ func TestGetLatestBlockHeaderFromBlockLocatorRequest(t *testing.T) {
 			BlockLocatorHashes: [][]byte{(&locator).CloneBytes()},
 		}
 
-		resp, err := server.GetLatestBlockHeaderFromBlockLocatorRequest(ctx, req)
+		resp, err := server.GetLatestBlockHeaderFromBlockLocator(ctx, req)
 		require.Error(t, err)
 		require.Nil(t, resp)
 		assert.Contains(t, err.Error(), "forced error")
 	})
 }
 
-func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
+func TestGetBlockHeadersFromOldest(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -1900,7 +1902,7 @@ func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
 			NumberOfHeaders: 1,
 		}
 
-		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
+		resp, err := server.GetBlockHeadersFromOldest(ctx, req)
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		require.Len(t, resp.BlockHeaders, 1)
@@ -1925,7 +1927,7 @@ func TestGetBlockHeadersFromOldestRequest(t *testing.T) {
 			NumberOfHeaders: 1,
 		}
 
-		resp, err := server.GetBlockHeadersFromOldestRequest(ctx, req)
+		resp, err := server.GetBlockHeadersFromOldest(ctx, req)
 		require.Error(t, err)
 		require.Nil(t, resp)
 	})
@@ -2824,6 +2826,48 @@ func TestLocateBlockHeaders(t *testing.T) {
 		require.Len(t, resp.BlockHeaders, 1)
 		assert.NotNil(t, resp.BlockHeaders[0])
 	})
+
+	t.Run("error - short locator hash rejected instead of reaching the store", func(t *testing.T) {
+		// mockStoreLocateBlockHeaders has no expectations set, so the test fails
+		// if the handler reaches the store with an unparsed nil locator hash.
+		mockStore := &mockStoreLocateBlockHeaders{}
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		stop := chainhash.DoubleHashH([]byte("stop"))
+
+		req := &blockchain_api.LocateBlockHeadersRequest{
+			Locator:   [][]byte{{0x01, 0x02, 0x03}}, // not 32 bytes
+			HashStop:  (&stop).CloneBytes(),
+			MaxHashes: 5,
+		}
+
+		resp, err := server.LocateBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		mockStore.AssertNotCalled(t, "LocateBlockHeaders", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("error - short hash stop rejected instead of reaching the store", func(t *testing.T) {
+		mockStore := &mockStoreLocateBlockHeaders{}
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		locator := chainhash.DoubleHashH([]byte("locator"))
+
+		req := &blockchain_api.LocateBlockHeadersRequest{
+			Locator:   [][]byte{(&locator).CloneBytes()},
+			HashStop:  []byte{0x01, 0x02, 0x03}, // not 32 bytes
+			MaxHashes: 5,
+		}
+
+		resp, err := server.LocateBlockHeaders(ctx, req)
+		require.Error(t, err)
+		require.Nil(t, resp)
+		require.Equal(t, codes.InvalidArgument, status.Code(err))
+		mockStore.AssertNotCalled(t, "LocateBlockHeaders", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 }
 
 // Test_GetBlockHeadersFromTill tests the GetBlockHeadersFromTill gRPC method
@@ -3714,32 +3758,11 @@ func Test_IsFullyReady(t *testing.T) {
 func Test_Idle(t *testing.T) {
 	ctx := setup(t)
 
-	tests := []struct {
-		name        string
-		expectError bool
-	}{
-		{
-			name:        "idle request",
-			expectError: true, // Fresh node starts in CATCHINGBLOCKS; STOP event has no CATCHINGBLOCKS->IDLE edge
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			request := &emptypb.Empty{}
-
-			response, err := ctx.server.Idle(context.Background(), request)
-
-			if tt.expectError {
-				require.Error(t, err)
-				require.Nil(t, response)
-				return
-			}
-
-			require.NoError(t, err)
-			require.NotNil(t, response)
-		})
-	}
+	// A fresh node starts in CATCHINGBLOCKS; STOP parks it in IDLE.
+	response, err := ctx.server.Idle(context.Background(), &emptypb.Empty{})
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	require.Equal(t, blockchain_api.FSMStateType_IDLE.String(), ctx.server.finiteStateMachine.Current())
 }
 
 // Test_WaitUntilFSMTransitionFromIdleState tests the WaitUntilFSMTransitionFromIdleState gRPC method

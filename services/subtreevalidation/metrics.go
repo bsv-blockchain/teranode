@@ -38,6 +38,13 @@ var (
 	// in storage, which is a common optimization operation.
 	prometheusSubtreeValidationCheckSubtree prometheus.Histogram
 
+	// prometheusSubtreeValidationCachedConflictProbes counts transactions whose
+	// conflicting flag was read from the UTXO store while blessing a block's
+	// already-cached subtrees. This is the cost the cached path took on to stop
+	// depending on the ConflictingNodes trailer (issue #1742), and it scales with
+	// transactions per block, so it is worth being able to see rather than infer.
+	prometheusSubtreeValidationCachedConflictProbes prometheus.Counter
+
 	// prometheusSubtreeValidationValidateSubtree tracks the duration of complete subtree validation operations.
 	// This is the primary metric for monitoring the core validation functionality,
 	// measuring end-to-end validation time including all sub-operations.
@@ -58,10 +65,49 @@ var (
 	// validation logic, separate from handler overhead.
 	prometheusSubtreeValidationValidateSubtreeDuration prometheus.Histogram
 
+	// prometheusSubtreeValidationBatchStep times each step of the catch-up batch
+	// path (precheck, resolve, check, check_after_reads, write, fallback) per
+	// load batch. resolve and check overlap, so their sum overstates the time;
+	// check_after_reads is the check time left once every parent read is back.
+	prometheusSubtreeValidationBatchStep *prometheus.HistogramVec
+
+	// prometheusSubtreeValidationBatchTxs counts the catch-up batch path's
+	// transactions by outcome: created by SpendAndCreateMulti, or sent through
+	// the per-transaction path.
+	prometheusSubtreeValidationBatchTxs *prometheus.CounterVec
+
+	// prometheusSubtreeValidationBatchParentOutputs counts previous outputs the
+	// catch-up batch path resolved, by source: memory (a parent in the same load
+	// batch) or store (ParentOutputsForValidation).
+	prometheusSubtreeValidationBatchParentOutputs *prometheus.CounterVec
+
+	// prometheusSubtreeValidationBatchLists counts SpendAndCreateMulti lists.
+	prometheusSubtreeValidationBatchLists prometheus.Counter
+
 	// prometheusSubtreeValidationBlessMissingTransaction tracks the duration of bless missing transaction operations.
 	// This histogram measures the time taken to handle missing transactions,
 	// which is an important aspect of subtree validation.
 	prometheusSubtreeValidationBlessMissingTransaction prometheus.Histogram
+
+	// prometheusSubtreeValidationBlessUnlockFailed counts transactions that were accepted
+	// but whose two-phase-commit unlock failed, and were blessed anyway.
+	prometheusSubtreeValidationBlessUnlockFailed prometheus.Counter
+
+	// prometheusSubtreeValidationBlessUnlockRecovered counts transactions in that set that
+	// the per-level retry in unlockAcceptedTransactions did manage to unlock.
+	prometheusSubtreeValidationBlessUnlockRecovered prometheus.Counter
+
+	// prometheusSubtreeValidationConflictingKeptAside counts txs of peer subtrees kept aside
+	// because they conflict with txs this node accepted, until a block references them. It
+	// counts per validation pass: a subtree validated again after an interrupted pass counts again.
+	prometheusSubtreeValidationConflictingKeptAside prometheus.Counter
+
+	// prometheusSubtreeValidationBlessUnlockRetryFailedBatches counts unlock retry calls that
+	// returned an error. SetLocked reports the first error without per-record results, so the
+	// unit is one call, not one transaction: on a failed call some or all of its hashes stay
+	// locked until they are mined. The same goes for a retry left unrun because the unlock
+	// context was already done.
+	prometheusSubtreeValidationBlessUnlockRetryFailedBatches prometheus.Counter
 
 	// prometheusSubtreeValidationSetTXMetaCacheKafkaBatch tracks the duration of processing one
 	// SetCacheMulti batch from a Kafka message. One observation per Kafka message that contained
@@ -94,6 +140,24 @@ var (
 	// need a signal so they can detect malformed-message bursts that would otherwise be invisible.
 	// Reason labels: nil_message, too_short, unmarshal_failure, bad_hash, bad_url.
 	prometheusSubtreeKafkaMalformed *prometheus.CounterVec
+
+	// prometheusSubtreeAlreadyExistsSkipped counts subtree Kafka messages skipped because the
+	// subtree already exists. This is individually benign (best-effort, no retries), but without
+	// a metric a spike in the rate would be invisible.
+	prometheusSubtreeAlreadyExistsSkipped prometheus.Counter
+
+	// prometheusSkippedSubtrees counts peer subtrees announced while the node was catching up, by
+	// outcome: recorded (newly kept), evicted (oldest dropped when full), expired (announced more
+	// than skippedSubtreeMaxAge before its replay), requeued (kept again because the node was
+	// catching up again), dropped (the node was IDLE at replay), replayed (validated or already
+	// stored), replay_failed.
+	prometheusSkippedSubtrees *prometheus.CounterVec
+
+	// prometheusPeerSubtreeAdmissionWait tracks how long a peer subtree waited for a
+	// subtreevalidation_peerSubtreeConcurrency slot, and prometheusPeerSubtreeAdmissionWaiting
+	// how many are waiting now. Together they show whether the limit is too low.
+	prometheusPeerSubtreeAdmissionWait    prometheus.Histogram
+	prometheusPeerSubtreeAdmissionWaiting prometheus.Gauge
 )
 
 var (
@@ -122,6 +186,15 @@ func _initPrometheusMetrics() {
 			Name:      "check_subtree",
 			Help:      "Duration of calls to checkSubtree endpoint",
 			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationCachedConflictProbes = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "cached_subtree_conflict_probes_total",
+			Help:      "Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing",
 		},
 	)
 
@@ -164,6 +237,46 @@ func _initPrometheusMetrics() {
 		},
 	)
 
+	prometheusSubtreeValidationBatchStep = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "batch_step",
+			Help:      "Duration of each step of the catch-up batch path, per load batch; resolve and check overlap, check_after_reads is the check time after the last parent read",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+		[]string{"step"},
+	)
+
+	prometheusSubtreeValidationBatchTxs = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "batch_txs",
+			Help:      "Transactions handled by the catch-up batch path, by outcome",
+		},
+		[]string{"outcome"},
+	)
+
+	prometheusSubtreeValidationBatchParentOutputs = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "batch_parent_outputs",
+			Help:      "Previous outputs resolved by the catch-up batch path, by source",
+		},
+		[]string{"source"},
+	)
+
+	prometheusSubtreeValidationBatchLists = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "batch_lists",
+			Help:      "SpendAndCreateMulti lists written by the catch-up batch path",
+		},
+	)
+
 	prometheusSubtreeValidationBlessMissingTransaction = promauto.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "teranode",
@@ -171,6 +284,42 @@ func _initPrometheusMetrics() {
 			Name:      "bless_missing_transaction",
 			Help:      "Duration of bless missing transaction",
 			Buckets:   util.MetricsBucketsMilliSeconds,
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockFailed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_failed",
+			Help:      "Accepted transactions blessed although their two-phase-commit unlock failed",
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockRecovered = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_recovered",
+			Help:      "Accepted transactions the per-level unlock retry unlocked, subset of bless_unlock_failed",
+		},
+	)
+
+	prometheusSubtreeValidationConflictingKeptAside = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "conflicting_kept_aside",
+			Help:      "Transactions of peer subtrees kept aside because they conflict with accepted transactions, until a block references them, counted per validation pass",
+		},
+	)
+
+	prometheusSubtreeValidationBlessUnlockRetryFailedBatches = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "bless_unlock_retry_failed_batches",
+			Help:      "Unlock retry calls that returned an error, per call not per transaction, the unlocked set of such a call is unknown",
 		},
 	)
 
@@ -220,5 +369,43 @@ func _initPrometheusMetrics() {
 			Help:      "Number of malformed Kafka subtree messages dropped, by reason",
 		},
 		[]string{"reason"},
+	)
+
+	prometheusSubtreeAlreadyExistsSkipped = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "subtree_already_exists_skipped_total",
+			Help:      "Number of subtree Kafka messages skipped because the subtree already exists",
+		},
+	)
+
+	prometheusSkippedSubtrees = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "skipped_peer_subtrees_total",
+			Help:      "Peer subtrees announced while the node was catching up, by outcome (recorded, evicted, expired, requeued, dropped, replayed, replay_failed)",
+		},
+		[]string{"outcome"},
+	)
+
+	prometheusPeerSubtreeAdmissionWait = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "peer_subtree_admission_wait",
+			Help:      "Seconds a peer subtree waited for a validation slot (subtreevalidation_peerSubtreeConcurrency)",
+			Buckets:   util.MetricsBucketsMilliLongSeconds,
+		},
+	)
+
+	prometheusPeerSubtreeAdmissionWaiting = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "subtreevalidation",
+			Name:      "peer_subtree_admission_waiting",
+			Help:      "Peer subtrees waiting for a validation slot (subtreevalidation_peerSubtreeConcurrency)",
+		},
 	)
 }

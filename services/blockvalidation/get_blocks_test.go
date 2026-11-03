@@ -25,7 +25,9 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/adaptivefetch"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -33,8 +35,10 @@ import (
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/jarcoal/httpmock"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/ordishs/gocore"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -49,6 +53,8 @@ import (
 func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 	t.Run("Single Block Fetch", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blocks
@@ -110,6 +116,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("Multiple_Blocks_Fetch_-_Ordering_Test", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		numBlocks := 5
@@ -190,6 +198,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("HTTP Error Handling", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		numBlocks := 3
@@ -241,6 +251,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("Context Cancellation", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		blocks := testhelpers.CreateTestBlockChain(t, 2)
@@ -300,6 +312,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("Empty_Block_Response", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		numBlocks := 2
@@ -351,6 +365,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("Concurrent_Block_Fetching_Behavior", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		numBlocks := 10
@@ -442,6 +458,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("No Headers", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		blocks := testhelpers.CreateTestBlockChain(t, 1)
@@ -487,6 +505,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("Nil Headers", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		blocks := testhelpers.CreateTestBlockChain(t, 1)
@@ -517,6 +537,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("Fetch Blocks Batch", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test block
@@ -545,6 +567,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 
 	t.Run("Fetch Single Block", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test block
@@ -576,6 +600,8 @@ func TestFetchBlocksConcurrently_CurrentImplementation(t *testing.T) {
 func TestFetchBlocksConcurrently_PerformanceCharacteristics(t *testing.T) {
 	t.Run("Memory_Usage_Pattern", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		numBlocks := 100
@@ -1323,8 +1349,8 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	defer httpmock.DeactivateAndReset()
 
-	// 503 is the only status the retry loop iterates on, so this is the shape that
-	// reaches all six attempts.
+	// 503 is retried (as is 429), so a peer that keeps answering 503 is the shape
+	// that reaches all six attempts.
 	url := fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String())
 	httpmock.RegisterResponder("GET", url, httpmock.NewStringResponder(503, "unavailable"))
 
@@ -1353,6 +1379,39 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 	// in exactly the case the bound exists to contain.
 	require.False(t, errors.IsLocalError(err), "a peer that exhausts the bound must stay attributable, not read as a local failure")
 	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	// The retry loop stops on its own budget (half the bound) or reports the deadline as
+	// the peer's rejection, so the error names the rejection rather than a context error
+	// for the caller to rewrite.
+	require.Contains(t, err.Error(), "still rejected after")
+}
+
+// A peer that stalls without ever rejecting us gives the retry loop no rejection to report,
+// so the fetch fails with a context error at the bound. The deferred fallback in
+// fetchAndStoreSubtreeData must still turn that into an attributable error, or the stalling
+// peer reads as a local failure and stays in rotation.
+func TestFetchAndStoreSubtreeData_StallWithoutRejectionStaysAttributable(t *testing.T) {
+	suite := NewCatchupTestSuite(t)
+	defer suite.Cleanup()
+
+	suite.Server.settings.BlockValidation.SubtreeDataFetchTimeout = 300 * time.Millisecond
+
+	blocks := testhelpers.CreateTestBlockChain(t, 1)
+	subtreeHash := &chainhash.Hash{0xab, 0xce}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	url := fmt.Sprintf("http://test-peer/subtree_data/%s", subtreeHash.String())
+	httpmock.RegisterResponder("GET", url, func(req *http.Request) (*http.Response, error) {
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})
+
+	err := suite.Server.fetchAndStoreSubtreeData(suite.Ctx, blocks[0], subtreeHash, nil, "test-peer-id", "http://test-peer", false, nil)
+
+	require.Error(t, err)
+	require.False(t, errors.IsLocalError(err), "a stalling peer must stay attributable: %v", err)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
 	require.Contains(t, err.Error(), "exceeded the")
 }
 
@@ -1360,6 +1419,8 @@ func TestFetchAndStoreSubtreeData_DetachedFetchIsBounded(t *testing.T) {
 func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 	t.Run("Ordered_Delivery_With_Batching", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blockchain with 10 blocks
@@ -1434,6 +1495,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 	t.Run("Efficient_Batching_Strategy", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blockchain with 20 blocks
@@ -1518,6 +1581,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 	t.Run("Large_Batch_Fetching", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blockchain with 100 blocks
@@ -1591,6 +1656,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 	t.Run("Multiple_Large_Batches_250_Blocks", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blockchain with 250 blocks
@@ -1675,6 +1742,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 	t.Run("Worker_Pool_Parallel_Processing", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blockchain with 50 blocks
@@ -1761,6 +1830,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 
 	t.Run("Error_Handling_In_Worker_Pipeline", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blockchain
@@ -1815,6 +1886,8 @@ func TestFetchBlocksConcurrently_OptimizedBehavior(t *testing.T) {
 func TestFetchBlocksConcurrently_WorkerPoolArchitecture(t *testing.T) {
 	t.Run("Large_Batch_Processing_100_Blocks", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blockchain with 100 blocks
@@ -2245,6 +2318,8 @@ func TestSubtreeFunctions(t *testing.T) {
 func TestFetchBlocksConcurrentlyOptimized(t *testing.T) {
 	t.Run("BackwardCompatibilityAlias", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blocks
@@ -3175,9 +3250,10 @@ func TestBlockWorker(t *testing.T) {
 	mockSubtreeStore := memory.New()
 	settings := test.CreateBaseTestSettings(t)
 	server := &Server{
-		logger:       logger,
-		subtreeStore: mockSubtreeStore,
-		settings:     settings,
+		logger:          logger,
+		subtreeStore:    mockSubtreeStore,
+		settings:        settings,
+		blockValidation: notStoredBlockValidation(t),
 	}
 
 	baseURL := "http://test-peer:8080"
@@ -3466,6 +3542,8 @@ func TestFetchBlocksConcurrently_ErrorHandling(t *testing.T) {
 // TestOrderedDelivery_StrictOrdering tests that blocks are delivered in correct order despite worker completion order
 func TestOrderedDelivery_StrictOrdering(t *testing.T) {
 	suite := NewCatchupTestSuite(t)
+	// The blocks are not stored, so catchup fetches them all.
+	suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 	defer suite.Cleanup()
 
 	// Create test blocks
@@ -4102,9 +4180,10 @@ func TestBlockWorker_Pessimistic_CallsFetchSubtreeData(t *testing.T) {
 
 	var fetchCalls atomic.Int32
 	server := &Server{
-		logger:        ulogger.TestLogger{},
-		stats:         gocore.NewStat("test-pess"),
-		adaptiveFetch: afState,
+		logger:          ulogger.TestLogger{},
+		stats:           gocore.NewStat("test-pess"),
+		adaptiveFetch:   afState,
+		blockValidation: notStoredBlockValidation(t),
 	}
 	server.fetchSubtreeDataForBlockFn = func(ctx context.Context, b *model.Block, peerID, baseURL string) (map[string]struct{}, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 		fetchCalls.Add(1)
@@ -4171,6 +4250,8 @@ func TestBlockWorker_Optimistic_SkipsFetchSubtreeData(t *testing.T) {
 func TestFetchBlocksConcurrently_BlockHeightIsSet(t *testing.T) {
 	t.Run("Block_Height_Should_Be_Set_During_Catchup", func(t *testing.T) {
 		suite := NewCatchupTestSuite(t)
+		// The blocks are not stored, so catchup fetches them all.
+		suite.MockBlockchain.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil).Maybe()
 		defer suite.Cleanup()
 
 		// Create test blocks at specific heights
@@ -4264,6 +4345,46 @@ func TestBlockvalidation_AdaptiveFetch_PessToOptToPess(t *testing.T) {
 	})
 	require.Equal(t, adaptivefetch.ModePessimistic, af.Mode(),
 		"single 500-miss optimistic block must trip back to pessimistic")
+}
+
+// mismatchedSubtreeDataBody builds the one shape the missing-transaction predicate
+// cannot see: a COMPLETE subtree_data body in which the reader's uncompared slot has
+// been filled with a fabricated transaction (bitcoin-sv/teranode#4838). It returns the
+// subtree, the raw bytes a peer would serve for it, and the fabricated transaction.
+//
+// The subtree must carry no coinbase placeholder, and that is the mechanism rather
+// than a detail. serializeFromReader diverts a transaction to slot 0, uncompared, when
+// its running index stands at 1 and the transaction is coinbase-shaped; a subtree that
+// starts with the placeholder begins at index 1 and spends the diversion on its own
+// legitimate coinbase, so only a subtree without one reaches index 1 with a real
+// transaction already stored at slot 0 — which every subtree after the first does,
+// straight after its first transaction.
+//
+// The served stream is [a, FAKE, b]: a is compared against node 0 and stored, FAKE
+// overwrites it with no comparison and without advancing the index, and b is then
+// compared against node 1. Every slot ends up filled, so neither the body's length nor
+// its nil count gives it away — only comparing each stored transaction to its node does.
+//
+// Hand-assembled rather than built through Data.AddTx/Serialize: AddTx rejects a
+// coinbase-shaped transaction at a non-zero index and Serialize emits exactly Length()
+// entries, so the API cannot express this body at all.
+func mismatchedSubtreeDataBody(t *testing.T, a, b *bt.Tx) (*subtreepkg.Subtree, []byte, *bt.Tx) {
+	t.Helper()
+
+	subtree, err := subtreepkg.NewIncompleteTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*a.TxIDChainHash(), 1, 11))
+	require.NoError(t, subtree.AddNode(*b.TxIDChainHash(), 2, 12))
+	require.NotEqual(t, subtreepkg.CoinbasePlaceholderHashValue, subtree.Nodes[0].Hash,
+		"precondition: the diversion is only reachable in a subtree with no coinbase placeholder")
+
+	fake := preBindCoinbase(t, 0xfa)
+	require.True(t, fake.IsCoinbase(), "precondition: the diverted transaction must be coinbase-shaped")
+	require.False(t, subtree.Nodes[0].Hash.Equal(*fake.TxIDChainHash()))
+
+	body := bytes.Join([][]byte{a.SerializeBytes(), fake.SerializeBytes(), b.SerializeBytes()}, nil)
+
+	return subtree, body, fake
 }
 
 // TestFetchAndStoreSubtreeData_PoisonedResponses covers issue 1368: a peer that
@@ -4384,6 +4505,84 @@ func TestFetchAndStoreSubtreeData_PoisonedResponses(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrExternal))
 		require.True(t, isCacheBypassRetryable(err))
 	})
+
+	// A body can be complete and still be the wrong body. The missing-transaction
+	// predicate counts nil slots, so it passes this one — and every structural anchor
+	// downstream passes it too, because the node list is untouched. The only check that
+	// can see it is the transaction-to-node comparison, and this is the one boundary
+	// where the party that served the bytes is known (bitcoin-sv/teranode#4838).
+	//
+	// The retry marker is asserted deliberately: without it the verdict is a dead end
+	// rather than one cache-busted retry followed by failover, which is how every other
+	// unusable body on this path behaves.
+	t.Run("CompleteButMismatchedBodyIsAPeerFailure", func(t *testing.T) {
+		server := newServer()
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		mismatched, body, fake := mismatchedSubtreeDataBody(t, txs[1], txs[2])
+		mismatchedHash := mismatched.RootHash()
+
+		httpmock.RegisterResponder("GET",
+			fmt.Sprintf("%s/subtree_data/%s", baseURL, mismatchedHash.String()),
+			httpmock.NewBytesResponder(200, body))
+
+		err := server.fetchAndStoreSubtreeData(ctx, testBlock, mismatchedHash, mismatched, peerID, baseURL, false, nil)
+		require.Error(t, err, "a complete body whose transactions are not the subtree's must be rejected")
+		require.Contains(t, err.Error(), "is not the one the subtree names")
+		require.Contains(t, err.Error(), peerID, "the peer that served the bytes must be named")
+		require.Contains(t, err.Error(), baseURL)
+		require.Contains(t, err.Error(), fake.TxIDChainHash().String(), "the fabricated transaction must be named")
+		require.True(t, errors.Is(err, errors.ErrExternal))
+		require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")
+		require.True(t, isCacheBypassRetryable(err),
+			"a mismatched body must buy the same cache-busted retry an empty one does")
+
+		// Storing it anyway would convert an attributable peer fault into an
+		// unattributable local one: the read side would find it on disk, see only a
+		// local file, and quarantine it with nobody charged.
+		stored, existsErr := server.subtreeStore.Exists(ctx, mismatchedHash[:], fileformat.FileTypeSubtreeData)
+		require.NoError(t, existsErr)
+		require.False(t, stored, "a rejected body must never be written")
+	})
+
+	// The mismatched body is attributable, so it strikes the serving peer — but only on
+	// the cache-busted retry, as the wrong-root subtree does: before the bypass the bytes
+	// may be a cache's, not the peer's.
+	t.Run("CompleteButMismatchedBodyStrikesOnlyAfterCacheBypass", func(t *testing.T) {
+		for _, bypassCache := range []bool{false, true} {
+			rec := &banScoreRecorder{}
+
+			server := newServer()
+			server.blockValidation = &BlockValidation{
+				logger:    ulogger.TestLogger{},
+				settings:  server.settings,
+				p2pClient: rec,
+			}
+
+			httpmock.ActivateNonDefault(util.HTTPClient())
+
+			mismatched, body, _ := mismatchedSubtreeDataBody(t, txs[1], txs[2])
+			mismatchedHash := mismatched.RootHash()
+
+			httpmock.RegisterResponder("GET",
+				fmt.Sprintf("%s/subtree_data/%s", baseURL, mismatchedHash.String()),
+				httpmock.NewBytesResponder(200, body))
+
+			err := server.fetchAndStoreSubtreeData(ctx, testBlock, mismatchedHash, mismatched, peerID, baseURL, bypassCache, nil)
+
+			httpmock.DeactivateAndReset()
+
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "is not the one the subtree names")
+
+			if bypassCache {
+				require.Equal(t, []string{peerID}, rec.struck(), "the cache-busted retry must strike the serving peer exactly once")
+			} else {
+				require.Empty(t, rec.struck(), "a mismatch before the cache bypass must not strike: the bytes may be the cache's")
+			}
+		}
+	})
 }
 
 // TestFetchAndStoreSubtreeAndSubtreeData_CacheBypassRetry covers the issue-1368
@@ -4446,6 +4645,114 @@ func TestFetchAndStoreSubtreeAndSubtreeData_CacheBypassRetry(t *testing.T) {
 	counts := httpmock.GetCallCountInfo()
 	require.Equal(t, 1, counts["GET "+poisonedURL], "the poisoned URL must be requested exactly once")
 	require.Equal(t, 1, counts["GET "+bustedURL], "the bypass retry must fire exactly once")
+
+	// A complete-but-mismatched body must be DISPOSED of exactly like a poisoned one:
+	// one cache-busted retry against the same peer, then failover to an alternative
+	// (bitcoin-sv/teranode#4838). Rejecting it is not enough on its own — an error with
+	// no retry marker is a dead end, and the peer that served it keeps the subtree
+	// unobtainable for the whole cache TTL, which is the issue-1368 stall on a new error
+	// class. Its own server and fixture, so the counts above stay the empty-body case's.
+	t.Run("MismatchedBodyRetriesThenFailsOverToAnAlternative", func(t *testing.T) {
+		const altBaseURL = "http://alternative-peer:8000"
+
+		altPeerID := peer.ID("alternative-peer-serving-the-honest-body").String()
+		require.NotEqual(t, peerID, altPeerID)
+
+		mismatched, badBody, _ := mismatchedSubtreeDataBody(t, txs[1], txs[2])
+		mismatchedHash := mismatched.RootHash()
+
+		honest := subtreepkg.NewSubtreeData(mismatched)
+		require.NoError(t, honest.AddTx(txs[1], 0))
+		require.NoError(t, honest.AddTx(txs[2], 1))
+		honestBody, serErr := honest.Serialize()
+		require.NoError(t, serErr)
+
+		var nodes []byte
+		nodes = append(nodes, txs[1].TxIDChainHash()[:]...)
+		nodes = append(nodes, txs[2].TxIDChainHash()[:]...)
+
+		fake := &subtreeAttributionP2PClient{
+			peers: []*p2p.PeerInfo{
+				{
+					ID:         peer.ID("alternative-peer-serving-the-honest-body"),
+					DataHubURL: altBaseURL,
+					Height:     1000,
+					IsBanned:   false,
+					// Must stay at or above 20, and DataHubURL non-empty, or
+					// GetPeersAtMaxHeight filters this peer out silently, no failover
+					// happens, and the test passes for the wrong reason.
+					ReputationScore: 50,
+				},
+			},
+		}
+
+		altServer := &Server{
+			logger:       ulogger.TestLogger{},
+			subtreeStore: memory.New(),
+			settings:     test.CreateBaseTestSettings(t),
+			p2pClient:    fake,
+		}
+
+		var (
+			mu            sync.Mutex
+			primaryData   []string // RawQuery of each subtree_data request to the primary
+			altDataCalls  int
+			altSubtreeGot int
+		)
+
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", baseURL, mismatchedHash.String()),
+			httpmock.NewBytesResponder(200, nodes))
+
+		// The primary serves the same mismatched bytes to the cache-busted retry too, so
+		// the cache is ruled out and the peer itself is the fault.
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", baseURL, mismatchedHash.String()),
+			func(req *http.Request) (*http.Response, error) {
+				mu.Lock()
+				primaryData = append(primaryData, req.URL.RawQuery)
+				mu.Unlock()
+
+				return httpmock.NewBytesResponse(200, badBody), nil
+			})
+
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree/%s", altBaseURL, mismatchedHash.String()),
+			func(*http.Request) (*http.Response, error) {
+				mu.Lock()
+				altSubtreeGot++
+				mu.Unlock()
+
+				return httpmock.NewBytesResponse(200, nodes), nil
+			})
+
+		httpmock.RegisterResponder("GET", fmt.Sprintf("%s/subtree_data/%s", altBaseURL, mismatchedHash.String()),
+			func(*http.Request) (*http.Response, error) {
+				mu.Lock()
+				altDataCalls++
+				mu.Unlock()
+
+				return httpmock.NewBytesResponse(200, honestBody), nil
+			})
+
+		servingPeer, fetchErr := altServer.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, mismatchedHash, peerID, baseURL, nil)
+		require.NoError(t, fetchErr, "the alternative peer's honest body must complete the fetch")
+		require.Equal(t, altPeerID, servingPeer, "the alternative peer must be recorded as the one that served it")
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		require.Len(t, primaryData, 2, "the marker must buy exactly one cache-busted retry against the primary")
+		require.Empty(t, primaryData[0], "the first attempt must not carry a cachebust parameter")
+		require.Contains(t, primaryData[1], "cachebust=", "the retry must bust the cache")
+		require.Equal(t, 1, altDataCalls, "the alternative must be asked for the body exactly once")
+		require.Zero(t, altSubtreeGot,
+			"the node list was stored by the primary's honest /subtree response, so the alternative is only needed for the body")
+
+		// The stored body is the alternative's, not the primary's: had the mismatched one
+		// been written, the read side would later find it, see only a local file, and
+		// quarantine it with nobody charged.
+		storedBody, getErr := altServer.subtreeStore.Get(ctx, mismatchedHash[:], fileformat.FileTypeSubtreeData)
+		require.NoError(t, getErr)
+		require.Equal(t, honestBody, storedBody, "the rejected body must never reach the store")
+	})
 }
 
 // TestFetchAndStoreSubtreeAndSubtreeData_AllPeersFailedErrorNamesEveryPeer covers
@@ -4594,7 +4901,7 @@ func TestFetchAndStoreSubtree_PoisonedResponses(t *testing.T) {
 		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "not a whole number")
-		require.True(t, errors.Is(err, errors.ErrProcessing), "the class must stay ProcessingError")
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the class must stay peer-attributable")
 		require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")
 		require.True(t, isCacheBypassRetryable(err), "a truncated body is the issue-1368 signature and must be retryable")
 	})
@@ -4610,9 +4917,26 @@ func TestFetchAndStoreSubtree_PoisonedResponses(t *testing.T) {
 		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "that hash to")
-		require.True(t, errors.Is(err, errors.ErrProcessing), "the class must stay ProcessingError")
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "the class must stay peer-attributable")
 		require.False(t, errors.IsLocalError(err))
 		require.True(t, isCacheBypassRetryable(err))
+	})
+
+	t.Run("EmptyBodyIsAPeerFaultAndCacheBypassRetryable", func(t *testing.T) {
+		f := newR2SubtreeFixture(t, baseURL)
+		server := newServer()
+		httpmock.ActivateNonDefault(util.HTTPClient())
+		defer httpmock.DeactivateAndReset()
+
+		httpmock.RegisterResponder("GET", f.subtreeURL, httpmock.NewBytesResponder(200, []byte{}))
+
+		_, err := server.fetchAndStoreSubtree(ctx, testBlock, f.hash, peerID, baseURL, false, nil)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "empty subtree received")
+		require.True(t, errors.Is(err, errors.ErrNotFound), "the class must stay peer-attributable")
+		require.False(t, errors.IsLocalError(err), "must not short-circuit the alternative-peer loop")
+		require.False(t, isLocalProcessingFault(err), "must not short-circuit the alternative-peer loop")
+		require.True(t, isCacheBypassRetryable(err), "an empty body is the issue-1368 signature and must be retryable")
 	})
 }
 
@@ -4727,7 +5051,7 @@ func TestTryPeerForSubtree_WrongRootSubtreeStrikesOnlyAfterCacheBypass(t *testin
 
 		err := server.tryPeerForSubtree(ctx, testBlock, f.hash, peerID, baseURL, nil)
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrProcessing))
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 		require.True(t, isCacheBypassRetryable(err))
 
 		mu.Lock()
@@ -4783,6 +5107,20 @@ func newBudgetedPrefetchServer(t *testing.T, budget int64) *Server {
 // newBudgetedPrefetchWorkerServer extends newBudgetedPrefetchServer with the two fields
 // blockWorker itself needs: a stat for the tracing span and an adaptive-fetch state to
 // sample the mode from.
+// notStoredBlockValidation is block validation for worker fixtures: every block reads as not yet
+// stored, so the worker goes on to prewarm it.
+func notStoredBlockValidation(t *testing.T) *BlockValidation {
+	t.Helper()
+
+	client := &blockchain.Mock{}
+	client.On("GetBlockExists", mock.Anything, mock.Anything).Return(false, nil)
+
+	cache := expiringmap.New[chainhash.Hash, bool](time.Minute)
+	t.Cleanup(cache.Stop)
+
+	return &BlockValidation{blockchainClient: client, blockExistsCache: cache}
+}
+
 func newBudgetedPrefetchWorkerServer(t *testing.T, budget int64, mode adaptivefetch.Mode) *Server {
 	t.Helper()
 
@@ -4802,6 +5140,7 @@ func newBudgetedPrefetchWorkerServer(t *testing.T, budget int64, mode adaptivefe
 	server := newBudgetedPrefetchServer(t, budget)
 	server.stats = gocore.NewStat("test-prefetch-budget")
 	server.adaptiveFetch = af
+	server.blockValidation = notStoredBlockValidation(t)
 
 	return server
 }
@@ -5932,7 +6271,7 @@ func TestSubtreeDataWriteFailure_Classification(t *testing.T) {
 				return
 			}
 
-			require.True(t, errors.Is(err, errors.ErrProcessing))
+			require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
 			require.Contains(t, err.Error(), peerID, "a peer-attributable error must name the peer")
 		})
 	}
@@ -6095,4 +6434,48 @@ type failingWriter struct{}
 
 func (failingWriter) Write(_ []byte) (int, error) {
 	return 0, io.ErrClosedPipe
+}
+
+// TestFetchAndStoreSubtreeAndSubtreeData_TruncatedLocalSubtreeIsLocal pins the local exits of the
+// alternative-peer walk. A subtree file already on our disk that does not deserialize fails as a
+// bare ProcessingError, which is local. Every alternative would hit the same file, so none is
+// tried, and the result must not become the External all-peers-failed aggregate, which charges and
+// rotates the primary.
+func TestFetchAndStoreSubtreeAndSubtreeData_TruncatedLocalSubtreeIsLocal(t *testing.T) {
+	ctx := context.Background()
+	primaryURL := "http://primary-peer:8000"
+	primaryID := "12D3KooWL1NF6fdTJ9cucEuwvuX8V8KtpJZZnUE4umdLBuK15eUZ"
+
+	subtreeHash := chainhash.HashH([]byte("truncated-local-subtree"))
+
+	store := memory.New()
+	require.NoError(t, store.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, []byte{0x01, 0x02, 0x03}))
+
+	p2pClient := &subtreeAttributionP2PClient{
+		peers: []*p2p.PeerInfo{{
+			ID:              peer.ID("alternative-peer"),
+			DataHubURL:      "http://alternative-peer:8000",
+			Height:          1000,
+			ReputationScore: 50,
+		}},
+	}
+
+	server := &Server{
+		logger:       ulogger.TestLogger{},
+		subtreeStore: store,
+		settings:     test.CreateBaseTestSettings(t),
+		p2pClient:    p2pClient,
+	}
+
+	httpmock.ActivateNonDefault(util.HTTPClient())
+	defer httpmock.DeactivateAndReset()
+
+	_, err := server.fetchAndStoreSubtreeAndSubtreeData(ctx, &model.Block{Height: 100}, &subtreeHash, primaryID, primaryURL, nil)
+	require.Error(t, err)
+	require.False(t, errors.Is(err, errors.ErrExternal), "a local read failure must not become the all-peers-failed aggregate")
+	require.True(t, isLocalCatchupFault(err))
+	require.Zero(t, httpmock.GetTotalCallCount(), "no peer can fix our own file, so none is asked")
+
+	server.reportCatchupFailureForError(ctx, primaryID, err)
+	require.Zero(t, p2pClient.totalCharges(), "our own file must not be charged to any peer")
 }

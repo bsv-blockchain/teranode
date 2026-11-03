@@ -21,7 +21,7 @@ import (
 // and needs no protection; gating server-side avoids pointless writes and keeps not-fully-spent
 // txs out of the preservation/expiry path. Filtered records return FILTERED_OUT, which is treated
 // as a benign skip below (mirrors the Lua path's no-op).
-func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
+func (s *Store) PreserveTransactionsWithExpressions(ctx context.Context, txIDs []chainhash.Hash, preserveUntilHeight uint32) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
 	batchWritePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
@@ -34,6 +34,9 @@ func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []c
 	ops := []*aerospike.Operation{
 		aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), int(preserveUntilHeight))),
 		aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)),
+		// read back, so an external master's pagination records can be followed up (below)
+		aerospike.GetBinOp(fields.External.String()),
+		aerospike.GetBinOp(fields.TotalExtraRecs.String()),
 	}
 
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
@@ -69,6 +72,11 @@ func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []c
 
 	preservedCount := 0
 
+	var (
+		childDAH childDAHFollowUps
+		pagesErr error
+	)
+
 	for j, record := range batchRecords {
 		batchRec := record.BatchRec()
 		if batchRec.Err != nil {
@@ -86,13 +94,31 @@ func (s *Store) PreserveTransactionsWithExpressions(_ context.Context, txIDs []c
 		}
 
 		preservedCount++
+
+		state, parseErr := s.parseSetMinedState(batchRec.Record.Bins)
+		if parseErr != nil {
+			pagesErr = errors.JoinCapped(10, pagesErr, errors.NewProcessingError("[PreserveTransactions][%s] failed to parse the pagination record count", txIDs[validIndexes[j]].String(), parseErr))
+			continue
+		}
+
+		childDAH.collectPreserved(&txIDs[validIndexes[j]], state)
 	}
+
+	// A failed page write is returned: the pruner skips its deletion phase when preservation
+	// fails and selects pages by their own DAH, so a page left with its DAH would otherwise be
+	// deleted in the same cycle. The follow-up is unconditional, so the next run heals it.
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
+	pagesErr = errors.JoinCapped(10, pagesErr, applied.unsetErr)
 
 	if otherErrors > 0 {
 		s.logger.Errorf("[PreserveTransactions] %d errors processing %d transactions", otherErrors, len(txIDs))
 	}
 
 	s.logger.Debugf("[PreserveTransactions] Successfully preserved %d out of %d transactions", preservedCount, len(txIDs))
+
+	if pagesErr != nil {
+		return errors.NewStorageError("[PreserveTransactions] failed to clear the deleteAtHeight of the pagination records of preserved txs", pagesErr)
+	}
 
 	return nil
 }

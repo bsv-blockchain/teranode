@@ -30,7 +30,6 @@ func init() {
 	// Initialize test settings
 	gocore.Config().Set("network", "regtest")
 	gocore.Config().Set("use_cgo_verifier", "false")
-	gocore.Config().Set("use_cgo_signer", "false")
 	gocore.Config().Set("profilerAddr", "")
 	gocore.Config().Set("prometheusEndpoint", "")
 }
@@ -383,6 +382,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 
 	// Configure settings - this will now pick up KAFKA_PORT and persister URLs from gocore.Config
 	appSettings := settings.NewSettings()
+	appSettings.GRPCAdminAPIKey = "daemon-all-services-test-key"
 	appSettings.LocalTestStartFromState = "RUNNING"
 	appSettings.P2P.Port = p2pPort
 	appSettings.Asset.HTTPPort = assetPort
@@ -518,7 +518,11 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	appSettings.BlockPersister.Store = blobStoreURL
 	appSettings.Block.TxStore = blobStoreURL
 	appSettings.SubtreeValidation.SubtreeStore = blobStoreURL
-	appSettings.Legacy.TempStore = blobStoreURL
+
+	// The legacy block park is not optional and needs a temp store it can scan on restart.
+	tempStoreURL, err := url.Parse("file://" + t.TempDir())
+	require.NoError(t, err)
+	appSettings.Legacy.TempStore = tempStoreURL
 
 	// Manually set Kafka topic URL schemes to 'memory' for in-memory provider
 	const newConst = "memory"

@@ -16,14 +16,15 @@
 // provides a RESTful API that follows standard HTTP conventions:
 //   - GET /blob/{key}.{fileType} - Retrieve a blob
 //   - HEAD /blob/{key}.{fileType} - Check if a blob exists
-//   - POST /blob/{key}.{fileType} - Store a new blob
-//   - PATCH /blob/{key}.{fileType} - Update blob's Delete-At-Height value
-//   - DELETE /blob/{key}.{fileType} - Delete a blob
+//   - POST /blob/{key}.{fileType} - Store a blob (requires Authorization: Bearer; replaces an existing one only when the request sets allowOverwrite=true)
+//   - PATCH /blob/{key}.{fileType} - Update blob's Delete-At-Height value (requires Authorization: Bearer)
+//   - DELETE /blob/{key}.{fileType} - Delete a blob (requires Authorization: Bearer)
 //   - GET /health - Health check endpoint
 package blob
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -35,11 +36,14 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	blobhttp "github.com/bsv-blockchain/teranode/stores/blob/http"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
-const NotFoundMsg = "Not found"
+// NotFoundMsg is the body a miss is answered with. The HTTP client owns it: it reads a 404 as a
+// miss only with this body.
+const NotFoundMsg = blobhttp.NotFoundMsg
 
 // HTTPBlobServer provides an HTTP interface to a blob storage backend.
 // It implements the http.Handler interface and exposes blob operations as RESTful endpoints.
@@ -61,26 +65,32 @@ type HTTPBlobServer struct {
 	store Store
 	// logger provides structured logging for server operations
 	logger ulogger.Logger
+	// authToken is the shared secret a caller must present to mutate the store. Empty
+	// means this server is read-only: POST, PATCH and DELETE are refused outright.
+	authToken string
 }
 
 // NewHTTPBlobServer creates a new HTTP blob server instance.
 // Parameters:
 //   - logger: Logger instance for server operations
 //   - storeURL: URL containing the store configuration
+//   - authToken: Shared secret callers must present to POST, PATCH or DELETE a blob.
+//     Empty makes the server read-only.
 //   - opts: Optional store configuration options
 //
 // Returns:
 //   - *HTTPBlobServer: The configured server instance
 //   - error: Any error that occurred during creation
-func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, opts ...options.StoreOption) (*HTTPBlobServer, error) {
+func NewHTTPBlobServer(logger ulogger.Logger, storeURL *url.URL, authToken string, opts ...options.StoreOption) (*HTTPBlobServer, error) {
 	store, err := NewStore(logger, storeURL, opts...)
 	if err != nil {
 		return nil, err
 	}
 
 	return &HTTPBlobServer{
-		store:  store,
-		logger: logger,
+		store:     store,
+		logger:    logger,
+		authToken: authToken,
 	}, nil
 }
 
@@ -124,9 +134,11 @@ func (s *HTTPBlobServer) Start(ctx context.Context, addr string) error {
 // - GET /health: Health check endpoint
 // - GET /blob/{key}.{fileType}: Retrieve a blob
 // - HEAD /blob/{key}.{fileType}: Check if a blob exists
-// - POST /blob/{key}.{fileType}: Store a new blob
+// - POST /blob/{key}.{fileType}: Store a blob; replaces an existing one only for an authenticated request that sets allowOverwrite=true
 // - PATCH /blob/{key}.{fileType}: Update blob's Delete-At-Height value
 // - DELETE /blob/{key}.{fileType}: Delete a blob
+//
+// POST, PATCH and DELETE change the store, so they require an authenticated caller.
 //
 // Parameters:
 //   - w: HTTP response writer for sending the response
@@ -135,6 +147,17 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/health" {
 		s.handleHealth(w, r)
 		return
+	}
+
+	switch r.Method {
+	case http.MethodPost, http.MethodPatch, http.MethodDelete:
+		if !s.authorizeMutation(r) {
+			// The path is quoted: it is percent-decoded and caller-controlled, so it can carry a newline.
+			s.logger.Warnf("[HTTPBlobServer] refused unauthenticated %s %q from %s", r.Method, r.URL.Path, r.RemoteAddr)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+
+			return
+		}
 	}
 
 	opts := options.QueryToFileOptions(r.URL.Query())
@@ -153,6 +176,32 @@ func (s *HTTPBlobServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// authorizeMutation reports whether a request may change the store. With no token
+// configured the server is read-only - a blob server reachable on the network with no
+// shared secret must not accept writes at all. Comparison is constant-time.
+//
+// The token is presented in the clear: this endpoint is plain HTTP. It stops a caller
+// that cannot see our traffic, which is the case this guards against; it is not a
+// defence against anything on the path. Keep the listener on loopback or a trusted segment.
+func (s *HTTPBlobServer) authorizeMutation(r *http.Request) bool {
+	if s.authToken == "" {
+		return false
+	}
+
+	const prefix = "Bearer "
+
+	// The auth-scheme is case-insensitive (RFC 7235); the token itself is not.
+	header := r.Header.Get("Authorization")
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
+		return false
+	}
+
+	presented := []byte(header[len(prefix):])
+	expected := []byte(s.authToken)
+
+	return len(presented) == len(expected) && subtle.ConstantTimeCompare(presented, expected) == 1
 }
 
 // setCurrentBlockHeight removed - DAH cleanup now handled by pruner service
@@ -222,7 +271,7 @@ func (s *HTTPBlobServer) handleExists(w http.ResponseWriter, r *http.Request, op
 // The function handles errors by returning appropriate HTTP status codes:
 // - 200 OK for successful retrievals
 // - 404 Not Found if the blob doesn't exist
-// - 500 Internal Server Error for other errors
+// - 500 Internal Server Error for other errors, a storage error wrapping a not-found included
 //
 // For large blobs, the function uses streaming to minimize memory usage by not
 // loading the entire blob into memory at once.
@@ -250,12 +299,7 @@ func (s *HTTPBlobServer) handleGet(w http.ResponseWriter, r *http.Request, opts 
 
 	rc, err := s.store.GetIoReader(r.Context(), key, fileType, opts...)
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			http.Error(w, NotFoundMsg, http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-
+		writeStoreError(w, err)
 		return
 	}
 	defer rc.Close()
@@ -310,12 +354,7 @@ func (s *HTTPBlobServer) handleRangeRequest(w http.ResponseWriter, r *http.Reque
 
 	dataReader, err := s.store.GetIoReader(r.Context(), key, fileType, opts...)
 	if err != nil {
-		if errors.Is(err, errors.ErrNotFound) {
-			http.Error(w, NotFoundMsg, http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-
+		writeStoreError(w, err)
 		return
 	}
 	// Close on every return path - the underlying file-store reader holds
@@ -521,7 +560,10 @@ func parseRangePosition(s string) (int64, bool) {
 // The function handles errors by returning appropriate HTTP status codes:
 // - 201 Created for successful storage operations
 // - 400 Bad Request if the key cannot be extracted from the path
+// - 409 Conflict if the blob exists and no authenticated overwrite was requested
 // - 500 Internal Server Error for storage failures
+//
+// A 401 Unauthorized is answered by ServeHTTP before this handler runs.
 //
 // Parameters:
 //   - w: HTTP response writer for sending the storage operation response
@@ -532,6 +574,14 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Overwrite is the one option read here rather than in QueryToFileOptions, because it is
+	// honoured only for a caller holding the shared secret. That grants nothing the secret does
+	// not already grant - the same caller may DELETE the blob and POST it again. The token is
+	// checked again so this does not depend on the gate in ServeHTTP staying in front of it.
+	if r.URL.Query().Get(options.AllowOverwriteQueryParam) == "true" && s.authorizeMutation(r) {
+		opts = append(opts, options.WithAllowOverwrite(true))
 	}
 
 	// The opts from QueryToFileOptions intentionally do not include DAH from the sender.
@@ -566,7 +616,7 @@ func (s *HTTPBlobServer) handleSet(w http.ResponseWriter, r *http.Request, opts 
 // - 204 No Content for successful DAH updates
 // - 400 Bad Request if the key cannot be extracted or the DAH value is invalid
 // - 404 Not Found if the blob doesn't exist
-// - 500 Internal Server Error for other failures
+// - 500 Internal Server Error for other failures, a storage error wrapping a not-found included
 //
 // Parameters:
 //   - w: HTTP response writer for sending the DAH update response
@@ -589,12 +639,7 @@ func (s *HTTPBlobServer) handleSetDAH(w http.ResponseWriter, r *http.Request, op
 
 	err = s.store.SetDAH(r.Context(), key, fileType, uint32(dah), opts...)
 	if err != nil {
-		if err == errors.ErrNotFound {
-			http.Error(w, NotFoundMsg, http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-
+		writeStoreError(w, err)
 		return
 	}
 
@@ -636,6 +681,19 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// writeStoreError answers a failed store call: 404 with NotFoundMsg for a miss, 500 for
+// anything else. A miss is a not-found with no storage error in its chain. A storage error is
+// the store failing while it looked, whatever it wraps, and the HTTP client reports a 404 to
+// its caller as a miss, so a fault answered 404 would reach that caller as an absent blob.
+func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errors.ErrNotFound) && !errors.Is(err, errors.ErrStorageError) {
+		http.Error(w, NotFoundMsg, http.StatusNotFound)
+		return
+	}
+
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
 // getKeyFromPath extracts the blob key and file type from the request path.
 // It parses paths in the format "/blob/{key}.{fileType}" where {key} is a base64-encoded
 // blob key and {fileType} is a string representation of the file type.
@@ -655,9 +713,12 @@ func (s *HTTPBlobServer) handleDelete(w http.ResponseWriter, r *http.Request, op
 //   - error: Any error that occurred during extraction, such as invalid path format,
 //     invalid base64 encoding, or unrecognized file type
 func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
-	// Assuming the path is in the format "/blob/{key}.{fileType}"
+	const blobPathPrefix = "/blob/"
+
+	// The path is caller-controlled: a dot before the end of the prefix (e.g. "/.tx") would
+	// otherwise slice out of range and panic the handler.
 	pos := strings.LastIndex(path, ".")
-	if pos == -1 {
+	if !strings.HasPrefix(path, blobPathPrefix) || pos < len(blobPathPrefix) {
 		return nil, "", errors.NewInvalidArgumentError("invalid path format")
 	}
 
@@ -668,7 +729,7 @@ func getKeyFromPath(path string) ([]byte, fileformat.FileType, error) {
 		return nil, "", errors.NewInvalidArgumentError("invalid file type", err)
 	}
 
-	encodedKey := path[6:pos]
+	encodedKey := path[len(blobPathPrefix):pos]
 
 	key, err := base64.URLEncoding.DecodeString(encodedKey)
 	if err != nil {

@@ -730,15 +730,15 @@ func Test_txMetaCache_MultiOperations(t *testing.T) {
 		err = cache.SetCacheMulti([][]byte{hash[:]}, [][]byte{[]byte{}})
 		require.NoError(t, err)
 
-		// An empty value still gets the 4-byte height suffix appended by
-		// SetCacheMulti, so the stored entry is exactly 4 bytes.
+		// Values are stored exactly as given (no block height suffix), so the
+		// empty value comes back empty.
 		byteBackend, ok := cache.cache.(*improvedCacheBackend)
 		require.True(t, ok, "test relies on ImprovedCache byte backend")
 
 		cachedBytes := make([]byte, 0)
 		err = byteBackend.cache.Get(&cachedBytes, hash[:])
 		require.NoError(t, err)
-		require.Equal(t, 4, len(cachedBytes))
+		require.Empty(t, cachedBytes)
 	})
 }
 

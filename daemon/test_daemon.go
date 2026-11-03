@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -47,8 +48,8 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainstore "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	utxopruner "github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/test/utils/containers"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/test/utils/wait"
@@ -195,6 +196,14 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 
 	appSettings = settings.NewSettings() // This reads gocore.Config and applies sensible defaults
 
+	// The test daemon drives its own RPC endpoint over Basic auth, and the RPC server
+	// fails closed when either credential is unset. Production no longer ships a default
+	// pair, so supply a throwaway one for the in-process node instead of depending on it.
+	if appSettings.RPC.RPCUser == "" || appSettings.RPC.RPCPass == "" {
+		appSettings.RPC.RPCUser = "testdaemon"
+		appSettings.RPC.RPCPass = "testdaemon"
+	}
+
 	// Generate a unique context for this TestDaemon to ensure util.GetListener
 	// creates unique listeners instead of returning cached ones from another TestDaemon.
 	// The counter ensures uniqueness even when tests run in quick succession.
@@ -283,12 +292,12 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.Validator.HTTPListenAddress = listenAddr
 	appSettings.Validator.HTTPAddress, _ = url.Parse(clientAddr)
 
-	// P2P - allocate port for libp2p (doesn't support pre-created listeners)
-	p2pPort, err := getFreePort()
-	require.NoError(t, err)
+	// P2P - libp2p doesn't support pre-created listeners, so its port is
+	// drawn (and, if it collides, redrawn) immediately before the daemon
+	// actually starts. See attemptP2PPort in NewTestDaemon below.
 	appSettings.P2P.StaticPeers = nil
+	appSettings.P2P.BootstrapPeers = nil
 	appSettings.P2P.ListenAddresses = []string{"0.0.0.0"}
-	appSettings.P2P.Port = p2pPort
 
 	// P2P gRPC
 	if opts.EnableP2P {
@@ -431,9 +440,9 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 	appSettings.RPC.CacheEnabled = false
 	appSettings.UsePrometheusGRPCMetrics = false
 
-	// Give the in-process P2P/Legacy servers and their clients a shared, non-placeholder
-	// admin API key so protected admin RPCs (ban/unban, connect/disconnect peer) authenticate.
-	// settings.conf ships no key, so without this every admin RPC would return Unauthenticated.
+	// Give Blockchain/P2P/Legacy servers and their clients a shared test credential.
+	// Blockchain requires it for startup, reads, writes and subscriptions.
+	// settings.conf deliberately ships no production default.
 	// Tests that need a specific key still override it below via SettingsOverrideFunc.
 	appSettings.GRPCAdminAPIKey = "teranode-testdaemon-admin-key"
 
@@ -481,8 +490,6 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		t.Logf("Initialized %s container with URL: %s", opts.UTXOStoreType, utxoStoreURL.String())
 	}
 
-	readyCh := make(chan struct{})
-
 	var (
 		logger        ulogger.Logger
 		loggerFactory Option
@@ -512,52 +519,77 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		})
 	}
 
-	// d := New(loggerFactory, WithContext(ctx))
-	d := New(loggerFactory, WithContext(ctx))
+	var d *Daemon
 
-	services := []string{
-		"-all=0",
-		"-blockchain=1",
-		"-subtreevalidation=1",
-		"-blockvalidation=1",
-		"-blockassembly=1",
-		"-asset=1",
-		"-propagation=1",
-	}
+	// Start the daemon, retrying with a freshly drawn p2p port when the one
+	// picked by getFreePort() loses the TOCTOU race against libp2p's later
+	// bind (see attemptP2PPort). Every other setup step above is stable
+	// across attempts (listeners already open via util.GetListener, data
+	// dir already created), so only the p2p port and the daemon start need
+	// to be redone.
+	startErr := attemptP2PPort(maxP2PPortAttempts, func(p2pPort int) error {
+		appSettings.P2P.Port = p2pPort
 
-	if opts.EnableRPC {
-		services = append(services, "-rpc=1")
-	}
+		d = New(loggerFactory, WithContext(ctx))
 
-	if opts.EnableP2P {
-		services = append(services, "-p2p=1")
-	}
+		services := []string{
+			"-all=0",
+			"-blockchain=1",
+			"-subtreevalidation=1",
+			"-blockvalidation=1",
+			"-blockassembly=1",
+			"-asset=1",
+			"-propagation=1",
+		}
 
-	if opts.EnableValidator {
-		services = append(services, "-validator=1")
-	}
+		if opts.EnableRPC {
+			services = append(services, "-rpc=1")
+		}
 
-	if opts.EnableLegacy {
-		services = append(services, "-legacy=1")
-	}
+		if opts.EnableP2P {
+			services = append(services, "-p2p=1")
+		}
 
-	if opts.EnableBlockPersister {
-		services = append(services, "-blockpersister=1")
-	}
+		if opts.EnableValidator {
+			services = append(services, "-validator=1")
+		}
 
-	if opts.EnablePruner {
-		services = append(services, "-pruner=1")
-	}
+		if opts.EnableLegacy {
+			services = append(services, "-legacy=1")
+		}
 
-	go d.Start(logger, services, appSettings, readyCh)
+		if opts.EnableBlockPersister {
+			services = append(services, "-blockpersister=1")
+		}
 
-	select {
-	case <-readyCh:
-		t.Logf("Daemon %s started successfully", appSettings.ClientName)
-	case <-time.After(30 * time.Second):
-		servicesNotReady := d.ServiceManager.ServicesNotReady()
-		t.Fatalf("Daemon %s failed to start within 30s. Waiting on: %v", appSettings.ClientName, servicesNotReady)
-	}
+		if opts.EnablePruner {
+			services = append(services, "-pruner=1")
+		}
+
+		readyCh := make(chan struct{})
+
+		go d.Start(logger, services, appSettings, readyCh)
+
+		select {
+		case <-readyCh:
+			t.Logf("Daemon %s started successfully", appSettings.ClientName)
+			return nil
+		case <-d.stopCh:
+			// startServices already failed and Start() ran its own teardown
+			// before closing stopCh; Stop() here is a defensive, idempotent
+			// pass over the same state so a retry never inherits a listener
+			// or service left behind by this attempt.
+			attemptErr := d.startError()
+			t.Logf("Daemon %s failed to start on p2p port %d: %v", appSettings.ClientName, p2pPort, attemptErr)
+			_ = d.Stop()
+
+			return attemptErr
+		case <-time.After(30 * time.Second):
+			servicesNotReady := d.ServiceManager.ServicesNotReady()
+			return errors.NewProcessingError("daemon %s failed to start within 30s. Waiting on: %v", appSettings.ClientName, servicesNotReady)
+		}
+	})
+	require.NoError(t, startErr, "Daemon %s failed to start", appSettings.ClientName)
 
 	ports := []int{getPortFromString(appSettings.HealthCheckHTTPListenAddress)}
 	if opts.WaitForHealthReadiness {
@@ -633,6 +665,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		}
 	}
 
+	// When the daemon runs its own BlockValidation service, that service sets the
+	// mined status of blocks; a second setMined worker on the same stores races
+	// it and can leave an invalidated block's transactions marked mined. Without
+	// the service, this instance is the only one and keeps its worker.
+	blockValidationOpts := []interface{}{p2pClient}
+	if _, err = d.ServiceManager.GetService("BlockValidation"); err == nil {
+		blockValidationOpts = append(blockValidationOpts, blockvalidation.NoSetMined{})
+	}
+
 	blockValidation := blockvalidation.NewBlockValidation(
 		d.Ctx,
 		logger,
@@ -643,7 +684,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		utxoStore,
 		validatorClient,
 		subtreeValidationClient,
-		p2pClient,
+		blockValidationOpts...,
 	)
 
 	assert.NotNil(t, blockchainClient)
@@ -696,13 +737,12 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		td.prunerObserver = prunerObserver
 
 		// Register the observer with the pruner service
-		aerospikeStore, ok := utxoStore.(*aerospike.Store)
+		prunerProvider, ok := utxo.As[utxopruner.PrunerServiceProvider](utxoStore)
 		if !ok {
-			t.Logf("Warning: UtxoStore is not an Aerospike store, cannot register pruner observer")
-			t.Fail()
+			t.Fatalf("UtxoStore does not provide a pruner service, cannot register pruner observer")
 		}
 
-		prunerService, err := aerospikeStore.GetPrunerService()
+		prunerService, err := prunerProvider.GetPrunerService()
 		if err != nil {
 			t.Logf("Warning: Failed to get pruner service: %v", err)
 		} else if prunerService != nil {
@@ -848,21 +888,92 @@ func GetFreePort() (int, error) {
 	return getFreePort()
 }
 
-// getFreePort asks the kernel for a free open port that is ready to use.
+// freePortMin and freePortMax bound the ports getFreePort draws from. The range
+// sits below the kernel's ephemeral range (Linux 32768+, macOS 49152+), so an
+// outbound connection's source port can never take a port between the draw and
+// the service binding it, as happened to BlockValidation in TestDaemon_Start_AllServices.
+const (
+	freePortMin = 20000
+	freePortMax = 32000
+)
+
+// getFreePort returns a random port in [freePortMin, freePortMax) that is free
+// to bind on the wildcard address the services listen on.
 func getFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
+	var lastErr error
+
+	for range 100 {
+		n, err := rand.Int(rand.Reader, big.NewInt(freePortMax-freePortMin))
+		if err != nil {
+			return 0, err
+		}
+
+		port := freePortMin + int(n.Int64())
+
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		_ = l.Close()
+
+		return port, nil
 	}
 
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
+	return 0, errors.NewProcessingError("no free port in [%d, %d)", freePortMin, freePortMax, lastErr)
+}
+
+// maxP2PPortAttempts bounds how many times attemptP2PPort will redraw the
+// libp2p port after a bind collision before giving up. Random free-port
+// draws colliding more than a couple of times in a row is not expected in
+// practice; this exists so a persistent, genuine failure still fails rather
+// than retrying indefinitely.
+const maxP2PPortAttempts = 5
+
+// isAddrInUse reports whether err represents a TCP bind collision (the port
+// getFreePort() handed back was taken by something else before the later
+// bind that actually uses it - e.g. libp2p, in a parallel CI shard). It
+// deliberately does not match on anything else, so a genuine, unrelated
+// startup failure is not swallowed by the retry in attemptP2PPort.
+//
+// errors.Is(err, syscall.EADDRINUSE) is used rather than a hand-rolled
+// string match: when err unwraps to a real *net.OpError/*os.SyscallError
+// wrapping EADDRINUSE, stdlib unwrapping (which teranode/errors.Is defers
+// to) finds it directly. Our own error chain instead wraps the syscall error
+// inside plain fmt.Errorf("...: %w", ...) calls (see the vendored
+// go-p2p-message-bus client and services/p2p/Server.go), so by the time it
+// reaches here the top-level error is a *teranode/errors.Error whose target
+// is a bare syscall.Errno; (*errors.Error).Is falls back to matching the
+// errno's rendered text ("address already in use") against the error's own
+// full rendered message in that case, which still finds it. Both paths are
+// covered by the single errors.Is call.
+func isAddrInUse(err error) bool {
+	return err != nil && errors.Is(err, syscall.EADDRINUSE)
+}
+
+// attemptP2PPort draws a free port via getFreePort and passes it to fn.
+// If fn fails because that port lost the TOCTOU race against a later bind
+// (isAddrInUse), it draws a fresh port and retries, up to maxAttempts times.
+// Any other error - or exhausting maxAttempts - returns immediately with
+// fn's error, so a genuine startup failure still fails fast instead of being
+// retried blindly.
+func attemptP2PPort(maxAttempts int, fn func(port int) error) error {
+	var err error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		port, portErr := getFreePort()
+		if portErr != nil {
+			return portErr
+		}
+
+		err = fn(port)
+		if err == nil || !isAddrInUse(err) {
+			return err
+		}
 	}
 
-	defer func() { _ = l.Close() }()
-
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return err
 }
 
 // getPortFromString extracts the port number from a string address.
@@ -1115,6 +1226,18 @@ func (td *TestDaemon) checkTransactionsInMiningCandidate(txs ...*bt.Tx) (map[cha
 	}
 
 	return txFoundMap, nil
+}
+
+// CountInBlockAssembly returns how many times tx appears in the subtrees of a fresh mining
+// candidate. A candidate asked for while block assembly is processing a block or a reset is
+// empty, so a caller polling this sees 0 until that work is done.
+func (td *TestDaemon) CountInBlockAssembly(tx *bt.Tx) (int, error) {
+	txFoundMap, err := td.checkTransactionsInMiningCandidate(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	return txFoundMap[*tx.TxIDChainHash()], nil
 }
 
 // VerifyInBlockAssembly checks that the given transactions are present in the block assembly candidate's subtrees exactly once.

@@ -20,15 +20,17 @@ import (
 // constants so that callers of GetSubscribers() can reliably detect which
 // services are currently connected.
 const (
-	SubscriberLegacy            = "legacy/manager"
-	SubscriberP2P               = "p2pServer"
-	SubscriberUTXOStore         = "UTXOStore"
-	SubscriberBlockAssembler    = "BlockAssembler"
-	SubscriberBlockValidation   = "blockvalidation"
-	SubscriberSubtreeValidation = "subtreevalidation"
-	SubscriberPruner            = "Pruner"
-	SubscriberAssetService      = "AssetService"
-	SubscriberUTXOPersister     = "utxo-persister"
+	SubscriberLegacy              = "legacy/manager"
+	SubscriberP2P                 = "p2pServer"
+	SubscriberUTXOStore           = "UTXOStore"
+	SubscriberBlockAssembler      = "BlockAssembler"
+	SubscriberBlockValidation     = "blockvalidation"
+	SubscriberSubtreeValidation   = "subtreevalidation"
+	SubscriberPruner              = "Pruner"
+	SubscriberAssetService        = "AssetService"
+	SubscriberUTXOPersister       = "utxo-persister"
+	SubscriberFileBlockHeight     = "File BlockHeight"
+	SubscriberAssetMainChainCache = "asset-mainchain-cache"
 )
 
 // ClientI defines the interface for blockchain client operations.
@@ -444,6 +446,27 @@ type ClientI interface {
 	// - Array of corresponding BlockHeaderMeta objects with additional metadata
 	// - Error if the header retrieval fails
 	GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+
+	// BlocksBetterThan returns the valid blocks that sort better than after in the order the
+	// store picks its best tip by (most chain work, then lowest peer id, then lowest block id),
+	// worst first, at or above minHeight, at most limit of them. When from is not nil it also
+	// returns the valid blocks that sort better than or level with from.
+	//
+	// Without an invalidation the best tip only ever moves to a block that sorts better, so a
+	// reader that keeps the key of the last block it handled finds every later best tip here,
+	// even one that lost again before it looked. A drop of the tip is recorded in the low-water
+	// mark under state key model.BestTipLowWaterStateKey, which the reader passes as from.
+	//
+	// Returns headers and metadata as slices of the same length, and whether more blocks sort
+	// better than the last one returned. Without more, the last block is the best tip at the
+	// time of the read, so the reader needs no separate read of the best block header. A page
+	// that comes back full reports more, also from a server too old to say.
+	BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error)
+
+	// ClearBestTipLowWater deletes the best tip's low-water mark if it still holds expected, the
+	// bytes the caller read with GetState. A drop recorded since changes the mark, and the delete
+	// is then a no-op.
+	ClearBestTipLowWater(ctx context.Context, expected []byte) error
 
 	// GetBlockHeadersByHeight retrieves block headers between two heights.
 	//
@@ -1096,12 +1119,13 @@ type ClientI interface {
 	// - height: Current blockchain height
 	// - limit: Maximum number of deletions to acquire
 	// - lockTimeoutSeconds: How long to hold the lock (0 = default 300s)
+	// - excludeStoreTypes: store types to leave out of the batch (nil = none); a service that predates this parameter ignores it, so a caller must still cope with rows of an excluded type
 	//
 	// Returns:
 	// - batchToken: Token to use when completing the batch
 	// - deletions: Array of scheduled deletions to process
 	// - Error if acquisition fails
-	AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int) (string, []*blockchain_api.ScheduledDeletion, error)
+	AcquireBlobDeletionBatch(ctx context.Context, height uint32, limit int, lockTimeoutSeconds int, excludeStoreTypes []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error)
 
 	// CompleteBlobDeletionBatch completes a previously acquired batch.
 	//

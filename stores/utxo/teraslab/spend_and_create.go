@@ -15,3 +15,11 @@ import (
 func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
 	return utxo.SequentialSpendAndCreate(ctx, s.logger, s, tx, blockHeight, opts...)
 }
+
+// SpendAndCreateMulti implements utxo.Store for an ordered list of transactions.
+// It delegates to the shared default implementation (which drives SpendAndCreate
+// per transaction with the configured wave widths), matching the SQL/Aerospike
+// backends; a TeraSlab-native atomic implementation is a followup.
+func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, s, utxo.SpendAndCreateMultiWidthsFor(s.settings), txs, blockHeight, opts...)
+}

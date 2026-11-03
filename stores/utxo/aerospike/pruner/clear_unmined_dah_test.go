@@ -1,0 +1,249 @@
+package pruner
+
+import (
+	"context"
+	"fmt"
+	"testing"
+
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
+)
+
+func TestClearUnminedDAH(t *testing.T) {
+	newSvc := func(t *testing.T, fn func(records []aerospike.BatchRecordIfc, call int) error) (*Service, *int) {
+		svc := newTestService(t)
+		svc.settings.Pruner.SkipDeletions = false
+		svc.fieldConflicting = "conflicting"
+
+		calls := 0
+		svc.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+			calls++
+			return fn(records, calls)
+		}
+
+		return svc, &calls
+	}
+
+	key := func(t *testing.T, name string) *aerospike.Key {
+		k, err := aerospike.NewKey("test", "test", name)
+		require.NoError(t, err)
+
+		return k
+	}
+
+	// markHad makes a write report that it found a DAH to clear
+	markHad := func(svc *Service, r aerospike.BatchRecordIfc) {
+		r.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{svc.fieldDeleteAtHeight: 7}}
+	}
+
+	clears := func(t *testing.T) []*dahClear {
+		return []*dahClear{{masterKey: key(t, "m1"), pageKeys: []*aerospike.Key{key(t, "p1")}}}
+	}
+
+	t.Run("clears masters and pages and counts them", func(t *testing.T) {
+		var svc *Service
+
+		svc, calls := newSvc(t, func(records []aerospike.BatchRecordIfc, _ int) error {
+			for _, r := range records {
+				markHad(svc, r)
+			}
+
+			return nil
+		})
+
+		before := testutil.ToFloat64(prometheusUtxoDAHClearedUnmined)
+
+		require.Equal(t, 2, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Equal(t, 2, *calls)
+		require.Equal(t, float64(2), testutil.ToFloat64(prometheusUtxoDAHClearedUnmined)-before)
+	})
+
+	t.Run("records without a DAH are not counted but pages are still written", func(t *testing.T) {
+		svc, calls := newSvc(t, func([]aerospike.BatchRecordIfc, int) error { return nil })
+
+		require.Zero(t, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Equal(t, 2, *calls)
+	})
+
+	t.Run("master batch error writes no pages", func(t *testing.T) {
+		svc, calls := newSvc(t, func([]aerospike.BatchRecordIfc, int) error { return errors.NewProcessingError("boom") })
+
+		before := testutil.ToFloat64(prometheusUtxoDAHClearedUnmined)
+
+		require.Zero(t, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Equal(t, 1, *calls)
+		require.Zero(t, testutil.ToFloat64(prometheusUtxoDAHClearedUnmined)-before)
+	})
+
+	for name, code := range map[string]types.ResultCode{"per-record error": types.TIMEOUT, "key not found": types.KEY_NOT_FOUND_ERROR, "filtered out": types.FILTERED_OUT} {
+		t.Run("master "+name+" skips its pages", func(t *testing.T) {
+			svc, calls := newSvc(t, func(records []aerospike.BatchRecordIfc, _ int) error {
+				for _, r := range records {
+					r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: code}
+				}
+
+				return nil
+			})
+
+			require.Zero(t, svc.clearUnminedDAH(context.Background(), clears(t)))
+			require.Equal(t, 1, *calls)
+		})
+	}
+
+	t.Run("page batch error keeps the master count", func(t *testing.T) {
+		var svc *Service
+
+		svc, calls := newSvc(t, func(records []aerospike.BatchRecordIfc, call int) error {
+			if call == 2 {
+				return errors.NewProcessingError("boom")
+			}
+
+			for _, r := range records {
+				markHad(svc, r)
+			}
+
+			return nil
+		})
+
+		require.Equal(t, 1, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Equal(t, 2, *calls)
+	})
+
+	// the master clear succeeded, so a page that is already gone leaves nothing to retry: it must not
+	// be logged as a failure
+	t.Run("page key not found is benign", func(t *testing.T) {
+		var svc *Service
+
+		svc, calls := newSvc(t, func(records []aerospike.BatchRecordIfc, call int) error {
+			for _, r := range records {
+				if call == 2 {
+					r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
+
+					continue
+				}
+
+				markHad(svc, r)
+			}
+
+			return nil
+		})
+
+		logger := &errorCountLogger{Logger: svc.logger}
+		svc.logger = logger
+
+		require.Equal(t, 1, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Equal(t, 2, *calls)
+		require.Zero(t, logger.errors, "a page that is already gone is not a failure")
+		require.Equal(t, 1, logger.warns, "a page already gone under an unmined master is lost data and must be logged")
+	})
+
+	t.Run("page per-record error is still a failure", func(t *testing.T) {
+		var svc *Service
+
+		svc, _ = newSvc(t, func(records []aerospike.BatchRecordIfc, call int) error {
+			for _, r := range records {
+				if call == 2 {
+					r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+
+					continue
+				}
+
+				markHad(svc, r)
+			}
+
+			return nil
+		})
+
+		logger := &errorCountLogger{Logger: svc.logger}
+		svc.logger = logger
+
+		require.Equal(t, 1, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Positive(t, logger.errors, "a page error other than KEY_NOT_FOUND must be reported")
+	})
+
+	// The store side writes pages in chunks so one worker never holds sum(totalExtraRecs)
+	// writes at once; the pruner's page clear must be bounded the same way, or a chunk with a
+	// few large unmined external txs times out every cycle.
+	t.Run("page writes are sent in bounded chunks", func(t *testing.T) {
+		var sizes []int
+
+		svc, _ := newSvc(t, func(records []aerospike.BatchRecordIfc, _ int) error {
+			sizes = append(sizes, len(records))
+			return nil
+		})
+
+		pages := make([]*aerospike.Key, 2*maxPageClearBatch+1)
+		for i := range pages {
+			pages[i] = key(t, fmt.Sprintf("p%d", i))
+		}
+
+		svc.clearUnminedDAH(context.Background(), []*dahClear{{masterKey: key(t, "m1"), pageKeys: pages}})
+
+		require.Equal(t, []int{1, maxPageClearBatch, maxPageClearBatch, 1}, sizes, "one master write, then the pages in chunks")
+	})
+
+	t.Run("SkipDeletions writes nothing", func(t *testing.T) {
+		svc, calls := newSvc(t, func([]aerospike.BatchRecordIfc, int) error { return nil })
+		svc.settings.Pruner.SkipDeletions = true
+
+		require.Zero(t, svc.clearUnminedDAH(context.Background(), clears(t)))
+		require.Zero(t, *calls)
+	})
+
+	t.Run("cancelled context writes nothing", func(t *testing.T) {
+		svc, calls := newSvc(t, func([]aerospike.BatchRecordIfc, int) error { return nil })
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		require.Zero(t, svc.clearUnminedDAH(ctx, clears(t)))
+		require.Zero(t, *calls)
+	})
+}
+
+// errorCountLogger counts Errorf and Warnf calls; the error logger of the tests only logs them.
+type errorCountLogger struct {
+	ulogger.Logger
+	errors int
+	warns  int
+}
+
+func (l *errorCountLogger) Errorf(string, ...interface{}) { l.errors++ }
+
+func (l *errorCountLogger) Warnf(string, ...interface{}) { l.warns++ }
+
+func TestDropUnminedRecords_DedupesPageKeys(t *testing.T) {
+	svc := newTestService(t)
+	svc.fieldConflicting = "conflicting"
+
+	master := unminedRecord(t, svc, 0, aerospike.BinMap{svc.fieldUnminedSince: 7, svc.fieldTotalExtraRecs: 1})
+	page := unminedRecord(t, svc, 1, aerospike.BinMap{})
+
+	svc.readMastersFn = func([]*aerospike.Key) ([]masterRead, error) {
+		return []masterRead{{record: &aerospike.Record{Bins: aerospike.BinMap{svc.fieldUnminedSince: 7}}}}, nil
+	}
+
+	_, dropped, clears := svc.dropUnminedRecords([]*aerospike.Result{master, page})
+	require.Equal(t, 2, dropped)
+	require.Len(t, clears, 1)
+	require.Len(t, clears[0].pageKeys, 1)
+}
+
+func unminedRecord(t *testing.T, svc *Service, num uint32, bins aerospike.BinMap) *aerospike.Result {
+	t.Helper()
+
+	txID := chainhash.HashH([]byte("dedupe"))
+
+	key, err := aerospike.NewKey(svc.namespace, svc.set, uaerospike.CalculateKeySourceInternal(&txID, num))
+	require.NoError(t, err)
+
+	bins[svc.fieldTxID] = txID.CloneBytes()
+
+	return &aerospike.Result{Record: &aerospike.Record{Key: key, Bins: bins}}
+}

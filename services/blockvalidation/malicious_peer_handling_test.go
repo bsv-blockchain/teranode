@@ -99,7 +99,7 @@ func TestBlockHandlerWithMaliciousPeer(t *testing.T) {
 	}()
 
 	// Process the message
-	err = server.blockHandler(kafkaMsg)
+	err = server.blockHandler(context.Background(), kafkaMsg)
 	require.NoError(t, err)
 
 	// Verify block was handled
@@ -257,12 +257,17 @@ func TestKafkaConsumerMessageHandling(t *testing.T) {
 			Value: msgBytes,
 		}
 
-		handler := server.consumerMessageHandler(ctx)
+		retryCtx, cancelRetry := context.WithCancel(ctx)
+		defer cancelRetry()
+
+		handler := server.consumerMessageHandler(retryCtx)
 		err = handler(kafkaMessage)
 
-		// Should return error for retry
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "temporary failure")
+		// Committed (a returned error would not be redelivered once a later message on
+		// the partition succeeds) and retried in-process instead.
+		require.NoError(t, err)
+		assert.True(t, server.blockMessageRetries.isPending(recoverableHash.String()), "a retry should be pending for the block")
+		mockBlockchain.AssertNotCalled(t, "ReportPeerFailure", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 }
 

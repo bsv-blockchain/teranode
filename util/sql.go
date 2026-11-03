@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -44,12 +45,8 @@ func InitSQLDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Set
 	return nil, errors.NewConfigurationError("db: unknown scheme: %s", storeURL.Scheme)
 }
 
-// InitPostgresDB initializes a PostgreSQL database connection with connection pooling.
-// Extracts connection parameters from the URL and applies SSL mode configuration.
-// Sets up connection limits based on the provided settings.
-// If servicePoolSettings is provided, it overrides the global PostgreSQL pool settings.
-// Otherwise, uses the global PostgresSettings from tSettings.
-func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings, servicePoolSettings *settings.PostgresSettings) (*usql.DB, error) {
+// postgresConnConfig builds the pgx connection config for a postgres:// store URL.
+func postgresConnConfig(storeURL *url.URL) (*pgx.ConnConfig, error) {
 	dbHost := storeURL.Hostname()
 	port := storeURL.Port()
 	dbPort, _ := strconv.Atoi(port)
@@ -71,8 +68,12 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		sslMode = val[0] // Use the first value if multiple are provided
 	}
 
-	// Build connection string for pgx
-	dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=%s host=%s port=%d", dbUser, dbPassword, dbName, sslMode, dbHost, dbPort)
+	// Build connection string for pgx. Values are quoted: an unquoted empty
+	// value would swallow the next keyword ("password= dbname=x" sets the
+	// password to "dbname=x" and leaves dbname unset).
+	dbInfo := fmt.Sprintf("user=%s password=%s dbname=%s sslmode=%s host=%s port=%d",
+		quotePostgresConnValue(dbUser), quotePostgresConnValue(dbPassword), quotePostgresConnValue(dbName),
+		quotePostgresConnValue(sslMode), quotePostgresConnValue(dbHost), dbPort)
 
 	// Use pgx/stdlib with QueryExecModeExec to skip prepared statement overhead.
 	// QueryExecModeExec skips the Prepare step (no Parse/Describe round-trip),
@@ -85,10 +86,30 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	}
 	connConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
 
+	return connConfig, nil
+}
+
+// quotePostgresConnValue quotes a value for a keyword/value connection string,
+// escaping backslashes and single quotes as libpq and pgx expect.
+func quotePostgresConnValue(value string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
+}
+
+// InitPostgresDB initializes a PostgreSQL database connection with connection pooling.
+// Extracts connection parameters from the URL and applies SSL mode configuration.
+// Sets up connection limits based on the provided settings.
+// If servicePoolSettings is provided, it overrides the global PostgreSQL pool settings.
+// Otherwise, uses the global PostgresSettings from tSettings.
+func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *settings.Settings, servicePoolSettings *settings.PostgresSettings) (*usql.DB, error) {
+	connConfig, err := postgresConnConfig(storeURL)
+	if err != nil {
+		return nil, err
+	}
+
 	sqlDB := stdlib.OpenDB(*connConfig)
 	db := usql.WrapDB(sqlDB)
 
-	logger.Infof("Using postgres DB: %s@%s:%d/%s", dbUser, dbHost, dbPort, dbName)
+	logger.Infof("Using postgres DB: %s@%s:%d/%s", connConfig.User, connConfig.Host, connConfig.Port, connConfig.Database)
 
 	// Determine which pool settings to use: service-specific override or global defaults
 	poolSettings := &tSettings.Postgres
@@ -127,10 +148,12 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 		if poolSettings.RetryBaseDelay == 0 {
 			poolSettings.RetryBaseDelay = tSettings.Postgres.RetryBaseDelay
 		}
-		// Circuit breaker settings: use global defaults for zero values
-		// Note: CircuitBreakerEnabled is explicit - if service sets false, it stays false
-		if !poolSettings.CircuitBreakerEnabled && tSettings.Postgres.CircuitBreakerEnabled {
-			poolSettings.CircuitBreakerEnabled = true
+		// Circuit breaker enablement: nil means "inherit global", non-nil is the
+		// service's explicit choice and always wins - including an explicit
+		// false, which must be able to opt a service out of a globally-enabled
+		// breaker.
+		if poolSettings.CircuitBreakerEnabled == nil {
+			poolSettings.CircuitBreakerEnabled = tSettings.Postgres.CircuitBreakerEnabled
 		}
 		if poolSettings.CircuitBreakerFailureThreshold == 0 {
 			poolSettings.CircuitBreakerFailureThreshold = tSettings.Postgres.CircuitBreakerFailureThreshold
@@ -160,13 +183,13 @@ func InitPostgresDB(logger ulogger.Logger, storeURL *url.URL, tSettings *setting
 	})
 
 	// Configure circuit breaker if enabled (requires all settings to be explicitly set)
-	if poolSettings.CircuitBreakerEnabled {
+	if poolSettings.CircuitBreakerEnabled != nil && *poolSettings.CircuitBreakerEnabled {
 		cbConfig := usql.CircuitBreakerConfig{
 			FailureThreshold: poolSettings.CircuitBreakerFailureThreshold,
 			HalfOpenMax:      poolSettings.CircuitBreakerHalfOpenMax,
 			Cooldown:         poolSettings.CircuitBreakerCooldown,
 			FailureWindow:    poolSettings.CircuitBreakerFailureWindow,
-			Enabled:          poolSettings.CircuitBreakerEnabled,
+			Enabled:          true,
 			OnStateChange: func(from, to usql.CircuitState, reason string) {
 				logger.Warnf("PostgreSQL circuit breaker state changed: %s -> %s (%s)", from.String(), to.String(), reason)
 			},

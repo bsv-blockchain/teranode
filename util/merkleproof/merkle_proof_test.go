@@ -17,6 +17,10 @@ type MockMerkleProofConstructor struct {
 	blockHeader       *model.BlockHeader
 	subtrees          map[string]*subtree.Subtree
 	mainChainBlockIDs map[uint32]bool
+
+	// subtreeLoads counts complete-subtree deserializations, the cost the
+	// block-roots cache exists to cut.
+	subtreeLoads int
 }
 
 func (m *MockMerkleProofConstructor) GetTxMeta(txHash *chainhash.Hash) (*TxMetaData, error) {
@@ -32,6 +36,8 @@ func (m *MockMerkleProofConstructor) GetBlockHeader(blockHash *chainhash.Hash) (
 }
 
 func (m *MockMerkleProofConstructor) GetSubtree(subtreeHash *chainhash.Hash) (*subtree.Subtree, error) {
+	m.subtreeLoads++
+
 	if st, ok := m.subtrees[subtreeHash.String()]; ok {
 		return st, nil
 	}

@@ -819,10 +819,12 @@ func TestReverseProcessConflicting_MarkConflictingErrorPropagates(t *testing.T) 
 	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demotedHash}, true).
 		Return([]*Spend{}, []chainhash.Hash{}, errors.NewProcessingError("setConflicting failed")).Once()
 
-	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
+	cascaded, touched, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error marking demoted tx + descendants conflicting")
+	require.Equal(t, []chainhash.Hash{demotedHash}, cascaded, "the failed mark may have flipped the demoted tx, so it is reported for eviction")
+	require.Nil(t, touched)
 	mockStore.AssertExpectations(t)
 }
 
@@ -848,10 +850,11 @@ func TestReverseProcessConflicting_UnspendErrorPropagates(t *testing.T) {
 	mockStore.On("Unspend", mock.Anything, mock.AnythingOfType("[]*utxo.Spend"), mock.Anything).
 		Return(errors.NewProcessingError("unspend failed")).Once()
 
-	_, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
+	cascaded, _, err := ReverseProcessConflicting(ctx, mockStore, 1, chainhash.Hash{}, []chainhash.Hash{demotedHash})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "error unspending demoted tx inputs")
+	require.Equal(t, []chainhash.Hash{demotedHash}, cascaded, "the demoted tx was flipped before the failure, so it is reported for eviction")
 	mockStore.AssertExpectations(t)
 }
 

@@ -3,6 +3,8 @@ package aerospike
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
@@ -11,7 +13,319 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// childDAHItem is one master record whose pagination records need their deleteAtHeight set
+// (DeleteAtHeight > 0) or cleared (DeleteAtHeight == 0) by SetDAHForChildRecordsMulti.
+type childDAHItem = struct {
+	TxID           *chainhash.Hash
+	ChildCount     int
+	DeleteAtHeight uint32
+}
+
+// childDAHFollowUps accumulates, per txid, the pagination-record DAH follow-up a batch needs.
+// The LAST state recorded for a txid wins, so a set and an unset queued for the same txid in one
+// batch can never be applied in the wrong order (an unset applied after a set would leave a live
+// master's children without a DAH; a set after an unset would leave a prunable master's children
+// pinned). The zero value is ready to use.
+//
+// Assumption: for one key within one batch, the order of the results equals the order the server
+// executed the writes in, and a later result's "old" DAH is the earlier result's "new" DAH. That
+// holds for a single BatchOperate on one node; it is not verified for a key repeated across
+// nodes or batches, which is why callers collapse per batch rather than across batches.
+type childDAHFollowUps struct {
+	order []chainhash.Hash
+	items map[chainhash.Hash]childDAHItem
+}
+
+func (f *childDAHFollowUps) put(item childDAHItem) {
+	if f.items == nil {
+		f.items = make(map[chainhash.Hash]childDAHItem)
+	}
+
+	if _, seen := f.items[*item.TxID]; !seen {
+		f.order = append(f.order, *item.TxID)
+	}
+
+	f.items[*item.TxID] = item
+}
+
+// addSet queues "children get this DAH" (the Lua DAHSET signal).
+func (f *childDAHFollowUps) addSet(hash *chainhash.Hash, childCount int, dah uint32) {
+	f.put(childDAHItem{TxID: hash, ChildCount: childCount, DeleteAtHeight: dah})
+}
+
+// addUnset queues "children lose their DAH" (the Lua DAHUNSET signal).
+func (f *childDAHFollowUps) addUnset(hash *chainhash.Hash, childCount int) {
+	f.put(childDAHItem{TxID: hash, ChildCount: childCount})
+}
+
+// collect compares the master's DAH before and after the write and, for an external master with
+// pagination records, queues the matching follow-up: a set or raised DAH is copied to the
+// children, a cleared DAH clears them. It queues nothing for non-external records and when the
+// DAH did not change.
+func (f *childDAHFollowUps) collect(hash *chainhash.Hash, state SetMinedState) {
+	if !state.External || state.TotalExtraRecs == nil {
+		return
+	}
+
+	switch {
+	case state.NewDeleteAtHeight != nil && (state.OldDeleteAtHeight == nil || *state.OldDeleteAtHeight != *state.NewDeleteAtHeight):
+		f.addSet(hash, *state.TotalExtraRecs, *state.NewDeleteAtHeight)
+	case state.NewDeleteAtHeight == nil && state.OldDeleteAtHeight != nil:
+		f.addUnset(hash, *state.TotalExtraRecs)
+	}
+}
+
+// collectPreserved queues the unset follow-up for the pagination records of a preserved
+// external master. Preserving clears only the master's deleteAtHeight, but the pruner selects
+// pagination records by their own, so pages that keep one are deleted under a preserved master.
+//
+// Unlike collect this does not compare the master's DAH before and after: PreserveTransactions
+// re-runs every pruner cycle, and an unconditional unset heals pages whose earlier write failed
+// and pages stamped before this ran. The cost is one idempotent write per page of a preserved
+// external master per cycle.
+func (f *childDAHFollowUps) collectPreserved(hash *chainhash.Hash, state SetMinedState) {
+	if state.External && state.TotalExtraRecs != nil && *state.TotalExtraRecs > 0 {
+		f.addUnset(hash, *state.TotalExtraRecs)
+	}
+}
+
+// sets returns the queued set items in first-seen order (nil if none).
+func (f *childDAHFollowUps) sets() []childDAHItem { return f.filter(true) }
+
+// unsets returns the queued unset items in first-seen order (nil if none).
+func (f *childDAHFollowUps) unsets() []childDAHItem { return f.filter(false) }
+
+func (f *childDAHFollowUps) filter(set bool) []childDAHItem {
+	var out []childDAHItem
+
+	for _, h := range f.order {
+		if item := f.items[h]; (item.DeleteAtHeight > 0) == set {
+			out = append(out, item)
+		}
+	}
+
+	return out
+}
+
+// maxChildDAHPagesPerBatch bounds how many pagination records one child-DAH BatchOperate
+// touches, so a batch of large external txs cannot build an unbounded request.
+const maxChildDAHPagesPerBatch = 4096
+
+// childDAHRetryBackoff is the pause before a retry of a failed child-DAH (or restore) write.
+// A var so tests can shorten it.
+var childDAHRetryBackoff = 50 * time.Millisecond
+
+// chunkChildDAHItems groups items so a chunk holds about maxPages pagination records. An item is
+// never split (SetDAHForChildRecordsMulti expands all of its pages), so an item larger than the
+// cap travels alone. Order is preserved.
+func chunkChildDAHItems(items []childDAHItem, maxPages int) [][]childDAHItem {
+	var (
+		chunks [][]childDAHItem
+		pages  int
+	)
+
+	var cur []childDAHItem //nolint:prealloc // sized by the page cap, not len(items)
+
+	for _, item := range items {
+		if len(cur) > 0 && pages+item.ChildCount > maxPages {
+			chunks = append(chunks, cur)
+			cur, pages = nil, 0
+		}
+
+		cur = append(cur, item)
+		pages += item.ChildCount
+	}
+
+	if len(cur) > 0 {
+		chunks = append(chunks, cur)
+	}
+
+	return chunks
+}
+
+// maxLoggedChildDAHTxIDs caps how many txids a failed child-DAH chunk puts on its Error line.
+const maxLoggedChildDAHTxIDs = 10
+
+// childDAHItemIDs lists the txids of a chunk, capped, for the Error line an operator repairs from.
+func childDAHItemIDs(chunk []childDAHItem) string {
+	n := min(len(chunk), maxLoggedChildDAHTxIDs)
+	ids := make([]string, n)
+
+	for i := 0; i < n; i++ {
+		ids[i] = chunk[i].TxID.String()
+	}
+
+	return strings.Join(ids, ",")
+}
+
+// childDAHApplyResult reports what applyChildDAHFollowUps could not write.
+type childDAHApplyResult struct {
+	unsetErr, setErr         error
+	failedUnsets, failedSets []childDAHItem
+}
+
+// sleepCtx waits d, or returns ctx.Err() as soon as ctx is done.
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// writeChildDAHChunk writes one chunk, retrying once after a short backoff that honours ctx.
+func (s *Store) writeChildDAHChunk(ctx context.Context, chunk []childDAHItem) error {
+	err := s.SetDAHForChildRecordsMulti(chunk)
+	if err != nil {
+		if sleepErr := sleepCtx(ctx, childDAHRetryBackoff); sleepErr != nil {
+			return errors.JoinCapped(10, err, sleepErr)
+		}
+
+		err = s.SetDAHForChildRecordsMulti(chunk)
+	}
+
+	return err
+}
+
+// applyChildDAHFollowUps writes the queued follow-ups in bounded chunks: unsets first, then sets,
+// each chunk retried once after a backoff. Clearing is the data-deleting direction (a child left
+// with a stale DAH can be pruned under a live master), so it goes first. A failed SET is not
+// harmless either: for a raise (X -> Y) the children stay at the lower X and can be pruned before
+// the master. Failures are logged at Error and returned (with the items that failed) so callers
+// can count them and, where the master write is not retry-safe, restore the master.
+func (s *Store) applyChildDAHFollowUps(ctx context.Context, f *childDAHFollowUps) childDAHApplyResult {
+	var res childDAHApplyResult
+
+	run := func(items []childDAHItem, kind string, failed *[]childDAHItem, errOut *error) {
+		for _, chunk := range chunkChildDAHItems(items, maxChildDAHPagesPerBatch) {
+			if err := s.writeChildDAHChunk(ctx, chunk); err != nil {
+				s.logger.Errorf("[childDAHFollowUps] failed to %s child DAH for %d txs (first %d: %s): %v", kind, len(chunk), min(len(chunk), maxLoggedChildDAHTxIDs), childDAHItemIDs(chunk), err)
+				*failed = append(*failed, chunk...)
+				*errOut = errors.JoinCapped(10, *errOut, err)
+			}
+		}
+	}
+
+	run(f.unsets(), "unset", &res.failedUnsets, &res.unsetErr)
+	run(f.sets(), "set", &res.failedSets, &res.setErr)
+
+	return res
+}
+
+// dahRestore is one master record to put back into a known earlier state after a failed
+// child-record DAH follow-up.
+type dahRestore struct {
+	// ID identifies the record in logs (usually the txid).
+	ID string
+	// Key is the master record.
+	Key *aerospike.Key
+	// Bins are the bin values to write back.
+	Bins []*aerospike.Bin
+	// Filter gates the write on the known post-write state (see dahUnchangedExpression plus the
+	// caller's own conditions); a filtered write means another writer owns the record.
+	Filter *aerospike.Expression
+}
+
+// dahUnchangedExpression is true when the record's DAH is still exactly what the write being
+// undone left: absent when newDAH is nil, else present and equal to *newDAH. Nested ExpCond, so
+// it does not rely on ExpAnd short-circuiting.
+func dahUnchangedExpression(newDAH *uint32) *aerospike.Expression {
+	dahBin := fields.DeleteAtHeight.String()
+	if newDAH == nil {
+		return aerospike.ExpNot(aerospike.ExpBinExists(dahBin))
+	}
+
+	return aerospike.ExpCond(
+		aerospike.ExpBinExists(dahBin), aerospike.ExpEq(aerospike.ExpIntBin(dahBin), aerospike.ExpIntVal(int64(*newDAH))),
+		aerospike.ExpBoolVal(false),
+	)
+}
+
+// restoreDAHBatch restores masters after a failed child DAH follow-up, as one BatchOperate per
+// attempt (not one per record), retrying once for only the records that failed, after a backoff
+// that honours ctx. Each record is independently filtered: FILTERED_OUT or KEY_NOT_FOUND means
+// another writer owns it (or it is gone) and is logged and skipped. Records that still fail are
+// counted in failedCounter (the caller's own metric, so counts stay attributable) and returned in a
+// distinct "restore failed" error: such a master is left in its post-write state and nothing
+// revisits it.
+//
+// Shared by every caller whose master write is not retry-safe: expired preservation, and the
+// longest-chain path (MarkTransactionsOnLongestChain). Each passes its own failure counter.
+func (s *Store) restoreDAHBatch(ctx context.Context, items []dahRestore, failedCounter prometheus.Counter) error {
+	pending := items
+
+	for attempt := 0; attempt < 2 && len(pending) > 0; attempt++ {
+		if attempt > 0 {
+			if err := sleepCtx(ctx, childDAHRetryBackoff); err != nil {
+				break
+			}
+		}
+
+		records := make([]aerospike.BatchRecordIfc, len(pending))
+
+		for i, it := range pending {
+			policy := util.GetAerospikeBatchWritePolicy(s.settings)
+			policy.RecordExistsAction = aerospike.UPDATE_ONLY
+			policy.FilterExpression = it.Filter
+
+			ops := make([]*aerospike.Operation, 0, len(it.Bins))
+			for _, b := range it.Bins {
+				ops = append(ops, aerospike.PutOp(b))
+			}
+
+			records[i] = aerospike.NewBatchWrite(policy, it.Key, ops...)
+		}
+
+		batchErr := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records)
+
+		var failed []dahRestore
+
+		for i, rec := range records {
+			recErr := rec.BatchRec().Err
+			if batchErr != nil {
+				recErr = batchErr
+			}
+
+			if recErr == nil {
+				continue
+			}
+
+			var aErr *aerospike.AerospikeError
+			if batchErr == nil && errors.As(recErr, &aErr) && (aErr.ResultCode == types.FILTERED_OUT || aErr.ResultCode == types.KEY_NOT_FOUND_ERROR) {
+				s.logger.Infof("[restoreDAH] not restoring %s: record changed concurrently or deleted (%v)", pending[i].ID, aErr.ResultCode)
+				continue
+			}
+
+			failed = append(failed, pending[i])
+		}
+
+		pending = failed
+	}
+
+	if len(pending) == 0 {
+		return nil
+	}
+
+	if failedCounter != nil {
+		failedCounter.Add(float64(len(pending)))
+	}
+
+	ids := make([]string, len(pending))
+	for i, it := range pending {
+		ids[i] = it.ID
+	}
+
+	s.logger.Errorf("[restoreDAH] restore failed for %d masters, they keep their post-write state and nothing will revisit them: %v", len(pending), ids)
+
+	return errors.NewStorageError("[restoreDAH] restore failed for %d masters: %v", len(pending), ids)
+}
 
 // SetMinedState contains the state returned from setMined operations.
 // Only fields needed for external transaction follow-up (child record and blob storage DAH updates) are included.
@@ -74,6 +388,7 @@ func (s *Store) parseSetMinedState(bins aerospike.BinMap) (SetMinedState, error)
 			s.parseDAHFromSlice(v, &state)
 		case int:
 			// Single value - treat as both old and new (shouldn't happen with our ops structure)
+			s.debugBareDAH()
 			dah := uint32(v)
 			state.OldDeleteAtHeight = &dah
 			state.NewDeleteAtHeight = &dah
@@ -137,33 +452,106 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 	return result
 }
 
-// buildDeleteAtHeightExpression creates an Aerospike expression that calculates and returns
-// the deleteAtHeight value based on record state. The expression evaluates the same logic
-// as the Lua setDeleteAtHeight function.
+// buildDeleteAtHeightOps returns the two ExpWriteOps that give a record the same
+// deleteAtHeight as the Lua setDeleteAtHeight function (teranode.lua), branch by branch.
+// They read the CURRENT deleteAtHeight bin, so callers must not null the bin first.
 //
-// The expression returns:
-//   - newDeleteHeight (int): When DAH should be set
-//   - nil: When DAH should be cleared (with ExpWriteFlagAllowDelete this deletes the bin)
-//   - ExpUnknown: When no change is needed (with ExpWriteFlagEvalNoFail this is a no-op)
+// Visibility: an ExpWriteOp sees the in-flight record, i.e. writes made by EARLIER ops in the
+// same operate call (a Put-nil, a ListAppend) are visible to it; it does not read the
+// pre-operate record. Pinned against a real server by TestExpressionSeesInFlightOperateChanges.
 //
-// Logic implemented:
-//  1. If preserveUntil is set → no change (unless ignorePreserveUntil is true)
-//  2. If conflicting AND no existing DAH → set DAH
-//  3. If master record (totalExtraRecs not nil) AND allSpent AND hasBlocks AND isOnLongestChain → set DAH
-//  4. If master record AND NOT (allSpent AND hasBlocks AND isOnLongestChain) AND has existing DAH → clear DAH
-//  5. Otherwise → no change
+// The first op's expression returns:
+//   - newDeleteHeight (int): DAH should be set (or raised)
+//   - ExpUnknown: no change needed (with ExpWriteFlagEvalNoFail this is a no-op)
 //
-// Note: Pagination records (totalExtraRecs is nil) only update lastSpentState, not DAH.
-// The lastSpentState logic is handled separately via ExpWriteOp for that bin.
+// It never deletes the bin: Aerospike rejects a conditional that mixes int and nil branches
+// (PARAMETER_ERROR), so clearing a stale DAH (step 5) is the second op's expression, which
+// returns ExpNilValue (deleting the bin with ExpWriteFlagAllowDelete) or ExpUnknown.
 //
-// ignorePreserveUntil drops the preserveUntil guard (step 1). It is set only by the
-// expired-preservation path (ProcessExpiredPreservations), which clears preserveUntil in the
-// same operate call — but expressions read the pre-operate record, so the guard would otherwise
-// still see the (about-to-be-cleared) bin and short-circuit. Dropping the guard there lets the
-// eligibility check (steps 2-4) decide the DAH, restoring the "DAH set ⟹ safe to delete"
-// invariant for expiring preservations.
-func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool, ignorePreserveUntil bool) *aerospike.Expression {
-	newDeleteHeight := int64(currentBlockHeight + blockHeightRetention)
+// Logic implemented (same order as Lua):
+//  1. If preserveUntil is set -> no change
+//  2. If conflicting -> set DAH if there is none, otherwise no change
+//  3. If pagination record (totalExtraRecs not set) -> no change (Lua only signals here)
+//  4. If allSpent AND hasBlocks AND isOnLongestChain -> set DAH if none, raise it if lower;
+//     never lower an existing higher DAH
+//  5. Otherwise, clear an existing DAH
+//
+// The retention == 0 guard is the caller's: the ops are only added when retention > 0.
+// The Lua DAHSET/DAHUNSET signals cannot be emitted from an expression; callers detect a DAH
+// change by reading the bin before and after (see processBatchResultsForSetMinedExpressions).
+//
+// Child-record (pagination) follow-up and what happens when it fails. After the master write the
+// children are updated by applyChildDAHFollowUps (unsets first, chunked, each retried once). The
+// master write is not retry-safe: a retry sees old == new (or FILTERED_OUT) and queues nothing.
+// Callers differ in what they do when a child write still fails:
+//   - expired preservation (ProcessExpiredPreservations): RESTORES the master through
+//     restoreDAHBatch, so the next run redoes the transition. The longest-chain path
+//     (MarkTransactionsOnLongestChain) does the same with the same helper.
+//   - setMined (Lua and expressions) and spend (expressions): only LOG at Error, COUNT and RETURN
+//     the error (setMined returns it, spend increments prometheusUtxoMapErrors as its spends are
+//     already completed). They do NOT restore, so a failed unset or raise leaves the pages stale
+//     (or lower) under a master that no longer has that DAH and nothing revisits them. Known
+//     follow-up, deliberately unchanged here: "pre-state" for a spend or an unmined-block
+//     transition is not a single bin snapshot and needs its own design.
+//
+// The lastSpentState logic for pagination records is handled separately via ExpWriteOp for that bin.
+//
+// The expired-preservation caller clears preserveUntil with an earlier op in the same operate;
+// the guard in step 1 sees that in-flight clear, so no bypass is needed there.
+//
+// Accepted divergence from Lua: SetMinedMultiWithExpressions skips a record whose blockID is
+// already present (FILTERED_OUT), so none of this runs on a re-mine of the same block, whereas
+// Lua re-evaluates setDeleteAtHeight and unminedSince every time. Not fixed.
+//
+// Not retry-safe: the child-record DAH follow-ups run after the batch write. If one fails, the
+// master already carries the new DAH and a retry is a no-op (FILTERED_OUT / old == new), so the
+// child keeps the old value until something else touches the master. The Lua path has the same
+// property.
+func (s *Store) buildDeleteAtHeightOps(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) []*aerospike.Operation {
+	return s.buildDeleteAtHeightOpsFor(aerospike.ExpIntVal(int64(currentBlockHeight)+int64(blockHeightRetention)), onLongestChain)
+}
+
+// buildDeleteAtHeightOpsFromRecordHeight is buildDeleteAtHeightOps for callers that have no mined
+// block height (MarkTransactionsOnLongestChain). The DAH is stamped from
+// max(currentBlockHeight, the record's highest blockHeights entry) + retention, evaluated on the
+// server, so it is the value setMined would have stamped or later. A record without block heights
+// uses currentBlockHeight. The caller passes the store height + 1, the lag allowance the spend path
+// makes (the store height trails the block being validated).
+func (s *Store) buildDeleteAtHeightOpsFromRecordHeight(currentBlockHeight uint32, blockHeightRetention uint32, onLongestChain bool) []*aerospike.Operation {
+	heights := aerospike.ExpListBin(fields.BlockHeights.String())
+
+	// nested conditions: the list is only read once it is known to exist and to be non-empty, without
+	// relying on ExpAnd short-circuiting
+	highestMined := aerospike.ExpCond(
+		aerospike.ExpBinExists(fields.BlockHeights.String()), aerospike.ExpCond(
+			aerospike.ExpGreater(aerospike.ExpListSize(heights), aerospike.ExpIntVal(0)),
+			aerospike.ExpListGetByRank(aerospike.ListReturnTypeValue, aerospike.ExpTypeINT, aerospike.ExpIntVal(-1), heights),
+			aerospike.ExpIntVal(0),
+		),
+		aerospike.ExpIntVal(0),
+	)
+
+	return s.buildDeleteAtHeightOpsFor(aerospike.ExpNumAdd(
+		aerospike.ExpMax(aerospike.ExpIntVal(int64(currentBlockHeight)), highestMined),
+		aerospike.ExpIntVal(int64(blockHeightRetention)),
+	), onLongestChain)
+}
+
+func (s *Store) buildDeleteAtHeightOpsFor(newDAH *aerospike.Expression, onLongestChain bool) []*aerospike.Operation {
+	setExp, clearExp := s.buildDeleteAtHeightExpressionsFor(newDAH, onLongestChain)
+	flags := aerospike.ExpWriteFlagAllowDelete | aerospike.ExpWriteFlagEvalNoFail
+
+	return []*aerospike.Operation{
+		aerospike.ExpWriteOp(fields.DeleteAtHeight.String(), setExp, flags),
+		// A stale DAH on a no-longer-eligible master is deleted by a second expression (see above).
+		aerospike.ExpWriteOp(fields.DeleteAtHeight.String(), clearExp, flags),
+	}
+}
+
+// buildDeleteAtHeightExpressionsFor builds the set/raise expression and the clear expression from
+// the same branch conditions so the two can never disagree. The new DAH is given as an expression,
+// so it can be computed from the record.
+func (s *Store) buildDeleteAtHeightExpressionsFor(newDAH *aerospike.Expression, onLongestChain bool) (*aerospike.Expression, *aerospike.Expression) {
 
 	// Helper expressions for readability
 	conflictingBin := aerospike.ExpBoolBin(fields.Conflicting.String())
@@ -173,18 +561,19 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 	recordUtxosBin := aerospike.ExpIntBin(fields.RecordUtxos.String())
 	blockIDsBin := aerospike.ExpListBin(fields.BlockIDs.String())
 
-	// Condition: preserveUntil is NOT set (bin doesn't exist). When ignorePreserveUntil is
-	// true we treat preservation as already gone so the guard branch below never triggers.
+	// Condition: preserveUntil is NOT set (bin doesn't exist)
 	preserveUntilNotSet := aerospike.ExpNot(aerospike.ExpBinExists(fields.PreserveUntil.String()))
-	if ignorePreserveUntil {
-		preserveUntilNotSet = aerospike.ExpBoolVal(true)
-	}
 
-	// Condition: conflicting is true
-	isConflicting := aerospike.ExpEq(conflictingBin, aerospike.ExpBoolVal(true))
+	// Condition: conflicting is true. Lua treats a missing bin as false, so guard the read.
+	isConflicting := aerospike.ExpCond(
+		aerospike.ExpBinExists(fields.Conflicting.String()), aerospike.ExpEq(conflictingBin, aerospike.ExpBoolVal(true)),
+		aerospike.ExpBoolVal(false),
+	)
 
-	// Condition: existing DAH is NOT set
-	dahNotExists := aerospike.ExpNot(aerospike.ExpBinExists(fields.DeleteAtHeight.String()))
+	// Condition: existing DAH is set / NOT set
+	dahExists := aerospike.ExpBinExists(fields.DeleteAtHeight.String())
+	dahNotExists := aerospike.ExpNot(dahExists)
+	existingDAH := aerospike.ExpIntBin(fields.DeleteAtHeight.String())
 
 	// Condition: is master record (totalExtraRecs bin exists)
 	isMasterRecord := aerospike.ExpBinExists(fields.TotalExtraRecs.String())
@@ -195,15 +584,28 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 		aerospike.ExpBinExists(fields.SpentExtraRecs.String()), spentExtraRecsBin,
 		aerospike.ExpIntVal(0),
 	)
+	// spentUtxos == recordUtxos with Lua nil semantics: both missing is equal, one missing is not.
+	// An unguarded read of a missing bin makes the whole expression unknown, which is a silent
+	// no-op under EvalNoFail (see TestExpressionMissingBinSemantics), so each read is guarded.
+	spentExists := aerospike.ExpBinExists(fields.SpentUtxos.String())
+	recordExists := aerospike.ExpBinExists(fields.RecordUtxos.String())
+	utxoCountsEqual := aerospike.ExpCond(
+		aerospike.ExpAnd(spentExists, recordExists), aerospike.ExpEq(spentUtxosBin, recordUtxosBin),
+		aerospike.ExpAnd(aerospike.ExpNot(spentExists), aerospike.ExpNot(recordExists)), aerospike.ExpBoolVal(true),
+		aerospike.ExpBoolVal(false),
+	)
 	allSpent := aerospike.ExpAnd(
 		aerospike.ExpEq(totalExtraRecsBin, spentExtraRecsOrZero),
-		aerospike.ExpEq(spentUtxosBin, recordUtxosBin),
+		utxoCountsEqual,
 	)
 
-	// Condition: has blocks (blockIDs list size > 0)
-	hasBlocks := aerospike.ExpGreater(
-		aerospike.ExpListSize(blockIDsBin),
-		aerospike.ExpIntVal(0),
+	// Condition: has blocks (blockIDs list size > 0); a missing list is empty (Lua: nil)
+	hasBlocks := aerospike.ExpCond(
+		aerospike.ExpBinExists(fields.BlockIDs.String()), aerospike.ExpGreater(
+			aerospike.ExpListSize(blockIDsBin),
+			aerospike.ExpIntVal(0),
+		),
+		aerospike.ExpBoolVal(false),
 	)
 
 	// Condition: is on longest chain - we know this from the input parameter
@@ -218,29 +620,52 @@ func (s *Store) buildDeleteAtHeightExpression(currentBlockHeight uint32, blockHe
 		isOnLongestChainExp = aerospike.ExpNot(aerospike.ExpBinExists(fields.UnminedSince.String()))
 	}
 
-	// Condition: should set DAH for master record
+	// Condition: should set DAH for master record (master-ness is already established by the
+	// pagination-record branch preceding it in the conditional below)
 	shouldSetDAHMaster := aerospike.ExpAnd(
-		isMasterRecord,
 		allSpent,
 		hasBlocks,
 		isOnLongestChainExp,
 	)
 
-	// Build the main conditional expression
-	// Order matters: check most specific conditions first
-	return aerospike.ExpCond(
+	// Build the main conditional expression, in the same order as Lua setDeleteAtHeight.
+	// ExpCond evaluates its conditions lazily and in order, so bins are only read once the
+	// preceding branches have established they exist.
+	setExp := aerospike.ExpCond(
 		// If preserveUntil is set, no change
 		aerospike.ExpNot(preserveUntilNotSet), aerospike.ExpUnknown(),
 
-		// If conflicting and no existing DAH, set DAH
-		aerospike.ExpAnd(isConflicting, dahNotExists), aerospike.ExpIntVal(newDeleteHeight),
+		// Conflicting: set DAH if none, otherwise leave it alone
+		isConflicting, aerospike.ExpCond(
+			dahNotExists, newDAH,
+			aerospike.ExpUnknown(),
+		),
 
-		// If master record and should set DAH
-		shouldSetDAHMaster, aerospike.ExpIntVal(newDeleteHeight),
+		// Pagination record: no DAH change
+		aerospike.ExpNot(isMasterRecord), aerospike.ExpUnknown(),
 
-		// Default: no change
+		// Master record, eligible: set if none, raise if lower, never lower
+		shouldSetDAHMaster, aerospike.ExpCond(
+			dahNotExists, newDAH,
+			aerospike.ExpLess(existingDAH, newDAH), newDAH,
+			aerospike.ExpUnknown(),
+		),
+
+		// Default (including a stale DAH on an ineligible master): no change
 		aerospike.ExpUnknown(),
 	)
+
+	// Clear: a master record, not preserved, not conflicting, not eligible, with a DAH present.
+	clearExp := aerospike.ExpCond(
+		aerospike.ExpNot(preserveUntilNotSet), aerospike.ExpUnknown(),
+		isConflicting, aerospike.ExpUnknown(),
+		aerospike.ExpNot(isMasterRecord), aerospike.ExpUnknown(),
+		shouldSetDAHMaster, aerospike.ExpUnknown(),
+		dahExists, aerospike.ExpNilValue(),
+		aerospike.ExpUnknown(),
+	)
+
+	return setExp, clearExp
 }
 
 // SetMinedMultiWithExpressions is the batch version of SetMinedWithExpressions.
@@ -294,10 +719,10 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 		ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil)))
 	}
 
-	// Set deleteAtHeight to nil initially (will be updated by expression if needed)
-	ops = append(ops, aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
-
-	// Add deleteAtHeight expression if retention is enabled.
+	// Add deleteAtHeight expression if retention is enabled. The bin is deliberately NOT
+	// nulled first: the expression reads the existing DAH so it can raise but never lower
+	// it, clear it when no longer eligible, and leave it untouched for preserveUntil and
+	// retention 0 (matching the Lua setDeleteAtHeight).
 	// Stamp the DAH relative to the height of the block the tx is mined into
 	// (minedBlockInfo.BlockHeight), NOT the store's cached chain tip (thisBlockHeight).
 	// The cached tip lags behind the block being validated during catchup/sync; using
@@ -305,12 +730,7 @@ func (s *Store) SetMinedMultiWithExpressions(ctx context.Context, hashes []*chai
 	// retention window elapsed.
 	blockHeightRetention := s.settings.GetUtxoStoreBlockHeightRetention()
 	if blockHeightRetention > 0 {
-		dahExp := s.buildDeleteAtHeightExpression(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain, false)
-		ops = append(ops, aerospike.ExpWriteOp(
-			fields.DeleteAtHeight.String(),
-			dahExp,
-			aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
-		))
+		ops = append(ops, s.buildDeleteAtHeightOps(minedBlockInfo.BlockHeight, blockHeightRetention, minedBlockInfo.OnLongestChain)...)
 	}
 
 	// Read final values after modifications (blockIDs and DAH)
@@ -367,15 +787,8 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	nrErrors := 0
 
 	// Collect follow-up actions for external transactions (child record DAH updates)
-	dahSetItems := make([]struct {
-		TxID           *chainhash.Hash
-		ChildCount     int
-		DeleteAtHeight uint32
-	}, 0)
-	externalDAH := make([]struct {
-		TxID *chainhash.Hash
-		DAH  uint32
-	}, 0)
+	// Child (pagination) record DAH follow-ups, last state per txid wins.
+	var childDAH childDAHFollowUps
 	// #1037: lock-clearing follow-up. Non-filtered records: pagination records via
 	// work.items (the master is unlocked by the main batch write's Locked=false op).
 	// FILTERED_OUT records: work.fullUnlock, since the filtered write returns no
@@ -442,40 +855,8 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 			blockIDs[*hash] = blockIDsUint32
 		}
 
-		// For external transactions, check if DAH changed and collect follow-up actions
-		if state.External && state.TotalExtraRecs != nil {
-			// Check if deleteAtHeight actually changed
-			dahChanged := false
-			if state.OldDeleteAtHeight == nil && state.NewDeleteAtHeight != nil {
-				dahChanged = true // DAH was set
-			} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight == nil {
-				dahChanged = true // DAH was cleared
-			} else if state.OldDeleteAtHeight != nil && state.NewDeleteAtHeight != nil {
-				dahChanged = *state.OldDeleteAtHeight != *state.NewDeleteAtHeight // DAH value changed
-			}
-
-			if dahChanged {
-				// Update child records DAH if deleteAtHeight is set (not cleared)
-				if state.NewDeleteAtHeight != nil {
-					dahSetItems = append(dahSetItems, struct {
-						TxID           *chainhash.Hash
-						ChildCount     int
-						DeleteAtHeight uint32
-					}{TxID: hash, ChildCount: *state.TotalExtraRecs, DeleteAtHeight: *state.NewDeleteAtHeight})
-				}
-
-				// Update blob storage DAH (handles both set and clear cases)
-				externalDAH = append(externalDAH, struct {
-					TxID *chainhash.Hash
-					DAH  uint32
-				}{TxID: hash, DAH: func() uint32 {
-					if state.NewDeleteAtHeight != nil {
-						return *state.NewDeleteAtHeight
-					}
-					return 0 // 0 signals to clear DAH in blob storage
-				}()})
-			}
-		}
+		// For external transactions, queue the child-record DAH follow-up if the master DAH changed
+		childDAH.collect(hash, state)
 
 		// #1037: this batch write cleared `locked` on the master only. Clear it on
 		// the pagination/extra records too, so a child spending a high-index output
@@ -523,6 +904,14 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 
 	prometheusTxMetaAerospikeMapSetMinedBatchN.Add(float64(okUpdates))
 
+	// Execute follow-up actions for external transactions (child record and blob storage DAH).
+	// These run BEFORE the sibling-error return below: the records that did succeed are already
+	// mined, and a retry would hit FILTERED_OUT and never reconcile their child-record DAH.
+	var postErr error
+
+	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
+	postErr = errors.JoinCapped(10, applied.unsetErr, applied.setErr)
+
 	// Mirror the Lua path's single guard (set_mined.go) instead of the nested
 	// `if nrErrors > 0 { if errs != nil }`: every nrErrors++ is paired with an
 	// errs join, so the two conditions move together — keeping them as one
@@ -530,17 +919,12 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	// caller unlocks successfully-mined (and FILTERED_OUT) records despite a
 	// sibling failure in this batch.
 	if errs != nil || nrErrors > 0 {
+		if postErr != nil {
+			errs = errors.Join(errs, postErr)
+		}
+
 		prometheusTxMetaAerospikeMapSetMinedBatchErrN.Add(float64(nrErrors))
 		return blockIDs, work, errors.NewError("aerospike batch record errors", errs)
-	}
-
-	// Execute follow-up actions for external transactions (child record and blob storage DAH)
-	var postErr error
-
-	if len(dahSetItems) > 0 {
-		if err := s.SetDAHForChildRecordsMulti(dahSetItems); err != nil {
-			postErr = errors.Join(postErr, err)
-		}
 	}
 
 	if postErr != nil {
@@ -548,4 +932,13 @@ func (s *Store) processBatchResultsForSetMinedExpressions(
 	}
 
 	return blockIDs, work, nil
+}
+
+// debugBareDAH logs when the DAH bin comes back as a bare value on a path that always issues two
+// reads (before and after). A bare value means the "before" read produced no entry, so old == new
+// is assumed and a DAH set would not trigger the child-record follow-up.
+func (s *Store) debugBareDAH() {
+	if s.logger != nil {
+		s.logger.Debugf("[aerospike] deleteAtHeight returned as a bare value on a two-read path; treating old == new")
+	}
 }

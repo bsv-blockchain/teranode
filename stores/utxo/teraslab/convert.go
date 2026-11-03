@@ -320,14 +320,18 @@ func extendedTxSize(tx *bt.Tx) int {
 // ---------------------------------------------------------------------------
 
 func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, genesisActivationHeight uint32, opts utxo.CreateOptions) (teraslab.CreateItem, error) {
-	txHash := tx.TxIDChainHash()
-
-	var txid teraslab.TxID
+	// Use the explicit txid when the caller supplies one (WithTXID) rather than
+	// serializing the tx: a tx seeded from a UTXO-set snapshot has no inputs and
+	// nil output gaps, which tx.TxIDChainHash() cannot serialize. GetUtxoHashes
+	// and serializeOutputs below both tolerate nil outputs.
+	var txHash *chainhash.Hash
 	if opts.TxID != nil {
-		txid = hashToTxID(opts.TxID)
+		txHash = opts.TxID
 	} else {
-		txid = hashToTxID(txHash)
+		txHash = tx.TxIDChainHash()
 	}
+
+	txid := hashToTxID(txHash)
 
 	isCoinbase := tx.IsCoinbase()
 	if opts.IsCoinbase != nil {
@@ -339,15 +343,22 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, gene
 	// whole contract for this store. GetFeesAndUtxoHashes hard-errors on a
 	// non-extended (undecorated) non-coinbase tx instead of silently recording a
 	// zero fee (which would corrupt block-assembly fee ordering / mining totals);
-	// the inputless branch mirrors aerospike create.go (fee 0, hashes only).
+	// the inputless branch mirrors aerospike create.go (fee 0, hashes only, size 0).
+	// tx.Size() / extendedTxSize serialize every output, so they are confined to
+	// the with-inputs branch: an inputless tx seeded from a UTXO snapshot has nil
+	// output gaps that go-bt cannot serialize (and whose wire size is undefined).
 	var (
 		fee          uint64
+		size         int
+		extendedSize int
 		utxoHashPtrs []*chainhash.Hash
 		err          error
 	)
 	if len(tx.Inputs) == 0 {
 		utxoHashPtrs, err = utxo.GetUtxoHashes(tx, txHash)
 	} else {
+		size = tx.Size()
+		extendedSize = extendedTxSize(tx)
 		fee, utxoHashPtrs, err = utxo.GetFeesAndUtxoHashes(context.Background(), tx, blockHeight)
 	}
 	if err != nil {
@@ -419,8 +430,8 @@ func txToCreateItem(tx *bt.Tx, blockHeight uint32, coinbaseMaturity uint32, gene
 		TxVersion:      tx.Version,
 		Locktime:       tx.LockTime,
 		Fee:            fee,
-		SizeInBytes:    uint64(tx.Size()),
-		ExtendedSize:   uint64(extendedTxSize(tx)),
+		SizeInBytes:    uint64(size),
+		ExtendedSize:   uint64(extendedSize),
 		IsCoinbase:     isCoinbase,
 		SpendingHeight: spendingHeight,
 		CreatedAt:      uint64(time.Now().UnixMilli()),

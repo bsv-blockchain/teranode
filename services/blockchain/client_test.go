@@ -5487,3 +5487,30 @@ func TestClientAssignBlockID(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// mockReportPeerFailureClient captures the ReportPeerFailure request.
+type mockReportPeerFailureClient struct {
+	blockchain_api.BlockchainAPIClient
+	req *blockchain_api.ReportPeerFailureRequest
+}
+
+func (m *mockReportPeerFailureClient) ReportPeerFailure(_ context.Context, in *blockchain_api.ReportPeerFailureRequest, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+	m.req = in
+	return &emptypb.Empty{}, nil
+}
+
+// TestClientReportPeerFailure_NilHash pins that a failure about a message whose hash
+// did not parse is still reported, with the 32-byte zero hash the server requires,
+// rather than panicking on the nil dereference.
+func TestClientReportPeerFailure_NilHash(t *testing.T) {
+	api := &mockReportPeerFailureClient{}
+	c := &Client{client: api}
+
+	require.NotPanics(t, func() {
+		require.NoError(t, c.ReportPeerFailure(context.Background(), nil, "peerA", "block", "bad hash"))
+	})
+
+	require.NotNil(t, api.req)
+	assert.Equal(t, make([]byte, chainhash.HashSize), api.req.Hash)
+	assert.Equal(t, "peerA", api.req.PeerId)
+}

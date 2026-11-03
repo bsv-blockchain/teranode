@@ -121,8 +121,9 @@ func TestValidateSubtrees_InfraMerkleErrorIsWrapped(t *testing.T) {
 
 // TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals drives the RUNNING per-hash corrupt cap
 // end-to-end through processBlockFound — the universal chokepoint that both the worker and the
-// direct ProcessBlock route funnel through (bitcoin-sv/teranode#4692). It proves BEHAVIOUR, not mere
-// execution:
+// direct ProcessBlock route funnel through (bitcoin-sv/teranode#4692). The deliveries carry a
+// peer-served baseURL (capTestBaseURL): the cap serves that route only, since accountCorruptAttempt
+// records nothing for "legacy". It proves BEHAVIOUR, not mere execution:
 //   - a below-cap corrupt delivery is validated and surfaces a corrupt error (and is accounted),
 //   - once the cap is reached the next corrupt delivery is DROPPED before validation — it returns
 //     nil (the corrupt error is suppressed), proving the expensive validation was skipped rather
@@ -148,10 +149,13 @@ func TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals(t *testing.T) {
 	block.CoinbaseTx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x00})
 
 	// Deliveries below the cap are validated and surface a corrupt error, each accounted toward the cap.
+	// The verdict comes back as itself, not inside the full route's ServiceError: a caller that reads
+	// IsTransientLocalError as retry-later must not keep retrying a corrupt body.
 	for i := 1; i <= 2; i++ {
-		err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+		err := s.processBlockFound(ctx, block.Hash(), peerID, capTestBaseURL, false, block)
 		require.Error(t, err, "delivery %d must reach validation and fail", i)
 		require.True(t, errors.IsBlockCorrupt(err), "delivery %d must surface a corrupt error, got: %v", i, err)
+		require.False(t, errors.IsTransientLocalError(err), "delivery %d: a corrupt verdict must not come back as a transient local fault, got: %v", i, err)
 	}
 
 	require.True(t, s.corruptAttemptsExhausted(block.Hash(), peerID), "cap reached after 2 corrupt deliveries")
@@ -160,7 +164,7 @@ func TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals(t *testing.T) {
 	// corrupt-classified, NON-POISONING error (never nil-as-accepted, bitcoin-sv/teranode#4692). The
 	// error is corrupt but NOT ErrBlockInvalid, and the block was never stored — so nothing is
 	// poisoned and no caller can read the drop as acceptance.
-	err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+	err := s.processBlockFound(ctx, block.Hash(), peerID, capTestBaseURL, false, block)
 	require.Error(t, err, "past the cap the delivery must be suppressed with an error, never reported as accepted")
 	require.True(t, errors.IsBlockCorrupt(err), "the cap-suppressed drop must be corrupt-classified, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "the cap-suppressed drop must NEVER be ErrBlockInvalid (no poison)")
@@ -175,7 +179,7 @@ func TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals(t *testing.T) {
 	s.clearCorruptAttempts(block.Hash(), peerID)
 	require.False(t, s.corruptAttemptsExhausted(block.Hash(), peerID), "cleared counter reopens the gate")
 
-	err = s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+	err = s.processBlockFound(ctx, block.Hash(), peerID, capTestBaseURL, false, block)
 	require.Error(t, err)
 	require.True(t, errors.IsBlockCorrupt(err), "after the cap clears the hash is validated again (self-heal), got: %v", err)
 
@@ -183,7 +187,7 @@ func TestProcessBlockFound_CorruptCapGate_DropsAndSelfHeals(t *testing.T) {
 	// identity, the gate never reports exhausted and never drops one as nil-accept. This guards the
 	// blocker directly — an unidentified delivery can never wedge the honest tip.
 	for i := 1; i <= 4; i++ {
-		err = s.processBlockFound(ctx, block.Hash(), "", "legacy", block)
+		err = s.processBlockFound(ctx, block.Hash(), "", capTestBaseURL, false, block)
 		require.Error(t, err, "empty-peer delivery %d must reach validation (uncapped)", i)
 		require.True(t, errors.IsBlockCorrupt(err), "empty-peer delivery %d must surface a corrupt error, got: %v", i, err)
 	}
@@ -208,7 +212,7 @@ func TestProcessBlockFound_CapDisabled_NeverDrops(t *testing.T) {
 	// Many corrupt deliveries; with the cap disabled every one still reaches validation and surfaces
 	// the corrupt error (never silently dropped by the gate).
 	for i := 1; i <= 5; i++ {
-		err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+		err := s.processBlockFound(ctx, block.Hash(), peerID, capTestBaseURL, false, block)
 		require.Error(t, err, "delivery %d must still reach validation when the cap is disabled", i)
 		require.True(t, errors.IsBlockCorrupt(err), "delivery %d must surface a corrupt error, got: %v", i, err)
 	}
@@ -235,7 +239,7 @@ func TestProcessBlockFound_CorruptCap_HonestPeerNotWedged(t *testing.T) {
 
 	// The bad peer exhausts its own budget for the tip hash.
 	for i := 1; i <= 2; i++ {
-		err := s.processBlockFound(ctx, block.Hash(), badPeer, "legacy", block)
+		err := s.processBlockFound(ctx, block.Hash(), badPeer, capTestBaseURL, false, block)
 		require.Error(t, err)
 		require.True(t, errors.IsBlockCorrupt(err), "bad-peer delivery %d must reach validation, got: %v", i, err)
 	}
@@ -245,7 +249,7 @@ func TestProcessBlockFound_CorruptCap_HonestPeerNotWedged(t *testing.T) {
 	// The honest peer serving the SAME hash is NOT gated out — its delivery reaches validation (and,
 	// with this deliberately-corrupt body, still surfaces the corrupt error rather than a silent nil
 	// drop). The bad peer never wedged the honest tip.
-	err := s.processBlockFound(ctx, block.Hash(), honestPeer, "legacy", block)
+	err := s.processBlockFound(ctx, block.Hash(), honestPeer, capTestBaseURL, false, block)
 	require.Error(t, err, "the honest peer must not be gated out by the bad peer's exhausted budget")
 	require.True(t, errors.IsBlockCorrupt(err), "the honest delivery reached validation, got: %v", err)
 }
@@ -267,7 +271,7 @@ func TestProcessBlockFound_CorruptCap_HitNeitherClearsNorPoisons(t *testing.T) {
 
 	// Reach the cap.
 	for i := 1; i <= 2; i++ {
-		err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+		err := s.processBlockFound(ctx, block.Hash(), peerID, capTestBaseURL, false, block)
 		require.Error(t, err)
 		require.True(t, errors.IsBlockCorrupt(err))
 	}
@@ -275,7 +279,7 @@ func TestProcessBlockFound_CorruptCap_HitNeitherClearsNorPoisons(t *testing.T) {
 
 	// The cap-hit delivery is suppressed with a corrupt-classified, non-poisoning error (never
 	// nil-as-accepted) but must NOT clear the counter...
-	err := s.processBlockFound(ctx, block.Hash(), peerID, "legacy", block)
+	err := s.processBlockFound(ctx, block.Hash(), peerID, capTestBaseURL, false, block)
 	require.Error(t, err, "a cap-hit delivery is suppressed with an error, never reported as accepted")
 	require.True(t, errors.IsBlockCorrupt(err), "the cap-hit suppression is corrupt-classified, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "the cap-hit suppression must NEVER be ErrBlockInvalid")

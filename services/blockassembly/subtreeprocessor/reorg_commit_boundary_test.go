@@ -203,9 +203,6 @@ func TestReorgBlocks_MoveBackPath_WriterFlushFailureBeforeCommitFailsAndRollsBac
 	}()
 	t.Cleanup(func() { close(newSubtreeChan) })
 
-	// Single disk: every hash routes to disks[0], so the failing batch below
-	// is guaranteed to be the one moveBackBlockBulkBuild's write goes through
-	// (with more than one disk, sharding could route it elsewhere).
 	stp, err := NewSubtreeProcessor(ctx, logger, test.CreateBaseTestSettings(t), blobStore, blockchainClient, utxoStore, newSubtreeChan,
 		WithTxMapDirs([]string{t.TempDir()}))
 	require.NoError(t, err)
@@ -227,19 +224,16 @@ func TestReorgBlocks_MoveBackPath_WriterFlushFailureBeforeCommitFailsAndRollsBac
 	_, err = utxoStore.Create(ctx, movedBackTx, 2)
 	require.NoError(t, err)
 
-	// Installed before Reorg runs anything, so the channel sends
-	// moveBackBlockBulkBuild's SetIfNotExists calls make to the writer
-	// establish the happens-before ordering needed for it to see this value
-	// (same pattern as TestDiskTxMap_WriterErrorIsReported).
-	failing := &failingBatch{flushErr: errors.NewStorageError("flush failed")}
-	stp.diskTxMap.disks[0].batch = failing
+	// Installed on every log segment before Reorg runs anything, so
+	// moveBackBlockBulkBuild's write fails whichever segment it lands in.
+	failDiskTxMapLogs(stp.diskTxMap, alwaysFailWrites, nil)
 
 	err = stp.Reorg([]*model.Block{moveBackBlock}, []*model.Block{})
 	require.Error(t, err, "a write flush failure during moveBack must fail the reorg before its commit point")
 	require.ErrorContains(t, err, "disk tx map storage error before committing reorg",
 		"must be this check's own error - not e.g. a panic from an unmocked blockchain call recovered into an error, "+
 			"which would also make require.Error pass without the fix actually having run")
-	require.ErrorContains(t, err, "flush failed", "and must actually be the flush failure")
+	require.ErrorContains(t, err, "write failed", "and must actually be the write failure")
 
 	require.Equal(t, tipHeader.Hash(), stp.GetCurrentBlockHeader().Hash(), "the header must not move on a rolled-back reorg")
 	require.True(t, stp.TakeResetRequested(), "a pre-commit failure still requests a reset: the drained error may be an earlier write that never reached disk, whose phantom the rollback keeps")

@@ -137,67 +137,6 @@ func TestSplitMapBuckets_ConfigClampingAndDefault(t *testing.T) {
 	}
 }
 
-// TestTxMapPool_GrowsOnLargerBlock simulates the
-// "first block was small, later block is large" scenario flagged in code
-// review: the pool should be reallocated (not auto-rehashed by swiss.Map)
-// when the requested mapSize exceeds the pool's recorded capacity.
-func TestTxMapPool_GrowsOnLargerBlock(t *testing.T) {
-	settings := test.CreateBaseTestSettings(t)
-	settings.BlockAssembly.SplitMapBuckets = 16
-
-	stp, err := NewSubtreeProcessor(
-		context.Background(), ulogger.TestLogger{}, settings,
-		nil, nil, nil, make(chan NewSubtreeRequest, 1),
-	)
-	require.NoError(t, err)
-
-	require.Nil(t, stp.txMapPool, "pool should be lazily allocated, not present at construction")
-	require.Equal(t, 0, stp.txMapPoolCapacity)
-
-	// First "block": modest size.
-	stp.txMapPool = NewSplitSwissMap(1024, 1000)
-	stp.txMapPoolCapacity = 1000
-	priorPool := stp.txMapPool
-
-	// Simulate the constructor-style sizing branch used by CreateTransactionMap.
-	// Re-running the same logic in a helper would couple the test to the public
-	// API more than needed; instead, mirror the three cases directly.
-
-	// Same-or-smaller block: pool retained, only Clear()ed.
-	requestedMapSize := 500
-
-	switch {
-	case stp.txMapPool == nil:
-		stp.txMapPool = NewSplitSwissMap(1024, requestedMapSize)
-		stp.txMapPoolCapacity = requestedMapSize
-	case requestedMapSize > stp.txMapPoolCapacity:
-		stp.txMapPool = NewSplitSwissMap(1024, requestedMapSize)
-		stp.txMapPoolCapacity = requestedMapSize
-	default:
-		stp.txMapPool.Clear()
-	}
-
-	require.Same(t, priorPool, stp.txMapPool, "same-or-smaller block must reuse the pool, not reallocate")
-	require.Equal(t, 1000, stp.txMapPoolCapacity)
-
-	// Larger block: pool must be reallocated, capacity recorded.
-	requestedMapSize = 5000
-
-	switch {
-	case stp.txMapPool == nil:
-		stp.txMapPool = NewSplitSwissMap(1024, requestedMapSize)
-		stp.txMapPoolCapacity = requestedMapSize
-	case requestedMapSize > stp.txMapPoolCapacity:
-		stp.txMapPool = NewSplitSwissMap(1024, requestedMapSize)
-		stp.txMapPoolCapacity = requestedMapSize
-	default:
-		stp.txMapPool.Clear()
-	}
-
-	require.NotSame(t, priorPool, stp.txMapPool, "larger block must trigger reallocation, not in-place rehash")
-	require.Equal(t, 5000, stp.txMapPoolCapacity)
-}
-
 // makeNode builds a deterministic subtree node for tests that only care about
 // the hash byte for identity.
 func makeNode(b byte) subtreepkg.Node {

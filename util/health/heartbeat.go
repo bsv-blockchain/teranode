@@ -52,12 +52,26 @@ func (h *Heartbeat) Beat() {
 // its never-beaten state part-way through a preamble that is legitimately
 // unbounded, so the remainder of that preamble would age the heartbeat and the
 // probe would report a healthy, still-starting node as wedged.
+//
+// It is also safe to call from a goroutine other than the one that calls
+// Disable, and it never re-arms a heartbeat that Disable has cleared. The check
+// and the store are one compare-and-swap, so a Disable that lands between them
+// makes the swap fail, the retry sees the never-beaten state and returns. A
+// plain load followed by a store would overwrite that Disable, and the
+// heartbeat would then age through a graceful shutdown drain and fail the
+// probe.
 func (h *Heartbeat) BeatIfStarted() {
-	if h.lastBeat.Load() == nil {
-		return
-	}
+	for {
+		last := h.lastBeat.Load()
+		if last == nil {
+			return
+		}
 
-	h.Beat()
+		t := h.clock()
+		if h.lastBeat.CompareAndSwap(last, &t) {
+			return
+		}
+	}
 }
 
 // Disable returns the heartbeat to its never-beaten state, so it reports

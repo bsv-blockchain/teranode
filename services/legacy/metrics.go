@@ -26,7 +26,7 @@ var peerServerMetricHandlers = []string{
 	"OnProtoconf",    // Protocol configuration message handler metrics
 	"OnMemPool",      // Memory pool query handler metrics
 	"OnTx",           // Transaction message handler metrics
-	"OnBlock",        // Block message handler metrics
+	"OnBlockOnDisk",  // Streamed-block hand-off to the sync manager's queue
 	"OnInv",          // Inventory message handler metrics
 	"OnHeaders",      // Headers message handler metrics
 	"OnGetData",      // GetData message handler metrics
@@ -48,6 +48,38 @@ var (
 	// The map is keyed by handler name (from peerServerMetricHandlers) with histogram values
 	// that track execution time distribution.
 	peerServerMetrics = map[string]prometheus.Histogram{}
+
+	// Rebroadcast queue metrics. See rebroadcastHandler.
+	prometheusLegacyRebroadcastPending = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy",
+		Name:      "rebroadcast_pending",
+		Help:      "Number of txs in the legacy rebroadcast queue",
+	})
+	prometheusLegacyRebroadcastAddDropped = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy",
+		Name:      "rebroadcast_add_dropped_total",
+		Help:      "Txs not added to the legacy rebroadcast queue because its input channel was full",
+	})
+	prometheusLegacyRebroadcastCapHits = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy",
+		Name:      "rebroadcast_cap_hits_total",
+		Help:      "Txs not added to the legacy rebroadcast queue because it was full of already-retried entries",
+	})
+	prometheusLegacyRebroadcastRetries = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy",
+		Name:      "rebroadcast_retries_total",
+		Help:      "Tx invs re-offered to peers by the legacy rebroadcast queue",
+	})
+	prometheusLegacyRebroadcastRemoved = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "teranode",
+		Subsystem: "legacy",
+		Name:      "rebroadcast_removed_total",
+		Help:      "Txs removed from the legacy rebroadcast queue, by reason",
+	}, []string{"reason"})
 
 	// prometheusMetricsInitOnce ensures metrics initialization happens exactly once,
 	// even if initPrometheusMetrics is called multiple times from different goroutines.
@@ -83,4 +115,12 @@ func _initPrometheusMetrics() {
 		})
 		prometheus.MustRegister(peerServerMetrics[metric])
 	}
+
+	prometheus.MustRegister(
+		prometheusLegacyRebroadcastPending,
+		prometheusLegacyRebroadcastAddDropped,
+		prometheusLegacyRebroadcastCapHits,
+		prometheusLegacyRebroadcastRetries,
+		prometheusLegacyRebroadcastRemoved,
+	)
 }

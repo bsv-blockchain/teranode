@@ -3,14 +3,18 @@ package blockvalidation
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -78,7 +82,7 @@ func TestReadSubtree_MmapFallbackReReadsFromStart(t *testing.T) {
 		Height: 1,
 	}
 
-	result := bv.readSubtree(ctx, block, 0, subtree.RootHash())
+	result := bv.readSubtree(ctx, block, 0, subtree.RootHash(), subtreeReadWithFullSubtree, "batch")
 
 	// Before the fix this errored ("failed to deserialize subtree") or returned a
 	// corrupt subtree because the fallback read from the consumed stream.
@@ -95,4 +99,224 @@ func TestReadSubtree_MmapFallbackReReadsFromStart(t *testing.T) {
 	require.NotNil(t, result.subtreeData)
 	require.Len(t, result.subtreeData.Txs, 1)
 	require.Nil(t, result.subtreeData.Txs[0])
+}
+
+// The tests below pin INVARIANT BO — one owner per batch, released exactly once — on
+// the only substrate where a lifetime mistake is observable. On the heap path a missed
+// release is invisible (the GC collects it) and a premature release corrupts nothing,
+// so an mmap-backed run is the only thing that can tell a correct implementation from
+// either failure. go-subtree creates one temp file per mmap-backed subtree directly in
+// the directory it is handed (os.CreateTemp(dir, "subtree-nodes-*")) and removes it in
+// Close, so "the directory is empty" is exactly "every subtree was released".
+
+// requireMmapDirEmpty is the leak assertion: every mmap-backed subtree that was ever
+// created has been closed, because Close is what removes the backing file.
+func requireMmapDirEmpty(t *testing.T, mmapDir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.Empty(t, entries, "every mmap-backed subtree must have been released; leftovers: %v", entries)
+}
+
+// requireMmapEngaged proves the fixture really takes the mmap path before anything is
+// concluded from the directory. Without it a change that quietly fell back to the heap
+// would leave the directory empty for the wrong reason and every assertion below would
+// be vacuous.
+func requireMmapEngaged(t *testing.T, h *preBindHarness, block *model.Block, subtreeHash *chainhash.Hash) {
+	t.Helper()
+
+	structure, err := h.bv.readSubtreeStructure(h.ctx, block, subtreeHash, subtreeReadAnchorOnly, "binding")
+	require.NoError(t, err)
+	require.True(t, structure.subtree.IsMmapBacked(),
+		"the fixture is not mmap-backed, so nothing below distinguishes a correct release from no release at all")
+
+	releaseSubtreeStructure(structure.subtree)
+	releaseSubtreeStructure(structure.fullSubtree)
+}
+
+// TestProcessSubtreeBatch_ReaderFailure_LeavesNoMmapFiles covers the COLLECTOR: a batch
+// that fails partway through collection used to be abandoned with every subtree it had
+// already copied still mapped.
+//
+// The missing blob is on the FINAL index, and that is load-bearing rather than
+// arbitrary. The collector reads the channels in index order and copies every result
+// that arrives before the first failure into the batch, so with the failure last,
+// indices 0..n-2 are in the batch and only the deferred batch.Close can release them.
+// A failure at index 0 exercises the other release, which the next test covers.
+//
+// Mutation target: removing the deferred batch.Close() from prefetchSubtreeBatch must
+// leave three temp files behind. Removing readSubtree's release of structure.subtree
+// leaves a fourth, for the subtree whose own data read failed.
+func TestProcessSubtreeBatch_ReaderFailure_LeavesNoMmapFiles(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+
+	mmapDir := t.TempDir()
+	h.bv.mmapDir = mmapDir
+
+	coinbase := preBindCoinbase(t, 0x20)
+
+	groups, _ := h.multiBatchGroups(0xd0, []int{1, 2, 2, 2})
+
+	_, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 8)
+
+	requireMmapEngaged(t, h, block, roots[0])
+	requireMmapDirEmpty(t, mmapDir)
+
+	// The last subtree's transaction data is gone, so its structure reads cleanly and
+	// mmaps, and only the subsequent data read fails.
+	require.NoError(t, h.subtreeStore.Del(h.ctx, roots[len(roots)-1][:], fileformat.FileTypeSubtreeData))
+
+	batch, err := h.bv.processSubtreeBatch(h.ctx, block, 0, len(roots), make(map[chainhash.Hash]*bt.Tx), false)
+	require.Error(t, err, "a batch with an unreadable subtree_data must fail")
+	require.Nil(t, batch)
+
+	requireMmapDirEmpty(t, mmapDir)
+}
+
+// TestPrefetchSubtreeBatch_FirstIndexFailure_ReleasesLaterResults covers the release on
+// the AGGREGATED failure path. The collector no longer returns at the first failing
+// index: it receives every channel so every forged blob in the batch is named. With
+// the failure at index 0 nothing is ever copied into the batch, so every later result
+// is released by the collector itself as it arrives, not by the batch's close and not
+// by the defensive drain, which finds every channel already consumed.
+//
+// Mutation target: removing the collector's release of post-failure results must leave
+// temp files behind.
+func TestPrefetchSubtreeBatch_FirstIndexFailure_ReleasesLaterResults(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+
+	mmapDir := t.TempDir()
+	h.bv.mmapDir = mmapDir
+
+	coinbase := preBindCoinbase(t, 0x23)
+
+	groups, _ := h.multiBatchGroups(0xc0, []int{1, 2, 2, 2})
+
+	_, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 8)
+
+	requireMmapEngaged(t, h, block, roots[1])
+	requireMmapDirEmpty(t, mmapDir)
+
+	require.NoError(t, h.subtreeStore.Del(h.ctx, roots[0][:], fileformat.FileTypeSubtreeData))
+
+	batch, err := h.bv.prefetchSubtreeBatch(h.ctx, block, 0, len(roots), false)
+	require.Error(t, err, "a batch with an unreadable subtree_data must fail")
+	require.True(t, errors.Is(err, errors.ErrNotFound), "got %v", err)
+	require.Nil(t, batch)
+
+	requireMmapDirEmpty(t, mmapDir)
+}
+
+// firstCallFailingUtxoStore fails BatchPreviousOutputsDecorate once, which is the
+// simplest deterministic way to fail the pipeline's stage 2 without failing a READ —
+// a reader failure is the collector's case and is already covered above.
+type firstCallFailingUtxoStore struct {
+	utxo.Store
+
+	mu     sync.Mutex
+	failed bool
+}
+
+func (s *firstCallFailingUtxoStore) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
+	s.mu.Lock()
+	first := !s.failed
+	s.failed = true
+	s.mu.Unlock()
+
+	if first {
+		return errors.NewProcessingError("simulated decorate failure")
+	}
+
+	return s.Store.BatchPreviousOutputsDecorate(ctx, txs)
+}
+
+// TestPipeline_CancelledDuringExtend_ReleasesInHandBatch covers the IN-HAND batch,
+// which no channel drain would ever find: stage 2 is holding the pointer when it
+// fails, so nothing is buffered anywhere and only that stage's own release can free it.
+//
+// The failure is injected in stage 2 rather than in a read precisely so it is not the
+// collector's case. Stage 2 fails on the first batch, which cancels gCtx; stage 1's
+// send then takes its Done branch still holding the batch it just built, and any batch
+// already buffered is left for the deferred drain. All three shapes have to release for
+// the directory to come back empty.
+//
+// Mutation target: dropping stage 2's conditional close, or turning the deferred
+// channel drains back into bare discards, must leave temp files behind.
+func TestPipeline_CancelledDuringExtend_ReleasesInHandBatch(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	mmapDir := t.TempDir()
+	h.bv.mmapDir = mmapDir
+
+	coinbase := preBindCoinbase(t, 0x21)
+
+	groups, _ := h.multiBatchGroups(0xe0, []int{1, 2, 2, 2, 2})
+
+	_, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 10)
+
+	requireMmapEngaged(t, h, block, roots[0])
+	requireMmapDirEmpty(t, mmapDir)
+
+	h.bv.utxoStore = &firstCallFailingUtxoStore{Store: h.utxoStore}
+
+	err := h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+	require.Error(t, err, "a stage-2 failure must fail the block")
+
+	requireMmapDirEmpty(t, mmapDir)
+}
+
+// TestPipeline_MultiBatch_MmapBacked_HonestBodyValidates is the COUNTER-test, and it
+// catches the opposite and more dangerous mistake: a close that happens after the batch
+// has already been handed to the next stage.
+//
+// A missed close leaks. A close after a completed handoff is a use-after-release — the
+// next stage dereferences batch.subtrees[i].Nodes into an unmapped region — and no
+// amount of Close idempotence helps, because the harm lands on the NEXT owner. On the
+// heap path that mistake is completely invisible, which is why this test must be
+// mmap-backed and why the engagement check above is not optional.
+//
+// Three batches and the default prefetch depth, so the stages genuinely overlap and a
+// premature release in stage 1 or 2 is concurrent with stage 3's use of it.
+//
+// Mutation target: turning stage 1's or stage 2's conditional close into an
+// unconditional `defer batch.Close()` must make this test fail or crash. If it still
+// passes, the fixture is not mmap-backed and the test is worthless.
+func TestPipeline_MultiBatch_MmapBacked_HonestBodyValidates(t *testing.T) {
+	h := newPreBindHarness(t, nil)
+	h.bv.settings.BlockValidation.SubtreeBatchSize = 2
+
+	mmapDir := t.TempDir()
+	h.bv.mmapDir = mmapDir
+
+	coinbase := preBindCoinbase(t, 0x22)
+
+	groups, parents := h.multiBatchGroups(0xf0, []int{1, 2, 2, 2, 2})
+
+	_, roots, merkleRoot := h.multiSubtreeBody(coinbase, groups)
+	block := h.newPreBindBlock(coinbase, roots, merkleRoot, 10)
+
+	requireMmapEngaged(t, h, block, roots[0])
+	requireMmapDirEmpty(t, mmapDir)
+
+	require.NoError(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""),
+		"an honest mmap-backed body spanning three batches must validate")
+
+	for _, group := range groups {
+		for _, tx := range group {
+			created, getErr := h.utxoStore.Get(h.ctx, tx.TxIDChainHash())
+			require.NoError(t, getErr, "every transaction of every batch must have been created")
+			require.Equal(t, tx.TxIDChainHash().String(), created.Tx.TxID())
+		}
+	}
+
+	for _, parent := range parents {
+		h.requireParentSpent(parent)
+	}
+
+	requireMmapDirEmpty(t, mmapDir)
 }

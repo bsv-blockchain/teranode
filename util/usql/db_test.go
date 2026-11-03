@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -236,6 +237,126 @@ func TestDB_ContextCancellation(t *testing.T) {
 	// it should fail immediately
 	_, err = db.QueryContext(ctx, "SELECT * FROM nonexistent_table")
 	assert.Error(t, err)
+}
+
+// TestDB_CircuitBreaker_HalfOpenSurvivesInconclusiveProbe encodes the scenario
+// raised in review on PR #1642: recordCircuitBreakerResult ignores non-retriable
+// errors (e.g. a Postgres unique-violation, or a cancelled context), so a
+// half-open probe that ends that way consumes the probe budget without ever
+// calling RecordSuccess or RecordFailure. Before the fix, once every probe in
+// the round is inconclusive like this, the breaker rejects with ErrCircuitOpen
+// forever - even though the database is healthy - because nothing re-arms
+// nextAttempt. The fix must let a fresh probe round start once the half-open
+// deadline passes.
+func TestDB_CircuitBreaker_HalfOpenSurvivesInconclusiveProbe(t *testing.T) {
+	db, err := Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	cb := NewCircuitBreaker(CircuitBreakerConfig{
+		FailureThreshold: 1,
+		HalfOpenMax:      1,
+		Cooldown:         20 * time.Millisecond,
+		FailureWindow:    time.Second,
+		Enabled:          true,
+	})
+	db.SetCircuitBreaker(cb)
+
+	// Trip the breaker with a genuine infrastructure failure.
+	db.recordCircuitBreakerResult(errors.NewError("connection refused"))
+	require.Equal(t, CircuitOpen, cb.State())
+
+	// Let the cooldown elapse: this consumes the single half-open probe.
+	time.Sleep(30 * time.Millisecond)
+	require.True(t, cb.Allow(), "cooldown elapsed, should allow the half-open probe")
+	require.Equal(t, CircuitHalfOpen, cb.State())
+
+	// The probe reaches the database and gets a well-formed, non-retriable
+	// answer - a duplicate-key violation, exactly like the ordinary duplicate
+	// block/tx handling in stores/blockchain/sql and stores/utxo/sql. This is
+	// not an infrastructure failure, so recordCircuitBreakerResult must not
+	// call RecordFailure - but it isn't a nil error either, so it isn't
+	// recorded as a success.
+	dupErr := &pgconn.PgError{Code: PgErrUniqueViolation}
+	db.recordCircuitBreakerResult(dupErr)
+
+	// The probe budget (HalfOpenMax=1) is now exhausted without a conclusive
+	// result. Immediately after, Allow() must still reject - this round's
+	// deadline hasn't passed yet.
+	require.False(t, cb.Allow(), "probe budget exhausted, should still reject immediately")
+
+	// But the database is healthy: once the half-open deadline passes, the
+	// breaker must start a fresh probe round rather than rejecting forever.
+	time.Sleep(30 * time.Millisecond)
+	require.True(t, cb.Allow(), "breaker must eventually allow traffic again instead of wedging open forever")
+}
+
+// TestDB_CircuitBreaker_CancelledContextDoesNotWedgeHalfOpen is the same
+// scenario as above but with the other non-retriable error the reviewers
+// called out: a cancelled context. Its message matches none of the retriable
+// patterns in isRetriable, so it is just as inconclusive to the breaker as a
+// duplicate-key violation.
+func TestDB_CircuitBreaker_CancelledContextDoesNotWedgeHalfOpen(t *testing.T) {
+	db, err := Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	cb := NewCircuitBreaker(CircuitBreakerConfig{
+		FailureThreshold: 1,
+		HalfOpenMax:      1,
+		Cooldown:         20 * time.Millisecond,
+		FailureWindow:    time.Second,
+		Enabled:          true,
+	})
+	db.SetCircuitBreaker(cb)
+
+	db.recordCircuitBreakerResult(errors.NewError("connection refused"))
+	require.Equal(t, CircuitOpen, cb.State())
+
+	time.Sleep(30 * time.Millisecond)
+	require.True(t, cb.Allow())
+	require.Equal(t, CircuitHalfOpen, cb.State())
+
+	db.recordCircuitBreakerResult(context.Canceled)
+	require.False(t, cb.Allow(), "probe budget exhausted, should still reject immediately")
+
+	time.Sleep(30 * time.Millisecond)
+	require.True(t, cb.Allow(), "breaker must eventually allow traffic again instead of wedging open forever")
+}
+
+// TestDB_CircuitBreaker_HalfOpenStaysOpenForGenuineOutage is the counterpart to
+// the two tests above: the fresh-round escape hatch must not turn the breaker
+// into a no-op when the database is actually down. A real infrastructure
+// failure during the probe must still re-trip the circuit and keep it open
+// for the full cooldown.
+func TestDB_CircuitBreaker_HalfOpenStaysOpenForGenuineOutage(t *testing.T) {
+	db, err := Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
+
+	cb := NewCircuitBreaker(CircuitBreakerConfig{
+		FailureThreshold: 1,
+		HalfOpenMax:      1,
+		Cooldown:         20 * time.Millisecond,
+		FailureWindow:    time.Second,
+		Enabled:          true,
+	})
+	db.SetCircuitBreaker(cb)
+
+	db.recordCircuitBreakerResult(errors.NewError("connection refused"))
+	require.Equal(t, CircuitOpen, cb.State())
+
+	time.Sleep(30 * time.Millisecond)
+	require.True(t, cb.Allow())
+	require.Equal(t, CircuitHalfOpen, cb.State())
+
+	// The probe itself fails with another genuine infrastructure error.
+	db.recordCircuitBreakerResult(errors.NewError("connection refused"))
+	require.Equal(t, CircuitOpen, cb.State(), "a real infra failure during the probe must re-trip the circuit")
+
+	// Immediately after re-tripping, requests must still be rejected - the
+	// fresh-round escape hatch must not bypass a live cooldown.
+	require.False(t, cb.Allow(), "circuit must stay open for the new cooldown after a genuine failure")
 }
 
 // BenchmarkDB_QueryWithRetry benchmarks query performance with retry enabled

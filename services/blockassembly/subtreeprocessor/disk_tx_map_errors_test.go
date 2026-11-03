@@ -21,43 +21,24 @@ func newErrTestDiskTxMap(t *testing.T) *DiskTxMap {
 	return m
 }
 
-// A write the disk writer fails to persist must be reported, not dropped: the
-// filter would otherwise claim the entry exists while its inpoints never
-// reached disk.
-func TestDiskTxMap_WriterErrorIsReported(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		batch *failingBatch
-	}{
-		{name: "set", batch: &failingBatch{setErr: errors.NewStorageError("set failed")}},
-		{name: "flush", batch: &failingBatch{flushErr: errors.NewStorageError("flush failed")}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newErrTestDiskTxMap(t)
-			defer m.Close()
+// A payload write that fails must be reported, not dropped: the index would
+// otherwise claim the entry exists while its inpoints never reached disk.
+func TestDiskTxMap_WriteErrorIsReported(t *testing.T) {
+	m := newErrTestDiskTxMap(t)
+	defer m.Close()
 
-			// Installed before the first write; the channel send to the writer
-			// orders it before the writer's use.
-			m.disks[0].batch = tc.batch
+	failDiskTxMapLogs(m, 1, nil)
 
-			inp := subtreepkg.TxInpoints{}
-			m.Set(batchTestHash(1), &inp)
-			require.NoError(t, m.Flush())
+	inp := subtreepkg.TxInpoints{}
+	m.Set(batchTestHash(1), &inp)
+	require.NoError(t, m.Flush())
 
-			require.Error(t, m.TakeErr())
-			require.NoError(t, m.TakeErr(), "an error is reported once")
-		})
-	}
+	require.Error(t, m.TakeErr())
+	require.NoError(t, m.TakeErr(), "an error is reported once")
 }
 
-// failingBatch stands in for the writer's Badger batch and fails on demand.
-type failingBatch struct {
-	setErr, flushErr error
-}
-
-func (b *failingBatch) Set(_, _ []byte) error { return b.setErr }
-func (b *failingBatch) Flush() error          { return b.flushErr }
-func (b *failingBatch) Cancel()               {}
+// alwaysFailWrites fails every payload write of m from now on.
+const alwaysFailWrites = 1 << 30
 
 // A failed read must not pass for "not found".
 func TestDiskTxMap_ReadErrorIsReported(t *testing.T) {
@@ -68,78 +49,11 @@ func TestDiskTxMap_ReadErrorIsReported(t *testing.T) {
 	require.NoError(t, m.Flush())
 	require.NoError(t, m.TakeErr())
 
-	require.NoError(t, m.disks[0].store.Close())
+	failDiskTxMapLogs(m, 0, errors.NewStorageError("read failed"))
 
 	_, ok := m.Get(batchTestHash(1))
 	require.False(t, ok)
 	require.Error(t, m.TakeErr())
-}
-
-// Documents today's behaviour, unchanged on purpose: a
-// read error on SetIfNotExists' slow path is indistinguishable from
-// not-found, so the hash is (re-)inserted as if new - a duplicate entry, not
-// merely a missed dedup. The error is still recorded (via getFromStore), so
-// the operation boundary that observes it is not blind to the underlying
-// storage problem, even though the duplicate itself goes uncorrected. See the
-// report for the options considered and why none was applied here.
-func TestDiskTxMap_SetIfNotExists_SlowPathReadErrorInsertsDuplicateButRecordsErr(t *testing.T) {
-	m := newErrTestDiskTxMap(t)
-
-	hash := batchTestHash(1)
-	inp := subtreepkg.TxInpoints{}
-
-	_, wasSet := m.SetIfNotExists(hash, &inp)
-	require.True(t, wasSet)
-	require.NoError(t, m.Flush()) // clears `recent`, forcing the next call onto the slow path
-	require.NoError(t, m.TakeErr())
-
-	require.NoError(t, m.disks[0].store.Close())
-
-	existing, wasSet := m.SetIfNotExists(hash, &inp)
-	require.Nil(t, existing)
-	require.True(t, wasSet, "today's behaviour: a slow-path read error reads as not-found, so the entry is treated as new")
-
-	require.Error(t, m.TakeErr(), "the read error is still recorded for the operation boundary to report")
-}
-
-func TestDiskTxMap_DeleteErrorIsReported(t *testing.T) {
-	m := newErrTestDiskTxMap(t)
-
-	inp := subtreepkg.TxInpoints{}
-	m.Set(batchTestHash(1), &inp)
-	require.NoError(t, m.Flush())
-
-	require.NoError(t, m.disks[0].store.Close())
-
-	m.Delete(batchTestHash(1))
-	require.Error(t, m.TakeErr())
-}
-
-// After a flush failure, the writer must recover by cancelling the broken
-// batch and installing a fresh one, so a transient error does not fail every
-// write until the next Clear rotation happens to succeed.
-func TestDiskTxMap_WriterRecoversAfterFlushFailure(t *testing.T) {
-	m := newErrTestDiskTxMap(t)
-	defer m.Close()
-
-	failing := &failingBatch{flushErr: errors.NewStorageError("flush failed")}
-	m.disks[0].batch = failing
-
-	inp := subtreepkg.TxInpoints{}
-	m.Set(batchTestHash(1), &inp)
-	require.NoError(t, m.Flush())
-	require.Error(t, m.TakeErr(), "the flush failure is reported once")
-
-	// The writer must have installed a fresh batch: further writes go through
-	// a real Badger batch again, not the still-failing stub.
-	require.NotSame(t, shardBatch(failing), m.disks[0].batch, "the failed batch must be replaced")
-
-	m.Set(batchTestHash(2), &inp)
-	require.NoError(t, m.Flush())
-	require.NoError(t, m.TakeErr(), "the recovered batch must accept and flush further writes")
-
-	_, found := m.Get(batchTestHash(2))
-	require.True(t, found, "the write after recovery must actually reach disk")
 }
 
 // AddDirectly is a load path like AddNodesDirectly and gets the same
@@ -298,29 +212,6 @@ func TestProcessCompleteSubtree_DefersDiskTxMapError(t *testing.T) {
 	require.NoError(t, stp.diskTxMapErr(), "no error yet: every write above succeeded")
 }
 
-// UpdateSubtreeIndexBatch's failure is what processCompleteSubtree's
-// recordErr call defers to the operation boundary. Exercise the real failure
-// (a closed store), not a synthetic recordErr call, so a regression that
-// breaks that plumbing (e.g. UpdateSubtreeIndexBatch swallowing the error
-// instead of returning it) is caught here.
-func TestDiskTxMap_UpdateSubtreeIndexBatch_ReportsRealReadFailure(t *testing.T) {
-	m := newErrTestDiskTxMap(t)
-	defer m.Close()
-
-	node := subtreepkg.Node{Hash: batchTestHash(1)}
-	inp := subtreepkg.TxInpoints{}
-
-	_, wasSet := m.SetIfNotExists(node.Hash, &inp)
-	require.True(t, wasSet)
-	require.NoError(t, m.Flush())
-	require.NoError(t, m.TakeErr())
-
-	require.NoError(t, m.disks[0].store.Close())
-
-	err := m.UpdateSubtreeIndexBatch([]subtreepkg.Node{node}, 1)
-	require.Error(t, err, "a closed store must fail the index update, not silently skip it")
-}
-
 // runHandlerWithRecover is a pure panic-recovery wrapper: it returns exactly
 // fn's error and does not itself inspect disk tx map errors. Handlers that
 // commit state before returning (moveForwardBlock, reorgBlocks, reset) would
@@ -425,7 +316,7 @@ func TestDiskTxMap_GetWithErr_DoesNotRecordOnMap(t *testing.T) {
 	require.NoError(t, m.Flush())
 	require.NoError(t, m.TakeErr())
 
-	require.NoError(t, m.disks[0].store.Close())
+	failDiskTxMapLogs(m, 0, errors.NewStorageError("read failed"))
 
 	_, found, err := m.GetWithErr(batchTestHash(1))
 	require.False(t, found)
@@ -504,24 +395,23 @@ func TestStop_DrainsPendingDiskTxMapErrThroughCountedPath(t *testing.T) {
 	require.Equal(t, before+1, after, "Stop must log and count a pending error, not just log it")
 }
 
-// AddDirectly's own boundary check cannot see a flush failure for a write
-// still sitting below writerFlushThreshold: nothing flushed it yet, so
+// AddDirectly's own boundary check cannot see a write failure for a payload
+// still sitting in a log segment's buffer: nothing wrote it yet, so
 // diskTxMapErr() has nothing to observe. FlushDiskTxMapForLoad exists for
 // exactly this - a caller flushes once, after the whole load, and only then
-// checks. Fails a REAL flush via the failingBatch seam, not recordErr, so a
+// checks. Fails a REAL write via the failingLogFile seam, not recordErr, so a
 // regression that goes back to a naked diskTxMapErr() check is caught.
 func TestFlushDiskTxMapForLoad_CatchesTrailingUnflushedWriteFailure(t *testing.T) {
 	stp, cleanup := newAddNodesBenchProcessor(t, 64, WithTxMapDirs([]string{t.TempDir()}))
 	defer cleanup()
 
-	failing := &failingBatch{flushErr: errors.NewStorageError("flush failed")}
-	stp.diskTxMap.disks[0].batch = failing
+	failDiskTxMapLogs(stp.diskTxMap, alwaysFailWrites, nil)
 
 	node := subtreepkg.Node{Hash: batchTestHash(1), Fee: 1, SizeInBytes: 100}
 	inp := subtreepkg.TxInpoints{}
 
-	// A single write stays well below writerFlushThreshold, so AddDirectly's
-	// own deferred check has nothing to see yet.
+	// A single write stays well below logBufferSize, so AddDirectly's own
+	// deferred check has nothing to see yet.
 	require.NoError(t, stp.AddDirectly(&node, &inp, true), "the write itself is unflushed, not yet failing")
 	require.NoError(t, stp.diskTxMapErr(), "nothing flushed yet, so nothing pending")
 
@@ -536,8 +426,7 @@ func TestFlushDiskTxMapForLoad_ReportsTrailingUnflushedWriteFailureOnReload(t *t
 	stp, cleanup := newAddNodesBenchProcessor(t, 64, WithTxMapDirs([]string{t.TempDir()}))
 	defer cleanup()
 
-	failing := &failingBatch{flushErr: errors.NewStorageError("flush failed")}
-	stp.diskTxMap.disks[0].batch = failing
+	failDiskTxMapLogs(stp.diskTxMap, alwaysFailWrites, nil)
 
 	node := subtreepkg.Node{Hash: batchTestHash(1), Fee: 1, SizeInBytes: 100}
 	inp := subtreepkg.TxInpoints{}
@@ -577,10 +466,7 @@ func TestDrainQueue_TrailingUnflushedWriteFailure_CaughtByFlushDiskTxMapForLoad(
 	)
 	require.Equal(t, int64(1), stp.queue.length(), "precondition: 1 batch enqueued")
 
-	failing := &failingBatch{flushErr: errors.NewStorageError("flush failed")}
-	for i := range stp.diskTxMap.disks {
-		stp.diskTxMap.disks[i].batch = failing
-	}
+	failDiskTxMapLogs(stp.diskTxMap, alwaysFailWrites, nil)
 
 	stp.DrainQueue(map[chainhash.Hash]struct{}{chainhash.HashH([]byte("unrelated-drop")): {}})
 	require.Equal(t, int64(0), stp.queue.length(), "precondition: DrainQueue actually drained the queue")

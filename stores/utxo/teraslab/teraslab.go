@@ -14,7 +14,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/conflictwal"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/usql"
@@ -61,9 +60,9 @@ type Store struct {
 	getRecordFn func(ctx context.Context, fieldMask uint32, txids []teraslab.TxID) ([]teraslab.TxRecord, error)
 
 	// walDB / walEngine back the conflict-resolution WAL (#861). The TeraSlab
-	// server cannot hold arbitrary intent records, so the WAL reuses the shared
-	// conflictwal package over a dedicated SQL connection (Postgres in prod,
-	// SQLite for dev — see New).
+	// server cannot hold arbitrary intent records, so the WAL lives in a dedicated
+	// SQL connection (Postgres in prod, SQLite for dev — see New); the inline SQL
+	// logic is in conflict_wal.go / conflict_recovery.go, mirroring the SQL backend.
 	walDB     *usql.DB
 	walEngine string
 }
@@ -140,7 +139,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		return nil, errors.NewStorageError("teraslab: open conflict WAL store", err)
 	}
 
-	if err := conflictwal.CreateTable(walDB, walURL.Scheme); err != nil {
+	if err := createConflictWALTable(walDB, walURL.Scheme); err != nil {
 		_ = walDB.Close()
 		return nil, err
 	}

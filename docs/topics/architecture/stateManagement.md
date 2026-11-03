@@ -56,7 +56,7 @@ The FSM handles the following state **transitions**:
 
 - **Run**: Transitions to _Running_ from _Idle_ or _CatchingBlocks_
 - **CatchupBlocks**: Transitions to _CatchingBlocks_ from _Running_ or _Idle_
-- **Stop**: Transitions to _Idle_ from _Running_
+- **Stop**: Transitions to _Idle_ from _Running_ or _CatchingBlocks_
 
 Teranode provides a visualizer tool to generate and visualize the state machine diagram. To run the visualizer, use the command `go run services/blockchain/fsm_visualizer/main.go`. The generated `docs/state-machine.diagram.md` can be visualized using <https://mermaid.live/>.
 
@@ -120,7 +120,7 @@ The Blockchain service also exposes the following gRPC methods to interact with 
 
 #### 3.3.1. FSM: Idle State
 
-A node reaches `Idle` by being stopped from `Running`, by restoring persisted
+A node reaches `Idle` by being stopped from `Running` or `CatchingBlocks`, by restoring persisted
 `Idle`, or by starting fresh under a context configured to park there (production
 deployments do; see section 3.1). In this state:
 
@@ -144,9 +144,9 @@ Allowed Operations in Idle State:
 
 Services wait for the FSM to leave `Idle` before starting their operations — any
 non-Idle state, including `CatchingBlocks`, releases them (see section 3.5). As
-such, the node should see no activity for as long as the FSM stays in `Idle`.
+such, a node that boots into `Idle` sees no activity until it leaves `Idle`.
 
-The node can also return back to the `Idle` state from `Running`, however this can only be triggered by a manual / external request.
+The node can also return to `Idle` from `Running` or `CatchingBlocks`, but only on a manual / external request. Services that have already started keep running; `Idle` records the operator's intent and blocks automatic promotion, it is not a drain barrier. In particular, a STOP from `CatchingBlocks` does not cancel the catchup batch in progress: it keeps validating blocks under `Idle` and its final promotion to `Running` is refused. The catchup safeguards (no block-assembly feeding, no peer-subtree validation, no rejected-transaction or invalid-subtree publishing, pruner `SkipDuringCatchup`) apply in every state except `Running`, so they stay in force under `Idle`. In legacy sync mode, block download is not FSM-gated and continues. Stop the services before destructive recovery such as `rewindblockchain`.
 
 #### 3.3.2. FSM: Running State
 

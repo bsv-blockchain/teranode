@@ -203,6 +203,16 @@ type fieldSpyStore struct {
 
 	mu      sync.Mutex
 	getters [][]fields.FieldName
+
+	parentReads [][]utxostore.Outpoint
+}
+
+func (s *fieldSpyStore) ParentOutputsForValidation(ctx context.Context, outpoints []utxostore.Outpoint, opts ...utxostore.ParentOutputOption) ([]utxostore.ParentOutput, error) {
+	s.mu.Lock()
+	s.parentReads = append(s.parentReads, append([]utxostore.Outpoint(nil), outpoints...))
+	s.mu.Unlock()
+
+	return s.Store.ParentOutputsForValidation(ctx, outpoints, opts...)
 }
 
 func (s *fieldSpyStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
@@ -243,8 +253,13 @@ func TestValidate_ReExtendUsesOutputsProjection(t *testing.T) {
 	_, err := v.ValidateWithOptions(ctx, forged, 500, &Options{AddTXToBlockAssembly: false})
 	require.Error(t, err, "forged claim must still be rejected")
 
-	require.True(t, spy.requested(fields.Outputs),
-		"re-extension must read the parent with the narrow outputs projection")
+	spy.mu.Lock()
+	parentReads := len(spy.parentReads)
+	spy.mu.Unlock()
+	require.Equal(t, 1, parentReads,
+		"re-extension must read the parent outputs with one ParentOutputsForValidation call")
+	require.False(t, spy.requested(fields.Outputs),
+		"re-extension must not fall back to a per-parent Get")
 	require.False(t, spy.requested(fields.Tx),
 		"re-extension must not pull the parent's inputs")
 }

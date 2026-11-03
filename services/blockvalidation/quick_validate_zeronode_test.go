@@ -39,7 +39,7 @@ func TestReadSubtree_RejectsZeroNodeBlob(t *testing.T) {
 
 	require.NoError(t, suite.Server.subtreeStore.Set(t.Context(), root[:], fileformat.FileTypeSubtree, emptySubtreeBlob(root)))
 
-	res := suite.Server.blockValidation.readSubtree(suite.Ctx, block, 0, &root)
+	res := suite.Server.blockValidation.readSubtree(suite.Ctx, block, 0, &root, subtreeReadWithFullSubtree, "batch")
 	require.Error(t, res.err)
 	require.Contains(t, res.err.Error(), "has zero nodes")
 }

@@ -111,7 +111,8 @@ func buildChainHeaders(t *testing.T, genesis *chainhash.Hash, n uint32) ([]*mode
 func readSetUTXOs(t *testing.T, ctx context.Context, tSettings *settings.Settings, store blob.Store, hash *chainhash.Hash) map[string]uint64 {
 	t.Helper()
 
-	us, err := GetUTXOSet(ctx, ulogger.TestLogger{}, tSettings, store, hash)
+	// The set reader does not check the height, so any value serves here.
+	us, err := GetUTXOSet(ctx, ulogger.TestLogger{}, tSettings, store, hash, 0)
 	require.NoError(t, err)
 
 	r, err := us.GetUTXOSetReader(hash)

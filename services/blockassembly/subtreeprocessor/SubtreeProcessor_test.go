@@ -1177,7 +1177,9 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		_ = subtreeProcessor.currentSubtree.Load().AddCoinbaseNode()
 
 		// Setup maps
-		transactionMap := NewSplitSwissMap(4, 16)      // Transactions that are in the new block
+		transactionMap := NewSortedHashSet(16) // Transactions that are in the new block
+		require.NoError(t, transactionMap.Freeze(1))
+
 		losingTxHashesMap := txmap.NewSplitSwissMap(4) // Conflicting transactions to remove
 		currentTxMap := subtreeProcessor.GetCurrentTxMap()
 
@@ -1190,7 +1192,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		// Process remainder - since all transactions are already in currentTxMap,
 		// and transactionMap is empty (none are in the block), all should be processed
 		// but due to duplicate detection, they won't be re-added
-		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, currentTxMap, false)
+		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, nil, currentTxMap, false)
 		require.NoError(t, err)
 
 		// Count all transactions in the result
@@ -1212,10 +1214,12 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		}
 
 		// Test with some transactions marked as in the new block
-		_ = transactionMap.Put(*hashes[3])  // index 3
-		_ = transactionMap.Put(*hashes[7])  // index 7
-		_ = transactionMap.Put(*hashes[11]) // index 11
-		_ = transactionMap.Put(*hashes[15]) // index 15
+		transactionMap = NewSortedHashSet(16)
+		require.NoError(t, transactionMap.Put(*hashes[3]))  // index 3
+		require.NoError(t, transactionMap.Put(*hashes[7]))  // index 7
+		require.NoError(t, transactionMap.Put(*hashes[11])) // index 11
+		require.NoError(t, transactionMap.Put(*hashes[15])) // index 15
+		require.NoError(t, transactionMap.Freeze(1))
 
 		expectedTxIDs := []string{
 			"4ebd5a35e6b73a5f8e1a3621dba857239538c1b1d26364913f14c85b04e208fc",
@@ -1261,7 +1265,7 @@ func TestSubtreeProcessor_getRemainderTxHashes(t *testing.T) {
 		// Process remainder - transactions in transactionMap won't be added
 		// But since they're already in currentTxMap from before, and processRemainderTxHashes
 		// uses addNode which has duplicate detection, none will be re-added
-		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, currentTxMap, false)
+		err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, nil, currentTxMap, false)
 		if err != nil {
 			t.Fatalf("processRemainderTxHashes returned error: %v", err)
 		}
@@ -1360,7 +1364,8 @@ func testOrderPreservation(t *testing.T, subtreeProcessor *SubtreeProcessor, num
 	// - losingTxHashesMap: empty (no conflicting tx)
 	// - sourceTxMap: populated with all tx (source for parent lookup)
 	// - stp.currentTxMap: cleared (so SetIfNotExists succeeds)
-	transactionMap := NewSplitSwissMap(uint16(numTx), 16)
+	transactionMap := NewSortedHashSet(16)
+	require.NoError(t, transactionMap.Freeze(1))
 	losingTxHashesMap := txmap.NewSplitSwissMap(10, 4)
 
 	// Clear the processor's internal map so SetIfNotExists succeeds
@@ -1373,7 +1378,7 @@ func testOrderPreservation(t *testing.T, subtreeProcessor *SubtreeProcessor, num
 	}
 
 	// Process remainder - all tx should come back in order
-	err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, sourceTxMap, false)
+	err = subtreeProcessor.processRemainderTxHashes(context.Background(), chainedSubtrees, transactionMap, losingTxHashesMap, nil, sourceTxMap, false)
 	require.NoError(t, err)
 
 	// Collect all remainder nodes from chainedSubtrees and currentSubtree

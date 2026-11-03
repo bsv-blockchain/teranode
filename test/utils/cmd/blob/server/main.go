@@ -20,12 +20,15 @@ import (
 //	BSERVER_URL="localhost:8080" BSERVER_SUBDIR=foo BSERVER_HASHPREFIX=2 go run test/utils/cmd/blob/server/main.go
 func main() {
 	slog.Info("Mini program to start a blob http server")
-	slog.Info("Use environment variables BSERVER_URL BSERVER_SUBDIR BSERVER_HASHPREFIX to configure the server")
+	slog.Info("Use environment variables BSERVER_URL BSERVER_SUBDIR BSERVER_HASHPREFIX BSERVER_TOKEN to configure the server")
 
 	serverURL := os.Getenv("BSERVER_URL")
 	subdir := os.Getenv("BSERVER_SUBDIR")
 	hPrefixStr := os.Getenv("BSERVER_HASHPREFIX")
 	logLevel := os.Getenv("BSERVER_LOGLEVEL")
+
+	// Shared secret required on POST, PATCH and DELETE. Empty leaves the server read-only.
+	authToken := os.Getenv("BSERVER_TOKEN")
 
 	// Default serverURL if not set
 	if len(serverURL) < 1 {
@@ -66,9 +69,9 @@ func main() {
 
 	var blobServer *blob.HTTPBlobServer
 	if prefixLength > 0 {
-		blobServer, err = blob.NewHTTPBlobServer(logger, serverStoreURL, options.WithHashPrefix(prefixLength))
+		blobServer, err = blob.NewHTTPBlobServer(logger, serverStoreURL, authToken, options.WithHashPrefix(prefixLength))
 	} else {
-		blobServer, err = blob.NewHTTPBlobServer(logger, serverStoreURL)
+		blobServer, err = blob.NewHTTPBlobServer(logger, serverStoreURL, authToken)
 	}
 
 	if err != nil || blobServer == nil {
