@@ -126,24 +126,45 @@ type isActiveFn func(tipHash *chainhash.Hash) bool
 type branchLenFn func(ctx context.Context, hashBytes []byte) (uint32, error)
 
 // processChainTipRows processes chain tip rows using the provided active-check and branch-length functions.
+// It reads and closes rows before it computes any branch length: in SQLite's shared cache a writer
+// waiting on the open cursor stops new readers, so a branch-length query issued while the cursor
+// is open would wait on that writer forever.
 func (s *SQL) processChainTipRows(ctx context.Context, rows *sql.Rows, isActive isActiveFn, branchLen branchLenFn) ([]*model.ChainTip, error) {
-	var chainTips []*model.ChainTip
+	type tipRow struct {
+		hashBytes      []byte
+		height         uint32
+		invalid        bool
+		subtreesSet    bool
+		fullyProcessed bool
+	}
+
+	var tipRows []tipRow
 
 	for rows.Next() {
 		var (
-			hashBytes      []byte
-			height         uint32
-			chainWork      []byte
-			invalid        bool
-			subtreesSet    bool
-			fullyProcessed bool
+			r         tipRow
+			chainWork []byte
 		)
 
-		if err := rows.Scan(&hashBytes, &height, &chainWork, &invalid, &subtreesSet, &fullyProcessed); err != nil {
+		if err := rows.Scan(&r.hashBytes, &r.height, &chainWork, &r.invalid, &r.subtreesSet, &r.fullyProcessed); err != nil {
 			return nil, errors.NewStorageError("failed to scan chain tip row", err)
 		}
 
-		tipHash, err := chainhash.NewHash(hashBytes)
+		tipRows = append(tipRows, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("error iterating chain tip rows", err)
+	}
+
+	if err := rows.Close(); err != nil {
+		return nil, errors.NewStorageError("failed to close chain tip rows", err)
+	}
+
+	var chainTips []*model.ChainTip
+
+	for _, r := range tipRows {
+		tipHash, err := chainhash.NewHash(r.hashBytes)
 		if err != nil {
 			return nil, errors.NewStorageError("failed to create hash from bytes", err)
 		}
@@ -152,34 +173,30 @@ func (s *SQL) processChainTipRows(ctx context.Context, rows *sql.Rows, isActive 
 
 		status := statusHeadersOnly
 		switch {
-		case invalid:
+		case r.invalid:
 			status = statusInvalid
 		case isActive(tipHash):
 			status = statusActive
-		case fullyProcessed:
+		case r.fullyProcessed:
 			status = statusValidFork
-		case subtreesSet:
+		case r.subtreesSet:
 			status = statusValidHeaders
 		}
 
 		branchLength := uint32(0)
 		if status != statusActive {
-			branchLength, err = branchLen(ctx, hashBytes)
+			branchLength, err = branchLen(ctx, r.hashBytes)
 			if err != nil {
 				s.logger.Warnf("Failed to calculate branch length for tip %s: %v", hash, err)
 			}
 		}
 
 		chainTips = append(chainTips, &model.ChainTip{
-			Height:    height,
+			Height:    r.height,
 			Hash:      hash,
 			Branchlen: branchLength,
 			Status:    status,
 		})
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, errors.NewStorageError("error iterating chain tip rows", err)
 	}
 
 	return chainTips, nil

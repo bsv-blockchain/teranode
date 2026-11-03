@@ -3,7 +3,9 @@ package sql
 import (
 	"context"
 	"net/url"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -494,5 +496,79 @@ func BenchmarkGetChainTipsPerformance(b *testing.B) {
 		if err != nil {
 			b.Fatalf("GetChainTips failed: %v", err)
 		}
+	}
+}
+
+// A write transaction that starts while GetChainTips reads its tips must not deadlock it. In
+// SQLite's shared cache a writer waiting on the tip query's cursor stops new readers, so a
+// branch-length query issued while that cursor is still open waits on the writer forever.
+func TestProcessChainTipRows_WriterDuringBranchLength(t *testing.T) {
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(ctx) })
+	waitForStartupRebuild(t, s)
+
+	for _, b := range []*model.Block{block1, block2, blockAlternative2} {
+		_, _, err = s.StoreBlock(ctx, b, "")
+		require.NoError(t, err)
+	}
+
+	var startWriter sync.Once
+
+	writerDone := make(chan error, 1)
+	branchLen := func(ctx context.Context, hashBytes []byte) (uint32, error) {
+		startWriter.Do(func() {
+			go func() {
+				tx, err := s.db.BeginTx(ctx, nil)
+				if err != nil {
+					writerDone <- err
+					return
+				}
+
+				if _, err = tx.ExecContext(ctx, `UPDATE blocks SET on_main_chain = on_main_chain`); err != nil {
+					_ = tx.Rollback()
+					writerDone <- err
+
+					return
+				}
+
+				writerDone <- tx.Commit()
+			}()
+
+			// Let the writer reach its wait on the blocks table.
+			time.Sleep(100 * time.Millisecond)
+		})
+
+		return s.calculateBranchLength(ctx, hashBytes)
+	}
+
+	rows, err := s.queryChainTipRows(ctx)
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		defer rows.Close()
+
+		_, err := s.processChainTipRows(ctx, rows, func(*chainhash.Hash) bool { return false }, branchLen)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("processChainTipRows deadlocked with a concurrent writer")
+	}
+
+	select {
+	case err := <-writerDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the writer did not finish")
 	}
 }
