@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/stretchr/testify/require"
@@ -200,4 +201,59 @@ func TestUnspendGatesTheJournalsBlockFactsOnASingleSharedCondition(t *testing.T)
 	h, b := utxoFacts(t, s, ctx, parent)
 	require.Zero(t, h, "a negative journal height must never surface as this UTXO's mined height")
 	require.Zero(t, b, "and its paired block id must be zeroed with it, not restored on its own")
+}
+
+// TestUnspendGivesTheRestoredUTXOItsTransactionsLockAsItIsNow is a coin spent through
+// IgnoreLocked while its transaction was locked, as block validation spends a parent mined in
+// the same block, and restored after the transaction was unlocked. The journal recorded the
+// lock, and copying it back left a coin no plain spend could take, with nothing left to clear
+// it. In aerospike the lock is the transaction's, so the restored coin is spendable.
+func TestUnspendGivesTheRestoredUTXOItsTransactionsLockAsItIsNow(t *testing.T) {
+	s, ctx := newTestStore(t)
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	loser := spendParentTx(t, parent, nil, 1_000, 0)
+	_, err = s.Create(ctx, loser, 101)
+	require.NoError(t, err)
+
+	spends, err := spendOnly(ctx, s, loser, 101, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	require.NoError(t, s.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, false))
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+
+	other := spendParentTx(t, parent, nil, 2_000, 0)
+	_, err = s.Create(ctx, other, 102)
+	require.NoError(t, err)
+
+	_, err = spendOnly(ctx, s, other, 102)
+	require.NoError(t, err, "the restored UTXO of an unlocked transaction must be spendable")
+}
+
+// TestUnspendKeepsTheLockOfATransactionStillLocked is the other half: a coin restored while
+// its transaction is still locked comes back locked, so a plain spend is still refused.
+func TestUnspendKeepsTheLockOfATransactionStillLocked(t *testing.T) {
+	s, ctx := newTestStore(t)
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	loser := spendParentTx(t, parent, nil, 1_000, 0)
+	spends, err := spendOnly(ctx, s, loser, 101, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+
+	require.NoError(t, s.Unspend(ctx, spends))
+
+	spends, err = spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), 102)
+	require.Error(t, err)
+	require.True(t, errors.Is(spends[0].Err, errors.ErrTxLocked), "got %v", spends[0].Err)
 }

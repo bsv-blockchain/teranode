@@ -91,12 +91,17 @@ import (
 // the journal's bit, which is what this did before: nothing can mark it, since SetConflicting
 // refuses a transaction it does not hold.
 //
-// The locked bit is still copied off the row, and it can be stale the same way: a winner spends
-// a parent through IgnoreLocked while conflict resolution's hold is on it, so the row records
-// the lock, and a later ReverseProcessConflicting restore brings the parent back locked. The
-// counter's re-spend straight after normally consumes it; when that re-spend is skipped (a
-// counter with no body) the parent stays locked. Deriving the lock needs the lookup floor,
-// because SetLocked leaves containment rows below it stale, and is left for its own change.
+// The locked bit is derived the same way, and it has to be: the journal row records the lock
+// the UTXO had when it was spent, and block validation spends a locked parent through
+// IgnoreLocked, so a child mined in the same block as its parent journals the parent's lock.
+// Copied back, a coin restored after the parent was unlocked came back locked, and nothing
+// clears a lock on a transaction already released, so the coin could never be spent again. In
+// aerospike the lock belongs to the transaction's record, so a restored UTXO always carries the
+// transaction's lock as it is now. $9 is FlagLocked. Only the identity row and containment rows
+// at or above the lookup floor ($8) are asked, because SetLocked leaves containment rows below
+// it stale. A transaction found in none of them is mined deeper than any lock outlives, so its
+// restored UTXO comes back unlocked. $4 is still added on top, for a caller that asks for the
+// restore to be locked.
 //
 // The restored UTXO's pair is the copy's own, verbatim, whenever it is non-zero: a non-zero
 // pair was final when it was copied and stays final. A copy at (0,0) is the REPAIR's case. The
@@ -155,10 +160,12 @@ restored AS (
                       spendable_from, flags, hash_override, mined_height, block_id)
     SELECT (get_byte(t.txid, 0) & 7)::smallint, t.txid, t.ukey, t.satoshis, t.script,
            t.created_height, t.spendable_from,
-           CASE WHEN cf.known
-                THEN (t.flags & ~$7::smallint)
-                     | CASE WHEN cf.conflicting THEN $7::smallint ELSE 0::smallint END
-                ELSE t.flags END | $4::smallint,
+           (CASE WHEN cf.known
+                 THEN (t.flags & ~$7::smallint)
+                      | CASE WHEN cf.conflicting THEN $7::smallint ELSE 0::smallint END
+                 ELSE t.flags END & ~$9::smallint)
+           | CASE WHEN cf.locked THEN $9::smallint ELSE 0::smallint END
+           | $4::smallint,
            t.hash_override,
            CASE WHEN t.mined_height > 0 THEN t.mined_height
                 WHEN w.n = 1 THEN w.mined_height ELSE 0 END,
@@ -167,12 +174,13 @@ restored AS (
       FROM one t
       LEFT JOIN won w ON w.ukey = t.ukey AND w.txid = t.txid
      CROSS JOIN LATERAL (
-       SELECT count(*) > 0 AS known, coalesce(bool_or((x.flags & $7::smallint) <> 0), false) AS conflicting
-         FROM (SELECT i.flags FROM tx_ident i
+       SELECT count(*) > 0 AS known, coalesce(bool_or((x.flags & $7::smallint) <> 0), false) AS conflicting,
+              coalesce(bool_or((x.flags & $9::smallint) <> 0 AND x.h >= $8::int), false) AS locked
+         FROM (SELECT i.flags, 2147483647 AS h FROM tx_ident i
                 WHERE i.leaf = (get_byte(t.txid, 0) & 7)::smallint
                   AND i.txid = t.txid
                UNION ALL
-               SELECT m.flags FROM tx_mined m
+               SELECT m.flags, m.mined_height AS h FROM tx_mined m
                 WHERE m.txid = t.txid
                   AND m.mined_height >= $5::int) AS x
        OFFSET 0
@@ -314,7 +322,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 	)
 
 	if err := dbTx.QueryRow(ctx, unspendSQL, ukeys, ptxids, stxids, extraFlags,
-		int32(fence.droppedFloor), int32(fence.fence), FlagConflicting). //nolint:gosec // heights fit int32
+		int32(fence.droppedFloor), int32(fence.fence), FlagConflicting, s.lookupFloor(), FlagLocked). //nolint:gosec // heights fit int32
 		Scan(&restored, &requested, &alreadyLive, &otherOwner, &repaired, &noSource, &ambiguous, &offending); err != nil {
 		return errors.NewStorageError("[utxoset][Unspend] restore", err)
 	}
