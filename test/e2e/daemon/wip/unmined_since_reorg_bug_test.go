@@ -213,11 +213,19 @@ func testSideToMain(t *testing.T, td *daemon.TestDaemon, ctx context.Context, te
 	// Wait for reorg to complete - verify we're at expected height with expected block
 	td.WaitForBlockHeight(t, prevBlock, 30*time.Second)
 
-	// Verify AFTER reorg
-	meta, err = td.UtxoStore.Get(ctx, testTxHash, fields.UnminedSince, fields.BlockIDs)
-	require.NoError(t, err)
+	// Verify AFTER reorg. Block validation clears unmined_since for the side chain's blocks in
+	// its mined_set background job, after block assembly reaches the height, so wait for it.
+	require.Eventually(t, func() bool {
+		if meta, err = td.UtxoStore.Get(ctx, testTxHash, fields.UnminedSince, fields.BlockIDs); err != nil {
+			return false
+		}
 
-	onChain, err = td.BlockchainClient.CheckBlockIsInCurrentChain(ctx, meta.BlockIDs)
+		if onChain, err = td.BlockchainClient.CheckBlockIsInCurrentChain(ctx, meta.BlockIDs); err != nil {
+			return false
+		}
+
+		return onChain && meta.UnminedSince == 0
+	}, 30*time.Second, 100*time.Millisecond, "the side chain's tx is marked mined after it becomes the main chain")
 	require.NoError(t, err)
 
 	t.Logf("AFTER reorg - unmined_since: %d, onChain: %t, blockIDs: %v", meta.UnminedSince, onChain, meta.BlockIDs)
@@ -288,12 +296,21 @@ func testMainToSideAfterSideToMain(t *testing.T, td *daemon.TestDaemon, ctx cont
 	// Wait for reorg to complete - verify we're at expected height
 	td.WaitForBlockHeight(t, prevBlock, 30*time.Second)
 
-	// Verify AFTER reorg - tx now on orphaned side chain
-	meta, err = td.UtxoStore.Get(ctx, testTx2Hash, fields.UnminedSince, fields.BlockIDs)
+	// Verify AFTER reorg - tx now on orphaned side chain. Block assembly marks it while it
+	// finishes the reorg, so wait for the mark.
+	require.Eventually(t, func() bool {
+		if meta, err = td.UtxoStore.Get(ctx, testTx2Hash, fields.UnminedSince, fields.BlockIDs); err != nil {
+			return false
+		}
+
+		if onChain, err = td.BlockchainClient.CheckBlockIsInCurrentChain(ctx, meta.BlockIDs); err != nil {
+			return false
+		}
+
+		return !onChain && meta.UnminedSince != 0
+	}, 30*time.Second, 100*time.Millisecond, "the orphaned tx is marked unmined")
 	require.NoError(t, err)
 
-	onChain, err = td.BlockchainClient.CheckBlockIsInCurrentChain(ctx, meta.BlockIDs)
-	require.NoError(t, err)
 	t.Logf("AFTER reorg - unmined_since: %d, onChain: %t, blockIDs: %v", meta.UnminedSince, onChain, meta.BlockIDs)
 
 	assert.False(t, onChain, "Transaction should NOT be on main chain after reorg (orphaned)")
