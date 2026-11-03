@@ -165,8 +165,8 @@ func (s *Server) watchRepairHold(ctx context.Context, cancel context.CancelFunc,
 }
 
 // retryHeldHeight tries a held height again after a while, so pruning resumes once the hold
-// is released even when no new block arrives. It replaces a pending retry; the processor only
-// passes it a newer signal whose block is on the best chain (see retryTarget).
+// is released even when no new block arrives. It replaces a pending retry, so the processor
+// passes it a newer signal only when that signal's block is on the best chain (retryTarget).
 func (s *Server) retryHeldHeight(sig pruneSignal) {
 	if s.repairHoldRetry != nil {
 		s.repairHoldRetry.Stop()
@@ -200,7 +200,8 @@ func (s *Server) retryTarget(ctx context.Context, sig, pending pruneSignal) prun
 }
 
 // onBestChain reports whether sig's block is on the best chain. A check that fails counts as
-// off it, so a pending retry is kept.
+// off it, so a pending retry is kept: if the block did win, pruning at its height waits for the
+// next block, as it would without the hold.
 func (s *Server) onBestChain(ctx context.Context, sig pruneSignal) bool {
 	if s.blockchainClient == nil {
 		return true
@@ -515,6 +516,12 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 
 		case sig := <-s.pruneNotify:
 			if sig.blockHeight <= s.lastProcessedHeight.Load() {
+				// It may have displaced the pending retry's signal from the channel after
+				// that retry's timer fired, so the retry is armed again.
+				if s.repairHoldRetry != nil && !sig.retry {
+					s.retryHeldHeight(s.repairHoldRetrySig)
+				}
+
 				continue
 			}
 

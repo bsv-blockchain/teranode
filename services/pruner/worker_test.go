@@ -1532,6 +1532,54 @@ func TestRepairHoldRetryFollowsBestChainOnly(t *testing.T) {
 	}
 }
 
+// A block signal at or below the last processed height is dropped, but it may have displaced
+// the pending retry's signal from the channel after its timer fired. The pending retry is armed
+// again, so the held height is still pruned on an idle chain.
+func TestRepairHoldDroppedSignalRearmsRetry(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 4)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+	server.repairHoldRecheckInterval = time.Hour
+
+	done := make(chan struct{})
+	go func() {
+		server.prunerProcessor(ctx)
+		close(done)
+	}()
+
+	server.pruneNotify <- pruneSignal{blockHeight: 102}
+	require.Eventually(t, func() bool { return client.reads.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "102 is held")
+
+	cancel()
+	<-done
+
+	// The retry timer fired, and its signal was displaced by a block the processor is already past.
+	require.NotNil(t, server.repairHoldRetry, "a retry is pending")
+	server.repairHoldRetry.Stop()
+	server.lastProcessedHeight.Store(101)
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+
+	runProcessor(t, ctx2, server)
+	server.pruneNotify <- pruneSignal{blockHeight: 101}
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(102), h)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held height was not retried after a dropped signal displaced its retry")
+	}
+}
+
 // A cycle run by the held-height retry wakes the blob worker with a block signal, which the
 // blob worker runs rather than dropping as a stale retry of its own.
 func TestRepairHoldRetryCycleWakesBlobWorker(t *testing.T) {
