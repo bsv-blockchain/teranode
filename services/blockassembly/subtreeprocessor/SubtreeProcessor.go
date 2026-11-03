@@ -5790,6 +5790,8 @@ func (stp *SubtreeProcessor) applyCoinbaseUtxos(ctx context.Context, block *mode
 	return nil
 }
 
+const unlockTimeout = 30 * time.Second
+
 // removeCoinbaseUtxos removes the coinbase UTXO and its child spends from the UTXO store.
 //
 // The nil block / nil CoinbaseTx guard exists for the rollback paths that call
@@ -5832,7 +5834,12 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 		unlockHashes = append(unlockHashes, childSpendHashes...)
 		unlockHashes = append(unlockHashes, *block.CoinbaseTx.TxIDChainHash())
 
-		if unlockErr := stp.utxoStore.SetLocked(ctx, unlockHashes, false); unlockErr != nil {
+		unlockCtx, cancelUnlock := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+		unlockErr := stp.utxoStore.SetLocked(unlockCtx, unlockHashes, false)
+
+		cancelUnlock()
+
+		if unlockErr != nil {
 			stp.logger.Errorf("[removeCoinbaseUtxos][%s] error unlocking the txs of coinbase tx %s: %v", block.String(), block.CoinbaseTx.String(), unlockErr)
 		}
 

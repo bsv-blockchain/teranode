@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
+	sqlpruner "github.com/bsv-blockchain/teranode/stores/utxo/sql/pruner"
 	"github.com/stretchr/testify/require"
 )
 
@@ -248,4 +250,66 @@ func TestPrunerDeletesOnlyConflictingLosersWhoseParentRefsWereCleared(t *testing
 	require.NoError(t, err)
 	require.Nil(t, after.SpendingData, "the parent output is unspent once the loser is reaped")
 	require.Equal(t, 0, countChildRefs())
+}
+
+// A conflict promotion that lands between the parent reference clear and the delete re-spends the
+// parent output and clears the conflicting flag. The delete must keep that record.
+func TestPrunerKeepsAConflictingLoserPromotedAfterItsParentRefsWereCleared(t *testing.T) {
+	ctx := t.Context()
+
+	store, parent := setup(ctx, t)
+	store.settings.Pruner.UTXODefensiveEnabled = true
+
+	loser := bt.NewTx()
+	require.NoError(t, loser.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, loser.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parent.Outputs[0].Satoshis-1000))
+	loser.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err := store.Create(ctx, parent, 0)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, loser, 0)
+	require.NoError(t, err)
+
+	spends, err := store.Spend(ctx, loser, store.GetBlockHeight()+1)
+	require.NoError(t, err)
+	require.Len(t, spends, len(loser.Inputs))
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*loser.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	promote := func(hookCtx context.Context, txHash *chainhash.Hash) error {
+		if clearErr := utxo.ClearParentRefs(hookCtx, store, txHash); clearErr != nil {
+			return clearErr
+		}
+
+		if _, spendErr := store.Spend(hookCtx, loser, store.GetBlockHeight()+1); spendErr != nil {
+			return spendErr
+		}
+
+		_, _, conflictErr := store.SetConflicting(hookCtx, []chainhash.Hash{*txHash}, false)
+
+		return conflictErr
+	}
+
+	prunerSvc, err := sqlpruner.NewService(store.settings, sqlpruner.Options{
+		Logger:          store.logger,
+		DB:              store.db,
+		Ctx:             ctx,
+		ClearParentRefs: promote,
+	})
+	require.NoError(t, err)
+
+	_, err = prunerSvc.Prune(ctx, store.GetBlockHeight()+1000, "test")
+	require.NoError(t, err)
+
+	_, err = store.Get(ctx, loser.TxIDChainHash())
+	require.NoError(t, err, "a loser promoted after its parent references were cleared must be kept")
+
+	parentSpend := &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: spends[0].UTXOHash}
+
+	after, err := store.GetSpend(ctx, parentSpend)
+	require.NoError(t, err)
+	require.NotNil(t, after.SpendingData, "the promoted transaction spends the parent output again")
+	require.Equal(t, loser.TxIDChainHash().String(), after.SpendingData.TxID.String())
 }

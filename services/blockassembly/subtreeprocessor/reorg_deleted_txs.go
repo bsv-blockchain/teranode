@@ -147,8 +147,8 @@ func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash 
 // chain so block assembly offers it again. The saved file is deleted
 // after a restore.
 //
-// It returns the txs it recreated that are not on the longest chain, so the caller can put them back
-// in block assembly. A tx that was skipped, or that already existed, is not returned.
+// It returns the txs it recreated, or found already recreated by an earlier attempt, that are not on the
+// longest chain, so the caller can put them back in block assembly. A tx that was skipped is not returned.
 func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *model.Block) ([]*bt.Tx, error) {
 	txs, err := stp.readReorgDeletedTxs(ctx, block.Header.Hash())
 	if err != nil {
@@ -227,7 +227,7 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 			markNotOnLongestChain = append(markNotOnLongestChain, txHash)
 		}
 
-		if createErr == nil && !onLongestChain {
+		if (createErr == nil || errors.Is(createErr, errors.ErrTxExists)) && !onLongestChain {
 			unmined = append(unmined, saved.tx)
 		}
 	}

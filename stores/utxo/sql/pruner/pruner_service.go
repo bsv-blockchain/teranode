@@ -222,7 +222,7 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 			return count, clearErr
 		}
 
-		clearedCount, deleteErr := s.deleteHashes(ctx, cleared)
+		clearedCount, deleteErr := s.deleteHashes(ctx, cleared, blockHeight, safetyWindow)
 		if deleteErr != nil {
 			return count, deleteErr
 		}
@@ -321,21 +321,34 @@ func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight, s
 }
 
 // deleteHashes deletes the records with the given hashes and returns how many rows it removed.
-func (s *Service) deleteHashes(ctx context.Context, hashes []chainhash.Hash) (int64, error) {
+// Each chunk re-checks the defensive eligibility, so a record promoted out of conflict since its
+// parent references were cleared is kept.
+func (s *Service) deleteHashes(ctx context.Context, hashes []chainhash.Hash, blockHeight, safetyWindow uint32) (int64, error) {
 	var total int64
 
 	for start := 0; start < len(hashes); start += deleteHashesChunk {
 		end := min(start+deleteHashesChunk, len(hashes))
 
 		placeholders := make([]string, end-start)
-		args := make([]any, end-start)
+		args := make([]any, end-start+2)
+		args[0] = blockHeight
+		args[1] = safetyWindow
 
 		for i := start; i < end; i++ {
-			placeholders[i-start] = fmt.Sprintf("$%d", i-start+1)
-			args[i-start] = hashes[i][:]
+			placeholders[i-start] = fmt.Sprintf("$%d", i-start+3)
+			args[i-start+2] = hashes[i][:]
 		}
 
-		result, err := s.db.ExecContext(ctx, "DELETE FROM transactions WHERE hash IN ("+strings.Join(placeholders, ",")+")", args...)
+		result, err := s.db.ExecContext(ctx, `
+			DELETE FROM transactions
+			WHERE id IN (
+				SELECT t.id
+				FROM transactions t
+				WHERE `+defensiveDeleteFilter+`
+				  AND t.conflicting
+				  AND t.hash IN (`+strings.Join(placeholders, ",")+`)
+			)
+		`, args...)
 		if err != nil {
 			return total, errors.NewStorageError("failed to delete conflicting transactions", err)
 		}

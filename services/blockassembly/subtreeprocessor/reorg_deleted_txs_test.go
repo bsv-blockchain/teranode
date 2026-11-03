@@ -761,3 +761,105 @@ func TestApplyCoinbaseUtxosWithoutRequeueLeavesRestoredTxsOutOfBlockAssembly(t *
 
 	require.False(t, stp.currentTxMap.Exists(*first.TxIDChainHash()), "the reset reloads it from the store, so the apply must not add it")
 }
+
+type delFailsOnceBlobStore struct {
+	blob.Store
+	failed bool
+}
+
+func (s *delFailsOnceBlobStore) Del(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) error {
+	if !s.failed && fileType == fileformat.FileTypeReorgDeletedTxs {
+		s.failed = true
+
+		return errors.NewStorageError("injected")
+	}
+
+	return s.Store.Del(ctx, key, fileType, opts...)
+}
+
+// When the saved file cannot be deleted after the txs were recreated, the retry finds every tx
+// already in the store. It must still hand the off-chain txs back to block assembly.
+func TestApplyCoinbaseUtxosRetryRequeuesATxRecreatedByAFailedAttempt(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+	addToAssembly(t, stp, first)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	require.False(t, stp.currentTxMap.Exists(*first.TxIDChainHash()), "precondition: the move back took the tx out of block assembly")
+	require.True(t, stp.removeMap.Exists(*first.TxIDChainHash()), "precondition: the move back marked the tx for removal")
+
+	realStore := stp.subtreeStore
+	stp.subtreeStore = &delFailsOnceBlobStore{Store: realStore}
+
+	require.Error(t, stp.applyCoinbaseUtxos(ctx, block, true, true), "the first attempt fails on the delete of the saved file")
+
+	_, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.Tx)
+	require.NoError(t, err, "precondition: the first attempt recreated the tx")
+
+	stp.subtreeStore = realStore
+
+	require.NoError(t, stp.applyCoinbaseUtxos(ctx, block, true, true), "the retry must complete")
+
+	require.True(t, stp.currentTxMap.Exists(*first.TxIDChainHash()), "the retry puts the tx back in block assembly")
+	require.False(t, stp.removeMap.Exists(*first.TxIDChainHash()), "the tx is no longer marked for removal")
+
+	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.False(t, exists, "the saved file is deleted by the retry")
+}
+
+type setLockedHonoursCtx struct {
+	utxostore.Store
+}
+
+type cancelOnGetBlobStore struct {
+	blob.Store
+	cancel context.CancelFunc
+}
+
+func (s *cancelOnGetBlobStore) Get(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...options.FileOption) ([]byte, error) {
+	if fileType == fileformat.FileTypeReorgDeletedTxs {
+		s.cancel()
+
+		return nil, errors.NewStorageError("injected", ctx.Err())
+	}
+
+	return s.Store.Get(ctx, key, fileType, opts...)
+}
+
+func (s *setLockedHonoursCtx) SetLocked(ctx context.Context, hashes []chainhash.Hash, locked bool) error {
+	if err := ctx.Err(); err != nil && !locked {
+		return errors.NewStorageError("injected", err)
+	}
+
+	return s.Store.SetLocked(ctx, hashes, locked)
+}
+
+// The unlock after a failed save must still run when the reorg context is cancelled by then.
+func TestRemoveCoinbaseUtxosUnlocksTheTxsWhenTheSaveFailsOnACancelledContext(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	realStore := stp.utxoStore
+	stp.utxoStore = &setLockedHonoursCtx{Store: realStore}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stp.subtreeStore = &cancelOnGetBlobStore{Store: stp.subtreeStore, cancel: cancel}
+
+	require.Error(t, stp.removeCoinbaseUtxos(cancelled, block), "the save fails")
+	require.Error(t, cancelled.Err(), "precondition: the reorg context was cancelled while the txs were saved")
+
+	for name, tx := range map[string]*bt.Tx{"coinbase": block.CoinbaseTx, "first": first, "second": second} {
+		txMeta, err := realStore.Get(ctx, tx.TxIDChainHash(), fields.Locked)
+		require.NoError(t, err, "%s was not deleted", name)
+		require.False(t, txMeta.Locked, "%s must not stay locked", name)
+	}
+}
