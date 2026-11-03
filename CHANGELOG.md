@@ -31,7 +31,7 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   block validation keeps reading every transaction, as before, and logs a warning on
   each block. The SQL stores add the partial index `px_transactions_conflicting`.
   External `utxo.Store` implementations must implement `ConflictingTxHashes`.
-  (#TBD)
+  (#2110)
 
 - **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
   recovery if a transaction affected by rollback or reverse processing is still
