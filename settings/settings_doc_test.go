@@ -898,7 +898,7 @@ var checkedRowsPerDoc = map[string]int{
 	"policy_settings.md":            26,
 	"alert_settings.md":             10,
 	"asset_settings.md":             38,
-	"blockassembly_settings.md":     44,
+	"blockassembly_settings.md":     45,
 	"blockchain_settings.md":        11,
 	"blockpersister_settings.md":    9,
 	"blockvalidation_settings.md":   71,

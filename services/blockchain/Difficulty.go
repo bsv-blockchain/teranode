@@ -359,21 +359,8 @@ func (d *Difficulty) calcHistoricalWorkRequired(ctx context.Context, src HeaderS
 //   - suitableFirstBlock: First block in the difficulty adjustment window
 //   - suitableLastBlock: Last block in the difficulty adjustment window
 func (d *Difficulty) computeTarget(suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
-	return ComputeTarget(d.settings, suitableFirstBlock, suitableLastBlock)
-}
+	tSettings := d.settings
 
-// ComputeTarget calculates the DAA target difficulty from the first and last suitable
-// blocks of the difficulty adjustment window. It is the pure arithmetic core shared by
-// the store-backed Difficulty.CalcNextWorkRequired path and by callers that reconstruct
-// the window from headers not yet persisted (e.g. block validation catchup). It reads
-// only the ChainWork and Time of the two suitable blocks plus the chain parameters, so
-// it makes no store access and holds no state.
-//
-// Parameters:
-//   - tSettings: chain settings (TargetTimePerBlock, PowLimit, NoDifficultyAdjustment)
-//   - suitableFirstBlock: first (older) suitable block in the window
-//   - suitableLastBlock: last (newer) suitable block in the window
-func ComputeTarget(tSettings *settings.Settings, suitableFirstBlock *model.SuitableBlock, suitableLastBlock *model.SuitableBlock) (*model.NBit, error) {
 	lastSuitableBits, _ := model.NewNBitFromSlice(suitableLastBlock.NBits)
 	// If regtest we don't adjust the difficulty
 	if tSettings.ChainCfgParams.NoDifficultyAdjustment {

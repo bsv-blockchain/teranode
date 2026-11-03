@@ -1915,6 +1915,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 
 		// Create a simple mock iterator that returns no transactions
 		mockIterator := &utxoStore.MockUnminedTxIterator{}
+		mockIterator.On("Close").Return(nil).Maybe()
 		mockIterator.On("Next", mock.Anything, mock.Anything).Return([]*utxoStore.UnminedTransaction{}, nil)
 
 		mockUtxoStore.On("GetUnminedTxIterator").Return(mockIterator, nil)
