@@ -41,8 +41,9 @@ const (
 // blobDeletionWorker runs a blob deletion pass for each signal. A pass skipped for an
 // overtaken-tip repair hold is tried again after repairHoldRecheckInterval, so the blobs it
 // left are deleted once the hold is released even when no new block arrives: the pruner may
-// already have finished that height, or be waiting out the phase 1 gap cooldown. A pending
-// retry is merged into the next pass, which runs at the higher of the two heights, and is kept
+// already have finished that height, or be waiting out the phase 1 gap cooldown. A new signal
+// replaces a pending retry, even at a lower height: after a reorg to a shorter chain with more
+// work, the height the chain left is never reached again on an idle chain. The retry is kept
 // until a pass gets past the hold.
 func (s *Server) blobDeletionWorker() {
 	var (
@@ -63,24 +64,27 @@ func (s *Server) blobDeletionWorker() {
 
 		case sig := <-s.blobNotify:
 			pending := retry != nil
+
+			// A timer that fired just before its retry was replaced or dropped.
+			if sig.retry && (!pending || sig != retrySig) {
+				continue
+			}
+
 			if pending {
 				retry.Stop()
 				retry = nil
-
-				if retrySig.blockHeight > sig.blockHeight {
-					sig = retrySig
-				}
 			}
 
 			s.logger.Debugf("Processing blob deletions for height %d", sig.blockHeight)
 
 			result := s.processBlobDeletionsAtHeight(sig.blockHeight, sig.blockHash)
 			if result == blobPassHeld || (result == blobPassNotReady && pending) {
+				sig.retry = true
 				retrySig = sig
 				retry = time.AfterFunc(s.repairHoldRecheck(), func() {
 					select {
 					case s.blobNotify <- sig:
-					default: // a newer signal is waiting, and its pass takes this retry's height
+					default: // a newer signal is waiting, and it replaces this retry
 					}
 				})
 			}

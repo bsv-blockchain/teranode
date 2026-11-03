@@ -1011,11 +1011,24 @@ func TestRepairHoldStopsBlobDeletion(t *testing.T) {
 	require.NotZero(t, client.acquired.Load(), "deletion resumes once the hold is released")
 }
 
+// newBlobRepairHoldServer returns a server whose blob passes check block assembly, which is
+// running at ba's height, and read the hold from client.
+func newBlobRepairHoldServer(ctx context.Context, client *repairHoldClient, ba *baHeightClient) *Server {
+	server := newRepairHoldTestServer(ctx, client, &recordingPruner{calls: make(chan uint32, 1)})
+	server.blockAssemblyClient = ba
+	server.settings.Pruner.BlockTrigger = settings.PrunerBlockTriggerOnBlockPersisted
+	server.settings.Pruner.BlockAssemblyWaitTimeout = 50 * time.Millisecond
+	server.settings.Pruner.BlobDeletionBatchSize = 10
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	return server
+}
+
 // A blob deletion pass skipped for the hold is tried again once the hold is released, without
 // another block: the pruner may already have finished that height (a hold written after its
 // last read) or be waiting out the phase 1 gap cooldown, and then nothing else wakes the blob
-// worker on an idle chain. A lower signal after a reorg does not lower the retried height, and
-// the retry stops once a pass runs.
+// worker on an idle chain. After a reorg to a lower tip, the retry runs at the lower height,
+// which block assembly accepts, and it stops once a pass runs.
 func TestRepairHoldReleaseResumesIdleBlobDeletion(t *testing.T) {
 	initPrometheusMetrics()
 
@@ -1025,13 +1038,14 @@ func TestRepairHoldReleaseResumesIdleBlobDeletion(t *testing.T) {
 	client := &repairHoldClient{}
 	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
 
-	server := newRepairHoldTestServer(ctx, client, &recordingPruner{calls: make(chan uint32, 1)})
-	server.settings.Pruner.BlobDeletionBatchSize = 10
-	server.repairHoldRecheckInterval = 20 * time.Millisecond
+	ba := &baHeightClient{}
+	server := newBlobRepairHoldServer(ctx, client, ba)
 
 	runBlobWorker(t, server)
 
 	for _, h := range []uint32{102, 101} {
+		ba.height.Store(h)
+
 		reads := client.reads.Load()
 		server.blobNotify <- pruneSignal{blockHeight: h}
 		require.Eventually(t, func() bool { return client.reads.Load() > reads }, 2*time.Second, 5*time.Millisecond)
@@ -1042,8 +1056,76 @@ func TestRepairHoldReleaseResumesIdleBlobDeletion(t *testing.T) {
 	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
 
 	require.Eventually(t, func() bool { return client.acquired.Load() == 1 }, 2*time.Second, 5*time.Millisecond, "the held pass runs once the hold is released")
-	require.Equal(t, uint32(102), client.acquiredAt.Load(), "at the highest held height")
+	require.Equal(t, uint32(101), client.acquiredAt.Load(), "at the height of the latest signal")
 	require.Never(t, func() bool { return client.acquired.Load() > 1 }, 100*time.Millisecond, 10*time.Millisecond, "the retry stops once a pass ran")
+}
+
+// A pass held at one height, followed after the release by a signal for a lower winning tip
+// (a shorter chain with more work), deletes at the lower height: the pending retry for the
+// height the chain left does not replace the newer signal.
+func TestRepairHoldBlobRetryFollowsLowerTipAfterRelease(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	ba := &baHeightClient{}
+	ba.height.Store(102)
+
+	server := newBlobRepairHoldServer(ctx, client, ba)
+	server.repairHoldRecheckInterval = time.Hour
+
+	runBlobWorker(t, server)
+
+	server.blobNotify <- pruneSignal{blockHeight: 102}
+	require.Eventually(t, func() bool { return client.reads.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the pass at 102 is held")
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+	ba.height.Store(101)
+	server.blobNotify <- pruneSignal{blockHeight: 101}
+
+	require.Eventually(t, func() bool { return client.acquired.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the pass at the lower tip runs")
+	require.Equal(t, uint32(101), client.acquiredAt.Load())
+}
+
+// A retry signal from a timer that fired just before its retry was replaced or dropped is
+// itself dropped, and the pending retry still runs once the hold is released.
+func TestRepairHoldStaleBlobRetryIsDropped(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	ba := &baHeightClient{}
+	ba.height.Store(102)
+
+	server := newBlobRepairHoldServer(ctx, client, ba)
+	server.repairHoldRecheckInterval = time.Second
+
+	runBlobWorker(t, server)
+
+	// With no retry pending, a retry signal is stale too.
+	server.blobNotify <- pruneSignal{blockHeight: 102, retry: true}
+	require.Never(t, func() bool { return client.reads.Load() > 0 }, 100*time.Millisecond, 10*time.Millisecond, "the stale retry runs no pass")
+
+	server.blobNotify <- pruneSignal{blockHeight: 102}
+	require.Eventually(t, func() bool { return client.reads.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the pass at 102 is held")
+
+	// 101's timer fired just before 102's pass replaced it, and its signal arrives now.
+	reads := client.reads.Load()
+	server.blobNotify <- pruneSignal{blockHeight: 101, retry: true}
+	require.Never(t, func() bool { return client.reads.Load() > reads }, 100*time.Millisecond, 10*time.Millisecond, "the stale retry runs no pass")
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	require.Eventually(t, func() bool { return client.acquired.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the pending retry runs")
+	require.Equal(t, uint32(102), client.acquiredAt.Load())
 }
 
 // A held cycle that enters the phase 1 gap cooldown still gets its blob deletion once the
@@ -1238,9 +1320,9 @@ func TestRepairHoldReleaseResumesIdlePruning(t *testing.T) {
 var testHeldBlock = []model.HeldBlock{{Hash: chainhash.HashH([]byte("b")), ID: 7, Height: 90}}
 
 // A retry timer for a lower held height can fire after a higher height was held. Its signal
-// must not replace the higher retry, or the release prunes only the lower height and the
-// higher one waits for the next block.
-func TestRepairHoldRetryKeepsHighestHeight(t *testing.T) {
+// is dropped without a cycle and does not replace the pending retry, so the release prunes the
+// higher height without waiting for the next block.
+func TestRepairHoldStaleRetryKeepsPendingRetry(t *testing.T) {
 	initPrometheusMetrics()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1265,7 +1347,7 @@ func TestRepairHoldRetryKeepsHighestHeight(t *testing.T) {
 
 	// 101's timer fired just before 102's cycle replaced it, and its signal arrives now.
 	server.pruneNotify <- pruneSignal{blockHeight: 101, retry: true}
-	require.Eventually(t, func() bool { return client.reads.Load() == 3 }, 2*time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return client.reads.Load() > 2 }, 100*time.Millisecond, 10*time.Millisecond, "the stale retry runs no cycle")
 
 	cancel()
 	<-done
@@ -1283,10 +1365,77 @@ func TestRepairHoldRetryKeepsHighestHeight(t *testing.T) {
 
 	select {
 	case h := <-pruneSvc.calls:
-		require.Equal(t, uint32(102), h, "the highest held height is the one retried")
+		require.Equal(t, uint32(102), h, "the pending retry's height is the one retried")
 	case <-time.After(2 * time.Second):
 		t.Fatal("the held height was not retried")
 	}
+}
+
+// After a reorg to a lower tip (a shorter chain with more work) while pruning is held, the
+// retry takes the lower height of the newer signal: the higher height the chain left is never
+// reached again on an idle chain, so retrying it would never prune.
+func TestRepairHoldRetryFollowsLowerTip(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	pruneSvc := &recordingPruner{calls: make(chan uint32, 4)}
+	server := newRepairHoldTestServer(ctx, client, pruneSvc)
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	runProcessor(t, ctx, server)
+
+	server.pruneNotify <- pruneSignal{blockHeight: 102}
+	require.Eventually(t, func() bool { return client.reads.Load() >= 1 }, 2*time.Second, 5*time.Millisecond)
+
+	reads := client.reads.Load()
+	server.pruneNotify <- pruneSignal{blockHeight: 101}
+	require.Eventually(t, func() bool { return client.reads.Load() > reads }, 2*time.Second, 5*time.Millisecond)
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+	select {
+	case h := <-pruneSvc.calls:
+		require.Equal(t, uint32(101), h, "the lower tip is pruned")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held height was not pruned once the hold was released")
+	}
+}
+
+// A cycle run by the held-height retry wakes the blob worker with a block signal, which the
+// blob worker runs rather than dropping as a stale retry of its own.
+func TestRepairHoldRetryCycleWakesBlobWorker(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := &repairHoldClient{}
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+	server := newRepairHoldTestServer(ctx, client, &recordingPruner{calls: make(chan uint32, 4)})
+	server.settings.Pruner.BlobDeletionBatchSize = 10
+	server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+	runProcessor(t, ctx, server)
+	server.pruneNotify <- pruneSignal{blockHeight: 101}
+
+	// Take the held cycle's wake, so only the retry cycle can wake the blob worker.
+	select {
+	case <-server.blobNotify:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the held cycle did not wake the blob worker")
+	}
+
+	client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+	runBlobWorker(t, server)
+
+	require.Eventually(t, func() bool { return client.acquired.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the retry cycle's blob pass runs")
+	require.Equal(t, uint32(101), client.acquiredAt.Load())
 }
 
 // A retried height whose phase 1 fails keeps its retry: once the store recovers, the height

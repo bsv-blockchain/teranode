@@ -165,15 +165,12 @@ func (s *Server) watchRepairHold(ctx context.Context, cancel context.CancelFunc,
 }
 
 // retryHeldHeight tries a held height again after a while, so pruning resumes once the hold
-// is released even when no new block arrives. The retry keeps the highest height it was given:
-// a late signal from an older timer must not take a higher height's place.
+// is released even when no new block arrives. It replaces a pending retry, even at a lower
+// height: after a reorg to a shorter chain with more work, the height the chain left is never
+// reached again on an idle chain.
 func (s *Server) retryHeldHeight(sig pruneSignal) {
 	if s.repairHoldRetry != nil {
 		s.repairHoldRetry.Stop()
-
-		if s.repairHoldRetrySig.blockHeight > sig.blockHeight {
-			sig = s.repairHoldRetrySig
-		}
 	}
 
 	sig.retry = true
@@ -479,13 +476,16 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				continue
 			}
 
-			// A pending retry is kept until a cycle at or above its height is done, so a cycle
-			// skipped for any reason below cannot drop it. A retry signal with none pending
-			// comes from a timer that fired just before its retry was cleared.
+			// A retry signal other than the pending retry's comes from a timer that fired just
+			// before its retry was replaced or cleared. A pending retry is kept, at the height
+			// of the latest signal, until a cycle at or above that height is done, so a cycle
+			// skipped for any reason below cannot drop it.
+			if sig.retry && (s.repairHoldRetry == nil || sig != s.repairHoldRetrySig) {
+				continue
+			}
+
 			if s.repairHoldRetry != nil {
 				s.retryHeldHeight(sig)
-			} else if sig.retry {
-				continue
 			}
 
 			// Phase 1 already ran for a retried height: while the hold lasts, skip the cycle.
@@ -554,7 +554,7 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			// preservation, so it runs even in a cycle whose Phase 1 fails. It reads the hold
 			// itself, so it is woken in a held cycle too: it deletes nothing while held and tries
 			// again on its own until the hold is released.
-			signalLatest(s.blobNotify, sig)
+			signalLatest(s.blobNotify, pruneSignal{blockHeight: blockHeight, blockHash: sig.blockHash})
 			s.logger.Debugf("[pruner][%s:%d] notified blob deletion worker", blockHashStr, blockHeight)
 
 			prunerActive.Set(1)
