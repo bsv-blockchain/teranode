@@ -9,7 +9,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/require"
 )
@@ -423,47 +422,4 @@ func TestAnOrdinaryCoinbaseInsideItsMaturityIsStillImmature(t *testing.T) {
 	spends, err := spendOnly(ctx, s, spendOneOutputTx(t, cb, 0), 100)
 	require.Error(t, err)
 	require.True(t, errors.Is(spends[0].Err, errors.ErrTxCoinbaseImmature), "got %v", spends[0].Err)
-}
-
-// TestRestoreConflictSpendsRefusesAReassignedUTXO pins that a conflict restore cannot spend a
-// reassigned UTXO by its outpoint. A restore record carries no output to check against the new
-// owner's, so the first write must refuse it exactly as a replay of the same restore does;
-// accepting it once and refusing the replay would leave the recovery stuck half-applied.
-func TestRestoreConflictSpendsRefusesAReassignedUTXO(t *testing.T) {
-	s, ctx := newTestStore(t)
-	tSettings := settings.NewSettings()
-
-	require.NoError(t, s.SetBlockHeight(100))
-
-	parent := mkTx(t, 1, 5_000)
-	_, err := s.Create(ctx, parent, 100)
-	require.NoError(t, err)
-
-	old := &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0}
-	newOutput := &bt.Output{Satoshis: 5_000, LockingScript: newOwnerScript(t)}
-
-	newHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(), newOutput, 0)
-	require.NoError(t, err)
-
-	require.NoError(t, s.FreezeUTXOs(ctx, []*utxo.Spend{old}, tSettings))
-	require.NoError(t, s.ReAssignUTXO(ctx, old,
-		&utxo.Spend{TxID: old.TxID, Vout: 0, UTXOHash: newHash}, tSettings))
-
-	spendable := 100 + tSettings.UtxoStore.ReAssignedUtxoSpendableAfterBlocks
-	require.NoError(t, s.SetBlockHeight(spendable))
-
-	spender := chainhash.HashH([]byte("restore spender"))
-	record := []*utxo.Spend{{
-		TxID:         parent.TxIDChainHash(),
-		Vout:         0,
-		UTXOHash:     newHash,
-		SpendingData: spendpkg.NewSpendingData(&spender, 0),
-	}}
-
-	for attempt := range 2 {
-		err = s.RestoreConflictSpends(ctx, record, spendable)
-		require.Error(t, err, "attempt %d", attempt)
-		require.True(t, errors.Is(err, errors.ErrUtxoHashMismatch), "attempt %d: got %v", attempt, err)
-		require.Equal(t, 1, utxoCount(t, s, ctx, parent), "attempt %d: the UTXO stays for its new owner", attempt)
-	}
 }

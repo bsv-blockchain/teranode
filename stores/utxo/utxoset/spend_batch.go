@@ -60,6 +60,10 @@ type spendPlan struct {
 	// because a UTXO whose only stored authentication is a digest cannot also waive the claim
 	// the digest is computed from.
 	skipClaim []bool
+	// recorded marks a plan built from conflict resolution's own spend records
+	// (planRecordedSpends) rather than from transactions. Its items carry no input, so the
+	// claim is the record's UTXO hash, checked by recordedClaimMismatch.
+	recorded bool
 }
 
 // spendGuardMask is the set of UTXO flags that refuse a spend for one caller's options.
@@ -321,6 +325,55 @@ func claimMismatch(in *bt.Input, sp *utxo.Spend, satoshis int64, script []byte, 
 		sp.TxID, sp.Vout, in.PreviousTxSatoshis, len(*in.PreviousTxScript), satoshis, len(script))
 }
 
+// claimMismatch checks a row's claim the way its plan was built: a transaction's input against
+// the UTXO (claimMismatch), or a recorded spend's UTXO hash against a reassignment
+// (recordedClaimMismatch). The first write and the replay both come through here, so the two
+// can never disagree about the same record.
+func (p *spendPlan) claimMismatch(in *bt.Input, sp *utxo.Spend, satoshis int64, script []byte, hashOverride []byte,
+	skipClaim bool) error {
+	if p.recorded {
+		return recordedClaimMismatch(sp, hashOverride)
+	}
+
+	return claimMismatch(in, sp, satoshis, script, hashOverride, skipClaim)
+}
+
+// recordedClaimMismatch checks a conflict-resolution spend record against a reassigned UTXO.
+//
+// A record is not a peer's claim. RestoreConflictSpends is called only by conflict resolution,
+// with records it took from this store's own rows (SpendsMadeBy, SetConflicting, which name a
+// reassigned UTXO by its new hash) or built from a winner that block validation accepted, and
+// that winner already spent the reassigned UTXO with the new output presented. A plain-form
+// winner body carries no output, so its records carry no hash, or the zero hash
+// GetSpendsOutpointOnly writes for "none". Refusing those would refuse the winner on every
+// retry and stop block assembly, so a record with no hash is accepted, as is one naming the
+// new hash. Only a record that names a different hash is refused: that is the old owner's
+// identity, which a reassignment exists to retire.
+func recordedClaimMismatch(sp *utxo.Spend, hashOverride []byte) error {
+	if len(hashOverride) == 0 {
+		return nil
+	}
+
+	claimed := claimedUTXOHash(sp)
+	if claimed == nil || bytes.Equal(claimed[:], hashOverride) {
+		return nil
+	}
+
+	return errors.NewUtxoHashMismatchError("[utxoset][RestoreConflictSpends] %s:%d was reassigned; %s is no longer its utxo hash",
+		sp.TxID, sp.Vout, claimed)
+}
+
+// claimedUTXOHash is the UTXO hash a spend record claims, or nil when it claims none. The zero
+// hash is GetSpendsOutpointOnly's marker for a record built without the spent output, and no
+// real output hashes to it, so it is read as no claim rather than as a wrong one.
+func claimedUTXOHash(sp *utxo.Spend) *chainhash.Hash {
+	if sp == nil || sp.UTXOHash == nil || sp.UTXOHash.IsEqual(&chainhash.Hash{}) {
+		return nil
+	}
+
+	return sp.UTXOHash
+}
+
 // reassignedClaimMismatch is the one case where this store has to fall back on a digest.
 //
 // ReAssignUTXO is handed a utxo.Spend, which carries a UTXO hash and no room for a locking
@@ -417,7 +470,7 @@ func (s *Store) runSpendPlan(ctx context.Context, q pgx.Tx, p *spendPlan) error 
 		// is checking. It runs for a recorded spend with no input too, so a reassigned UTXO is
 		// refused on the first write exactly as namePlanSpenders refuses it on a replay.
 		in := p.itemInput(item, vin)
-		if err := claimMismatch(in, p.perItem[item][vin], satoshis, script, hashOverride,
+		if err := p.claimMismatch(in, p.perItem[item][vin], satoshis, script, hashOverride,
 			p.skipClaim[item]); err != nil {
 			p.perItem[item][vin].Err = err
 		}
@@ -645,7 +698,7 @@ func (s *Store) namePlanSpenders(ctx context.Context, q pgx.Tx, p *spendPlan, do
 			sp.Err = nil
 			sp.ConflictingTxID = nil
 
-			sp.Err = claimMismatch(in, sp, satoshis, script, hashOverride, p.skipClaim[p.owner[k]])
+			sp.Err = p.claimMismatch(in, sp, satoshis, script, hashOverride, p.skipClaim[p.owner[k]])
 
 			if in != nil {
 				decorateInput(in, satoshis, script, hashOverride)

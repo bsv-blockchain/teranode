@@ -173,17 +173,21 @@ func (s *Store) GetSpend(ctx context.Context, sp *utxo.Spend) (*utxo.SpendRespon
 // A caller that supplies no hash is trusted, because the row was located by the outpoint and
 // the full txid. The bulk UTXO endpoints do this deliberately rather than fetch whole
 // transactions to recompute a digest they already have the outpoint for.
+//
+// The zero hash counts as no hash (claimedUTXOHash): it is what a record built from a plain-form
+// body carries, which conflict resolution looks up before and after it moves an owner.
 func reassignedHashMismatch(sp *utxo.Spend, hashOverride []byte) error {
-	if len(hashOverride) == 0 || sp.UTXOHash == nil {
+	claimed := claimedUTXOHash(sp)
+	if len(hashOverride) == 0 || claimed == nil {
 		return nil
 	}
 
-	if bytes.Equal(sp.UTXOHash[:], hashOverride) {
+	if bytes.Equal(claimed[:], hashOverride) {
 		return nil
 	}
 
 	return errors.NewUtxoHashMismatchError("[utxoset][GetSpend] %s:%d was reassigned; %s is no longer its utxo hash",
-		sp.TxID, sp.Vout, sp.UTXOHash)
+		sp.TxID, sp.Vout, claimed)
 }
 
 // liveSpendResponse turns one live UTXO's flags into the answer the interface reports.
