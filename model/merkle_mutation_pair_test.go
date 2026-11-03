@@ -83,13 +83,15 @@ func computeMultiSubtreeMerkleRoot(t *testing.T, coinbase *bt.Tx, subtrees []*su
 //     because the hash it would condemn is the honest block's hash too.
 //
 // Which duplicate check fires matters. buildBlock pre-sets b.SubtreeSlices, so
-// getAndValidateSubtrees returns early ("already loaded") and neither the load-time
-// dedup hook nor the CVE-2012-2459 floor in check_duplicate_txs.go runs. The catch here
-// is Valid's later checkDuplicateTransactions pass (putSubtreeInTxMap), whose error has
-// no "(CVE-2012-2459)" suffix. A real peer block loads its subtrees from the store and
-// goes through the load-time hook instead, so a regression in that hook would NOT turn
-// this test red. This test pins the merkle property and the classification, not the
-// load-time path.
+// getAndValidateSubtrees returns early ("already loaded") and the load-time dedup hook
+// does not run. The catch here is Valid's later checkDuplicateTransactions pass
+// (putSubtreeInTxMap). The CVE-2012-2459 floor in check_duplicate_txs.go is not on this
+// path at all: only blockvalidation's quick path calls it. The load-time hook prints the
+// same message as the later pass, so the error text cannot say which one fired; what
+// selects the later pass is the pre-set slices with DiskMapDirs nil. A real peer block
+// loads its subtrees from the store and goes through the load-time hook instead, so a
+// regression in that hook would NOT turn this test red. This test pins the merkle
+// property and the classification, not the load-time path.
 func TestCVE20122459_MerkleMutantPair_SameHashDifferentBody(t *testing.T) {
 	ctx := context.Background()
 	tSettings := test.CreateBaseTestSettings(t)
@@ -226,7 +228,4 @@ func TestCVE20122459_MerkleMutantPair_SameHashDifferentBody(t *testing.T) {
 	require.True(t, errors.IsBlockCorrupt(err), "mutant rejection must be BlockCorrupt, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "mutant rejection must not poison the shared block hash as BlockInvalid")
 	require.Contains(t, err.Error(), "duplicate transaction", "the mutant must be caught by the duplicate-transaction check, not the merkle check")
-	// The CVE floor in check_duplicate_txs.go also says "duplicate transaction", so the
-	// Contains above cannot tell the two apart. Its message alone carries this suffix.
-	require.NotContains(t, err.Error(), "(CVE-2012-2459)", "the mutant must be caught by the txMap arm, not the CVE floor")
 }
