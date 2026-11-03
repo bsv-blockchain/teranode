@@ -3395,9 +3395,13 @@ func (s *server) getPeers() []*serverPeer {
 	}
 }
 
+// upnpRenewInterval is how often upnpUpdateThread renews the port mapping,
+// well inside the 20-minute lease it asks for. A variable so tests can shorten it.
+var upnpRenewInterval = 15 * time.Minute
+
 func (s *server) upnpUpdateThread() {
 	// Go off immediately to prevent code duplication, thereafter we renew
-	// lease every 15 minutes.
+	// lease every upnpRenewInterval.
 	timer := time.NewTimer(0 * time.Second)
 	lport, _ := strconv.ParseInt(activeNetParams.DefaultPort, 10, 16)
 	first := true
@@ -3420,6 +3424,10 @@ out:
 				externalip, err := s.nat.GetExternalAddress()
 				if err != nil {
 					s.logger.Warnf("UPnP can't get external address: %v", err)
+					// The timer has fired; without a reset nothing renews the
+					// lease again. first stays true, so the next pass retries.
+					timer.Reset(upnpRenewInterval)
+
 					continue out
 				}
 				na := wire.NewNetAddressIPPort(externalip, uint16(listenPort),
@@ -3431,7 +3439,7 @@ out:
 				s.logger.Warnf("Successfully bound via UPnP to %s", addrmgr.NetAddressKey(na))
 				first = false
 			}
-			timer.Reset(time.Minute * 15)
+			timer.Reset(upnpRenewInterval)
 		case <-s.quit:
 			break out
 		}

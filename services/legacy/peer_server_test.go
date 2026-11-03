@@ -6,6 +6,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1976,4 +1977,51 @@ func TestBanListEvent_ListenerGivesUpAtShutdown(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the ban listener must give up once the server is shutting down")
 	}
+}
+
+// lookupFailingNAT maps the port but never reports an external address, as a gateway that
+// accepts AddPortMapping and errors on GetExternalIPAddress does.
+type lookupFailingNAT struct {
+	mappings atomic.Int32
+}
+
+func (n *lookupFailingNAT) GetExternalAddress() (net.IP, error) {
+	return nil, errors.NewProcessingError("no external address")
+}
+
+func (n *lookupFailingNAT) AddPortMapping(string, int, int, string, int) (int, error) {
+	n.mappings.Add(1)
+	return 8333, nil
+}
+
+func (n *lookupFailingNAT) DeletePortMapping(string, int, int) error { return nil }
+
+// A failed external-address lookup does not stop the UPnP thread renewing the port mapping. The
+// lookup failure skipped the timer reset, and with the timer already fired the thread waited only
+// for shutdown, so the 20-minute lease lapsed and was never renewed.
+func TestUPnPUpdateThread_KeepsRenewingAfterAFailedAddressLookup(t *testing.T) {
+	origInterval := upnpRenewInterval
+	upnpRenewInterval = 10 * time.Millisecond
+
+	t.Cleanup(func() { upnpRenewInterval = origInterval })
+
+	nat := &lookupFailingNAT{}
+
+	s := &server{
+		logger: ulogger.TestLogger{},
+		nat:    nat,
+		quit:   make(chan struct{}),
+	}
+
+	s.wg.Add(1)
+
+	go s.upnpUpdateThread()
+
+	t.Cleanup(func() {
+		close(s.quit)
+		s.wg.Wait()
+	})
+
+	require.Eventually(t, func() bool { return nat.mappings.Load() >= 3 }, 5*time.Second, 10*time.Millisecond,
+		"the port mapping must be renewed after a failed address lookup")
 }
