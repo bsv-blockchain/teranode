@@ -5220,8 +5220,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// reach this path as moveBack txs; where it cannot move onto the tip, the replay marks
 	// the tip's branch-only txs unmined itself. When the replay falls back to the best header
 	// (a blockchain service without BlocksBetterThan, or a replay given up after repeated
-	// failures), it skips such a tip, and its txs stay marked mined until the next reset:
-	// reset() keeps its whole-assembly sweep as the catch-all. Folding the whole mempool in here cost a batch write per mempool tx on every
+	// failures), it skips such a tip, and block assembly then marks the txs it holds that
+	// recent fork blocks contain (BlockAssembler.markSkippedForkTxs). reset() keeps its
+	// whole-assembly sweep as the catch-all. Folding the whole mempool in here cost a batch write per mempool tx on every
 	// reorg — 380M records and ~8 minutes at scale, with block assembly intake stalled
 	// throughout.
 	//

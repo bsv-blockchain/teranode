@@ -5,13 +5,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -1040,4 +1048,144 @@ func TestReplayBestTipChanges_ExternalResetFailureGatesCandidates(t *testing.T) 
 	ba.processNewBlockAnnouncement(t.Context())
 	require.False(t, ba.bestTipResetReplayPending.Load())
 	requireBlockAssemblyTip(t, items, a[1])
+}
+
+// noBestTipOrderClient is a blockchain client whose BlocksBetterThan fails, as a blockchain
+// service that does not serve the best-tip order yet, or one the replay keeps failing on.
+type noBestTipOrderClient struct {
+	blockchain.ClientI
+}
+
+func (c *noBestTipOrderClient) BlocksBetterThan(context.Context, model.BestTipKey, *model.BestTipKey, uint32, uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	return nil, nil, false, errors.NewServiceError("best-tip order not served")
+}
+
+// TestFollowBestHeader_MarksTxsOfSkippedTip is the case following the best header skips. Block
+// assembly is on A1 and holds X. B extends A1 with X, becomes the best tip, and block
+// validation marks X mined in it; C overtakes B before block assembly looks. The replay would
+// move onto B and back. Without it block assembly follows the best header from A1 to C2, B is
+// never moved back, and X would stay marked mined, so a restart, which reloads only unmined
+// transactions, would drop it. Both ways the replay falls back are covered.
+func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// positionKnown sets a replay position, which the replay then fails to move on from.
+		positionKnown bool
+	}{
+		{"best-tip order not served", false},
+		{"replay given up", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			initPrometheusMetrics()
+			ctx := t.Context()
+
+			items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+				s.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+			}, withCoinbaseMaturity(testCoinbaseMaturity))
+			ba := items.blockAssembler
+			ba.subtreeProcessor.Stop(context.Background())
+			stp, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, ba.settings, items.blobStore, items.blockchainClient, items.utxoStore, items.newSubtreeChan)
+			require.NoError(t, err)
+			ba.subtreeProcessor = stp
+			stp.Start(ctx)
+
+			genesis := genesisHeader(t, items)
+			a1 := buildChain(genesis, 1, 60000)[0]
+			addBlockWithMinedSet(ctx, t, items, a1)
+
+			if tc.positionKnown {
+				startReplayAt(t, items, a1, 1)
+			} else {
+				ba.setBestBlockHeader(a1, 1)
+			}
+
+			stp.InitCurrentBlockHeader(a1)
+			require.NoError(t, items.utxoStore.SetBlockHeight(2))
+
+			// X spends a confirmed transaction and is in block assembly.
+			funding := replayPoolTx(&chainhash.Hash{}, 100)
+			x := replayPoolTx(funding.TxIDChainHash(), 99)
+			for _, tx := range []*bt.Tx{funding, x} {
+				_, err = items.utxoStore.(*utxosql.Store).Create(ctx, tx, 1)
+				require.NoError(t, err)
+			}
+			require.NoError(t, items.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*funding.TxIDChainHash()}, true))
+
+			stp.AddBatch([]subtree.Node{{Hash: *x.TxIDChainHash(), Fee: 1, SizeInBytes: uint64(len(x.Bytes()))}}, []*subtree.TxInpoints{{}})
+			require.Eventually(t, func() bool { return stp.GetCurrentTxMap().Exists(*x.TxIDChainHash()) }, 5*time.Second, 10*time.Millisecond, "X is in block assembly")
+
+			// B extends A1 with X and is the best tip; block validation marks X mined in it.
+			tree, err := subtree.NewTreeByLeafCount(2)
+			require.NoError(t, err)
+			require.NoError(t, tree.AddCoinbaseNode())
+			require.NoError(t, tree.AddNode(*x.TxIDChainHash(), 1, uint64(len(x.Bytes()))))
+			treeBytes, err := tree.Serialize()
+			require.NoError(t, err)
+			require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
+
+			b := buildChain(a1, 1, 61000)[0]
+			coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+			require.NoError(t, err)
+			// Block validation sets subtrees_set before it marks a block's transactions mined.
+			require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: b, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, "", blockchainoptions.WithSubtreesSet(true), blockchainoptions.WithMinedSet(true)))
+			best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
+			require.NoError(t, err)
+			require.Equal(t, b.Hash().String(), best.Hash().String(), "B was the best tip")
+
+			_, genMeta, err := items.blockchainClient.GetBlockHeader(ctx, genesis.Hash())
+			require.NoError(t, err)
+			_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: 0, OnLongestChain: true})
+			require.NoError(t, err)
+
+			_, bMeta, err := items.blockchainClient.GetBlockHeader(ctx, b.Hash())
+			require.NoError(t, err)
+			_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{x.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: bMeta.ID, BlockHeight: 2, OnLongestChain: true})
+			require.NoError(t, err)
+			require.Zero(t, unminedSince(t, items, x), "precondition: X is marked mined in B")
+
+			// C overtakes B before block assembly looks.
+			c := buildChain(a1, 2, 62000)
+			for _, h := range c {
+				addBlockWithMinedSet(ctx, t, items, h)
+			}
+			best, _, err = items.blockchainClient.GetBestBlockHeader(ctx)
+			require.NoError(t, err)
+			require.Equal(t, c[1].Hash().String(), best.Hash().String())
+
+			ba.blockchainClient = &noBestTipOrderClient{ClientI: items.blockchainClient}
+
+			passes := 1
+			if tc.positionKnown {
+				passes = maxBestTipReplayFailures
+			}
+
+			for range passes {
+				ba.processNewBlockAnnouncement(ctx)
+			}
+
+			requireBlockAssemblyTip(t, items, c[1])
+			require.True(t, stp.GetCurrentTxMap().Exists(*x.TxIDChainHash()), "X is still in block assembly")
+			require.NotZero(t, unminedSince(t, items, x), "X is marked not on the longest chain")
+
+			// A restart reloads the unmined transactions, and X is one of them.
+			stp.Stop(context.Background())
+
+			restarted, err := NewBlockAssembler(ctx, ulogger.TestLogger{}, ba.settings, gocore.NewStat("test"), items.utxoStore, items.blobStore, items.blockchainClient, make(chan subtreeprocessor.NewSubtreeRequest, 10))
+			require.NoError(t, err)
+			restarted.SetSkipWaitForPendingBlocks(true)
+			require.NoError(t, restarted.Start(ctx))
+
+			require.Eventually(t, func() bool { return restarted.subtreeProcessor.GetCurrentTxMap().Exists(*x.TxIDChainHash()) }, 10*time.Second, 10*time.Millisecond, "the restart reloads X")
+		})
+	}
+}
+
+// unminedSince reads the unmined_since of tx from the UTXO store.
+func unminedSince(t *testing.T, items *baTestItems, tx *bt.Tx) uint32 {
+	t.Helper()
+
+	meta, err := items.utxoStore.Get(t.Context(), tx.TxIDChainHash(), fields.UnminedSince)
+	require.NoError(t, err)
+
+	return meta.UnminedSince
 }

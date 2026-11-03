@@ -148,11 +148,12 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   old sweep was a batch write per transaction on every reorg: about 380 million records
   and 8 minutes at scale, with block assembly intake stalled throughout. A tip that was
   overtaken before block assembly moved onto it, which that sweep also caught, is
-  covered by the best-tip replay (#2074). While that replay falls back to following the
+  covered by the best-tip replay (#2074). When that replay falls back to following the
   best header (a blockchain service that does not serve `BlocksBetterThan` yet during a
-  rolling upgrade, or a replay given up after three failures in a row, each counted in
-  `teranode_blockassembly_processing_stuck_total{reason="best_tip_replay"}`), such a
-  tip's transactions stay marked mined until the next reset, which still marks every
+  rolling upgrade, or a replay given up after three failures in a row), block assembly
+  marks the transactions it holds that recent fork blocks contain as not on the longest
+  chain once it reaches the best tip, after waiting for every pending `mined_set`. It
+  reads each fork block within the UTXO retention once. A reset still marks every
   transaction in block assembly. No action needed. (#2065)
 
 - **`GetLastNBlocks` honours `fromHeight` when orphans are included.** The SQL

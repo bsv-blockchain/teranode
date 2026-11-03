@@ -192,6 +192,162 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 	return true
 }
 
+// markSkippedForkTxs runs after block assembly followed the best header instead of replaying
+// the changes of the best tip. That skips a block that was the best tip only briefly: block
+// validation marked its transactions mined, but block assembly never moved onto it and back,
+// so reorgBlocks never marked them again; following the best header may even reach the best
+// tip by a plain catch-up. A transaction such a block shares with block assembly would stay
+// marked mined, and a restart, which reloads only unmined transactions, would drop it.
+//
+// Block assembly is on the best tip here, so every transaction it holds is off the longest
+// chain. This marks the ones that recent fork blocks contain. Which fork block was the best tip
+// does not matter: marking a transaction already unmined changes nothing. It first waits for
+// every pending mined_set, so a setTxMined still writing a fork block cannot clear
+// unmined_since again after the mark. A fork block block assembly never processed has no
+// processed_at, so its chain tip reads valid-headers rather than valid-fork: every tip but the
+// active and invalid ones is read, and of their blocks those with subtrees. Blocks below the
+// replay floor are not read, and each block is read once. A failure is logged and the next
+// fallback tries again.
+func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context) {
+	tip, tipHeight := b.CurrentBlock()
+
+	best, _, err := b.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler] error getting the best block header to mark skipped fork transactions: %v", err)
+		return
+	}
+
+	if tip == nil || !tip.Hash().IsEqual(best.Hash()) {
+		// Only on the best tip is everything block assembly holds off the longest chain.
+		return
+	}
+
+	// GetChainTips reads its rows before it computes branch lengths, so under SQLite's shared
+	// cache it cannot deadlock against a concurrent writer.
+	tips, err := b.blockchainClient.GetChainTips(ctx)
+	if err != nil {
+		b.logger.Errorf("[BlockAssembler] error getting chain tips to mark skipped fork transactions: %v", err)
+		return
+	}
+
+	floor := b.bestTipFloor(tipHeight)
+
+	var forkBlocks []blockHeaderWithMeta
+
+	for _, chainTip := range tips {
+		if chainTip.Status == "active" || chainTip.Status == "invalid" || chainTip.Branchlen == 0 || chainTip.Height < floor {
+			continue
+		}
+
+		tipHash, err := chainhash.NewHashFromStr(chainTip.Hash)
+		if err != nil {
+			b.logger.Errorf("[BlockAssembler] error parsing chain tip hash %s: %v", chainTip.Hash, err)
+			return
+		}
+
+		headers, metas, err := b.blockchainClient.GetBlockHeaders(ctx, tipHash, uint64(chainTip.Branchlen))
+		if err != nil {
+			b.logger.Errorf("[BlockAssembler] error getting the blocks of fork %s: %v", tipHash, err)
+			return
+		}
+
+		for i, header := range headers {
+			if metas[i].Height < floor || metas[i].Invalid {
+				continue
+			}
+
+			if _, done := b.skippedForkBlocksMarked[*header.Hash()]; !done {
+				forkBlocks = append(forkBlocks, blockHeaderWithMeta{header: header, meta: metas[i]})
+			}
+		}
+	}
+
+	if len(forkBlocks) == 0 {
+		return
+	}
+
+	if !b.skipWaitForPendingBlocks {
+		if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
+			b.logger.Errorf("[BlockAssembler] error waiting for pending blocks before marking skipped fork transactions: %v", err)
+			return
+		}
+	}
+
+	txMap := b.subtreeProcessor.GetCurrentTxMap()
+	read := make(map[chainhash.Hash]uint32, len(forkBlocks))
+
+	var held []chainhash.Hash
+
+	for _, fb := range forkBlocks {
+		if !fb.meta.SubtreesSet {
+			// Block validation has not written it, so it marked nothing mined; look again later.
+			continue
+		}
+
+		hashes, err := b.blockTxHashes(ctx, fb.header)
+		if err != nil {
+			b.logger.Errorf("[BlockAssembler] error reading fork block %s to mark skipped fork transactions: %v", fb.header.Hash(), err)
+			return
+		}
+
+		for _, txHash := range hashes {
+			if txMap.Exists(txHash) {
+				held = append(held, txHash)
+			}
+		}
+
+		read[*fb.header.Hash()] = fb.meta.Height
+	}
+
+	if len(held) > 0 {
+		if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, held, false); err != nil {
+			b.logger.Errorf("[BlockAssembler] error marking %d transactions of skipped fork blocks as not on the longest chain: %v", len(held), err)
+			return
+		}
+
+		b.logger.Warnf("[BlockAssembler] followed the best header without the replay: marked %d transactions block assembly holds that fork blocks contain as not on the longest chain", len(held))
+	}
+
+	if b.skippedForkBlocksMarked == nil {
+		b.skippedForkBlocksMarked = make(map[chainhash.Hash]uint32)
+	}
+
+	for hash, height := range b.skippedForkBlocksMarked {
+		if height < floor {
+			delete(b.skippedForkBlocksMarked, hash)
+		}
+	}
+
+	for hash, height := range read {
+		b.skippedForkBlocksMarked[hash] = height
+	}
+}
+
+// blockTxHashes returns the hashes of the transactions in a stored block, without its coinbase.
+func (b *BlockAssembler) blockTxHashes(ctx context.Context, header *model.BlockHeader) ([]chainhash.Hash, error) {
+	block, err := b.blockchainClient.GetBlock(ctx, header.Hash())
+	if err != nil {
+		return nil, errors.NewProcessingError("error getting block %s", header.Hash(), err)
+	}
+
+	subtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
+	if err != nil {
+		return nil, errors.NewProcessingError("error getting subtrees of block %s", header.Hash(), err)
+	}
+
+	hashes := make([]chainhash.Hash, 0, len(subtrees)*100)
+
+	for _, st := range subtrees {
+		for _, node := range st.Nodes {
+			if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
+				hashes = append(hashes, node.Hash)
+			}
+		}
+	}
+
+	return hashes, nil
+}
+
 // giveUpBestTipHistory moves the replay position to the best tip after the replay kept failing,
 // persists it, and then clears a low-water mark, so the next pass does not replay the history
 // that kept failing. A failure to read the best tip leaves the position where it is.
