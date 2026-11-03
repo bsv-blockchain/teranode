@@ -11,7 +11,9 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
@@ -122,12 +124,14 @@ func TestMoveForwardBlockRecreatesDeletedChainForAnOwnBlock(t *testing.T) {
 	requireRecreatedChain(t, ctx, stp, first, second)
 }
 
-// A move forward that cannot recreate a saved tx must fail, not hand the block on with records missing.
-func TestMoveForwardBlockFailsWhenASavedTxCannotBeRecreated(t *testing.T) {
+// A saved tx whose input another tx now spends cannot be recreated, and neither can the saved txs
+// that spend it. Every retry would fail the same way, so the move forward must carry on without them.
+func TestMoveForwardBlockSkipsASavedTxWhoseInputIsNowSpent(t *testing.T) {
 	ctx := context.Background()
 	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
 
-	first, _ := createCoinbaseChain(t, ctx, stp, block)
+	first, second := createCoinbaseChain(t, ctx, stp, block)
 
 	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
 
@@ -139,7 +143,38 @@ func TestMoveForwardBlockFailsWhenASavedTxCannotBeRecreated(t *testing.T) {
 	require.NoError(t, err, "a rival already spends the coinbase output the saved tx needs")
 
 	_, _, err = stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, false, true)
-	require.Error(t, err, "the saved tx cannot be spent again, so the block must not be applied")
+	require.NoError(t, err, "a saved tx that can never be recreated must not block the move forward")
+
+	for _, tx := range []*bt.Tx{first, second} {
+		_, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash())
+		require.ErrorIs(t, getErr, errors.ErrTxNotFound, "tx %s is skipped", tx.TxIDChainHash())
+	}
+
+	_, err = stp.utxoStore.Get(ctx, rival.TxIDChainHash())
+	require.NoError(t, err, "the rival stays")
+
+	spent, err := stp.utxoStore.GetSpend(ctx, spendOf(t, rival))
+	require.NoError(t, err)
+	require.NotNil(t, spent.SpendingData)
+	require.Equal(t, rival.TxIDChainHash().String(), spent.SpendingData.TxID.String(), "the rival still owns the coinbase output")
+
+	_, err = stp.subtreeStore.Get(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.ErrorIs(t, err, errors.ErrNotFound, "a retry would get the same result, so the saved file is deleted")
+}
+
+// Any failure other than a spent input still fails the move forward.
+func TestMoveForwardBlockFailsWhenTheSavedFileIsUnreadable(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	createCoinbaseChain(t, ctx, stp, block)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+	require.NoError(t, stp.subtreeStore.Set(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs, []byte{0, 9, 9}, options.WithAllowOverwrite(true)))
+
+	_, _, err := stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, false, true)
+	require.Error(t, err, "saved txs that cannot be read must not be passed over")
 }
 
 func TestParentsFirstOrdersAChainWhateverTheInputOrder(t *testing.T) {
@@ -185,9 +220,9 @@ func TestResetRecreatesChainDeletedWhenTheSameBlockIsMovedBackAndForward(t *test
 	}
 }
 
-// A reset that moves a block back and does not move it forward leaves the saved txs unused, and a
-// reset that cannot recreate a saved tx must fail rather than report success with records missing.
-func TestResetFailsWhenASavedTxCannotBeRecreated(t *testing.T) {
+// A reset that moves a block back and forward again must not fail for a saved tx that another tx
+// now conflicts with.
+func TestResetSkipsASavedTxWhoseInputIsNowSpent(t *testing.T) {
 	for _, fastForward := range []bool{false, true} {
 		t.Run(fmt.Sprintf("fastForward=%v", fastForward), func(t *testing.T) {
 			ctx := context.Background()
@@ -212,7 +247,39 @@ func TestResetFailsWhenASavedTxCannotBeRecreated(t *testing.T) {
 			stp.InitCurrentBlockHeader(block.Header)
 
 			response := stp.Reset(block.Header, nil, []*model.Block{block}, fastForward, func() error { return nil })
-			require.Error(t, response.Err, "the saved tx cannot be spent again, so the reset must not report success")
+			require.NoError(t, response.Err)
+
+			_, err = stp.utxoStore.Get(ctx, first.TxIDChainHash())
+			require.ErrorIs(t, err, errors.ErrTxNotFound, "the saved tx is skipped")
+		})
+	}
+}
+
+// A reset that cannot read the saved txs must fail rather than report success with records missing.
+func TestResetFailsWhenTheSavedFileIsUnreadable(t *testing.T) {
+	for _, fastForward := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fastForward=%v", fastForward), func(t *testing.T) {
+			ctx := context.Background()
+			stp, _ := newProgressTestProcessor(t, resetBlockchainMock())
+
+			block := &model.Block{
+				Height:     1,
+				CoinbaseTx: coinbaseTx,
+				Subtrees:   []*chainhash.Hash{},
+				Header:     childHeader(prevBlockHeader, 403),
+			}
+			blockHash := block.Header.Hash()
+
+			createCoinbaseChain(t, ctx, stp, block)
+
+			require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+			require.NoError(t, stp.subtreeStore.Set(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs, []byte{0, 9, 9}, options.WithAllowOverwrite(true)))
+			require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+
+			stp.InitCurrentBlockHeader(block.Header)
+
+			response := stp.Reset(block.Header, nil, []*model.Block{block}, fastForward, func() error { return nil })
+			require.Error(t, response.Err)
 		})
 	}
 }
@@ -377,4 +444,80 @@ func TestMoveForwardBlocksRecreateATxThatSpendsDescendantsOfTwoCoinbases(t *test
 		require.NotNil(t, spent.SpendingData)
 		require.Equal(t, both.TxIDChainHash().String(), spent.SpendingData.TxID.String())
 	}
+}
+
+func TestMoveForwardBlockDeletesTheSavedFileAfterARestore(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	_, err := stp.subtreeStore.Get(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err, "precondition: the move back saved the txs")
+
+	_, _, err = stp.moveForwardBlock(ctx, block, true, map[chainhash.Hash]struct{}{}, false, true)
+	require.NoError(t, err)
+
+	requireRecreatedChain(t, ctx, stp, first, second)
+
+	_, err = stp.subtreeStore.Get(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.ErrorIs(t, err, errors.ErrNotFound, "a restored block must not leave its saved file behind")
+}
+
+// A tx restored once and then changed in the store must be saved with its current state the next
+// time the block is moved back, not with the state of the earlier save.
+func TestKeepReorgDeletedTxsSavesTheCurrentStateOfARestoredTx(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+	require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+	require.NoError(t, stp.restoreReorgDeletedTxs(ctx, block))
+
+	requireRecreatedChain(t, ctx, stp, first, second)
+
+	_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: 42, BlockHeight: 1234, SubtreeIdx: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	saved, err := stp.readReorgDeletedTxs(ctx, blockHash)
+	require.NoError(t, err)
+
+	var entry *reorgDeletedTx
+
+	for _, e := range saved {
+		if e.tx.TxIDChainHash().IsEqual(first.TxIDChainHash()) {
+			entry = e
+		}
+	}
+
+	require.NotNil(t, entry, "the first tx is saved again")
+	require.Len(t, entry.mined, 1)
+	require.Equal(t, uint32(42), entry.mined[0].BlockID)
+	require.False(t, entry.unmined)
+}
+
+// A saved tx that is absent from the store keeps its saved entry when the move back is retried.
+func TestKeepReorgDeletedTxsKeepsTheSavedEntryOfATxNoLongerInTheStore(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	hashes := []chainhash.Hash{*first.TxIDChainHash(), *second.TxIDChainHash()}
+	require.NoError(t, stp.keepReorgDeletedTxs(ctx, block, hashes))
+
+	saved, err := stp.readReorgDeletedTxs(ctx, blockHash)
+	require.NoError(t, err)
+	require.Len(t, saved, 2, "the saved entries of txs absent from the store survive a retry")
 }

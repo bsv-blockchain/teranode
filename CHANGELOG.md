@@ -295,12 +295,15 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   hash of the block that was moved back (new file type `reorgDeletedTxs`, expiry as for
   kept-aside subtree transactions). If saving fails, the move back fails and nothing is
   deleted. When a reorg or a block assembly reset moves that block forward again, block
-  assembly recreates the saved transactions after the coinbase, and fails the move if
-  it cannot. Each recreated transaction gets back the block IDs and the chain state it
-  had when it was deleted. The saved file expires at the same height as kept-aside
-  subtree transactions. If the block returns after that, block assembly recreates
-  nothing and does not log a warning. No action is needed. Parent spends that were
-  left dangling before the upgrade are not repaired. (#1214)
+  assembly recreates the saved transactions after the coinbase, then deletes the saved
+  file. Block assembly does not recreate a saved transaction when another transaction
+  now spends one of its inputs, nor the saved transactions that spend it, and it logs
+  an error for each. Any other failure still fails the move. Each recreated transaction
+  gets back the block IDs and the chain state it had when it was deleted. The saved
+  file expires at the same height as kept-aside subtree transactions. If the block
+  returns after that, block assembly recreates nothing and does not log a warning. No
+  action is needed. Parent spends that were left dangling before the upgrade are not
+  repaired. (#1214)
 
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**

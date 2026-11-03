@@ -87,3 +87,76 @@ func TestPrunerClearsParentRefsOfReapedConflictingLoser(t *testing.T) {
 		})
 	}
 }
+
+// A conflicting loser that has an unstable spending child survives the defensive delete, so the
+// references its parent holds to it must survive too.
+func TestPrunerKeepsParentRefsOfAConflictingLoserItDoesNotDelete(t *testing.T) {
+	ResetPrunerServiceForTests()
+	t.Cleanup(ResetPrunerServiceForTests)
+
+	ctx := t.Context()
+
+	store, parent := setup(ctx, t)
+	store.settings.Pruner.UTXODefensiveEnabled = true
+
+	loser := bt.NewTx()
+	require.NoError(t, loser.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, loser.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parent.Outputs[0].Satoshis-1000))
+	loser.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(loser.TxIDChainHash().String(), 0, loser.Outputs[0].LockingScript.String(), loser.Outputs[0].Satoshis))
+	require.NoError(t, child.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", loser.Outputs[0].Satoshis-1000))
+	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err := store.Create(ctx, parent, 0)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, loser, 0)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, child, 0)
+	require.NoError(t, err)
+
+	spends, err := store.Spend(ctx, loser, store.GetBlockHeight()+1)
+	require.NoError(t, err)
+	require.Len(t, spends, len(loser.Inputs))
+
+	_, err = store.Spend(ctx, child, store.GetBlockHeight()+1)
+	require.NoError(t, err, "the unmined child spends the loser's output, so it is not stable")
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*loser.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	parentSpend := &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: spends[0].UTXOHash}
+
+	countChildRefs := func() int {
+		var n int
+
+		require.NoError(t, store.db.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM conflicting_children
+			WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1)`, parent.TxIDChainHash()[:]).Scan(&n))
+
+		return n
+	}
+
+	require.Equal(t, 1, countChildRefs(), "precondition: the parent lists the loser as a conflicting child")
+
+	provider, ok := any(store).(pruner.PrunerServiceProvider)
+	require.True(t, ok)
+
+	prunerSvc, err := provider.GetPrunerService()
+	require.NoError(t, err)
+
+	_, err = prunerSvc.Prune(ctx, store.GetBlockHeight()+1000, "test")
+	require.NoError(t, err)
+
+	_, err = store.Get(ctx, loser.TxIDChainHash())
+	require.NoError(t, err, "the loser has an unstable child, so the delete keeps it")
+
+	after, err := store.GetSpend(ctx, parentSpend)
+	require.NoError(t, err)
+	require.NotNil(t, after.SpendingData, "the kept loser still spends the parent output")
+	require.Equal(t, loser.TxIDChainHash().String(), after.SpendingData.TxID.String())
+	require.Equal(t, 1, countChildRefs(), "the parent still lists the kept loser as a conflicting child")
+}

@@ -135,6 +135,30 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 	return deletedCount, nil
 }
 
+const defensiveDeleteFilter = `t.delete_at_height IS NOT NULL
+				  AND t.delete_at_height <= $1
+				  AND (t.unmined_since IS NULL OR t.conflicting)
+				  AND NOT EXISTS (
+				    -- Find ANY unstable child - if found, parent cannot be deleted
+				    -- This ensures ALL children must be stable before parent deletion
+				    SELECT 1
+				    FROM outputs o
+				    WHERE o.transaction_id = t.id
+				      AND o.spending_data IS NOT NULL
+				      AND (
+				        -- Extract child TX hash from spending_data (first 32 bytes)
+				        -- Check if this child is NOT stable
+				        NOT EXISTS (
+				          SELECT 1
+				          FROM transactions child
+				          INNER JOIN block_ids child_blocks ON child.id = child_blocks.transaction_id
+				          WHERE child.hash = substr(o.spending_data, 1, 32)
+				            AND child.unmined_since IS NULL  -- Child must be mined
+				            AND child_blocks.block_height <= ($1 - $2)  -- Child must be stable
+				        )
+				      )
+				  )`
+
 // deleteTombstoned removes transactions that have passed their expiration time.
 // Only deletes parent transactions if their last spending child is mined and stable.
 // Records that are currently unmined (unmined_since set) are skipped unless they are conflicting,
@@ -167,7 +191,7 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 	} else {
 		// Defensive mode enabled - verify ALL spending children are stable before deletion
 		// This prevents orphaning any child transaction
-		kept, clearErr := s.clearConflictingParentRefs(ctx, blockHeight)
+		kept, clearErr := s.clearConflictingParentRefs(ctx, blockHeight, safetyWindow)
 		if clearErr != nil {
 			return 0, clearErr
 		}
@@ -177,30 +201,8 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (int
 			WHERE id IN (
 				SELECT t.id
 				FROM transactions t
-				WHERE t.delete_at_height IS NOT NULL
-				  AND t.delete_at_height <= $1
-				  AND (t.unmined_since IS NULL OR t.conflicting)
+				WHERE ` + defensiveDeleteFilter + `
 				  %s
-				  AND NOT EXISTS (
-				    -- Find ANY unstable child - if found, parent cannot be deleted
-				    -- This ensures ALL children must be stable before parent deletion
-				    SELECT 1
-				    FROM outputs o
-				    WHERE o.transaction_id = t.id
-				      AND o.spending_data IS NOT NULL
-				      AND (
-				        -- Extract child TX hash from spending_data (first 32 bytes)
-				        -- Check if this child is NOT stable
-				        NOT EXISTS (
-				          SELECT 1
-				          FROM transactions child
-				          INNER JOIN block_ids child_blocks ON child.id = child_blocks.transaction_id
-				          WHERE child.hash = substr(o.spending_data, 1, 32)
-				            AND child.unmined_since IS NULL  -- Child must be mined
-				            AND child_blocks.block_height <= ($1 - $2)  -- Child must be stable
-				        )
-				      )
-				  )
 			)
 		`
 		keptClause, keptArgs := keptHashesClause(kept, 3)
@@ -243,20 +245,20 @@ func (s *Service) clearUnminedDeleteAtHeight(ctx context.Context, blockHeight ui
 	}
 }
 
-// clearConflictingParentRefs removes parent references to every expired conflicting record, so the
-// delete that follows cannot leave a surviving parent naming a missing spender. It returns the
-// hashes whose references could not be cleared; the delete must skip them and retry next block.
-func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight uint32) ([]chainhash.Hash, error) {
+// clearConflictingParentRefs removes parent references to every expired conflicting record the
+// defensive delete will remove, so the delete that follows cannot leave a surviving parent naming a
+// missing spender. A record the delete skips keeps its references. It returns the hashes whose
+// references could not be cleared; the delete must skip them and retry next block.
+func (s *Service) clearConflictingParentRefs(ctx context.Context, blockHeight, safetyWindow uint32) ([]chainhash.Hash, error) {
 	if s.clearParentRefs == nil {
 		return nil, nil
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT hash FROM transactions
-		WHERE delete_at_height IS NOT NULL
-		  AND delete_at_height <= $1
-		  AND conflicting
-	`, blockHeight)
+		SELECT t.hash FROM transactions t
+		WHERE `+defensiveDeleteFilter+`
+		  AND t.conflicting
+	`, blockHeight, safetyWindow)
 	if err != nil {
 		return nil, errors.NewStorageError("failed to list expired conflicting transactions", err)
 	}
