@@ -328,6 +328,22 @@ func (r *recheckStore) Spend(ctx context.Context, tx *bt.Tx, h uint32, ignoreFla
 	return r.fakeSequentialStore.Spend(ctx, tx, h, ignoreFlags...)
 }
 
+// unknownCreateStore can read and remove a record, and its create reports an
+// unknown outcome.
+type unknownCreateStore struct {
+	deletingRecheckStore
+	record    meta.Data
+	readErr   error
+	readCalls int
+}
+
+func (u *unknownCreateStore) GetMeta(_ context.Context, _ *chainhash.Hash, data *meta.Data) error {
+	u.readCalls++
+	*data = u.record
+
+	return u.readErr
+}
+
 // deletingRecheckStore can remove the record it created.
 type deletingRecheckStore struct {
 	recheckStore
@@ -406,6 +422,58 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 		_, _, err := SequentialSpendAndCreate(done, logger, f, tx, 100)
 		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the recheck answered under a detached context")
 		require.Equal(t, 1, f.deleteCalls)
+	})
+
+	t.Run("after an unknown create, only a marker over an unmined record removes it", func(t *testing.T) {
+		unknown := MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("batch wait ran out"))
+
+		for _, tc := range []struct {
+			name       string
+			spend      Spend
+			recheck    error
+			record     meta.Data
+			readErr    error
+			wantDelete bool
+		}{
+			{name: "marker, unmined", spend: Spend{Idempotent: true}, recheck: pruned, wantDelete: true},
+			{name: "marker, mined", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{BlockIDs: []uint32{7}}},
+			{name: "marker, record unreadable", spend: Spend{Idempotent: true}, recheck: pruned, readErr: errors.NewStorageError("down")},
+			{name: "missing parent", spend: Spend{Blessed: true}, recheck: errors.NewTxNotFoundError("parent gone")},
+			{name: "not a replay", spend: Spend{Idempotent: true}},
+			{name: "recheck cannot answer", spend: Spend{Idempotent: true}, recheck: errors.NewStorageError("down")},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f := &unknownCreateStore{
+					deletingRecheckStore: deletingRecheckStore{recheckStore: recheckStore{
+						fakeSequentialStore: fakeSequentialStore{spends: []*Spend{&tc.spend}, createErr: unknown},
+						recheckErr:          tc.recheck,
+					}},
+					record:  tc.record,
+					readErr: tc.readErr,
+				}
+
+				_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+				require.True(t, IsCreateOutcomeUnknown(err))
+				require.Len(t, spends, 1, "the spends are kept")
+				require.Equal(t, 0, f.unspendCalls)
+
+				if tc.wantDelete {
+					require.Equal(t, 1, f.deleteCalls)
+					require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+				} else {
+					require.Equal(t, 0, f.deleteCalls)
+					require.Same(t, unknown, err, "the create's own error is returned")
+				}
+			})
+		}
+	})
+
+	t.Run("after an unknown create, a fresh spend is not rechecked", func(t *testing.T) {
+		f := &recheckStore{fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{}}, createErr: MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("x"))}}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.True(t, IsCreateOutcomeUnknown(err))
+		require.Equal(t, 1, f.spendCalls)
 	})
 
 	t.Run("a store that cannot delete reports a storage error", func(t *testing.T) {

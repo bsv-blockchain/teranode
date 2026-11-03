@@ -157,6 +157,10 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		}
 	}
 
+	if IsCreateOutcomeUnknown(err) && anyMatched(spends) {
+		return nil, spends, recheckUnknownCreate(ctx, logger, s, tx, blockHeight, options.IgnoreFlags, err)
+	}
+
 	if err != nil {
 		if errors.Is(err, errors.ErrTxExists) {
 			// the tx already exists; leave the spends in place for the caller to decide
@@ -194,10 +198,15 @@ func anyMatched(spends []*Spend) bool {
 	return false
 }
 
-// completeDeleter is the store method recheckRecreated removes a recreated
-// record with. Both in-tree stores implement it.
+// completeDeleter is the store method the recheck removes a recreated record
+// with, and metaReader the one it reads a record's block ids with. Both in-tree
+// stores implement them.
 type completeDeleter interface {
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
+}
+
+type metaReader interface {
+	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 }
 
 // recheckRecreated closes the window between the spend and the create of a
@@ -238,70 +247,155 @@ type completeDeleter interface {
 // Only a transaction whose spend the store had already answered for is
 // rechecked, so a transaction seen for the first time pays nothing.
 func recheckRecreated(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags) error {
-	ignoreFlags.RequireParentOutputs = true
-
-	bound := defaultSequentialRollbackTimeout
-
-	if b, ok := s.(spendRollbackBounded); ok && b.SpendRollbackTimeout() > 0 {
-		bound = b.SpendRollbackTimeout()
-	}
-
-	recheckCtx, cancelRecheck := context.WithTimeout(context.WithoutCancel(ctx), bound)
-	defer cancelRecheck()
-
-	var recheckErr error
-
-	if err := retryStoreCall(recheckCtx, func() error {
-		_, recheckErr = s.Spend(recheckCtx, tx, blockHeight, ignoreFlags)
-		if recheckErr == nil || IsReplayAnswer(recheckErr) {
-			return nil
-		}
-
-		return recheckErr
-	}); err != nil {
+	answer, err := recheckSpend(ctx, s, tx, blockHeight, ignoreFlags)
+	if err != nil {
 		logger.Errorf("[SpendAndCreate] %s: recheck after create could not answer, keeping the created record: %v", tx.TxIDChainHash().String(), err)
 
 		return MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("SpendAndCreate: recheck of %s after create could not answer, keeping the created record", tx.TxIDChainHash().String(), err))
 	}
 
-	if recheckErr == nil {
+	if answer == nil {
 		return nil
 	}
 
 	deleter, ok := s.(completeDeleter)
 	if !ok {
-		return errors.NewStorageError("SpendAndCreate: %s recreated a pruned transaction and the store cannot remove it", tx.TxIDChainHash().String(), recheckErr)
+		return errors.NewStorageError("SpendAndCreate: %s recreated a pruned transaction and the store cannot remove it", tx.TxIDChainHash().String(), answer)
 	}
 
-	delCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+	if err := removeRecreated(ctx, s, deleter, tx.TxIDChainHash()); err != nil {
+		logger.Errorf("[SpendAndCreate] %s recreated a pruned transaction and could not remove it; it remains in the store: %v", tx.TxIDChainHash().String(), err)
+
+		return errors.NewStorageError("SpendAndCreate: could not remove recreated pruned transaction %s", tx.TxIDChainHash().String(), errors.Join(answer, err))
+	}
+
+	return answer
+}
+
+// recheckUnknownCreate is the recheck after a create whose outcome is unknown
+// (IsCreateOutcomeUnknown) over a spend the store had already answered for. The
+// write may still land, so a pruned C can be recreated with no error to say so.
+//
+// Unlike after a successful create, nothing here proves C's record was absent,
+// so a replay answer alone does not license a delete. A live C can answer one:
+// a C whose parent was pruned has its rebroadcast blessed and then answers the
+// missing parent, and a C the pruner held back after writing one parent's
+// marker answers that marker. Deleting either would remove a mined transaction
+// with unspent outputs. So the record is removed only when the marker answers
+// and the record carries no block id: the pruner marks only a mined child, so
+// an unmined record behind a marker is a recreation, never the original. A
+// record with block ids is left alone, and so is a create from a block path,
+// which writes block ids; those paths fail the attempt and their compensation
+// removes the record on the retry.
+//
+// Every outcome returns an error still marked MarkCreateOutcomeUnknown, so the
+// spends are kept. One gap stays: a write still in flight can land after the
+// delete, or after a read that found nothing.
+func recheckUnknownCreate(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, createErr error) error {
+	hash := tx.TxIDChainHash()
+
+	answer, err := recheckSpend(ctx, s, tx, blockHeight, ignoreFlags)
+	if err != nil || !errors.Is(answer, errors.ErrUtxoSpendingTxPruned) {
+		return createErr
+	}
+
+	deleter, canDelete := s.(completeDeleter)
+	reader, canRead := s.(metaReader)
+
+	if !canDelete || !canRead {
+		logger.Errorf("[SpendAndCreate] %s: create outcome unknown over a pruned transaction's marker and the store cannot check or remove the record", hash.String())
+
+		return createErr
+	}
+
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackBound(s))
 	defer cancel()
 
-	if err := retryStoreCall(delCtx, func() error {
-		err := deleter.DeleteComplete(delCtx, tx.TxIDChainHash())
+	var record meta.Data
+
+	if err = retryStoreCall(readCtx, func() error {
+		err := reader.GetMeta(readCtx, hash, &record)
 		if err != nil && (errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound)) {
 			return nil
 		}
 
 		return err
 	}); err != nil {
-		logger.Errorf("[SpendAndCreate] %s recreated a pruned transaction and could not remove it; it remains in the store: %v", tx.TxIDChainHash().String(), err)
+		logger.Errorf("[SpendAndCreate] %s: create outcome unknown over a pruned transaction's marker and the record could not be read: %v", hash.String(), err)
 
-		return errors.NewStorageError("SpendAndCreate: could not remove recreated pruned transaction %s", tx.TxIDChainHash().String(), errors.Join(recheckErr, err))
+		return createErr
 	}
 
-	return recheckErr
+	if len(record.BlockIDs) > 0 {
+		return createErr
+	}
+
+	if err = removeRecreated(ctx, s, deleter, hash); err != nil {
+		logger.Errorf("[SpendAndCreate] %s: create outcome unknown over a pruned transaction's marker and the record could not be removed: %v", hash.String(), err)
+
+		return createErr
+	}
+
+	logger.Warnf("[SpendAndCreate] %s: removed a recreated pruned transaction after a create with an unknown outcome; a write still in flight could land after this", hash.String())
+
+	return MarkCreateOutcomeUnknown(errors.NewUtxoSpendingTxPrunedError("SpendAndCreate: %s recreated a pruned transaction after a create with an unknown outcome and it was removed", hash.String(), createErr))
+}
+
+// recheckSpend spends tx again with RequireParentOutputs, detached from ctx and
+// bounded by the rollback timeout, with up to three attempts. answer is nil or a
+// replay answer; err is set when no attempt gave either.
+func recheckSpend(ctx context.Context, s SequentialStore, tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags) (answer error, err error) {
+	ignoreFlags.RequireParentOutputs = true
+
+	recheckCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackBound(s))
+	defer cancel()
+
+	err = retryStoreCall(recheckCtx, func() error {
+		_, answer = s.Spend(recheckCtx, tx, blockHeight, ignoreFlags)
+		if answer == nil || IsReplayAnswer(answer) {
+			return nil
+		}
+
+		return answer
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return answer, nil
+}
+
+// removeRecreated deletes a recreated record, detached from ctx and bounded by
+// the rollback timeout, with up to three attempts. A record already gone
+// counts as removed.
+func removeRecreated(ctx context.Context, s SequentialStore, deleter completeDeleter, hash *chainhash.Hash) error {
+	delCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackBound(s))
+	defer cancel()
+
+	return retryStoreCall(delCtx, func() error {
+		err := deleter.DeleteComplete(delCtx, hash)
+		if err != nil && (errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound)) {
+			return nil
+		}
+
+		return err
+	})
+}
+
+// rollbackBound is the store's SpendRollbackTimeout, or
+// defaultSequentialRollbackTimeout when the store names none.
+func rollbackBound(s SequentialStore) time.Duration {
+	if b, ok := s.(spendRollbackBounded); ok && b.SpendRollbackTimeout() > 0 {
+		return b.SpendRollbackTimeout()
+	}
+
+	return defaultSequentialRollbackTimeout
 }
 
 // unspendDetached runs unspendWithRetry under a context that ignores ctx's
 // cancellation and deadline and carries the rollback's own bound instead.
 func unspendDetached(ctx context.Context, logger ulogger.Logger, s SequentialStore, spends []*Spend) error {
-	bound := defaultSequentialRollbackTimeout
-
-	if b, ok := s.(spendRollbackBounded); ok && b.SpendRollbackTimeout() > 0 {
-		bound = b.SpendRollbackTimeout()
-	}
-
-	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackBound(s))
 	defer cancel()
 
 	return unspendWithRetry(rbCtx, logger, s, spends)

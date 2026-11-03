@@ -16,11 +16,13 @@ import (
 
 // pruneBeforeCreate runs the pruner's commit for a child, its marker on the
 // parent and then its deletion, in the window between SequentialSpendAndCreate's
-// spend and its create.
+// spend and its create. With outcomeUnknown the create runs and then reports
+// the outcome as unknown, as a batcher wait that ran out does.
 type pruneBeforeCreate struct {
 	*Store
-	prune       func()
-	afterCreate func()
+	prune          func()
+	afterCreate    func()
+	outcomeUnknown bool
 }
 
 func (p *pruneBeforeCreate) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
@@ -32,6 +34,10 @@ func (p *pruneBeforeCreate) Create(ctx context.Context, tx *bt.Tx, blockHeight u
 
 	if p.afterCreate != nil {
 		p.afterCreate()
+	}
+
+	if p.outcomeUnknown {
+		return nil, utxo.MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("batch did not complete in time"))
 	}
 
 	return md, err
@@ -140,6 +146,92 @@ func TestSpendAndCreateRecheckRemovesARecreatedPrunedTransaction(t *testing.T) {
 			if !tc.parentPruned {
 				require.Equal(t, spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, parent, 0),
 					"the parent keeps C's spend")
+			}
+		})
+	}
+}
+
+// TestSpendAndCreateRecheckAfterAnUnknownCreate: a create whose outcome is
+// unknown may still have written a pruned C again, so it is rechecked too, but
+// without the proof a successful create gives that C was absent. The record is
+// removed only when the marker answers and the record was never mined.
+//
+// The rows:
+//   - marker, unmined record: the pruner marks the parent and deletes C in the
+//     window, and the create writes C again. It is removed.
+//   - marker, mined record: the pruner marks the parent and holds C back, so C
+//     is still the mined original. It is kept.
+//   - parent pruned, mined record: the parent is gone and C is live, so the
+//     rebroadcast is blessed and the recheck answers the missing parent. C is
+//     kept: a missing parent alone does not prove C was pruned.
+func TestSpendAndCreateRecheckAfterAnUnknownCreate(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		deleteChild  bool
+		parentPruned bool
+		marker       bool
+		wantPruned   bool
+		wantGone     bool
+	}{
+		{name: "marker, unmined record", marker: true, deleteChild: true, wantPruned: true, wantGone: true},
+		{name: "marker, mined record", marker: true},
+		{name: "parent pruned, mined record", parentPruned: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, _ := setup(ctx, t)
+
+			parent := bt.NewTx()
+			require.NoError(t, parent.From("4444444444444444444444444444444444444444444444444444444444444444", 0, "51", 30000))
+			parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+			_, err := store.Create(ctx, parent, 1000)
+			require.NoError(t, err)
+
+			child := bt.NewTx()
+			require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+			// C is mined and its spend of the parent is recorded.
+			_, err = store.Spend(ctx, child, 1000)
+			require.NoError(t, err)
+			_, err = store.Create(ctx, child, 1000, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 1000}))
+			require.NoError(t, err)
+
+			if tc.parentPruned {
+				require.NoError(t, store.DeleteComplete(ctx, parent.TxIDChainHash()))
+			}
+
+			wrapped := &pruneBeforeCreate{Store: store, outcomeUnknown: true}
+			wrapped.prune = func() {
+				if tc.marker {
+					_, insertErr := store.db.ExecContext(ctx,
+						`INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1`,
+						parent.TxIDChainHash()[:], child.TxIDChainHash()[:])
+					require.NoError(t, insertErr)
+				}
+
+				if tc.deleteChild {
+					require.NoError(t, store.DeleteComplete(ctx, child.TxIDChainHash()))
+				}
+			}
+
+			_, spends, err := utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, wrapped, child, 1000)
+			require.True(t, utxo.IsCreateOutcomeUnknown(err), "the outcome stays unknown, so the spends are kept")
+			require.NotEmpty(t, spends)
+
+			if tc.wantPruned {
+				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+			} else {
+				require.NotErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+			}
+
+			_, getErr := store.Get(ctx, child.TxIDChainHash())
+			if tc.wantGone {
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "the recreated record must be removed")
+			} else {
+				require.NoError(t, getErr, "a mined record is never removed on this path")
 			}
 		})
 	}
