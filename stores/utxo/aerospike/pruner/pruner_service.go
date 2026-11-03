@@ -967,7 +967,7 @@ func (s *Service) Prune(ctx context.Context, blockHeight uint32, blockHashStr st
 // verify them all in one BatchGet.
 //
 // Returns the per-child stability verdict and, per scanned record key, the
-// children that record's outputs name. Extracted from processRecordChunk so the
+// children that record's outputs name. Extracted from processRecordChunkCarry so the
 // chunk loop reads as the decision it makes rather than the bin parsing it needs.
 func (s *Service) verifyChunkChildren(chunk []*aerospike.Result, blockHeight uint32) (map[string]bool, map[string][]string) {
 	uniqueSpendingChildren := make(map[string][]byte, 1000)   // hex hash -> bytes (typical: ~50-100 children per chunk)
@@ -2026,7 +2026,7 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 		// 5-10x faster than Input.ReadFrom() which parses the entire input
 		for i, inputInterface := range inputInterfaces {
 			// Comma-ok, not a bare assertion: this runs inside an errgroup
-			// goroutine (processRecordChunk -> chunkGroup.Go), which does not
+			// goroutine (chunkGroup.Go -> processRecordChunkCarry), which does not
 			// recover, so a bin holding a non-[]byte element would kill the
 			// pruner process instead of retaining the one record.
 			inputBytes, ok := inputInterface.([]byte)
@@ -2060,7 +2060,7 @@ func (s *Service) getTxInputsFromBins(ctx context.Context, blockHeight uint32, b
 }
 
 // addParentUpdate accumulates replay protection for a surviving parent record.
-// It is the single producer of parentUpdateInfo values: processRecordChunk and
+// It is the single producer of parentUpdateInfo values: processRecordChunkCarry and
 // ProcessSingleRecord both go through it, so the two cannot disagree about which
 // records get a marker.
 func (s *Service) addParentUpdate(updates map[string]*parentUpdateInfo, source []byte, childHash *chainhash.Hash, offset uint32) error {
@@ -3579,7 +3579,7 @@ func (s *Service) ProcessSingleRecord(txHash *chainhash.Hash, inputs []*bt.Input
 		return nil // No parents to update
 	}
 
-	// Build parent updates map through the same producer processRecordChunk
+	// Build parent updates map through the same producer processRecordChunkCarry
 	// uses, so the manual-cleanup entry point cannot write a different set of
 	// markers from the pruner it stands in for.
 	parentUpdates := make(map[string]*parentUpdateInfo, len(inputs)) // One parent per input (worst case)
