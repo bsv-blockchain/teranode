@@ -253,10 +253,14 @@ type BlockAssembler struct {
 	bestTipUnsupportedLogged atomic.Bool
 
 	// skippedForkBlocksMarked holds the fork blocks, by hash with their height, whose
-	// transactions markSkippedForkTxs has already marked, and skippedForkMarkPending is set
-	// while a run of it is unfinished. Both are owned by the block-processing loop.
-	skippedForkBlocksMarked map[chainhash.Hash]uint32
-	skippedForkMarkPending  bool
+	// transactions markSkippedForkTxs has already marked. skippedForkMarkPending is set while a
+	// run of it is unfinished. skippedForkMarkSaved is set once SkippedForkMarkStateKey is known
+	// to hold skippedForkMarkSavedPending. All are owned by the block-processing loop, and by
+	// Start before it.
+	skippedForkBlocksMarked     map[chainhash.Hash]uint32
+	skippedForkMarkPending      bool
+	skippedForkMarkSaved        bool
+	skippedForkMarkSavedPending bool
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -1659,6 +1663,12 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			// we cannot start block assembly if we have not processed all pending blocks
 			return errors.NewProcessingError("[BlockAssembler] failed to wait for pending blocks: %v", err)
 		}
+	}
+
+	// A mark of skipped fork transactions a restart cut short makes them unmined, so it runs
+	// before they are loaded.
+	if err = b.finishSkippedForkMarkAtStart(ctx); err != nil {
+		return err
 	}
 
 	// Replay any conflict-resolution WAL intents left behind by a crash mid-

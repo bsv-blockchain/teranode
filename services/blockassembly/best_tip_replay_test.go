@@ -1067,7 +1067,9 @@ func (c *noBestTipOrderClient) BlocksBetterThan(context.Context, model.BestTipKe
 // never moved back, and X would stay marked mined, so a restart, which reloads only unmined
 // transactions, would drop it. Both ways the replay falls back are covered, a fork block that
 // cannot be read does not keep B's transactions from being marked, and a run that could not
-// read B is finished by a later pass even when the replay works again by then.
+// read B is finished by a later pass even when the replay works again by then, or by the next
+// start when block assembly restarts first. B is found when its only child is invalid, so
+// the chain tip of its fork is that child.
 func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -1077,11 +1079,17 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 		unreadableFork bool
 		// subtreeLate writes B's subtree only after the fallback, and the next pass replays.
 		subtreeLate bool
+		// restartFirst restarts block assembly before that next pass.
+		restartFirst bool
+		// invalidChild gives B a child D that is then invalidated.
+		invalidChild bool
 	}{
-		{"best-tip order not served", false, false, false},
-		{"replay given up", true, false, false},
-		{"another fork block cannot be read", false, true, false},
-		{"B read after the replay works again", true, false, true},
+		{name: "best-tip order not served"},
+		{name: "replay given up", positionKnown: true},
+		{name: "another fork block cannot be read", unreadableFork: true},
+		{name: "B read after the replay works again", positionKnown: true, subtreeLate: true},
+		{name: "B read by the next start", positionKnown: true, subtreeLate: true, restartFirst: true},
+		{name: "B under an invalid child", invalidChild: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			initPrometheusMetrics()
@@ -1154,6 +1162,16 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 			require.NoError(t, err)
 			require.Zero(t, unminedSince(t, items, x), "precondition: X is marked mined in B")
 
+			if tc.invalidChild {
+				// D extends B and is invalidated; block validation processes the invalidation and
+				// sets D's mined_set again. B is no longer a chain tip.
+				d := buildChain(b, 1, 64000)[0]
+				addBlockWithMinedSet(ctx, t, items, d)
+				_, err = items.blockchainClient.InvalidateBlock(ctx, d.Hash())
+				require.NoError(t, err)
+				require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, d.Hash()))
+			}
+
 			// C overtakes B before block assembly looks.
 			c := buildChain(a1, 2, 62000)
 			for _, h := range c {
@@ -1191,11 +1209,17 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 
 				// The subtree store recovers, and so does the replay.
 				require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
-				ba.blockchainClient = items.blockchainClient
-				ba.processNewBlockAnnouncement(ctx)
-				requireBlockAssemblyTip(t, items, c[1])
+
+				if !tc.restartFirst {
+					ba.blockchainClient = items.blockchainClient
+					ba.processNewBlockAnnouncement(ctx)
+					requireBlockAssemblyTip(t, items, c[1])
+				}
 			}
-			require.NotZero(t, unminedSince(t, items, x), "X is marked not on the longest chain")
+
+			if !tc.restartFirst {
+				require.NotZero(t, unminedSince(t, items, x), "X is marked not on the longest chain")
+			}
 
 			// A restart reloads the unmined transactions, and X is one of them.
 			stp.Stop(context.Background())
@@ -1204,6 +1228,7 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 			require.NoError(t, err)
 			restarted.SetSkipWaitForPendingBlocks(true)
 			require.NoError(t, restarted.Start(ctx))
+			require.NotZero(t, unminedSince(t, items, x), "X is marked not on the longest chain after the restart")
 
 			require.Eventually(t, func() bool { return restarted.subtreeProcessor.GetCurrentTxMap().Exists(*x.TxIDChainHash()) }, 10*time.Second, 10*time.Millisecond, "the restart reloads X")
 		})

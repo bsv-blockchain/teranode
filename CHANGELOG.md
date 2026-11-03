@@ -151,12 +151,14 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   covered by the best-tip replay (#2074). When that replay falls back to following the
   best header (a blockchain service that does not serve `BlocksBetterThan` yet during a
   rolling upgrade, or a replay given up after three failures in a row), block assembly
-  marks the transactions it holds that recent fork blocks contain as not on the longest
-  chain once it reaches the best tip, after waiting for every pending `mined_set`. It
-  reads the fork blocks within the UTXO retention that block validation has processed,
-  each once; a fork block it cannot read is logged and read again on the next block or
-  reconcile pass, whether or not the replay works by then. The retry is kept in memory
-  only. A reset still marks every transaction in block assembly. No action needed. (#2065)
+  marks the transactions of recent fork blocks that no block of the best chain contains
+  as not on the longest chain, after waiting for every pending `mined_set`. It walks
+  every fork down from its chain tip, past invalid blocks, and reads each fork block
+  within the UTXO retention that block validation has processed once. A run that cannot
+  read a fork block is repeated on every later block or reconcile pass, and is recorded
+  under a new blockchain state key, `BlockAssemblerSkippedForkMark`, so a restart
+  finishes it before it loads the unmined transactions. An older binary ignores the key.
+  A reset still marks every transaction in block assembly. No action needed. (#2065)
 
 - **`GetLastNBlocks` honours `fromHeight` when orphans are included.** The SQL
   blockchain store ignored `fromHeight` with `includeOrphans=true` and always returned
