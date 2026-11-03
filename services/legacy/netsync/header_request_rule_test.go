@@ -8,12 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/services/legacy/blockchain"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -122,9 +120,7 @@ func inboundHeaderPeer(t *testing.T, sm *SyncManager, idx uint8) *peerpkg.Peer {
 
 	state := &peerSyncState{
 		syncCandidate: true,
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
 	}
-	t.Cleanup(state.requestedTxns.Stop)
 
 	sm.peerStates.Set(inbound, state)
 

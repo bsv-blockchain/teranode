@@ -11,6 +11,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
+	"github.com/stretchr/testify/require"
 )
 
 // TestMruInventoryMap ensures the MruInventoryMap behaves as expected including
@@ -144,6 +145,31 @@ func TestMruInventoryMapStringer(t *testing.T) {
 		t.Fatalf("unexpected string representation - got %q, want %q "+
 			"or %q", gotStr, wantStr1, wantStr2)
 	}
+}
+
+// TestMruInventoryMap_KeepsACopyNotTheCallersPointer pins that Add stores its
+// own copy of the item. A decoded inv message keeps all its items in one
+// backing array, so a stored pointer to one item would keep the whole message
+// alive while the item stays in the map. Reusing the caller's item shows the
+// difference: with the caller's pointer stored, evicting the first entry
+// deletes the reused item's new key instead, and the first entry is never
+// evicted.
+func TestMruInventoryMap_KeepsACopyNotTheCallersPointer(t *testing.T) {
+	m := newMruInventoryMap(1)
+
+	first := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x01}}
+	original := first
+
+	m.Add(&first)
+
+	first.Hash = chainhash.Hash{0x02} // the caller reuses its item
+
+	second := wire.InvVect{Type: wire.InvTypeTx, Hash: chainhash.Hash{0x03}}
+	m.Add(&second) // at the limit of one, this evicts the first entry
+
+	require.False(t, m.Exists(&original), "the first entry must be evicted")
+	require.True(t, m.Exists(&second))
+	require.Len(t, m.invMap, 1)
 }
 
 // BenchmarkMruInventoryList performs basic benchmarks on the most recently
