@@ -772,12 +772,10 @@ func (s *Service) partitionWorker(
 		// when the body already waited.
 		_ = chunkGroup.Wait()
 
-		drain := s.drainCarry
-		if err != nil || ctx.Err() != nil {
-			drain = s.drainCarryDetached
-		}
-
-		deleted, heldBack, drainErr := drain(ctx, carry)
+		// Detached on every path, not only after an error: a cancellation
+		// landing between any check here and the drain's send would discard
+		// a carry whose markers have landed.
+		deleted, heldBack, drainErr := s.drainCarryDetached(ctx, carry)
 
 		processed += int64(deleted)
 		skipped += int64(heldBack)
@@ -2536,10 +2534,10 @@ func (s *Service) drainCarry(ctx context.Context, carry *deleteCarry) (deleted, 
 }
 
 // drainCarryDetached drains under a context that ignores ctx's cancellation,
-// bounded by drainTimeout. It runs when the worker is stopping on an error or
-// a cancellation: the carried children are cleared, their markers have
-// landed, and a child left present behind its own markers would have its
-// re-spend refused as a pruned replay.
+// bounded by drainTimeout. A partition worker drains this way whenever it
+// stops: the carried children are cleared, their markers have landed, and a
+// child left present behind its own markers would have its re-spend refused
+// as a pruned replay.
 func (s *Service) drainCarryDetached(ctx context.Context, carry *deleteCarry) (deleted, heldBack int, err error) {
 	drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), drainTimeout)
 	defer cancel()
@@ -2547,7 +2545,7 @@ func (s *Service) drainCarryDetached(ctx context.Context, carry *deleteCarry) (d
 	return s.drainCarry(drainCtx, carry)
 }
 
-// drainTimeout bounds the drain of a worker that is stopping.
+// drainTimeout bounds the drain of a partition worker.
 const drainTimeout = 30 * time.Second
 
 // flushChunk sends one batch: the marker writes for this chunk's queued
@@ -2562,7 +2560,9 @@ const drainTimeout = 30 * time.Second
 // and the rows of one batch run in no fixed order; the delete's own answer
 // says whether the parent is gone, which is all the marker would have
 // protected against. A queued child whose parent's delete did not definitely
-// land is held back.
+// land is held back. In TTL mode the write is sent anyway: the "delete" there
+// is a touch that leaves the parent readable for up to a second, and any
+// write in that second gives it a full lifetime again.
 func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpdates map[string]*parentUpdateInfo, deletions []*pendingDeletion, externalFiles []*externalFileInfo) (deleted, heldBack int, err error) {
 	// SkipDeletions is checked before any marker is written, not only before the
 	// deletions. The spend path consults a marker for the transaction asking to
@@ -2587,7 +2587,13 @@ func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpda
 
 	deleteRecords, masters, deleteSlots := s.buildCarriedDeletes(prev)
 
-	writeUpdates, tied := splitTiedUpdates(parentUpdates, deleteSlots)
+	// In TTL mode a carried "delete" is a one-second expiry, and the parent can
+	// be read, and written back to a full lifetime, until it lapses, so its
+	// marker write is always sent.
+	writeUpdates, tied := parentUpdates, map[string]*parentUpdateInfo(nil)
+	if !s.utxoSetTTL {
+		writeUpdates, tied = splitTiedUpdates(parentUpdates, deleteSlots)
+	}
 
 	plan, sent, markErr := s.markParentsWith(ctx, writeUpdates, parentUpdates, deleteRecords)
 	if markErr != nil && !sent {
@@ -3132,7 +3138,10 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 		info := updates[sources[i]]
 		batchRec := rec.BatchRec()
 
-		if batchRec.Err != nil && batchRec.Err.Matches(types.FILTERED_OUT) {
+		// A refusal that is in doubt may follow an attempt the client retried,
+		// which may have written the markers before the record changed. It is
+		// a failed write, so its children's markers are withdrawn from it too.
+		if batchRec.Err != nil && batchRec.Err.Matches(types.FILTERED_OUT) && !batchRec.InDoubt && !batchRec.Err.IsInDoubt() {
 			if refused == nil {
 				refused = make(map[string]*parentUpdateInfo)
 			}

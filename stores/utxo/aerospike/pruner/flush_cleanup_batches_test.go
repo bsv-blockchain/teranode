@@ -650,8 +650,12 @@ func TestFlushChunk_MarkerOnARecordTheSameBatchDeletes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		refused bool
+		ttl     bool
 	}{
 		{name: "the parent's delete lands, so the child is cleared"},
+		// In TTL mode the parent's "delete" is a one-second expiry that leaves
+		// it readable, so the child's marker on it is written anyway.
+		{name: "in TTL mode the marker on the expiring parent is still written", ttl: true},
 		// A key in a namespace the server does not have is refused with
 		// INVALID_NAMESPACE, which is not in doubt.
 		{name: "the parent's delete is refused, so the child is held back", refused: true},
@@ -659,9 +663,16 @@ func TestFlushChunk_MarkerOnARecordTheSameBatchDeletes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := countBatches(s, client)
 
+			s.utxoSetTTL = tc.ttl
+			t.Cleanup(func() { s.utxoSetTTL = false })
+
 			n := byte(0)
 			if tc.refused {
 				n = 1
+			}
+
+			if tc.ttl {
+				n = 2
 			}
 
 			parent := chainhash.HashH([]byte{0xD0, n, 1})
@@ -694,11 +705,20 @@ func TestFlushChunk_MarkerOnARecordTheSameBatchDeletes(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-			require.Equal(t, 1, *calls, "the marker write on the deleted parent is not sent")
+			require.Equal(t, 1, *calls)
 			require.Zero(t, heldBack)
+
+			if tc.ttl {
+				require.True(t, hasMarker(t, client, parentKey, &child), "the expiring parent carries the marker")
+			}
 
 			_, _, err = s.drainCarry(ctx, carry)
 			require.NoError(t, err)
+
+			if tc.ttl {
+				// The child's "delete" is a one-second expiry too.
+				return
+			}
 
 			found, err := client.Exists(nil, childKey)
 			require.NoError(t, err)
@@ -732,4 +752,48 @@ func TestFlushChunk_UnsentBatchKeepsTheCarry(t *testing.T) {
 	found, err := client.Exists(nil, childKey)
 	require.NoError(t, err)
 	require.False(t, found)
+}
+
+// TestMarkParents_InDoubtRefusalIsAFailedWrite: a refused marker write that is
+// in doubt may follow a retried attempt that did write the markers, so it is a
+// failed write. Its children are held back and the withdrawal goes to that
+// record as well, rather than skipping it as a record that was never written.
+func TestMarkParents_InDoubtRefusalIsAFailedWrite(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	parent := chainhash.HashH([]byte{0xF0, 1})
+	child := chainhash.HashH([]byte{0xF0, 2})
+	parentKey := putRecord(t, client, &parent, spentBy(&child))
+
+	updates := make(map[string]*parentUpdateInfo)
+	require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+	var withdrawnFrom [][]byte
+
+	call := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		call++
+
+		if call == 1 {
+			for _, rec := range records {
+				br := rec.BatchRec()
+				br.ResultCode = types.FILTERED_OUT
+				br.InDoubt = true
+				br.Err = &aerospike.AerospikeError{ResultCode: types.FILTERED_OUT, InDoubt: true}
+			}
+
+			return nil
+		}
+
+		for _, rec := range records {
+			withdrawnFrom = append(withdrawnFrom, rec.BatchRec().Key.Digest())
+		}
+
+		return client.BatchOperate(policy, records)
+	}
+
+	plan, err := s.markParents(context.Background(), updates)
+	require.NoError(t, err)
+	require.Contains(t, plan.blocked, child)
+	require.Equal(t, [][]byte{parentKey.Digest()}, withdrawnFrom, "the in-doubt record is withdrawn from, not read and stripped")
 }
