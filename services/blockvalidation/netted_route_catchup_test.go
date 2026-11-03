@@ -301,31 +301,38 @@ func TestNettedRoute_DifficultyIsCheckedBeforeTheWindowRefusal(t *testing.T) {
 	bv, _, cleanup := newNetRangeHarness(t, "netted_route_daa_first", 65536)
 	defer cleanup()
 
-	params := chaincfg.MainNetParams
-	params.DaaForkHeight = 0
-	params.Checkpoints = []chaincfg.Checkpoint{{Height: 300_000}}
+	// An honest chain of 170 headers under the modern DAA, the first 160 stored. The window offered
+	// is 161 to 170, below checkpoint 300, so it is on the netted route with no verified checkpoint.
+	daa, trunk, chain := daaFixture(t)
+
+	params := *daa.ChainCfgParams
+	params.Checkpoints = []chaincfg.Checkpoint{{Height: 300}}
 	bv.settings.ChainCfgParams = &params
 
-	startBits, err := model.NewNBitFromString("180a097a")
-	require.NoError(t, err)
-
-	easyBits, err := model.NewNBitFromString("207fffff")
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, bv.settings, trunk, nil, nil)
 	require.NoError(t, err)
 
 	run := func(t *testing.T, tamper bool) (*catchupReportRecorder, error) {
 		t.Helper()
 
-		anchor, headers := buildConstantChain(300, 600, startBits)
+		headers := append([]*model.BlockHeader(nil), chain[161:]...)
 		if tamper {
-			headers[200].Bits = *easyBits
+			last := len(headers) - 1
+			headers[last] = withTamperedBits(t, headers[last], "207fffff")
 		}
 
 		rec := &catchupReportRecorder{}
-		u := &Server{logger: ulogger.TestLogger{}, settings: bv.settings, blockValidation: bv, utxoStore: bv.utxoStore, p2pClient: rec}
-		c := &CatchupContext{blockUpTo: newReleaseCatchupBlock(t), peerID: "peer", commonAncestorMeta: anchor, blockHeaders: headers}
+		u := &Server{logger: ulogger.TestLogger{}, settings: bv.settings, blockValidation: bv, utxoStore: bv.utxoStore, p2pClient: rec, blockchainClient: client}
+		c := &CatchupContext{
+			blockUpTo:          newReleaseCatchupBlock(t),
+			peerID:             "peer",
+			commonAncestorHash: chain[160].Hash(),
+			commonAncestorMeta: &model.BlockHeaderMeta{Height: 160},
+			blockHeaders:       headers,
+		}
 
 		_, netted := u.nettedRouteFirstBlock(c)
-		require.True(t, netted, "the window starts below checkpoint 300,000 on a netting store")
+		require.True(t, netted, "the window starts below checkpoint 300 on a netting store")
 
 		return rec, u.validateHeaderWindow(t.Context(), c)
 	}
