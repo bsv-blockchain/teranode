@@ -88,9 +88,7 @@ func demotionPeer(t *testing.T, sm *SyncManager, idx uint8, lastBlock int32) (*p
 
 	state := &peerSyncState{
 		syncCandidate: true,
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
 	}
-	t.Cleanup(state.requestedTxns.Stop)
 	state.noteBestKnownHeight(lastBlock)
 
 	sm.peerStates.Set(local, state)
@@ -156,11 +154,13 @@ func TestStalledSyncPeer_IsDemotedAndStaysConnected(t *testing.T) {
 		require.True(t, sm.blockDownloads.Add(stalled, h))
 	}
 
-	state, exists := sm.peerStates.Get(stalled)
+	_, exists := sm.peerStates.Get(stalled)
 	require.True(t, exists)
 
 	awaitedTx := chainhash.Hash{0xb0}
-	state.requestedTxns.Set(awaitedTx, struct{}{})
+	sm.requestedTxns = expiringmap.New[chainhash.Hash, struct{}](time.Hour)
+	t.Cleanup(sm.requestedTxns.Stop)
+	sm.requestedTxns.Set(awaitedTx, struct{}{})
 
 	sm.handleCheckSyncPeer()
 
@@ -182,8 +182,8 @@ func TestStalledSyncPeer_IsDemotedAndStaysConnected(t *testing.T) {
 	require.Zero(t, sm.blockDownloads.CountForPeer(stalled),
 		"a peer let off its slice must get that budget back straight away")
 
-	_, txStillWanted := state.requestedTxns.Get(awaitedTx)
-	require.True(t, txStillWanted, "the demoted peer's outstanding transaction requests must survive")
+	_, txStillWanted := sm.requestedTxns.Get(awaitedTx)
+	require.True(t, txStillWanted, "an outstanding transaction request made through the demoted peer must survive")
 
 	require.Equal(t, successor, sm.loadSyncPeer(), "the headers role must move to the other candidate")
 	require.False(t, stalled.SyncPeer(), "the demoted peer must no longer think it is the sync peer")
