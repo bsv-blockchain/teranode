@@ -1234,6 +1234,7 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 				require.NotZero(t, unminedSince(t, items, x), "X is marked not on the longest chain")
 				require.NotZero(t, unminedSince(t, items, y), "Y is marked not on the longest chain")
 				require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the pool is reloaded with Y, which only B had")
+				require.False(t, ba.bestTipResetReplayPending.Load(), "the reload on block assembly's own tip leaves no tip history pending, so mining candidates are built")
 			}
 
 			// A restart reloads the unmined transactions, and X is one of them.

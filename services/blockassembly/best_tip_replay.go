@@ -370,10 +370,17 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) {
 	if reload {
 		tip, height := b.CurrentBlock()
 
+		// The reset marks tip history pending when the replay position is known, which keeps
+		// mining candidates empty until a replay passes it. It stays on block assembly's own tip,
+		// so it leaves no history behind.
+		wasPending := b.bestTipResetReplayPending.Load()
+
 		if err = b.resetToBlockAndRecord(ctx, tip, height, true); err != nil {
 			b.logger.Errorf("[BlockAssembler] error reloading the pool after marking skipped fork transactions, marking them again on the next pass: %v", err)
 			return
 		}
+
+		b.bestTipResetReplayPending.Store(wasPending)
 	}
 
 	for hash, height := range marked {
@@ -385,14 +392,19 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) {
 
 // forkBlocksBelow returns the blocks of the fork ending at tipHash, from the tip down to the
 // fork point, with their meta. It reads branchLen blocks; GetChainTips reports 0 when it could
-// not compute a branch length, and then it reads down from the tip to the replay floor and stops
-// at the first block of the best chain.
+// not compute a branch length, and then it reads down from the tip to the replay floor, at most
+// blockchain_maxBlockHeadersPerRequest blocks, and stops at the first block of the best chain.
 func (b *BlockAssembler) forkBlocksBelow(ctx context.Context, tipHash *chainhash.Hash, tipHeight, branchLen, floor uint32, best *model.BlockHeader) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	if branchLen > 0 {
 		return b.blockchainClient.GetBlockHeaders(ctx, tipHash, uint64(branchLen))
 	}
 
-	headers, metas, err := b.blockchainClient.GetBlockHeaders(ctx, tipHash, uint64(tipHeight-floor)+1)
+	count := uint64(tipHeight-floor) + 1
+	if limit := b.settings.BlockChain.MaxBlockHeadersPerRequest; limit > 0 && count > uint64(limit) {
+		count = uint64(limit)
+	}
+
+	headers, metas, err := b.blockchainClient.GetBlockHeaders(ctx, tipHash, count)
 	if err != nil {
 		return nil, nil, err
 	}
