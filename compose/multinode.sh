@@ -1554,12 +1554,16 @@ PY
   done
 }
 
-# merkle_warm starts merkle-service's block processor. It starts only once
-# its subtree consumer has read a first message, and coinbase-only blocks
-# announce no subtrees, so until the first real tx it reads no blocks and
-# the first scenario tx waits for it to replay the whole chain (18 minutes
-# at height 1100). One placeholder message on the subtree topic starts it;
-# merkle-service logs it as undecodable and drops it.
+# merkle_warm starts merkle-service's pipeline. Each stage starts only after
+# the one before has read a first message: the block processor waits for a
+# subtree message, the subtree worker for a block message, callback delivery
+# for a subtree-work message. Coinbase-only blocks produce no subtree or
+# subtree-work messages, so on a new chain the first scenario tx gets no
+# SEEN_ON_NETWORK until a block with a subtree is processed, and no MINED
+# until the whole chain is replayed (18 minutes at height 1100). One
+# placeholder on each topic starts every stage. merkle-service logs each as
+# undecodable; the block one stays uncommitted until the next real block,
+# which is processed normally and commits past it.
 merkle_warm() {
   local port="${MERKLE_HOST_PORT:-18090}" kafka="${KAFKA_CONTAINER:-kafka-shared-multinode}"
   local deadline=$((SECONDS + 60))
@@ -1571,11 +1575,14 @@ merkle_warm() {
     fi
     sleep 1
   done
-  echo "multinode.sh warm-up" | docker exec -i "$kafka" rpk topic produce subtree >/dev/null
-  deadline=$((SECONDS + 30))
-  until docker logs "$MERKLE_CONTAINER" 2>&1 | grep -q 'starting block processor'; do
+  local topic
+  for topic in subtree block subtree-work; do
+    echo "multinode.sh warm-up" | docker exec -i "$kafka" rpk topic produce "$topic" >/dev/null
+  done
+  deadline=$((SECONDS + 60))
+  until docker logs "$MERKLE_CONTAINER" 2>&1 | grep -q 'starting callback delivery service'; do
     if ((SECONDS > deadline)); then
-      echo "warning: $MERKLE_CONTAINER has not started its block processor; the first MINED may be slow" >&2
+      echo "warning: $MERKLE_CONTAINER has not started callback delivery; SEEN_ON_NETWORK and MINED may be late" >&2
       return 0
     fi
     sleep 1
