@@ -165,9 +165,8 @@ func (s *Server) watchRepairHold(ctx context.Context, cancel context.CancelFunc,
 }
 
 // retryHeldHeight tries a held height again after a while, so pruning resumes once the hold
-// is released even when no new block arrives. It replaces a pending retry, even at a lower
-// height: after a reorg to a shorter chain with more work, the height the chain left is never
-// reached again on an idle chain.
+// is released even when no new block arrives. It replaces a pending retry; the processor only
+// passes it a newer signal whose block is on the best chain (see retryTarget).
 func (s *Server) retryHeldHeight(sig pruneSignal) {
 	if s.repairHoldRetry != nil {
 		s.repairHoldRetry.Stop()
@@ -182,6 +181,51 @@ func (s *Server) retryHeldHeight(sig pruneSignal) {
 		default: // a block signal is waiting, and its cycle arms the retry again
 		}
 	})
+}
+
+// retryTarget returns the signal a worker with a pending held-height retry acts on. A new
+// signal whose block is on the best chain replaces the pending retry, even at a lower height:
+// after a reorg to a shorter chain with more work, the height the chain left is never reached
+// again on an idle chain. A block off the best chain, such as a side block below the tip, does
+// not: the worker runs the pending retry instead, as if its timer had fired, which also
+// stands in for a retry signal the new one displaced from the channel. Block persister
+// notifications come in height order, so a lower block on the best chain only arrives after
+// a reorg away from the pending one.
+func (s *Server) retryTarget(ctx context.Context, sig, pending pruneSignal) pruneSignal {
+	if sig.retry || s.onBestChain(ctx, sig) {
+		return sig
+	}
+
+	return pending
+}
+
+// onBestChain reports whether sig's block is on the best chain. A check that fails counts as
+// off it, so a pending retry is kept.
+func (s *Server) onBestChain(ctx context.Context, sig pruneSignal) bool {
+	if s.blockchainClient == nil {
+		return true
+	}
+
+	ids, err := s.blockchainClient.GetBlockHeaderIDs(ctx, &sig.blockHash, 1)
+	if err == nil && len(ids) == 0 {
+		err = errors.NewProcessingError("block not found")
+	}
+
+	var onChain bool
+	if err == nil {
+		onChain, err = s.blockchainClient.CheckBlockIsInCurrentChain(ctx, ids[:1])
+	}
+
+	if err != nil {
+		if ctx.Err() == nil {
+			s.logger.Errorf("[pruner][%s:%d] failed to check whether the block is on the best chain, keeping the pending held-height retry: %v", sig.blockHash.String(), sig.blockHeight, err)
+			prunerErrors.WithLabelValues("best_chain_check").Inc()
+		}
+
+		return false
+	}
+
+	return onChain
 }
 
 // repairHoldRecheck is how long a height held by the overtaken-tip repair hold waits before it
@@ -438,7 +482,8 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 // OVERTAKEN-TIP REPAIR HOLD:
 // While block validation holds pruning, nothing is deleted and the height is retried every
 // repairHoldRecheckInterval, so pruning resumes on an idle chain. A pending retry is kept
-// across every cycle that does not finish its height.
+// across every cycle that does not finish its height, and only a signal for a block on the
+// best chain moves it (retryTarget).
 //
 // CATCHUP SKIP MODE:
 // When SkipDuringCatchup is enabled (default: false), the pruner skips all operations
@@ -469,26 +514,28 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			return
 
 		case sig := <-s.pruneNotify:
-			blockHeight := sig.blockHeight
-			blockHashStr := sig.blockHash.String()
-
-			if blockHeight <= s.lastProcessedHeight.Load() {
+			if sig.blockHeight <= s.lastProcessedHeight.Load() {
 				continue
 			}
 
 			// A retry signal other than the pending retry's comes from a timer that fired just
 			// before its retry was replaced or cleared. A pending retry is kept, at the height
-			// of the latest signal, until a cycle at or above that height is done, so a cycle
-			// skipped for any reason below cannot drop it.
+			// of the latest signal on the best chain, until a cycle at or above that height is
+			// done, so a cycle skipped for any reason below cannot drop it.
 			if sig.retry && (s.repairHoldRetry == nil || sig != s.repairHoldRetrySig) {
 				continue
 			}
 
 			if s.repairHoldRetry != nil {
+				sig = s.retryTarget(ctx, sig, s.repairHoldRetrySig)
 				s.retryHeldHeight(sig)
 			}
 
-			// Phase 1 already ran for a retried height: while the hold lasts, skip the cycle.
+			blockHeight := sig.blockHeight
+			blockHashStr := sig.blockHash.String()
+
+			// A retried height deletes nothing while the hold lasts, so the cycle is skipped;
+			// phase 1 runs once the hold is released.
 			if sig.retry && s.overtakenTipRepairHeld(ctx, blockHashStr, blockHeight) {
 				prunerSkipped.WithLabelValues("overtaken_tip_repair_hold").Inc()
 				continue

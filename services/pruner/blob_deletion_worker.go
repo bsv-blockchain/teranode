@@ -42,9 +42,9 @@ const (
 // overtaken-tip repair hold is tried again after repairHoldRecheckInterval, so the blobs it
 // left are deleted once the hold is released even when no new block arrives: the pruner may
 // already have finished that height, or be waiting out the phase 1 gap cooldown. A new signal
-// replaces a pending retry, even at a lower height: after a reorg to a shorter chain with more
-// work, the height the chain left is never reached again on an idle chain. The retry is kept
-// until a pass gets past the hold.
+// for a block on the best chain replaces a pending retry, even at a lower height; one for a
+// block off it runs the pending retry instead (retryTarget). The retry is kept until a pass
+// gets past the hold.
 func (s *Server) blobDeletionWorker() {
 	var (
 		retry    *time.Timer
@@ -71,6 +71,8 @@ func (s *Server) blobDeletionWorker() {
 			}
 
 			if pending {
+				sig = s.retryTarget(s.ctx, sig, retrySig)
+
 				retry.Stop()
 				retry = nil
 			}

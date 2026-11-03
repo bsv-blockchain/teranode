@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -826,6 +827,35 @@ type repairHoldClient struct {
 	acquired atomic.Int32
 	// acquiredAt is the safe height of the last blob deletion batch request.
 	acquiredAt atomic.Uint32
+	// side holds the hashes of blocks off the best chain; every other block is on it.
+	side sync.Map
+	// chainChecks counts best chain membership checks, which fail while chainCheckFails is set.
+	chainChecks     atomic.Int32
+	chainCheckFails atomic.Bool
+}
+
+// Block ids repairHoldClient gives a block on the best chain and a block off it.
+const (
+	bestChainBlockID uint32 = 1
+	sideBlockID      uint32 = 2
+)
+
+func (c *repairHoldClient) GetBlockHeaderIDs(_ context.Context, blockHash *chainhash.Hash, _ uint64) ([]uint32, error) {
+	if _, ok := c.side.Load(*blockHash); ok {
+		return []uint32{sideBlockID}, nil
+	}
+
+	return []uint32{bestChainBlockID}, nil
+}
+
+func (c *repairHoldClient) CheckBlockIsInCurrentChain(_ context.Context, blockIDs []uint32) (bool, error) {
+	c.chainChecks.Add(1)
+
+	if c.chainCheckFails.Load() {
+		return false, errors.NewStorageError("chain check failed")
+	}
+
+	return len(blockIDs) == 1 && blockIDs[0] == bestChainBlockID, nil
 }
 
 func (c *repairHoldClient) AcquireBlobDeletionBatch(_ context.Context, safeHeight uint32, _ int, _ int, _ []storetypes.BlobStoreType) (string, []*blockchain_api.ScheduledDeletion, error) {
@@ -1403,6 +1433,102 @@ func TestRepairHoldRetryFollowsLowerTip(t *testing.T) {
 		require.Equal(t, uint32(101), h, "the lower tip is pruned")
 	case <-time.After(2 * time.Second):
 		t.Fatal("the held height was not pruned once the hold was released")
+	}
+}
+
+// A held retry moves to a newer signal only when that signal's block is on the best chain. A
+// reorg to a shorter chain with more work moves it to the lower tip; a side block below the tip
+// leaves it at the tip, and so does a lower block whose chain cannot be checked. Each holds
+// on an idle chain, with no block after the lower one, in the pruner processor and in the blob
+// deletion worker.
+func TestRepairHoldRetryFollowsBestChainOnly(t *testing.T) {
+	tip, lower := chainhash.HashH([]byte("102")), chainhash.HashH([]byte("101"))
+
+	for _, tc := range []struct {
+		name       string
+		lowerWins  bool
+		checkFails bool
+		want       uint32
+	}{
+		{"lower winning tip", true, false, 101},
+		{"lower side block", false, false, 102},
+		{"lower block chain check fails", false, true, 102},
+	} {
+		// reorg marks the block that is off the best chain once the lower block arrives.
+		reorg := func(client *repairHoldClient) {
+			client.chainCheckFails.Store(tc.checkFails)
+
+			if tc.lowerWins {
+				client.side.Store(tip, struct{}{})
+			} else {
+				client.side.Store(lower, struct{}{})
+			}
+		}
+
+		t.Run(tc.name+"/processor", func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			client := &repairHoldClient{}
+			client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+			pruneSvc := &recordingPruner{calls: make(chan uint32, 4)}
+			server := newRepairHoldTestServer(ctx, client, pruneSvc)
+			server.repairHoldRecheckInterval = 20 * time.Millisecond
+
+			runProcessor(t, ctx, server)
+
+			server.pruneNotify <- pruneSignal{blockHeight: 102, blockHash: tip}
+			require.Eventually(t, func() bool { return client.reads.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "102 is held")
+
+			reorg(client)
+			server.pruneNotify <- pruneSignal{blockHeight: 101, blockHash: lower}
+			require.Eventually(t, func() bool { return client.chainChecks.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the lower block's chain is checked")
+
+			client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+			select {
+			case h := <-pruneSvc.calls:
+				require.Equal(t, tc.want, h)
+			case <-time.After(2 * time.Second):
+				t.Fatal("the held height was not pruned once the hold was released")
+			}
+		})
+
+		t.Run(tc.name+"/blob worker", func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			client := &repairHoldClient{}
+			client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(testHeldBlock)})
+
+			ba := &baHeightClient{}
+			ba.height.Store(102)
+
+			server := newBlobRepairHoldServer(ctx, client, ba)
+
+			runBlobWorker(t, server)
+
+			server.blobNotify <- pruneSignal{blockHeight: 102, blockHash: tip}
+			require.Eventually(t, func() bool { return client.reads.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "102 is held")
+
+			reorg(client)
+			if tc.lowerWins {
+				ba.height.Store(101)
+			}
+
+			server.blobNotify <- pruneSignal{blockHeight: 101, blockHash: lower}
+			require.Eventually(t, func() bool { return client.chainChecks.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the lower block's chain is checked")
+
+			client.hold.Store(&repairHoldAnswer{data: model.EncodeOvertakenTipRepairHold(nil)})
+
+			require.Eventually(t, func() bool { return client.acquired.Load() > 0 }, 2*time.Second, 5*time.Millisecond, "the held blobs are deleted once the hold is released")
+			require.Equal(t, tc.want, client.acquiredAt.Load())
+		})
 	}
 }
 
