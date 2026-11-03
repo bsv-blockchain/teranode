@@ -1,6 +1,10 @@
 package sql
 
 import (
+	"context"
+
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
@@ -39,4 +43,40 @@ func newConflictingTxIterator(store *Store) (*unminedTxIterator, error) {
 	it.rows = rows
 
 	return it, nil
+}
+
+// ConflictingTxHashes returns the hash of every transaction flagged conflicting,
+// read through the px_transactions_conflicting partial index. SQL always answers
+// from the index, so indexed is true whenever err is nil.
+func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT hash FROM transactions WHERE conflicting = true`)
+	if err != nil {
+		return nil, false, errors.NewStorageError("[ConflictingTxHashes] query failed", err)
+	}
+
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	var hashes []chainhash.Hash
+
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return nil, false, errors.NewStorageError("[ConflictingTxHashes] scan failed", err)
+		}
+
+		hash, hashErr := chainhash.NewHash(raw)
+		if hashErr != nil {
+			return nil, false, errors.NewStorageError("[ConflictingTxHashes] bad hash in transactions row", hashErr)
+		}
+
+		hashes = append(hashes, *hash)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, false, errors.NewStorageError("[ConflictingTxHashes] row iteration failed", err)
+	}
+
+	return hashes, true, nil
 }

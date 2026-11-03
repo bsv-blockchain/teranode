@@ -5631,6 +5631,13 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not add conflict recovery column", err)
 	}
 
+	// Serves ConflictingTxHashes: block validation reads the conflicting set once
+	// per block instead of one row per transaction of an already-validated subtree.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_transactions_conflicting ON transactions (hash) WHERE conflicting = true;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create px_transactions_conflicting index - [%+v]", err)
+	}
+
 	return nil
 }
 
@@ -5961,6 +5968,13 @@ func createSqliteSchema(db *usql.DB) error {
 		if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN recovery BLOB`); err != nil {
 			return errors.NewStorageError("could not add conflict recovery column", err)
 		}
+	}
+
+	// Serves ConflictingTxHashes: block validation reads the conflicting set once
+	// per block instead of one row per transaction of an already-validated subtree.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_transactions_conflicting ON transactions (hash) WHERE conflicting = true;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create px_transactions_conflicting index - [%+v]", err)
 	}
 
 	return nil

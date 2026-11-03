@@ -18,6 +18,21 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — action required before upgrading
 
+- **Block validation reads conflicting transactions from an index, and the
+  Aerospike UTXO store builds a new secondary index for it.** For subtrees the node
+  has already validated, `CheckBlockSubtrees` now asks the UTXO store once per block
+  which transactions are conflicting. Before, it read the `conflicting` flag of every
+  transaction in those subtrees, which on a block of a billion transactions took
+  minutes. The Aerospike store creates an expression index named `conflictingIndex`
+  on the UTXO set at startup. It holds only records whose `conflicting` bin is true,
+  so it stays small. Aerospike builds it in the background, and a large namespace
+  pays one full scan while it builds. Expression indexes need Aerospike 8.1 or later.
+  On an older server, and until the index is built and passes a startup self-test,
+  block validation keeps reading every transaction, as before, and logs a warning on
+  each block. The SQL stores add the partial index `px_transactions_conflicting`.
+  External `utxo.Store` implementations must implement `ConflictingTxHashes`.
+  (#TBD)
+
 - **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
   recovery if a transaction affected by rollback or reverse processing is still
   confirmed in any current-chain block, or if that check fails. The WAL remains

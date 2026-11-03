@@ -165,6 +165,14 @@ func (m *MockStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
 }
 
+func (m *MockStore) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).([]chainhash.Hash), args.Bool(1), args.Error(2)
+}
+
 func (m *MockStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	args := m.Called(ctx, removals)
 	return args.Error(0)

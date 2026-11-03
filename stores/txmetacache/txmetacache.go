@@ -1004,6 +1004,11 @@ func (t *TxMetaCache) GetConflictingTxIterator() (utxo.UnminedTxIterator, error)
 	return t.utxoStore.GetConflictingTxIterator()
 }
 
+// ConflictingTxHashes asks the underlying store; the cache holds no conflicting set.
+func (t *TxMetaCache) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	return t.utxoStore.ConflictingTxHashes(ctx)
+}
+
 func (t *TxMetaCache) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	return t.utxoStore.RemoveFromConflictingChildren(ctx, removals)
 }

@@ -267,6 +267,10 @@ func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return s.store.GetConflictingTxIterator()
 }
 
+func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	return s.store.ConflictingTxHashes(ctx)
+}
+
 func (s *Store) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	err := s.store.RemoveFromConflictingChildren(ctx, removals)
 	s.logger.Debugf("[UTXOStore][logger][RemoveFromConflictingChildren] count %d err %v : %s", len(removals), err, caller())

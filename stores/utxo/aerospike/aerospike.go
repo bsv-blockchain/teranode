@@ -251,6 +251,11 @@ type Store struct {
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
 
+	// conflictingIndexState is whether this process trusts the conflicting index
+	// (conflictingIndexUnchecked/Usable/Unusable); see conflicting_index.go.
+	conflictingIndexState   atomic.Int32
+	conflictingIndexProbeMu sync.Mutex
+
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
 	// block-state methods. SetBlockHeight and SetBlockState are declared below
@@ -457,6 +462,21 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 					err := s.CreateIndexIfNotExists(ctx, preserveUntilIndexName, fields.PreserveUntil.String(), aerospike.NUMERIC)
 					if err != nil {
 						s.logger.Errorf("Failed to create preserveUntilIndex: %v", err)
+					}
+				}
+
+				// Read by ConflictingTxHashes. A server that cannot hold an
+				// expression index (before 8.1) leaves block validation on its
+				// per-transaction fallback, which is correct but slow.
+				exists, err = s.indexExists(conflictingIndexName)
+				if err != nil {
+					s.logger.Errorf("Failed to check %s existence: %v", conflictingIndexName, err)
+					return
+				}
+
+				if !exists {
+					if err := s.createExpressionIndexIfNotExists(conflictingIndexName, conflictingIndexExpression()); err != nil {
+						s.logger.Warnf("Failed to create %s (expression indexes need Aerospike 8.1 or later); block validation will read every transaction of an already-validated subtree: %v", conflictingIndexName, err)
 					}
 				}
 			}

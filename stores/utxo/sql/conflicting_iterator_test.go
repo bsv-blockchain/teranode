@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,4 +56,58 @@ func TestSQLGetConflictingTxIterator(t *testing.T) {
 
 	require.Len(t, collected, 1)
 	assert.Equal(t, tx.TxIDChainHash().String(), collected[0].Hash.String())
+}
+
+// TestSQLConflictingTxHashes pins that the indexed lookup tracks the conflicting
+// flag through the store's own writers: SetConflicting in both directions and a
+// create of an already-conflicting transaction.
+func TestSQLConflictingTxHashes(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, parent := setup(ctx, t)
+
+	_, err := store.Create(ctx, parent, 0)
+	require.NoError(t, err)
+
+	childOf := func(vout uint32) *bt.Tx {
+		child := bt.NewTx()
+		require.NoError(t, child.From(parent.TxID(), vout, parent.Outputs[vout].LockingScript.String(), parent.Outputs[vout].Satoshis))
+		require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+		child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+
+		return child
+	}
+
+	child := childOf(0)
+	_, err = store.Create(ctx, child, 0)
+	require.NoError(t, err)
+
+	hashes, indexed, err := store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, hashes)
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*child.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	hashes, indexed, err = store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, []chainhash.Hash{*child.TxIDChainHash()}, hashes)
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*child.TxIDChainHash()}, false)
+	require.NoError(t, err)
+
+	hashes, _, err = store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.Empty(t, hashes)
+
+	created := childOf(1)
+	_, err = store.Create(ctx, created, 0, utxo.WithConflicting(true))
+	require.NoError(t, err)
+
+	hashes, _, err = store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{*created.TxIDChainHash()}, hashes)
 }

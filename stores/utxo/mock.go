@@ -252,6 +252,15 @@ func (m *MockUtxostore) GetConflictingTxIterator() (UnminedTxIterator, error) {
 	return args.Get(0).(UnminedTxIterator), args.Error(1)
 }
 
+// ConflictingTxHashes mocks the index-backed lookup of conflicting transactions.
+func (m *MockUtxostore) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).([]chainhash.Hash), args.Bool(1), args.Error(2)
+}
+
 // RemoveFromConflictingChildren mocks batched removal of conflicting-child entries.
 func (m *MockUtxostore) RemoveFromConflictingChildren(ctx context.Context, removals []ConflictingChildRemoval) error {
 	args := m.Called(ctx, removals)
