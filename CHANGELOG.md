@@ -143,7 +143,8 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 - **A syncing node refuses unmined transactions at every intake.** While the FSM is
   `CATCHINGBLOCKS`, propagation (gRPC, HTTP `/tx` and `/txs`, UDP), the validator's
-  Kafka consumer, legacy `tx` messages and the legacy orphan-eviction retry, and RPC
+  Kafka consumer, legacy `tx` messages, each parked legacy orphan validated after its
+  parent is accepted, the legacy orphan-eviction retry, and RPC
   `sendrawtransaction` all drop the transaction before anything is stored. Propagation
   answers HTTP 503 with `SERVICE_UNAVAILABLE` on `/tx`, and on `/txs` when refusals are
   the batch's only server-side failures (any other 5xx in the batch still makes it 500).

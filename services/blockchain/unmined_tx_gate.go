@@ -17,6 +17,7 @@ import (
 // the node syncs.
 const (
 	UnminedTxRouteLegacyTx             = "legacy_tx"
+	UnminedTxRouteLegacyOrphan         = "legacy_orphan"
 	UnminedTxRouteLegacyOrphanEviction = "legacy_orphan_eviction"
 	UnminedTxRoutePropagation          = "propagation"
 	UnminedTxRouteValidatorKafka       = "validator_kafka"

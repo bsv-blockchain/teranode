@@ -1039,6 +1039,7 @@ func gatedSyncManager(t *testing.T, name string, state blockchain2.FSMStateType,
 	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
 	sm.blockchainClient = blockchainClient
 	sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyTx)
+	sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphan)
 	sm.orphanEvictionGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphanEviction)
 
 	return sm, p, store
@@ -1107,6 +1108,83 @@ func TestEvictOrphan_RefusedWhileSyncing(t *testing.T) {
 
 			require.NoError(t, getErr, "an accepted orphan is in the UTXO store")
 			require.InDelta(t, refusedBefore, sm.orphanEvictionGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing pins the orphan
+// walk's own gate (issue 2003). handleTxMsg reads the FSM once, before the
+// parent's validation; the node can fall into a sync during that validation or
+// the walk that follows. Here the first read says RUNNING and every later one
+// CATCHINGBLOCKS: the parent is stored, and the child parked behind it must not
+// be, nor announced, nor left in the pool. The RUNNING row is the control, where
+// the same walk stores and announces the child.
+func TestProcessOrphanTransactions_RefusedOnceTheNodeStartsSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range []struct {
+		name        string
+		laterState  blockchain2.FSMStateType
+		childStored bool
+	}{
+		{"sync starts mid walk", blockchain2.FSMStateCATCHINGBLOCKS, false},
+		{"stays running", blockchain2.FSMStateRUNNING, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			txs := transactions.CreateTestTransactionChainWithCount(t, 3)
+			parent, child := txs[0], txs[1]
+
+			// The validator stores the extended form of whichever tx it is given,
+			// because the wire form handleTxMsg decodes carries no parent amounts.
+			extended := map[chainhash.Hash]*bt.Tx{*parent.TxIDChainHash(): parent, *child.TxIDChainHash(): child}
+			store := newUnlockFailureStore(t, "netsync_gate_orphan_walk_"+tt.laterState.String())
+			sm, p := newUnlockSyncManager(t, &validator.MockValidator{
+				ValidateFunc: func(ctx context.Context, tx *bt.Tx) (*meta.Data, error) {
+					return store.Create(ctx, extended[*tx.TxIDChainHash()], 1)
+				},
+			})
+			sm.utxoStore = store
+			notifier := &recordingNotifier{MockPeerNotifier: &MockPeerNotifier{}}
+			sm.peerNotifier = notifier
+
+			running := blockchain2.FSMStateRUNNING
+			later := tt.laterState
+			blockchainClient := &blockchain2.Mock{}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&running, nil).Once()
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&later, nil)
+			sm.blockchainClient = blockchainClient
+			sm.txGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyTx)
+			sm.orphanGate = blockchain2.NewUnminedTxGate(ulogger.TestLogger{}, blockchainClient, blockchain2.UnminedTxRouteLegacyOrphan)
+
+			parents := txmap.NewSyncedMap[chainhash.Hash, struct{}]()
+			parents.Set(*parent.TxIDChainHash(), struct{}{})
+			sm.orphanTxs.Set(*child.TxIDChainHash(), &orphanTxAndParents{tx: child, parents: parents, addedAt: time.Now()})
+
+			msg := wire.NewMsgTx(1)
+			require.NoError(t, msg.Deserialize(bytes.NewReader(parent.Bytes())))
+
+			refusedBefore := sm.orphanGate.RefusedTotal()
+
+			sm.handleTxMsg(&txMsg{tx: bsvutil.NewTx(msg), peer: p})
+
+			_, parentErr := store.Get(t.Context(), parent.TxIDChainHash())
+			require.NoError(t, parentErr, "the parent was read as RUNNING and is stored")
+
+			_, childErr := store.Get(t.Context(), child.TxIDChainHash())
+			_, stillParked := sm.orphanTxs.Get(*child.TxIDChainHash())
+			require.False(t, stillParked, "the child leaves the pool whether it is stored or refused")
+
+			if !tt.childStored {
+				require.ErrorIs(t, childErr, errors.ErrTxNotFound, "a child walked after the sync started must not reach the UTXO store")
+				require.Equal(t, []chainhash.Hash{*parent.TxIDChainHash()}, notifier.announced(), "only the parent is announced")
+				require.InDelta(t, refusedBefore+1, sm.orphanGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.NoError(t, childErr, "a child walked while RUNNING is stored")
+			require.ElementsMatch(t, []chainhash.Hash{*parent.TxIDChainHash(), *child.TxIDChainHash()}, notifier.announced())
+			require.InDelta(t, refusedBefore, sm.orphanGate.RefusedTotal(), 0)
 		})
 	}
 }

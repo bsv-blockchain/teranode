@@ -679,12 +679,14 @@ type SyncManager struct {
 	blockAssembly     blockassembly.ClientI
 	legacyKafkaInvCh  chan *kafka.Message
 
-	// txGate and orphanEvictionGate drop unmined transactions while the node
-	// syncs (issue 2003): txGate for a tx message a peer sends, announced or not,
-	// and orphanEvictionGate for the last validation an orphan gets when the pool
-	// evicts it. Announcements need no gate of their own, handleInvMsg asks for a
-	// transaction only in RUNNING. nil accepts everything.
+	// txGate, orphanGate and orphanEvictionGate drop unmined transactions while
+	// the node syncs (issue 2003): txGate for a tx message a peer sends, announced
+	// or not, orphanGate for each parked orphan validated once its parent is
+	// accepted, and orphanEvictionGate for the last validation an orphan gets when
+	// the pool evicts it. Announcements need no gate of their own, handleInvMsg
+	// asks for a transaction only in RUNNING. nil accepts everything.
 	txGate             *teranodeblockchain.UnminedTxGate
+	orphanGate         *teranodeblockchain.UnminedTxGate
 	orphanEvictionGate *teranodeblockchain.UnminedTxGate
 	// legacyKafkaInvProducer is retained (DC11) so SyncManager.Stop() can stop it
 	// synchronously; without a field there is no handle to flush it on shutdown.
@@ -2036,6 +2038,17 @@ func (sm *SyncManager) processOrphanTransactions(ctx context.Context, txHash *ch
 	for _, orphanTx := range orphanTxs {
 		// check if the orphan transaction has this transaction as a parent
 		if _, ok := orphanTx.parents.Get(*txHash); !ok {
+			continue
+		}
+
+		// handleTxMsg read the FSM before validating the parent, and that
+		// validation and this walk take time, so the node can have fallen into a
+		// sync since (issue 2003). Each orphan is checked again just before its
+		// own validation. A refused orphan leaves the pool: refused transactions
+		// are dropped, not held until RUNNING, and leaving it parked would only
+		// put it in front of the eviction gate later.
+		if sm.orphanGate.Refuses(ctx, orphanTx.tx.TxIDChainHash()) {
+			sm.orphanTxs.Delete(*orphanTx.tx.TxIDChainHash())
 			continue
 		}
 
@@ -4613,6 +4626,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		blockAssembly:     blockAssembly,
 
 		txGate:             teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyTx),
+		orphanGate:         teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphan),
 		orphanEvictionGate: teranodeblockchain.NewUnminedTxGate(logger, blockchainClient, teranodeblockchain.UnminedTxRouteLegacyOrphanEviction),
 	}
 
