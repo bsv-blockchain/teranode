@@ -153,9 +153,13 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `utxo_pruner_input_resolution_errors_total`,
   `utxo_pruner_children_held_unverified_total`, `utxo_pruner_markers_superseded_total`,
   `utxo_pruner_marker_withdraw_failures_total`,
-  `utxo_pruner_parent_update_failures_total` and
+  `utxo_pruner_parent_update_failures_total`,
+  `utxo_pruner_marker_writes_refused_total` and
   `utxo_sql_pruner_children_held_back_total`; operators should alert on a steadily
-  rising value. The SQL store (Postgres and SQLite) creates a new table,
+  rising value. The Aerospike pruner writes each marker with a plain map write
+  that checks the parent output on the server, instead of the `addDeletedChildren`
+  UDF, and deletes each chunk's children in the batch that carries the next
+  chunk's markers, so a pass costs one batch per chunk plus one at the end. The SQL store (Postgres and SQLite) creates a new table,
   `deleted_children`, on startup to hold the markers: one row per pruned child per
   surviving parent, removed when that parent is pruned, so it adds disk use in
   proportion to the pruned transactions whose parents are still unspent. The

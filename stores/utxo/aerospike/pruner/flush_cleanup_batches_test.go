@@ -8,6 +8,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -81,6 +82,8 @@ func TestFlushCleanupBatches_MarkersAreAllOrNothingPerChild(t *testing.T) {
 		heldBack bool
 		// p1Marked / p2Marked are the markers expected afterwards.
 		p1Marked, p2Marked bool
+		// p2Offsets are the outputs of P2 the child claims; default output 0.
+		p2Offsets []uint32
 	}{
 		{
 			name:     "both parents name the child",
@@ -108,6 +111,27 @@ func TestFlushCleanupBatches_MarkersAreAllOrNothingPerChild(t *testing.T) {
 				return aerospike.BinMap{fields.Utxos.String(): []interface{}{make([]byte, 32)}}
 			},
 			heldBack: true,
+		},
+		{
+			// A frozen output carries the freeze sentinel where the spending data
+			// goes, which names no transaction.
+			name: "a frozen output holds the child back",
+			p2: func(*chainhash.Hash) aerospike.BinMap {
+				frozen := make([]byte, 68)
+				copy(frozen[32:], subtree.FrozenBytes[:])
+
+				return aerospike.BinMap{fields.Utxos.String(): []interface{}{frozen}}
+			},
+			heldBack: true,
+		},
+		{
+			// Two outputs of P2 are claimed by the child, and only the second
+			// names it: one holder is enough, as in spendHolder.
+			name: "one of several claimed outputs naming the child is enough",
+			p2: func(c *chainhash.Hash) aerospike.BinMap {
+				return aerospike.BinMap{fields.Utxos.String(): []interface{}{make([]byte, 32), spentUtxoElement(c)}}
+			},
+			p1Marked: true, p2Marked: true, p2Offsets: []uint32{0, 1},
 		},
 		{
 			name:     "a parent with no utxos bin holds the child back",
@@ -152,7 +176,14 @@ func TestFlushCleanupBatches_MarkersAreAllOrNothingPerChild(t *testing.T) {
 
 			updates := make(map[string]*parentUpdateInfo)
 			require.NoError(t, s.addParentUpdatesForInput(updates, &p1, 0, &child))
-			require.NoError(t, s.addParentUpdatesForInput(updates, &p2, 0, &child))
+			p2Offsets := tc.p2Offsets
+			if p2Offsets == nil {
+				p2Offsets = []uint32{0}
+			}
+
+			for _, vout := range p2Offsets {
+				require.NoError(t, s.addParentUpdatesForInput(updates, &p2, vout, &child))
+			}
 
 			heldBack, flushErr := s.flushCleanupBatches(context.Background(), updates,
 				[]*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}}, nil)
@@ -530,4 +561,175 @@ func TestIsPaginationRecord(t *testing.T) {
 			require.Equal(t, tc.page, s.isPaginationRecord(record, tc.hash))
 		})
 	}
+}
+
+// countBatches makes every pruner batch call go to the client through a
+// counter, and returns the counter.
+func countBatches(s *Service, client *uaerospike.Client) *int {
+	calls := 0
+
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		calls++
+
+		return client.BatchOperate(policy, records)
+	}
+
+	return &calls
+}
+
+// TestFlushChunk_DeletesRideTheNextChunksBatch pins the cost and the order of
+// the carried deletes. Chunk 1 queues child C1 on parent P1, chunk 2 queues C2
+// on P2. Chunk 1's batch writes C1's marker and deletes nothing. Chunk 2's
+// batch writes C2's marker and deletes C1, whose marker the previous batch
+// confirmed. The drain deletes C2. Three batches for two chunks, one per chunk
+// plus the drain, and no child is deleted in the batch that marks it.
+func TestFlushChunk_DeletesRideTheNextChunksBatch(t *testing.T) {
+	s, client := newFlushTestService(t)
+	calls := countBatches(s, client)
+	ctx := context.Background()
+
+	queue := func(n byte) (*chainhash.Hash, *aerospike.Key, *aerospike.Key, map[string]*parentUpdateInfo) {
+		parent := chainhash.HashH([]byte{0xC0, n, 1})
+		child := chainhash.HashH([]byte{0xC0, n, 2})
+
+		parentKey := putRecord(t, client, &parent, spentBy(&child))
+		childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
+
+		updates := make(map[string]*parentUpdateInfo)
+		require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+		return &child, parentKey, childKey, updates
+	}
+
+	exists := func(key *aerospike.Key) bool {
+		found, err := client.Exists(nil, key)
+		require.NoError(t, err)
+
+		return found
+	}
+
+	c1, p1Key, c1Key, updates1 := queue(1)
+	c2, p2Key, c2Key, updates2 := queue(2)
+
+	carry := &deleteCarry{}
+
+	deleted, heldBack, err := s.flushChunk(ctx, carry, updates1, []*pendingDeletion{{txHash: c1, keys: []*aerospike.Key{c1Key}}}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, *calls)
+	require.Zero(t, deleted)
+	require.Zero(t, heldBack)
+	require.True(t, hasMarker(t, client, p1Key, c1))
+	require.True(t, exists(c1Key), "a child is not deleted in the batch that marks it")
+
+	deleted, _, err = s.flushChunk(ctx, carry, updates2, []*pendingDeletion{{txHash: c2, keys: []*aerospike.Key{c2Key}}}, nil)
+	require.NoError(t, err)
+	require.Equal(t, 2, *calls, "chunk 2's markers and chunk 1's delete share one batch")
+	require.Equal(t, 1, deleted)
+	require.False(t, exists(c1Key))
+	require.True(t, hasMarker(t, client, p2Key, c2))
+	require.True(t, exists(c2Key))
+
+	deleted, _, err = s.drainCarry(ctx, carry)
+	require.NoError(t, err)
+	require.Equal(t, 3, *calls)
+	require.Equal(t, 1, deleted)
+	require.False(t, exists(c2Key))
+	require.True(t, carry.empty())
+}
+
+// TestFlushChunk_MarkerOnARecordTheSameBatchDeletes covers a parent P that is
+// itself a pruned child, cleared by chunk 1, while chunk 2 queues P's own child
+// C on it. Chunk 2's batch deletes P, so C's marker write on P is not sent: the
+// rows of one batch run in no fixed order, and P's delete answers whether P is
+// gone. When it is, C is cleared. When the delete is refused, P may still be
+// there unmarked, so C is held back.
+func TestFlushChunk_MarkerOnARecordTheSameBatchDeletes(t *testing.T) {
+	s, client := newFlushTestService(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name    string
+		refused bool
+	}{
+		{name: "the parent's delete lands, so the child is cleared"},
+		// A key in a namespace the server does not have is refused with
+		// INVALID_NAMESPACE, which is not in doubt.
+		{name: "the parent's delete is refused, so the child is held back", refused: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := countBatches(s, client)
+
+			n := byte(0)
+			if tc.refused {
+				n = 1
+			}
+
+			parent := chainhash.HashH([]byte{0xD0, n, 1})
+			child := chainhash.HashH([]byte{0xD0, n, 2})
+
+			parentKey := putRecord(t, client, &parent, spentBy(&child))
+			if tc.refused {
+				var err error
+				parentKey, err = aerospike.NewKey("nosuchnamespace", "test", uaerospike.CalculateKeySource(&parent, 0, 128))
+				require.NoError(t, err)
+			}
+
+			childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
+
+			carry := &deleteCarry{deletions: []*pendingDeletion{{txHash: &parent, keys: []*aerospike.Key{parentKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
+
+			info := &parentUpdateInfo{key: parentKey, seen: make(map[chainhash.Hash]struct{})}
+			info.add(&child, 0)
+			updates := map[string]*parentUpdateInfo{string(parentKey.Digest()): info}
+
+			_, heldBack, err := s.flushChunk(ctx, carry, updates, []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}}, nil)
+
+			if tc.refused {
+				require.Equal(t, 2, *calls, "the batch, then the withdrawal of the held-back child's markers")
+				require.Error(t, err, "a refused delete fails the batch, as before")
+				require.Equal(t, 2, heldBack, "the surviving parent and its child are both held back")
+				require.True(t, carry.empty(), "the held-back child is not carried")
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, 1, *calls, "the marker write on the deleted parent is not sent")
+			require.Zero(t, heldBack)
+
+			_, _, err = s.drainCarry(ctx, carry)
+			require.NoError(t, err)
+
+			found, err := client.Exists(nil, childKey)
+			require.NoError(t, err)
+			require.False(t, found)
+		})
+	}
+}
+
+// TestFlushChunk_UnsentBatchKeepsTheCarry: a batch that never goes out, because
+// the context is done, must leave the carried deletes owed, so the drain still
+// sends them.
+func TestFlushChunk_UnsentBatchKeepsTheCarry(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	child := chainhash.HashH([]byte{0xE0, 2})
+	childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
+
+	carry := &deleteCarry{deletions: []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}}, updates: []map[string]*parentUpdateInfo{{}}}
+
+	done, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, _, err := s.flushChunk(done, carry, nil, nil, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, carry.deletions, 1)
+
+	deleted, _, err := s.drainCarryDetached(done, carry)
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+
+	found, err := client.Exists(nil, childKey)
+	require.NoError(t, err)
+	require.False(t, found)
 }
