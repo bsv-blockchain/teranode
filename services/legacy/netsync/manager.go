@@ -1995,7 +1995,6 @@ func (sm *SyncManager) handleTxMsg(tmsg *txMsg) {
 	// overlay that never removes a coin from the chainstate; teranode has no such
 	// overlay, so it needs the stricter rule.
 	if sm.txGate.Refuses(ctx, txHash) {
-		state.requestedTxns.Delete(*txHash)
 		sm.requestedTxns.Delete(*txHash)
 
 		return
