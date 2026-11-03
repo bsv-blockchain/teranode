@@ -537,13 +537,16 @@ func (s *Store) classifyPlanMisses(ctx context.Context, q pgx.Tx, p *spendPlan, 
 		// state instead, matching both reference stores.
 		refusing := flags & p.masks[k]
 
+		// Each input gets an error of its own, never the package-level value with the same
+		// code: the validator joins a transaction's input errors into one chain, and joining
+		// onto a shared value would chain every later caller's error onto this one.
 		switch {
 		case refusing&FlagFrozen != 0:
-			sp.Err = errors.ErrFrozen
+			sp.Err = errors.NewUtxoFrozenError("[utxoset] utxo %s:%d is frozen", sp.TxID, sp.Vout)
 		case refusing&FlagConflicting != 0:
-			sp.Err = errors.ErrTxConflicting
+			sp.Err = errors.NewTxConflictingError("[utxoset] utxo %s:%d belongs to a conflicting transaction", sp.TxID, sp.Vout)
 		case refusing&FlagLocked != 0:
-			sp.Err = errors.ErrTxLocked
+			sp.Err = errors.NewTxLockedError("[utxoset] utxo %s:%d belongs to a locked transaction", sp.TxID, sp.Vout)
 		case spendableFrom > p.heights[k]:
 			// Exists, but not yet spendable. NOT a double spend, and reporting it as one
 			// would be wrong. One column carries two different holds and they get different
@@ -609,7 +612,8 @@ func (s *Store) classifyPlanMisses(ctx context.Context, q pgx.Tx, p *spendPlan, 
 		}
 
 		if _, ok := present[k]; !ok {
-			p.perItem[p.owner[k]][p.ownerVin[k]].Err = errors.ErrSpent
+			sp := p.perItem[p.owner[k]][p.ownerVin[k]]
+			sp.Err = errors.New(errors.ERR_UTXO_SPENT, "[utxoset] utxo %s:%d already spent", sp.TxID, sp.Vout)
 			missing = true
 		}
 	}
