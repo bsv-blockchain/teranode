@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/pkg/urlutil"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	"github.com/bsv-blockchain/teranode/services/blockchain/work"
@@ -805,7 +806,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			PeerURL:           ctx.baseURL,
 			TargetBlockHash:   ctx.blockUpTo.Hash().String(),
 			TargetBlockHeight: ctx.blockUpTo.Height,
-			ErrorMessage:      errorMsg,
+			ErrorMessage:      urlutil.RedactIPLiterals(errorMsg), // served by Asset /catchup/status (bitcoin-sv/teranode#4855)
 			ErrorType:         errorType,
 			AttemptTime:       time.Now().UnixMilli(),
 			DurationMs:        time.Since(ctx.startTime).Milliseconds(),

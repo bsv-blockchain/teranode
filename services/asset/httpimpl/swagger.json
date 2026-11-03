@@ -2984,6 +2984,7 @@
           "x-go-name": "LastBlockTime"
         },
         "last_catchup_error": {
+          "description": "Most recent catchup error for this peer, with IP addresses redacted and capped at 512 bytes. Empty when asset_publicErrorDetail is false.",
           "type": "string",
           "x-go-name": "LastCatchupError"
         },

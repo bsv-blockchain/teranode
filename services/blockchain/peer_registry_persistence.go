@@ -155,6 +155,8 @@ func loadPeerRegistry(ctx context.Context, logger ulogger.Logger, store blob.Sto
 		// entries alive slightly longer but adds no correctness benefit.
 		if p.IsBanned || p.LastSeen.After(cutoff) {
 			peerCopy := clonePeerInfo(p)
+			// A blob saved by an older binary holds the error unsanitized.
+			peerCopy.LastCatchupError = sanitizeCatchupError(peerCopy.LastCatchupError)
 			live = append(live, &peerCopy)
 		}
 	}

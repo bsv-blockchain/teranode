@@ -302,6 +302,26 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `processed_at` of such a block. Before, the peer id came back empty and
   `processed_at` was misread. `GetBlockHeader` was not affected. (#2074)
 
+- **Peer HTTP errors no longer carry the response body, and stored catch-up errors no
+  longer carry IP addresses** (bitcoin-sv/teranode#4855). A peer chooses the URL that
+  catch-up fetches from, so a failed fetch could be a response from, or a dial to, a
+  service inside the node's network. The error reached the peer registry's
+  `LastCatchupError` and the unauthenticated Asset `/peers` endpoint.
+    - A non-2xx response to a peer fetch is now reported as
+      `http request [<url>] returned status code [N]`. The `with body "..."` part is
+      gone, from logs as well. The error type (`NOT_FOUND`, `SERVICE_UNAVAILABLE`,
+      `SERVICE_RATE_LIMITED`, `SERVICE_ERROR`) is unchanged.
+    - `last_catchup_error` in `/peers` and `/api/p2p/peers`, and `error_message` in
+      `/catchup/status`, show every IP address (with its port) as `<redacted-ip>`.
+      `last_catchup_error` is cut at 512 bytes. A registry blob saved by an older
+      binary is cleaned the same way on load.
+    - `last_catchup_error` in `/peers` now follows `asset_publicErrorDetail`, like
+      `/catchup/status` `error_message`: with the setting `false` it is empty.
+      `last_catchup_error_time` is still served. The default (`true`) keeps the field.
+    - Who is affected: operators who read peer error bodies or addresses from logs or
+      the dashboard. The full address still appears in this node's own logs where the
+      fetch failed, apart from the response body, which is no longer recorded anywhere.
+
 - **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
   background, and block storage can wait for the repair.** `InvalidateBlock`,
   `RevalidateBlock`, the startup rebuild and two `StoreBlock` paths used to log a
