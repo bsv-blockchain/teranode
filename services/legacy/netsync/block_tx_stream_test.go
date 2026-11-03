@@ -64,16 +64,22 @@ func TestBlockTxStream_YieldsTheCountThenEveryTransaction(t *testing.T) {
 // TestBlockTxStream_RefusesATruncatedStream pins the case a malicious or broken
 // peer produces: a declared count the body does not deliver. Stopping short must
 // be an error, never a short block treated as complete. Here the body arrived to
-// exactly its declared length and still owes four transactions, so the message
-// disagrees with itself: that is the peer's, as a corrupt delivery, the same code
-// RequireEnd gives a length that disagrees with the transactions.
+// exactly its declared length and stops inside the second of its two transactions,
+// so the message disagrees with itself: that is the peer's, as a corrupt delivery,
+// the same code RequireEnd gives a length that disagrees with the transactions. The
+// second transaction is begun rather than missing so the body is long enough for its
+// count (minSerializedTxSize) and the stream gets as far as reading it.
 func TestBlockTxStream_RefusesATruncatedStream(t *testing.T) {
 	var buf bytes.Buffer
 
-	require.NoError(t, wire.WriteVarInt(&buf, wire.ProtocolVersion, 5))
+	require.NoError(t, wire.WriteVarInt(&buf, wire.ProtocolVersion, 2))
 
 	raw, _ := streamTxBytes(t, 1)
 	_, err := buf.Write(raw)
+	require.NoError(t, err)
+
+	second, _ := streamTxBytes(t, 2)
+	_, err = buf.Write(second[:len(second)/2])
 	require.NoError(t, err)
 
 	s, err := newBlockTxStream(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
@@ -89,6 +95,38 @@ func TestBlockTxStream_RefusesATruncatedStream(t *testing.T) {
 	require.True(t, errors.IsBlockCorrupt(err),
 		"a body delivered to its declared length that still owes transactions is a corrupt delivery, the peer's")
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "and says nothing about the block itself")
+}
+
+// The same disagreement with the body ending exactly at a transaction boundary: the stream sees
+// a clean io.EOF where the next transaction should start, rather than one inside a transaction,
+// and that is still a corrupt delivery, not a clean end.
+func TestBlockTxStream_RefusesAStreamThatEndsBetweenTransactionsShortOfItsCount(t *testing.T) {
+	var buf bytes.Buffer
+
+	require.NoError(t, wire.WriteVarInt(&buf, wire.ProtocolVersion, 4))
+
+	for i := 1; i <= 3; i++ {
+		raw, _ := streamTxBytes(t, i)
+		_, err := buf.Write(raw)
+		require.NoError(t, err)
+	}
+
+	bodyLen := int64(buf.Len())
+	require.GreaterOrEqual(t, bodyLen, int64(4*minSerializedTxSize), "the body must be long enough for its count, so the stream reads to its end")
+
+	s, err := newBlockTxStream(bytes.NewReader(buf.Bytes()), bodyLen)
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		_, _, err = s.Next()
+		require.NoError(t, err)
+	}
+
+	_, _, err = s.Next()
+	require.Error(t, err)
+	require.NotErrorIs(t, err, errBlockTxStreamDone)
+	require.True(t, errors.IsBlockCorrupt(err), "a body delivered to its declared length that still owes a transaction is a corrupt delivery: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid))
 }
 
 // TestBlockTxStream_ABodyCutShortOfItsDeclaredLengthIsADeliveryFault pins the
@@ -292,6 +330,93 @@ func TestBlockTxStream_RefusesAnEmptyBlock(t *testing.T) {
 	_, err := newBlockTxStream(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no transactions")
+}
+
+// A transaction with no inputs or no outputs is refused as it is read, before the caller records it
+// in the block's duplicate map. It parses in 10 bytes, so without this a peer could make the map
+// grow by one entry for every 10 bytes of body sent before the merkle root was checked (issue
+// 4945). It is an invalid block and the peer's fault, but not one of the three refusals that may
+// ban (ErrBlockBodyMismatch).
+func TestBlockTxStream_RefusesATransactionWithNoInputsOrNoOutputs(t *testing.T) {
+	noInputs := bt.NewTx()
+	require.NoError(t, noInputs.PayToAddress("1BitcoinEaterAddressDontSendf59kuE", 1000))
+
+	noOutputs, _ := streamTx(t, 1)
+	noOutputs.Outputs = nil
+
+	neither := bt.NewTx()
+
+	for name, tx := range map[string]*bt.Tx{"no inputs": noInputs, "no outputs": noOutputs, "neither": neither} {
+		t.Run(name, func(t *testing.T) {
+			first, _ := streamTx(t, 2)
+
+			var buf bytes.Buffer
+
+			require.NoError(t, wire.WriteVarInt(&buf, wire.ProtocolVersion, 2))
+			buf.Write(first.Bytes())
+			buf.Write(tx.Bytes())
+
+			// Declared long enough for its count, so the stream reaches the transaction itself.
+			s, err := newBlockTxStream(&buf, minSerializedTxSize*2+1)
+			require.NoError(t, err)
+
+			_, _, err = s.Next()
+			require.NoError(t, err)
+
+			_, _, err = s.Next()
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "it needs at least one", "refused by the check, not by the parser")
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "no block carrying it can be valid: %v", err)
+			require.False(t, errors.Is(err, errors.ErrBlockBodyMismatch), "and it is not a refusal that bans")
+			require.NotErrorIs(t, err, errBlockTxStreamDone)
+		})
+	}
+}
+
+// A transaction with no inputs is refused once its inputs are read, before the caller is asked for
+// a writer for its outputs: nothing of it reaches the subtree data file.
+func TestBlockTxStream_RefusesNoInputsBeforeItsOutputsAreWritten(t *testing.T) {
+	noInputs := bt.NewTx()
+	require.NoError(t, noInputs.PayToAddress("1BitcoinEaterAddressDontSendf59kuE", 1000))
+
+	var buf bytes.Buffer
+
+	require.NoError(t, wire.WriteVarInt(&buf, wire.ProtocolVersion, 1))
+	buf.Write(noInputs.Bytes())
+
+	s, err := newBlockTxStream(&buf, minSerializedTxSize)
+	require.NoError(t, err)
+
+	asked := false
+
+	_, _, _, err = s.NextStreamed(func(*bt.Tx) (io.Writer, error) {
+		asked = true
+
+		return io.Discard, nil
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "has no inputs")
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "no block carrying it can be valid: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockBodyMismatch), "and it is not a refusal that bans")
+	require.False(t, asked, "the outputs were never given a writer")
+}
+
+// The count is held to minSerializedTxSize, the smallest valid transaction, not to the 10 bytes an
+// input-less, output-less one parses in: a body of 60 bytes per declared transaction passes, one
+// byte less is refused at the claim.
+func TestBlockTxStream_HoldsTheCountToTheSmallestValidTransaction(t *testing.T) {
+	const count = 1000
+
+	var buf bytes.Buffer
+
+	require.NoError(t, wire.WriteVarInt(&buf, wire.ProtocolVersion, count))
+
+	_, err := newBlockTxStream(bytes.NewReader(buf.Bytes()), count*minSerializedTxSize)
+	require.NoError(t, err)
+
+	_, err = newBlockTxStream(bytes.NewReader(buf.Bytes()), count*minSerializedTxSize-1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "body can hold")
 }
 
 // A block on the wire whose transaction comes in the extended form is a corrupt delivery. Its id,

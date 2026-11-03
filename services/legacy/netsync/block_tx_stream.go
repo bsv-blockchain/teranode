@@ -35,10 +35,16 @@ var errBlockTxStreamDone = errors.NewProcessingError("block transaction stream e
 // holds.
 const maxBlockTxCount = 1 << 31
 
-// minSerializedTxSize is the smallest a serialized transaction can possibly be:
-// 4 version, 1 input count, 1 output count, 4 locktime. No real transaction is
-// this small, which is the point — it is a floor for arithmetic, not an estimate.
-const minSerializedTxSize = 10
+// minSerializedTxSize is the smallest a valid transaction can be on the wire: 4 version, 1 input
+// count, one input with an empty script (32 outpoint hash, 4 index, 1 script length, 4 sequence), 1
+// output count, one output with an empty script (8 value, 1 script length), 4 locktime. A
+// transaction with no inputs or no outputs parses in 10 bytes but is invalid by consensus
+// (bad-txns-vin-empty, bad-txns-vout-empty), and NextStreamed refuses it, so every transaction a
+// body carries costs the peer at least this many bytes. That floor is what bounds the duplicate map
+// by the bytes actually received: each entry costs the map about 63 bytes at its peak while
+// growing (BenchmarkPipelineDedupMapPerEntry), so a 10-byte floor let a peer buy six times the
+// heap a byte of body buys now (issue 4945).
+const minSerializedTxSize = 60
 
 // blockTxStreamReadBufferSize is the buffer between the socket and the decoder.
 // Large enough that a transaction of ordinary size is assembled without a syscall
@@ -107,14 +113,14 @@ func newBlockTxStream(r io.Reader, payloadLen int64) (*blockTxStream, error) {
 	}
 
 	// The body's own length is a real, cheap bound on the count — a
-	// transaction cannot be smaller than minSerializedTxSize, so a body this
+	// valid transaction cannot be smaller than minSerializedTxSize, so a body this
 	// long cannot hold more than payloadLen/minSerializedTxSize of them, and a
 	// larger claim is a lie catchable for free — but it does NOT stop the
 	// allocation amplification below. payloadLen is itself peer-declared
 	// (int64(length) off the wire message header, never measured), and the
 	// wire payload ceiling is 4,000,000,000 bytes (services/legacy/config.go
 	// maxWireBlockPayload), so this check alone still lets a peer declare a
-	// 400,000,000-transaction body it never sends. What actually stops the
+	// 66,666,666-transaction body it never sends. What actually stops the
 	// amplification is that the caller no longer sizes anything from this
 	// count: see newPipelineDedupMap in pipeline_sink.go.
 	if payloadLen > 0 && count > uint64(payloadLen)/minSerializedTxSize {
@@ -161,34 +167,55 @@ func (s *blockTxStream) NextStreamed(beforeOutputs txstream.BeforeOutputs) (*bt.
 
 	var (
 		localErr error
+		noInputs error
 		sink     *errRecordingWriter
 	)
 
 	// StandardOnly: an id is defined over the standard form, so an extended copy of a valid block
 	// still matches its header, but SV Node rejects the encoding, and the previous outputs it
 	// carries would land in the .subtreeData file.
+	//
+	// A transaction with no inputs or no outputs is refused before the caller records it in its
+	// duplicate map, rather than left to block validation: one parses in 10 bytes, and without this
+	// every 10 bytes of body cost one map entry before the merkle root was checked (issue 4945).
+	// Invalid, as a transaction the peer encoded badly is: no block carrying it can be valid. It
+	// does not raise ErrBlockBodyMismatch, which only the three sites in pipelineBlockSink's
+	// producer rule may. No inputs is refused here, before beforeOutputs writes its start and its
+	// outputs are copied after it; no outputs once they are read, below.
 	opts := txstream.Options{SkipDataScripts: true, StandardOnly: true}
-	if beforeOutputs != nil {
-		opts.BeforeOutputs = func(tx *bt.Tx) (io.Writer, error) {
-			w, err := beforeOutputs(tx)
-			if err != nil {
-				localErr = err
+	opts.BeforeOutputs = func(tx *bt.Tx) (io.Writer, error) {
+		if len(tx.Inputs) == 0 {
+			noInputs = errors.NewBlockInvalidError("[blockTxStream] transaction %d of the %d declared has no inputs; it needs at least one", s.read, s.txCount)
 
-				return nil, err
-			}
-
-			if w == nil {
-				return nil, nil
-			}
-
-			sink = &errRecordingWriter{w: w}
-
-			return sink, nil
+			return nil, noInputs
 		}
+
+		if beforeOutputs == nil {
+			return nil, nil
+		}
+
+		w, err := beforeOutputs(tx)
+		if err != nil {
+			localErr = err
+
+			return nil, err
+		}
+
+		if w == nil {
+			return nil, nil
+		}
+
+		sink = &errRecordingWriter{w: w}
+
+		return sink, nil
 	}
 
 	tx, hash, size, err := s.txs.Next(opts)
 	if err != nil {
+		if noInputs != nil {
+			return nil, nil, 0, noInputs
+		}
+
 		if localErr != nil {
 			return nil, nil, 0, localErr
 		}
@@ -219,6 +246,10 @@ func (s *blockTxStream) NextStreamed(beforeOutputs txstream.BeforeOutputs) (*bt.
 		}
 
 		return nil, nil, 0, errors.NewBlockInvalidError("[blockTxStream] failed reading transaction %d of the %d declared", s.read, s.txCount, err)
+	}
+
+	if len(tx.Outputs) == 0 {
+		return nil, nil, 0, errors.NewBlockInvalidError("[blockTxStream] transaction %d of the %d declared has no outputs; it needs at least one", s.read, s.txCount)
 	}
 
 	s.read++

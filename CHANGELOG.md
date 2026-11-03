@@ -283,6 +283,24 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   owed) and `teranode_blockchain_sql_on_main_chain_write_failures{path}`. No action is
   needed. (#2049)
 
+- **A streamed legacy block's duplicate map moves to disk past 1,048,576 transactions.**
+  Every transaction of a block read off the legacy wire was recorded on the Go heap,
+  at about 48 bytes each (63 at the peak of a grow), before the block's merkle root
+  could be checked, so a peer sending a 4 GB body of minimal transactions could grow
+  it to about 19 GB. Past `legacy_streamDedupMaxInMemoryEntries` (default 1,048,576,
+  about 50 MB a block) the map now moves to a memory-mapped table under
+  `<dataFolder>/legacy-dedup`. The table's file is unlinked when it is created and
+  reclaimed when the block finishes. Operators who sync blocks of more than a million
+  transactions need room there: the first table is 172 MB, and it then takes 55 to
+  110 bytes per transaction, up to three times that while it grows, for each block
+  converting at once. Before each grow the node checks that the disk's free space
+  covers what all such tables may claim plus 1 GiB; when it does not, the block fails
+  as this node's fault, is drained and is requested again, rather than a write
+  filling the disk and crashing the process. The stream also now refuses a
+  transaction with no inputs or no outputs as it reads it, as an invalid block, and
+  holds the declared transaction count to 60 bytes per transaction instead of 10.
+  Neither changes what is valid. (#2111, bitcoin-sv/teranode#4945)
+
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**
   Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop

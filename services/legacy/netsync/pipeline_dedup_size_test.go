@@ -8,6 +8,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-wire"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +55,7 @@ func TestNewPipelineDedupMap_BoundedRegardlessOfDeclaredTxCount(t *testing.T) {
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 
-	dedup := newPipelineDedupMap(stream.TxCount())
+	dedup := newPipelineDedupMap(stream.TxCount(), nil, nil)
 
 	runtime.ReadMemStats(&after)
 
@@ -85,7 +86,7 @@ func TestNewPipelineDedupMap_SizedForASmallBlock(t *testing.T) {
 	runtime.GC()
 	runtime.ReadMemStats(&before)
 
-	dedup := newPipelineDedupMap(5_000)
+	dedup := newPipelineDedupMap(5_000, nil, nil)
 
 	runtime.ReadMemStats(&after)
 
@@ -96,7 +97,7 @@ func TestNewPipelineDedupMap_SizedForASmallBlock(t *testing.T) {
 // A map sized for a small declaration still takes every transaction a block brings, growing as it
 // goes, and still catches a duplicate.
 func TestNewPipelineDedupMap_GrowsPastItsSize(t *testing.T) {
-	dedup := newPipelineDedupMap(2)
+	dedup := newPipelineDedupMap(2, nil, nil)
 
 	for i := uint64(0); i < 50_000; i++ {
 		var h chainhash.Hash
@@ -106,4 +107,61 @@ func TestNewPipelineDedupMap_GrowsPastItsSize(t *testing.T) {
 
 	var first chainhash.Hash
 	require.Error(t, dedup.Put(first, 0), "the first hash again is a duplicate")
+}
+
+// BenchmarkPipelineDedupMapPerEntry measures the heap one in-memory dedup entry keeps live once the
+// map has grown from its capped initial size by real Puts, which is how a streamed block fills it.
+// The cap is raised past the entry count so the map stays in memory, which is the cost
+// legacy_streamDedupMaxInMemoryEntries multiplies into a per-block heap ceiling: about 47 bytes live
+// and 63 at the peak of a grow. Run with -benchtime=1x: one map of entries is the measurement, not
+// the iteration count.
+func BenchmarkPipelineDedupMapPerEntry(b *testing.B) {
+	const entries = 10_000_000
+
+	tSettings := &settings.Settings{Legacy: settings.LegacySettings{StreamDedupMaxInMemoryEntries: entries + 1}}
+
+	growth := func(from, to uint64) float64 {
+		if to < from {
+			return 0
+		}
+
+		return float64(to-from) / entries
+	}
+
+	for range b.N {
+		var before, after runtime.MemStats
+
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+
+		dedup := newPipelineDedupMap(entries, tSettings, nil)
+
+		for i := uint64(0); i < entries; i++ {
+			var h chainhash.Hash
+			binary.LittleEndian.PutUint64(h[:], i)
+			binary.LittleEndian.PutUint64(h[8:], i*0x9E3779B97F4A7C15)
+
+			if err := dedup.Put(h, i); err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		if dedup.disk != nil {
+			b.Fatal("the map moved to disk; this measures the in-memory map")
+		}
+
+		runtime.ReadMemStats(&after)
+		peak := after.HeapInuse
+
+		runtime.GC()
+		runtime.ReadMemStats(&after)
+		runtime.KeepAlive(dedup)
+
+		b.ReportMetric(growth(before.HeapInuse, after.HeapInuse), "live-B/entry")
+		b.ReportMetric(growth(before.HeapInuse, peak), "peak-B/entry")
+
+		if err := dedup.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

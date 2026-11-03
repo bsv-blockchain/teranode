@@ -334,3 +334,25 @@ func TestNewDiskTxMapUint64_RejectsZeroCapacity(t *testing.T) {
 	})
 	require.Error(t, err)
 }
+
+// FileBytes is the disk every table can take, and GrowAt reaches each table: a map sized for a few
+// entries that is given many grows its files well before a segment fills.
+func TestDiskTxMapUint64_FileBytesAndGrowAt(t *testing.T) {
+	m, err := NewDiskTxMapUint64(DiskTxMapUint64Options{
+		BasePaths:      []string{t.TempDir(), t.TempDir()},
+		Prefix:         "test-growat",
+		FilterCapacity: 10,
+		GrowAt:         0.5,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = m.Close() })
+
+	start := m.FileBytes()
+	require.Positive(t, start)
+
+	for i := 0; i < 50_000; i++ {
+		require.NoError(t, m.Put(makeHash(i), uint64(i)))
+	}
+
+	require.Greater(t, m.FileBytes(), start, "the tables grew, and FileBytes followed")
+}

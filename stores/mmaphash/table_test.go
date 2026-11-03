@@ -571,3 +571,51 @@ func TestLookupConcurrentWithGrow(t *testing.T) {
 		})
 	}
 }
+
+// With GrowAt set, a segment grows once its entries pass that share of its slots, instead of only
+// when it is full, so probing stays short (issue 4945). FileBytes follows every grow.
+func TestTableGrowsAtTheConfiguredLoad(t *testing.T) {
+	tbl, err := New(Options{Dir: t.TempDir(), Prefix: "growat", KeySize: 32, ValueSize: 8, Expected: 1, GrowAt: 0.5})
+	require.NoError(t, err)
+	defer tbl.Close()
+
+	require.Equal(t, int64(minSeg*minSegSlots*tbl.slotSize), tbl.FileBytes())
+
+	// collidingKey puts every key in one segment: half of it is the most it may hold.
+	for i := uint64(0); i <= minSegSlots/2; i++ {
+		_, inserted, err := tbl.Upsert(collidingKey(i), i)
+		require.NoError(t, err)
+		require.True(t, inserted)
+	}
+
+	require.Equal(t, uint64(2*minSegSlots), tbl.slotsPerSeg, "one entry past half grew it, long before it was full")
+	require.Equal(t, int64(minSeg*2*minSegSlots*tbl.slotSize), tbl.FileBytes())
+
+	for i := uint64(0); i <= minSegSlots/2; i++ {
+		v, found, err := tbl.Lookup(collidingKey(i))
+		require.NoError(t, err)
+		require.True(t, found)
+		require.Equal(t, i, v)
+	}
+}
+
+// Without GrowAt a segment still grows only when it is full, as block validation's maps expect.
+func TestTableWithoutGrowAtGrowsOnlyWhenFull(t *testing.T) {
+	tbl, err := New(Options{Dir: t.TempDir(), Prefix: "nogrowat", KeySize: 32, ValueSize: 8, Expected: 1})
+	require.NoError(t, err)
+	defer tbl.Close()
+
+	for i := uint64(0); i < minSegSlots; i++ {
+		_, _, err := tbl.Upsert(collidingKey(i), i)
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, uint64(minSegSlots), tbl.slotsPerSeg)
+}
+
+func TestTableNewRejectsABadGrowAt(t *testing.T) {
+	for _, g := range []float64{-0.1, 1.5, math.NaN()} {
+		_, err := New(Options{Dir: t.TempDir(), Prefix: "badgrowat", KeySize: 32, Expected: 1, GrowAt: g})
+		require.Errorf(t, err, "GrowAt %v", g)
+	}
+}
