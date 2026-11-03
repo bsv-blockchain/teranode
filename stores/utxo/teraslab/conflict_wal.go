@@ -50,6 +50,30 @@ func createConflictWALTable(db *usql.DB, engine string) error {
 		return errors.NewStorageError("[teraslab] failed to create conflict_intents table", err)
 	}
 
+	// Migrate a conflict_intents table created by a pre-recovery build of this
+	// branch (CREATE TABLE IF NOT EXISTS above skips an existing table, so it would
+	// keep the old schema and BeginConflictIntent's insert into recovery would
+	// fail). Mirrors the SQL backend's recovery-column migration.
+	if engine == "postgres" {
+		if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN IF NOT EXISTS recovery BYTEA`); err != nil {
+			return errors.NewStorageError("[teraslab] failed to add conflict_intents recovery column", err)
+		}
+
+		return nil
+	}
+
+	// SQLite has no ADD COLUMN IF NOT EXISTS, so add it only when absent.
+	var recoveryColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('conflict_intents') WHERE name = 'recovery'`).Scan(&recoveryColumns); err != nil {
+		return errors.NewStorageError("[teraslab] failed to inspect conflict_intents schema", err)
+	}
+
+	if recoveryColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN recovery BLOB`); err != nil {
+			return errors.NewStorageError("[teraslab] failed to add conflict_intents recovery column", err)
+		}
+	}
+
 	return nil
 }
 
