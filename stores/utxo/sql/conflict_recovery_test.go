@@ -221,7 +221,7 @@ func TestConflictRecoveryHealStaleForward(t *testing.T) {
 
 func TestConflictRecoverySetConflictingChildren(t *testing.T) {
 	store, _ := newTestStore(t)
-	tests.ConflictRecoverySetConflictingChildren(t, store, false)
+	tests.ConflictRecoverySetConflictingChildren(t, store, true)
 }
 
 func TestConflictRecoveryReverseCompletionFailure(t *testing.T) {
