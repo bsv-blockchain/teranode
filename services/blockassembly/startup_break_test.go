@@ -86,6 +86,7 @@ func TestStartup_RefusesWhenIteratorConstructionFails(t *testing.T) {
 	// type-assertion doesn't panic; loadUnminedTransactions must ignore it because
 	// err != nil.
 	iter := new(utxostore.MockUnminedTxIterator)
+	iter.On("Close").Return(nil).Maybe()
 	store.On("GetUnminedTxIterator").
 		Return(iter, errors.NewProcessingError("utxo store unavailable"))
 
