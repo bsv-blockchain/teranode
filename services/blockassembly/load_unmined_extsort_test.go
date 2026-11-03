@@ -172,7 +172,9 @@ func TestLoadUnminedSorted_FiltersLikeTheInMemoryPath(t *testing.T) {
 	mined := unminedAt(2, 900)
 	mined.BlockIDs = []uint32{7}
 	onSideChain := unminedAt(3, 800)
-	onSideChain.BlockIDs = []uint32{99}
+	// A block the store holds (genesis) that is not on the best chain given below: the
+	// reload reads its height for the era filter, as the in-memory path does.
+	onSideChain.BlockIDs = []uint32{0}
 
 	iter := &sliceUnminedIterator{batches: [][]*utxo.UnminedTransaction{{keep, coinbase, mined, onSideChain}}}
 

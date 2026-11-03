@@ -292,6 +292,12 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 
 	// Early exit if no headers to process
 	if len(catchupCtx.headersFetchResult.Headers) == 0 {
+		// The target is already stored, so the fork checks below never see it. It can be a
+		// fork stored before the tip passed a checkpoint above it, and is no longer valid.
+		if err = u.validateStoredTargetBelowCheckpoint(ctx, catchupCtx); err != nil {
+			return err
+		}
+
 		u.logger.Infof("[catchup][%s] block already exists or no headers needed", blockUpTo.Hash().String())
 		return nil
 	}
@@ -1186,6 +1192,45 @@ func (u *Server) validateForkBelowCheckpoint(catchupCtx *CatchupContext) error {
 	}
 
 	return errors.NewServiceError("[catchup][%s] bad-fork-prior-to-checkpoint: chain forks at height %d, below a checkpoint the tip (height %d) has passed", catchupCtx.blockUpTo.Hash().String(), firstForkHeight, catchupCtx.bestBlockMeta.Height)
+}
+
+// validateStoredTargetBelowCheckpoint applies the checkpoint fork rule to a catchup target that
+// is already stored, as ValidateBlock does for a stored hash: one below a checkpoint the tip has
+// passed that is not on the main chain is refused as BlockInvalid. A target that is not stored
+// passes; the fork checks after the header fetch cover it.
+func (u *Server) validateStoredTargetBelowCheckpoint(ctx context.Context, catchupCtx *CatchupContext) error {
+	if u.settings.ChainCfgParams == nil || len(u.settings.ChainCfgParams.Checkpoints) == 0 {
+		return nil
+	}
+
+	hash := catchupCtx.blockUpTo.Hash()
+
+	header, meta, err := u.blockchainClient.GetBlockHeader(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errors.ErrBlockNotFound) || errors.Is(err, errors.ErrNotFound) {
+			return nil
+		}
+
+		return errors.NewServiceError("[catchup][%s] failed to get the stored target for the checkpoint fork rule", hash.String(), err)
+	}
+
+	if meta == nil || meta.Invalid {
+		return nil
+	}
+
+	if err = u.blockValidation.rejectStoredForkBelowCheckpoint(ctx, header, meta.Height); err != nil {
+		if errors.Is(err, errors.ErrBlockInvalid) {
+			u.logger.Errorf("[catchup][%s] %v", hash.String(), err)
+
+			if prometheusCatchupErrors != nil {
+				prometheusCatchupErrors.WithLabelValues(catchupCtx.peerID, "bad_fork_prior_to_checkpoint").Inc()
+			}
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 // checkSecretMining detects if the peer withheld blocks (secret mining attack).

@@ -854,10 +854,12 @@ func TestTxRulesChange_RebuildsTheTemplate(t *testing.T) {
 	tests := []struct {
 		name            string
 		sequential      bool
+		diskSort        bool
 		rulesMovedFirst bool
 	}{
 		{name: "batched reload"},
 		{name: "sequential reload", sequential: true},
+		{name: "disk-sort reload", diskSort: true},
 		{name: "rules moved before the block", rulesMovedFirst: true},
 	}
 
@@ -873,6 +875,13 @@ func TestTxRulesChange_RebuildsTheTemplate(t *testing.T) {
 
 			if tt.sequential {
 				ba.settings.BlockAssembly.UnminedLoadingBatchSize = 0
+			}
+
+			if tt.diskSort {
+				ba.settings.BlockAssembly.UnminedTxDiskSortEnabled = true
+				ba.settings.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+				// One record per run, so every transaction goes through a run file.
+				ba.settings.BlockAssembly.UnminedTxSortBufferRecords = 1
 			}
 
 			inCandidate := func(hash *chainhash.Hash) bool {

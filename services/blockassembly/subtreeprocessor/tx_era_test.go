@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -299,8 +300,13 @@ func TestTxEra_RestartDroppedTxs(t *testing.T) {
 			{Node: &subtreepkg.Node{Hash: f.parent}, TxInpoints: &subtreepkg.TxInpoints{}, UnminedSince: 99},
 		}))
 
+		dropsBefore := promtestutil.ToFloat64(prometheusSubtreeProcessorTxEraDropped)
+
 		finish := stp.RestartDroppedTxs()
 		finish(reloaded)
+
+		require.Equal(t, dropsBefore, promtestutil.ToFloat64(prometheusSubtreeProcessorTxEraDropped),
+			"putting the old records back is not a drop")
 
 		kept := filterUnmined(stp, []*utxostore.UnminedTransaction{
 			{Node: &subtreepkg.Node{Hash: f.child}, TxInpoints: inpointsWithParent(f.parent), UnminedSince: 150},

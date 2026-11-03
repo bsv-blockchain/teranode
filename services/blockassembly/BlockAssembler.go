@@ -1489,35 +1489,51 @@ func (b *BlockAssembler) reloadValidatedHeights(ctx context.Context, txs []*utxo
 	heights := make([]uint32, len(txs))
 
 	_, tip := b.CurrentBlock()
-	retention := b.settings.UtxoStore.UnminedTxRetention
 
 	for i, tx := range txs {
-		if len(tx.BlockIDs) == 0 {
-			unminedSince := uint32(max(tx.UnminedSince, 0)) //nolint:gosec // a block height
-			if unminedSince > 1 && (tip <= retention || unminedSince > tip-retention) {
-				heights[i] = unminedSince
-			}
-
-			continue
+		height, err := b.reloadValidatedHeight(ctx, tx, tip, blockHeights)
+		if err != nil {
+			return nil, err
 		}
 
-		for _, id := range tx.BlockIDs {
-			height, ok := blockHeights[id]
-			if !ok {
-				block, err := b.blockchainClient.GetBlockByID(ctx, uint64(id))
-				if err != nil {
-					return nil, errors.NewProcessingError("[loadUnminedTransactions] error getting block %d for the transaction rules of %s", id, tx.Hash, err)
-				}
-
-				height = block.Height
-				blockHeights[id] = height
-			}
-
-			heights[i] = max(heights[i], height)
-		}
+		heights[i] = height
 	}
 
 	return heights, nil
+}
+
+// reloadValidatedHeight is reloadValidatedHeights for one transaction, with the tip read once
+// by the caller.
+func (b *BlockAssembler) reloadValidatedHeight(ctx context.Context, tx *utxo.UnminedTransaction, tip uint32, blockHeights map[uint32]uint32) (uint32, error) {
+	if len(tx.BlockIDs) == 0 {
+		retention := b.settings.UtxoStore.UnminedTxRetention
+
+		unminedSince := uint32(max(tx.UnminedSince, 0)) //nolint:gosec // a block height
+		if unminedSince > 1 && (tip <= retention || unminedSince > tip-retention) {
+			return unminedSince, nil
+		}
+
+		return 0, nil
+	}
+
+	var validatedHeight uint32
+
+	for _, id := range tx.BlockIDs {
+		height, ok := blockHeights[id]
+		if !ok {
+			block, err := b.blockchainClient.GetBlockByID(ctx, uint64(id))
+			if err != nil {
+				return 0, errors.NewProcessingError("[loadUnminedTransactions] error getting block %d for the transaction rules of %s", id, tx.Hash, err)
+			}
+
+			height = block.Height
+			blockHeights[id] = height
+		}
+
+		validatedHeight = max(validatedHeight, height)
+	}
+
+	return validatedHeight, nil
 }
 
 // templateTxEraIsStale reports whether the subtree processor admits other transaction
@@ -4358,6 +4374,12 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 		}
 	}()
 
+	// What the era filter needs, read once: whether an era is set, the tip that dates
+	// unmined_since, and the heights of the blocks a transaction is mined in.
+	_, _, eraOn := b.subtreeProcessor.TxEra()
+	_, tip := b.CurrentBlock()
+	blockHeights := map[uint32]uint32{}
+
 	lockedTransactions := make([]chainhash.Hash, 0, 1024)
 	markAsMinedOnLongestChain := make([]chainhash.Hash, 0, 1024)
 
@@ -4409,7 +4431,16 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 				}
 			}
 
-			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints); err != nil {
+			// The sort keeps only what block assembly needs, so the height the era filter
+			// reads off unmined_since and the block ids is worked out here and sorted with it.
+			var validatedHeight uint32
+			if eraOn {
+				if validatedHeight, err = b.reloadValidatedHeight(ctx, unminedTx, tip, blockHeights); err != nil {
+					return err
+				}
+			}
+
+			if err = sorter.Add(int64(unminedTx.CreatedAt), *unminedTx.Node, unminedTx.TxInpoints, validatedHeight); err != nil {
 				return errors.NewProcessingError("error buffering unmined transaction %s for sorting", unminedTx.Node.Hash, err)
 			}
 
@@ -4454,9 +4485,8 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 	}
 
 	addStart := time.Now()
-	blockHeights := map[uint32]uint32{}
 
-	err = sorter.Drain(ctx, batchSize, func(batch []*utxo.UnminedTransaction) error {
+	err = sorter.Drain(ctx, batchSize, func(batch []*utxo.UnminedTransaction, validatedHeights []uint32) error {
 		// One beat per drained batch (issue 1447): a 10M batch adds in about a
 		// second (BenchmarkAddNodesDirectly), well inside any stall timeout.
 		b.heartbeat.BeatIfStarted()
@@ -4467,11 +4497,11 @@ func (b *BlockAssembler) loadUnminedSorted(ctx context.Context, it utxo.UnminedT
 			orderEqualCreatedAtRunsParentsFirst(batch)
 		}
 
-		batch, addErr := b.filterReloadByTxEra(ctx, batch, blockHeights)
-		if addErr != nil {
-			return addErr
+		if eraOn {
+			batch = b.subtreeProcessor.FilterUnminedTxEra(batch, validatedHeights)
 		}
 
+		var addErr error
 		if isReload {
 			addErr = b.subtreeProcessor.AddNodesDirectlyReportOnly(batch, true)
 		} else {

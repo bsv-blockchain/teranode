@@ -175,7 +175,8 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       `utxostore_unminedTxRetention`, or 1; such a value is read as unknown, and the
       transaction is admitted as before. A drop is forgotten
       once a block mines the transaction or a reload no longer finds it unmined, so its
-      descendants are admitted again. A new counter,
+      descendants that arrive after that are admitted. A descendant dropped before stays
+      out until the next reload. A new counter,
       `teranode_subtreeprocessor_tx_era_dropped_total`, counts the drops.
     - When a new block moves the next height under other rules, block assembly rebuilds
       its template from the UTXO store. Mining candidates stay empty while it does. On

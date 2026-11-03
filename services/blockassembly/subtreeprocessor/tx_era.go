@@ -191,8 +191,16 @@ func (stp *SubtreeProcessor) RestartDroppedTxs() (finish func(reloaded bool)) {
 		stp.droppedMu.Lock()
 		defer stp.droppedMu.Unlock()
 
+		// Not through recordDroppedLocked: these drops were counted when they happened.
+		if stp.droppedTxs == nil {
+			stp.droppedTxs = make(map[chainhash.Hash]struct{}, len(prev))
+		}
+
 		for hash := range prev {
-			stp.recordDroppedLocked(hash)
+			if _, ok := stp.droppedTxs[hash]; !ok {
+				stp.droppedTxs[hash] = struct{}{}
+				stp.droppedCount.Add(1)
+			}
 		}
 	}
 }

@@ -788,6 +788,45 @@ func TestCatchup_NoMinedSetChurnOnRejectedFork(t *testing.T) {
 		mockBlockchainClient.AssertNotCalled(t, "ClearBlockMinedSet", mock.Anything, mock.Anything)
 	})
 
+	t.Run("StoredTargetForkBelowPassedCheckpoint", func(t *testing.T) {
+		// The target is already stored as valid, at height 101, below the checkpoint at 120
+		// that the tip (150) has passed. Catchup ends before the fork checks when the target
+		// exists, so it must apply the rule there: a stored fork is refused, a main-chain block
+		// is not.
+		for _, onMainChain := range []bool{false, true} {
+			t.Run(fmt.Sprintf("onMainChain=%v", onMainChain), func(t *testing.T) {
+				server, mockBlockchainClient, targetBlock, cleanup := buildForkScenario(t, 100, 150)
+				defer cleanup()
+
+				params := *server.settings.ChainCfgParams
+				params.Checkpoints = []chaincfg.Checkpoint{{Height: 120, Hash: &chainhash.Hash{0x01}}}
+				server.settings.ChainCfgParams = &params
+				server.blockValidation.settings.ChainCfgParams = &params
+
+				// Ahead of the scenario's catch-alls, which report every other block missing.
+				n := len(mockBlockchainClient.ExpectedCalls)
+				mockBlockchainClient.On("GetBlockExists", mock.Anything, targetBlock.Hash()).Return(true, nil)
+				mockBlockchainClient.On("GetBlockHeader", mock.Anything, targetBlock.Hash()).
+					Return(targetBlock.Header, &model.BlockHeaderMeta{Height: 101, ID: 7}, nil)
+				mockBlockchainClient.On("GetBlockHeaderIDs", mock.Anything, targetBlock.Hash(), uint64(1)).Return([]uint32{7}, nil)
+				mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{7}).Return(onMainChain, nil)
+				added := append([]*mock.Call(nil), mockBlockchainClient.ExpectedCalls[n:]...)
+				mockBlockchainClient.ExpectedCalls = append(added, mockBlockchainClient.ExpectedCalls[:n]...)
+
+				err := server.catchup(context.Background(), targetBlock, "peer-4940", "http://peer")
+
+				if onMainChain {
+					require.NoError(t, err)
+					return
+				}
+
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a stored fork below a passed checkpoint is invalid, got: %v", err)
+				require.Contains(t, err.Error(), "bad-fork-prior-to-checkpoint")
+			})
+		}
+	})
+
 	t.Run("SecretMiningDepth", func(t *testing.T) {
 		// Fork depth 180 - 100 = 80 <= CoinbaseMaturity (100) so validateForkDepth passes,
 		// but blocksBehind 80 > SecretMiningThreshold (50) => checkSecretMining rejects.
