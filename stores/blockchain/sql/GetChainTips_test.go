@@ -390,7 +390,6 @@ func Test_SqlGetChainTips(t *testing.T) {
 	})
 }
 
-// Helper function to create block3 on top of a given parent block
 // TestProcessChainTipRows_ClosesTheCursorBeforeBranchLength holds a write transaction on
 // the blocks table inside branchLen. On SQLite in shared-cache mode the write waits for any
 // open read of the table, and a waiting writer blocks every new read, so with the tip
@@ -459,6 +458,7 @@ func TestProcessChainTipRows_ClosesTheCursorBeforeBranchLength(t *testing.T) {
 	require.True(t, writeCommitted, "a write to the blocks table could not commit while branchLen ran, so the chain tip cursor was still open")
 }
 
+// Helper function to create block3 on top of a given parent block
 func createBlock3OnFork(parentBlock *model.Block) *model.Block {
 	// Create a new coinbase transaction for block 3
 	coinbaseTx3Fork, _ := bt.NewTxFromString("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff17030300002f6d312d65752fb670097da68d1b768d8b21f6ffffffff03ac505763000000001976a914c362d5af234dd4e1f2a1bfbcab90036d38b0aa9f88acaa505763000000001976a9143c22b6d9ba7b50b6d6e615c69d11ecb2ba3db14588acaa505763000000001976a914b7177c7deb43f3869eabc25cfd9f618215f34d5588ac00000000")
