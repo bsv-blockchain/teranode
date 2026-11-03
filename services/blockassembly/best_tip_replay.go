@@ -592,10 +592,10 @@ func (b *BlockAssembler) droppedTipNeedsReset(ctx context.Context, hash chainhas
 //     current-chain guard refuses to demote a winner mined in a block of the current chain. The
 //     move would fail on every pass until the replay gives its history up, which skips the branch
 //     again. That can happen at any depth: the best tip goes from X to its sibling Y and then to
-//     X's child X2, so replaying Y moves X back while X is on the best chain. It is checked only
-//     when block assembly's tip is on the best chain. A tip off it whose lowest block moved back
-//     is on it needs three branches racing before block assembly looks, and is left to fail
-//     until the history is given up.
+//     X's child X2, so replaying Y moves X back while X is on the best chain. Block assembly's
+//     own tip may have lost meanwhile: on X2 when the best tip went to Y and then to Z2, another
+//     child of X, the move back to Y passes X2, which is off the best chain, and then X, which
+//     is on it. So every block moved back that is on the best chain is checked.
 //
 // Such a change is applied at its own depth instead. Block assembly never applied the stale
 // branch, so it never swapped the branch's conflicts or created its coinbases, and what is left to
@@ -623,28 +623,28 @@ func (b *BlockAssembler) restampPastStaleBranch(ctx context.Context, header *mod
 	// Spendable from height lowest+maturity, and the next block is bestHeight+1.
 	pastMaturity := uint64(bestMeta.Height)+1 >= uint64(lowest.meta.Height)+maturity
 
-	// moveBack runs from block assembly's tip down to the fork point. When block assembly's tip
-	// is on the best chain, every block it moves back is.
-	checked := lowest
-	if !pastMaturity {
-		checked = moveBack[0]
-	}
-
-	onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{checked.meta.ID}, best.Hash())
+	// moveBack runs from block assembly's tip down to the fork point, so the blocks on the best
+	// chain are a run at its end. If the lowest is off it, none is.
+	onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{lowest.meta.ID}, best.Hash())
 	if err != nil {
-		return false, errors.NewProcessingError("[restampPastStaleBranch] error checking whether %s is on the best chain", checked.header.Hash(), err)
+		return false, errors.NewProcessingError("[restampPastStaleBranch] error checking whether %s is on the best chain", lowest.header.Hash(), err)
 	}
 
 	if !onBest {
-		// Past maturity, every block moved back is on a branch that lost, so its coinbase
-		// spends lost too. Below it, block assembly's tip is off the best chain.
+		// Every block moved back is on a branch that lost, with its coinbase spends and its
+		// conflict swaps.
 		return false, nil
 	}
 
 	reason := "past coinbase maturity"
 
 	if !pastMaturity {
-		resolved, err := b.blocksResolvedConflicts(ctx, moveBack)
+		onBestRun, err := b.bestChainRun(ctx, moveBack, best)
+		if err != nil {
+			return false, err
+		}
+
+		resolved, err := b.blocksResolvedConflicts(ctx, onBestRun)
 		if err != nil || !resolved {
 			return false, err
 		}
@@ -655,6 +655,30 @@ func (b *BlockAssembler) restampPastStaleBranch(ctx context.Context, header *mod
 	b.logger.Warnf("[BlockAssembler] best tip change %d: %s is on a stale branch forking %d blocks below the best tip, restamping its %d blocks instead of moving back over the best chain %s", meta.Height, header.Hash(), bestMeta.Height-lowest.meta.Height+1, len(moveForward), reason)
 
 	return true, b.restampStaleBranch(ctx, moveForward, best)
+}
+
+// bestChainRun returns the blocks at the end of moveBack that are on the best chain, given that
+// the last one is. moveBack runs down from block assembly's tip, so the run stops at the first
+// block, going up, that is off the best chain.
+func (b *BlockAssembler) bestChainRun(ctx context.Context, moveBack []blockHeaderWithMeta, best *model.BlockHeader) ([]blockHeaderWithMeta, error) {
+	start := len(moveBack) - 1
+
+	for start > 0 {
+		hm := moveBack[start-1]
+
+		onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{hm.meta.ID}, best.Hash())
+		if err != nil {
+			return nil, errors.NewProcessingError("[bestChainRun] error checking whether %s is on the best chain", hm.header.Hash(), err)
+		}
+
+		if !onBest {
+			break
+		}
+
+		start--
+	}
+
+	return moveBack[start:], nil
 }
 
 // blocksResolvedConflicts reports whether any of the blocks lists conflicting transactions in its

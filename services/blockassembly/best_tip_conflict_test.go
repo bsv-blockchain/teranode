@@ -152,16 +152,14 @@ func testResetHistoricalConflict(t *testing.T, commonWinner, pruneWinner bool) {
 	}
 }
 
-// TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain replays a past change whose
-// move back would reverse a conflict swap in a block of the current best chain. Block assembly is
-// on X, which resolved a double spend. The best tip went to Y2 on a sibling branch and then to X3,
-// which builds on X. Replaying Y2 would move X back, and the current-chain guard refuses to demote
-// X's winner, so the replay would fail on every pass. The replay restamps the Y branch instead,
-// and X keeps its swap.
-func TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain(t *testing.T) {
+// setupConflictResolvedAtX puts block assembly on X, at height 2 above A1, where X's subtree
+// resolved a double spend: winner and loser both spend funding, and winner is mined in X. The
+// returned check fails once winner no longer holds funding's output. Coinbase maturity is 100, so
+// moving X back stays below maturity and the coinbase rule never restamps.
+func setupConflictResolvedAtX(t *testing.T) (items *baTestItems, a1, x *model.BlockHeader, assertWinnerKeepsInput func()) {
+	t.Helper()
 	initPrometheusMetrics()
-	// Maturity 100 keeps the move back of X below maturity, so the coinbase rule does not restamp.
-	items := setupBlockAssemblyTest(t, func(s *settings.Settings) { s.BlockAssembly.OnRestartValidateParentChain = false }, withCoinbaseMaturity(testCoinbaseMaturity))
+	items = setupBlockAssemblyTest(t, func(s *settings.Settings) { s.BlockAssembly.OnRestartValidateParentChain = false }, withCoinbaseMaturity(testCoinbaseMaturity))
 	ba := items.blockAssembler
 	ba.subtreeProcessor.Stop(context.Background())
 	store, ok := items.utxoStore.(*utxosql.Store)
@@ -172,7 +170,7 @@ func TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain(t *testi
 	stp.Start(t.Context())
 
 	genesis := genesisHeader(t, items)
-	a1 := buildChain(genesis, 1, 25000)[0]
+	a1 = buildChain(genesis, 1, 25000)[0]
 	addBlockWithMinedSet(t.Context(), t, items, a1)
 	ba.setBestBlockHeader(a1, 1)
 	stp.InitCurrentBlockHeader(a1)
@@ -206,7 +204,7 @@ func TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain(t *testi
 
 	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 	require.NoError(t, err)
-	x := buildChain(a1, 1, 26000)[0]
+	x = buildChain(a1, 1, 26000)[0]
 	require.NoError(t, items.blockchainClient.AddBlock(t.Context(), &model.Block{Header: x, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, "", blockchainoptions.WithMinedSet(true)))
 	_, xMeta, err := items.blockchainClient.GetBlockHeader(t.Context(), x.Hash())
 	require.NoError(t, err)
@@ -217,7 +215,7 @@ func TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain(t *testi
 	require.NoError(t, ba.resetToBlockAndRecord(t.Context(), x, 2, true))
 	requireBlockAssemblyTip(t, items, x)
 
-	assertWinnerKeepsInput := func() {
+	assertWinnerKeepsInput = func() {
 		t.Helper()
 		parent, e := store.Get(t.Context(), funding.TxIDChainHash(), fields.Utxos)
 		require.NoError(t, e)
@@ -231,6 +229,19 @@ func TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain(t *testi
 		require.True(t, l.Conflicting)
 	}
 	assertWinnerKeepsInput()
+
+	return items, a1, x, assertWinnerKeepsInput
+}
+
+// TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain replays a past change whose
+// move back would reverse a conflict swap in a block of the current best chain. Block assembly is
+// on X, which resolved a double spend. The best tip went to Y2 on a sibling branch and then to X3,
+// which builds on X. Replaying Y2 would move X back, and the current-chain guard refuses to demote
+// X's winner, so the replay would fail on every pass. The replay restamps the Y branch instead,
+// and X keeps its swap.
+func TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain(t *testing.T) {
+	items, a1, x, assertWinnerKeepsInput := setupConflictResolvedAtX(t)
+	ba := items.blockAssembler
 	startReplayAt(t, items, x, 2)
 
 	// Y2 sorts better than X, then X3 better than Y2. X2 ties Y2 on work and loses on id, and
@@ -244,8 +255,73 @@ func TestReplayBestTipChanges_PastChangeOverResolvedConflictOnBestChain(t *testi
 		addBlockWithMinedSet(t.Context(), t, items, h)
 	}
 
-	_, err = ba.replayBestTipChanges(t.Context())
+	_, err := ba.replayBestTipChanges(t.Context())
 	require.NoError(t, err, "a move back over X would be refused by the current-chain guard")
 	requireBlockAssemblyTip(t, items, xs[1])
 	assertWinnerKeepsInput()
+}
+
+// TestReplayBestTipChanges_PastChangeOverResolvedConflictTipLost is the same race with three
+// branches. Block assembly is on X2, a child of X. The best tip went to Y3 on a branch from A1 and
+// then to Z3, another child of X, so X2 lost too. Replaying Y3 would move back X2, off the best
+// chain, and then X, on it, and the guard refuses to demote X's winner. The replay restamps the Y
+// branch, then reorgs from X2 to Z3.
+func TestReplayBestTipChanges_PastChangeOverResolvedConflictTipLost(t *testing.T) {
+	items, a1, x, assertWinnerKeepsInput := setupConflictResolvedAtX(t)
+	ba := items.blockAssembler
+
+	x2 := buildChain(x, 1, 29000)[0]
+	addBlockWithMinedSet(t.Context(), t, items, x2)
+	require.NoError(t, ba.resetToBlockAndRecord(t.Context(), x2, 3, true))
+	requireBlockAssemblyTip(t, items, x2)
+	startReplayAt(t, items, x2, 3)
+
+	// Z is stored before Y, so at equal work Z's blocks have the lower ids and sort better. The
+	// read is Y3, then Z2 and Z3: Y3 is replayed while block assembly is still on X2.
+	z := buildChain(x, 3, 30000)
+	for _, h := range z {
+		addBlockWithMinedSet(t.Context(), t, items, h)
+	}
+	// Y1 carries yOnly, a transaction no other block has, spending yFunding. Block validation
+	// stamped it mined when Y was the best chain.
+	store, ok := items.utxoStore.(*utxosql.Store)
+	require.True(t, ok)
+	yFunding := replayPoolTx(&chainhash.Hash{2}, 100)
+	yOnly := replayPoolTx(yFunding.TxIDChainHash(), 99)
+	yOnly.Inputs[0].PreviousTxScript = bscript.NewFromBytes([]byte{0x51})
+	_, _, err := store.SpendAndCreate(t.Context(), yFunding, 0, utxo.WithCreateOnly())
+	require.NoError(t, err)
+	_, _, err = store.SpendAndCreate(t.Context(), yOnly, 2)
+	require.NoError(t, err)
+	require.NoError(t, store.MarkTransactionsOnLongestChain(t.Context(), []chainhash.Hash{*yFunding.TxIDChainHash(), *yOnly.TxIDChainHash()}, true))
+	tree, err := subtree.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, tree.AddCoinbaseNode())
+	require.NoError(t, tree.AddNode(*yOnly.TxIDChainHash(), 1, uint64(len(yOnly.Bytes()))))
+	data, err := tree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, items.blobStore.Set(t.Context(), tree.RootHash()[:], fileformat.FileTypeSubtree, data))
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+
+	y := buildChain(a1, 3, 31000)
+	require.NoError(t, items.blockchainClient.AddBlock(t.Context(), &model.Block{Header: y[0], CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, "", blockchainoptions.WithMinedSet(true)))
+	for _, h := range y[1:] {
+		addBlockWithMinedSet(t.Context(), t, items, h)
+	}
+	_, y1Meta, err := items.blockchainClient.GetBlockHeader(t.Context(), y[0].Hash())
+	require.NoError(t, err)
+	_, err = items.utxoStore.SetMinedMulti(t.Context(), []*chainhash.Hash{yOnly.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: y1Meta.ID, BlockHeight: 2})
+	require.NoError(t, err)
+
+	_, err = ba.replayBestTipChanges(t.Context())
+	require.NoError(t, err, "a move back over X would be refused by the current-chain guard")
+	requireBlockAssemblyTip(t, items, z[2])
+	assertWinnerKeepsInput()
+
+	pool := ba.subtreeProcessor.GetTransactionHashes(t.Context())
+	require.Contains(t, pool, *yOnly.TxIDChainHash(), "Y's block-only transaction reaches the pool")
+	meta, err := items.utxoStore.Get(t.Context(), yOnly.TxIDChainHash(), fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, meta.UnminedSince, "Y's block-only transaction is marked unmined")
 }

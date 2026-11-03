@@ -172,10 +172,10 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   leaves the old pool in service and the replay carries on from its position. A past
   best tip whose move would take block assembly back over best-chain blocks is not
   moved to when those blocks are at least coinbase maturity below the best tip, or
-  when one of them resolved a double spend and block assembly's tip is on the best
-  chain: its branch-only transactions are marked unmined where they lie and the pool
-  is reloaded. That keeps confirmed spends of a coinbase, and the conflict swaps of
-  the best chain, in place. (#2074)
+  when one of them resolved a double spend, even if block assembly's own tip has
+  since lost: its branch-only transactions are marked unmined where they lie and the
+  pool is reloaded. That keeps confirmed spends of a coinbase, and the conflict swaps
+  of the best chain, in place. (#2074)
 
 - **Mining candidates stay empty after a reset until block assembly has replayed the
   tip changes left pending.** A reset moves block assembly to one target, so a branch
