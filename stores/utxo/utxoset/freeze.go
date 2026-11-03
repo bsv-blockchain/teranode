@@ -18,11 +18,18 @@ import (
 // full 32-byte txid recheck is present for the same reason it is everywhere else: the
 // ukey is a non-unique 96-bit prefix and can locate a row but never authorise acting on
 // it.
+//
+// A reassigned UTXO is acted on only when the caller names its new hash ($6), as aerospike
+// checks the caller's hash against the record before a freeze or unfreeze. The alert system
+// computes that hash from ParentOutputsForValidation, which answers a reassigned UTXO with the
+// old owner's output, so without this a second freeze order for the old owner would freeze the
+// UTXO again under its new owner.
 const setFlagsSQL = `
 UPDATE utxo u
    SET flags = (u.flags | $4::smallint) & $5::smallint
-  FROM unnest($1::smallint[], $2::uuid[], $3::bytea[]) AS k(leaf, ukey, txid)
- WHERE u.leaf = k.leaf AND u.ukey = k.ukey AND u.txid = k.txid`
+  FROM unnest($1::smallint[], $2::uuid[], $3::bytea[], $6::bytea[]) AS k(leaf, ukey, txid, hash)
+ WHERE u.leaf = k.leaf AND u.ukey = k.ukey AND u.txid = k.txid
+   AND (u.hash_override IS NULL OR u.hash_override = k.hash)`
 
 // FreezeUTXOs marks outputs unspendable.
 //
@@ -47,6 +54,7 @@ func (s *Store) setFlags(ctx context.Context, spends []*utxo.Spend, orMask, andM
 	leaves := make([]int16, 0, len(spends))
 	ukeys := make([][16]byte, 0, len(spends))
 	txids := make([][]byte, 0, len(spends))
+	claims := make([][]byte, 0, len(spends))
 
 	for _, sp := range spends {
 		if sp == nil || sp.TxID == nil {
@@ -56,13 +64,20 @@ func (s *Store) setFlags(ctx context.Context, spends []*utxo.Spend, orMask, andM
 		leaves = append(leaves, LeafFor(sp.TxID[:]))
 		ukeys = append(ukeys, Pack(sp.TxID[:], sp.Vout))
 		txids = append(txids, sp.TxID[:])
+
+		var claim []byte
+		if h := claimedUTXOHash(sp); h != nil {
+			claim = h[:]
+		}
+
+		claims = append(claims, claim)
 	}
 
 	if len(ukeys) == 0 {
 		return nil
 	}
 
-	tag, err := s.pool.Exec(ctx, setFlagsSQL, leaves, ukeys, txids, orMask, andMask)
+	tag, err := s.pool.Exec(ctx, setFlagsSQL, leaves, ukeys, txids, orMask, andMask, claims)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][%s]", op, err)
 	}
@@ -70,8 +85,9 @@ func (s *Store) setFlags(ctx context.Context, spends []*utxo.Spend, orMask, andM
 	if tag.RowsAffected() != int64(len(ukeys)) {
 		// A freeze that silently missed is a freeze that did not happen, and the caller
 		// would carry on believing the UTXO is immobilised. The usual cause is that the
-		// output is already spent -- delete-on-spend leaves no row to flag.
-		return errors.NewProcessingError("[utxoset][%s] affected %d of %d outputs; the rest are already spent or were never created",
+		// output is already spent -- delete-on-spend leaves no row to flag -- or reassigned
+		// and named by a hash other than its new one.
+		return errors.NewProcessingError("[utxoset][%s] affected %d of %d outputs; the rest are already spent, were never created, or were reassigned and named by another hash",
 			op, tag.RowsAffected(), len(ukeys))
 	}
 

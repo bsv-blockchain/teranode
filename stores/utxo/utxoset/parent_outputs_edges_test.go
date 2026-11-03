@@ -3,47 +3,79 @@ package utxoset
 import (
 	"testing"
 
-	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/require"
 )
 
-// TestParentOutputsForValidationRefusesAReassignedOutput: an output an operator reassigned still
-// holds the old owner's value and script, so handing them to the validator would validate a
-// spend against the wrong terms. The entry carries an error instead, and the parent's other
-// output is answered as usual.
-func TestParentOutputsForValidationRefusesAReassignedOutput(t *testing.T) {
+// TestParentOutputsForValidationAnswersAReassignedOutputAsStored: a reassigned output still
+// holds the old owner's value and script, and it is answered with them, as aerospike answers
+// from the record's outputs, both while it is unspent and after the new owner has spent it. The
+// spender gets a verdict from that: the new owner's spend fails its script check, and the old
+// owner's is refused by the spend's claim check. An error here made a block spending the
+// output a store fault, which block validation retries for ever.
+func TestParentOutputsForValidationAnswersAReassignedOutputAsStored(t *testing.T) {
+	s, ctx := newTestStore(t)
+	parent, newOutput, _, _, spendable := reassignedParent(t, s, ctx, 8_000)
+
+	check := func(t *testing.T) {
+		t.Helper()
+
+		answers, err := s.ParentOutputsForValidation(ctx, []utxo.Outpoint{
+			{TxID: *parent.TxIDChainHash(), Vout: 0},
+			{TxID: *parent.TxIDChainHash(), Vout: 1},
+		})
+		require.NoError(t, err)
+		require.Len(t, answers, 2)
+
+		for vout, answer := range answers {
+			require.NoError(t, answer.Err, "output %d", vout)
+			require.Contains(t, []utxo.ParentOutputStatus{utxo.ParentOutputMined, utxo.ParentOutputNotMined}, answer.Status, "output %d", vout)
+			require.Equal(t, parent.Outputs[vout].Satoshis, answer.Satoshis, "output %d", vout)
+			require.Equal(t, []byte(*parent.Outputs[vout].LockingScript), []byte(*answer.LockingScript), "output %d", vout)
+		}
+	}
+
+	t.Run("unspent", check)
+
+	// The old owner, presenting the output it was just answered with, is refused at the spend.
+	_, spends, err := s.SpendAndCreate(ctx, spendParentTx(t, parent, nil, 500, 0), spendable)
+	require.Error(t, err)
+	require.True(t, errors.Is(spends[0].Err, errors.ErrUtxoHashMismatch), "got %v", spends[0].Err)
+
+	_, _, err = s.SpendAndCreate(ctx, spendParentTx(t, parent, newOutput, 1_000, 0), spendable)
+	require.NoError(t, err)
+
+	t.Run("spent by the new owner", check)
+}
+
+// TestFreezeOfAReassignedOutputNeedsItsNewHash: the alert system names a UTXO by the hash it
+// computes from ParentOutputsForValidation, which for a reassigned UTXO is the old owner's. A
+// freeze or unfreeze naming that hash must not act on the UTXO its new owner now holds, as
+// aerospike refuses the mismatched hash. Naming the new hash still works.
+func TestFreezeOfAReassignedOutputNeedsItsNewHash(t *testing.T) {
 	s, ctx := newTestStore(t)
 	tSettings := settings.NewSettings()
+	parent, _, newHash, oldHash, _ := reassignedParent(t, s, ctx, 8_000)
 
-	require.NoError(t, s.SetBlockHeight(100))
+	byOld := []*utxo.Spend{{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: oldHash}}
+	byNew := []*utxo.Spend{{TxID: parent.TxIDChainHash(), Vout: 0, UTXOHash: newHash}}
 
-	parent := mkTx(t, 2, 5_000)
-	_, err := s.Create(ctx, parent, 100)
+	require.Error(t, s.FreezeUTXOs(ctx, byOld, tSettings))
+	require.Error(t, s.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: parent.TxIDChainHash(), Vout: 0}}, tSettings), "no hash")
+
+	resp, err := s.GetSpend(ctx, byNew[0])
 	require.NoError(t, err)
+	require.NotEqual(t, int(utxo.Status_FROZEN), resp.Status, "the old owner's hash froze the new owner's UTXO")
 
-	old := &utxo.Spend{TxID: parent.TxIDChainHash(), Vout: 0}
+	require.NoError(t, s.FreezeUTXOs(ctx, byNew, tSettings))
+	require.Error(t, s.UnFreezeUTXOs(ctx, byOld, tSettings))
+	require.NoError(t, s.UnFreezeUTXOs(ctx, byNew, tSettings))
 
-	newHash, err := util.UTXOHashFromOutput(parent.TxIDChainHash(),
-		&bt.Output{Satoshis: 5_000, LockingScript: newOwnerScript(t)}, 0)
-	require.NoError(t, err)
-
-	require.NoError(t, s.FreezeUTXOs(ctx, []*utxo.Spend{old}, tSettings))
-	require.NoError(t, s.ReAssignUTXO(ctx, old, &utxo.Spend{TxID: old.TxID, Vout: 0, UTXOHash: newHash}, tSettings))
-
-	answers, err := s.ParentOutputsForValidation(ctx, []utxo.Outpoint{
-		{TxID: *parent.TxIDChainHash(), Vout: 0},
-		{TxID: *parent.TxIDChainHash(), Vout: 1},
-	})
-	require.NoError(t, err)
-
-	require.Error(t, answers[0].Err, "a reassigned output must not be answered with the old owner's terms")
-	require.Contains(t, answers[0].Err.Error(), "reassigned")
-
-	require.NoError(t, answers[1].Err)
-	require.Equal(t, parent.Outputs[1].Satoshis, answers[1].Satoshis)
+	// A UTXO never reassigned is still frozen by its outpoint alone, as before.
+	other := []*utxo.Spend{{TxID: parent.TxIDChainHash(), Vout: 1}}
+	require.NoError(t, s.FreezeUTXOs(ctx, other, tSettings))
 }
 
 // TestParentOutputsForValidationFailsOnlyTheUnreadableParent: a parent whose stored row does not

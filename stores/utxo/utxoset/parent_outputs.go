@@ -16,14 +16,18 @@ import (
 // again after a crash once its parents' outputs have been spent by it, including outputs
 // SpendAndCreateMulti netted and never wrote as UTXOs.
 //
-// A reassigned UTXO comes back with its hash_override, because its satoshis and script are the
-// old owner's and must not be handed out.
+// A reassigned UTXO's satoshis and script are still the old owner's, because ReAssignUTXO is
+// given a hash and nothing else. They are answered as they are, as aerospike answers from the
+// record's outputs: the new owner's spend then fails its script check, and the old owner's
+// reaches the spend, whose claim check refuses it against hash_override. Either way the spender
+// gets a verdict. Answering with an error instead made every block spending a reassigned UTXO a
+// store fault, which block validation never judges and retries for ever.
 const parentCoinSQL = `
-SELECT k.ref, u.satoshis, u.script, u.hash_override
+SELECT k.ref, u.satoshis, u.script
   FROM unnest($1::smallint[], $2::uuid[], $3::bytea[], $4::int[]) AS k(leaf, ukey, txid, ref)
   JOIN utxo u ON u.leaf = k.leaf AND u.ukey = k.ukey AND u.txid = k.txid
 UNION ALL
-SELECT k.ref, j.satoshis, j.script, j.hash_override
+SELECT k.ref, j.satoshis, j.script
   FROM unnest($1::smallint[], $2::uuid[], $3::bytea[], $4::int[]) AS k(leaf, ukey, txid, ref)
   JOIN spend_journal j ON j.ukey = k.ukey AND j.txid = k.txid`
 
@@ -139,13 +143,12 @@ func (s *Store) readParentCoins(ctx context.Context, outpoints []utxo.Outpoint, 
 
 	for rows.Next() {
 		var (
-			ref          int32
-			satoshis     int64
-			script       []byte
-			hashOverride []byte
+			ref      int32
+			satoshis int64
+			script   []byte
 		)
 
-		if err := rows.Scan(&ref, &satoshis, &script, &hashOverride); err != nil {
+		if err := rows.Scan(&ref, &satoshis, &script); err != nil {
 			rows.Close()
 			fail(err)
 
@@ -158,13 +161,6 @@ func (s *Store) readParentCoins(ctx context.Context, outpoints []utxo.Outpoint, 
 
 		found[ref] = true
 		i := idx[ref]
-
-		if hashOverride != nil {
-			answers[i] = utxo.ParentOutput{Err: errors.NewProcessingError("[utxoset][ParentOutputsForValidation] output %d of %s has been reassigned; its stored value and script belong to the old owner",
-				outpoints[i].Vout, outpoints[i].TxID.String())}
-
-			continue
-		}
 
 		sc := bscript.Script(script)
 		answers[i].Satoshis = uint64(satoshis) //nolint:gosec // satoshis are never negative
