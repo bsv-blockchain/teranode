@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -2206,7 +2207,7 @@ func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.B
 		limit = uint32(maximum) //nolint:gosec // maximum is smaller than the uint32 request
 	}
 
-	blockHeaders, metas, err := b.store.BlocksBetterThan(ctx, after, from, req.MinHeight, limit)
+	blockHeaders, metas, more, err := blocksBetterThanPage(ctx, b.store, after, from, req.MinHeight, limit)
 	if err != nil {
 		return nil, errors.WrapGRPC(err)
 	}
@@ -2224,7 +2225,28 @@ func (b *Blockchain) BlocksBetterThan(ctx context.Context, req *blockchain_api.B
 	return &blockchain_api.BlocksBetterThanResponse{
 		BlockHeaders: blockHeaderBytes,
 		Metas:        metasBytes,
+		More:         more,
 	}, nil
+}
+
+// blocksBetterThanPage reads one page of BlocksBetterThan and whether more blocks follow it, by
+// asking the store for one block past the page.
+func blocksBetterThanPage(ctx context.Context, store blockchain_store.Store, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	probe := limit
+	if probe < math.MaxUint32 {
+		probe++
+	}
+
+	headers, metas, err := store.BlocksBetterThan(ctx, after, from, minHeight, probe)
+	if err != nil {
+		return nil, nil, false, err
+	}
+
+	if uint64(len(headers)) <= uint64(limit) {
+		return headers, metas, false, nil
+	}
+
+	return headers[:limit], metas[:limit], true, nil
 }
 
 // ClearBestTipLowWater deletes the best tip's low-water mark if it still holds the expected bytes.

@@ -1537,6 +1537,7 @@ type BlocksBetterThanResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	BlockHeaders  [][]byte               `protobuf:"bytes,1,rep,name=blockHeaders,proto3" json:"blockHeaders,omitempty"` // List of serialized block headers
 	Metas         [][]byte               `protobuf:"bytes,2,rep,name=metas,proto3" json:"metas,omitempty"`               // List of serialized metadata
+	More          bool                   `protobuf:"varint,3,opt,name=more,proto3" json:"more,omitempty"`                // More blocks sort better than the last one returned
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1583,6 +1584,13 @@ func (x *BlocksBetterThanResponse) GetMetas() [][]byte {
 		return x.Metas
 	}
 	return nil
+}
+
+func (x *BlocksBetterThanResponse) GetMore() bool {
+	if x != nil {
+		return x.More
+	}
+	return false
 }
 
 // ClearBestTipLowWaterRequest names the low-water mark bytes the caller read.
@@ -7658,10 +7666,11 @@ const file_services_blockchain_blockchain_api_blockchain_api_proto_rawDesc = "" 
 	"\x05after\x18\x01 \x01(\fR\x05after\x12\x12\n" +
 	"\x04from\x18\x02 \x01(\fR\x04from\x12\x1c\n" +
 	"\tminHeight\x18\x03 \x01(\rR\tminHeight\x12\x14\n" +
-	"\x05limit\x18\x04 \x01(\rR\x05limit\"T\n" +
+	"\x05limit\x18\x04 \x01(\rR\x05limit\"h\n" +
 	"\x18BlocksBetterThanResponse\x12\"\n" +
 	"\fblockHeaders\x18\x01 \x03(\fR\fblockHeaders\x12\x14\n" +
-	"\x05metas\x18\x02 \x03(\fR\x05metas\"9\n" +
+	"\x05metas\x18\x02 \x03(\fR\x05metas\x12\x12\n" +
+	"\x04more\x18\x03 \x01(\bR\x04more\"9\n" +
 	"\x1bClearBestTipLowWaterRequest\x12\x1a\n" +
 	"\bexpected\x18\x01 \x01(\fR\bexpected\"`\n" +
 	"\x1eGetBlockHeadersByHeightRequest\x12 \n" +

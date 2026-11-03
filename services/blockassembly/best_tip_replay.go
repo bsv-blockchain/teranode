@@ -27,6 +27,13 @@ const (
 	// bestTipPageSize is how many blocks one BlocksBetterThan call returns.
 	bestTipPageSize = 1000
 
+	// bestTipPositionSaveInterval is the least time between two saves of the replay position
+	// after a pass. A restart replays at most this much of blocks already handled, each a no-op.
+	bestTipPositionSaveInterval = 10 * time.Second
+
+	// bestTipPositionShutdownSaveTimeout bounds the save of the replay position on shutdown.
+	bestTipPositionShutdownSaveTimeout = 5 * time.Second
+
 	// maxBestTipReplayFailures is how many passes in a row the replay may fail before block
 	// assembly follows the best header once instead, so a block it cannot apply does not hold
 	// it off the tip for ever.
@@ -57,7 +64,7 @@ func isStateNotFound(err error) bool {
 // blocks. If the blockchain service does not serve BlocksBetterThan the position stays unknown,
 // and a wake-up asks again after bestTipProbeInterval.
 func (b *BlockAssembler) loadBestTipPosition(ctx context.Context) {
-	if _, _, err := b.blockchainClient.BlocksBetterThan(ctx, bestTipProbeKey, nil, 0, 1); err != nil {
+	if _, _, _, err := b.blockchainClient.BlocksBetterThan(ctx, bestTipProbeKey, nil, 0, 1); err != nil {
 		b.lastBestTipProbe.Store(time.Now().UnixNano())
 
 		if b.bestTipUnsupportedLogged.CompareAndSwap(false, true) {
@@ -232,6 +239,37 @@ func (b *BlockAssembler) readBestTipLowWater(ctx context.Context) (*model.BestTi
 	return &mark, data, nil
 }
 
+// readBestTipLowWaterIfDue reads the low-water mark unless it cannot have changed since a read
+// that found none. It can after a BlockMinedUnset notification, which the blockchain service
+// sends for every invalidation, so that clears bestTipLowWaterQuiet. A lost notification is
+// covered by reading anyway once per blockassembly_reconcileInterval. A delete records a drop as
+// well, but only the offline rewind tool deletes blocks, and the first pass after a start reads
+// the mark. Skipping the read on the other passes saves a call to the blockchain service per
+// block, which counts during initial sync.
+//
+// The quiet flag is set before the read, so a notification that arrives during it clears the flag
+// again. A read that fails or finds a mark clears it too, so the next pass reads again.
+func (b *BlockAssembler) readBestTipLowWaterIfDue(ctx context.Context) (*model.BestTipLowWater, []byte, error) {
+	now := time.Now()
+
+	if b.bestTipLowWaterQuiet.Load() {
+		interval := b.settings.BlockAssembly.ReconcileInterval
+		if interval <= 0 || now.Sub(time.Unix(0, b.lastBestTipLowWaterRead.Load())) < interval {
+			return nil, nil, nil
+		}
+	}
+
+	b.bestTipLowWaterQuiet.Store(true)
+	b.lastBestTipLowWaterRead.Store(now.UnixNano())
+
+	mark, data, err := b.readBestTipLowWater(ctx)
+	if err != nil || mark != nil {
+		b.bestTipLowWaterQuiet.Store(false)
+	}
+
+	return mark, data, err
+}
+
 // settleBestTipLowWater persists the replay position and then clears the low-water mark the
 // replay read, if the mark still holds data. It runs once the position has moved past the mark.
 // The order makes a crash between the two harmless: the mark is still there on restart and the
@@ -269,7 +307,7 @@ func (b *BlockAssembler) settleBestTipLowWater(ctx context.Context, data []byte)
 // builds on is not moved to on its own, because moving to the later one passes through it.
 //
 // A drop of the best tip, by an invalidation or a delete, is recorded by the store in a
-// low-water mark. The pass reads the mark and also replays the blocks at or above it, so the
+// low-water mark. The pass reads the mark when it may have changed (readBestTipLowWaterIfDue) and also replays the blocks at or above it, so the
 // block the tip dropped to and every branch that won after it are handled although they may
 // sort below the position. The mark also names the blocks that were the best tip when it
 // dropped. One that block assembly never applied is in no read of valid blocks, so the pass
@@ -301,7 +339,7 @@ func (b *BlockAssembler) replayBestTipChanges(ctx context.Context) (int, error) 
 		}
 	}
 
-	mark, markData, err := b.readBestTipLowWater(ctx)
+	mark, markData, err := b.readBestTipLowWaterIfDue(ctx)
 	if err != nil {
 		return read, err
 	}
@@ -328,11 +366,6 @@ func (b *BlockAssembler) replayBestTipChanges(ctx context.Context) (int, error) 
 	}
 
 	for {
-		best, _, err := b.blockchainClient.GetBestBlockHeader(ctx)
-		if err != nil {
-			return read, errors.NewProcessingError("[replayBestTipChanges] error getting best block header", err)
-		}
-
 		pos := b.bestTipPos.Load()
 		if pos == nil {
 			return read, errors.NewProcessingError("[replayBestTipChanges] no replay position")
@@ -340,7 +373,7 @@ func (b *BlockAssembler) replayBestTipChanges(ctx context.Context) (int, error) 
 
 		_, tipHeight := b.CurrentBlock()
 
-		headers, metas, err := b.blockchainClient.BlocksBetterThan(ctx, *pos, from, b.bestTipFloor(tipHeight), bestTipPageSize)
+		headers, metas, more, err := b.blockchainClient.BlocksBetterThan(ctx, *pos, from, b.bestTipFloor(tipHeight), bestTipPageSize)
 		if err != nil {
 			return read, errors.NewProcessingError("[replayBestTipChanges] error getting blocks better than the replay position", err)
 		}
@@ -350,6 +383,15 @@ func (b *BlockAssembler) replayBestTipChanges(ctx context.Context) (int, error) 
 		}
 
 		read += len(headers)
+
+		if len(headers) == 0 {
+			// Nothing at or above the mark is left within the floor, so it is spent too.
+			from = nil
+			settle()
+			b.bestTipResetReplayPending.Store(false)
+
+			return read, nil
+		}
 
 		// A block whose child is later in the page is on the child's path.
 		parents := make(map[chainhash.Hash]struct{}, len(headers))
@@ -366,7 +408,9 @@ func (b *BlockAssembler) replayBestTipChanges(ctx context.Context) (int, error) 
 				continue
 			}
 
-			last := hash.IsEqual(best.Hash())
+			// The best tip sorts better than every other valid block, so a page with nothing
+			// after it ends with the best tip. That saves a read of the best header per pass.
+			last := !more && i+1 == len(headers)
 
 			if err = b.applyBestTipChange(ctx, headers[i], metas[i], last); err != nil && !errors.Is(err, errors.ErrBlockAssemblyReset) {
 				// The position stays before this block, which the next pass retries. The
@@ -382,14 +426,9 @@ func (b *BlockAssembler) replayBestTipChanges(ctx context.Context) (int, error) 
 			reachedBest = last
 		}
 
-		if len(headers) == 0 {
-			// Nothing at or above the mark is left within the floor, so it is spent too.
-			from = nil
-		}
-
 		settle()
 
-		if len(headers) == 0 || reachedBest {
+		if reachedBest {
 			b.bestTipResetReplayPending.Store(false)
 			return read, nil
 		}
@@ -899,7 +938,7 @@ func (b *BlockAssembler) idleReconcileNeeded(ctx context.Context) bool {
 		if pos := b.bestTipPos.Load(); pos != nil {
 			_, tipHeight := b.CurrentBlock()
 
-			if headers, _, err := b.blockchainClient.BlocksBetterThan(ctx, *pos, nil, b.bestTipFloor(tipHeight), 1); err == nil && len(headers) > 0 {
+			if headers, _, _, err := b.blockchainClient.BlocksBetterThan(ctx, *pos, nil, b.bestTipFloor(tipHeight), 1); err == nil && len(headers) > 0 {
 				return true
 			}
 		}
@@ -933,18 +972,25 @@ func (b *BlockAssembler) setBestTipPos(key model.BestTipKey) {
 	b.bestTipPos.Store(&key)
 }
 
-// returnToRunning ends a block-processing state and then persists the replay position. The save
-// is one write to the blockchain service, and a mining candidate asked for during a processing
-// state is an empty one, so the save waits until block assembly is running again.
+// returnToRunning ends a block-processing state and then persists the replay position, at most
+// once per bestTipPositionSaveInterval. The save is one write to the blockchain service, and a
+// mining candidate asked for during a processing state is an empty one, so the save waits until
+// block assembly is running again.
 func (b *BlockAssembler) returnToRunning(ctx context.Context) {
 	b.setCurrentRunningState(StateRunning)
-	b.saveBestTipPosition(ctx)
+
+	if time.Since(time.Unix(0, b.lastBestTipPosSave.Load())) >= bestTipPositionSaveInterval {
+		b.saveBestTipPosition(ctx)
+	}
 }
 
-// saveBestTipPosition persists the replay position when it moved since the last save. A failed
-// or missed save only costs a restart replaying blocks block assembly already handled, each of
-// which is then a no-op or a move that ends where it started, so it is logged and not returned.
+// saveBestTipPosition persists the replay position when it moved since the last save. A failed,
+// missed or deferred save only costs a restart replaying blocks block assembly already handled,
+// each of which is then a no-op or a move that ends where it started, so it is logged and not
+// returned. During initial sync that is a few seconds of blocks, against a write per block saved.
 func (b *BlockAssembler) saveBestTipPosition(ctx context.Context) {
+	b.lastBestTipPosSave.Store(time.Now().UnixNano())
+
 	if !b.bestTipPosKnown.Load() {
 		return
 	}

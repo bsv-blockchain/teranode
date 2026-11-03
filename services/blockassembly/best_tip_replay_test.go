@@ -484,6 +484,8 @@ func (c *grpcShapedBestHeaderClient) GetBestBlockHeader(ctx context.Context) (*m
 // only once block assembly is running again, so the write does not lengthen the time a mining
 // candidate comes back empty.
 func TestReturnToRunning_SavesAfterLeavingProcessingState(t *testing.T) {
+	initPrometheusMetrics()
+
 	m := &blockchain.Mock{}
 	ba := &BlockAssembler{blockchainClient: m, logger: ulogger.TestLogger{}}
 
@@ -508,6 +510,173 @@ func TestReturnToRunning_SavesAfterLeavingProcessingState(t *testing.T) {
 	// Nothing moved, so the next return writes nothing.
 	ba.returnToRunning(t.Context())
 	m.AssertNumberOfCalls(t, "SetState", 1)
+
+	// A moved position waits for bestTipPositionSaveInterval, so a pass per block during
+	// initial sync does not cost a write per block.
+	moved := model.BestTipKey{ChainWork: []byte{8}, PeerID: "p", ID: 8}
+	m.On("SetState", mock.Anything, BestTipPositionStateKey, moved.Bytes()).Return(nil).Once()
+	ba.setBestTipPos(moved)
+	ba.returnToRunning(t.Context())
+	m.AssertNumberOfCalls(t, "SetState", 1)
+
+	ba.lastBestTipPosSave.Store(time.Now().Add(-bestTipPositionSaveInterval).UnixNano())
+	ba.returnToRunning(t.Context())
+	m.AssertNumberOfCalls(t, "SetState", 2)
+	require.Equal(t, moved, *ba.bestTipPosSaved.Load())
+}
+
+// syncCallCounter counts the calls to the blockchain service that a replay pass can make on top of
+// moving block assembly.
+type syncCallCounter struct {
+	blockchain.ClientI
+	betterThan, bestHeader, getState, positionSaves int
+}
+
+func (c *syncCallCounter) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, floor, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	c.betterThan++
+	return c.ClientI.BlocksBetterThan(ctx, after, from, floor, limit)
+}
+
+func (c *syncCallCounter) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	c.bestHeader++
+	return c.ClientI.GetBestBlockHeader(ctx)
+}
+
+func (c *syncCallCounter) GetState(ctx context.Context, key string) ([]byte, error) {
+	c.getState++
+	return c.ClientI.GetState(ctx, key)
+}
+
+func (c *syncCallCounter) SetState(ctx context.Context, key string, data []byte) error {
+	if key == BestTipPositionStateKey {
+		c.positionSaves++
+	}
+
+	return c.ClientI.SetState(ctx, key, data)
+}
+
+// TestReplayBestTipChanges_InitialSyncCallsPerBlock pins what the replay costs per block during
+// initial sync, where a pass runs for every one of many small blocks: one BlocksBetterThan read,
+// which takes the place of the best header read that following the best header made, and no
+// read of the low-water mark or save of the position.
+func TestReplayBestTipChanges_InitialSyncCallsPerBlock(t *testing.T) {
+	initPrometheusMetrics()
+
+	items := setupBlockAssemblyTest(t)
+	genesis := genesisHeader(t, items)
+	startReplayAt(t, items, genesis, 0)
+	recordMoves(t, items)
+
+	ba := items.blockAssembler
+	chain := buildChain(genesis, 51, 35000)
+
+	pass := func() {
+		ba.setCurrentRunningState(StateBlockchainSubscription)
+		ba.processNewBlockAnnouncement(t.Context())
+		ba.returnToRunning(t.Context())
+	}
+
+	// The first pass reads the mark and saves the position.
+	addChain(t, items, chain[:1])
+	pass()
+
+	counter := &syncCallCounter{ClientI: items.blockchainClient}
+	ba.blockchainClient = counter
+
+	for _, h := range chain[1:] {
+		addChain(t, items, []*model.BlockHeader{h})
+		pass()
+	}
+
+	requireBlockAssemblyTip(t, items, chain[50])
+	require.Equal(t, 50, counter.betterThan)
+	require.Zero(t, counter.bestHeader)
+	require.Zero(t, counter.getState)
+	require.Zero(t, counter.positionSaves)
+}
+
+// TestTakeBlockNotifications_CoalescesQueued checks that the notifications already queued behind
+// the one received are taken with it, so one replay pass covers them all, and that a
+// BlockMinedUnset among them makes the next pass read the low-water mark.
+func TestTakeBlockNotifications_CoalescesQueued(t *testing.T) {
+	ba := &BlockAssembler{blockchainSubscriptionCh: make(chan *blockchain.Notification, 8)}
+	ba.bestTipLowWaterQuiet.Store(true)
+
+	ba.blockchainSubscriptionCh <- &blockchain.Notification{Type: model.NotificationType_Block}
+	ba.blockchainSubscriptionCh <- nil
+	ba.blockchainSubscriptionCh <- &blockchain.Notification{Type: model.NotificationType_BlockMinedUnset}
+	ba.blockchainSubscriptionCh <- &blockchain.Notification{Type: model.NotificationType_Block}
+
+	require.True(t, ba.takeBlockNotifications(&blockchain.Notification{Type: model.NotificationType_Block}))
+	require.Empty(t, ba.blockchainSubscriptionCh)
+	require.False(t, ba.bestTipLowWaterQuiet.Load(), "an invalidation may have set the mark")
+
+	// Notifications of other kinds need no pass.
+	ba.blockchainSubscriptionCh <- &blockchain.Notification{Type: model.NotificationType_Subtree}
+	require.False(t, ba.takeBlockNotifications(&blockchain.Notification{Type: model.NotificationType_PING}))
+	require.Empty(t, ba.blockchainSubscriptionCh)
+
+	// A BlockMinedUnset alone calls for a pass: its Block notification may have been handled
+	// before the mark could be read.
+	ba.bestTipLowWaterQuiet.Store(true)
+	require.True(t, ba.takeBlockNotifications(&blockchain.Notification{Type: model.NotificationType_BlockMinedUnset}))
+	require.False(t, ba.bestTipLowWaterQuiet.Load())
+}
+
+// TestReadBestTipLowWaterIfDue_ReadsOnlyWhenTheMarkCanHaveChanged checks that once a read found no
+// mark, the replay reads it again only after a BlockMinedUnset notification or once
+// blockassembly_reconcileInterval has passed, and keeps reading while a mark is set.
+func TestReadBestTipLowWaterIfDue_ReadsOnlyWhenTheMarkCanHaveChanged(t *testing.T) {
+	initPrometheusMetrics()
+
+	items := setupBlockAssemblyTest(t)
+	ba := items.blockAssembler
+	ctx := t.Context()
+
+	mark, _, err := ba.readBestTipLowWaterIfDue(ctx)
+	require.NoError(t, err)
+	require.Nil(t, mark)
+	require.True(t, ba.bestTipLowWaterQuiet.Load())
+
+	// A drop recorded now is not read on the next pass.
+	genesis := genesisHeader(t, items)
+	chain := buildChain(genesis, 2, 34000)
+	addChain(t, items, chain)
+	_, err = items.blockchainClient.InvalidateBlock(ctx, chain[1].Hash())
+	require.NoError(t, err)
+
+	mark, _, err = ba.readBestTipLowWaterIfDue(ctx)
+	require.NoError(t, err)
+	require.Nil(t, mark, "no notification and no interval, so the mark is not read")
+
+	// The invalidation's BlockMinedUnset notification makes the next pass read it.
+	require.True(t, ba.takeBlockNotifications(&blockchain.Notification{Type: model.NotificationType_BlockMinedUnset}))
+	mark, data, err := ba.readBestTipLowWaterIfDue(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, mark)
+
+	// A mark is read on every pass until it is cleared.
+	mark, _, err = ba.readBestTipLowWaterIfDue(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, mark)
+
+	require.NoError(t, items.blockchainClient.ClearBestTipLowWater(ctx, data))
+	mark, _, err = ba.readBestTipLowWaterIfDue(ctx)
+	require.NoError(t, err)
+	require.Nil(t, mark)
+	require.True(t, ba.bestTipLowWaterQuiet.Load())
+
+	// A lost notification is covered once the interval has passed.
+	_, err = items.blockchainClient.InvalidateBlock(ctx, chain[0].Hash())
+	require.NoError(t, err)
+	mark, _, err = ba.readBestTipLowWaterIfDue(ctx)
+	require.NoError(t, err)
+	require.Nil(t, mark)
+
+	ba.lastBestTipLowWaterRead.Store(time.Now().Add(-ba.settings.BlockAssembly.ReconcileInterval).UnixNano())
+	mark, _, err = ba.readBestTipLowWaterIfDue(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, mark, "the interval read finds the mark the lost notification would have flagged")
 }
 
 // TestReplayBestTipChanges_ProbeIsRateLimited checks that against a blockchain service without
@@ -785,9 +954,9 @@ type cappedTipClient struct {
 	fail bool
 }
 
-func (c *cappedTipClient) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, floor, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+func (c *cappedTipClient) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, floor, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
 	if c.fail {
-		return nil, nil, errors.NewStorageError("temporary replay read failure")
+		return nil, nil, false, errors.NewStorageError("temporary replay read failure")
 	}
 	return c.ClientI.BlocksBetterThan(ctx, after, from, floor, min(limit, c.cap))
 }

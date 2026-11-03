@@ -403,6 +403,7 @@ message BlocksBetterThanRequest {
 message BlocksBetterThanResponse {
   repeated bytes blockHeaders = 1;  // List of serialized block headers
   repeated bytes metas = 2;         // List of serialized metadata
+  bool more = 3;                    // More blocks sort better than the last one returned
 }
 
 // ClearBestTipLowWaterRequest names the low-water mark bytes the caller read.

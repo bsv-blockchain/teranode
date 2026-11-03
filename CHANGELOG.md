@@ -175,7 +175,14 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   when one of them resolved a double spend, even if block assembly's own tip has
   since lost: its branch-only transactions are marked unmined where they lie and the
   pool is reloaded. That keeps confirmed spends of a coinbase, and the conflict swaps
-  of the best chain, in place. (#2074)
+  of the best chain, in place. During initial sync a pass per block makes the same
+  number of blockchain calls as before: one `BlocksBetterThan` read, whose response now
+  says whether more blocks follow, takes the place of the best header read. The
+  low-water mark is read after a `BlockMinedUnset` notification, on the first pass
+  after a start, and once per reconcile interval, which `0` turns off. The position is
+  saved at most every 10 seconds and on shutdown, so a crash replays up to that much
+  of blocks already handled, each a no-op. Block notifications queued behind each
+  other are handled in one pass. (#2074)
 
 - **Mining candidates stay empty after a reset until block assembly has replayed the
   tip changes left pending.** A reset moves block assembly to one target, so a branch

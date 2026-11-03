@@ -227,8 +227,16 @@ type BlockAssembler struct {
 	bestTipResetReplayPending atomic.Bool // candidates stay empty until reset's pending history succeeds or is given up
 	bestTipResetIncomplete    atomic.Bool // reset moved its target but has not finished reloading/persisting
 
-	// bestTipPosSaved is the position last persisted under BestTipPositionStateKey.
-	bestTipPosSaved atomic.Pointer[model.BestTipKey]
+	// bestTipPosSaved is the position last persisted under BestTipPositionStateKey, and
+	// lastBestTipPosSave when a save was last tried, in Unix nanoseconds.
+	bestTipPosSaved    atomic.Pointer[model.BestTipKey]
+	lastBestTipPosSave atomic.Int64
+
+	// bestTipLowWaterQuiet is set when the last read of the low-water mark found none and no
+	// BlockMinedUnset notification arrived since, and lastBestTipLowWaterRead is when the mark
+	// was last read, in Unix nanoseconds (see readBestTipLowWaterIfDue).
+	bestTipLowWaterQuiet    atomic.Bool
+	lastBestTipLowWaterRead atomic.Int64
 
 	// lastBestTipReplay is when processNewBlockAnnouncement last ran, in Unix nanoseconds.
 	// The idle tick wakes a replay once it is older than blockassembly_reconcileInterval.
@@ -573,6 +581,12 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 				// instead of letting the grace period finish the drain.
 				b.heartbeat.Disable()
 
+				// Saves after a pass are spaced out, so save the last position now. The
+				// context is done, so the write gets a short one of its own.
+				saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bestTipPositionShutdownSaveTimeout)
+				b.saveBestTipPosition(saveCtx)
+				cancel()
+
 				// Note: We don't close blockchainSubscriptionCh here because we don't own it -
 				// it's created by the blockchain client's Subscribe method
 				return
@@ -646,7 +660,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 			case notification := <-b.blockchainSubscriptionCh:
 				b.setCurrentRunningState(StateBlockchainSubscription)
 
-				if notification.Type == model.NotificationType_Block {
+				if b.takeBlockNotifications(notification) {
 					b.processNewBlockAnnouncement(ctx)
 				}
 
@@ -756,6 +770,47 @@ func (b *BlockAssembler) triggerReconcile() {
 	case b.reconcileCh <- struct{}{}:
 	default:
 	}
+}
+
+// takeBlockNotifications takes first and every notification already queued behind it, and
+// reports whether any of them calls for a replay pass. One pass covers them all, since it reads
+// every block better than the replay position. During initial sync notifications queue up while
+// block assembly works, and a pass per notification would cost calls to the blockchain service
+// for each one that finds nothing new. A BlockMinedUnset notification means a block was
+// invalidated, which may have set the low-water mark, so the next pass reads it.
+func (b *BlockAssembler) takeBlockNotifications(first *blockchain.Notification) bool {
+	replay := false
+
+	take := func(notification *blockchain.Notification) {
+		if notification == nil {
+			return
+		}
+
+		switch notification.Type {
+		case model.NotificationType_Block:
+			replay = true
+		case model.NotificationType_BlockMinedUnset:
+			b.bestTipLowWaterQuiet.Store(false)
+			replay = true
+		}
+	}
+
+	take(first)
+
+	for queued := len(b.blockchainSubscriptionCh); queued > 0; queued-- {
+		select {
+		case notification, ok := <-b.blockchainSubscriptionCh:
+			if !ok {
+				return replay
+			}
+
+			take(notification)
+		default:
+			return replay
+		}
+	}
+
+	return replay
 }
 
 // reset performs a full reset of the block assembler state by clearing all subtrees and reloading from blockchain.

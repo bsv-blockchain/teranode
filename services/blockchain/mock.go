@@ -302,18 +302,22 @@ func (m *Mock) hasExpectation(method string) bool {
 }
 
 // BlocksBetterThan mocks the BlocksBetterThan method
-func (m *Mock) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+// The expectation returns headers, metas and an error; a full page reports more, as from a server
+// that predates the more field.
+func (m *Mock) BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
 	if !m.hasExpectation("BlocksBetterThan") {
-		return nil, nil, errBetterBlocksNotMocked
+		return nil, nil, false, errBetterBlocksNotMocked
 	}
 
 	args := m.Called(ctx, after, from, minHeight, limit)
 
 	if args.Error(2) != nil {
-		return nil, nil, args.Error(2)
+		return nil, nil, false, args.Error(2)
 	}
 
-	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
+	headers := args.Get(0).([]*model.BlockHeader)
+
+	return headers, args.Get(1).([]*model.BlockHeaderMeta), uint64(len(headers)) >= uint64(limit), args.Error(2)
 }
 
 // ClearBestTipLowWater mocks the ClearBestTipLowWater method

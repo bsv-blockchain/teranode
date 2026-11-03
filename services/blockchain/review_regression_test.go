@@ -253,11 +253,13 @@ func TestBlocksBetterThan_ClampsConfiguredPageSize(t *testing.T) {
 		meta, err := model.NewBlockHeaderMetaFromBytes(page.Metas[0])
 		require.NoError(t, err)
 		require.Equal(t, height, meta.Height, "worst first")
+		require.Equal(t, height < 3, page.More, "a capped page says whether blocks follow it")
 		after = model.NewBestTipKey(header, meta)
 	}
 	end, err := fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: after.Bytes(), Limit: 1000})
 	require.NoError(t, err)
 	require.Empty(t, end.BlockHeaders)
+	require.False(t, end.More)
 	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: after.Bytes()})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 	_, err = fixture.server.BlocksBetterThan(t.Context(), &blockchain_api.BlocksBetterThanRequest{After: []byte{9}, Limit: 1})

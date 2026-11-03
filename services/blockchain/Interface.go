@@ -457,8 +457,11 @@ type ClientI interface {
 	// even one that lost again before it looked. A drop of the tip is recorded in the low-water
 	// mark under state key model.BestTipLowWaterStateKey, which the reader passes as from.
 	//
-	// Returns headers and metadata as slices of the same length.
-	BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error)
+	// Returns headers and metadata as slices of the same length, and whether more blocks sort
+	// better than the last one returned. Without more, the last block is the best tip at the
+	// time of the read, so the reader needs no separate read of the best block header. A page
+	// that comes back full reports more, also from a server too old to say.
+	BlocksBetterThan(ctx context.Context, after model.BestTipKey, from *model.BestTipKey, minHeight, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error)
 
 	// ClearBestTipLowWater deletes the best tip's low-water mark if it still holds expected, the
 	// bytes the caller read with GetState. A drop recorded since changes the mark, and the delete

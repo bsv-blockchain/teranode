@@ -259,7 +259,7 @@ func TestReplayBestTipChanges_LowWaterReplaysShortBranch(t *testing.T) {
 	require.Equal(t, y[1].Hash().String(), best.Hash().String())
 
 	// Nothing that sorts better than X2 is S2.
-	betterThanX2, _, err := items.blockchainClient.BlocksBetterThan(ctx, bestTipKeyOf(t, items, x2), nil, 0, 100)
+	betterThanX2, _, _, err := items.blockchainClient.BlocksBetterThan(ctx, bestTipKeyOf(t, items, x2), nil, 0, 100)
 	require.NoError(t, err)
 	require.NotContains(t, headerHashes(betterThanX2...), s2.Hash().String())
 
