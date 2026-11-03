@@ -54,7 +54,8 @@ func (p *pruneBeforeCreate) Create(ctx context.Context, tx *bt.Tx, blockHeight u
 //   - idempotent retry: an earlier attempt spent C's input and never created C;
 //     nothing is pruned, the recheck passes and C is created.
 //   - other failure: the recheck fails for a reason that is not a replay (the
-//     parent turned conflicting after the create), so C is kept.
+//     parent turned conflicting after the create), so C is kept and the caller
+//     is told the outcome is unknown rather than told it succeeded.
 func TestSpendAndCreateRecheckRemovesARecreatedPrunedTransaction(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -67,7 +68,7 @@ func TestSpendAndCreateRecheckRemovesARecreatedPrunedTransaction(t *testing.T) {
 		{name: "marker", marker: true, wantErr: errors.ErrUtxoSpendingTxPruned, wantGone: true},
 		{name: "parent pruned too", parentPruned: true, wantErr: errors.ErrTxNotFound, wantGone: true},
 		{name: "idempotent retry"},
-		{name: "other failure", conflicting: true},
+		{name: "other failure", conflicting: true, wantErr: errors.ErrServiceUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()

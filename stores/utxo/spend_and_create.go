@@ -223,36 +223,54 @@ type completeDeleter interface {
 // is gone at the recheck was pruned in between, and is pruned only once fully
 // spent and buried, so the transaction is the pruned one. The record is deleted
 // detached and bounded, like the rollback, and the answer returned. The
-// historical spends stay, as a normal prune leaves them. Any other failure of
-// the recheck says nothing about a replay, and a concurrent caller may already
-// have accepted the record as existing, so the record is kept and the failure
-// only logged.
+// historical spends stay, as a normal prune leaves them.
+//
+// The recheck itself runs detached and bounded too, with the delete's three
+// attempts, so a caller's deadline that the spend and the create used up does
+// not stop it. Any other failure says nothing about a replay, and a concurrent
+// caller may already have accepted the record as existing, so the record and
+// the spends are kept. The failure is still returned, as a ServiceUnavailable
+// error marked with MarkCreateOutcomeUnknown, because whether the record should
+// stand is unknown: a caller that read success would never look again. A retry
+// heals it either way: a replay meets the marker at the spend, and anything
+// else finds the record and gets ErrTxExists.
 //
 // Only a transaction whose spend the store had already answered for is
 // rechecked, so a transaction seen for the first time pays nothing.
 func recheckRecreated(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags) error {
 	ignoreFlags.RequireParentOutputs = true
 
-	_, recheckErr := s.Spend(ctx, tx, blockHeight, ignoreFlags)
-	if recheckErr == nil {
-		return nil
+	bound := defaultSequentialRollbackTimeout
+
+	if b, ok := s.(spendRollbackBounded); ok && b.SpendRollbackTimeout() > 0 {
+		bound = b.SpendRollbackTimeout()
 	}
 
-	if !IsReplayAnswer(recheckErr) {
-		logger.Warnf("[SpendAndCreate] %s: recheck after create failed, keeping the created record: %v", tx.TxIDChainHash().String(), recheckErr)
+	recheckCtx, cancelRecheck := context.WithTimeout(context.WithoutCancel(ctx), bound)
+	defer cancelRecheck()
 
+	var recheckErr error
+
+	if err := retryStoreCall(recheckCtx, func() error {
+		_, recheckErr = s.Spend(recheckCtx, tx, blockHeight, ignoreFlags)
+		if recheckErr == nil || IsReplayAnswer(recheckErr) {
+			return nil
+		}
+
+		return recheckErr
+	}); err != nil {
+		logger.Errorf("[SpendAndCreate] %s: recheck after create could not answer, keeping the created record: %v", tx.TxIDChainHash().String(), err)
+
+		return MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("SpendAndCreate: recheck of %s after create could not answer, keeping the created record", tx.TxIDChainHash().String(), err))
+	}
+
+	if recheckErr == nil {
 		return nil
 	}
 
 	deleter, ok := s.(completeDeleter)
 	if !ok {
 		return errors.NewStorageError("SpendAndCreate: %s recreated a pruned transaction and the store cannot remove it", tx.TxIDChainHash().String(), recheckErr)
-	}
-
-	bound := defaultSequentialRollbackTimeout
-
-	if b, ok := s.(spendRollbackBounded); ok && b.SpendRollbackTimeout() > 0 {
-		bound = b.SpendRollbackTimeout()
 	}
 
 	delCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)

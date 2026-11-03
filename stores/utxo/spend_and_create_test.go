@@ -296,10 +296,12 @@ func TestSequentialSpendAndCreate(t *testing.T) {
 	})
 }
 
-// recheckStore answers the first Spend with spends and the recheck with
-// recheckErr, and records the recheck's flags.
+// recheckStore answers the first Spend with spends and each recheck with the
+// next of recheckErrs, then with recheckErr, and records the recheck's flags. A
+// recheck under a context that is already done fails with the context's error.
 type recheckStore struct {
 	fakeSequentialStore
+	recheckErrs  []error
 	recheckErr   error
 	recheckFlags []IgnoreFlags
 }
@@ -308,6 +310,17 @@ func (r *recheckStore) Spend(ctx context.Context, tx *bt.Tx, h uint32, ignoreFla
 	if r.spendCalls > 0 {
 		r.spendCalls++
 		r.recheckFlags = ignoreFlags
+
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		if len(r.recheckErrs) > 0 {
+			err := r.recheckErrs[0]
+			r.recheckErrs = r.recheckErrs[1:]
+
+			return nil, err
+		}
 
 		return nil, r.recheckErr
 	}
@@ -354,6 +367,45 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 		require.Len(t, f.recheckFlags, 1)
 		require.True(t, f.recheckFlags[0].RequireParentOutputs)
 		require.True(t, f.recheckFlags[0].IgnoreLocked, "the caller's flags are kept")
+	})
+
+	t.Run("a recheck that cannot answer is retried, then reported with the record and spends kept", func(t *testing.T) {
+		f := &recheckStore{fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{Idempotent: true}}, createMeta: &meta.Data{}}, recheckErr: errors.NewStorageError("timeout")}
+
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.Nil(t, md)
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.True(t, IsCreateOutcomeUnknown(err))
+		require.True(t, errors.IsRetryableError(err), "the block path retries it")
+		require.Len(t, spends, 1, "the spends are kept")
+		require.Equal(t, 0, f.unspendCalls)
+		require.Equal(t, 1+deleteCreatedAttempts, f.spendCalls)
+	})
+
+	t.Run("a recheck that fails once and then answers is not reported", func(t *testing.T) {
+		f := &recheckStore{
+			fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{Idempotent: true}}, createMeta: &meta.Data{}},
+			recheckErrs:         []error{errors.NewStorageError("timeout")},
+		}
+
+		md, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+		require.NoError(t, err)
+		require.NotNil(t, md)
+		require.Equal(t, 3, f.spendCalls)
+	})
+
+	t.Run("the recheck runs past the caller's deadline", func(t *testing.T) {
+		done, cancel := context.WithCancel(ctx)
+		cancel()
+
+		f := &deletingRecheckStore{
+			recheckStore: recheckStore{fakeSequentialStore: fakeSequentialStore{spends: []*Spend{{Idempotent: true}}, createMeta: &meta.Data{}}, recheckErr: pruned},
+		}
+
+		_, _, err := SequentialSpendAndCreate(done, logger, f, tx, 100)
+		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the recheck answered under a detached context")
+		require.Equal(t, 1, f.deleteCalls)
 	})
 
 	t.Run("a store that cannot delete reports a storage error", func(t *testing.T) {
