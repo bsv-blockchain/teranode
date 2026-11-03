@@ -1033,6 +1033,27 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **Legacy bans now disconnect connected peers, and the ban list no longer leaks
+  goroutines.** The legacy service's ban listener only started at shutdown, so a
+  ban recorded while the node ran (a misbehaving peer, the feeler's non-BSV bans,
+  or a `setban` when the ban reaches this process's ban list) never disconnected a
+  peer that was already connected, and once the listener's 100-event buffer filled
+  every later ban left a goroutine blocked for the life of the process. The
+  listener now runs alongside the peer loop: a ban disconnects every connected
+  inbound or automatic outbound legacy peer at the banned host or inside the
+  banned subnet, as long as the ban list still holds the ban when the event is
+  handled; a ban that has expired or been removed by then disconnects nothing.
+  Persistent peers (`addnode`, and every peer in `connect`-only mode) are not
+  disconnected, as before; that is an accepted limit, since disconnecting one
+  would also drop its `addnode` request for good. The peer loop no longer blocks
+  on a ban event, which with that buffer full would have frozen it on the next
+  ban.
+  `legacy_upnp`, which had the same start-up ordering bug, now maps the port while
+  the node runs instead of only at shutdown. It keeps renewing the lease after a
+  failed external-address lookup, and its HTTP calls to the gateway time out after
+  10 seconds, so a gateway that never answers no longer hangs shutdown.
+  (bsv-blockchain/teranode#2098)
+
 - **Catch-up checks the difficulty of every offered header before fetching any
   block.** The header precheck used to skip the first ~147 headers after the
   common ancestor, every pre-DAA header and chains that never adjust difficulty,

@@ -11,7 +11,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/legacy/addrmgr"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
-	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -139,12 +138,16 @@ func TestServerPeer_ARejectedBodyBansTheHostSoItCannotReconnect(t *testing.T) {
 
 			addr := net.JoinHostPort(host, "8333")
 
+			// The server listens to the ban list it bans on, as in production,
+			// where the ban event comes from the ban list.
+			bl := emptyWritableBanList(t)
+
 			srv := &server{
 				ctx:      context.Background(),
 				logger:   ulogger.TestLogger{},
-				banList:  emptyWritableBanList(t),
+				banList:  bl,
 				banPeers: make(chan *serverPeer, 1),
-				banChan:  make(chan p2p.BanEvent, 1),
+				banChan:  bl.Subscribe(),
 			}
 			state := newTestPeerState()
 
