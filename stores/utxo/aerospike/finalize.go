@@ -110,6 +110,26 @@ func (s *Store) finalizeRecordCount(tx *bt.Tx) int {
 	return (n + s.utxoBatchSize - 1) / s.utxoBatchSize
 }
 
+// removeUnminedSinceIfMinedOp returns the master-record write that removes unminedSince
+// when the record has block IDs. A creating record created with mined block info carries
+// unminedSince so the sweep can find it; once it is no longer creating it is an ordinary
+// mined record and must not be reported as unmined. A record with no block IDs, or no
+// unminedSince, is left alone: the unknown branch with ExpWriteFlagEvalNoFail makes the
+// write a no-op.
+func removeUnminedSinceIfMinedOp() *aerospike.Operation {
+	return aerospike.ExpWriteOp(
+		fields.UnminedSince.String(),
+		aerospike.ExpCond(
+			aerospike.ExpGreater(
+				aerospike.ExpListSize(aerospike.ExpListBin(fields.BlockIDs.String())),
+				aerospike.ExpIntVal(0),
+			), aerospike.ExpNilValue(),
+			aerospike.ExpUnknown(),
+		),
+		aerospike.ExpWriteFlagAllowDelete|aerospike.ExpWriteFlagEvalNoFail,
+	)
+}
+
 // sendFinalizeBatch clears the creating bin for a batch of transactions. Single-record
 // txs (the overwhelmingly common case) are cleared in one BatchOperate over the whole
 // batch; multi-record txs are handled inline via clearCreatingFlag, which already
@@ -154,9 +174,9 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		writePolicy.FilterExpression = filterExp // only touch records that still carry the creating bin
 
 		// Clear by writing nil (bin absence == not creating).
-		op := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
+		clearOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
 
-		singleRecords = append(singleRecords, aerospike.NewBatchWrite(writePolicy, key, op))
+		singleRecords = append(singleRecords, aerospike.NewBatchWrite(writePolicy, key, clearOp, removeUnminedSinceIfMinedOp()))
 		singleOwner = append(singleOwner, idx)
 	}
 
