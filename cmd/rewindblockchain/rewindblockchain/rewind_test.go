@@ -18,7 +18,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
-	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
@@ -1331,43 +1330,6 @@ func TestRewind_PersisterHeightBelowTargetLeftAlone(t *testing.T) {
 	require.Len(t, got, 4)
 	require.Equal(t, uint32(1), binary.LittleEndian.Uint32(got),
 		"a lagging persister height must survive a full rewind run untouched")
-}
-
-// TestRewind_ForgetsPrunerParentPreservation: the pruner measures phase 1 gaps from the last
-// height it recorded. After a rewind below it, every height up to it would look covered, and a
-// gap while the node syncs back would start no cooldown. The rewind resets the record, so the
-// pruner treats what it knows of earlier phase 1 runs as nothing.
-func TestRewind_ForgetsPrunerParentPreservation(t *testing.T) {
-	ctx := context.Background()
-	bcStore, utxoStore, subtreeStore, tSettings := newTestStores(t, ctx)
-
-	bits, err := model.NewNBitFromString("207fffff")
-	require.NoError(t, err)
-
-	blocks := buildLinearChain(t, ctx, bcStore, 6, bits, tSettings.ChainCfgParams.GenesisHash)
-	require.NoError(t, bcStore.SetFSMState(ctx, "IDLE"))
-	require.NoError(t, setBlockAssemblerState(ctx, bcStore, 6, blocks[5].Header))
-
-	recorded := make([]byte, 8)
-	binary.LittleEndian.PutUint32(recorded, 6)
-	require.NoError(t, bcStore.SetState(ctx, pruner.ParentPreservationStateKey, recorded))
-
-	// The fixture's blocks carry no subtrees to unwind, so rewind to the tip: phase 3 runs
-	// the same.
-	_, err = Rewind(ctx, logger(), tSettings, Options{
-		TargetHeight: 6,
-		AssumeYes:    true,
-		Stores: &Stores{
-			Blockchain: bcStore,
-			UTXO:       utxoStore,
-			Subtree:    subtreeStore,
-		},
-	})
-	require.NoError(t, err)
-
-	got, err := bcStore.GetState(ctx, pruner.ParentPreservationStateKey)
-	require.NoError(t, err)
-	require.Equal(t, pruner.ForgottenParentPreservationRecord(), got)
 }
 
 // capturingLogger records Infof/Warnf output so tests can assert on the

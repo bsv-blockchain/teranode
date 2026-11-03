@@ -64,7 +64,7 @@ import (
 // That is deliberate: the reset reloads the unmined transactions and re-marks the ones the master
 // restore (applyLongestChainChildDAH) left in a mined state with unmined_since set, so nothing is lost,
 // at the price of one transient page failure costing an incremental reorg. Do not swallow this error.
-func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxo.MarkLongestChainOption) error {
+func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	if len(txHashes) == 0 {
 		return nil
 	}
@@ -265,15 +265,10 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		attempted, succeeded, finalErrorCount, finalMissingCount, atomic.LoadInt64(&childDAHFailed), onLongestChain)
 
 	if finalMissingCount > 0 {
-		switch skipMissing := utxo.NewMarkLongestChainOptions(opts...).SkipMissing; {
-		case !onLongestChain && !skipMissing:
+		if !onLongestChain {
 			s.logger.Fatalf("CRITICAL: %d missing transactions during MarkTransactionsOnLongestChain(false) - data integrity compromised, first: %v",
 				finalMissingCount, firstMissing)
-		case skipMissing:
-			// Expected: the caller's records may have been pruned since it read them.
-			s.logger.Warnf("[MarkTransactionsOnLongestChain] skipped %d transactions no longer in the store, first: %v",
-				finalMissingCount, firstMissing)
-		default:
+		} else {
 			s.logger.Errorf("[MarkTransactionsOnLongestChain] skipped %d transactions the store does not hold, first: %v",
 				finalMissingCount, firstMissing)
 		}

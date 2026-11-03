@@ -89,11 +89,9 @@ var (
 	// unbounded Prometheus cardinality (one permanent series per distinct hash
 	// over the node's lifetime). The specific block hash is recorded in the
 	// accompanying log lines for manual repair.
-	prometheusBlockValidationSetMinedRetries           prometheus.Counter
-	prometheusBlockValidationSetMinedDrops             prometheus.Counter
-	prometheusBlockValidationSetMinedEnqueueOverflow   prometheus.Counter
-	prometheusBlockValidationTipRepairSubtreesSetAside prometheus.Gauge
-	prometheusBlockValidationTipRepairAbandoned        *prometheus.CounterVec
+	prometheusBlockValidationSetMinedRetries         prometheus.Counter
+	prometheusBlockValidationSetMinedDrops           prometheus.Counter
+	prometheusBlockValidationSetMinedEnqueueOverflow prometheus.Counter
 
 	// outpoint-only fast-path counter: incremented once per block when the
 	// below-checkpoint outpoint-only path is active (setting on, height ≤ highest
@@ -278,25 +276,6 @@ func _initPrometheusMetrics() {
 			Name:      "setmined_enqueue_overflow_total",
 			Help:      "Total number of setMined enqueues parked in the overflow set because setMinedChan was full. A sustained rise means producers are outpacing the serial setMined worker; the overflow set is deduped by block hash, so memory stays bounded by the number of distinct blocks.",
 		},
-	)
-
-	prometheusBlockValidationTipRepairSubtreesSetAside = promauto.NewGauge(
-		prometheus.GaugeOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "tip_repair_subtrees_set_aside",
-			Help:      "Subtrees of overtaken blocks the overtaken-tip repair could not read and set aside. Their txs may look mined while off the longest chain, and the pruner cannot protect those txs' parents, until a later pass reads them. Above zero for long means a subtree file is corrupt or its store is failing.",
-		},
-	)
-
-	prometheusBlockValidationTipRepairAbandoned = promauto.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "teranode",
-			Subsystem: "blockvalidation",
-			Name:      "tip_repair_abandoned_total",
-			Help:      "Overtaken blocks (kind=block) and their subtrees (kind=subtree) the overtaken-tip repair gave up because they are gone, each subtree counted once per block. Their txs may keep the wrong status: marked mined while off the longest chain, where the pruner can delete parents they need, or marked not on the longest chain after their block came back onto it; nothing can name them without the data.",
-		},
-		[]string{"kind"},
 	)
 
 	prometheusBlockValidationQuickCommitAddBlock = promauto.NewHistogram(

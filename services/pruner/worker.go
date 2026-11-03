@@ -2,16 +2,11 @@ package pruner
 
 import (
 	"context"
-	"database/sql"
-	"encoding/binary"
 	"fmt"
-	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
-	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/retry"
@@ -74,357 +69,6 @@ func (s *Server) checkBlockAssemblySafeForPruner(ctx context.Context, phase stri
 	return true
 }
 
-// defaultRepairHoldPollInterval is how often phase 2 checks the hold while it deletes, and
-// defaultRepairHoldRecheckInterval how long a held height waits before it is tried again.
-const (
-	defaultRepairHoldPollInterval    = time.Second
-	defaultRepairHoldRecheckInterval = 30 * time.Second
-)
-
-// checkRepairHoldSlack makes sure a hold written just after a cycle's last check cannot let
-// that cycle delete a parent block validation still needs. Such a parent's delete height is
-// its spend height plus the UTXO retention, and its child was mined within the unmined
-// retention of the spend (or the parent was preserved), so it is due at the cycle's height
-// only if the overtaken block is more than retention minus unmined retention below the tip.
-// That must exceed the deepest fork catch-up accepts, CoinbaseMaturity, with room left for
-// the blocks phase 1 may miss (phase1GapLimit). On mainnet and testnet a configuration
-// without that slack is refused; elsewhere it is logged.
-func (s *Server) checkRepairHoldSlack() error {
-	if s.settings == nil || s.settings.ChainCfgParams == nil {
-		return nil
-	}
-
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
-	unmined := s.settings.UtxoStore.UnminedTxRetention
-	maturity := uint32(s.settings.ChainCfgParams.CoinbaseMaturity)
-
-	var slack uint32
-	if retention > unmined {
-		slack = retention - unmined
-	}
-
-	if slack > maturity {
-		return nil
-	}
-
-	msg := "overtaken-tip repair hold slack too small: utxostore block height retention %d minus utxostore_unminedTxRetention %d is %d, not above CoinbaseMaturity %d"
-
-	switch s.settings.ChainCfgParams.Name {
-	case "mainnet", "testnet":
-		return errors.NewConfigurationError(msg, retention, unmined, slack, maturity)
-	default:
-		s.logger.Errorf("[pruner] "+msg+"; a deep enough reorg can let the pruner delete a parent the overtaken-tip repair still needs", retention, unmined, slack, maturity)
-		return nil
-	}
-}
-
-// watchRepairHold checks the overtaken-tip repair hold every repairHoldPollInterval while
-// phase 2 deletes, and cancels the rest of the deletion when one appears. A deletion that
-// commits before the first check is not cancelled; its safety rests on checkRepairHoldSlack
-// and phase1GapLimit, not on this watch. The returned function stops the watch and reports
-// whether it cancelled.
-func (s *Server) watchRepairHold(ctx context.Context, cancel context.CancelFunc, blockHashStr string, blockHeight uint32) func() bool {
-	interval := s.repairHoldPollInterval
-	if interval <= 0 {
-		interval = defaultRepairHoldPollInterval
-	}
-
-	var held atomic.Bool
-
-	done := make(chan struct{})
-
-	go func() {
-		defer close(done)
-
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// The deletion's own context: a read that fails because it was cancelled
-				// is not a hold.
-				if s.overtakenTipRepairHeld(ctx, blockHashStr, blockHeight) && ctx.Err() == nil {
-					held.Store(true)
-					cancel()
-
-					return
-				}
-			}
-		}
-	}()
-
-	return func() bool {
-		cancel()
-		<-done
-
-		return held.Load()
-	}
-}
-
-// retryHeldHeight tries a held height again after a while, so pruning resumes once the hold
-// is released even when no new block arrives. It replaces a pending retry, so the processor
-// passes it a newer signal only when that signal's block is on the best chain (retryTarget).
-func (s *Server) retryHeldHeight(sig pruneSignal) {
-	if s.repairHoldRetry != nil {
-		s.repairHoldRetry.Stop()
-	}
-
-	sig.retry = true
-	s.repairHoldRetrySig = sig
-
-	s.repairHoldRetry = time.AfterFunc(s.repairHoldRecheck(), func() {
-		select {
-		case s.pruneNotify <- sig:
-		default: // a block signal is waiting, and its cycle arms the retry again
-		}
-	})
-}
-
-// retryTarget returns the signal a worker with a pending held-height retry acts on. A new
-// signal whose block is on the best chain replaces the pending retry, even at a lower height:
-// after a reorg to a shorter chain with more work, the height the chain left is never reached
-// again on an idle chain. A block off the best chain, such as a side block below the tip, does
-// not: the worker runs the pending retry instead, as if its timer had fired, which also
-// stands in for a retry signal the new one displaced from the channel. Block persister
-// notifications come in height order, so a lower block on the best chain only arrives after
-// a reorg away from the pending one.
-func (s *Server) retryTarget(ctx context.Context, sig, pending pruneSignal) pruneSignal {
-	if sig.retry || s.onBestChain(ctx, sig) {
-		return sig
-	}
-
-	return pending
-}
-
-// onBestChain reports whether sig's block is on the best chain. A check that fails counts as
-// off it, so a pending retry is kept: if the block did win, pruning at its height waits for the
-// next block, as it would without the hold.
-func (s *Server) onBestChain(ctx context.Context, sig pruneSignal) bool {
-	if s.blockchainClient == nil {
-		return true
-	}
-
-	ids, err := s.blockchainClient.GetBlockHeaderIDs(ctx, &sig.blockHash, 1)
-	if err == nil && len(ids) == 0 {
-		err = errors.NewProcessingError("block not found")
-	}
-
-	var onChain bool
-	if err == nil {
-		onChain, err = s.blockchainClient.CheckBlockIsInCurrentChain(ctx, ids[:1])
-	}
-
-	if err != nil {
-		if ctx.Err() == nil {
-			s.logger.Errorf("[pruner][%s:%d] failed to check whether the block is on the best chain, keeping the pending held-height retry: %v", sig.blockHash.String(), sig.blockHeight, err)
-			prunerErrors.WithLabelValues("best_chain_check").Inc()
-		}
-
-		return false
-	}
-
-	return onChain
-}
-
-// repairHoldRecheck is how long a height held by the overtaken-tip repair hold waits before it
-// is tried again.
-func (s *Server) repairHoldRecheck() time.Duration {
-	if s.repairHoldRecheckInterval > 0 {
-		return s.repairHoldRecheckInterval
-	}
-
-	return defaultRepairHoldRecheckInterval
-}
-
-// clearHeldHeightRetry drops the pending retry once a cycle at or above its height is done.
-func (s *Server) clearHeldHeightRetry(blockHeight uint32) {
-	if s.repairHoldRetry != nil && s.repairHoldRetrySig.blockHeight <= blockHeight {
-		s.repairHoldRetry.Stop()
-		s.repairHoldRetry = nil
-	}
-}
-
-// ParentPreservationStateKey is the blockchain state key under which the pruner records the
-// height of its last successful phase 1 and the height from which phase 2 may delete again.
-const ParentPreservationStateKey = "PrunerParentPreservation"
-
-// ForgottenParentPreservationRecord is the record that knows of no earlier phase 1 run, as if
-// none was ever recorded: the next phase 1 counts as following a gap. A tool that moves the
-// chain back below the recorded height writes it, or gaps during the sync back would be
-// measured from a height the chain no longer has.
-func ForgottenParentPreservationRecord() []byte {
-	return parentPreservationRecord{}.encode()
-}
-
-// parentPreservationRecord is the record stored under ParentPreservationStateKey.
-type parentPreservationRecord struct {
-	lastSuccess uint32
-	phase2From  uint32
-}
-
-func (r parentPreservationRecord) encode() []byte {
-	data := make([]byte, 0, 8)
-	data = binary.LittleEndian.AppendUint32(data, r.lastSuccess)
-
-	return binary.LittleEndian.AppendUint32(data, r.phase2From)
-}
-
-func decodeParentPreservationRecord(data []byte) (parentPreservationRecord, error) {
-	if len(data) != 8 {
-		return parentPreservationRecord{}, errors.NewProcessingError("invalid parent preservation record: %d bytes, want 8", len(data))
-	}
-
-	return parentPreservationRecord{
-		lastSuccess: binary.LittleEndian.Uint32(data[:4]),
-		phase2From:  binary.LittleEndian.Uint32(data[4:]),
-	}, nil
-}
-
-// phase1GapLimit returns how many blocks may pass between two successful phase 1 runs, and
-// whether that limit applies. A parent falls due at its spend height plus the UTXO retention,
-// and phase 1 preserves it once its child has been unmined for the unmined retention. If phase
-// 1 misses more than retention - unmined retention - CoinbaseMaturity blocks, a child can be
-// mined so late in that gap that its parent falls due while the child's block can still be
-// overtaken. The repair would then need a parent phase 2 may already have deleted, and a hold
-// written after the delete committed cannot bring it back. Like checkRepairHoldSlack, this
-// assumes no reorg deeper than CoinbaseMaturity: catch-up refuses one, blocks relayed one at
-// a time are not checked.
-func (s *Server) phase1GapLimit() (limit, maturity uint32, ok bool) {
-	// Without preservation (pruner_skipPreserveParents, or utxostore_parentPreservationBlocks=0,
-	// where phase 1 returns without preserving), phase 1 protects no parent and no run is
-	// recorded: once preservation is back, the time without it counts as a gap.
-	if s.blockchainClient == nil || s.utxoStore == nil || s.settings == nil || s.settings.ChainCfgParams == nil ||
-		s.settings.Pruner.SkipPreserveParents || s.settings.UtxoStore.ParentPreservationBlocks == 0 {
-		return 0, 0, false
-	}
-
-	retention := s.settings.GetUtxoStoreBlockHeightRetention()
-	unmined := s.settings.UtxoStore.UnminedTxRetention
-	maturity = uint32(s.settings.ChainCfgParams.CoinbaseMaturity)
-
-	if retention <= unmined || retention-unmined <= maturity {
-		// No gap is safe; checkRepairHoldSlack refuses or reports this configuration.
-		return 0, 0, false
-	}
-
-	return retention - unmined - maturity, maturity, true
-}
-
-// recordPhase1Success records a successful phase 1 at blockHeight and reports whether phase
-// 2 may run. After a gap longer than phase1GapLimit, phase 2 waits until the blocks mined in
-// the gap are CoinbaseMaturity deep. The record is kept in the blockchain state, so a restart
-// neither forgets a cooldown nor hides the time the pruner was down.
-func (s *Server) recordPhase1Success(ctx context.Context, blockHashStr string, blockHeight uint32) (bool, error) {
-	limit, maturity, ok := s.phase1GapLimit()
-	if !ok {
-		return true, nil
-	}
-
-	if s.preservation == nil {
-		rec, err := s.readParentPreservationRecord(ctx, blockHashStr, blockHeight)
-		if err != nil {
-			return false, err
-		}
-
-		s.preservation = &rec
-	}
-
-	rec := *s.preservation
-
-	if blockHeight > rec.lastSuccess && blockHeight-rec.lastSuccess > limit {
-		rec.phase2From = max(rec.phase2From, blockHeight+maturity)
-		s.logger.Warnf("[pruner][%s:%d] phase 1 last succeeded at height %d, more than %d blocks ago; phase 2 deletes nothing until height %d", blockHashStr, blockHeight, rec.lastSuccess, limit, rec.phase2From)
-	}
-
-	rec.lastSuccess = max(rec.lastSuccess, blockHeight)
-
-	if rec != *s.preservation {
-		if err := s.blockchainClient.SetState(ctx, ParentPreservationStateKey, rec.encode()); err != nil {
-			return false, errors.NewStorageError("failed to write the parent preservation record", err)
-		}
-
-		*s.preservation = rec
-	}
-
-	return blockHeight >= rec.phase2From, nil
-}
-
-// readParentPreservationRecord reads the parent preservation record. Without one, phase 1 is
-// taken to have last run at height 0.
-func (s *Server) readParentPreservationRecord(ctx context.Context, blockHashStr string, blockHeight uint32) (parentPreservationRecord, error) {
-	data, err := s.blockchainClient.GetState(ctx, ParentPreservationStateKey)
-	if err != nil {
-		if isStateNotFound(err) {
-			return parentPreservationRecord{}, nil
-		}
-
-		return parentPreservationRecord{}, errors.NewStorageError("failed to read the parent preservation record", err)
-	}
-
-	rec, err := decodeParentPreservationRecord(data)
-	if err != nil {
-		s.logger.Errorf("[pruner][%s:%d] unreadable parent preservation record, treating phase 1 as last run at height 0: %v", blockHashStr, blockHeight, err)
-		return parentPreservationRecord{}, nil
-	}
-
-	return rec, nil
-}
-
-// isStateNotFound reports whether a blockchain state read failed because the key is missing.
-// Over gRPC an older server's missing key arrives as text only.
-func isStateNotFound(err error) bool {
-	return errors.Is(err, errors.ErrNotFound) || strings.Contains(err.Error(), sql.ErrNoRows.Error())
-}
-
-// overtakenTipRepairHeld reports whether block validation holds pruning for an overtaken
-// block whose repair has not finished (model.OvertakenTipRepairHoldKey). No record means no
-// hold. A record that cannot be read may be holding, so it counts as held.
-func (s *Server) overtakenTipRepairHeld(ctx context.Context, blockHashStr string, blockHeight uint32) bool {
-	if s.blockchainClient == nil {
-		return false
-	}
-
-	data, err := s.blockchainClient.GetState(ctx, model.OvertakenTipRepairHoldKey)
-	if err != nil {
-		if isStateNotFound(err) {
-			prunerOvertakenTipRepairHeldBlocks.Set(0)
-			return false
-		}
-
-		// Cut short by the caller's own cancellation: not a failed read, and nothing is
-		// deleted on it.
-		if ctx.Err() != nil {
-			return true
-		}
-
-		s.logger.Errorf("[pruner][%s:%d] failed to read the overtaken-tip repair hold, deleting nothing this cycle: %v", blockHashStr, blockHeight, err)
-		prunerErrors.WithLabelValues("overtaken_tip_repair_hold").Inc()
-
-		return true
-	}
-
-	held, err := model.DecodeOvertakenTipRepairHold(data)
-	if err != nil {
-		s.logger.Errorf("[pruner][%s:%d] unreadable overtaken-tip repair hold, deleting nothing this cycle: %v", blockHashStr, blockHeight, err)
-		prunerErrors.WithLabelValues("overtaken_tip_repair_hold").Inc()
-
-		return true
-	}
-
-	prunerOvertakenTipRepairHeldBlocks.Set(float64(len(held)))
-
-	if len(held) == 0 {
-		return false
-	}
-
-	s.logger.Warnf("[pruner][%s:%d] deleting nothing: block validation is still repairing %d overtaken blocks, lowest %s at height %d", blockHashStr, blockHeight, len(held), held[0].Hash.String(), held[0].Height)
-
-	return true
-}
-
 // waitForBlockMinedStatus waits for the block to have mined_set=true, indicating that
 // block validation has completed. Returns true if mined, false otherwise.
 // This function will retry checking the mined status until the configured timeout is reached,
@@ -477,14 +121,7 @@ func (s *Server) waitForBlockMinedStatus(ctx context.Context, blockHash *chainha
 // Delete-at-height pruning removes old transaction records from storage.
 // Records are only deleted if they've passed the retention window and are not preserved.
 // It never runs in a cycle where Phase 1 failed: the next block notification retries
-// both, and teranode_pruner_preserve_parents_consecutive_failures counts the streak. After
-// Phase 1 has missed more than phase1GapLimit blocks, it waits CoinbaseMaturity blocks.
-//
-// OVERTAKEN-TIP REPAIR HOLD:
-// While block validation holds pruning, nothing is deleted and the height is retried every
-// repairHoldRecheckInterval, so pruning resumes on an idle chain. A pending retry is kept
-// across every cycle that does not finish its height, and only a signal for a block on the
-// best chain moves it (retryTarget).
+// both, and teranode_pruner_preserve_parents_consecutive_failures counts the streak.
 //
 // CATCHUP SKIP MODE:
 // When SkipDuringCatchup is enabled (default: false), the pruner skips all operations
@@ -507,44 +144,13 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			s.logger.Infof("Stopping pruner processor")
-
-			if s.repairHoldRetry != nil {
-				s.repairHoldRetry.Stop()
-			}
-
 			return
 
 		case sig := <-s.pruneNotify:
-			if sig.blockHeight <= s.lastProcessedHeight.Load() {
-				// It may have displaced the pending retry's signal from the channel after
-				// that retry's timer fired, so the retry is armed again.
-				if s.repairHoldRetry != nil && !sig.retry {
-					s.retryHeldHeight(s.repairHoldRetrySig)
-				}
-
-				continue
-			}
-
-			// A retry signal other than the pending retry's comes from a timer that fired just
-			// before its retry was replaced or cleared. A pending retry is kept, at the height
-			// of the latest signal on the best chain, until a cycle at or above that height is
-			// done, so a cycle skipped for any reason below cannot drop it.
-			if sig.retry && (s.repairHoldRetry == nil || sig != s.repairHoldRetrySig) {
-				continue
-			}
-
-			if s.repairHoldRetry != nil {
-				sig = s.retryTarget(ctx, sig, s.repairHoldRetrySig)
-				s.retryHeldHeight(sig)
-			}
-
 			blockHeight := sig.blockHeight
 			blockHashStr := sig.blockHash.String()
 
-			// A retried height deletes nothing while the hold lasts, so the cycle is skipped;
-			// phase 1 runs once the hold is released.
-			if sig.retry && s.overtakenTipRepairHeld(ctx, blockHashStr, blockHeight) {
-				prunerSkipped.WithLabelValues("overtaken_tip_repair_hold").Inc()
+			if blockHeight <= s.lastProcessedHeight.Load() {
 				continue
 			}
 
@@ -593,22 +199,14 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				continue
 			}
 
-			// While block validation is repairing an overtaken block, some transactions may look
-			// mined while off the longest chain, and Phase 1 cannot preserve their parents.
-			// Nothing is deleted until the repair finishes: no blob deletion, which would take
-			// the overtaken block's subtrees the repair reads, and no Phase 2.
-			held := s.overtakenTipRepairHeld(ctx, blockHashStr, blockHeight)
-			if held {
-				// Armed now, so a phase 1 or record failure below cannot leave it unscheduled.
-				s.retryHeldHeight(sig)
-			}
-
 			// Safety check passed - wake blob deletion worker to run concurrently with Phase 1&2.
 			// It works off the blockchain service's queued blob batches, independent of parent
-			// preservation, so it runs even in a cycle whose Phase 1 fails. It reads the hold
-			// itself, so it is woken in a held cycle too: it deletes nothing while held and tries
-			// again on its own until the hold is released.
-			signalLatest(s.blobNotify, pruneSignal{blockHeight: blockHeight, blockHash: sig.blockHash})
+			// preservation, so it runs even in a cycle whose Phase 1 fails.
+			select {
+			case <-s.blobNotify:
+			default:
+			}
+			s.blobNotify <- sig
 			s.logger.Debugf("[pruner][%s:%d] notified blob deletion worker", blockHashStr, blockHeight)
 
 			prunerActive.Set(1)
@@ -616,7 +214,6 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 			// Phase 1: Preserve parents of old unmined transactions
 			// This must run before Phase 2 to protect parents from deletion
 			phase1Failed := false
-			phase1Ran := false
 			if s.utxoStore != nil && !s.settings.Pruner.SkipPreserveParents {
 				s.logger.Debugf("[pruner][%s:%d] phase 1: preserving parents", blockHashStr, blockHeight)
 				startTime := time.Now()
@@ -634,7 +231,6 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 					prunerPreserveParentsFailing.Inc()
 					phase1Failed = true
 				} else {
-					phase1Ran = true
 					prunerPreserveParentsFailing.Set(0)
 					prunerDuration.WithLabelValues("preserve_parents").Observe(time.Since(startTime).Seconds())
 					if recordsProcessed > 0 {
@@ -681,59 +277,9 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 				continue
 			}
 
-			if phase1Ran {
-				allowed, err := s.recordPhase1Success(ctx, blockHashStr, blockHeight)
-				if err != nil {
-					s.logger.Errorf("[pruner][%s:%d] phase 2: skipped, the parent preservation record could not be kept: %v", blockHashStr, blockHeight, err)
-					prunerErrors.WithLabelValues("parent_preservation_record").Inc()
-					prunerActive.Set(0)
-
-					continue
-				}
-
-				if !allowed {
-					prunerSkipped.WithLabelValues("phase1_gap_cooldown").Inc()
-					prunerActive.Set(0)
-					// Only a higher block can end the cooldown.
-					s.clearHeldHeightRetry(blockHeight)
-
-					continue
-				}
-			}
-
-			// Read again: block validation may have written a hold while phase 1 ran.
-			if !held {
-				held = s.overtakenTipRepairHeld(ctx, blockHashStr, blockHeight)
-			}
-
-			if held {
-				prunerSkipped.WithLabelValues("overtaken_tip_repair_hold").Inc()
-				prunerActive.Set(0)
-				s.retryHeldHeight(sig)
-
-				// Do not update lastProcessedHeight: the height is retried
-				continue
-			}
-
 			if s.prunerService != nil {
 				startTime := time.Now()
-
-				// A hold seen while deletion runs cancels the rest of it: block validation may
-				// have found an overtaken block between the last check and now.
-				pruneCtx, cancelPrune := context.WithCancel(ctx)
-				heldDuringPrune := s.watchRepairHold(pruneCtx, cancelPrune, blockHashStr, blockHeight)
-				recordsProcessed, err := s.prunerService.Prune(pruneCtx, blockHeight, blockHashStr)
-
-				if heldDuringPrune() {
-					s.logger.Warnf("[pruner][%s:%d] phase 2: cancelled, block validation started holding pruning while it ran", blockHashStr, blockHeight)
-					prunerSkipped.WithLabelValues("overtaken_tip_repair_hold").Inc()
-					prunerActive.Set(0)
-					s.retryHeldHeight(sig)
-
-					// Do not update lastProcessedHeight: the height is retried
-					continue
-				}
-
+				recordsProcessed, err := s.prunerService.Prune(ctx, blockHeight, blockHashStr)
 				if err != nil {
 					s.logger.Errorf("[pruner][%s:%d] phase 2: DAH pruner failed: %v", blockHashStr, blockHeight, err)
 					prunerErrors.WithLabelValues("dah_pruner").Inc()
@@ -748,7 +294,6 @@ func (s *Server) prunerProcessor(ctx context.Context) {
 
 			// Update last processed height atomically
 			s.lastProcessedHeight.Store(blockHeight)
-			s.clearHeldHeightRetry(blockHeight)
 		}
 	}
 }

@@ -20,8 +20,8 @@ import (
 // SQLITE_LOCKED; when the failed side is SetMinedMulti, setTxMined failed the
 // whole block over it. Each chunk is its own transaction and is rolled back on
 // failure, so running it again is safe. The write is the real chunk write; the
-// first attempts are refused with the error text the engine raised in
-// services/blockvalidation's overtaken-tip repair tests.
+// first attempts are refused with the error text the sqlitememory engine raises
+// for such a cycle.
 func TestSetMinedMultiRetriesLockError(t *testing.T) {
 	ctx := context.Background()
 	db, tx := setup(ctx, t)

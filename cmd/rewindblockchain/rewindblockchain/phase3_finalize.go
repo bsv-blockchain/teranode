@@ -8,7 +8,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
-	"github.com/bsv-blockchain/teranode/services/pruner"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 )
 
@@ -31,21 +30,6 @@ func (e *env) phase3Finalize(ctx context.Context, pf *preflightResult) error {
 	if err := e.deleteUTXOPersisterLastProcessed(ctx); err != nil {
 		return err
 	}
-
-	return e.forgetPrunerParentPreservation(ctx)
-}
-
-// forgetPrunerParentPreservation resets the pruner's parent preservation record. The pruner
-// measures gaps between phase 1 runs from the last height it recorded, which the rewind has
-// taken away: left in place, every height up to it would look covered while the node syncs
-// back, and a gap then would start no cooldown. Forgotten, the next phase 1 counts as
-// following a gap, and phase 2 waits CoinbaseMaturity blocks.
-func (e *env) forgetPrunerParentPreservation(ctx context.Context) error {
-	if err := e.blockchainStore.SetState(ctx, pruner.ParentPreservationStateKey, pruner.ForgottenParentPreservationRecord()); err != nil {
-		return errors.NewStorageError("failed to reset state[%s]", pruner.ParentPreservationStateKey, err)
-	}
-
-	e.logger.Infof("state[%s] reset: the pruner waits CoinbaseMaturity blocks before deleting again", pruner.ParentPreservationStateKey)
 
 	return nil
 }
@@ -75,8 +59,8 @@ func (e *env) resetBlockAssemblerState(ctx context.Context, pf *preflightResult)
 func (e *env) readBlockPersisterHeight(ctx context.Context) (uint32, bool, error) {
 	existing, err := e.blockchainStore.GetState(ctx, blockPersisterHeightKey)
 	if err != nil {
-		// The SQL blockchain store returns errors.ErrNotFound wrapping sql.ErrNoRows
-		// for a missing key; either match is enough.
+		// SQL blockchain store returns sql.ErrNoRows directly for missing keys;
+		// future implementations may wrap into errors.ErrNotFound.
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, errors.ErrNotFound) {
 			e.logger.Debugf("state[%s] not present: %v", blockPersisterHeightKey, err)
 			return 0, false, nil

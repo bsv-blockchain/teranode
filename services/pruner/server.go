@@ -43,9 +43,6 @@ import (
 type pruneSignal struct {
 	blockHeight uint32
 	blockHash   chainhash.Hash
-
-	// retry marks a held height tried again by its timer rather than by a new block.
-	retry bool
 }
 
 // BlobDeletionObserver is an optional callback interface for testing.
@@ -73,21 +70,7 @@ type Server struct {
 	lastProcessedHeight atomic.Uint32
 	lastPersistedHeight atomic.Uint32
 	pruneNotify         chan pruneSignal
-
-	// repairHoldPollInterval is how often phase 2 checks the overtaken-tip repair hold while
-	// it deletes, and repairHoldRecheckInterval how long a held height waits before it is
-	// tried again; zero means the defaults. repairHoldRetry is the pending retry and
-	// repairHoldRetrySig the signal it sends. Both are owned by the pruner processor.
-	repairHoldPollInterval    time.Duration
-	repairHoldRecheckInterval time.Duration
-	repairHoldRetry           *time.Timer
-	repairHoldRetrySig        pruneSignal
-
-	// preservation is the parent preservation record (parentPreservationStateKey), read on the
-	// first successful phase 1. Owned by the pruner processor.
-	preservation *parentPreservationRecord
-
-	stats *gocore.Stat
+	stats               *gocore.Stat
 
 	// Blob deletion
 	blobStores           map[storetypes.BlobStoreType]blob.Store
@@ -125,10 +108,6 @@ func New(
 // block persisted notifications for coordination with the block persister service.
 func (s *Server) Init(ctx context.Context) error {
 	s.ctx = ctx
-
-	if err := s.checkRepairHoldSlack(); err != nil {
-		return err
-	}
 
 	// Initialize metrics
 	initPrometheusMetrics()
@@ -209,7 +188,12 @@ func (s *Server) Init(ctx context.Context) error {
 
 								s.logger.Infof("[pruner][%s:%d] notified from BlockPersisted notification", blockHash.String(), height)
 
-								signalLatest(s.pruneNotify, sig)
+								// Drain old signal (if any) and replace with latest
+								select {
+								case <-s.pruneNotify:
+								default:
+								}
+								s.pruneNotify <- sig
 							}
 						}
 					}
@@ -253,7 +237,12 @@ func (s *Server) Init(ctx context.Context) error {
 
 					s.logger.Infof("[pruner][%s:%d] notified from Block notification", blockHash.String(), height)
 
-					signalLatest(s.pruneNotify, sig)
+					// Drain old signal (if any) and replace with latest
+					select {
+					case <-s.pruneNotify:
+					default:
+					}
+					s.pruneNotify <- sig
 				}
 			}
 		}
@@ -403,24 +392,6 @@ func (s *Server) triggerInitialPruning(ctx context.Context) {
 	case <-time.After(5 * time.Second):
 		s.logger.Warnf("[pruner] failed to queue initial pruning request (timeout)")
 	case <-ctx.Done():
-	}
-}
-
-// signalLatest hands a worker the latest signal on its one-slot channel, replacing a waiting
-// one. A held-height retry timer also sends, and can fill the slot between the drain and the
-// send, so the send never blocks: the sender must not wait behind a running pass.
-func signalLatest(ch chan pruneSignal, sig pruneSignal) {
-	for {
-		select {
-		case <-ch:
-		default:
-		}
-
-		select {
-		case ch <- sig:
-			return
-		default:
-		}
 	}
 }
 

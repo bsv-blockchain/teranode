@@ -142,72 +142,15 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 ### Breaking — behaviour changes on upgrade
 
 - **A reorg no longer re-marks block assembly's whole mempool.** Block assembly marks
-  only the transactions it moved back and that are not mined on the new chain. Block
-  validation now repairs a block it marked mined that a competing chain later overtakes,
-  on its setMined worker, in slices of `blockvalidation_tipRepairSliceSize` transactions
-  (new setting, default 250000); each slice can delay the next block's mined status by
-  one slice. **The pruner deletes nothing while a repair is unfinished.** Block validation
-  records the overtaken blocks it has not finished repairing under the blockchain state
-  key `OvertakenTipRepairHold`, before it sets the mined status of the block that
-  overtook them, and the pruner skips UTXO deletion (phase 2) and blob deletion while any
-  is listed; parent preservation (phase 1) still runs. A held height is tried again every
-  30 seconds, so deletion resumes on its own once the repair finishes, even with no new
-  block. While phase 2 deletes, the pruner checks the hold every second and cancels the
-  rest of the deletion when one appears; a deletion that commits before that check, such
-  as a single SQL `DELETE`, is not cancelled. The safety of a deletion that commits before
-  a hold is seen does not rest on that check: as long as phase 1 ran while the parent's
-  child was old and unmined, such a deletion only reaches a parent the repair needs when
-  the overtaken block is deeper than the UTXO retention minus
-  `utxostore_unminedTxRetention`. So on mainnet and testnet the pruner now refuses to start
-  unless that gap is above `CoinbaseMaturity` (100), the deepest fork catch-up accepts: the
-  defaults (288 and 144) pass, and a node that raised `utxostore_unminedTxRetention` or
-  lowered the retention must restore the gap. Other networks log an error instead. When
-  phase 1 misses more blocks than that gap minus `CoinbaseMaturity` (44 with the defaults),
-  because it failed, was skipped, the pruner was down, or a cycle took so long that the
-  heights in between were never processed (for example during catch-up or legacy sync, with
-  the default `pruner_skipDuringCatchup=false`), phase 2 deletes nothing for the
-  next `CoinbaseMaturity` blocks (`phase1_gap_cooldown` in
-  `teranode_pruner_skipped_total`). The pruner keeps the height of its last phase 1 under
-  the blockchain state key `PrunerParentPreservation`, so a restart neither forgets nor
-  hides a gap. A node without that record yet, upgraded on an existing chain or pruning
-  first above height 44, waits 100 blocks once (about 17 hours on mainnet); blob deletion
-  is not affected. With `pruner_skipPreserveParents` or
-  `utxostore_parentPreservationBlocks=0` phase 1 preserves nothing, so there is no
-  cooldown and no protection; once preservation is turned back on, the time without it
-  counts as a gap. `rewindblockchain` resets `PrunerParentPreservation`, so after a rewind
-  phase 2 waits 100 blocks. A reorg deeper than `CoinbaseMaturity` is not covered:
-  catch-up refuses one, but blocks of a competing chain relayed one at a time are not
-  checked for fork depth, and a parent phase 2 deleted before such a reorg stays deleted.
-  A subtree of an overtaken block that cannot be read is tried
-  again on every block and holds pruning until it reads or the block leaves the
-  1000-block repair window. A subtree or block that is gone from its store can never be
-  read: a gone subtree is given up at once, and a gone block after 10 attempts, both
-  counted in `teranode_blockvalidation_tip_repair_abandoned_total` (a gone subtree once
-  per block, however often a reorg moves the block). Their transactions may stay marked
-  mined while off the chain, and the pruner can then delete parents they need; if the
-  block comes back onto the chain, they may stay marked not on it.
-  `teranode_pruner_overtaken_tip_repair_held_blocks` and
-  `teranode_blockvalidation_tip_repair_subtrees_set_aside` show a hold; a hold that stays
-  above zero means a subtree file is corrupt or a store keeps failing, and disk use grows
-  until it is resolved. A repair that keeps failing no longer stops healthy blocks: their
-  mined status does not wait for it. The hold survives a restart, and the blocks it lists
-  are repaired after it. **A single block validation instance must write mined status
-  for the chain**: the hold is one record, so two instances can release each other's
-  hold. A block overtaken while block validation is down and more than 10 blocks below
-  the tip when it starts is not repaired. If block assembly stops after marking a reorg's
-  transactions on the longest chain but before saving its position, the transactions of a
-  block that block validation already repaired can stay marked mined while off the chain;
-  nothing checks them again. Upgrade the pruner no later than block
-  validation: a newer block validation with an older pruner writes the hold but nothing
-  reads it. Rolling block validation back after it wrote a non-empty hold leaves the
-  record in place, and a newer pruner keeps holding until block validation is upgraded
-  again or the `OvertakenTipRepairHold` state row is deleted. No action needed for a
-  single-instance deployment. (#2065)
-- **A missing blockchain state key is a not-found error.** `GetState` on the SQL
-  blockchain store returned the raw `sql.ErrNoRows` for a key never written; it now
-  returns an `ERR_NOT_FOUND` error wrapping it, whose code survives gRPC. Callers that
-  match `sql.ErrNoRows`, with `errors.Is` or on its text, still match, locally and over
-  gRPC; new callers should match `errors.ErrNotFound`. (#2065)
+  as not on the longest chain only the transactions it moved back that the new chain
+  does not mine and that are still in block assembly, plus the losing conflicting
+  transactions, instead of every transaction in block assembly. On a large mempool the
+  old sweep was a batch write per transaction on every reorg: about 380 million records
+  and 8 minutes at scale, with block assembly intake stalled throughout. A tip that was
+  overtaken before block assembly moved onto it, which that sweep also caught, is
+  covered by the best-tip replay (#2074). A reset still marks every transaction in block
+  assembly. No action needed. (#2065)
+
 - **`GetLastNBlocks` honours `fromHeight` when orphans are included.** The SQL
   blockchain store ignored `fromHeight` with `includeOrphans=true` and always returned
   the highest blocks. It now returns only blocks at or below `fromHeight`, as documented.

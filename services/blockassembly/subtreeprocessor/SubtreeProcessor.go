@@ -40,6 +40,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/retry"
@@ -1637,10 +1638,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// (WHERE unmined_since IS NOT NULL) — will not find them, and they will be silently dropped
 	// from block assembly after the reset.
 	//
-	// reorgBlocks() no longer sweeps the whole assembly (issue 2051); block validation repairs
-	// an overtaken tip's txs when the best chain changes, asynchronously. This sweep stays as
-	// the catch-all for a reset that lands before that repair, since reset is rare and is
-	// where a gap drops txs from block assembly. For transactions that already have
+	// reorgBlocks() marks only the transactions it moved back (issue 2051), so this sweep no
+	// longer mirrors it. It stays as the catch-all: reset is rare, and it is where such a gap
+	// drops transactions from block assembly. For transactions that already have
 	// unmined_since set, it is a no-op.
 	{
 		currentSubtree := stp.currentSubtree.Load()
@@ -5215,10 +5215,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// writes a mempool tx with unmined_since set, and setTxMined only clears it for a block
 	// on the longest chain, so a pure mempool tx needs no repair. The one way such a tx can
 	// look mined without being in a moveBack block is a tip that was overtaken before block
-	// assembly ever moved onto it. Block validation repairs those when the best chain
-	// changes (services/blockvalidation/overtaken_tip_repair.go), asynchronously; reset()
-	// keeps its whole-assembly sweep as the catch-all for a reset that lands before that
-	// repair. Folding the whole mempool in here cost a batch write per mempool tx on every
+	// assembly ever moved onto it. Block assembly replays every block that was the best tip
+	// (best_tip_replay.go), so it moves onto such a tip and back off it, and the tip's txs
+	// reach this path as moveBack txs; where it cannot move onto the tip, the replay marks
+	// the tip's branch-only txs unmined itself. reset() keeps its whole-assembly sweep as a
+	// catch-all. Folding the whole mempool in here cost a batch write per mempool tx on every
 	// reorg — 380M records and ~8 minutes at scale, with block assembly intake stalled
 	// throughout.
 	//
@@ -5423,15 +5424,79 @@ func (stp *SubtreeProcessor) markNotOnLongestChain(ctx context.Context, moveBack
 func (stp *SubtreeProcessor) checkMarkNotOnLongestChain(ctx context.Context, invalidBlock *model.Block, markNotOnLongestChain []chainhash.Hash) ([]chainhash.Hash, error) {
 	stp.logger.Infof("[reorgBlocks] block %s we moved back is invalid, checking whether to mark transactions as not on longest chain", invalidBlock.String())
 
-	recentIDs, err := model.RecentChainBlockIDs(ctx, stp.blockchainClient, invalidBlock.Header.HashPrevBlock, 1000)
+	checkMarkNotOnLongestChain := make([]chainhash.Hash, 0, len(markNotOnLongestChain))
+
+	_, lastBlockHeaderMetas, err := stp.blockchainClient.GetBlockHeaders(ctx, invalidBlock.Header.HashPrevBlock, 1000)
 	if err != nil {
 		return nil, errors.NewProcessingError("[reorgBlocks] error getting last block headers", err)
 	}
 
-	checkMarkNotOnLongestChain, err := model.FilterTxsNotOnLongestChain(ctx, stp.logger, stp.settings, stp.utxoStore, stp.blockchainClient,
-		recentIDs, invalidBlock.ID, markNotOnLongestChain, false)
-	if err != nil {
-		return nil, errors.NewProcessingError("[reorgBlocks] error filtering transactions not on longest chain", err)
+	lastBlockHeaderIDs := make(map[uint32]bool)
+	for _, header := range lastBlockHeaderMetas {
+		lastBlockHeaderIDs[header.ID] = true
+	}
+
+	txMetas := make([]*meta.Data, len(markNotOnLongestChain))
+	g, gCtx := errgroup.WithContext(ctx)
+	// Use SafeSetLimit (matching every other SetLimit call in this file): it
+	// panics loudly at setup if the computed limit is 0 (a misconfiguration with
+	// both MaxMinedRoutines and GetBatcherSize at 0) rather than letting g.Go
+	// deadlock on a zero-capacity semaphore. With defaults (MaxMinedRoutines=128)
+	// this is always >= 1.
+	util.SafeSetLimit(stp.logger, g, max(stp.settings.UtxoStore.MaxMinedRoutines, stp.settings.UtxoStore.GetBatcherSize*2))
+
+	// we need to check each transaction in the block we moved back and see if it is still on the longest chain or not
+	for idx, hash := range markNotOnLongestChain {
+		h := hash // per-iteration copy for pointer safety
+		g.Go(func() error {
+			txMeta, err := stp.utxoStore.Get(gCtx, &h, fields.BlockIDs)
+			if err != nil {
+				return errors.NewProcessingError("[reorgBlocks] error getting transaction from utxo store", err)
+			}
+
+			txMetas[idx] = txMeta
+
+			return nil
+		})
+	}
+
+	if err = g.Wait(); err != nil {
+		return nil, err
+	}
+
+	for idx, hash := range markNotOnLongestChain {
+		txMeta := txMetas[idx]
+		if txMeta == nil {
+			// transaction not found, not OK
+			return nil, errors.NewProcessingError("[reorgBlocks] transaction %s not found on longest chain", hash.String())
+		}
+
+		if len(txMeta.BlockIDs) == 1 && txMeta.BlockIDs[0] == invalidBlock.ID {
+			// the transaction is only in the invalid block, so it is definitely not on the longest chain
+			checkMarkNotOnLongestChain = append(checkMarkNotOnLongestChain, hash)
+		} else {
+			foundInRecentBlock := false
+			for _, blockID := range txMeta.BlockIDs {
+				if lastBlockHeaderIDs[blockID] {
+					// the transaction is still in one of the last 1000 blocks, so it is still on the longest chain
+					// do not mark it as not on the longest chain
+					foundInRecentBlock = true
+					break
+				}
+			}
+
+			if !foundInRecentBlock {
+				// check BlockIDs to see if the transaction is still on the longest chain
+				onLongestChain, err := stp.blockchainClient.CheckBlockIsInCurrentChain(ctx, txMeta.BlockIDs)
+				if err != nil {
+					return nil, errors.NewProcessingError("[reorgBlocks] error checking if transaction is on longest chain", err)
+				}
+
+				if !onLongestChain {
+					checkMarkNotOnLongestChain = append(checkMarkNotOnLongestChain, hash)
+				}
+			}
+		}
 	}
 
 	return checkMarkNotOnLongestChain, nil

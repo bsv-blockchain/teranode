@@ -13,10 +13,8 @@
 package blockchain
 
 import (
-	"cmp"
 	"context"
 	"net/http"
-	"slices"
 	"sync"
 	"time"
 
@@ -50,8 +48,6 @@ type MockStore struct {
 	blockIDReservations map[chainhash.Hash]uint64
 	// state tracks the current state of the mock store (e.g., IDLE)
 	state string
-	// keyedState holds what SetState wrote, by key
-	keyedState map[string][]byte
 	// MainChainFastPathDisabled, when true, makes MainChainBlockHashesByHeights
 	// return ok=false so callers exercise the per-height walk fallback (test hook).
 	MainChainFastPathDisabled bool
@@ -331,50 +327,8 @@ func (m *MockStore) AssignBlockID(_ context.Context, blockHash *chainhash.Hash) 
 	return id, nil
 }
 
-// GetLastNBlocks returns up to n blocks, highest first. Without includeOrphans only the best
-// block's chain is returned; fromHeight, when non-zero, caps the height.
 func (m *MockStore) GetLastNBlocks(ctx context.Context, n int64, includeOrphans bool, fromHeight uint32) ([]*model.BlockInfo, error) {
-	if n <= 0 {
-		return []*model.BlockInfo{}, nil
-	}
-
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	mainChain := make(map[chainhash.Hash]bool)
-	if m.BestBlock != nil {
-		for block := m.BestBlock; block != nil; block = m.Blocks[*block.Header.HashPrevBlock] {
-			mainChain[*block.Hash()] = true
-		}
-	}
-
-	blocks := make([]*model.Block, 0, len(m.Blocks))
-	for hash, block := range m.Blocks {
-		if (!includeOrphans && !mainChain[hash]) || (fromHeight > 0 && block.Height > fromHeight) {
-			continue
-		}
-
-		blocks = append(blocks, block)
-	}
-
-	slices.SortFunc(blocks, func(a, b *model.Block) int { return cmp.Compare(b.Height, a.Height) })
-
-	infos := make([]*model.BlockInfo, 0, min(int64(len(blocks)), n))
-	for _, block := range blocks {
-		if int64(len(infos)) >= n {
-			break
-		}
-
-		infos = append(infos, &model.BlockInfo{
-			Height:           block.Height,
-			Orphaned:         !mainChain[*block.Hash()],
-			BlockHeader:      block.Header.Bytes(),
-			TransactionCount: block.TransactionCount,
-			Size:             block.SizeInBytes,
-		})
-	}
-
-	return infos, nil
+	panic(implementMe)
 }
 
 func (m *MockStore) GetLastNInvalidBlocks(ctx context.Context, n int64) ([]*model.BlockInfo, error) {
@@ -752,31 +706,12 @@ func (m *MockStore) GetBlockHeaderIDs(ctx context.Context, blockHash *chainhash.
 	return []uint32{}, nil
 }
 
-// GetState returns what SetState wrote under key, or a not-found error.
 func (m *MockStore) GetState(ctx context.Context, key string) ([]byte, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	data, ok := m.keyedState[key]
-	if !ok {
-		return nil, errors.NewNotFoundError("no state for key %s", key)
-	}
-
-	return data, nil
+	panic(implementMe)
 }
 
-// SetState stores data under key.
 func (m *MockStore) SetState(ctx context.Context, key string, data []byte) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.keyedState == nil {
-		m.keyedState = map[string][]byte{}
-	}
-
-	m.keyedState[key] = append([]byte(nil), data...)
-
-	return nil
+	panic(implementMe)
 }
 
 func (m *MockStore) GetBlockIsMined(_ context.Context, blockHash *chainhash.Hash) (bool, error) {

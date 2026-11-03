@@ -65,7 +65,7 @@ func (s *scopeMarkRecorder) gotten(hash chainhash.Hash) bool {
 	return ok
 }
 
-func (s *scopeMarkRecorder) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool, opts ...utxostore.MarkLongestChainOption) error {
+func (s *scopeMarkRecorder) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
 	s.mu.Lock()
 	target := s.markFalse
 	if onLongestChain {
@@ -77,7 +77,7 @@ func (s *scopeMarkRecorder) MarkTransactionsOnLongestChain(ctx context.Context, 
 	}
 	s.mu.Unlock()
 
-	return s.Store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain, opts...)
+	return s.Store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
 }
 
 func (s *scopeMarkRecorder) markedFalse(hash chainhash.Hash) bool {
