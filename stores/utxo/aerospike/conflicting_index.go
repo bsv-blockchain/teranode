@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -87,14 +88,19 @@ func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool
 		return nil, false, nil
 	case conflictingIndexUnchecked:
 		// Until the self-test has passed, use the index only once every node
-		// reports it built. A query against an index still building answers with
-		// whatever has been indexed so far and no error, and the self-test would
-		// read that as an index that misses flag changes. A server without the
-		// index (8.0) answers a query naming it with a bare PARAMETER_ERROR, which
-		// this check also keeps from being sent.
+		// lists it built. A server without the index (8.0) answers a query naming
+		// it with a bare PARAMETER_ERROR rather than INDEX_NOTFOUND, which this
+		// check keeps from being sent; a building index answers INDEX_NOTREADABLE,
+		// which queryConflictingIndex already reads as not indexed.
+		//
+		// A failed readiness check is reported as not indexed rather than as an
+		// error: the caller's per-transaction fallback is the complete check, so
+		// nothing is skipped, and block validation is not stalled by an info call.
 		ready, readyErr := s.conflictingIndexBuiltOnAllNodes()
 		if readyErr != nil {
-			return nil, false, readyErr
+			s.logger.Warnf("[ConflictingTxHashes] could not check whether %s is built, falling back for now: %v", conflictingIndexName, readyErr)
+
+			return nil, false, nil
 		}
 
 		if !ready {
@@ -176,6 +182,10 @@ func (s *Store) conflictingIndexRecords(ctx context.Context, binNames []string, 
 	}()
 
 	for res := range recordset.Results() {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, false, ctxErr
+		}
+
 		if res.Err != nil {
 			if conflictingIndexNotReadable(res.Err) {
 				return false, false, nil
@@ -212,7 +222,7 @@ func (s *Store) conflictingIndexBuiltOnAllNodes() (bool, error) {
 		built := false
 
 		for _, entry := range strings.Split(info[command], ";") {
-			if strings.HasPrefix(entry, entryPrefix) && strings.HasSuffix(entry, ":state=RW") {
+			if strings.HasPrefix(entry, entryPrefix) && slices.Contains(strings.Split(entry, ":"), "state=RW") {
 				built = true
 
 				break
