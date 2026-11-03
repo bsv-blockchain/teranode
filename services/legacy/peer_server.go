@@ -4125,21 +4125,12 @@ func (s *server) handleBanEvent(ctx context.Context, event p2p.BanEvent) {
 
 	s.logger.Infof("Received ban event for %s", event.IP)
 
-	// A peer's address carries its port; a ban names a bare host or a subnet.
-	// Compare hosts, never the raw address, or nothing ever matches.
+	// Ask the ban list, not the event. Add and Remove publish from separate
+	// goroutines, and Add accepts an expiry already in the past, so an "add"
+	// event can arrive for a ban that no longer holds. IsBanned also strips the
+	// peer's port and checks every active subnet.
 	covered := func(sp *serverPeer) bool {
-		host, _, err := net.SplitHostPort(sp.Addr())
-		if err != nil {
-			return false
-		}
-
-		// Fast path. The ban list sets Subnet to a /32 or /128 for a bare
-		// host, so Contains below covers this case too.
-		if host == event.IP {
-			return true
-		}
-
-		return event.Subnet != nil && event.Subnet.Contains(net.ParseIP(host))
+		return s.banList.IsBanned(sp.Addr())
 	}
 
 	// One request disconnects one inbound peer, or every matching outbound

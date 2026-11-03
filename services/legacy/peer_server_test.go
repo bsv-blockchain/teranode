@@ -1774,6 +1774,83 @@ func TestBanListEvent_DisconnectsTheBannedPeers(t *testing.T) {
 	}
 }
 
+// An "add" event for a ban that no longer holds disconnects nothing. Add and Remove publish from
+// separate goroutines, so the add can arrive after the ban is gone, and Add takes an expiry already
+// in the past, as a BanPeer request with an "until" in the past sends. Matching the event's host
+// disconnected the peer anyway.
+func TestBanListEvent_AStaleBanDisconnectsNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ban  func(t *testing.T, bl *p2p.BanList)
+	}{
+		{
+			name: "a ban that has already expired",
+			ban: func(t *testing.T, bl *p2p.BanList) {
+				require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(-time.Minute)))
+			},
+		},
+		{
+			name: "a ban removed before its event was handled",
+			ban: func(t *testing.T, bl *p2p.BanList) {
+				require.NoError(t, bl.Add(t.Context(), "10.0.0.1", time.Now().Add(time.Hour)))
+				require.NoError(t, bl.Remove(t.Context(), "10.0.0.1"))
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bl := emptyWritableBanList(t)
+
+			s := &server{
+				ctx:     t.Context(),
+				logger:  ulogger.TestLogger{},
+				banList: bl,
+				banChan: bl.Subscribe(),
+				query:   make(chan interface{}),
+				quit:    make(chan struct{}),
+			}
+
+			state := newTestPeerState()
+			state.outboundPeers.Set(0, newTestOutboundPeer(t, s, "10.0.0.1:8333"))
+			state.inboundPeers.Set(0, newTestInboundPeer(t, s, "10.0.0.1:50000"))
+
+			go func() {
+				for {
+					select {
+					case q := <-s.query:
+						s.handleQuery(state, q)
+					case <-s.quit:
+						return
+					}
+				}
+			}()
+
+			t.Cleanup(func() { close(s.quit) })
+
+			tc.ban(t, bl)
+
+			// A remove event may come first; the add is the one under test.
+			var event p2p.BanEvent
+
+			for event.Action != "add" {
+				select {
+				case event = <-s.banChan:
+				case <-time.After(5 * time.Second):
+					t.Fatal("the ban list must publish the add")
+				}
+			}
+
+			// Synchronous: once it returns, any disconnect it asked for is done.
+			s.handleBanEvent(t.Context(), event)
+
+			_, outbound := state.outboundPeers.Get(0)
+			require.True(t, outbound, "the outbound peer is not banned and must stay connected")
+
+			_, inbound := state.inboundPeers.Get(0)
+			require.True(t, inbound, "the inbound peer is not banned and must stay connected")
+		})
+	}
+}
+
 // Banning a peer never stalls the peer loop, however far behind the ban listener is. The ban
 // handlers used to send the ban event themselves, blocking, from inside peerHandler, on the same
 // channel the ban list publishes to a moment later. With that channel full, as it was for weeks on
