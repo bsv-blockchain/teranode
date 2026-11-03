@@ -3,7 +3,6 @@ package sql
 import (
 	"context"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -391,6 +390,74 @@ func Test_SqlGetChainTips(t *testing.T) {
 	})
 }
 
+// TestProcessChainTipRows_ClosesTheCursorBeforeBranchLength holds a write transaction on
+// the blocks table inside branchLen. On SQLite in shared-cache mode the write waits for any
+// open read of the table, and a waiting writer blocks every new read, so with the tip
+// cursor still open the write could never commit and a store query would never return.
+// This is how the on_main_chain repair loop hung Test_SqlGetChainTips.
+func TestProcessChainTipRows_ClosesTheCursorBeforeBranchLength(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	s, err := New(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	for _, block := range []*model.Block{block1, block2, blockAlternative2} {
+		_, _, err = s.StoreBlock(ctx, block, "")
+		require.NoError(t, err)
+		require.NoError(t, s.SetBlockProcessedAt(ctx, block.Hash()))
+	}
+
+	rows, err := s.queryChainTipRows(ctx)
+	require.NoError(t, err)
+
+	branchLenCalls := 0
+	writeCommitted := false
+
+	tips, err := s.processChainTipRows(ctx, rows, func(tipHash *chainhash.Hash) bool {
+		return *tipHash == *block2.Hash()
+	}, func(ctx context.Context, _ []byte) (uint32, error) {
+		branchLenCalls++
+
+		done := make(chan error, 1)
+
+		go func() {
+			tx, txErr := s.db.BeginTx(ctx, nil)
+			if txErr != nil {
+				done <- txErr
+				return
+			}
+
+			if _, txErr = tx.ExecContext(ctx, `UPDATE blocks SET peer_id = peer_id WHERE id = 1`); txErr != nil {
+				_ = tx.Rollback()
+				done <- txErr
+
+				return
+			}
+
+			done <- tx.Commit()
+		}()
+
+		select {
+		case txErr := <-done:
+			require.NoError(t, txErr)
+
+			writeCommitted = true
+		case <-time.After(5 * time.Second):
+		}
+
+		return 1, nil
+	})
+	require.NoError(t, err)
+	require.Len(t, tips, 2)
+	require.Equal(t, 1, branchLenCalls)
+	require.True(t, writeCommitted, "a write to the blocks table could not commit while branchLen ran, so the chain tip cursor was still open")
+}
+
 // Helper function to create block3 on top of a given parent block
 func createBlock3OnFork(parentBlock *model.Block) *model.Block {
 	// Create a new coinbase transaction for block 3
@@ -496,79 +563,5 @@ func BenchmarkGetChainTipsPerformance(b *testing.B) {
 		if err != nil {
 			b.Fatalf("GetChainTips failed: %v", err)
 		}
-	}
-}
-
-// A write transaction that starts while GetChainTips reads its tips must not deadlock it. In
-// SQLite's shared cache a writer waiting on the tip query's cursor stops new readers, so a
-// branch-length query issued while that cursor is still open waits on the writer forever.
-func TestProcessChainTipRows_WriterDuringBranchLength(t *testing.T) {
-	storeURL, err := url.Parse("sqlitememory:///")
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	s, err := New(ulogger.TestLogger{}, storeURL, test.CreateBaseTestSettings(t))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = s.Close(ctx) })
-	waitForStartupRebuild(t, s)
-
-	for _, b := range []*model.Block{block1, block2, blockAlternative2} {
-		_, _, err = s.StoreBlock(ctx, b, "")
-		require.NoError(t, err)
-	}
-
-	var startWriter sync.Once
-
-	writerDone := make(chan error, 1)
-	branchLen := func(ctx context.Context, hashBytes []byte) (uint32, error) {
-		startWriter.Do(func() {
-			go func() {
-				tx, err := s.db.BeginTx(ctx, nil)
-				if err != nil {
-					writerDone <- err
-					return
-				}
-
-				if _, err = tx.ExecContext(ctx, `UPDATE blocks SET on_main_chain = on_main_chain`); err != nil {
-					_ = tx.Rollback()
-					writerDone <- err
-
-					return
-				}
-
-				writerDone <- tx.Commit()
-			}()
-
-			// Let the writer reach its wait on the blocks table.
-			time.Sleep(100 * time.Millisecond)
-		})
-
-		return s.calculateBranchLength(ctx, hashBytes)
-	}
-
-	rows, err := s.queryChainTipRows(ctx)
-	require.NoError(t, err)
-
-	done := make(chan error, 1)
-	go func() {
-		defer rows.Close()
-
-		_, err := s.processChainTipRows(ctx, rows, func(*chainhash.Hash) bool { return false }, branchLen)
-		done <- err
-	}()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("processChainTipRows deadlocked with a concurrent writer")
-	}
-
-	select {
-	case err := <-writerDone:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the writer did not finish")
 	}
 }

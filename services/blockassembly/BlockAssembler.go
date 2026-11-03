@@ -6,8 +6,9 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	mathbits "math/bits"
 	"os"
-	"sort"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3420,12 +3421,11 @@ func (b *BlockAssembler) validateParentChain(
 // and drops the child (cascading to its descendants). The stable base sort
 // preserves iterator order on ties, and the per-run reorder guarantees parents
 // precede their children regardless of iterator order.
-func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
-	sort.SliceStable(txs, func(i, j int) bool {
-		return txs[i].CreatedAt < txs[j].CreatedAt
-	})
-
-	orderEqualCreatedAtRunsParentsFirst(txs)
+//
+// It runs on every core with a radix sort (see sortUnminedByCreatedAt) and returns
+// false when it had to fall back to the comparison sort.
+func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) bool {
+	return sortUnminedByCreatedAt(txs, runtime.GOMAXPROCS(0))
 }
 
 // orderEqualCreatedAtRunsParentsFirst reorders, within each maximal run of equal
@@ -3433,6 +3433,8 @@ func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
 // children. Only same-timestamp transactions can be misordered, so unrelated
 // timestamps are left untouched.
 func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
+	var scratch runOrderScratch
+
 	for start := 0; start < len(txs); {
 		end := start + 1
 		for end < len(txs) && txs[end].CreatedAt == txs[start].CreatedAt {
@@ -3440,11 +3442,31 @@ func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
 		}
 
 		if end-start > 1 {
-			orderRunParentsFirst(txs[start:end])
+			orderRunParentsFirst(txs[start:end], &scratch)
 		}
 
 		start = end
 	}
+}
+
+// runOrderScratch holds the buffers orderRunParentsFirst reuses from one run to
+// the next. A reload has hundreds of thousands of runs, and allocating a map and
+// slices per run dominated the reorder.
+type runOrderScratch struct {
+	slotKeys  []uint64
+	slots     []int
+	edgeStart []int
+	edges     []int
+	depth     []int
+	state     []int8
+	stack     []int
+	count     []int
+	reordered []*utxo.UnminedTransaction
+}
+
+// hashPrefix is the first 8 bytes of a tx hash, the slot table's key.
+func hashPrefix(h *chainhash.Hash) uint64 {
+	return binary.LittleEndian.Uint64(h[:8])
 }
 
 // orderRunParentsFirst reorders, in place, a run of transactions that all share
@@ -3452,27 +3474,76 @@ func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
 // appears before its children. Transactions with no parent/child relationship
 // inside the run keep their incoming relative order (the sort is stable), which
 // preserves the iterator's ordering for unrelated transactions.
-func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
+func orderRunParentsFirst(run []*utxo.UnminedTransaction, s *runOrderScratch) {
 	n := len(run)
 
-	// Map each hash in the run to its slot so intra-run parent edges can be found.
-	pos := make(map[chainhash.Hash]int, n)
-	for i, tx := range run {
-		pos[tx.Node.Hash] = i
+	// Map each hash in the run to its slot so intra-run parent edges can be found:
+	// an open-addressing table indexed by the hash's first 8 bytes (tx hashes are
+	// uniformly distributed), at most half full. slots holds slot+1, 0 is empty.
+	// The prefix only narrows the probe; a match is always the full hash.
+	tableSize := 1 << mathbits.Len(uint(2*n-1))
+	mask := uint64(tableSize - 1)
+
+	if cap(s.slots) < tableSize {
+		s.slotKeys = make([]uint64, tableSize)
+		s.slots = make([]int, tableSize)
 	}
 
-	// parents[i] = slots within the run whose outputs transaction i spends.
-	parents := make([][]int, n)
+	slotKeys, slots := s.slotKeys[:tableSize], s.slots[:tableSize]
+	clear(slots)
+
 	for i, tx := range run {
+		k := hashPrefix(&tx.Node.Hash)
+
+		idx := k & mask
+		for slots[idx] != 0 && (slotKeys[idx] != k || run[slots[idx]-1].Node.Hash != tx.Node.Hash) {
+			idx = (idx + 1) & mask
+		}
+
+		// A repeated hash takes the later slot, as a map assignment would.
+		slotKeys[idx], slots[idx] = k, i+1
+	}
+
+	slotOf := func(h *chainhash.Hash) (int, bool) {
+		k := hashPrefix(h)
+
+		for idx := k & mask; slots[idx] != 0; idx = (idx + 1) & mask {
+			if p := slots[idx] - 1; slotKeys[idx] == k && run[p].Node.Hash == *h {
+				return p, true
+			}
+		}
+
+		return 0, false
+	}
+
+	// The parents of transaction i, as slots within the run, are
+	// edges[edgeStart[i]:edgeStart[i+1]].
+	s.edgeStart = resizeInts(s.edgeStart, n+1)
+	s.edges = s.edges[:0]
+
+	for i, tx := range run {
+		s.edgeStart[i] = len(s.edges)
+
 		if tx.TxInpoints == nil {
 			continue
 		}
 
 		for _, parentHash := range tx.TxInpoints.GetParentTxHashes() {
-			if p, ok := pos[parentHash]; ok && p != i {
-				parents[i] = append(parents[i], p)
+			if p, ok := slotOf(&parentHash); ok && p != i {
+				s.edges = append(s.edges, p)
 			}
 		}
+	}
+
+	s.edgeStart[n] = len(s.edges)
+
+	// Every depth would be 0 and the stable order unchanged.
+	if len(s.edges) == 0 {
+		return
+	}
+
+	parents := func(v int) []int {
+		return s.edges[s.edgeStart[v]:s.edgeStart[v+1]]
 	}
 
 	// depth[i] = length of the longest in-run ancestor chain ending at i. A
@@ -3485,38 +3556,47 @@ func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
 		done
 	)
 
-	depth := make([]int, n)
-	state := make([]int8, n)
-	stack := make([]int, 0, n)
+	s.depth = resizeInts(s.depth, n)
+	s.stack = s.stack[:0]
+
+	if cap(s.state) < n {
+		s.state = make([]int8, n)
+	}
+
+	s.state = s.state[:n]
+	clear(s.state)
+
+	depth, state := s.depth, s.state
+	maxDepth := 0
 
 	for i := 0; i < n; i++ {
 		if state[i] != unvisited {
 			continue
 		}
 
-		stack = append(stack, i)
+		s.stack = append(s.stack, i)
 
-		for len(stack) > 0 {
-			v := stack[len(stack)-1]
+		for len(s.stack) > 0 {
+			v := s.stack[len(s.stack)-1]
 
 			if state[v] == unvisited {
 				state[v] = active
-				for _, p := range parents[v] {
+				for _, p := range parents(v) {
 					if state[p] == unvisited {
-						stack = append(stack, p)
+						s.stack = append(s.stack, p)
 					}
 				}
 
 				continue
 			}
 
-			stack = stack[:len(stack)-1]
+			s.stack = s.stack[:len(s.stack)-1]
 			if state[v] == done {
 				continue
 			}
 
 			d := 0
-			for _, p := range parents[v] {
+			for _, p := range parents(v) {
 				// Parents still active indicate a cycle (impossible for a tx
 				// DAG); skip them so this terminates rather than looping.
 				if state[p] == done && depth[p]+1 > d {
@@ -3526,25 +3606,44 @@ func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
 
 			depth[v] = d
 			state[v] = done
+			maxDepth = max(maxDepth, d)
 		}
 	}
 
-	// Stable-sort slot indices by depth; equal depths keep original order.
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
+	// Counting sort by depth: stable, so equal depths keep their order.
+	s.count = resizeInts(s.count, maxDepth+2)
+	clear(s.count)
+
+	for _, d := range depth {
+		s.count[d+1]++
 	}
 
-	sort.SliceStable(order, func(a, b int) bool {
-		return depth[order[a]] < depth[order[b]]
-	})
+	for d := 1; d < len(s.count); d++ {
+		s.count[d] += s.count[d-1]
+	}
 
-	reordered := make([]*utxo.UnminedTransaction, n)
-	for k, idx := range order {
-		reordered[k] = run[idx]
+	if cap(s.reordered) < n {
+		s.reordered = make([]*utxo.UnminedTransaction, n)
+	}
+
+	reordered := s.reordered[:n]
+
+	for i, tx := range run {
+		reordered[s.count[depth[i]]] = tx
+		s.count[depth[i]]++
 	}
 
 	copy(run, reordered)
+	clear(reordered)
+}
+
+// resizeInts returns buf with length n, reallocating only when it is too small.
+func resizeInts(buf []int, n int) []int {
+	if cap(buf) < n {
+		return make([]int, n)
+	}
+
+	return buf[:n]
 }
 
 // fixUnminedSinceInconsistencies performs a lightweight scan of all records in the UTXO store
@@ -4042,7 +4141,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	b.logger.Infof("[loadUnminedTransactions] sorting %d unmined transactions by createdAt", len(unminedTransactions))
 
-	stableSortUnminedByCreatedAt(unminedTransactions)
+	if !stableSortUnminedByCreatedAt(unminedTransactions) {
+		b.logger.Warnf("[loadUnminedTransactions] CreatedAt range of %d unmined transactions too wide for the radix sort, used the comparison sort", len(unminedTransactions))
+	}
 
 	txCount := len(unminedTransactions)
 
