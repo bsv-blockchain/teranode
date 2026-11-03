@@ -1,6 +1,7 @@
 package blockassembly
 
 import (
+	"math"
 	"math/rand"
 	"sort"
 	"testing"
@@ -233,6 +234,45 @@ func TestRadixSortUnminedFallsBackOnWideKeys(t *testing.T) {
 	sortUnminedByCreatedAt(got, 8)
 
 	requireSameOrder(t, want, got)
+}
+
+// TestRadixSortUnminedSignedCreatedAt pins CreatedAt values below zero and at the
+// ends of the int range: negative values take the radix path, a range spanning
+// MinInt64 to MaxInt64 takes the fallback, and both give the stable sort's order.
+func TestRadixSortUnminedSignedCreatedAt(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		shift func(createdAt int) int
+		radix bool
+	}{
+		{"negative", func(c int) int { return c - 1_700_000_000_123 }, true},
+		{"near MinInt64", func(c int) int { return math.MinInt64 + 12_345 + c }, true},
+		{"near MaxInt64", func(c int) int { return math.MaxInt64 - 12_345 - c }, true},
+		{"MinInt64 to MaxInt64", func(c int) int {
+			if c%2 == 0 {
+				return math.MinInt64 + c
+			}
+
+			return math.MaxInt64 - c
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := randomUnmined(rand.New(rand.NewSource(5)), 3000, 50)
+			for _, tx := range in {
+				tx.CreatedAt = tc.shift(tx.CreatedAt)
+			}
+
+			require.Equal(t, tc.radix, radixSortFits(in))
+
+			want := append([]*utxo.UnminedTransaction(nil), in...)
+			referenceSortUnmined(want)
+
+			got := append([]*utxo.UnminedTransaction(nil), in...)
+			require.Equal(t, tc.radix, sortUnminedByCreatedAt(got, 8))
+
+			requireSameOrder(t, want, got)
+		})
+	}
 }
 
 // TestStableSortUnminedByCreatedAtUsesTheSameOrder pins the production entry point.
