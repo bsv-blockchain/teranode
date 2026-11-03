@@ -491,6 +491,19 @@ type Interface interface {
 	// Returns:
 	//   - error: The first error encountered creating a gap block's coinbase, if any
 	ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error
+
+	// MarkRecoveredConflicts marks the given transactions as conflicting nodes in
+	// the stored subtrees of the blocks that mined them, and saves those subtrees
+	// again. Block assembly calls it at startup for the losers of a recovered
+	// conflict intent, before it drains its input queue and completes the intent.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation of the block and subtree store calls
+	//   - hashes: Hashes of the losing transactions to mark as conflicting
+	//
+	// Returns:
+	//   - error: Any error encountered while reading or saving a subtree
+	MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error
 }
 
 // TxInpointsMap defines the interface for transaction inpoints storage with hash keys.
