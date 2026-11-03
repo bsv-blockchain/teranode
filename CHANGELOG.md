@@ -152,12 +152,14 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   best header (a blockchain service that does not serve `BlocksBetterThan` yet during a
   rolling upgrade, or a replay given up after three failures in a row), block assembly
   marks the transactions of recent fork blocks that no block of the best chain contains
-  as not on the longest chain, after waiting for every pending `mined_set`. It walks
-  every fork down from its chain tip, past invalid blocks, and reads each fork block
-  within the UTXO retention that block validation has processed once. A run that cannot
-  read a fork block is repeated on every later block or reconcile pass, and is recorded
-  under a new blockchain state key, `BlockAssemblerSkippedForkMark`, so a restart
-  finishes it before it loads the unmined transactions. An older binary ignores the key.
+  as not on the longest chain, after waiting for every pending `mined_set`, and reloads
+  the pool when one of them is not in it. It walks every fork down from its chain tip,
+  past invalid blocks, and reads each fork block within the UTXO retention that block
+  validation has processed once. The run is recorded as pending under a new blockchain
+  state key, `BlockAssemblerSkippedForkMark`, before block assembly follows the best
+  header; a run that does not finish is repeated on every later block pass and by the
+  reconcile timer (even with `blockassembly_reconcileInterval=0`), and a restart finishes
+  it before it loads the unmined transactions. An older binary ignores the key.
   A reset still marks every transaction in block assembly. No action needed. (#2065)
 
 - **`GetLastNBlocks` honours `fromHeight` when orphans are included.** The SQL

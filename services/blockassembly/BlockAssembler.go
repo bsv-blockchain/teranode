@@ -1422,7 +1422,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		// tip it holds however the tip was reached, and the replay working again is no reason
 		// to drop it.
 		if b.skippedForkMarkPending {
-			b.markSkippedForkTxs(ctx)
+			b.markSkippedForkTxs(ctx, false)
 		}
 
 		return
@@ -1439,13 +1439,20 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 
 	before, _ := b.CurrentBlock()
 
+	// The move persists block assembly's new tip, so the mark it may owe is recorded first: a
+	// crash right after the move then still finishes it at the next start.
+	if before == nil || !bestBlockchainBlockHeader.Hash().IsEqual(before.Hash()) {
+		b.skippedForkMarkPending = true
+		b.saveSkippedForkMark(ctx, true)
+	}
+
 	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil {
 		return
 	}
 
 	// A move that left the tip where it was skipped nothing.
 	if after, _ := b.CurrentBlock(); b.skippedForkMarkPending || before == nil || !after.Hash().IsEqual(before.Hash()) {
-		b.markSkippedForkTxs(ctx)
+		b.markSkippedForkTxs(ctx, false)
 	}
 }
 
