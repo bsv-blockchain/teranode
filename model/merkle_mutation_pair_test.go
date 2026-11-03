@@ -226,4 +226,7 @@ func TestCVE20122459_MerkleMutantPair_SameHashDifferentBody(t *testing.T) {
 	require.True(t, errors.IsBlockCorrupt(err), "mutant rejection must be BlockCorrupt, got: %v", err)
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "mutant rejection must not poison the shared block hash as BlockInvalid")
 	require.Contains(t, err.Error(), "duplicate transaction", "the mutant must be caught by the duplicate-transaction check, not the merkle check")
+	// The CVE floor in check_duplicate_txs.go also says "duplicate transaction", so the
+	// Contains above cannot tell the two apart. Its message alone carries this suffix.
+	require.NotContains(t, err.Error(), "(CVE-2012-2459)", "the mutant must be caught by the txMap arm, not the CVE floor")
 }
