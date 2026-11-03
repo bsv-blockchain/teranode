@@ -470,11 +470,12 @@ func TestRestampStaleBranch_WaitsForPendingMinedSet(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
 
-	// Y is A1's sibling, stored with mined_set still false: setTxMined(Y) has not finished.
+	// Y is A1's sibling, stored with subtrees_set true and mined_set still false: block validation
+	// only starts setTxMined(Y) after SetBlockSubtreesSet, and it has not finished yet.
 	y := buildChain(genesis, 1, 61000)[0]
 	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
 	require.NoError(t, err)
-	require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: y, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, ""))
+	require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: y, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, "", blockchainoptions.WithSubtreesSet(true)))
 
 	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
@@ -485,6 +486,12 @@ func TestRestampStaleBranch_WaitsForPendingMinedSet(t *testing.T) {
 	_, yMeta, err := items.blockchainClient.GetBlockHeader(ctx, y.Hash())
 	require.NoError(t, err)
 	require.False(t, yMeta.MinedSet, "Y's mined marking is still running")
+
+	// GetBlocksMinedNotSet only lists blocks with subtrees_set true and mined_set false, so this
+	// pins that the wait in restampStaleBranch can see Y at all.
+	pending, err := items.blockchainClient.GetBlocksMinedNotSet(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "Y must be pending, or the wait returns on its first poll")
 
 	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: 0, OnLongestChain: true})
 	require.NoError(t, err)
