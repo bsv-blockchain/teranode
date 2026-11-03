@@ -162,6 +162,27 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `includeOrphans` and `fromHeight`: they now page down instead of repeating the top of
   the chain. (#2065)
 
+- **A syncing node refuses unmined transactions at every intake.** While the FSM is
+  `CATCHINGBLOCKS`, propagation (gRPC, HTTP `/tx` and `/txs`, UDP), the validator's
+  Kafka consumer, legacy `tx` messages, each parked legacy orphan validated after its
+  parent is accepted, the legacy orphan-eviction retry, and RPC
+  `sendrawtransaction` all drop the transaction before anything is stored. Propagation
+  answers HTTP 503 with `SERVICE_UNAVAILABLE` on `/tx`, and on `/txs` when refusals are
+  the batch's only server-side failures (any other 5xx in the batch still makes it 500).
+  gRPC callers get `SERVICE_UNAVAILABLE` for each refused transaction, and propagation
+  writes no per-transaction ERROR line for a refusal. `sendrawtransaction` answers RPC error
+  -10, the code bitcoind uses during initial block download; legacy peers get no
+  reject message. A short catch-up from `RUNNING` also moves the FSM to
+  `CATCHINGBLOCKS`, so a node at the tip refuses for the length of that catch-up too.
+  A cached `IDLE`, which a node reads while the blockchain service restarts, still
+  accepts. Clients that submit to a node during a sync must resubmit once it reaches
+  `RUNNING`. Refusals are counted in
+  `teranode_unmined_transactions_refused_while_syncing_total{route}`. On `/tx`,
+  propagation's HTTP status for any other `SERVICE_UNAVAILABLE` error moves from 500 to
+  503 as well.
+  Block and subtree validation are not gated and still validate a block's own
+  transactions during catch-up. (#2094)
+
 - **Block assembly replays every block that may have been the best tip, so a branch
   that was the best chain only briefly is moved forward and back through the pool.**
   There is no schema change. Block assembly keeps its place in the order the
@@ -1053,6 +1074,27 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   Nothing to configure. (bsv-blockchain/teranode#2066)
 
 ### Not breaking, but worth knowing
+
+- **Legacy bans now disconnect connected peers, and the ban list no longer leaks
+  goroutines.** The legacy service's ban listener only started at shutdown, so a
+  ban recorded while the node ran (a misbehaving peer, the feeler's non-BSV bans,
+  or a `setban` when the ban reaches this process's ban list) never disconnected a
+  peer that was already connected, and once the listener's 100-event buffer filled
+  every later ban left a goroutine blocked for the life of the process. The
+  listener now runs alongside the peer loop: a ban disconnects every connected
+  inbound or automatic outbound legacy peer at the banned host or inside the
+  banned subnet, as long as the ban list still holds the ban when the event is
+  handled; a ban that has expired or been removed by then disconnects nothing.
+  Persistent peers (`addnode`, and every peer in `connect`-only mode) are not
+  disconnected, as before; that is an accepted limit, since disconnecting one
+  would also drop its `addnode` request for good. The peer loop no longer blocks
+  on a ban event, which with that buffer full would have frozen it on the next
+  ban.
+  `legacy_upnp`, which had the same start-up ordering bug, now maps the port while
+  the node runs instead of only at shutdown. It keeps renewing the lease after a
+  failed external-address lookup, and its HTTP calls to the gateway time out after
+  10 seconds, so a gateway that never answers no longer hangs shutdown.
+  (bsv-blockchain/teranode#2098)
 
 - **Catch-up checks the difficulty of every offered header before fetching any
   block.** The header precheck used to skip the first ~147 headers after the
