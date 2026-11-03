@@ -934,10 +934,16 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	batches[0] = append(batches[0], aerospike.NewBin(fields.SubtreeIdxs.String(), subtreeIdxs))
 	batches[0] = append(batches[0], aerospike.NewBin(fields.TotalUtxos.String(), len(utxos)))
 
-	// Set UnminedSince for unmined transactions (when no blockIDs/blockHeights)
-	if len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0 {
+	isUnmined := len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0
+
+	// Set UnminedSince for unmined transactions (when no blockIDs/blockHeights). A creating
+	// record gets it too, even with block IDs: it is the selector the stale-creating sweep
+	// queries by, and finalize removes it again for a record that has block IDs.
+	if isUnmined || isCreating {
 		batches[0] = append(batches[0], aerospike.NewBin(fields.UnminedSince.String(), aerospike.NewIntegerValue(int(blockHeight))))
-	} else if !isConflicting {
+	}
+
+	if !isUnmined && !isConflicting {
 		// A transaction with no spendable outputs (e.g. one that only carries
 		// OP_RETURN / data outputs) can never be spent, so it never transitions
 		// to "all spent" via the spend path. When it is created already-mined
@@ -1243,9 +1249,10 @@ func (s *Store) storeExternallyWithLock(
 		//
 		// Without this cleanup attempt, creating flags would remain set indefinitely, requiring
 		// manual intervention. This ensures eventual consistency through automatic recovery.
-		// Create-first: leave the creating flag set — the validator's
-		// FinalizeTransaction is the sole clearer, only after the inputs are spent.
-		if !bItem.creating {
+		// Create-first: leave the creating flag set whoever the duplicate is. This request's
+		// own option says nothing about another attempt's tentative record, so only
+		// FinalizeTransaction and the roll-forward healers clear it, once the inputs are spent.
+		if !s.settings.UtxoStore.UseCreateFirstOrder {
 			clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
 			if clearErr != nil {
 				s.logger.Warnf("[%s] Transaction %s exists but creating flag cleanup failed: %v", funcName, bItem.txHash, clearErr)
@@ -1280,7 +1287,9 @@ func (s *Store) storeExternallyWithLock(
 		// 3. AUTO-RECOVERY IS SELF-HEALING: The system automatically recovers via multiple paths:
 		//    a) When transaction is re-encountered (propagation/subtree), subtreevalidation checks
 		//       the Creating flag (processTxMetaUsingStore.go:112-122) and triggers re-processing
-		//    b) When setMined is called, it clears creating flags as part of mining
+		//    b) When setMined is called, its pre-flight rolls a creating record forward (re-spend,
+		//       then finalize), and the pruner sweep does the same; both run regardless of
+		//       UseCreateFirstOrder
 		//    c) Retry attempts from other sources will complete Phase 2 via "All exist" path (line 890)
 		//
 		// 4. RETURNING ERROR CREATES WORSE PROBLEMS:
@@ -1296,7 +1305,7 @@ func (s *Store) storeExternallyWithLock(
 		// RECOVERY GUARANTEES:
 		// - Next transaction encounter triggers auto-recovery and cleanup
 		// - Manual retry completes Phase 2 via "All exist" path
-		// - Mining operation clears flags via setMined
+		// - The setMined pre-flight and the pruner sweep roll the record forward and finalize it
 		// - No manual intervention required
 		s.logger.Errorf("[%s] Transaction %s created but creating flag not cleared: %v", funcName, bItem.txHash, clearErr)
 		s.logger.Errorf("[%s] Records remain with creating=true, preventing UTXO spending until auto-recovery completes", funcName)
@@ -1471,8 +1480,12 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 
 		// Delete the creating bin entirely by setting to nil
 		// This saves storage space and makes absence of bin = not creating
-		op := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
-		writeOp := aerospike.NewBatchWrite(writePolicy, key, op)
+		ops := []*aerospike.Operation{aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))}
+		if i == 0 {
+			ops = append(ops, removeUnminedSinceIfMinedOp())
+		}
+
+		writeOp := aerospike.NewBatchWrite(writePolicy, key, ops...)
 
 		if i == 0 {
 			masterWrite = writeOp

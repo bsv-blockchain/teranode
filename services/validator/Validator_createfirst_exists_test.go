@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -30,12 +32,17 @@ type creatingExistsShim struct {
 
 	childHash           chainhash.Hash
 	rollForwardComplete bool
+	locked              bool
+	notCreating         bool
+	events              *[]string
 
-	combinedCalls    int
-	rollForwardCalls int
-	finalizeCalls    int
-	setLockedCalls   int
-	setLockedValue   bool
+	rollForwardFlags   utxostore.IgnoreFlags
+	rollForwardSkipExt bool
+	combinedCalls      int
+	rollForwardCalls   int
+	finalizeCalls      int
+	setLockedCalls     int
+	setLockedValue     bool
 }
 
 func (s *creatingExistsShim) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
@@ -44,6 +51,8 @@ func (s *creatingExistsShim) SpendAndCreate(ctx context.Context, tx *bt.Tx, bloc
 	if o.SpendOnly {
 		// The ErrTxExists roll-forward re-spend.
 		s.rollForwardCalls++
+		s.rollForwardFlags = o.IgnoreFlags
+		s.rollForwardSkipExt = o.SkipExtendedInputs
 
 		if s.rollForwardComplete {
 			spent := make([]*utxostore.Spend, len(tx.Inputs))
@@ -70,7 +79,9 @@ func (s *creatingExistsShim) SpendAndCreate(ctx context.Context, tx *bt.Tx, bloc
 func (s *creatingExistsShim) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
 	if hash != nil && *hash == s.childHash {
 		// The record exists but is still mid create-first flight.
-		data.Creating = true
+		data.Creating = !s.notCreating
+		data.Locked = s.locked
+
 		return nil
 	}
 
@@ -88,6 +99,10 @@ func (s *creatingExistsShim) SetLocked(_ context.Context, _ []chainhash.Hash, va
 	s.setLockedCalls++
 	s.setLockedValue = value
 
+	if s.events != nil {
+		*s.events = append(*s.events, fmt.Sprintf("setLocked(%t)", value))
+	}
+
 	return nil
 }
 
@@ -97,6 +112,7 @@ func (s *creatingExistsShim) SetLocked(_ context.Context, _ []chainhash.Hash, va
 func newCreatingExistsValidator(t *testing.T, dbName string, rollForwardComplete bool) (*Validator, *bt.Tx, *creatingExistsShim) {
 	t.Helper()
 	tracing.SetupMockTracer()
+	initPrometheusMetrics()
 
 	ctx := context.Background()
 	logger := ulogger.NewErrorTestLogger(t)
@@ -194,7 +210,143 @@ func TestValidate_CreateFirst_ErrTxExistsCreating(t *testing.T) {
 		require.False(t, md.Locked, "the returned meta must be unlocked once rolled forward")
 		require.Equal(t, 1, shim.rollForwardCalls)
 		require.Equal(t, 1, shim.finalizeCalls, "a complete roll-forward must finalize")
-		require.Equal(t, 1, shim.setLockedCalls, "a complete roll-forward must unlock the record")
-		require.False(t, shim.setLockedValue, "unlock means SetLocked(false)")
+		require.Equal(t, 0, shim.setLockedCalls, "the roll-forward leaves the lock to the block-assembly hand-off")
+	})
+}
+
+type eventBlockAssembly struct {
+	events *[]string
+	stored []chainhash.Hash
+}
+
+func (b *eventBlockAssembly) Store(_ context.Context, hash *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
+	b.stored = append(b.stored, *hash)
+	*b.events = append(*b.events, "store")
+
+	return true, nil
+}
+
+func (b *eventBlockAssembly) RemoveTx(_ context.Context, _ *chainhash.Hash) error {
+	return nil
+}
+
+func withEventBlockAssembly(v *Validator, shim *creatingExistsShim) *eventBlockAssembly {
+	events := make([]string, 0, 2)
+	shim.events = &events
+	ba := &eventBlockAssembly{events: &events}
+	v.settings.BlockAssembly.Disabled = false
+	v.blockAssembler = ba
+
+	return ba
+}
+
+func TestValidate_CreateFirst_RollForwardIgnoreFlags(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name         string
+		ignoreLocked bool
+		outpointOnly bool
+	}{
+		{"ignore locked false", false, true},
+		{"ignore locked true", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v, childTx, shim := newCreatingExistsValidator(t, "creating_exists_flags_"+tc.name, true)
+
+			opts := creatingExistsOpts()
+			opts.IgnoreLocked = tc.ignoreLocked
+			opts.OutpointOnlySpend = tc.outpointOnly
+			opts.SkipScriptValidation = true
+
+			_, err := v.ValidateWithOptions(ctx, childTx, 500, opts)
+			require.NoError(t, err)
+			require.Equal(t, 1, shim.rollForwardCalls)
+			require.Equal(t, tc.ignoreLocked, shim.rollForwardFlags.IgnoreLocked, "the roll-forward must carry the caller's IgnoreLocked")
+			require.Equal(t, tc.outpointOnly, shim.rollForwardFlags.SkipUTXOHashCheck, "the roll-forward must skip the hash check only on the outpoint-only path")
+			require.Equal(t, tc.outpointOnly, shim.rollForwardSkipExt, "the roll-forward must skip extended inputs only on the outpoint-only path")
+		})
+	}
+}
+
+func TestIgnoreSpendOptions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   *Options
+	}{
+		{"plain", &Options{}},
+		{"ignore locked", &Options{IgnoreLocked: true}},
+		{"outpoint only", &Options{OutpointOnlySpend: true}},
+		{"both", &Options{IgnoreLocked: true, OutpointOnlySpend: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, err := utxostore.ParseCreateOptions(spendIgnoreOptions(tc.in)...)
+			require.NoError(t, err)
+			require.Equal(t, tc.in.IgnoreLocked, o.IgnoreFlags.IgnoreLocked)
+			require.Equal(t, tc.in.OutpointOnlySpend, o.IgnoreFlags.SkipUTXOHashCheck)
+			require.Equal(t, tc.in.OutpointOnlySpend, o.SkipExtendedInputs)
+		})
+	}
+}
+
+func TestValidate_CreateFirst_RollForwardHandoff(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("rolled forward tx reaches block assembly then unlocks", func(t *testing.T) {
+		v, childTx, shim := newCreatingExistsValidator(t, "creating_exists_handoff", true)
+		shim.locked = true
+		ba := withEventBlockAssembly(v, shim)
+
+		md, err := v.ValidateWithOptions(ctx, childTx, 500, creatingExistsOpts())
+
+		require.NoError(t, err)
+		require.Equal(t, []chainhash.Hash{*childTx.TxIDChainHash()}, ba.stored)
+		require.Equal(t, []string{"store", "setLocked(false)"}, *shim.events, "block assembly must receive the tx before the record is unlocked")
+		require.False(t, md.Creating)
+		require.False(t, md.Locked, "the deferred unlock clears Locked after the hand-off")
+	})
+
+	t.Run("without block assembly there is no store and no unlock", func(t *testing.T) {
+		v, childTx, shim := newCreatingExistsValidator(t, "creating_exists_no_ba", true)
+		shim.locked = true
+		ba := withEventBlockAssembly(v, shim)
+
+		opts := creatingExistsOpts()
+		opts.AddTXToBlockAssembly = false
+
+		md, err := v.ValidateWithOptions(ctx, childTx, 500, opts)
+
+		require.NoError(t, err)
+		require.Empty(t, ba.stored)
+		require.Empty(t, *shim.events, "a caller that does not own the hand-off must leave the record locked")
+		require.False(t, md.Creating)
+		require.True(t, md.Locked)
+	})
+
+	t.Run("failed roll-forward neither stores nor unlocks", func(t *testing.T) {
+		v, childTx, shim := newCreatingExistsValidator(t, "creating_exists_rf_fail", false)
+		shim.locked = true
+		ba := withEventBlockAssembly(v, shim)
+
+		_, err := v.ValidateWithOptions(ctx, childTx, 500, creatingExistsOpts())
+
+		require.Error(t, err)
+		require.Empty(t, ba.stored)
+		require.Empty(t, *shim.events)
+	})
+
+	t.Run("non creating resubmit returns early", func(t *testing.T) {
+		v, childTx, shim := newCreatingExistsValidator(t, "creating_exists_resubmit", true)
+		shim.locked = true
+		shim.notCreating = true
+		ba := withEventBlockAssembly(v, shim)
+
+		md, err := v.ValidateWithOptions(ctx, childTx, 500, creatingExistsOpts())
+
+		require.NoError(t, err)
+		require.Empty(t, ba.stored)
+		require.Empty(t, *shim.events)
+		require.Equal(t, 0, shim.rollForwardCalls)
+		require.True(t, md.Locked)
 	})
 }

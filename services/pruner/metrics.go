@@ -142,15 +142,19 @@ func _initPrometheusMetrics() {
 
 	prunerCreatingBacklog = promauto.NewGauge(
 		prometheus.GaugeOpts{
-			Name: "pruner_creating_backlog",
-			Help: "Number of stale create-first 'creating' transactions found by the most recent sweep pass (an approximation of the outstanding-creating backlog; capped at the per-pass limit)",
+			Namespace: "teranode",
+			Subsystem: "pruner",
+			Name:      "creating_backlog",
+			Help:      "Number of stale create-first 'creating' transactions found by the most recent sweep pass (an approximation of the outstanding-creating backlog; capped at the per-pass limit)",
 		},
 	)
 
 	prunerCreatingSweepFailures = promauto.NewCounter(
 		prometheus.CounterOpts{
-			Name: "pruner_creating_sweep_failures_total",
-			Help: "Total create-first records the sweep could not roll forward (left creating for a later pass); a sustained non-zero rate means records are stuck (e.g. a permanently locked or missing parent)",
+			Namespace: "teranode",
+			Subsystem: "pruner",
+			Name:      "creating_sweep_failures_total",
+			Help:      "Total create-first records the sweep could not roll forward (left creating for a later pass); a sustained non-zero rate means records are stuck (e.g. a permanently locked or missing parent)",
 		},
 	)
 

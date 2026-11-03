@@ -107,13 +107,16 @@ func ParseCreateOptions(opts ...CreateOption) (*CreateOptions, error) {
 
 // SequentialStore is the subset of a concrete store's methods needed by
 // SequentialSpendAndCreate. Out-of-tree backends that want the sequential
-// behaviour implement these three methods and delegate.
+// behaviour implement these methods and delegate.
 type SequentialStore interface {
 	Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, error)
 	Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignoreFlags ...IgnoreFlags) ([]*Spend, error)
 	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
 	// FinalizeTransaction clears the tentative creating state; used by the create-first path.
 	FinalizeTransaction(ctx context.Context, tx *bt.Tx) error
+	// DeleteComplete removes a record entirely; used by the create-first path to drop the
+	// tentative record when its spends fail.
+	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
 }
 
 // SequentialSpendAndCreate implements the Store.SpendAndCreate contract as the
@@ -204,19 +207,65 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	return md, spends, nil
 }
 
-// unspendDetached runs unspendWithRetry under a context that ignores ctx's
-// cancellation and deadline and carries the rollback's own bound instead.
-func unspendDetached(ctx context.Context, logger ulogger.Logger, s SequentialStore, spends []*Spend) error {
+// rollbackContext returns a context that ignores ctx's cancellation and deadline
+// and carries the rollback's own bound instead.
+func rollbackContext(ctx context.Context, s SequentialStore) (context.Context, context.CancelFunc) {
 	bound := defaultSequentialRollbackTimeout
 
 	if b, ok := s.(spendRollbackBounded); ok && b.SpendRollbackTimeout() > 0 {
 		bound = b.SpendRollbackTimeout()
 	}
 
-	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
+	return context.WithTimeout(context.WithoutCancel(ctx), bound)
+}
+
+// unspendDetached runs unspendWithRetry under rollbackContext.
+func unspendDetached(ctx context.Context, logger ulogger.Logger, s SequentialStore, spends []*Spend) error {
+	rbCtx, cancel := rollbackContext(ctx, s)
 	defer cancel()
 
 	return unspendWithRetry(rbCtx, logger, s, spends)
+}
+
+// finalizeDetached runs finalizeWithRetry under rollbackContext.
+func finalizeDetached(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx) error {
+	fCtx, cancel := rollbackContext(ctx, s)
+	defer cancel()
+
+	return finalizeWithRetry(fCtx, logger, s, tx)
+}
+
+// rollbackFailedCreateFirst undoes a create-first whose spend failed. It reverses the
+// spends that succeeded, then deletes the tentative record, both under one detached
+// context. When the reversal fails it does not delete: the record stays creating as the
+// recovery journal for the sweep. It returns the reversal error, or nil when the reversal
+// succeeded, even if the delete failed (the sweep converges a creating record whose
+// inputs are unspent).
+func rollbackFailedCreateFirst(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, spends []*Spend) error {
+	rbCtx, cancel := rollbackContext(ctx, s)
+	defer cancel()
+
+	var succeeded []*Spend
+
+	for _, sp := range spends {
+		if sp != nil && sp.Err == nil {
+			succeeded = append(succeeded, sp)
+		}
+	}
+
+	if len(succeeded) > 0 {
+		if err := unspendWithRetry(rbCtx, logger, s, succeeded); err != nil {
+			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s, tx left creating for recovery: %v", tx.TxIDChainHash().String(), err)
+
+			return err
+		}
+	}
+
+	if err := s.DeleteComplete(rbCtx, tx.TxIDChainHash()); err != nil {
+		logger.Errorf("SpendAndCreate create-first: deleting the tentative record failed for %s, tx left creating for recovery: %v", tx.TxIDChainHash().String(), err)
+	}
+
+	return nil
 }
 
 // sequentialCreateFirst persists a tx create-first: the record is created in the
@@ -226,22 +275,31 @@ func unspendDetached(ctx context.Context, logger ulogger.Logger, s SequentialSto
 // dangling spender reference. This addresses the spend-before-create crash window (one
 // mechanism related to #1214); it does not by itself satisfy #1214's delete-path audit.
 //
-// Recovery is roll-forward, not rollback:
+// Failure handling:
 //   - Create returns ErrTxExists (a prior attempt already created the record): return it
 //     unchanged; the caller treats it as a duplicate and the pruner sweeper rolls a
 //     still-creating record forward (re-spend + finalize).
-//   - Spend fails after the tentative create: the creating record is left in place as the
-//     recovery WAL (NOT finalized, NOT deleted); the error + spends are returned so the
-//     caller's conflicting handling can act and the pruner sweeper can roll it forward.
-//     Terminal double-spends are NOT resolved inline here: doing so on the free propagation
-//     path is attacker-paceable, and — because the delete side does not yet remove parent
-//     conflictingChildren refs — would manufacture the dangling-ref shape #1214 documents.
-//   - FinalizeTransaction fails after successful spends: return an error. The inputs are
-//     durably spent but the tentative flag could not be cleared, so the outputs are still
-//     unspendable; reporting success would make the validator announce the tx to block
-//     assembly (and unlock it) while its children fail with an unhandled ErrTxCreating. The
-//     record stays creating and is recovered by the ErrTxExists roll-forward on re-encounter,
-//     the pruner sweep, or setMined.
+//   - Spend fails after the tentative create: the spends that succeeded are reversed, then
+//     the tentative record is deleted, both under a detached context bounded like the
+//     spend-first rollback. The store's own partial-spend rollback cannot do this, because
+//     it probes for the spender record and the tentative record makes that probe succeed.
+//     Without the rollback a partially spent tx would leave its free inputs naming a record
+//     that is later pruned (the #1214 shape), and every rejected double-spend would leave a
+//     durable record. The per-input spends and the error are returned, with nil meta, so
+//     the caller can classify them. If the reversal fails, the record is NOT deleted: it
+//     stays creating as the recovery journal for the sweep, and the returned error wraps
+//     both failures. If only the delete fails, the original spend error is returned and the
+//     sweep converges the creating record whose inputs are unspent. If the spend fails with
+//     a context error, the spend batch may still commit after the caller returned, so
+//     nothing is reversed or deleted: the creating record stays as the recovery journal and
+//     the sweep re-spends idempotently and finalizes.
+//   - FinalizeTransaction fails after successful spends: it is retried up to 3 times with
+//     exponential backoff under a detached context. If every attempt fails, return an
+//     error. The inputs are durably spent but the tentative flag could not be cleared, so
+//     the outputs are still unspendable; reporting success would make the validator
+//     announce the tx to block assembly (and unlock it) while its children fail with an
+//     unhandled ErrTxCreating. The record stays creating and is recovered by the
+//     ErrTxExists roll-forward on re-encounter, the pruner sweep, or setMined.
 func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s SequentialStore,
 	tx *bt.Tx, blockHeight uint32, ignoreFlags IgnoreFlags, opts ...CreateOption) (*meta.Data, []*Spend, error) {
 	// Force WithCreating(true) last so it cannot be overridden by a caller option (belt and
@@ -256,12 +314,18 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 
 	spends, err := s.Spend(ctx, tx, blockHeight, ignoreFlags)
 	if err != nil {
-		// Leave the creating record in place as the recovery WAL; hand back the spends+error so
-		// the caller's conflicting handling and the pruner sweeper can resolve it.
-		return md, spends, err
+		if errors.IsContextError(err) {
+			return nil, spends, err
+		}
+
+		if rollbackErr := rollbackFailedCreateFirst(ctx, logger, s, tx, spends); rollbackErr != nil {
+			return nil, spends, errors.NewProcessingError("SpendAndCreate: error reversing utxo spends: %v", rollbackErr, err)
+		}
+
+		return nil, spends, err
 	}
 
-	if finErr := s.FinalizeTransaction(ctx, tx); finErr != nil {
+	if finErr := finalizeDetached(ctx, logger, s, tx); finErr != nil {
 		logger.Errorf("SpendAndCreate create-first: FinalizeTransaction failed for %s, tx left creating for recovery: %v", tx.TxIDChainHash().String(), finErr)
 		prometheusCreateFirstFinalizeFailed.Inc()
 
@@ -293,18 +357,20 @@ func AllInputsSpent(tx *bt.Tx, spends []*Spend) bool {
 }
 
 // CreatingRollForwarder is the store subset needed to roll a creating record forward:
-// re-run the spend-only phase, clear the tentative flag, and clear the lock.
+// re-run the spend-only phase and clear the tentative flag.
 type CreatingRollForwarder interface {
 	SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error)
 	FinalizeTransaction(ctx context.Context, tx *bt.Tx) error
-	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 }
 
 // RollForwardCreating completes a create-first transition abandoned in the tentative
 // "creating" state: it re-runs the input spends (idempotent for the same spender) and
 // finalizes the record. It is FAIL-CLOSED — it returns an error unless every input was
 // actually spent and the finalize succeeded, so a caller can never mistake a partial
-// roll-forward for a completed one. Shared by the ErrTxExists validator fast-path, the
+// roll-forward for a completed one. It returns the spends so the caller can hand the tx
+// to block assembly. It does NOT unlock the record: the caller unlocks only after block
+// assembly holds the tx, the order loadUnminedTransactions enforces, so a child cannot
+// be mined ahead of a parent that is in no template. Shared by the ErrTxExists validator fast-path, the
 // setMined pre-flight, and the pruner sweeper so the "is this really spent?" rule has a
 // single definition.
 //
@@ -313,31 +379,22 @@ type CreatingRollForwarder interface {
 // permissive a set as the original spend (e.g. WithIgnoreLocked) — otherwise a condition
 // the original spend was told to tolerate (a locked parent) turns a fail-closed roll-forward
 // into a hard stop, and the record never converges.
-func RollForwardCreating(ctx context.Context, s CreatingRollForwarder, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) error {
+func RollForwardCreating(ctx context.Context, s CreatingRollForwarder, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) ([]*Spend, error) {
 	_, spends, err := s.SpendAndCreate(ctx, tx, blockHeight, append([]CreateOption{WithSpendOnly()}, opts...)...)
 	if err != nil {
-		return err
+		return spends, err
 	}
 
 	if !AllInputsSpent(tx, spends) {
-		return errors.NewProcessingError("RollForwardCreating: re-spend of %s did not cover all inputs (%d spends for %d inputs)",
+		return spends, errors.NewProcessingError("RollForwardCreating: re-spend of %s did not cover all inputs (%d spends for %d inputs)",
 			tx.TxIDChainHash().String(), len(spends), len(tx.Inputs))
 	}
 
 	if err := s.FinalizeTransaction(ctx, tx); err != nil {
-		return err
+		return spends, err
 	}
 
-	// The tentative create carried WithLocked(true) on the block-assembly path, and
-	// FinalizeTransaction does not clear the lock — so a rolled-forward record would be
-	// creating=false but locked=true, i.e. still unspendable, the opposite of "rolled
-	// forward". Clear the lock so the outputs are actually spendable. Idempotent: clearing
-	// an already-unlocked record is a no-op.
-	if err := s.SetLocked(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, false); err != nil {
-		return err
-	}
-
-	return nil
+	return spends, nil
 }
 
 // unspendWithRetry reverses spends with up to 3 attempts and exponential backoff,
@@ -366,4 +423,31 @@ func unspendWithRetry(ctx context.Context, logger ulogger.Logger, s SequentialSt
 	}
 
 	return nil
+}
+
+// finalizeWithRetry finalizes tx with up to 3 attempts and the same exponential backoff
+// as unspendWithRetry. The backoff aborts early when ctx is cancelled.
+func finalizeWithRetry(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx) error {
+	var finErr error
+
+	for retries := uint(0); retries < 3; retries++ {
+		if finErr = s.FinalizeTransaction(ctx, tx); finErr == nil {
+			return nil
+		}
+
+		if retries < 2 {
+			backoff := time.Duration(1<<retries) * unspendRetryBackoffBase
+			logger.Errorf("error finalizing %s, retrying in %s: %v", tx.TxIDChainHash().String(), backoff.String(), finErr)
+
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return errors.NewProcessingError("error finalizing, context cancelled during retry backoff", errors.Join(finErr, ctx.Err()))
+			case <-timer.C:
+			}
+		}
+	}
+
+	return finErr
 }

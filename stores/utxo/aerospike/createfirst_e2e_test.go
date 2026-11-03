@@ -73,13 +73,12 @@ func TestSetMined_CreateFirst_RollsForwardBeforeClearing(t *testing.T) {
 	}
 }
 
-// TestSpendAndCreate_CreateFirst_DoubleSpendLeftForSweeper pins the behaviour after the
-// inline terminal-conflict resolution was removed: a create-first double-spend loser fails
-// with a spend error and is LEFT in the tentative creating state as the sweeper's WAL — it
-// is NOT resolved (marked conflicting / finalized) inline. Resolving inline on the free
-// propagation path was attacker-paceable and, because the delete side does not remove
-// parent conflictingChildren refs, manufactured the dangling-ref shape #1214 documents.
-func TestSpendAndCreate_CreateFirst_DoubleSpendLeftForSweeper(t *testing.T) {
+// TestSpendAndCreate_CreateFirst_DoubleSpendLeavesNoRecord pins the failed-spend contract of
+// the create-first path: when a spend fails after the tentative create, the spends that
+// succeeded are reversed and the tentative record is deleted. The loser leaves no record, the
+// winner's spend of the contested input is intact, and a free input the loser took is
+// unspent again.
+func TestSpendAndCreate_CreateFirst_DoubleSpendLeavesNoRecord(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.UtxoStore.UseCreateFirstOrder = true
@@ -88,35 +87,48 @@ func TestSpendAndCreate_CreateFirst_DoubleSpendLeftForSweeper(t *testing.T) {
 	t.Cleanup(deferFn)
 	cleanDB(t, client)
 
-	// Grandparent (spendable).
 	_, err := store.Create(ctx, tests.ParentTx, 100)
 	require.NoError(t, err)
 
-	// The winner takes grandparent output 1.
 	winner := spendableChildTx(t, tests.ParentTx, 1)
 	_, err = store.Spend(ctx, winner, 101, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
 	require.NoError(t, err)
 
-	// The loser spends the same output via the create-first combined path.
 	loser := spendableChildTx(t, tests.ParentTx, 1)
-	loser.Version = 8 // distinct txid, same input
+	require.NoError(t, loser.From(
+		tests.ParentTx.TxIDChainHash().String(), 2,
+		tests.ParentTx.Outputs[2].LockingScript.String(),
+		tests.ParentTx.Outputs[2].Satoshis,
+	))
+	loser.Version = 8
 
 	_, _, err = store.SpendAndCreate(ctx, loser, 101)
 	require.Error(t, err, "the create-first double-spend loser must fail")
 
-	// Left as the sweeper's WAL: still creating, NOT resolved inline.
 	got := &meta.Data{}
-	require.NoError(t, store.GetMeta(ctx, loser.TxIDChainHash(), got))
-	require.True(t, got.Creating, "the loser must be left in the creating state for the sweeper")
-	require.False(t, got.Conflicting, "the loser must NOT be marked conflicting inline (that is the sweeper's job, off the ingest path)")
+	err = store.GetMeta(ctx, loser.TxIDChainHash(), got)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrTxNotFound), "the loser's tentative record must be deleted, got: %v", err)
+
+	competitor := spendableChildTx(t, tests.ParentTx, 1)
+	competitor.Version = 9
+
+	_, err = store.Spend(ctx, competitor, 102, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrSpent), "the winner's spend must be intact, got: %v", err)
+
+	freeInput := spendableChildTx(t, tests.ParentTx, 2)
+	freeInput.Version = 10
+
+	_, err = store.Spend(ctx, freeInput, 102, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+	require.NoError(t, err, "a free input the loser took must be unspent again")
 }
 
-// TestSetMined_CreateFirst_RefusesToClearWithoutSpending is the icellan-P0 regression: the
-// setMined write paths must NEVER nil the creating bin, because setMined does not spend the
-// tx's inputs. This is the unconditional safety net for the paths the flag-gated pre-flight
-// does not run on — here modelled by the flag being OFF (a rollback with creating records
-// on disk). Asserted against BOTH write paths (Lua and filter-expression).
-func TestSetMined_CreateFirst_RefusesToClearWithoutSpending(t *testing.T) {
+// TestSetMined_CreatingRecord_RollsForwardWithFlagOff verifies the setMined pre-flight runs
+// whatever UseCreateFirstOrder says: a creating record left on disk by a flag rollback must
+// be rolled forward (inputs spent, creating cleared) when it is mined, not stranded or made
+// spendable off an unspent input. Asserted against BOTH write paths (Lua and filter-expression).
+func TestSetMined_CreatingRecord_RollsForwardWithFlagOff(t *testing.T) {
 	for _, useExpr := range []bool{false, true} {
 		useExpr := useExpr
 
@@ -128,7 +140,7 @@ func TestSetMined_CreateFirst_RefusesToClearWithoutSpending(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			logger := ulogger.NewErrorTestLogger(t)
 			tSettings := test.CreateBaseTestSettings(t)
-			tSettings.UtxoStore.UseCreateFirstOrder = false // flag OFF → pre-flight skipped
+			tSettings.UtxoStore.UseCreateFirstOrder = false
 			tSettings.Aerospike.EnableSetMinedFilterExpressions = useExpr
 
 			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
@@ -145,8 +157,6 @@ func TestSetMined_CreateFirst_RefusesToClearWithoutSpending(t *testing.T) {
 			_, err = store.Create(ctx, creatingTx, 101, utxo.WithCreating(true))
 			require.NoError(t, err)
 
-			// Mine it with the pre-flight disabled (flag off). The write path must NOT clear
-			// creating, or the outputs would become spendable with the input still unspent.
 			_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{creatingTx.TxIDChainHash()}, utxo.MinedBlockInfo{
 				BlockID: 1, BlockHeight: 101, SubtreeIdx: 0, OnLongestChain: true,
 			})
@@ -154,15 +164,14 @@ func TestSetMined_CreateFirst_RefusesToClearWithoutSpending(t *testing.T) {
 
 			got := &meta.Data{}
 			require.NoError(t, store.GetMeta(ctx, creatingTx.TxIDChainHash(), got))
-			require.True(t, got.Creating, "setMined must NOT clear the creating bin without spending the inputs")
+			require.False(t, got.Creating, "setMined must finalize a creating record even with the flag off")
 
-			// The input was never spent, confirming the record was correctly left gated
-			// rather than made spendable off an unspent input.
 			competitor := spendableChildTx(t, tests.ParentTx, 0)
 			competitor.Version = 42
 
 			_, err = store.Spend(ctx, competitor, 102, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
-			require.NoError(t, err, "the creating tx's input was never spent, so a competitor can still take it")
+			require.Error(t, err, "the rolled-forward tx must have spent its input; a competitor must be rejected")
+			require.True(t, errors.Is(err, errors.ErrSpent), "expected ErrSpent, got: %v", err)
 		})
 	}
 }
@@ -239,7 +248,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.NoError(t, err, "child must be spendable once the parent is rolled forward")
 	})
 
-	t.Run("a creating child with an absent input is not falsely blessed", func(t *testing.T) {
+	t.Run("a creating child whose parent is missing is blessed", func(t *testing.T) {
 		// absentGrandparent is a valid tx that is NEVER stored (distinct txid via Version),
 		// so the child's input UTXO record does not exist → the spend hits ErrTxNotFound.
 		absentGrandparent := spendableChildTx(t, tests.ParentTx, 0)
@@ -251,25 +260,25 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		_, err := store.Create(ctx, child, 106, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		// Spending the child's inputs must surface ErrTxNotFound: the input record is absent
-		// and a Creating=true child must NOT satisfy the "already blessed" fallback. Pre-fix,
-		// the fallback keyed on bare child existence and would have swallowed the error,
-		// letting the sweep finalize a tx whose input was never spent.
+		// A parent is pruned only once every output is spent, so a missing parent behind an
+		// existing spender record, creating or not, means the input has been taken: the
+		// spender exists, so the ErrTxNotFound is cleared. A roll-forward of a creating
+		// record whose parent was pruned must converge.
 		spends, spendErr := store.Spend(ctx, child, 106)
+		require.NoError(t, spendErr, "a missing parent behind an existing creating spender is blessed")
 
-		sawNotFound := errors.Is(spendErr, errors.ErrTxNotFound)
 		for _, sp := range spends {
-			if sp != nil && sp.Err != nil && errors.Is(sp.Err, errors.ErrTxNotFound) {
-				sawNotFound = true
-			}
+			require.NotNil(t, sp)
+			require.NoError(t, sp.Err)
 		}
 
-		require.True(t, sawNotFound, "a creating child with an absent input must surface ErrTxNotFound, not be falsely blessed; err=%v spends=%v", spendErr, spends)
-
-		// It must remain creating (never finalized off an unspent input).
 		got := &meta.Data{}
 		require.NoError(t, store.GetMeta(ctx, child.TxIDChainHash(), got))
-		require.True(t, got.Creating, "the child must remain in the creating state, not finalized")
+		require.True(t, got.Creating, "Spend alone does not finalize the record")
+
+		require.NoError(t, store.FinalizeTransaction(ctx, child))
+		require.NoError(t, store.GetMeta(ctx, child.TxIDChainHash(), got))
+		require.False(t, got.Creating, "the roll-forward converges to finalized")
 	})
 
 	t.Run("double-spend: creating loser lands in conflicting terminal state", func(t *testing.T) {

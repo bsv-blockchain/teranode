@@ -231,6 +231,8 @@ func TestCreateFirstSettingsWired(t *testing.T) {
 
 	require.Equal(t, uint32(2), tSettings.Pruner.CreatingTxSweepMinAgeBlocks,
 		"pruner_creatingTxSweepMinAgeBlocks must be wired in NewSettings (default 2), else the sweep is dead code")
+	require.Equal(t, uint32(1000), tSettings.Pruner.CreatingTxSweepMaxPerPass,
+		"pruner_creatingTxSweepMaxPerPass must be wired in NewSettings (default 1000), else the cap is zero")
 	require.False(t, tSettings.UtxoStore.UseCreateFirstOrder,
 		"utxostore_useCreateFirstOrder must be wired in NewSettings (default false)")
 }

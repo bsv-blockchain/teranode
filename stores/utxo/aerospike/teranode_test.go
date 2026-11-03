@@ -1,11 +1,85 @@
 package aerospike
 
 import (
+	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func listedUDFHash(t *testing.T, client *uaerospike.Client, filename string) string {
+	t.Helper()
+
+	udfs, err := client.ListUDF(nil)
+	require.NoError(t, err)
+
+	for _, udf := range udfs {
+		if udf.Filename == filename {
+			return udf.Hash
+		}
+	}
+
+	t.Fatalf("UDF %s not listed", filename)
+
+	return ""
+}
+
+// TestRegisterLuaIfNecessary_ReRegistersOnContentMismatch verifies that a UDF already
+// registered under the package filename but with different content is replaced by the
+// embedded script, so a lua change ships even when the package name is unchanged.
+func TestRegisterLuaIfNecessary_ReRegistersOnContentMismatch(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	ctx := context.Background()
+
+	container, err := runAerospikeTestContainer(ctx)
+	test.SkipIfContainerUnavailable(t, err)
+
+	t.Cleanup(func() {
+		require.NoError(t, container.Terminate(ctx))
+	})
+
+	host, err := container.Host(ctx)
+	require.NoError(t, err)
+
+	port, err := container.ServicePort(ctx)
+	require.NoError(t, err)
+
+	client, err := uaerospike.NewClient(host, port)
+	require.NoError(t, err)
+
+	const pkg = "teranode_hashtest"
+
+	require.NoError(t, registerLuaIfNecessary(logger, client, pkg, teranodeLUA))
+
+	want := listedUDFHash(t, client, pkg+".lua")
+	require.Regexp(t, "^[0-9a-f]{40}$", want)
+
+	stale := append([]byte("-- stale body\n"), teranodeLUA...)
+
+	task, err := client.RegisterUDF(nil, stale, pkg+".lua", aerospike.LUA)
+	require.NoError(t, err)
+	require.NoError(t, <-task.OnComplete())
+	require.NotEqual(t, want, listedUDFHash(t, client, pkg+".lua"), "precondition: the stale body is registered")
+
+	registered, err := registeredUDFContent(client, pkg+".lua")
+	require.NoError(t, err)
+	require.Equal(t, stale, registered, "precondition: the stale body is what the server holds")
+
+	require.NoError(t, registerLuaIfNecessary(logger, client, pkg, teranodeLUA))
+	require.Equal(t, want, listedUDFHash(t, client, pkg+".lua"), "the embedded script must replace the stale body")
+
+	registered, err = registeredUDFContent(client, pkg+".lua")
+	require.NoError(t, err)
+	require.Equal(t, teranodeLUA, registered)
+
+	require.NoError(t, registerLuaIfNecessary(logger, client, pkg, teranodeLUA))
+	require.Equal(t, want, listedUDFHash(t, client, pkg+".lua"), "a matching registration is left untouched")
+}
 
 func TestParseLuaMapResponse(t *testing.T) {
 	s := &Store{}

@@ -94,3 +94,40 @@ func TestCreateWithCreating_MultiRecord(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxCreating), "expected ErrTxCreating, got: %v", err)
 }
+
+// TestCreateOnlyDuplicate_MultiRecord_CreatingFlag verifies the duplicate-create guard on the
+// paginated path: with create-first on, a CreateOnly duplicate that does not carry WithCreating
+// must leave another attempt's tentative flag alone; with it off, the legacy recovery clears it.
+func TestCreateOnlyDuplicate_MultiRecord_CreatingFlag(t *testing.T) {
+	for _, createFirst := range []bool{true, false} {
+		name := "create-first-off"
+		if createFirst {
+			name = "create-first-on"
+		}
+
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.UtxoBatchSize = 2
+			tSettings.UtxoStore.UseCreateFirstOrder = createFirst
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			_, err = store.Create(ctx, tx, 100, utxo.WithCreateOnly())
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrTxExists), "expected ErrTxExists, got: %v", err)
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+			require.Equal(t, createFirst, got.Creating, "a duplicate create must clear the creating flag only when create-first is off")
+		})
+	}
+}
