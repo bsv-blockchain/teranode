@@ -84,10 +84,6 @@ func (r *ConflictRecovery) Validate() error {
 	return nil
 }
 
-// prepareConflictRecovery snapshots the whole cascade before SetConflicting or
-// Unspend can erase any edge. Parents already locked by another holder stay out of
-// this operation's lock and unlock list. The reads run concurrently, bounded by
-// conflictingWalkFanOut; the checklist keeps discovery order.
 // conflictSnapshotSpends is the UTXOs a checklist transaction took. A body in extended form
 // carries the amount and locking script of every output it spends, so the records come off the
 // body. A store that keeps the plain form, or drops bodies after a retention window (utxoset),
@@ -105,6 +101,10 @@ func conflictSnapshotSpends(ctx context.Context, s Store, h chainhash.Hash, tx *
 	return spends, nil
 }
 
+// prepareConflictRecovery snapshots the whole cascade before SetConflicting or
+// Unspend can erase any edge. Parents already locked by another holder stay out of
+// this operation's lock and unlock list. The reads run concurrently, bounded by
+// conflictingWalkFanOut; the checklist keeps discovery order.
 func prepareConflictRecovery(ctx context.Context, s Store, hashes []chainhash.Hash, winningSpends []*Spend) (*ConflictRecovery, error) {
 	r := &ConflictRecovery{Version: 1, Phase: ConflictRecoveryPrepared, WinningSpends: winningSpends}
 

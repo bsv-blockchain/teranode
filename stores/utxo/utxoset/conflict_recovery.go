@@ -66,8 +66,8 @@ func (s *Store) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*u
 //
 // The records carry no UTXO hash here, and none is needed. This store finds a UTXO by its
 // outpoint and authorises the spend by the full parent ID, so the record's outpoint and spender
-// are the whole claim. A reassigned UTXO, whose only authentication is that hash, is refused
-// (claimMismatch).
+// are the whole claim. A reassigned UTXO, whose only authentication is the new output, is
+// refused (claimMismatch), on the first write and on a replay alike: a record presents no output.
 //
 // Every record is written in one database transaction. A refusal rolls back the others, so a
 // failed restore leaves the store as it found it and the caller can retry or roll back.

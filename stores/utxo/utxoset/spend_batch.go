@@ -413,14 +413,16 @@ func (s *Store) runSpendPlan(ctx context.Context, q pgx.Tx, p *spendPlan) error 
 		item := p.owner[k]
 		vin := p.ownerVin[k]
 
-		if in := p.itemInput(item, vin); in != nil {
-			// Before the overwrite, and it has to be: the overwrite is what destroys the
-			// claim this is checking.
-			if err := claimMismatch(in, p.perItem[item][vin], satoshis, script, hashOverride,
-				p.skipClaim[item]); err != nil {
-				p.perItem[item][vin].Err = err
-			}
+		// Before the overwrite, and it has to be: the overwrite is what destroys the claim this
+		// is checking. It runs for a recorded spend with no input too, so a reassigned UTXO is
+		// refused on the first write exactly as namePlanSpenders refuses it on a replay.
+		in := p.itemInput(item, vin)
+		if err := claimMismatch(in, p.perItem[item][vin], satoshis, script, hashOverride,
+			p.skipClaim[item]); err != nil {
+			p.perItem[item][vin].Err = err
+		}
 
+		if in != nil {
 			decorateInput(in, satoshis, script, hashOverride)
 		}
 	}
