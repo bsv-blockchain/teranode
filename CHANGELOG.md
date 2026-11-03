@@ -166,13 +166,12 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   Aerospike store keeps the markers in a new bin on the parent record and registers
   a new UDF module, `teranode_v66`, on startup.
 
-  Two validator request fields are new, `spender_created_by_caller` and
-  `ignore_locked`, and the gRPC client now sends `ignore_locked`, which it used to
-  drop. On a deployment with a remote validator (`useLocalValidator=false`), subtree
+  One validator request field is new, `ignore_locked`, and the gRPC client now
+  sends it, where it used to drop it. On a deployment with a remote validator (`useLocalValidator=false`), subtree
   validation's spends past a parent locked by an in-flight conflict check now succeed
   where they used to fail with `TX_LOCKED`; an in-process validator already behaved
   this way. Upgrade the validator together with subtree validation: an old validator
-  ignores both fields and keeps refusing those spends with `TX_LOCKED`. (#1702)
+  ignores the field and keeps refusing those spends with `TX_LOCKED`. (#1702)
 
 - **A syncing node refuses unmined transactions at every intake.** While the FSM is
   `CATCHINGBLOCKS`, propagation (gRPC, HTTP `/tx` and `/txs`, UDP), the validator's

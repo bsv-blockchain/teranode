@@ -42,6 +42,21 @@ func newTestService(t *testing.T) *Service {
 	}
 }
 
+// processRecordChunk processes one chunk on its own: its deletes are sent and
+// drained before it returns. processed counts the records confirmed deleted.
+func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, chunk []*aerospike.Result) (int, int, error) {
+	carry := &deleteCarry{}
+
+	processed, skipped, err := s.processRecordChunkCarry(ctx, blockHeight, chunk, carry)
+	if err != nil {
+		return processed, skipped, err
+	}
+
+	deleted, heldBack, err := s.drainCarry(ctx, carry)
+
+	return processed + deleted, skipped + heldBack, err
+}
+
 // TestProcessRecordChunk_RecordWithoutInputs verifies a record with no inputs
 // (e.g. coinbase) is processed without a parent update. The chunk is crafted
 // with zero inputs so no parent updates accumulate and the flushCleanupBatches

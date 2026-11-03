@@ -18,6 +18,23 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// flushCleanupBatches runs one chunk through flushChunk and drains the carry at
+// once, so it sends the marker batch, then the delete batch, then a page batch
+// if any master had pages. The partition worker instead keeps one carry across
+// its chunks, which folds each delete batch into the next chunk's marker batch.
+func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*pendingDeletion, externalFiles []*externalFileInfo) (heldBack int, err error) {
+	carry := &deleteCarry{}
+
+	_, heldBack, err = s.flushChunk(ctx, carry, parentUpdates, deletions, externalFiles)
+	if err != nil {
+		return heldBack, err
+	}
+
+	_, drainedHeldBack, err := s.drainCarry(ctx, carry)
+
+	return heldBack + drainedHeldBack, err
+}
+
 // newFlushTestService starts an Aerospike container and returns a pruner
 // service on it. No Lua package is configured, so markers go through the plain
 // MapPutItems path; the marker rules under test sit above that choice.

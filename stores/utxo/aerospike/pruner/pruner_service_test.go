@@ -597,3 +597,64 @@ func TestExtractSpendingChildren(t *testing.T) {
 	require.True(t, isZeroBytes(unspent[32:64]))
 	require.False(t, isZeroBytes(spent[32:64]))
 }
+
+// TestAddParentUpdatesForInput covers what the pruner asks Aerospike to write for
+// one spent outpoint: which parent records get a marker, and how many copies of
+// the child hash each one receives.
+func TestAddParentUpdatesForInput(t *testing.T) {
+	var parent chainhash.Hash
+
+	parent[0] = 0xAA
+
+	var child chainhash.Hash
+
+	child[0] = 0xBB
+
+	newService := func(defensive bool) *Service {
+		return &Service{namespace: "test", set: "utxo", utxoBatchSize: 128, defensiveEnabled: defensive}
+	}
+
+	masterKey := string(parent.CloneBytes())
+	pageKey := string(uaerospike.CalculateKeySource(&parent, 300, 128))
+
+	require.NotEqual(t, masterKey, pageKey, "fixture must use a vout past the first page")
+
+	t.Run("either mode writes only the page the spend path reads", func(t *testing.T) {
+		for _, defensive := range []bool{false, true} {
+			updates := map[string]*parentUpdateInfo{}
+			require.NoError(t, newService(defensive).addParentUpdatesForInput(updates, &parent, 300, &child))
+			require.Len(t, updates, 1)
+			require.Contains(t, updates, pageKey)
+			require.NotContains(t, updates, masterKey,
+				"the master holds outputs 0..batchSize-1 only, so a marker for a higher output is read by nothing there and grows the record without bound")
+		}
+	})
+
+	t.Run("first page needs one write in either mode", func(t *testing.T) {
+		for _, defensive := range []bool{false, true} {
+			updates := map[string]*parentUpdateInfo{}
+			require.NoError(t, newService(defensive).addParentUpdatesForInput(updates, &parent, 7, &child))
+			require.Len(t, updates, 1)
+			require.Contains(t, updates, masterKey, "vout 0..127 lives on the master record")
+		}
+	})
+
+	t.Run("a consolidation spend queues one child hash, not one per input", func(t *testing.T) {
+		// 10k outputs of the same paginated parent, spread across pages: every
+		// input asks for the same (parent, child) marker. Without dedup this
+		// produced a 10,000-element list of the identical 64-char hex string in
+		// one batch record.
+		s := newService(true)
+		updates := map[string]*parentUpdateInfo{}
+
+		for vout := uint32(0); vout < 10_000; vout++ {
+			require.NoError(t, s.addParentUpdatesForInput(updates, &parent, vout, &child))
+		}
+
+		require.Len(t, updates, 79, "one entry per output page (page 0 is the master)")
+
+		for source, info := range updates {
+			require.Lenf(t, info.childHashes, 1, "parent record %x queued %d copies of the same child", source, len(info.childHashes))
+		}
+	})
+}

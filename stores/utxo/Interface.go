@@ -538,16 +538,6 @@ func WithSkipUTXOHashCheck(b bool) CreateOption {
 	return optSkipUTXOHashCheckFalse
 }
 
-// WithSpenderCreatedByCaller marks the spending transaction's record as written
-// by the caller in this pass (see IgnoreFlags.SpenderCreatedByCaller). Set it on
-// the spend phase of a create-first block path for every transaction that phase
-// 1 created, and only those.
-func WithSpenderCreatedByCaller(b bool) CreateOption {
-	return func(o *CreateOptions) {
-		o.IgnoreFlags.SpenderCreatedByCaller = b
-	}
-}
-
 // WithCreateOnly makes SpendAndCreate skip the spend phase: only the
 // transaction's outputs and metadata are stored (coinbase, seeding, and batch
 // flows whose inputs are spent elsewhere).

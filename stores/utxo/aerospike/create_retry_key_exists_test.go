@@ -183,9 +183,11 @@ func testCreateRetryKeyExists(t *testing.T, resend bool) {
 
 	t.Logf("phase 1 create of the replayed C returned %v (batch re-sent %d time(s)); the block path files it as createdHere=%v", createErr, resent.Load(), createdHere)
 
-	// Phase 2 spends with the flag derived from phase 1 (spendBatchWithRetry), and
-	// on a hard failure the block path removes the ghosts it identified.
-	_, _, spendErr := store.SpendAndCreate(ctx, c, 1400, utxo.WithSpendOnly(), utxo.WithIgnoreLocked(true), utxo.WithSpenderCreatedByCaller(createdHere))
+	// Phase 2 spends with the flag derived from phase 1, as the block list's
+	// second wave does for a record its first wave created, and on a hard
+	// failure the block path removes the ghosts it identified.
+	spenderCreatedByCaller := func(o *utxo.CreateOptions) { o.IgnoreFlags.SpenderCreatedByCaller = createdHere }
+	_, _, spendErr := store.SpendAndCreate(ctx, c, 1400, utxo.WithSpendOnly(), utxo.WithIgnoreLocked(true), spenderCreatedByCaller)
 
 	t.Logf("phase 2 spend of the replayed C returned %v", spendErr)
 

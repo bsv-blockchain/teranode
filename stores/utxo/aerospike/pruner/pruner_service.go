@@ -41,31 +41,6 @@ var _ pruner.Service = (*Service)(nil)
 
 var IndexName, _ = gocore.Config().Get("pruner_IndexName", "pruner_dah_index")
 
-// Wire vocabulary of the addDeletedChildren mod-teranode response. These mirror
-// the constants in teranode.lua (FIELD_STATUS / FIELD_ERROR_CODE / FIELD_MESSAGE,
-// STATUS_OK / STATUS_ERROR, ERROR_CODE_TX_NOT_FOUND) and the store's LuaSuccess
-// bin name; the pruner cannot import the store package (the store imports the
-// pruner), so they are restated here rather than shared.
-const (
-	// luaSuccessBin is the record bin both mod-teranode paths write their
-	// response map into — aerospike.LuaSuccess on the store side.
-	luaSuccessBin = "SUCCESS"
-
-	fieldStatus    = "status"
-	fieldErrorCode = "errorCode"
-	// fieldMessage is the key the producers actually emit (teranode.lua
-	// FIELD_MESSAGE); the store's own parser reads it too.
-	fieldMessage = "message"
-	// fieldErrorMessage is tolerated as an alias so a future producer that emits
-	// it is not silently dropped. No producer emits it today.
-	fieldErrorMessage = "errorMessage"
-
-	statusOK    = "OK"
-	statusError = "ERROR"
-
-	errorCodeTxNotFound = "TX_NOT_FOUND"
-)
-
 // TimeoutError indicates that a query operation timed out or encountered a network error.
 // This error type is used to distinguish retriable timeout errors from other errors.
 type TimeoutError struct {
@@ -143,54 +118,6 @@ type Options struct {
 	// Used to coordinate cleanup with block persister progress (can be nil)
 	GetPersistedHeight func() uint32
 
-	// LuaPackage is the name of the registered Lua UDF module
-	LuaPackage string
-
-	// BuildAddDeletedChildrenRecord, when non-nil, takes ownership of building
-	// the per-parent BatchRecord for the parent-update phase. The parent Store
-	// supplies this so the pruner routes through the native-op wrapper
-	// (subOpAddDeletedChildren) when the cluster supports it, with transparent
-	// fallback to the legacy NewBatchUDF call otherwise.
-	//
-	// The UDF branch honours the policy in full. The native-op branch synthesises
-	// its own write policy but still carries over the policy's FilterExpression
-	// when one is set, so a server-side eligibility gate applies identically on
-	// both paths (the pruner sets no filter today). childHashes are the deleted
-	// children's txids. The implementation encodes them as the op's single
-	// argument, a list of hex hash strings, which is what the legacy path wraps
-	// in aerospike.NewValue; taking the hashes lets the native path write the
-	// payload without building those strings.
-	//
-	// The implementation must not create the parent record when it is absent —
-	// a missing parent is routine here and the Lua function it replaces returns
-	// TX_NOT_FOUND without writing. It may report that either as a
-	// KEY_NOT_FOUND batch error or as an ERROR/TX_NOT_FOUND response map; the
-	// pruner counts both as a skipped parent.
-	//
-	// When nil, the pruner builds NewBatchUDF directly using LuaPackage
-	// (existing pre-PR-828 behaviour).
-	BuildAddDeletedChildrenRecord func(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, childHashes []*chainhash.Hash) aerospike.BatchRecordIfc
-
-	// ObserveNativeOpError, when non-nil, is handed every error the parent-update
-	// batch surfaces — per-record and whole-batch alike — for records built by
-	// BuildAddDeletedChildrenRecord.
-	//
-	// The parent Store supplies it so that a PARAMETER_ERROR, which is what an
-	// unpatched aerospike-server returns for the unknown native wire op, demotes
-	// the store to the UDF path exactly as the store's own native call sites do.
-	// The startup probe samples a single partition master, so a mixed-version
-	// cluster (or a node rolled back to a stock build after startup) can pass the
-	// probe and then reject native writes at runtime. Without this the pruner is
-	// the one native call site that cannot trigger that demotion, and since it
-	// runs every block it is a likely first victim — every parent update would
-	// then fail for the process lifetime.
-	//
-	// The pruner does not interpret the error: which codes mean "native
-	// unsupported" is the store's business, and the callback is expected to
-	// filter. Errors from the plain MapPutItems path are not reported, as those
-	// records never travelled the native path.
-	ObserveNativeOpError func(error)
-
 	// Observers is a list of observers to notify when pruning completes
 	Observers []pruner.Observer
 }
@@ -230,17 +157,6 @@ type Service struct {
 
 	partitionWorkerFn func(ctx context.Context, blockHeight uint32, partitionStart int, partitionCount int) (int64, int64, error)
 
-	// Lua UDF module name
-	luaPackage string
-
-	// Optional native-op-aware builder for the addDeletedChildren batch record.
-	// See Options.BuildAddDeletedChildrenRecord for the contract.
-	buildAddDeletedChildrenRecord func(*aerospike.BatchUDFPolicy, *aerospike.Key, []*chainhash.Hash) aerospike.BatchRecordIfc
-
-	// Optional sink for parent-update errors, letting the store demote itself off
-	// the native path. See Options.ObserveNativeOpError for the contract.
-	observeNativeOpError func(error)
-
 	// Cached field names (avoid repeated String() allocations in hot paths)
 	fieldTxID, fieldUtxos, fieldInputs, fieldDeletedChildren, fieldExternal        string
 	fieldDeleteAtHeight, fieldTotalExtraRecs, fieldUnminedSince, fieldBlockHeights string
@@ -274,7 +190,7 @@ type parentUpdateInfo struct {
 	// those outputs still records it as the spender: see keepSpendHolders.
 	offsets map[chainhash.Hash][]uint32
 	// markerFailed records that this record's marker write did not land, or
-	// that its outcome could not be read. Set by tallyParentUpdateResults.
+	// that its outcome could not be read. Set by writeVerifiedMarkers.
 	markerFailed bool
 	// released holds the children that are conflicting losers. ProcessConflicting
 	// released every input they spent, the uncontested ones too, so an unspent
@@ -330,7 +246,7 @@ type pendingDeletion struct {
 	keys   []*aerospike.Key
 	// page is set when the scanned record is a pagination record found on its
 	// own, so keys holds no master record. A refused page delete must not read
-	// as the master surviving: see executeBatchDeletions.
+	// as the master surviving: see buildCarriedDeletes.
 	page bool
 }
 
@@ -464,9 +380,6 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		ctx:                            opts.Ctx,
 		indexWaiter:                    opts.IndexWaiter,
 		notifier:                       notifier,
-		luaPackage:                     opts.LuaPackage,
-		buildAddDeletedChildrenRecord:  opts.BuildAddDeletedChildrenRecord,
-		observeNativeOpError:           opts.ObserveNativeOpError,
 		queryPolicy:                    queryPolicy,
 		writePolicy:                    writePolicy,
 		batchPolicy:                    batchPolicy,
@@ -1149,22 +1062,6 @@ func isZeroBytes(b []byte) bool {
 	return true
 }
 
-// processRecordChunk processes one chunk on its own: its deletes are sent and
-// drained before it returns. Returns: (processedCount, skippedCount, error),
-// where processed counts the records confirmed deleted.
-func (s *Service) processRecordChunk(ctx context.Context, blockHeight uint32, chunk []*aerospike.Result) (int, int, error) {
-	carry := &deleteCarry{}
-
-	processed, skipped, err := s.processRecordChunkCarry(ctx, blockHeight, chunk, carry)
-	if err != nil {
-		return processed, skipped, err
-	}
-
-	deleted, heldBack, err := s.drainCarry(ctx, carry)
-
-	return processed + deleted, skipped + heldBack, err
-}
-
 // processRecordChunkCarry processes a chunk of parent records with batched
 // child verification. Its marker writes go in one batch with the deletes the
 // carry holds from the previous chunk, and its own cleared deletes are left in
@@ -1343,7 +1240,7 @@ func (s *Service) processRecordChunkCarry(ctx context.Context, blockHeight uint3
 		}
 
 		// Accumulate deletions (master + pagination records), grouped by the
-		// transaction they belong to so flushCleanupBatches can hold back exactly
+		// transaction they belong to so flushChunk can hold back exactly
 		// the records whose parent markers did not land.
 		deletion := &pendingDeletion{txHash: txHash, keys: []*aerospike.Key{rec.Record.Key}, page: s.isPaginationRecord(rec.Record, txHash)}
 
@@ -2440,12 +2337,6 @@ func spendHolder(utxos []interface{}, offsets []uint32, childHash *chainhash.Has
 	return holderUnverified
 }
 
-// namesSpender reports whether any of the given utxos-bin offsets records
-// childHash as its spending transaction.
-func namesSpender(utxos []interface{}, offsets []uint32, childHash *chainhash.Hash) bool {
-	return spendHolder(utxos, offsets, childHash) == holderNamesChild
-}
-
 // deleteCarry holds the deletes a chunk has cleared, waiting for the batch that
 // carries the next chunk's marker writes.
 //
@@ -2480,40 +2371,6 @@ type deleteCarry struct {
 
 func (c *deleteCarry) empty() bool {
 	return len(c.deletions) == 0 && len(c.pages) == 0
-}
-
-// flushCleanupBatches persists replay protection before removing children, and
-// removes only the children whose protection actually landed. It runs one
-// chunk through flushChunk and drains the carry at once, so it sends the
-// marker batch, then the delete batch, then a page batch if any master had
-// pages. The partition worker calls flushChunk itself with a carry that lives
-// across its chunks, which folds each delete batch into the next chunk's
-// marker batch.
-//
-// Aerospike batches are not atomic across records, so a failed marker write must
-// leave the affected children in place for a later cycle, regardless of
-// defensive mode. Per-record marker failures are isolated: they hold back the
-// children of that one parent and are returned in heldBack. Only a whole-batch
-// failure - the BatchOperate call itself, or a cancelled context - is returned
-// as an error, because that says nothing about any individual record.
-//
-// Isolating per-record failures is the same reasoning as the retention path in
-// getTxInputsFromBins: PruneWithPartitions never retries a non-TimeoutError and
-// services/pruner/worker.go logs the failure and advances lastProcessedHeight
-// anyway, so one permanently-unwritable parent record returned as a chunk error
-// would re-fail every block forever and NotifyPruneComplete would never fire
-// again.
-func (s *Service) flushCleanupBatches(ctx context.Context, parentUpdates map[string]*parentUpdateInfo, deletions []*pendingDeletion, externalFiles []*externalFileInfo) (heldBack int, err error) {
-	carry := &deleteCarry{}
-
-	_, heldBack, err = s.flushChunk(ctx, carry, parentUpdates, deletions, externalFiles)
-	if err != nil {
-		return heldBack, err
-	}
-
-	_, drainedHeldBack, err := s.drainCarry(ctx, carry)
-
-	return heldBack + drainedHeldBack, err
 }
 
 // drainCarry sends the carry's remaining deletes, and then the pages of the
@@ -2563,6 +2420,17 @@ const drainTimeout = 30 * time.Second
 // land is held back. In TTL mode the write is sent anyway: the "delete" there
 // is a touch that leaves the parent readable for up to a second, and any
 // write in that second gives it a full lifetime again.
+//
+// Aerospike batches are not atomic across records, so a failed marker write
+// must leave the affected children in place for a later cycle, regardless of
+// defensive mode. Per-record marker failures are isolated: they hold back the
+// children of that one parent and are returned in heldBack. Only a whole-batch
+// failure, the BatchOperate call itself or a cancelled context, is returned as
+// an error, because that says nothing about any individual record. One
+// permanently unwritable parent returned as a chunk error would re-fail every
+// block forever: PruneWithPartitions never retries a non-TimeoutError, and
+// services/pruner/worker.go logs the failure and advances lastProcessedHeight
+// anyway, so NotifyPruneComplete would never fire again.
 func (s *Service) flushChunk(ctx context.Context, carry *deleteCarry, parentUpdates map[string]*parentUpdateInfo, deletions []*pendingDeletion, externalFiles []*externalFileInfo) (deleted, heldBack int, err error) {
 	// SkipDeletions is checked before any marker is written, not only before the
 	// deletions. The spend path consults a marker for the transaction asking to
@@ -2742,7 +2610,7 @@ func splitTiedUpdates(updates map[string]*parentUpdateInfo, deleteSlots map[stri
 // this package exists to prevent, and the next cycle re-finds it if it is
 // still there. A confirmed master's pages go in the carry for the next batch,
 // and its blob is deleted now. Every record whose delete did not definitely
-// land is counted in the returned error, as executeBatchDeletions did.
+// land is counted in the returned error.
 func (s *Service) settleCarriedDeletes(ctx context.Context, carry *deleteCarry, prev *deleteCarry, records []aerospike.BatchRecordIfc, masters map[int]*chainhash.Hash, results deletionResults) (deleted, heldBack int, err error) {
 	if len(records) == 0 {
 		return 0, 0, nil
@@ -2847,7 +2715,7 @@ func pageKeysDone(records []aerospike.BatchRecordIfc, deletion *pendingDeletion,
 // master is present is not counted, since that master's own deletion, or its
 // own hold-back, already accounts for it.
 //
-// The hold-back in flushCleanupBatches is keyed on the transaction, but it is
+// The hold-back in flushChunk is keyed on the transaction, but it is
 // filled per chunk from the master's inputs, and only the master carries them.
 // A page scanned in a different chunk from its master finds nothing blocked, so
 // without this a page was deleted while its master was deliberately kept for a
@@ -2856,9 +2724,9 @@ func pageKeysDone(records []aerospike.BatchRecordIfc, deletion *pendingDeletion,
 // spends on that page were lost.
 //
 // A present master needs none of its pages deleted here: the master's own
-// deletion lists every page key, whichever chunk it is scanned in, and
-// executeBatchDeletions deletes them once the master is gone. So a page
-// goes on its own only once its master is definitely gone, which is the
+// deletion lists every page key, whichever chunk it is scanned in, and the
+// batch after the master's delete removes them once the master is gone. So a
+// page goes on its own only once its master is definitely gone, which is the
 // leftover of an earlier cycle whose page deletes failed. A master read that
 // fails keeps the page, because the master is not known to be gone.
 func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pendingDeletion, int) {
@@ -3123,8 +2991,8 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 		}
 
 		// A server-side rejection reached the server, so the per-record results
-		// are readable; see executeBatchParentUpdatesUDF for why one unwritable
-		// parent must not fail the chunk.
+		// are readable; see flushChunk for why one unwritable parent must not
+		// fail the chunk.
 		s.logger.Warnf("Batch parent update returned a server-side rejection, classifying per record: %v", err)
 	}
 
@@ -3152,7 +3020,7 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 			continue
 		}
 
-		outcome, outcomeErr := classifyParentUpdateResult(batchRec, false)
+		outcome, outcomeErr := classifyParentUpdateResult(batchRec)
 
 		switch outcome {
 		case parentUpdateOK:
@@ -3425,125 +3293,10 @@ func (s *Service) withdrawMarkers(updates map[string]*parentUpdateInfo, children
 	}
 }
 
-// buildParentUpdateRecords builds the addDeletedChildren parent-update batch
-// records on the mod-teranode path: it prefers the injected native-op builder
-// (buildAddDeletedChildrenRecord → native subOpAddDeletedChildren) and falls back
-// to a direct Lua NewBatchUDF. Callers must only invoke it when the mod-teranode
-// path is active (buildAddDeletedChildrenRecord != nil || luaPackage != "").
-func (s *Service) buildParentUpdateRecords(updates map[string]*parentUpdateInfo) ([]aerospike.BatchRecordIfc, []*parentUpdateInfo) {
-	batchUDFPolicy := aerospike.NewBatchUDFPolicy()
-	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
-	infos := make([]*parentUpdateInfo, 0, len(updates))
-
-	for _, info := range updates {
-		infos = append(infos, info)
-
-		if s.buildAddDeletedChildrenRecord != nil {
-			batchRecords = append(batchRecords, s.buildAddDeletedChildrenRecord(batchUDFPolicy, info.key, info.childHashes))
-		} else {
-			childHashList := make([]interface{}, 0, len(info.childHashes))
-			for _, childHash := range info.childHashes {
-				childHashList = append(childHashList, childHash.String())
-			}
-
-			batchRecords = append(batchRecords, aerospike.NewBatchUDF(
-				batchUDFPolicy,
-				info.key,
-				s.luaPackage,
-				"addDeletedChildren",
-				aerospike.NewValue(childHashList),
-			))
-		}
-	}
-
-	return batchRecords, infos
-}
-
-// extractTxHash extracts the transaction hash from record bins
-func (s *Service) extractTxHash(bins aerospike.BinMap) (*chainhash.Hash, error) {
-	txIDBytes, ok := bins[s.fieldTxID].([]byte)
-	if !ok || len(txIDBytes) != 32 {
-		return nil, errors.NewProcessingError("invalid or missing txid")
-	}
-
-	txHash, err := chainhash.NewHash(txIDBytes)
-	if err != nil {
-		return nil, errors.NewProcessingError("invalid txid bytes: %v", err)
-	}
-
-	return txHash, nil
-}
-
-// executeBatchParentUpdates performs Phase 2a: updates parent records to mark that their
-// child transactions have been deleted (adds to deletedChildren map).
-//
-// Uses a Lua UDF (addDeletedChildren) instead of BatchWrite+MapPutItemsOp so that
-// missing parent records are handled server-side without generating KEY_NOT_FOUND errors
-// in Aerospike client metrics.
-//
-// IDEMPOTENCY: This operation is safely re-runnable:
-// - Missing parents are silently skipped by the Lua UDF (TX_NOT_FOUND)
-// - Duplicate updates are no-ops - deletedChildren map updates are idempotent
-// - Partial batch failures can be retried without side effects
-//
-// This must complete before Phase 2b (child deletion) to maintain referential integrity.
-func (s *Service) executeBatchParentUpdates(ctx context.Context, updates map[string]*parentUpdateInfo) (map[chainhash.Hash]struct{}, error) {
-	if len(updates) == 0 {
-		return nil, nil
-	}
-
-	if s.buildAddDeletedChildrenRecord != nil || s.luaPackage != "" {
-		return s.executeBatchParentUpdatesUDF(ctx, updates)
-	}
-
-	return s.executeBatchParentUpdatesBatchWrite(ctx, updates)
-}
-
-// executeBatchParentUpdatesUDF builds the addDeletedChildren parent-update batch
-// using either the native-op wrapper (when Options.BuildAddDeletedChildrenRecord
-// was supplied) or a direct NewBatchUDF fallback. Neither creates a missing
-// parent: the UDF reports it as an ERROR/TX_NOT_FOUND response and the native
-// path as a KEY_NOT_FOUND batch error, and both are counted as skipped rather
-// than failed.
-func (s *Service) executeBatchParentUpdatesUDF(ctx context.Context, updates map[string]*parentUpdateInfo) (map[chainhash.Hash]struct{}, error) {
-	batchRecords, infos := s.buildParentUpdateRecords(updates)
-
-	select {
-	case <-ctx.Done():
-		s.logger.Infof("Context cancelled, skipping parent update batch")
-		return nil, ctx.Err()
-	default:
-	}
-
-	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
-		s.reportNativeOpError(err)
-
-		if isBatchTransportError(err) {
-			s.logger.Errorf("Batch parent update failed at the transport: %v", err)
-
-			return nil, errors.NewStorageError("batch parent update failed", err)
-		}
-
-		// A server-side rejection: the batch reached the server, so the
-		// per-record results below are readable and the failure can be isolated
-		// to the parents it actually affected. Returning here instead would fail
-		// the chunk, and one permanently-unwritable parent record would then
-		// wedge pruning node-wide - the exact failure mode the retention path in
-		// getTxInputsFromBins was added to avoid.
-		s.logger.Warnf("Batch parent update returned a server-side rejection, classifying per record: %v", err)
-	}
-
-	// Both mod-teranode producers answer with a SUCCESS map, so this path is
-	// always classified against the mod-teranode contract.
-	tally := tallyParentUpdateResults(batchRecords, infos, true, s.observeNativeOpError)
-
-	return s.reportParentUpdateTally(tally, len(batchRecords)), nil
-}
-
 // reportParentUpdateTally records the batch's counters and returns the children
 // that must not be deleted. A per-record failure is logged and isolated, never
-// returned as an error: see flushCleanupBatches for why one poison record must
-// not fail the cycle.
+// returned as an error: see flushChunk for why one poison record must not fail
+// the cycle.
 func (s *Service) reportParentUpdateTally(tally parentUpdateTally, total int) map[chainhash.Hash]struct{} {
 	if tally.failed > 0 {
 		prometheusUtxoParentUpdateFailures.Add(float64(tally.failed))
@@ -3561,85 +3314,6 @@ func (s *Service) reportParentUpdateTally(tally parentUpdateTally, total int) ma
 	}
 
 	return tally.blocked
-}
-
-// addDeletedChildrenStatus reads the status / errorCode / message fields from the
-// SUCCESS map returned by the addDeletedChildren mod-teranode op, without
-// allocating a copy of the map (this runs once per parent update on the per-block
-// cleanup hot path).
-//
-// ok reports that resp was a recognised map shape AND carried a string status
-// field. Callers must treat ok == false as a failure, not as success: the two
-// producers (the Lua UDF and the server-fork native dispatcher) are not pinned to
-// the same response encoding by anything in this repo, so an unreadable response
-// means the parent update's outcome is unknown. See classifyParentUpdateResult.
-func addDeletedChildrenStatus(resp interface{}) (status, errorCode, errorMessage string, ok bool) {
-	status, ok, recognised := addDeletedChildrenField(resp, fieldStatus)
-	if !recognised {
-		return "", "", "", false
-	}
-
-	errorCode, _, _ = addDeletedChildrenField(resp, fieldErrorCode)
-
-	// Producers emit "message"; fall back to the "errorMessage" alias only when
-	// "message" is absent or empty.
-	if errorMessage, _, _ = addDeletedChildrenField(resp, fieldMessage); errorMessage == "" {
-		errorMessage, _, _ = addDeletedChildrenField(resp, fieldErrorMessage)
-	}
-
-	return status, errorCode, errorMessage, ok
-}
-
-// addDeletedChildrenField reads one string field from whichever map encoding the
-// response arrived in. ok reports the field was present as a string; recognised
-// is false when resp is not a map at all. It is a plain function rather than a
-// returned accessor because a closure over the map allocated once per parent
-// update on the cleanup hot path.
-//
-// Three shapes are handled. The UDF path yields map[interface{}]interface{}
-// (the aerospike client's unpackMapNormal). map[string]interface{} is accepted
-// because the native dispatcher may decode that way. []aerospike.MapPair is the
-// client's representation of an ordered-map particle (a map CDT carrying the
-// ordered-map ext header) — no producer is known to emit it for this op, but
-// accepting it costs a case and rejecting it would, post-fail-closed, turn a
-// working native deployment into a hard error.
-func addDeletedChildrenField(resp interface{}, field string) (value string, ok, recognised bool) {
-	switch m := resp.(type) {
-	case map[interface{}]interface{}:
-		value, ok = m[field].(string)
-		return value, ok, true
-
-	case map[string]interface{}:
-		value, ok = m[field].(string)
-		return value, ok, true
-
-	case []aerospike.MapPair:
-		for _, pair := range m {
-			if key, isString := pair.Key.(string); isString && key == field {
-				value, ok = pair.Value.(string)
-				return value, ok, true
-			}
-		}
-
-		return "", false, true
-
-	default:
-		return "", false, false
-	}
-}
-
-// reportNativeOpError hands a parent-update failure to the store's native-op
-// error observer, when one was injected. Nil-safe: Options.ObserveNativeOpError
-// is optional, and every pruner test constructs a Service without it.
-//
-// Only call this for records built by buildAddDeletedChildrenRecord — see
-// Options.ObserveNativeOpError.
-func (s *Service) reportNativeOpError(err error) {
-	if s.observeNativeOpError == nil || err == nil {
-		return
-	}
-
-	s.observeNativeOpError(err)
 }
 
 // isBatchTransportError reports whether a BatchOperate error means the call did
@@ -3675,60 +3349,6 @@ type parentUpdateTally struct {
 	blocked map[chainhash.Hash]struct{}
 }
 
-// tallyParentUpdateResults classifies every record in a parent-update batch.
-//
-// observeErr, when non-nil, is handed the raw per-record error before it is
-// classified — see Options.ObserveNativeOpError. Only mod-teranode records are
-// reported: the plain MapPutItems path never travelled the native path, so its
-// errors carry no signal about native support. KEY_NOT_FOUND is reported too;
-// filtering by result code is the observer's job, not the pruner's.
-//
-// infos, when non-nil, is index-aligned with batchRecords and identifies the
-// children each record protects, so a per-record failure can be turned into the
-// set of children that must be held back rather than failing the whole chunk.
-func tallyParentUpdateResults(batchRecords []aerospike.BatchRecordIfc, infos []*parentUpdateInfo, usesModTeranode bool, observeErr func(error)) parentUpdateTally {
-	var tally parentUpdateTally
-
-	for i, rec := range batchRecords {
-		if observeErr != nil && usesModTeranode {
-			if recErr := rec.BatchRec().Err; recErr != nil {
-				observeErr(recErr)
-			}
-		}
-
-		outcome, outcomeErr := classifyParentUpdateResult(rec.BatchRec(), usesModTeranode)
-
-		switch outcome {
-		case parentUpdateOK:
-			tally.success++
-
-		case parentUpdateNotFound:
-			tally.notFound++
-
-		default:
-			tally.failed++
-
-			if tally.firstErr == nil {
-				tally.firstErr = outcomeErr
-			}
-
-			if infos != nil && i < len(infos) {
-				infos[i].markerFailed = true
-
-				if tally.blocked == nil {
-					tally.blocked = make(map[chainhash.Hash]struct{})
-				}
-
-				for _, childHash := range infos[i].childHashes {
-					tally.blocked[*childHash] = struct{}{}
-				}
-			}
-		}
-	}
-
-	return tally
-}
-
 // isKeyNotFound reports whether a per-record batch error is KEY_NOT_FOUND, the
 // routine result for a parent or child the pruner already deleted. The client
 // sets these as a bare *AerospikeError with nothing wrapped, which is answered
@@ -3761,25 +3381,16 @@ const (
 	parentUpdateFailed
 )
 
-// classifyParentUpdateResult maps one parent-update batch record onto the outcome
-// the cleanup counters track.
+// classifyParentUpdateResult maps one marker-write batch record onto the
+// outcome the cleanup counters track.
 //
-// It fails CLOSED. Any response the pruner cannot read is reported as a failure
+// It fails CLOSED. Any answer the pruner cannot read is reported as a failure
 // rather than counted as a silent success, because the caller deletes the child
-// records in the same batch on the strength of this classification — a parent
-// update that silently did not happen is exactly the referential-integrity break
-// the parent-update phase exists to prevent. The store fails closed on the same
-// unknown (ParseLuaMapResponse returns an error); the pruner now matches it.
-//
-// A missing parent reaches us two different ways and is benign in both: as
-// KEY_NOT_FOUND from the policies that require an existing record (the native
-// path's UPDATE_ONLY, the plain MapPutItems fallback), or as an ERROR/TX_NOT_FOUND
-// response from the Lua UDF, which guards on aerospike:exists(rec) instead.
-//
-// usesModTeranode selects the response contract: mod-teranode records (native or
-// UDF) must carry a readable SUCCESS map, whereas the plain MapPutItems BatchWrite
-// has no response map at all and a nil Err is the whole of its success signal.
-func classifyParentUpdateResult(batchRec *aerospike.BatchRecord, usesModTeranode bool) (parentUpdateOutcome, error) {
+// records on the strength of this classification: a marker write that silently
+// did not happen is exactly the referential-integrity break the markers exist to
+// prevent. A missing parent comes back as KEY_NOT_FOUND from the UPDATE_ONLY
+// policy and is benign: it is normally one the pruner itself already deleted.
+func classifyParentUpdateResult(batchRec *aerospike.BatchRecord) (parentUpdateOutcome, error) {
 	if batchRec.Err != nil {
 		if isKeyNotFound(batchRec.Err) {
 			return parentUpdateNotFound, nil
@@ -3798,99 +3409,7 @@ func classifyParentUpdateResult(batchRec *aerospike.BatchRecord, usesModTeranode
 		return parentUpdateFailed, errors.NewProcessingError("parent update got no answer for its record (result code %v)", batchRec.ResultCode)
 	}
 
-	if !usesModTeranode {
-		return parentUpdateOK, nil
-	}
-
-	if batchRec.Record == nil || batchRec.Record.Bins == nil {
-		return parentUpdateFailed, errors.NewProcessingError("parent update returned no record")
-	}
-
-	resp, ok := batchRec.Record.Bins[luaSuccessBin]
-	if !ok {
-		return parentUpdateFailed, errors.NewProcessingError("parent update returned no %q bin", luaSuccessBin)
-	}
-
-	// Most responses are OK, which needs only the status field; the error fields
-	// are read on the failure branches alone.
-	if status, _, _ := addDeletedChildrenField(resp, fieldStatus); status == statusOK {
-		return parentUpdateOK, nil
-	}
-
-	status, errCode, errMsg, ok := addDeletedChildrenStatus(resp)
-	if !ok {
-		return parentUpdateFailed, errors.NewProcessingError("unreadable parent update response (%T)", resp)
-	}
-
-	switch status {
-	case statusError:
-		if errCode == errorCodeTxNotFound {
-			return parentUpdateNotFound, nil
-		}
-
-		return parentUpdateFailed, errors.NewProcessingError("parent update returned ERROR (code=%q, message=%q)", errCode, errMsg)
-
-	default:
-		return parentUpdateFailed, errors.NewProcessingError("parent update returned unknown status %q", status)
-	}
-}
-
-// buildParentMapUpdateRecords builds UPDATE_ONLY marker writes with COMMIT_ALL.
-// The returned infos are index-aligned with the batch records so a per-record
-// failure can be traced back to the children it protects.
-func (s *Service) buildParentMapUpdateRecords(updates map[string]*parentUpdateInfo) ([]aerospike.BatchRecordIfc, []*parentUpdateInfo) {
-	batchWritePolicy := aerospike.NewBatchWritePolicy()
-	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-
-	mapPolicy := aerospike.DefaultMapPolicy()
-	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
-	infos := make([]*parentUpdateInfo, 0, len(updates))
-
-	for _, info := range updates {
-		items := make(map[interface{}]interface{}, len(info.childHashes))
-		for _, childHash := range info.childHashes {
-			items[childHash.String()] = true
-		}
-
-		op := aerospike.MapPutItemsOp(mapPolicy, s.fieldDeletedChildren, items)
-		batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, info.key, op))
-		infos = append(infos, info)
-	}
-
-	return batchRecords, infos
-}
-
-// executeBatchParentUpdatesBatchWrite is the fallback when Lua UDF is not configured.
-// Uses BatchWrite+MapPutItemsOp with UPDATE_ONLY policy. Missing records generate
-// KEY_NOT_FOUND in Aerospike client metrics but are handled gracefully.
-func (s *Service) executeBatchParentUpdatesBatchWrite(ctx context.Context, updates map[string]*parentUpdateInfo) (map[chainhash.Hash]struct{}, error) {
-	batchRecords, infos := s.buildParentMapUpdateRecords(updates)
-
-	select {
-	case <-ctx.Done():
-		s.logger.Infof("Context cancelled, skipping parent update batch")
-		return nil, ctx.Err()
-	default:
-	}
-
-	// No reportNativeOpError here: this is the plain MapPutItems fallback, whose
-	// records never travelled the native path, so its failures say nothing about
-	// native-op support.
-	if err := s.client.BatchOperate(s.batchPolicy, batchRecords); err != nil {
-		if isBatchTransportError(err) {
-			s.logger.Errorf("Batch parent update failed at the transport: %v", err)
-
-			return nil, errors.NewStorageError("batch parent update failed", err)
-		}
-
-		s.logger.Warnf("Batch parent update returned a server-side rejection, classifying per record: %v", err)
-	}
-
-	// usesModTeranode is false here: the plain MapPutItems path has no response
-	// map, so a nil per-record Err is the whole of its success signal.
-	tally := tallyParentUpdateResults(batchRecords, infos, false, nil)
-
-	return s.reportParentUpdateTally(tally, len(batchRecords)), nil
+	return parentUpdateOK, nil
 }
 
 // isPaginationRecord reports whether a scanned record is one of txHash's
@@ -3908,143 +3427,6 @@ func (s *Service) isPaginationRecord(record *aerospike.Record, txHash *chainhash
 	}
 
 	return !bytes.Equal(masterKey.Digest(), record.Key.Digest())
-}
-
-// executeBatchDeletions performs Phase 2b: removes child transaction records from Aerospike
-// after their parents have been updated (Phase 2a).
-//
-// IDEMPOTENCY: This operation is safely re-runnable:
-// - Already-deleted records (KEY_NOT_FOUND) are counted as success
-// - Multiple delete attempts on same record are harmless
-// - Partial batch failures can be retried without side effects
-//
-// Parents must be updated first (Phase 2a) before calling this function.
-//
-// It returns two sets of children, both of which must keep their external blob.
-//
-// survivors are the children whose master record definitely survived: nothing
-// was sent because the context was already done, or the server refused the
-// master record's delete. Their parent markers must be withdrawn by the caller.
-//
-// unanswered are the children whose master record's outcome is unknown: the
-// server never answered it (NO_RESPONSE, which the client reports with a nil
-// Err), or answered in doubt. Their markers are NOT withdrawn: withdrawing
-// them after a delete that did land would leave exactly the unmarked deletion
-// this package exists to prevent, so the marker stays and the next cycle,
-// which re-finds the child if it is still present, marks and deletes it again.
-// Their blobs stay because the record may still be there, and a record whose
-// blob is gone can never be read back or pruned.
-//
-// A failed pagination-record delete does not keep its child in either set: the
-// master is what the spend path and the next scan see. Every record whose
-// delete did not definitely succeed is counted in the returned error.
-//
-// A master's pages are deleted in a second batch, and only for the masters the
-// first batch definitely removed. One batch is not atomic across records, so
-// sending a master and its pages together let a refused master keep its record
-// while its pages went. The master's markers are then withdrawn, and a replay
-// rewrote the missing pages with unspent outputs while the master answered
-// ErrTxExists. Pages of a master whose delete went unanswered stay as well: if
-// the master did go, they are leftovers the next cycle deletes on their own.
-func (s *Service) executeBatchDeletions(ctx context.Context, deletions []*pendingDeletion) (survivors, unanswered map[chainhash.Hash]struct{}, err error) {
-	if len(deletions) == 0 {
-		return nil, nil, nil
-	}
-
-	keys := make([]*aerospike.Key, 0, len(deletions))
-	// masters maps the index of each child's master record in the batch to the
-	// child. keys[0] of a pendingDeletion is the master record, except for a
-	// pagination record scanned on its own, which has no master in the batch.
-	masters := make(map[int]*chainhash.Hash, len(deletions))
-
-	for _, deletion := range deletions {
-		if len(deletion.keys) == 0 {
-			continue
-		}
-
-		if !deletion.page {
-			masters[len(keys)] = deletion.txHash
-			keys = append(keys, deletion.keys[0])
-
-			continue
-		}
-
-		keys = append(keys, deletion.keys...)
-	}
-
-	if len(keys) == 0 {
-		return nil, nil, nil
-	}
-
-	batchRecords := buildDeletionBatchRecords(keys, s.utxoSetTTL, s.removalCommitLevel)
-
-	// Check context before expensive operation
-	select {
-	case <-ctx.Done():
-		s.logger.Infof("Context cancelled, skipping deletion batch")
-
-		survivors = make(map[chainhash.Hash]struct{}, len(masters))
-		for _, txHash := range masters {
-			survivors[*txHash] = struct{}{}
-		}
-
-		return survivors, nil, ctx.Err()
-	default:
-	}
-
-	// Execute batch. A whole-batch error still leaves the per-record results
-	// the server did answer, so the survivors are classified either way.
-	batchErr := s.client.BatchOperate(s.batchPolicy, batchRecords)
-	if batchErr != nil {
-		s.logger.Errorf("Batch deletion failed for %d records: %v", len(keys), batchErr)
-	}
-
-	results := classifyDeletionResults(batchRecords, masters)
-
-	if batchErr != nil {
-		return results.survivors, results.unanswered, errors.NewStorageError("batch deletion failed", batchErr)
-	}
-
-	pageKeys := make([]*aerospike.Key, 0)
-
-	for _, deletion := range deletions {
-		if deletion.page || len(deletion.keys) < 2 {
-			continue
-		}
-
-		if _, survived := results.survivors[*deletion.txHash]; survived {
-			continue
-		}
-
-		if _, unknown := results.unanswered[*deletion.txHash]; unknown {
-			continue
-		}
-
-		pageKeys = append(pageKeys, deletion.keys[1:]...)
-	}
-
-	if len(pageKeys) > 0 {
-		pageRecords := buildDeletionBatchRecords(pageKeys, s.utxoSetTTL, s.removalCommitLevel)
-
-		if pageErr := s.client.BatchOperate(s.batchPolicy, pageRecords); pageErr != nil {
-			s.logger.Errorf("Batch deletion of pagination records failed for %d records: %v", len(pageKeys), pageErr)
-
-			return results.survivors, results.unanswered, errors.NewStorageError("batch deletion of pagination records failed", pageErr)
-		}
-
-		results.failedRecords = append(results.failedRecords, classifyDeletionResults(pageRecords, nil).failedRecords...)
-	}
-
-	for _, rec := range results.failedRecords {
-		s.logger.Errorf("Deletion error for key %v: result code %v, err %v", rec.Key, rec.ResultCode, rec.Err)
-	}
-
-	// Return error if any individual record operations failed
-	if len(results.failedRecords) > 0 {
-		return results.survivors, results.unanswered, errors.NewStorageError("%d deletion operations failed", len(results.failedRecords))
-	}
-
-	return results.survivors, results.unanswered, nil
 }
 
 // deletionResults is what one deletion batch's per-record answers say.

@@ -2697,7 +2697,6 @@ func TestDeletedChildren(t *testing.T) {
 		Namespace:     store.GetNamespace(),
 		Set:           store.GetName(),
 		IndexWaiter:   &mockIndexWaiter{},
-		LuaPackage:    teranode_aerospike.LuaPackage,
 	}
 
 	cleanupService, err := pruner.NewService(tSettings, opts)

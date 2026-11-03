@@ -77,62 +77,6 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 	return msgpack.Marshal([]any{subOp, args})
 }
 
-// encodeAddDeletedChildrenPayload writes the addDeletedChildren native-op
-// payload directly. The bytes are identical to
-// encodeNativeOpPayload(subOpAddDeletedChildren, []any{hexHashes}), where
-// hexHashes holds each child's chainhash.Hash.String(): one argument, a list of
-// 64-character hex txids in display (byte-reversed) order. Writing them here
-// avoids the hex strings, the []any boxing and msgpack's reflection, which were
-// ~7% of the pruner's CPU at 2M deletes/s. TestEncodeAddDeletedChildrenPayload
-// pins the equality.
-func encodeAddDeletedChildrenPayload(children []*chainhash.Hash) []byte {
-	const hexDigits = "0123456789abcdef"
-
-	const hexLen = chainhash.HashSize * 2
-
-	// fixarray(2) + uint8(subOp) + fixarray(1) + array header (up to 5 bytes)
-	// + per child: str8 header (2 bytes) + 64 hex digits.
-	buf := make([]byte, 0, 1+2+1+5+len(children)*(2+hexLen))
-
-	buf = append(buf, 0x92, 0xcc, subOpAddDeletedChildren, 0x91)
-
-	switch n := len(children); {
-	case n < 16:
-		buf = append(buf, 0x90|byte(n))
-	case n <= 0xffff:
-		buf = append(buf, 0xdc, byte(n>>8), byte(n))
-	default:
-		buf = append(buf, 0xdd, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
-	}
-
-	for _, h := range children {
-		buf = append(buf, 0xd9, hexLen)
-
-		for i := chainhash.HashSize - 1; i >= 0; i-- {
-			buf = append(buf, hexDigits[h[i]>>4], hexDigits[h[i]&0x0f])
-		}
-	}
-
-	return buf
-}
-
-// prunerAddDeletedChildrenRecord builds the pruner's per-parent
-// addDeletedChildren record. On the native path it encodes the payload directly
-// with encodeAddDeletedChildrenPayload; on the UDF path it builds the same
-// single list-of-hex-strings argument teranodeBatchRecord would.
-func (s *Store) prunerAddDeletedChildrenRecord(policy *aerospike.BatchUDFPolicy, key *aerospike.Key, children []*chainhash.Hash) aerospike.BatchRecordIfc {
-	if s.useNativeForSubOp(subOpAddDeletedChildren) {
-		return s.nativeOpBatchWrite(policy, key, encodeAddDeletedChildrenPayload(children))
-	}
-
-	hexHashes := make([]interface{}, len(children))
-	for i, h := range children {
-		hexHashes[i] = h.String()
-	}
-
-	return s.teranodeBatchUDFRecord(policy, LuaPackage, key, "addDeletedChildren", []any{hexHashes})
-}
-
 // useNativeForSubOp decides whether a given mod-teranode sub-op may use the
 // native operate-path. It requires the setting+capability flag, and additionally
 // FENCES unspend (subOpUnspend) to the UDF/Lua path regardless of the flag.
