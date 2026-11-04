@@ -184,19 +184,18 @@ function decide(pr, now, cfgIn) {
     isDraft: Boolean(pr.isDraft),
   };
   const hasStale = pr.labels.includes(cfg.staleLabel);
+  const last = lastHumanActivity(pr, cfg);
+  const idleDays = last === null ? null : days(now - last);
+  const withIdle = { ...base, lastActivity: iso(last), idleDays };
 
   const exempt = exemptionReason(pr, cfg);
   if (exempt) {
     // A PR that became exempt after it was labelled (keep-open added, approved)
     // loses the label. Data errors leave everything as it is.
-    if (hasStale && !pr.error) return { ...base, action: 'unstale', reason: `exempt: ${exempt}` };
-    return { ...base, action: 'exempt', reason: exempt };
+    if (hasStale && !pr.error) return { ...withIdle, action: 'unstale', reason: `exempt: ${exempt}` };
+    return { ...withIdle, action: 'exempt', reason: exempt };
   }
-
-  const last = lastHumanActivity(pr, cfg);
-  if (last === null) return { ...base, action: 'exempt', reason: 'no human activity dates found' };
-  const idleDays = days(now - last);
-  const withIdle = { ...base, lastActivity: iso(last), idleDays };
+  if (last === null) return { ...withIdle, action: 'exempt', reason: 'no human activity dates found' };
 
   if (hasStale) {
     const labeledAt = staleLabeledAt(pr, cfg);
@@ -315,7 +314,7 @@ function renderSummary(result, opts) {
 
   const exempt = by('exempt');
   out.push(`### Exempt (${exempt.length})\n`);
-  out.push(table(['PR', 'Author', 'Reason'], exempt.map((d) => [prRef(d, repo), who(d), d.reason])));
+  out.push(table(['PR', 'Author', 'Idle days', 'Reason'], exempt.map((d) => [prRef(d, repo), who(d), d.idleDays, d.reason])));
 
   out.push(`### Active (${by('active').length})\n`);
   out.push(`Human activity within ${cfg.staleDays} days; nothing to do.\n`);
