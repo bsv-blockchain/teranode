@@ -349,6 +349,14 @@ func (p *spendPlan) claimMismatch(in *bt.Input, sp *utxo.Spend, satoshis int64, 
 // retry and stop block assembly, so a record with no hash is accepted, as is one naming the
 // new hash. Only a record that names a different hash is refused: that is the old owner's
 // identity, which a reassignment exists to retire.
+//
+// Known limit: accepting a record with no hash assumes the winner's spend was checked against
+// the UTXO's current hash_override, and a winner stored before the reassignment never was. W
+// loses P:0 to X; X is later marked conflicting, so P:0 is restored; the alert system then
+// freezes and reassigns P:0; a reorg makes W's block win. Conflict resolution builds W's records
+// from its plain body, with no hash, this accepts them, and W takes the reassigned UTXO, where
+// aerospike would fail W's spend on the hash. It needs a reorg across a confiscation, and a plain
+// body carries no output to check, so it is left as it is.
 func recordedClaimMismatch(sp *utxo.Spend, hashOverride []byte) error {
 	if len(hashOverride) == 0 {
 		return nil
