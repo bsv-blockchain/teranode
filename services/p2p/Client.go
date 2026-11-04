@@ -691,22 +691,47 @@ func (c *Client) IsPeerMalicious(ctx context.Context, peerID string) (bool, stri
 //   - peerID: The P2P peer identifier to check
 //
 // Returns:
-//   - bool: True if the peer is considered unhealthy
-//   - string: Reason why the peer is considered unhealthy (if applicable)
-//   - float32: The peer's current reputation score
-//   - bool: True if the peer is absent from the registry (no information, not a verdict)
+//   - PeerHealth: The verdict, with the cause to branch on
 //   - error: Any error encountered during the operation
-func (c *Client) IsPeerUnhealthy(ctx context.Context, peerID string) (bool, string, float32, bool, error) {
+func (c *Client) IsPeerUnhealthy(ctx context.Context, peerID string) (PeerHealth, error) {
 	req := &p2p_api.IsPeerUnhealthyRequest{
 		PeerId: peerID,
 	}
 
 	resp, err := c.client.IsPeerUnhealthy(ctx, req)
 	if err != nil {
-		return false, "", 0, false, err
+		return PeerHealth{}, err
 	}
 
-	return resp.IsUnhealthy, resp.Reason, resp.ReputationScore, resp.Unknown, nil
+	return PeerHealth{
+		Unhealthy:       resp.IsUnhealthy,
+		Reason:          resp.Reason,
+		Cause:           peerHealthCauseFromAPI(resp.Cause),
+		ReputationScore: resp.ReputationScore,
+		Unknown:         resp.Unknown,
+	}, nil
+}
+
+// peerHealthCauseFromAPI maps the wire cause to the native one. A value this
+// build does not know maps to PeerHealthCauseUnspecified, which permits no
+// exception to an unhealthy verdict.
+func peerHealthCauseFromAPI(cause p2p_api.PeerHealthCause) PeerHealthCause {
+	switch cause {
+	case p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_REPUTATION:
+		return PeerHealthCauseLowReputation
+	case p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_SUCCESS_RATE:
+		return PeerHealthCauseLowSuccessRate
+	case p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_MALICIOUS:
+		return PeerHealthCauseMalicious
+	case p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_BANNED:
+		return PeerHealthCauseBanned
+	case p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_UNKNOWN_PEER:
+		return PeerHealthCauseUnknownPeer
+	case p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_NOT_ASSESSABLE:
+		return PeerHealthCauseNotAssessable
+	default:
+		return PeerHealthCauseUnspecified
+	}
 }
 
 // GetPeerRegistry retrieves the comprehensive peer registry data from the P2P service.

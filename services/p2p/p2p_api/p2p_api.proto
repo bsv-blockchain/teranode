@@ -248,11 +248,24 @@ message AddBanScoreRequest {
     string peer_id = 1;
   }
 
+  // PeerHealthCause says why IsPeerUnhealthy judged a peer as it did. Callers
+  // branch on this, never on the free-text reason, which is for logs only.
+  enum PeerHealthCause {
+    PEER_HEALTH_CAUSE_UNSPECIFIED = 0;       // Not set: a healthy peer, or a server that predates this field
+    PEER_HEALTH_CAUSE_LOW_REPUTATION = 1;    // Reputation below the usable cut-off
+    PEER_HEALTH_CAUSE_LOW_SUCCESS_RATE = 2;  // More than 10 interactions, fewer than half successful
+    PEER_HEALTH_CAUSE_MALICIOUS = 3;         // Malicious behaviour recorded against the peer
+    PEER_HEALTH_CAUSE_BANNED = 4;            // The peer is banned
+    PEER_HEALTH_CAUSE_UNKNOWN_PEER = 5;      // The peer is absent from the registry
+    PEER_HEALTH_CAUSE_NOT_ASSESSABLE = 6;    // Empty or invalid peer ID, or no registry to ask
+  }
+
   message IsPeerUnhealthyResponse {
     bool is_unhealthy = 1;
-    string reason = 2;  // Optional reason why peer is considered unhealthy
+    string reason = 2;  // Optional reason why peer is considered unhealthy (human-readable, for logs)
     float reputation_score = 3;  // Current reputation score
     bool unknown = 4;  // True if the peer is absent from the registry (no information, not a verdict)
+    PeerHealthCause cause = 5;  // Why the peer was judged unhealthy; branch on this, not on reason
   }
 
   // Comprehensive peer information with all registry metadata

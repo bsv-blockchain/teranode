@@ -2832,9 +2832,10 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 	// Local-policy decline cooldown, keyed per (hash, peerID) (bitcoin-sv/teranode#4692). THIS PEER
 	// has spent its decline budget for this hash; the hash itself is not in cooldown, because the
 	// size that produced those declines is peer-declared — see excessiveBlockSizeDeclined for why
-	// that must never spend a per-hash budget. So this is a PEER-scoped skip, and it takes the same
-	// shape as the bad/malicious skip below: try the other peers first, and clear the shared caches
-	// only if none of them can serve the hash. Fail-open on an empty peerID, like every sibling cap.
+	// that must never spend a per-hash budget. So this is a PEER-scoped skip: try the other peers
+	// first, and clear the shared caches only if none of them can serve the hash. Unlike the health
+	// gate below, it never falls back to this peer, since the block it would serve is the one local
+	// policy declines. Fail-open on an empty peerID, like every sibling cap.
 	if u.policyDeclineAttemptsExhausted(c.block.Hash(), c.peerID) {
 		u.logger.Warnf("[catchup] Block %s from peer %s in cooldown after exhausting local-policy declines (cap %d); trying alternative peers", c.block.Hash().String(), c.peerID, u.settings.BlockValidation.MaxCorruptAttemptsPerBlock)
 
@@ -2856,12 +2857,14 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		return
 	}
 
-	// Check if peer is bad or malicious before attempting catchup
-	bad, badReason := u.isPeerBad(c.peerID)
-	malicious := u.isPeerMalicious(ctx, c.peerID)
+	// Check if peer is bad or malicious before attempting catchup. The health verdict comes
+	// straight from the registry and names a malicious or banned peer itself, so isPeerMalicious
+	// (served from a short-lived cache) is asked only when the verdict does not already say so.
+	bad, badCause := u.isPeerBad(c.peerID)
+	malicious := isMaliciousHealthCause(badCause) || u.isPeerMalicious(ctx, c.peerID)
 
 	if bad || malicious {
-		reason := classifyPeerRefusalReason(badReason, malicious)
+		reason := classifyPeerRefusalReason(badCause, malicious)
 		prometheusCatchupPeerHealthGate.WithLabelValues(reason).Inc()
 		u.logger.Warnf("[catchup][%s] peer %s (%s) refused as catchup source (%s), trying alternative peers", c.block.Hash().String(), c.peerID, c.baseURL, reason)
 
@@ -2889,9 +2892,11 @@ func (u *Server) processCatchupChItem(ctx context.Context, c processBlockCatchup
 		// below), so this only stops the primary being the one peer held to a
 		// stricter standard. Falling through, rather than a separate path,
 		// keeps a failure charged to the peer and counted toward
-		// CatchupMaxAttemptsPerBlock. Any other refusal (malicious, banned, or
-		// a peer the registry could not assess) keeps the old refuse-and-clear.
-		if reason != "low_reputation" && reason != "low_success_rate" {
+		// CatchupMaxAttemptsPerBlock. Any other refusal (malicious, banned, a
+		// peer the registry could not assess, or a cause this build does not
+		// know) keeps the old refuse-and-clear. The decision is on the typed
+		// cause, never on the reason text.
+		if !refusalAllowsFallback(badCause, malicious) {
 			u.logger.Warnf("[catchup] All alternative peers failed for block %s, clearing processing marker for retry", blockHash.String())
 			u.processBlockNotify.Delete(*blockHash)
 			u.catchupAlternatives.Delete(*blockHash)

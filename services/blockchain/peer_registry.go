@@ -28,20 +28,27 @@ const maxPeerNameLength = 128
 // (maxReportedChainWorkBytes) aliases this value.
 const MaxValidatedChainWorkBytes = 128
 
-// MinUsablePeerReputation is the single reputation cut-off for using a peer as a
-// data source. A peer scoring at or above it is eligible as a sync peer, for peer
-// selection, and as a block-validation catchup source (the p2p IsPeerUnhealthy
-// check); a peer scoring below it is excluded from all of them, and is exactly the
-// set ReconsiderBadPeers recovers. Every gate must use this value: when the
-// catchup gate sat at 40 while recovery only reached peers below 20, a peer with
-// one historical failure and no success since settled at 20.0 (see
-// calculateAndUpdateReputation) and stayed refused as a catchup source forever,
-// stalling a node whose only peer ahead it was.
+// MinUsablePeerReputation is the reputation cut-off for using a peer as a data
+// source. A peer scoring below it is not picked as the sync peer or by peer
+// selection, the p2p service ignores its node-status, subtree and rejected-tx
+// gossip, and the p2p IsPeerUnhealthy check reports it as low reputation.
+// Block-validation catchup then tries other peers first, but still falls back
+// to it when none of them can serve the block and it is neither malicious nor
+// banned. Catchup alternatives (GetPeersForCatchup) are listed regardless of
+// reputation. ReconsiderBadPeers only considers peers below this value, and
+// recovers one only once it has a recorded failure older than the cooldown,
+// with the cooldown tripled for each earlier recovery.
+//
+// Every check that compares a reputation against a usable cut-off must use this
+// value. When the catchup check sat at 40 and recovery only reached peers below
+// 20, a peer with one old failure and no success since settled at 20.0 (see
+// calculateAndUpdateReputation). That peer was out of recovery's reach and stayed
+// refused as a catchup source, stalling a node whose only peer ahead it was.
 const MinUsablePeerReputation = 20.0
 
 // reconsideredPeerReputation is the score ReconsiderBadPeers gives a recovered
 // peer. It must be at or above MinUsablePeerReputation, or recovery hands back a
-// peer that every gate still refuses.
+// peer that every reputation check still refuses.
 const reconsideredPeerReputation = 30.0
 
 // sanitizeClientName scrubs an untrusted peer-supplied client name string.

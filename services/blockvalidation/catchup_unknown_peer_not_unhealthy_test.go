@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -24,11 +25,12 @@ type unhealthyStubP2PClient struct {
 	subtreeAttributionP2PClient
 	isUnhealthy bool
 	reason      string
+	cause       p2p.PeerHealthCause
 	unknown     bool
 }
 
-func (u *unhealthyStubP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (bool, string, float32, bool, error) {
-	return u.isUnhealthy, u.reason, 0, u.unknown, nil
+func (u *unhealthyStubP2PClient) IsPeerUnhealthy(_ context.Context, _ string) (p2p.PeerHealth, error) {
+	return p2p.PeerHealth{Unhealthy: u.isUnhealthy, Reason: u.reason, Cause: u.cause, Unknown: u.unknown}, nil
 }
 
 // TestIsPeerBad_UnknownPeerFailsOpen pins the fix: a peer absent from the registry (unknown=true)
@@ -38,36 +40,36 @@ func TestIsPeerBad_UnknownPeerFailsOpen(t *testing.T) {
 	initPrometheusMetrics()
 
 	t.Run("unknown peer: not bad, gate counter fires with reason unknown", func(t *testing.T) {
-		stub := &unhealthyStubP2PClient{isUnhealthy: true, reason: "unknown peer", unknown: true}
+		stub := &unhealthyStubP2PClient{isUnhealthy: true, reason: "unknown peer", cause: p2p.PeerHealthCauseUnknownPeer, unknown: true}
 		u := &Server{logger: ulogger.TestLogger{}, p2pClient: stub}
 
 		before := testutil.ToFloat64(prometheusCatchupPeerHealthGate.WithLabelValues("unknown"))
 
-		bad, reason := u.isPeerBad("some-peer")
+		bad, cause := u.isPeerBad("some-peer")
 
 		require.False(t, bad, "a peer merely unknown to the registry must fail open, not be refused")
-		require.Equal(t, "", reason)
+		require.Equal(t, p2p.PeerHealthCauseUnspecified, cause)
 		require.Equal(t, before+1, testutil.ToFloat64(prometheusCatchupPeerHealthGate.WithLabelValues("unknown")), "the unknown path must be observable even though it does not refuse the peer")
 	})
 
 	t.Run("genuinely unhealthy peer (low reputation): still refused", func(t *testing.T) {
-		stub := &unhealthyStubP2PClient{isUnhealthy: true, reason: "low reputation score: 12.34", unknown: false}
+		stub := &unhealthyStubP2PClient{isUnhealthy: true, reason: "low reputation score: 12.34", cause: p2p.PeerHealthCauseLowReputation, unknown: false}
 		u := &Server{logger: ulogger.TestLogger{}, p2pClient: stub}
 
-		bad, reason := u.isPeerBad("some-peer")
+		bad, cause := u.isPeerBad("some-peer")
 
 		require.True(t, bad, "a peer the registry reports unhealthy must still be refused; the unknown-peer fix must not disable the real check")
-		require.Equal(t, "low reputation score: 12.34", reason)
+		require.Equal(t, p2p.PeerHealthCauseLowReputation, cause)
 	})
 
 	t.Run("healthy peer: not bad", func(t *testing.T) {
 		stub := &unhealthyStubP2PClient{isUnhealthy: false, unknown: false}
 		u := &Server{logger: ulogger.TestLogger{}, p2pClient: stub}
 
-		bad, reason := u.isPeerBad("some-peer")
+		bad, cause := u.isPeerBad("some-peer")
 
 		require.False(t, bad)
-		require.Equal(t, "", reason)
+		require.Equal(t, p2p.PeerHealthCauseUnspecified, cause)
 	})
 }
 
@@ -93,7 +95,7 @@ func TestProcessCatchupChItem_UnknownPeerIsNotRefusedAsCatchupSource(t *testing.
 
 	// unknown=true, IsUnhealthy=true: exactly what the p2p server returns today for a peer absent
 	// from the registry (services/p2p/handle_catchup_metrics.go's not-found branch).
-	p2pStub := &unhealthyStubP2PClient{isUnhealthy: true, reason: "unknown peer", unknown: true}
+	p2pStub := &unhealthyStubP2PClient{isUnhealthy: true, reason: "unknown peer", cause: p2p.PeerHealthCauseUnknownPeer, unknown: true}
 
 	prev := chainhash.HashH([]byte("unknown-peer-not-refused-prev"))
 	mr := chainhash.HashH([]byte("unknown-peer-not-refused-merkle"))
