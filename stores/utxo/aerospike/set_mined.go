@@ -706,14 +706,14 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 			continue
 		}
 
-		items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.Creating}})
+		items = append(items, &utxo.UnresolvedMetaData{Hash: *h, Idx: i, Fields: []fields.FieldName{fields.Creating, fields.RollingBack}})
 	}
 
 	if len(items) == 0 {
 		return nil
 	}
 
-	if err := s.BatchDecorate(ctx, items, fields.Creating); err != nil {
+	if err := s.BatchDecorate(ctx, items, fields.Creating, fields.RollingBack); err != nil {
 		return errors.NewProcessingError("[setMined] create-first pre-flight: batch read of creating flag failed", err)
 	}
 
@@ -731,7 +731,7 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 		}
 
 		// Mid-flight record: fetch the tx bytes and roll it forward (re-spend + finalize).
-		md, err := s.Get(ctx, &item.Hash, fields.Tx, fields.Creating)
+		md, err := s.Get(ctx, &item.Hash, fields.Tx, fields.Creating, fields.RollingBack)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxNotFound) {
 				continue
@@ -744,10 +744,16 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 			continue // finalized between the batch read and this get
 		}
 
+		if md.RollingBack {
+			// Its owner is undoing it and will delete it, so it must not be completed or mined
+			// against. Fail closed: the block is retried once the rollback completes.
+			return errors.NewProcessingError("[setMined] create-first pre-flight: tx %s is rolling back", item.Hash.String())
+		}
+
 		// WithIgnoreLocked: a mined tx's parents may still be locked (e.g. their own
 		// create-first tentative lock); the roll-forward completes an already-committed
 		// spend, so a locked parent must not fail-close setMined for the whole block.
-		if _, err := utxo.RollForwardCreating(ctx, s, md.Tx, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
+		if _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
 			return errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", item.Hash.String(), err)
 		}
 	}

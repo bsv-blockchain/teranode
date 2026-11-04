@@ -95,7 +95,7 @@ func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash
 	return nil
 }
 
-func (m *MockUTXOStore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (m *MockUTXOStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	return false, nil
 }
 

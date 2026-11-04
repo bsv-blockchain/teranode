@@ -395,12 +395,17 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
 
 ### Recovery paths (roll-forward everywhere)
 
-- **Retry** — a re-encounter hits `ErrTxExists` on a still-`creating` record; the pruner
-  sweeper rolls it forward.
+- **Retry** — a re-encounter hits `ErrTxExists` on a still-`creating` record; the
+  create-first `SpendAndCreate` rolls it forward in the same call (re-spend under the
+  caller's ignore flags, then finalize) and returns an `ErrTxExists` for which
+  `utxo.IsRolledForward` is true, so the validator hands the transaction to block assembly.
+  A record that is rolling back is refused with a transient error until its owner, or the
+  sweep, has deleted it.
 - **Pruner sweeper** — `QueryStaleCreatingTxs` (secondary index on `unminedSince` +
   `creating` filter) finds abandoned creating records older than
-  `pruner_creatingTxSweepMinAgeBlocks`; the sweeper re-spends (`SpendAndCreate(WithSpendOnly)`)
-  and finalizes them, or marks double-spent losers conflicting and finalizes them.
+  `pruner_creatingTxSweepMinAgeBlocks`; the sweeper re-spends (`SpendAndCreate(WithSpendOnly)`,
+  without ignoring locks) and finalizes them, rolls back and deletes a loser whose input
+  belongs to another transaction, and finishes a rollback a crashed owner left marked.
 - **setMined** — a pre-flight in `SetMinedMulti` rolls a still-creating record forward
   (re-spend, then finalize) before the mined write. The write paths no longer clear the
   `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
@@ -409,6 +414,19 @@ reorg/conflict helpers) are single-phase and bypass the create-first ordering.
   is not verifiable from this repository.
 
 The healers (setMined pre-flight and pruner sweep) are not gated on the flag.
+
+### Rollback of a failed create-first spend
+
+A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`:
+`BeginCreateFirstRollback` sets the `rollingBack` bin on the master with a filter on the
+`creating` bin, the spends that succeeded are unspent, then `DeleteComplete` removes the
+record. While the marker is set, `FinalizeTransaction` (single and multi-record) refuses
+the record with `ErrTxNotFound`, so a concurrent roll-forward cannot complete it; the
+roll-forward then unspends the spends it made. The Lua spend gate still reads `creating`,
+so a rolling-back record's outputs stay unspendable. A spend whose batch may still be in
+flight (a context error, or the `utxostore_spendWaitTimeout` ServiceUnavailable) is not
+rolled back: the record stays creating for the sweep. The fresh create-first spend sets
+`RequireParentOutputs`, because the record the blessed-probe would find is its own.
 
 ### Sweep visibility of mined creating records
 

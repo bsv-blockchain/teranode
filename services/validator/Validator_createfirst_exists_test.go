@@ -19,14 +19,17 @@ import (
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 // creatingExistsShim wraps a real store to script the exists-in-creating-state scenario: the combined
 // create-first SpendAndCreate fails the first attempt with TX_LOCKED (so the retry loop
 // re-enters) and returns ErrTxExists on the retry, while GetMeta reports the record as
-// still Creating. The roll-forward's spend-only SpendAndCreate returns either a complete
-// or an incomplete spend set depending on rollForwardComplete.
+// still Creating. The store rolls a creating duplicate forward inside SpendAndCreate, so
+// the retry returns ErrTxExists marked utxo.MarkRolledForward with the spends when
+// rollForwardComplete is set, and an unmarked ErrTxExists (the store did not complete the
+// record) otherwise.
 type creatingExistsShim struct {
 	utxostore.Store
 
@@ -43,28 +46,12 @@ type creatingExistsShim struct {
 	finalizeCalls      int
 	setLockedCalls     int
 	setLockedValue     bool
+	deleteCalls        int
+	unspendCalls       int
 }
 
 func (s *creatingExistsShim) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
 	o, _ := utxostore.ParseCreateOptions(opts...)
-
-	if o.SpendOnly {
-		// The ErrTxExists roll-forward re-spend.
-		s.rollForwardCalls++
-		s.rollForwardFlags = o.IgnoreFlags
-		s.rollForwardSkipExt = o.SkipExtendedInputs
-
-		if s.rollForwardComplete {
-			spent := make([]*utxostore.Spend, len(tx.Inputs))
-			for i := range spent {
-				spent[i] = &utxostore.Spend{}
-			}
-
-			return nil, spent, nil
-		}
-
-		return nil, nil, nil // incomplete: no per-input spends → RollForwardCreating fails closed
-	}
 
 	// Combined create-first path: attempt 0 is TX_LOCKED (drives the retry loop), attempt 1
 	// finds the tentative record already present.
@@ -73,7 +60,35 @@ func (s *creatingExistsShim) SpendAndCreate(ctx context.Context, tx *bt.Tx, bloc
 		return nil, nil, errors.NewTxLockedError("tx locked on first attempt")
 	}
 
-	return nil, nil, errors.NewTxExistsError("tx exists in creating state")
+	if s.notCreating {
+		return nil, nil, errors.NewTxExistsError("tx exists")
+	}
+
+	if !s.rollForwardComplete {
+		return nil, nil, errors.NewTxExistsError("tx exists in creating state")
+	}
+
+	// The store's roll-forward ran inside this call, under the caller's flags.
+	s.rollForwardCalls++
+	s.rollForwardFlags = o.IgnoreFlags
+	s.rollForwardSkipExt = o.SkipExtendedInputs
+
+	spent := make([]*utxostore.Spend, len(tx.Inputs))
+	for i := range spent {
+		spent[i] = &utxostore.Spend{}
+	}
+
+	return nil, spent, utxostore.MarkRolledForward(errors.NewTxExistsError("tx exists in creating state"))
+}
+
+func (s *creatingExistsShim) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	s.deleteCalls++
+	return s.Store.DeleteComplete(ctx, hash)
+}
+
+func (s *creatingExistsShim) Unspend(ctx context.Context, spends []*utxostore.Spend, flagAsLocked ...bool) error {
+	s.unspendCalls++
+	return s.Store.Unspend(ctx, spends, flagAsLocked...)
 }
 
 func (s *creatingExistsShim) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
@@ -188,15 +203,16 @@ func creatingExistsOpts() *Options {
 func TestValidate_CreateFirst_ErrTxExistsCreating(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("incomplete roll-forward is not treated as validated", func(t *testing.T) {
+	t.Run("creating record the store did not roll forward is not treated as validated", func(t *testing.T) {
 		v, childTx, shim := newCreatingExistsValidator(t, "creating_exists_incomplete", false)
 
 		_, err := v.ValidateWithOptions(ctx, childTx, 500, creatingExistsOpts())
 
 		require.Error(t, err, "a creating record whose roll-forward re-spend is incomplete must not validate")
 		require.Equal(t, 2, shim.combinedCalls, "attempt 0 (TX_LOCKED) then attempt 1 (ErrTxExists) must both run")
-		require.Equal(t, 1, shim.rollForwardCalls, "the ErrTxExists branch must attempt a roll-forward re-spend")
-		require.Equal(t, 0, shim.finalizeCalls, "an incomplete roll-forward must not finalize")
+		require.Equal(t, 0, shim.rollForwardCalls, "the store reported no roll-forward")
+		require.Equal(t, 0, shim.finalizeCalls, "an unrolled creating record must not be finalized")
+		require.Equal(t, 0, shim.deleteCalls, "a record this attempt did not create is not deleted")
 	})
 
 	t.Run("complete roll-forward finalizes and validates", func(t *testing.T) {
@@ -209,7 +225,6 @@ func TestValidate_CreateFirst_ErrTxExistsCreating(t *testing.T) {
 		require.False(t, md.Creating, "the returned meta must be finalized once rolled forward")
 		require.False(t, md.Locked, "the returned meta must be unlocked once rolled forward")
 		require.Equal(t, 1, shim.rollForwardCalls)
-		require.Equal(t, 1, shim.finalizeCalls, "a complete roll-forward must finalize")
 		require.Equal(t, 0, shim.setLockedCalls, "the roll-forward leaves the lock to the block-assembly hand-off")
 	})
 }
@@ -217,9 +232,14 @@ func TestValidate_CreateFirst_ErrTxExistsCreating(t *testing.T) {
 type eventBlockAssembly struct {
 	events *[]string
 	stored []chainhash.Hash
+	err    error
 }
 
 func (b *eventBlockAssembly) Store(_ context.Context, hash *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
+	if b.err != nil {
+		return false, b.err
+	}
+
 	b.stored = append(b.stored, *hash)
 	*b.events = append(*b.events, "store")
 
@@ -262,7 +282,7 @@ func TestValidate_CreateFirst_RollForwardIgnoreFlags(t *testing.T) {
 			_, err := v.ValidateWithOptions(ctx, childTx, 500, opts)
 			require.NoError(t, err)
 			require.Equal(t, 1, shim.rollForwardCalls)
-			require.Equal(t, tc.ignoreLocked, shim.rollForwardFlags.IgnoreLocked, "the roll-forward must carry the caller's IgnoreLocked")
+			require.Equal(t, tc.ignoreLocked, shim.rollForwardFlags.IgnoreLocked, "the store's SpendAndCreate options must carry the caller's IgnoreLocked")
 			require.Equal(t, tc.outpointOnly, shim.rollForwardFlags.SkipUTXOHashCheck, "the roll-forward must skip the hash check only on the outpoint-only path")
 			require.Equal(t, tc.outpointOnly, shim.rollForwardSkipExt, "the roll-forward must skip extended inputs only on the outpoint-only path")
 		})
@@ -331,7 +351,7 @@ func TestValidate_CreateFirst_RollForwardHandoff(t *testing.T) {
 		_, err := v.ValidateWithOptions(ctx, childTx, 500, creatingExistsOpts())
 
 		require.Error(t, err)
-		require.Empty(t, ba.stored)
+		require.Empty(t, ba.stored, "a creating record the store did not complete must not reach block assembly")
 		require.Empty(t, *shim.events)
 	})
 
@@ -349,4 +369,30 @@ func TestValidate_CreateFirst_RollForwardHandoff(t *testing.T) {
 		require.Equal(t, 0, shim.rollForwardCalls)
 		require.True(t, md.Locked)
 	})
+}
+
+// TestValidate_CreateFirst_RolledForwardShedIsNotUnwound: a record this attempt only rolled
+// forward was created by another attempt, so a queue-full shed of its hand-off must leave it
+// as it is (finalized, locked) for the unmined reload. Deleting it or unspending its inputs
+// would undo another attempt's work.
+func TestValidate_CreateFirst_RolledForwardShedIsNotUnwound(t *testing.T) {
+	ctx := context.Background()
+
+	v, childTx, shim := newCreatingExistsValidator(t, "creating_exists_shed", true)
+	shim.locked = true
+	ba := withEventBlockAssembly(v, shim)
+	ba.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	keptBefore := testutil.ToFloat64(prometheusValidatorShedRolledForwardKept)
+	unwindsBefore := testutil.ToFloat64(prometheusValidatorShedUnwindTotal)
+
+	_, err := v.ValidateWithOptions(ctx, childTx, 500, creatingExistsOpts())
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the caller still sees the shed")
+	require.Equal(t, 0, shim.deleteCalls, "a rolled-forward record must not be deleted by the shed")
+	require.Equal(t, 0, shim.unspendCalls, "a rolled-forward record's inputs must not be unspent by the shed")
+	require.Equal(t, 0, shim.setLockedCalls, "the record stays locked for the unmined reload")
+	require.Equal(t, keptBefore+1, testutil.ToFloat64(prometheusValidatorShedRolledForwardKept))
+	require.Equal(t, unwindsBefore, testutil.ToFloat64(prometheusValidatorShedUnwindTotal), "no unwind is attempted")
 }

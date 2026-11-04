@@ -1137,6 +1137,12 @@ NEXT_BATCH_RECORD:
 					items[idx].Data.Creating = creatingBool
 				}
 
+			case fields.RollingBack:
+				rollingBackBool, ok := bins[key.String()].(bool)
+				if ok {
+					items[idx].Data.RollingBack = rollingBackBool
+				}
+
 			case fields.ConflictingChildren:
 				res, err := processConflictingChildren(bins)
 				if err != nil {

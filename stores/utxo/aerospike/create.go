@@ -1134,9 +1134,10 @@ func classifyCreateBatchResults(batchRecords []aerospike.BatchRecordIfc) (master
 // 5. BLOCK ASSEMBLY: Notification is about existence, not spendability
 //
 // RECOVERY SCENARIOS:
-// - Retry attempts complete Phase 2 via the "master already exists" recovery path below
-// - Auto-recovery triggers when transaction is re-encountered (processTxMetaUsingStore.go:112-122)
-// - The setMined pre-flight and the pruner sweep roll a creating record forward (re-spend, then finalize)
+//   - Retry attempts complete Phase 2 via the "master already exists" recovery path below
+//   - Auto-recovery triggers when transaction is re-encountered (processTxMetaUsingStore.go:112-122)
+//   - The setMined pre-flight and the pruner sweep roll a creating record forward (re-spend, then finalize); the sweep rolls back
+//     a record whose spends cannot be completed (utxo.RollBackCreating: mark rolling back, unspend, delete)
 func (s *Store) storeExternallyWithLock(
 	ctx context.Context,
 	bItem *BatchStoreItem,
@@ -1288,8 +1289,8 @@ func (s *Store) storeExternallyWithLock(
 		//    a) When transaction is re-encountered (propagation/subtree), subtreevalidation checks
 		//       the Creating flag (processTxMetaUsingStore.go:112-122) and triggers re-processing
 		//    b) When setMined is called, its pre-flight rolls a creating record forward (re-spend,
-		//       then finalize), and the pruner sweep does the same; both run regardless of
-		//       UseCreateFirstOrder
+		//       then finalize), and the pruner sweep does the same, or rolls back a record whose
+		//       spends cannot be completed; both run regardless of UseCreateFirstOrder
 		//    c) Retry attempts from other sources will complete Phase 2 via "All exist" path (line 890)
 		//
 		// 4. RETURNING ERROR CREATES WORSE PROBLEMS:
@@ -1454,12 +1455,24 @@ func (s *Store) ensureCreatingBin(bins []*aerospike.Bin, creating bool) []*aeros
 
 // clearCreatingFlag removes the creating flag from all records for a transaction
 // This is called after all records have been successfully created to allow UTXO spending
-// Uses expression filtering to only clear the bin on records that have it set
+// Uses expression filtering to only clear the bin on records that have it set and are not
+// rolling back.
+//
+// The master is read first: a rolling-back master returns ErrTxNotFound without touching the
+// children, so a refused finalize leaves them as they were. The master write then carries the
+// same filter, and a filtered-out master write is read back (finalizeFilteredOutResult). A
+// marker set between the child pass and the master write is a window this function does not
+// close: the children are then cleared while the master stays creating and rolling back, and
+// the rollback owner deletes the record with its children.
 func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	// Expression filter: only update records where creating bin exists
-	filterExp := aerospike.ExpBinExists(fields.Creating.String())
+	// Expression filter: only update records where creating bin exists and the record is not rolling back
+	filterExp := finalizeFilter()
+
+	if err := s.refuseRollingBackMaster(txHash); err != nil {
+		return err
+	}
 
 	// Separate master record (index 0) from children (indices 1+)
 	// Children will be cleared first, then master last
@@ -1530,13 +1543,35 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 
 		if masterWrite.BatchRec().Err != nil {
 			aErr, ok := masterWrite.BatchRec().Err.(*aerospike.AerospikeError)
-			// FILTERED_OUT is success - bin didn't exist, nothing to clear
+			// FILTERED_OUT is success when the bin didn't exist, nothing to clear; a rolling
+			// back master is refused
 			if ok && aErr.ResultCode == types.FILTERED_OUT {
-				return nil
+				return s.finalizeFilteredOutResult(txHash)
 			}
 			s.logger.Errorf("[clearCreatingFlag] Failed to clear creating flag for master record for tx %s: %v", txHash, masterWrite.BatchRec().Err)
 			return errors.NewProcessingError("failed to unlock master record for tx %s", txHash)
 		}
+	}
+
+	return nil
+}
+
+// refuseRollingBackMaster returns ErrTxNotFound when the master record of txHash is rolling
+// back, before any child is touched. Any other state, including an unreadable master, passes:
+// the writes that follow carry their own filter.
+func (s *Store) refuseRollingBackMaster(txHash *chainhash.Hash) error {
+	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if err != nil {
+		return err
+	}
+
+	state, getErr := s.readCreatingState(key)
+	if getErr != nil {
+		return nil
+	}
+
+	if state.rollingBack {
+		return errors.NewTxNotFoundError("[clearCreatingFlag] tx %s is rolling back", txHash.String())
 	}
 
 	return nil

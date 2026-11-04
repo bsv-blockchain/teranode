@@ -44,6 +44,8 @@ const (
 	Locked FieldName = "locked"
 	// Creating indicates the transaction is in the process of being created (multi-record 2-phase commit)
 	Creating FieldName = "creating"
+	// RollingBack marks a creating record whose create-first transition is being undone; nothing may finalize it
+	RollingBack FieldName = "rollingBack"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
 	// SpendingHeight is the block height at which the UTXO was spent
