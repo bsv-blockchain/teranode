@@ -429,7 +429,7 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 	var postErr error
 
 	if len(extraRecords) > 0 {
-		if err := s.IncrementSpentRecordsMulti(extraRecords, 1, minedBlockInfo.BlockHeight); err != nil {
+		if err := s.IncrementSpentRecordsMulti(ctx, extraRecords, 1, minedBlockInfo.BlockHeight); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}

@@ -140,7 +140,8 @@ func (b *batchSpend) complete(err error) {
 
 // IncrementSpentRecordsMulti performs a single BatchOperate to increment spent-extra-records for many txids.
 // This avoids enqueueing each increment through the batcher and waiting per-item.
-func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment int, blockHeight uint32) error {
+// A DAHSET or DAHUNSET signal in a response is propagated to the record's child pages.
+func (s *Store) IncrementSpentRecordsMulti(ctx context.Context, txids []*chainhash.Hash, increment int, blockHeight uint32) error {
 	if len(txids) == 0 {
 		return nil
 	}
@@ -205,6 +206,19 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 
 		if parsed.Status != LuaStatusOK {
 			aggErr = errors.Join(aggErr, errors.NewProcessingError("[IncrementSpentRecordsMulti][%s] incrementSpentExtraRecs returned %s: %s", describeChainHash(txids[i]), parsed.Status, parsed.Message))
+			continue
+		}
+
+		switch parsed.Signal {
+		case LuaSignalDAHSet:
+			if sigErr := s.handleDAHSetSignal(ctx, txids[i], parsed, blockHeight); sigErr != nil {
+				aggErr = errors.Join(aggErr, sigErr)
+			}
+
+		case LuaSignalDAHUnset:
+			if sigErr := s.SetDAHForChildRecords(txids[i], parsed.ChildCount, 0); sigErr != nil {
+				aggErr = errors.Join(aggErr, sigErr)
+			}
 		}
 	}
 
@@ -1569,8 +1583,9 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 // handleDAHSetSignal applies a DAH_SET signal from incrementSpentExtraRecs:
 // verify the children really are all spent (the spentExtraRecs counter can
 // drift after interrupted rollbacks), clear the drifted master DAH when they
-// are not, and otherwise propagate the DAH to the child records. Extracted
-// verbatim from handleExtraRecords.
+// are not, and otherwise propagate the DAH to the child records. A conflicting
+// master is prunable whatever its spent state, so a signal reported as
+// conflicting skips the verification and only stamps the children.
 func (s *Store) handleDAHSetSignal(ctx context.Context, txID *chainhash.Hash, res *LuaMapResponse, blockHeight uint32) error {
 	childCount := res.ChildCount
 
@@ -1584,7 +1599,7 @@ func (s *Store) handleDAHSetSignal(ctx context.Context, txID *chainhash.Hash, re
 	// Sanity check: verify all children are actually spent before
 	// setting DAH. The spentExtraRecs counter can drift due to
 	// interrupted rollbacks, so we don't trust it blindly.
-	if childCount > 0 {
+	if childCount > 0 && !res.Conflicting {
 		allSpent, verifyErr := s.verifyAllChildrenSpent(ctx, txID, childCount)
 		if verifyErr != nil {
 			s.logger.Errorf("[handleExtraRecords][%s] failed to verify children: %v", txID.String(), verifyErr)

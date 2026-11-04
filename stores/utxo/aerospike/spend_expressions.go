@@ -498,7 +498,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 	var postErr error
 
 	for bh, txids := range extraRecordsByHeight {
-		if err := s.IncrementSpentRecordsMulti(txids, 1, bh); err != nil {
+		if err := s.IncrementSpentRecordsMulti(ctx, txids, 1, bh); err != nil {
 			postErr = errors.Join(postErr, err)
 		}
 	}

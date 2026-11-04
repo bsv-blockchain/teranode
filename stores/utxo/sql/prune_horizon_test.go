@@ -140,7 +140,8 @@ func TestPruneHorizon_ConflictingThenMinedDoesNotKeepEarlierStamp(t *testing.T) 
 
 	const (
 		flagHeight uint32 = 1000
-		mineHeight uint32 = 1500
+		forkHeight uint32 = 1500
+		mineHeight uint32 = 1200
 	)
 
 	tx := tests.Tx
@@ -149,6 +150,16 @@ func TestPruneHorizon_ConflictingThenMinedDoesNotKeepEarlierStamp(t *testing.T) 
 	require.NoError(t, store.SetBlockHeight(flagHeight))
 
 	_, _, err := store.SpendAndCreate(ctx, tx, flagHeight, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	// The tx is placed on a fork at the high height first, so the floor is 1500 +
+	// retention. Only the floor can then lift the stamp of the lower longest-chain block.
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{txHash}, utxostore.MinedBlockInfo{
+		BlockID:        150,
+		BlockHeight:    forkHeight,
+		SubtreeIdx:     0,
+		OnLongestChain: false,
+	})
 	require.NoError(t, err)
 
 	// Precondition: conflicting, stamped for deletion at flag_height + retention.
@@ -180,12 +191,12 @@ func TestPruneHorizon_ConflictingThenMinedDoesNotKeepEarlierStamp(t *testing.T) 
 
 	require.NoError(t, store.db.QueryRowContext(ctx,
 		`SELECT delete_at_height FROM transactions WHERE hash = $1`, txHash[:]).Scan(&stamped))
-	require.GreaterOrEqual(t, stamped, int64(mineHeight+retention),
-		"SetMinedMulti must bump the stale flag-height stamp forward to at least mined_height + retention")
+	require.GreaterOrEqual(t, stamped, int64(forkHeight+retention),
+		"SetMinedMulti must bump the stale flag-height stamp forward to at least highest block height + retention")
 
-	// One block before the horizon measured from the MINED height. If the stale
+	// One block before the horizon measured from the highest block. If the stale
 	// flag-height stamp had survived, the tx would already be gone here.
-	tip := mineHeight + retention - 1
+	tip := forkHeight + retention - 1
 	require.NoError(t, store.SetBlockHeight(tip))
 
 	_, err = prunerSvc.Prune(ctx, tip, "<horizon-conflicting>")
@@ -195,7 +206,63 @@ func TestPruneHorizon_ConflictingThenMinedDoesNotKeepEarlierStamp(t *testing.T) 
 	require.NoError(t, err,
 		"tx flagged conflicting at %d then mined at %d must survive to %d; "+
 			"a surviving flag-height DAH stamp would break the parent-depth guard",
-		flagHeight, mineHeight, tip)
+		flagHeight, forkHeight, tip)
+}
+
+// A fully spent tx placed on a fork at a high block, then mined on the longest chain at
+// a much lower one, must outlive the high block by the retention window. Run through the
+// real pruner.
+func TestPruneHorizon_ForkThenLowerLongestChainBlockKeepsHighFloor(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, prunerSvc, retention := horizonStore(ctx, t)
+
+	const (
+		cachedTip  uint32 = 500
+		forkHeight uint32 = 1500
+	)
+
+	tx := tests.Tx
+	txHash := tx.TxIDChainHash()
+
+	require.NoError(t, store.SetBlockHeight(cachedTip))
+
+	_, _, err := store.SpendAndCreate(ctx, tx, cachedTip, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{txHash}, utxostore.MinedBlockInfo{
+		BlockID: 100, BlockHeight: forkHeight, SubtreeIdx: 0, OnLongestChain: false,
+	})
+	require.NoError(t, err)
+
+	for i, out := range tx.Outputs {
+		spendTx := bt.NewTx()
+		require.NoError(t, spendTx.From(txHash.String(), uint32(i), out.LockingScript.String(), out.Satoshis))
+		require.NoError(t, spendTx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+		_, _, err = store.SpendAndCreate(ctx, spendTx, cachedTip+1, utxostore.WithSpendOnly())
+		require.NoError(t, err, "spending output %d", i)
+	}
+
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{txHash}, utxostore.MinedBlockInfo{
+		BlockID: 101, BlockHeight: cachedTip, SubtreeIdx: 0, OnLongestChain: true,
+	})
+	require.NoError(t, err)
+
+	var stamped int64
+	require.NoError(t, store.db.QueryRowContext(ctx,
+		`SELECT delete_at_height FROM transactions WHERE hash = $1`, txHash[:]).Scan(&stamped))
+	require.Equal(t, int64(forkHeight+retention), stamped)
+
+	tip := cachedTip + retention
+	require.NoError(t, store.SetBlockHeight(tip))
+
+	_, err = prunerSvc.Prune(ctx, tip, "<horizon-fork-floor>")
+	require.NoError(t, err)
+
+	_, err = store.Get(ctx, txHash)
+	require.NoError(t, err, "a tx placed at %d must survive a prune at %d", forkHeight, tip)
 }
 
 // The opposite order: a transaction is mined at a height far above the node's cached

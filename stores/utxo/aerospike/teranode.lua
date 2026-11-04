@@ -86,6 +86,7 @@ local FIELD_BLOCK_IDS = "blockIDs"
 local FIELD_ERRORS = "errors"
 local FIELD_CHILD_COUNT = "childCount"
 local FIELD_DELETE_AT_HEIGHT = "deleteAtHeight"
+local FIELD_CONFLICTING = "conflicting"
 local FIELD_SPENDING_DATA = "spendingData"
 -- local FIELD_DEBUG = "debug"
 
@@ -440,7 +441,7 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     rec[BIN_UTXOS] = utxos
     rec[BIN_SPENT_UTXOS] = spentUtxos
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
@@ -460,6 +461,9 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         response[FIELD_SIGNAL] = signal
         if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
             response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
         end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
@@ -543,7 +547,7 @@ function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight
         rec[BIN_SPENT_UTXOS] = spentUtxos - 1
     end
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
@@ -552,6 +556,9 @@ function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight
         response[FIELD_SIGNAL] = signal
         if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
             response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
         end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
@@ -671,7 +678,7 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     -- it stamped the DAH too low and let the pruner delete the record before the
     -- retention window elapsed. currentBlockHeight is still used above for the
     -- unmined_since marker only.
-    local signal, childCount = setDeleteAtHeight(rec, blockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, blockHeight, blockHeightRetention)
 
     -- Update the record to save changes
     aerospike:update(rec)
@@ -681,6 +688,9 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
         response[FIELD_SIGNAL] = signal
         if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
             response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
         end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
@@ -978,6 +988,8 @@ end
 --   blockHeightRetention: number - The number of blocks to retain the record for
 -- Returns:
 --   string - A signal indicating the action taken
+--   number - The number of extra records, when the signal concerns a paginated master
+--   boolean - true when the signal comes from a conflicting record, which is prunable whatever its spent state
 
 --           _   ____       _      _          _   _   _   _      _       _     _
 --  ___  ___| |_|  _ \  ___| | ___| |_ ___   / \ | |_| | | | ___(_) __ _| |__ | |_
@@ -1026,13 +1038,13 @@ function setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
             -- Set the deleteAtHeight for the record
             rec[BIN_DELETE_AT_HEIGHT] = newDeleteHeight
             if rec[BIN_EXTERNAL] then
-                return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs
+                return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs, true
             end
         elseif minedFloor and existingDeleteAtHeight < minedFloor then
             -- stamped earlier from a lagging tip, before the record was mined: raise it
             rec[BIN_DELETE_AT_HEIGHT] = minedFloor
             if rec[BIN_EXTERNAL] then
-                return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs
+                return SIGNAL_DELETE_AT_HEIGHT_SET, totalExtraRecs, true
             end
         end
 
@@ -1121,7 +1133,7 @@ function setConflicting(rec, setValue, currentBlockHeight, blockHeightRetention)
 
     rec[BIN_CONFLICTING] = setValue
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
@@ -1130,6 +1142,9 @@ function setConflicting(rec, setValue, currentBlockHeight, blockHeightRetention)
         response[FIELD_SIGNAL] = signal
         if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
             response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
         end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
@@ -1312,7 +1327,7 @@ function incrementSpentExtraRecs(rec, inc, currentBlockHeight, blockHeightRetent
 
     rec[BIN_SPENT_EXTRA_RECS] = spentExtraRecs
 
-    local signal, childCount = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
+    local signal, childCount, conflicting = setDeleteAtHeight(rec, currentBlockHeight, blockHeightRetention)
 
     aerospike:update(rec)
 
@@ -1321,6 +1336,9 @@ function incrementSpentExtraRecs(rec, inc, currentBlockHeight, blockHeightRetent
         response[FIELD_SIGNAL] = signal
         if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
             response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+        if conflicting then
+            response[FIELD_CONFLICTING] = true
         end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount

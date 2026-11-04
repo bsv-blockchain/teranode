@@ -2793,6 +2793,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			newDAH := int64(s.GetBlockHeight() + 1 + retention)
 			dahIdx := pidx
 			updateArgs = append(updateArgs, newDAH)
+			// In-statement stamp for this path; setDAH below skips when it already holds it.
 			flooredDAH := flooredDAHSQL("p.transaction_id", fmt.Sprintf("$%d", dahIdx), retention)
 			// Postgres CTEs share a snapshot, so the count(*) over outputs inside
 			// dah_upd sees the PRE-update state. "unspent-before == spent_in_batch"
@@ -3020,9 +3021,8 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	// whoever commits last correctly deterministically sets DAH.
 	//
 	// setDAH is idempotent w.r.t. the CTE: if the CTE already set DAH to
-	// newDAH, setDAH sees conditions met + existingDAH == newDAH and writes
-	// the same value (no-op). Extra round-trip cost is O(distinct parents),
-	// bounded by batch size.
+	// newDAH, setDAH sees conditions met + existingDAH >= newDAH and skips the
+	// write. Extra round-trip cost is O(distinct parents), bounded by batch size.
 	//
 	// The set also includes idempotent parents (Phase 1 SELECT already showed
 	// the output spent with matching spending_data — the CTE skips them).
@@ -3437,10 +3437,16 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	}
 	// else: conditions not met and no existing DAH, leave as NULL
 
-	// A NULL decision over a NULL stamp writes nothing, which spares a row lock and WAL
-	// on the spend hot path. A value decision always writes: the read above is unlocked,
-	// so only the UPDATE can reconcile it with a concurrently mined block.
+	// Write only to raise or clear. A decision at or below the stored stamp, or a NULL
+	// over a NULL, writes nothing: the read above is unlocked, so rewriting a kept stamp
+	// could resurrect one that a concurrent SetConflicting(false) or PreserveTransactions
+	// just cleared. A stale CLEAR over a stamp that concurrent mining just raised fails
+	// safe: the record is kept longer, never pruned early.
 	if !deleteAtHeightOrNull.Valid && !existingDAH.Valid {
+		return nil
+	}
+
+	if deleteAtHeightOrNull.Valid && existingDAH.Valid && existingDAH.Int64 >= deleteAtHeightOrNull.Int64 {
 		return nil
 	}
 
@@ -3449,11 +3455,13 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 
 // writeDAH stores a delete_at_height decision taken from an unlocked read. A value is
 // raised to the row's mined floor and never lowers a stamp a concurrent writer has
-// raised since, so a stale read cannot undo mining. A NULL clears the stamp.
+// raised since, so a stale read cannot undo mining. A NULL clears the stamp. A row
+// that PreserveTransactions protected since the read is left untouched.
 func (s *Store) writeDAH(ctx context.Context, txn *sql.Tx, transactionID int, value sql.NullInt64, retention uint32) error {
 	qUpdate := fmt.Sprintf(`
 		UPDATE transactions
 		SET delete_at_height = CASE
+		        WHEN preserve_until IS NOT NULL THEN delete_at_height
 		        WHEN CAST($2 AS BIGINT) IS NULL THEN NULL
 		        WHEN delete_at_height IS NOT NULL AND delete_at_height > %[1]s THEN delete_at_height
 		        ELSE %[1]s
@@ -3466,19 +3474,6 @@ func (s *Store) writeDAH(ctx context.Context, txn *sql.Tx, transactionID int, va
 	}
 
 	return nil
-}
-
-// dahUnchanged reports whether two sql.NullInt64 DAH values are equivalent.
-// NULL==NULL is true; NULL vs valid and valid vs valid with different values
-// are false; valid vs valid with same value is true.
-func dahUnchanged(a, b sql.NullInt64) bool {
-	if a.Valid != b.Valid {
-		return false
-	}
-	if !a.Valid {
-		return true
-	}
-	return a.Int64 == b.Int64
 }
 
 // Unspend reverses a previous spend operation, marking UTXOs as unspent.
@@ -3958,7 +3953,8 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 				SET delete_at_height = CASE
 				        WHEN preserve_until IS NOT NULL THEN delete_at_height
 				        WHEN conflicting THEN CASE
-				             WHEN delete_at_height IS NULL OR delete_at_height < %[2]s THEN %[3]s
+				             WHEN delete_at_height IS NULL THEN %[3]s
+				             WHEN delete_at_height < %[2]s THEN %[2]s
 				             ELSE delete_at_height
 				        END
 				        WHEN unmined_since IS NULL
@@ -3967,7 +3963,7 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 				                 WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL
 				             )
 				             THEN CASE
-				                 WHEN delete_at_height IS NULL OR delete_at_height < $1 THEN $1
+				                 WHEN delete_at_height IS NULL OR delete_at_height < %[3]s THEN %[3]s
 				                 ELSE delete_at_height
 				             END
 				        ELSE NULL
@@ -5379,7 +5375,8 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					   ,delete_at_height = CASE
 					        WHEN preserve_until IS NOT NULL THEN delete_at_height
 					        WHEN conflicting THEN CASE
-					            WHEN delete_at_height IS NULL OR delete_at_height < %[4]s THEN %[1]s
+					            WHEN delete_at_height IS NULL THEN %[1]s
+					            WHEN delete_at_height < %[4]s THEN %[4]s
 					            ELSE delete_at_height
 					        END
 					        WHEN %[3]s THEN

@@ -42,6 +42,7 @@ func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash)
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	var (
 		batchRecords   = make([]aerospike.BatchRecordIfc, 0, len(txHashes))
+		batchTxHashes  = make([]*chainhash.Hash, 0, len(txHashes))
 		batchUDFPolicy = aerospike.NewBatchUDFPolicy()
 		txs            = make([]*bt.Tx, len(txHashes))
 		g, gCtx        = errgroup.WithContext(ctx)
@@ -87,6 +88,8 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("could not create aerospike key", err)
 		}
+
+		batchTxHashes = append(batchTxHashes, tx.TxIDChainHash())
 
 		// set the conflicting flag using a lua script in the batch
 		batchRecords = append(batchRecords, s.teranodeBatchRecord(
@@ -145,7 +148,50 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		return nil, nil, errors.NewProcessingError("could not batch write conflicting flag", err)
 	}
 
+	if err := s.propagateConflictingDAHSignals(batchRecords, batchTxHashes, s.GetBlockHeight()); err != nil {
+		return nil, nil, err
+	}
+
 	return affectedParentSpends, spendingTxHashes, nil
+}
+
+// propagateConflictingDAHSignals applies the DAHSET and DAHUNSET signals of the setConflicting
+// responses to the child pages of each record, so pages follow the master's stamp.
+func (s *Store) propagateConflictingDAHSignals(batchRecords []aerospike.BatchRecordIfc, txHashes []*chainhash.Hash, blockHeight uint32) error {
+	var aggErr error
+
+	for i, record := range batchRecords {
+		batchRec := record.BatchRec()
+		if batchRec == nil || batchRec.Err != nil || batchRec.Record == nil || batchRec.Record.Bins == nil {
+			continue
+		}
+
+		raw := batchRec.Record.Bins[LuaSuccess.String()]
+		if raw == nil {
+			continue
+		}
+
+		res, err := s.ParseLuaMapResponse(raw)
+		if err != nil || res.Status != LuaStatusOK {
+			continue
+		}
+
+		switch res.Signal {
+		case LuaSignalDAHSet:
+			if dah, ok := s.childDeleteAtHeightFor(res, blockHeight); ok {
+				if err := s.SetDAHForChildRecords(txHashes[i], res.ChildCount, dah); err != nil {
+					aggErr = errors.Join(aggErr, err)
+				}
+			}
+
+		case LuaSignalDAHUnset:
+			if err := s.SetDAHForChildRecords(txHashes[i], res.ChildCount, 0); err != nil {
+				aggErr = errors.Join(aggErr, err)
+			}
+		}
+	}
+
+	return aggErr
 }
 
 func (s *Store) updateParentConflictingChildren(tx *bt.Tx) error {
