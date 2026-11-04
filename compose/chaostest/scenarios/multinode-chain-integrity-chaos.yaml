@@ -1,0 +1,201 @@
+id: multinode-chain-integrity-chaos
+name: Chain integrity through faults - a fork, a paused node and a merkle-service outage
+description: >
+  The same load and audits as multinode-chain-integrity-steady, with fault rounds while the
+  wallet keeps sending and A auto-mines: C is cut off and mines its own short fork, which the
+  network must orphan when C rejoins; B is paused and must catch up; merkle-service is paused
+  and must catch up on the proofs. After all rounds every node must hold the same chain at every
+  height, and every wallet transaction must be MINED with a proof that holds on every node.
+  The broadcaster restart is left out: it loses tx records (a known defect, see
+  multinode-bcast-broadcaster-restart), which would hide everything else this run checks.
+requires: [regtest]
+roles:
+  A: teranode1   # auto-mines throughout
+  B: teranode2   # paused in round 2
+  C: teranode3   # partitioned in round 1, mines a fork
+params:
+  tps: 3
+  calmSeconds: 240
+  faultSeconds: 120
+  forkBlocks: 2
+  autoMine: 10
+  minProven: 1
+steps:
+  - name: converge every node
+    action: mine
+    with: { node: A, blocks: 2 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 180s }
+
+  - name: fund the wallet
+    action: wallet_topup
+    with: { node: A, satoshis: 8000000, count: 24, mine: true, waitSeconds: 180 }
+    as: fund
+    timeout: 10m
+    assert:
+      - check: wallet_tx_status
+        with: { txid: "${fund.txid}", arcade: MINED }
+        timeout: 180s
+
+  - name: mark the start of the load
+    action: mark
+    as: m0
+
+  - name: A mines
+    action: automine
+    with: { enabled: true, intervalSeconds: "${autoMine}", node: A, blocks: 1 }
+
+  - name: start the send
+    action: wallet_send_start
+    with: { tps: "${tps}", workers: 2, shape: opreturn }
+
+  - name: calm before the faults
+    action: wait
+    with: { seconds: "${calmSeconds}" }
+    timeout: 1h
+
+  # Round 1: a real fork. C mines on its own while A keeps mining the main chain.
+  - name: cut C off the p2p network
+    action: partition
+    with: { nodes: [C], plane: p2p, on: true }
+
+  - name: C mines a short fork of its own
+    action: mine
+    with: { node: C, blocks: "${forkBlocks}" }
+    as: fork
+
+  - name: hold the partition
+    action: wait
+    with: { seconds: "${faultSeconds}" }
+    timeout: 1h
+
+  - name: C rejoins and must drop its fork
+    action: partition
+    with: { nodes: [C], plane: p2p, on: false }
+    # A keeps auto-mining, so the others trail it by a block; strict same_tip comes after
+    # auto-mining stops.
+    assert:
+      - check: tip_not
+        with: { node: C, hash: "${fork.last}" }
+        timeout: 300s
+        message: C left its fork for the main chain
+      - check: height
+        with: { node: C, atLeast: "${tip(A) - 1}" }
+        timeout: 300s
+        message: C caught up with A
+
+  # Round 2: a node stalls and has to catch up.
+  - name: pause B
+    action: chaos
+    with: { node: B, action: pause }
+
+  - name: hold B paused
+    action: wait
+    with: { seconds: "${faultSeconds}" }
+    timeout: 1h
+
+  - name: unpause B
+    action: chaos
+    with: { node: B, action: unpause }
+    assert:
+      - check: height
+        with: { node: B, atLeast: "${tip(A) - 1}" }
+        timeout: 300s
+        message: B caught up with A
+
+  # Round 3: the proof builder stalls while blocks keep coming.
+  - name: pause merkle-service
+    action: chaos
+    with: { node: merkle-service, action: pause }
+
+  - name: hold merkle-service paused
+    action: wait
+    with: { seconds: "${faultSeconds}" }
+    timeout: 1h
+
+  - name: unpause merkle-service
+    action: chaos
+    with: { node: merkle-service, action: unpause }
+
+  - name: calm after the faults
+    action: wait
+    with: { seconds: "${calmSeconds}" }
+    timeout: 1h
+
+  - name: stop the send
+    action: wallet_send_stop
+    with: { timeoutSeconds: 60 }
+    as: sent
+    assert:
+      - check: expr
+        with: { left: "${sent.succeeded}", op: "!=", right: "0" }
+        message: the wallet sent something
+      - check: expr
+        with: { left: "${sent.failed}", right: "0" }
+        message: no send failed
+        should: true
+
+  - name: stop auto-mining
+    action: automine
+    with: { enabled: false }
+
+  - name: let in-flight blocks propagate
+    action: wait
+    with: { seconds: 20 }
+
+  - name: mine the stragglers and let proofs land
+    action: mine
+    with: { node: A, blocks: 2 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 300s }
+
+  - name: settle
+    action: wait
+    with: { seconds: 120 }
+
+  - name: audit every height on every node
+    action: chain_audit
+    with: { nodes: [A, B, C], arcade: true }
+    as: chain
+    timeout: 15m
+    assert:
+      - check: expr
+        with: { left: "${chain.divergences}", right: "0" }
+        message: every node and the broadcaster hold the same chain after the faults
+
+  - name: cross-check the SV nodes on the heights they hold
+    action: chain_audit
+    with: {}
+    as: svchain
+    timeout: 15m
+    assert:
+      - check: expr
+        with: { left: "${svchain.divergences}", right: "0" }
+        message: the SV nodes agree with the teranodes on every height they hold
+      - check: same_tip
+        with: {}
+        timeout: 120s
+        message: the SV nodes follow the teranode chain to its tip
+        should: true
+
+  - name: audit every wallet transaction's proof
+    action: proof_audit
+    with: { source: wallet, since: "${m0.at}", nodes: [A, B, C], minProven: "${minProven}" }
+    as: proofs
+    timeout: 15m
+    assert:
+      - check: expr
+        with: { left: "${proofs.mismatched}", right: "0" }
+        message: no proof the broadcaster hands out is wrong for any node
+      - check: expr
+        with: { left: "${proofs.meetsMin}", right: "true" }
+        message: enough of the flow was proven
+
+  - name: no wallet divergence
+    action: note
+    with: { message: "${chain.summary} | ${proofs.summary}" }
+    assert:
+      - check: no_event
+        with: { kind: wallet_divergence, since: "${m0.eventId}" }
+        timeout: 5s
+        message: the wallet and the network agreed about every transaction

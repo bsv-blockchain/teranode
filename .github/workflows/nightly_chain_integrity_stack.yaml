@@ -1,0 +1,134 @@
+name: nightly-chain-integrity-stack
+# Chain integrity on the multinode chaos stack: 3 teranodes on Aerospike, 2 SV nodes, BSV
+# Broadcaster, merkle-service, wallet and the chaos-test orchestrator. merkle-service builds a
+# merkle path for every broadcast tx independently, and every path is checked against every
+# node's block header; every height is compared across all nodes. Then the broadcaster
+# end-to-end suite and chaos-test's library run on the same stack. See
+# compose/chaostest/nightly.sh and compose/MULTINODE.md.
+on:
+  schedule:
+    - cron: '0 5 * * *'  # after nightly_tests (02:00) and fuzz (04:00), which share the runner pool
+  workflow_dispatch:
+    inputs:
+      quick:
+        description: 'Short phase 1 only (~15 min), to check the pipeline'
+        type: boolean
+        default: false
+      phases:
+        description: 'Phases to run (1 integrity, 2 broadcaster e2e, 3 chaos library)'
+        default: '1,2,3'
+      chaos_test_repo:
+        description: 'chaos-test repository'
+        default: 'galt-tr/chaos-test'
+      chaos_test_ref:
+        description: 'chaos-test ref (needs arcade_tx_status, chain_audit, proof_audit)'
+        default: 'main'
+
+permissions:
+  contents: read
+  packages: read
+  actions: read   # download the previous night's artifact for the comparison
+
+concurrency:
+  group: nightly-chain-integrity-stack
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.27.0'
+
+jobs:
+  chain-integrity-stack:
+    # amd64 is required: the SV node, merkle-service and wallet-infra images are amd64-only.
+    runs-on: teranode-runner-16-core
+    timeout-minutes: 150
+    env:
+      CHAOS_TEST_DIR: ${{ github.workspace }}/chaos-test
+      HAS_COINBASE_TOKEN: ${{ secrets.TERANODE_COINBASE_TOKEN != '' }}
+    steps:
+      - name: Check the runner
+        run: |
+          set -eu
+          echo "arch=$(uname -m) cpus=$(nproc) mem=$(free -g | awk '/Mem:/{print $2}')G disk=$(df -BG --output=avail . | tail -1)"
+          [ "$(uname -m)" = x86_64 ] || { echo "::error::needs amd64 (SV node, merkle-service and wallet-infra images)"; exit 1; }
+          busy=$(ss -ltnH | awk '{print $4}' | grep -Eo '[0-9]+$' | awk '($1>=3000&&$1<=3030)||$1==15432||($1>=18080&&$1<=18700)||($1>=20000&&$1<=25999)' | sort -u | tr '\n' ' ')
+          [ -z "$busy" ] || { echo "::error::ports the stack needs are in use: $busy"; exit 1; }
+
+      - name: Checkout teranode
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          path: teranode
+
+      - name: Checkout chaos-test
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          repository: ${{ inputs.chaos_test_repo || 'galt-tr/chaos-test' }}
+          ref: ${{ inputs.chaos_test_ref || 'main' }}
+          path: chaos-test
+          token: ${{ secrets.CHAOS_TEST_TOKEN || github.token }}
+
+      - name: Checkout the blaster (teranode-coinbase)
+        if: env.HAS_COINBASE_TOKEN == 'true'
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
+        with:
+          repository: bitcoin-sv/teranode-coinbase
+          path: teranode-coinbase
+          token: ${{ secrets.TERANODE_COINBASE_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Build the blaster
+        if: env.HAS_COINBASE_TOKEN == 'true'
+        run: make -C teranode-coinbase build-blaster
+
+      - name: Log in to GHCR
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
+        with:
+          username: ${{ vars.DOCKER_ORG }}
+          password: ${{ secrets.DOCKER_ORG_TOKEN }}
+
+      - name: Fetch the previous night's results
+        id: previous
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly_chain_integrity_stack.yaml --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          [ -n "$id" ] || exit 0
+          gh run download "$id" -R "$GITHUB_REPOSITORY" -D previous
+          echo "dir=$(find "$PWD/previous" -name summary.md -printf '%h\n' | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Run the nightly
+        working-directory: teranode
+        run: |
+          args=(--phases "${{ inputs.phases || '1,2,3' }}")
+          [ "${{ inputs.quick }}" = true ] && args=(--quick)
+          [ -n "${{ steps.previous.outputs.dir }}" ] && args+=(--previous "${{ steps.previous.outputs.dir }}")
+          compose/chaostest/nightly.sh "${args[@]}"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chain-integrity-stack-${{ github.run_number }}-${{ github.sha }}
+          path: |
+            teranode/data/nightly/*/
+            !teranode/data/nightly/.lock
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Tear down
+        if: always()
+        working-directory: teranode
+        run: compose/chaostest/chaosctl.sh stack down a || true

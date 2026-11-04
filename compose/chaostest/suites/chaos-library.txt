@@ -1,0 +1,7 @@
+# chaos-test's bundled library plus our freeze variant, on Stack A.
+# svnode-dust-policy needs a chain past height 103; nightly.sh runs it separately after a pre-mine.
+multinode-freeze-skew-rpc
+freeze-skew-rpc
+freeze-timing-skew
+freeze-fork-remine
+wallet-sustained-flow

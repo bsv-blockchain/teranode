@@ -1,0 +1,4 @@
+# Nightly chain-integrity suite for Stack A: steady load, then the same load through faults.
+# Each ends with chain_audit (every height on every node) and proof_audit (every wallet tx).
+multinode-chain-integrity-steady
+multinode-chain-integrity-chaos

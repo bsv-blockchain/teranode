@@ -183,6 +183,29 @@ curl -X POST -d '{"mode":"auto"}' localhost:8600/api/scenarios/freeze-skew-rpc/r
 - chaos-test's `make reset` wipes the chain: stop the blaster first, and restart it with `--fresh`. Funding resumes once 100 blocks have been mined while it runs (`--auto-mine` does this).
 - Only one stack can run at a time: both publish the same host ports.
 
+### Nightly chain integrity on this stack
+
+`compose/chaostest/nightly.sh` runs the whole thing unattended, locally or from
+`.github/workflows/nightly_chain_integrity_stack.yaml` (05:00 UTC, `teranode-runner-16-core`, amd64):
+
+| Phase | Suite (`compose/chaostest/suites/`) | What it proves |
+|---|---|---|
+| 1 | `chain-integrity-nightly` | Under wallet load through the broadcaster (and the blaster when available), with mining rotating over the teranodes, then again through a fork, a paused node and a merkle-service outage: `chain_audit` finds the same block hash and merkle root at every height on every teranode and in the broadcaster's chaintracks, and `proof_audit` checks every wallet tx's merkle path - built independently by merkle-service from datahub subtrees - against each node's block at that height. The SV nodes are cross-checked on the heights they hold. |
+| 2 | `broadcaster-e2e` | the broadcaster scenarios (happy path, double spend, reorg, outages) |
+| 3 | `chaos-library` | chaos-test's bundled scenarios, plus `svnode-dust-policy` after a 110-block pre-mine |
+
+```bash
+compose/chaostest/nightly.sh --dry-run       # what would run
+compose/chaostest/nightly.sh --quick         # ~15 min smoke of the pipeline (short phase 1)
+compose/chaostest/nightly.sh --phases 1      # one phase; --no-build reuses the images, --keep leaves the stack up
+```
+
+Results land in `data/nightly/<run>/`: `summary.md` (also the GitHub job summary), `junit.xml`,
+every run record (`runs/`, `orchestrator-runs/` with the audit reports), container logs,
+diagnostics and merkle-service's consumer groups. The exit code is non-zero for any failure not
+listed in `suites/known-failures.txt`; chain divergences and wrong proofs are never quarantined.
+Scenario parameters can be overridden per run with `chaosctl.sh scenario run ... --param k=v`.
+
 ## Split topology
 
 By default each node is a single container running every teranode microservice in one process (`-allinone=1`). For chaos testing you usually want finer-grained failure injection. Pass `-allinone=0` and each node is generated as nine sibling containers, one per microservice:

@@ -1,0 +1,154 @@
+id: multinode-chain-integrity-steady
+name: Chain integrity under steady load - every height and every proof agree on all nodes
+description: >
+  The nightly integrity baseline. The wallet sends a steady flow through the broadcaster while
+  auto-mining rotates over A, B and C, so each teranode assembles blocks the others validate
+  (the blaster may run underneath, started by the runner). Afterwards every node - the three
+  teranodes and both SV nodes - must agree on the block hash and merkle root at every height,
+  the broadcaster's chaintracks must agree with them, and every wallet transaction must be
+  MINED with a merkle path that merkle-service built independently and that holds on every
+  node's block at that height. A mismatch is an integrity failure.
+requires: [regtest]
+roles:
+  A: teranode1
+  B: teranode2
+  C: teranode3
+params:
+  tps: 3
+  phaseSeconds: 480   # per miner; three phases
+  autoMine: 10
+  minProven: 1
+steps:
+  - name: converge every node
+    action: mine
+    with: { node: A, blocks: 2 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 180s }
+
+  - name: fund the wallet
+    action: wallet_topup
+    with: { node: A, satoshis: 8000000, count: 24, mine: true, waitSeconds: 180 }
+    as: fund
+    timeout: 10m
+    assert:
+      - check: wallet_tx_status
+        with: { txid: "${fund.txid}", arcade: MINED }
+        timeout: 180s
+
+  - name: mark the start of the load
+    action: mark
+    as: m0
+
+  - name: A mines
+    action: automine
+    with: { enabled: true, intervalSeconds: "${autoMine}", node: A, blocks: 1 }
+
+  - name: start the send
+    action: wallet_send_start
+    with: { tps: "${tps}", workers: 2, shape: opreturn }
+
+  - name: A phase
+    action: wait
+    with: { seconds: "${phaseSeconds}" }
+    timeout: 1h
+
+  - name: B mines
+    action: automine
+    with: { enabled: true, intervalSeconds: "${autoMine}", node: B, blocks: 1 }
+
+  - name: B phase
+    action: wait
+    with: { seconds: "${phaseSeconds}" }
+    timeout: 1h
+
+  - name: C mines
+    action: automine
+    with: { enabled: true, intervalSeconds: "${autoMine}", node: C, blocks: 1 }
+
+  - name: C phase
+    action: wait
+    with: { seconds: "${phaseSeconds}" }
+    timeout: 1h
+
+  - name: stop the send
+    action: wallet_send_stop
+    with: { timeoutSeconds: 60 }
+    as: sent
+    assert:
+      - check: expr
+        with: { left: "${sent.succeeded}", op: "!=", right: "0" }
+        message: the wallet sent something
+      - check: expr
+        with: { left: "${sent.failed}", right: "0" }
+        message: no send failed
+        should: true
+
+  - name: stop auto-mining
+    action: automine
+    with: { enabled: false }
+
+  - name: let in-flight blocks propagate
+    action: wait
+    with: { seconds: 20 }
+
+  - name: mine the stragglers and let proofs land
+    action: mine
+    with: { node: A, blocks: 2 }
+    assert:
+      - { check: same_tip, with: { nodes: [A, B, C] }, timeout: 300s }
+
+  - name: settle
+    action: wait
+    with: { seconds: 60 }
+
+  - name: audit every height on every node
+    action: chain_audit
+    with: { nodes: [A, B, C], arcade: true }
+    as: chain
+    timeout: 15m
+    assert:
+      - check: expr
+        with: { left: "${chain.divergences}", right: "0" }
+        message: every node and the broadcaster hold the same chain
+
+  - name: cross-check the SV nodes on the heights they hold
+    action: chain_audit
+    with: {}
+    as: svchain
+    timeout: 15m
+    assert:
+      - check: expr
+        with: { left: "${svchain.divergences}", right: "0" }
+        message: the SV nodes agree with the teranodes on every height they hold
+      - check: same_tip
+        with: {}
+        timeout: 120s
+        message: the SV nodes follow the teranode chain to its tip
+        should: true
+
+  - name: audit every wallet transaction's proof
+    action: proof_audit
+    with: { source: wallet, since: "${m0.at}", nodes: [A, B, C], minProven: "${minProven}" }
+    as: proofs
+    timeout: 15m
+    assert:
+      - check: expr
+        with: { left: "${proofs.mismatched}", right: "0" }
+        message: no proof the broadcaster hands out is wrong for any node
+      - check: expr
+        with: { left: "${proofs.meetsMin}", right: "true" }
+        message: enough of the flow was proven
+
+  - name: no invalid blocks, no wallet divergence
+    action: note
+    with: { message: "${chain.summary} | ${proofs.summary}" }
+    assert:
+      - check: no_event
+        with: { kind: invalid_block, since: "${m0.eventId}" }
+        timeout: 5s
+        message: no node judged a block invalid
+        should: true
+      - check: no_event
+        with: { kind: wallet_divergence, since: "${m0.eventId}" }
+        timeout: 5s
+        message: the wallet and the network agreed about every transaction

@@ -1,0 +1,9 @@
+# Failures nightly.sh reports as "known" instead of failing the night. One per line:
+#   <scenario id>[:<failed step name prefix>]   # why, and where it is tracked
+# A known failure that starts passing is reported so the line can be removed.
+multinode-bcast-broadcaster-restart:start the broadcaster   # broadcaster loses tx records across stop/start
+multinode-freeze-skew-rpc:freeze victim                     # RPC freeze has no effect on Aerospike
+freeze-skew-rpc:freeze victim                               # RPC freeze has no effect on Aerospike
+freeze-timing-skew:C mines blockInside                      # no invalid-block verdict published on Kafka
+freeze-fork-remine:C keeps mining on its fork               # no invalid-block verdict published on Kafka
+wallet-sustained-flow:top up the wallet                     # wallet balance does not count the fan-out's coins

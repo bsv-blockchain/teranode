@@ -47,7 +47,7 @@ Blaster (on the active stack):
 
 Scenarios (chaos-test, on the active stack):
   scenario list                     Scenario ids the orchestrator has loaded
-  scenario run <id>... [--suite <name|file>] [--under-load [preset]] [--reset] [--step] [--workers N]
+  scenario run <id>... [--suite <name|file>] [--param k=v]... [--under-load [preset]] [--reset] [--step] [--workers N]
                                     Run one or more scenarios in order and follow each.
                                     --under-load starts (or keeps) the blaster first,
                                     without auto-mine (scenarios check exact heights).
@@ -471,9 +471,10 @@ print(json.dumps({"line": line, **d} if line else {}))' "${1:-}"
 # the previous run of the same scenario on the same stack. Returns 0 if passed.
 run_one() {
   local id="$1" mode="$2" stack="$3"
+  shift 3
   local before run_id resp
   before=$(blast_last_stats)
-  resp=$(curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "{\"mode\":\"$mode\"}" "$API/scenarios/$id/run")
+  resp=$(curl -s -m 10 -X POST -H 'Content-Type: application/json' -d "$(python3 -I -c 'import json, sys; print(json.dumps({"mode": sys.argv[1], "params": dict(a.split("=", 1) for a in sys.argv[2:])}))' "$mode" "$@")" "$API/scenarios/$id/run")
   run_id=$(python3 -I -c 'import json, sys; print(json.loads(sys.argv[1])["id"])' "$resp" 2>/dev/null) ||
     { echo "error: the orchestrator refused to start '$id': ${resp:-no response}" >&2; return 1; }
   echo "== $id: run $run_id ($mode) on stack $stack  ui=${API%/api}/#/scenarios"
@@ -552,6 +553,7 @@ EOF
 scenario_run() {
   local -a ids=()
   local load=false preset="" reset=false mode=auto workers=10
+  local -a params=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --under-load)
@@ -560,6 +562,7 @@ scenario_run() {
       --reset) reset=true ;;
       --step) mode=step ;;
       --workers) workers="${2:?}"; shift ;;
+      --param) params+=("${2:?--param needs key=value}"); shift ;;
       --suite)
         # A suite is a file of scenario ids, one per line (# comments allowed):
         # a name under suites/ or a path.
@@ -615,7 +618,7 @@ print(" ".join(i for i in sys.argv[1:] if i not in have))' "${ids[@]}")
       wait_converged 180 || note "starting anyway; the scenario's own same_tip checks decide"
     fi
     first=false
-    run_one "$id" "$mode" "$s" || failures=$((failures + 1))
+    run_one "$id" "$mode" "$s" ${params[@]+"${params[@]}"} || failures=$((failures + 1))
   done
   ((failures == 0))
 }
