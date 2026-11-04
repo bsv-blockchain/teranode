@@ -739,10 +739,20 @@ drain:
 	}
 
 	// A reset traverses only its endpoint lineages. Keep the replay position so any
-	// briefly winning branch outside those lineages is still replayed afterwards.
+	// briefly winning branch outside those lineages is still replayed afterwards. Without a
+	// replay position nothing replays them, so the reset owes the mark of skipped fork
+	// transactions a move to the best header owes. It is recorded first, since the reset
+	// persists its new tip; a reset is not refused for a failed record, which leaves the mark
+	// pending in this process only.
 	wasPending := b.bestTipResetReplayPending.Load()
 	if b.bestTipPosKnown.Load() {
 		b.bestTipResetReplayPending.Store(true)
+	} else {
+		if err := b.saveSkippedForkMark(ctx, true); err != nil {
+			b.logger.Errorf("[BlockAssembler] error recording the mark of skipped fork transactions a reset owes, marking them in this process only: %v", err)
+		}
+
+		b.skippedForkMarkPending = true
 	}
 	resp, err := b.resetWithResponse(ctx, validateInputs)
 	if err != nil && !resp.Rotated {
@@ -763,6 +773,8 @@ drain:
 			b.logger.Errorf("[BlockAssembler] reset completed but pending tip changes need retrying: %v", replayErr)
 			b.triggerReconcile()
 		}
+	} else if err == nil && b.skippedForkMarkPending {
+		_ = b.markSkippedForkTxs(ctx, false)
 	}
 
 	// The Reset path replays moveForward blocks through the same
@@ -1426,9 +1438,9 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	if !b.followBestTipChanges(ctx) {
 		// A mark that could not finish after an earlier fallback is finished here: on the best
 		// tip it holds however the tip was reached, and the replay working again is no reason
-		// to drop it. Off the best tip it waits, since block assembly's own blocks would read as
-		// fork blocks. Its back-off paces only the idle wake (reconcileDue), not a pass.
-		if b.skippedForkMarkPending && b.onBestTip(ctx) {
+		// to drop it. It does not run off the best tip. Its back-off paces only the idle wake
+		// (reconcileDue), not a pass.
+		if b.skippedForkMarkPending {
 			_ = b.markSkippedForkTxs(ctx, false)
 		}
 
@@ -1446,11 +1458,13 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 
 	before, _ := b.CurrentBlock()
 
-	// The move persists block assembly's new tip, so the mark it may owe is recorded first: a
-	// crash right after the move then still finishes it at the next start. Without that record
-	// block assembly does not move. The pending run, which waits for the best tip, wakes the
+	// Following the best header owes a mark of the fork blocks it skips when it moves the tip,
+	// and when the replay gave up its history, which a reset may already have skipped
+	// (followBestTipChanges sets it pending then). The move persists block assembly's new tip,
+	// so the mark is recorded first: a crash right after the move still finishes it at the next
+	// start. Without that record block assembly does not move, and the pending run wakes the
 	// next pass after a back-off.
-	if before == nil || !bestBlockchainBlockHeader.Hash().IsEqual(before.Hash()) {
+	if before == nil || !bestBlockchainBlockHeader.Hash().IsEqual(before.Hash()) || b.skippedForkMarkPending {
 		if err = b.saveSkippedForkMark(ctx, true); err != nil {
 			b.skippedForkMarkPending = true
 			b.noteSkippedForkMarkFailure(time.Now())
@@ -1463,26 +1477,14 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	}
 
 	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil {
+		// The pending mark keeps the idle wake retrying the move, after a back-off.
+		b.noteSkippedForkMarkFailure(time.Now())
 		return
 	}
 
-	// A move that left the tip where it was skipped nothing.
-	if after, _ := b.CurrentBlock(); b.skippedForkMarkPending || before == nil || !after.Hash().IsEqual(before.Hash()) {
+	if b.skippedForkMarkPending {
 		_ = b.markSkippedForkTxs(ctx, false)
 	}
-}
-
-// onBestTip reports whether block assembly's tip is the best block. A failed read reports false.
-func (b *BlockAssembler) onBestTip(ctx context.Context) bool {
-	best, _, err := b.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		b.logger.Errorf("[BlockAssembler] error getting the best block header: %v", err)
-		return false
-	}
-
-	tip, _ := b.CurrentBlock()
-
-	return tip != nil && best.Hash().IsEqual(tip.Hash())
 }
 
 // moveToBlock moves block assembly from its tip to the given block by the shortest path

@@ -171,6 +171,11 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 
 		b.giveUpBestTipHistory(ctx)
 
+		// The history given up may hold blocks that were the best tip only briefly, also when
+		// block assembly is on the best tip already, for example after a reset, which does not
+		// pass them. The caller records and runs the mark they owe.
+		b.skippedForkMarkPending = true
+
 		return true
 	}
 
@@ -203,34 +208,34 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 }
 
 // markSkippedForkTxs runs after block assembly followed the best header instead of replaying
-// the changes of the best tip. That skips a block that was the best tip only briefly: block
-// validation marked its transactions mined, but block assembly never moved onto it and back,
-// so reorgBlocks never marked them again; following the best header may even reach the best
-// tip by a plain catch-up. Those transactions would stay marked mined while off the longest
-// chain, and a restart, which reloads only unmined transactions, would drop them.
+// the changes of the best tip, or reached it by a reset the replay does not follow. That skips a
+// block that was the best tip only briefly: block validation marked its transactions mined, but
+// block assembly never moved onto it and back, so reorgBlocks never marked them again; following
+// the best header may even reach the best tip by a plain catch-up. Those transactions would stay
+// marked mined while off the longest chain, and a restart, which reloads only unmined
+// transactions, would drop them.
 //
 // It marks the transactions of recent fork blocks that no block of the best chain contains
 // (branchOnlyTxs) and that are marked mined as not on the longest chain, as the replay's restamp
-// does. Which fork block was the best tip does not matter: one still stamped unmined is left as
-// it is. Unless it runs at start-up, before the unmined transactions are loaded, it reloads the
-// pool when one it marked is not in it and is not conflicting, which the pool never loads. It
-// first waits for every pending mined_set, so a setTxMined still writing a fork block cannot
-// clear unmined_since again after the mark, and reads the best tip after that wait; it waits
-// only when there is a fork block to read.
+// does (markOffLongestChain). Which fork block was the best tip does not matter: one still
+// stamped unmined is left as it is. Unless it runs at start-up, before the unmined transactions
+// are loaded, it reloads the pool when one it marked is not in it and is not conflicting, which
+// the pool never loads. Outside start-up it runs only with block assembly on the best tip, since
+// otherwise block assembly's own blocks read as fork blocks.
 //
 // The fork blocks are walked down from every chain tip but the active one, to the fork point or
-// the replay floor (forkBlocksBelow). A tip may be an invalid block whose valid parent is the one
-// that was briefly best, and a fork block block assembly never processed has no processed_at, so
-// its tip reads valid-headers rather than valid-fork. Of the blocks walked, the valid ones with
-// subtrees that are still off the best chain after the wait are read: block validation sets
-// subtrees_set before it marks a block's transactions mined. A block is recorded once its
-// transactions are marked and the pool reloaded, and is not read again.
+// the floor (forkBlocksBelow, skippedForkMarkFloor). A tip may be an invalid block whose valid
+// parent is the one that was briefly best, and a fork block block assembly never processed has
+// no processed_at, so its tip reads valid-headers rather than valid-fork. Of the blocks walked,
+// the valid ones with subtrees are read: block validation sets subtrees_set before it marks a
+// block's transactions mined. One whose mined_set is not set yet is left for a later run, so a
+// setTxMined still writing it cannot clear unmined_since again after the mark. A block is
+// recorded once its transactions are marked and the pool reloaded, and is not read again.
 //
 // It returns an error when the run did not finish, for example on a fork block it cannot read.
-// The run then stays pending, in memory and under SkippedForkMarkStateKey: every later pass on
-// the best tip runs it again, the idle reconcile wakes one after a back-off
-// (noteSkippedForkMarkFailure), and the next start finishes it before it loads the unmined
-// transactions, or fails.
+// The run then stays pending, in memory and under SkippedForkMarkStateKey: every later pass runs
+// it again, the idle reconcile wakes one after a back-off (noteSkippedForkMarkFailure), and the
+// next start finishes it before it loads the unmined transactions, or fails.
 func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (err error) {
 	b.skippedForkMarkPending = true
 
@@ -269,8 +274,18 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 		return errors.NewProcessingError("[markSkippedForkTxs] error getting chain tips", err)
 	}
 
-	floor := b.bestTipFloor(bestMeta.Height)
-	seen := make(map[chainhash.Hash]struct{})
+	if !atStart {
+		tip, _ := b.CurrentBlock()
+
+		for _, chainTip := range tips {
+			if chainTip.Status == "active" && (tip == nil || chainTip.Hash != tip.Hash().String()) {
+				return errors.NewProcessingError("[markSkippedForkTxs] block assembly is not on the best tip %s", chainTip.Hash)
+			}
+		}
+	}
+
+	floor := b.skippedForkMarkFloor(bestMeta.Height)
+	walked := make(map[chainhash.Hash]struct{})
 
 	var forkBlocks []blockHeaderWithMeta
 
@@ -284,14 +299,12 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 			return errors.NewProcessingError("[markSkippedForkTxs] error parsing chain tip hash %s", chainTip.Hash, err)
 		}
 
-		headers, metas, err := b.forkBlocksBelow(ctx, tipHash, chainTip.Height, chainTip.Branchlen, floor, best)
+		headers, metas, err := b.forkBlocksBelow(ctx, tipHash, chainTip.Height, chainTip.Branchlen, floor, best, walked)
 		if err != nil {
 			return errors.NewProcessingError("[markSkippedForkTxs] error getting the blocks of fork %s", tipHash, err)
 		}
 
 		for i, header := range headers {
-			hash := *header.Hash()
-
 			// A block without subtrees has not been through block validation, which marked
 			// nothing mined in it; it is looked at again on a later run. An invalid block's
 			// transactions are block validation's to unmark.
@@ -299,13 +312,7 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 				continue
 			}
 
-			if _, dup := seen[hash]; dup {
-				continue
-			}
-
-			seen[hash] = struct{}{}
-
-			if _, done := b.skippedForkBlocksMarked[hash]; !done {
+			if _, done := b.skippedForkBlocksMarked[*header.Hash()]; !done {
 				forkBlocks = append(forkBlocks, blockHeaderWithMeta{header: header, meta: metas[i]})
 			}
 		}
@@ -313,18 +320,6 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 
 	if len(forkBlocks) == 0 {
 		return b.reloadAfterSkippedForkMark(ctx, atStart)
-	}
-
-	if !b.skipWaitForPendingBlocks {
-		if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
-			return errors.NewProcessingError("[markSkippedForkTxs] error waiting for pending blocks", err)
-		}
-	}
-
-	// A block stored while waiting may mine some of the fork blocks' transactions, or put a
-	// fork block on the best chain.
-	if best, _, err = b.blockchainClient.GetBestBlockHeader(ctx); err != nil {
-		return errors.NewProcessingError("[markSkippedForkTxs] error getting the best block header", err)
 	}
 
 	if b.skippedForkBlocksMarked == nil {
@@ -338,7 +333,7 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 	}
 
 	txMap := b.subtreeProcessor.GetCurrentTxMap()
-	unread := 0
+	unfinished := 0
 	marked := make(map[chainhash.Hash]uint32, len(forkBlocks))
 
 	// Block by block, so a block that cannot be read does not hold up the others; it is not
@@ -346,30 +341,28 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 	for _, fb := range forkBlocks {
 		hash := *fb.header.Hash()
 
-		onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{fb.meta.ID}, best.Hash())
-		if err != nil {
-			return errors.NewProcessingError("[markSkippedForkTxs] error checking whether fork block %s is on the best chain", hash, err)
-		}
+		if !fb.meta.MinedSet {
+			b.logger.Infof("[BlockAssembler] fork block %s is not processed by block validation yet, marking its skipped transactions on a later run", hash)
+			unfinished++
 
-		if onBest {
-			// Moving onto it is a reorg, which marks what it moves back.
 			continue
 		}
 
 		hashes, err := b.blockTxHashes(ctx, fb.header)
 		if err != nil {
 			b.logger.Errorf("[BlockAssembler] error reading fork block %s to mark skipped fork transactions: %v", hash, err)
-			unread++
+			unfinished++
 
 			continue
 		}
 
-		branchOnly, err := b.branchOnlyMeta(ctx, hashes, map[uint32]struct{}{fb.meta.ID: {}}, best, fields.UnminedSince, fields.Conflicting)
+		branchOnly, _, err := b.branchOnlyMeta(ctx, hashes, map[uint32]struct{}{fb.meta.ID: {}}, best, fields.UnminedSince, fields.Conflicting)
 		if err != nil {
 			return errors.NewProcessingError("[markSkippedForkTxs] error finding the transactions of fork block %s off the best chain", hash, err)
 		}
 
 		toMark := make([]chainhash.Hash, 0, len(branchOnly))
+		poolable := make(map[chainhash.Hash]struct{})
 
 		for _, u := range branchOnly {
 			// Still stamped unmined: no block marked it mined on the longest chain, as for one
@@ -381,16 +374,25 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 			toMark = append(toMark, u.Hash)
 
 			if !atStart && !u.Data.Conflicting && !txMap.Exists(u.Hash) {
-				b.skippedForkReloadPending = true
+				poolable[u.Hash] = struct{}{}
 			}
 		}
 
 		if len(toMark) > 0 {
-			if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, toMark, false); err != nil {
+			onBest, err := b.markOffLongestChain(ctx, toMark)
+			if err != nil {
 				return errors.NewProcessingError("[markSkippedForkTxs] error marking %d transactions of fork block %s as not on the longest chain", len(toMark), hash, err)
 			}
 
-			b.logger.Warnf("[BlockAssembler] followed the best header without the replay: marked %d transactions of fork block %s as not on the longest chain", len(toMark), hash)
+			for _, txHash := range onBest {
+				delete(poolable, txHash)
+			}
+
+			if len(poolable) > 0 {
+				b.skippedForkReloadPending = true
+			}
+
+			b.logger.Warnf("[BlockAssembler] followed the best header without the replay: marked %d transactions of fork block %s as not on the longest chain", len(toMark)-len(onBest), hash)
 		}
 
 		marked[hash] = fb.meta.Height
@@ -404,11 +406,54 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 		b.skippedForkBlocksMarked[hash] = height
 	}
 
-	if unread > 0 {
-		return errors.NewProcessingError("[markSkippedForkTxs] %d of %d fork blocks could not be read", unread, len(forkBlocks))
+	if unfinished > 0 {
+		return errors.NewProcessingError("[markSkippedForkTxs] %d of %d fork blocks could not be marked yet", unfinished, len(forkBlocks))
 	}
 
 	return nil
+}
+
+// markOffLongestChain marks the transactions as not on the longest chain, then marks again as on
+// it each one a block of the best chain contains by then, which it returns. The write is decided
+// on a read of the best chain: a block that became the best tip since, and whose setTxMined
+// cleared unmined_since before the write, would otherwise be left with it set while it is mined
+// on the best chain, and moving forward onto that block does not mark it again.
+func (b *BlockAssembler) markOffLongestChain(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
+	if err := b.utxoStore.MarkTransactionsOnLongestChain(ctx, hashes, false); err != nil {
+		return nil, err
+	}
+
+	best, _, err := b.blockchainClient.GetBestBlockHeader(ctx)
+	if err != nil {
+		return nil, errors.NewProcessingError("[markOffLongestChain] error getting the best block header", err)
+	}
+
+	_, onBest, err := b.branchOnlyMeta(ctx, hashes, nil, best)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(onBest) > 0 {
+		if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, onBest, true); err != nil {
+			return nil, err
+		}
+	}
+
+	return onBest, nil
+}
+
+// skippedForkMarkFloor is the lowest height of a fork block markSkippedForkTxs reads: the replay
+// floor, raised to where subtree files are surely still kept. A subtree file is kept until the
+// UTXO store's height when it was written, normally one below its block, plus the subtree
+// retention. A lower fork block may have lost it, and was the best tip, if ever, a retention ago.
+func (b *BlockAssembler) skippedForkMarkFloor(bestHeight uint32) uint32 {
+	floor := b.bestTipFloor(bestHeight)
+
+	if retention := b.settings.GetSubtreeValidationBlockHeightRetention(); retention > 0 && bestHeight+2 > retention {
+		floor = max(floor, bestHeight+2-retention)
+	}
+
+	return floor
 }
 
 // reloadAfterSkippedForkMark reloads the pool on block assembly's tip, as the replay's restamp
@@ -441,10 +486,13 @@ func (b *BlockAssembler) reloadAfterSkippedForkMark(ctx context.Context, atStart
 // forkBlocksBelow returns the blocks of the fork ending at tipHash, from the tip down to the
 // fork point, the first block that is an ancestor of best, or to the floor, with their meta.
 // It reads the headers in pages of at most bestTipPageSize and blockchain_maxBlockHeadersPerRequest,
-// so a fork longer than one read is read whole. branchLen, the branch length GetChainTips
-// reported, only sizes the first read: the store caps the walk that computes it, and reports 0
-// when it could not compute one. An error leaves the fork unread.
-func (b *BlockAssembler) forkBlocksBelow(ctx context.Context, tipHash *chainhash.Hash, tipHeight, branchLen, floor uint32, best *model.BlockHeader) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+// so a fork longer than one read is read whole. branchLen is the branch length GetChainTips
+// reported: the blocks within it are taken as off the best chain without asking, and it sizes the
+// first read. The store caps the walk that computes it, and reports 0 when it could not compute
+// one, so below it every block is checked. A block in walked, read from another tip, ends the
+// walk, since the rest is that tip's; every block returned is added to walked. An error leaves
+// the fork unread.
+func (b *BlockAssembler) forkBlocksBelow(ctx context.Context, tipHash *chainhash.Hash, tipHeight, branchLen, floor uint32, best *model.BlockHeader, walked map[chainhash.Hash]struct{}) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	pageSize := uint32(bestTipPageSize)
 	if limit := b.settings.BlockChain.MaxBlockHeadersPerRequest; limit > 0 && uint64(limit) < uint64(pageSize) {
 		pageSize = uint32(limit) //nolint:gosec // limit is positive and below bestTipPageSize
@@ -478,15 +526,22 @@ func (b *BlockAssembler) forkBlocksBelow(ctx context.Context, tipHash *chainhash
 				return headers, metas, nil
 			}
 
-			onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{pageMetas[i].ID}, best.Hash())
-			if err != nil {
-				return nil, nil, err
-			}
-
-			if onBest {
+			if _, done := walked[*page[i].Hash()]; done {
 				return headers, metas, nil
 			}
 
+			if uint32(len(headers)) >= branchLen { //nolint:gosec // a fork walk is far below 2^32 blocks
+				onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{pageMetas[i].ID}, best.Hash())
+				if err != nil {
+					return nil, nil, err
+				}
+
+				if onBest {
+					return headers, metas, nil
+				}
+			}
+
+			walked[*page[i].Hash()] = struct{}{}
 			headers = append(headers, page[i])
 			metas = append(metas, pageMetas[i])
 		}
@@ -1219,7 +1274,7 @@ func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockH
 	if len(branchOnly) > 0 {
 		b.heartbeat.BeatIfStarted()
 
-		if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, branchOnly, false); err != nil {
+		if _, err = b.markOffLongestChain(ctx, branchOnly); err != nil {
 			return errors.NewProcessingError("[restampStaleBranch] error marking %d stale branch transactions as not on the longest chain", len(branchOnly), err)
 		}
 	}
@@ -1234,7 +1289,7 @@ func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockH
 // branchOnlyTxs returns the hashes, in order, whose transaction no block of the best chain
 // contains. A hash the UTXO store has no record of (pruned) is left out.
 func (b *BlockAssembler) branchOnlyTxs(ctx context.Context, hashes []chainhash.Hash, staleIDs map[uint32]struct{}, best *model.BlockHeader) ([]chainhash.Hash, error) {
-	kept, err := b.branchOnlyMeta(ctx, hashes, staleIDs, best)
+	kept, _, err := b.branchOnlyMeta(ctx, hashes, staleIDs, best)
 	if err != nil {
 		return nil, err
 	}
@@ -1248,9 +1303,11 @@ func (b *BlockAssembler) branchOnlyTxs(ctx context.Context, hashes []chainhash.H
 }
 
 // branchOnlyMeta is branchOnlyTxs returning each transaction's record, read with its block ids
-// and the extra fields asked for.
-func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.Hash, staleIDs map[uint32]struct{}, best *model.BlockHeader, extra ...fields.FieldName) ([]*utxo.UnresolvedMetaData, error) {
+// and the extra fields asked for, and also the hashes whose transaction a block of the best chain
+// contains.
+func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.Hash, staleIDs map[uint32]struct{}, best *model.BlockHeader, extra ...fields.FieldName) ([]*utxo.UnresolvedMetaData, []chainhash.Hash, error) {
 	kept := make([]*utxo.UnresolvedMetaData, 0, len(hashes))
+	var mined []chainhash.Hash
 	requested := append([]fields.FieldName{fields.BlockIDs}, extra...)
 	onBest := make(map[uint32]bool)
 
@@ -1265,7 +1322,7 @@ func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.
 		}
 
 		if err := b.utxoStore.BatchDecorate(ctx, unresolved, requested...); err != nil {
-			return nil, errors.NewProcessingError("[branchOnlyTxs] error reading block ids", err)
+			return nil, nil, errors.NewProcessingError("[branchOnlyTxs] error reading block ids", err)
 		}
 
 	next:
@@ -1274,7 +1331,7 @@ func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.
 			case errors.Is(u.Err, errors.ErrTxNotFound):
 				continue
 			case u.Err != nil:
-				return nil, errors.NewProcessingError("[branchOnlyTxs] error reading block ids of %s", chunk[i], u.Err)
+				return nil, nil, errors.NewProcessingError("[branchOnlyTxs] error reading block ids of %s", chunk[i], u.Err)
 			}
 
 			if u.Data != nil {
@@ -1287,13 +1344,14 @@ func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.
 					if !known {
 						var err error
 						if on, err = b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{id}, best.Hash()); err != nil {
-							return nil, errors.NewProcessingError("[branchOnlyTxs] error checking whether block %d is on the best chain", id, err)
+							return nil, nil, errors.NewProcessingError("[branchOnlyTxs] error checking whether block %d is on the best chain", id, err)
 						}
 
 						onBest[id] = on
 					}
 
 					if on {
+						mined = append(mined, chunk[i])
 						continue next
 					}
 				}
@@ -1303,7 +1361,7 @@ func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.
 		}
 	}
 
-	return kept, nil
+	return kept, mined, nil
 }
 
 // bestBlockKey returns the best block and its place in the best-tip order. The place is read from

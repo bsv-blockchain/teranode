@@ -150,31 +150,36 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   overtaken before block assembly moved onto it, which that sweep also caught, is
   covered by the best-tip replay (#2074). When that replay falls back to following the
   best header (a blockchain service that does not serve `BlocksBetterThan` yet during a
-  rolling upgrade, or a replay given up after three failures in a row), block assembly
-  marks as not on the longest chain the transactions of recent fork blocks that no block
-  of the best chain contains and that a block marked mined, after waiting for every
-  pending `mined_set`. It walks every fork down from its chain tip to the fork point,
-  past invalid blocks and in pages however long the fork is, and reads each fork block
-  within the UTXO retention that block validation has processed once. The run is
-  recorded as pending under a new blockchain state key, `BlockAssemblerSkippedForkMark`,
-  before block assembly follows the best header; if that write fails, block assembly
-  stays on its tip and tries again. An older binary ignores the key. A reset still marks
-  every transaction in block assembly. (#2065)
+  rolling upgrade, or a replay given up after three failures in a row), and after a
+  reset while the blockchain service does not serve it, block assembly marks as not on
+  the longest chain the transactions of recent fork blocks that no block of the best
+  chain contains and that a block marked mined. A transaction a best-chain block mines by
+  the time the mark is written is marked as mined again. It walks every fork down from
+  its chain tip to the fork point, past invalid blocks and in pages however long the
+  fork is, and reads, once, each fork block block validation has finished whose subtree
+  files the subtree retention still keeps. It runs only with block assembly on the best
+  tip. The run is recorded as pending under a new blockchain state key,
+  `BlockAssemblerSkippedForkMark`, before block assembly follows the best header; if
+  that write fails, block assembly stays on its tip and tries again. An older binary
+  ignores the key. A reset still marks every transaction in block assembly. (#2065)
     - **Pool reload.** When the mark takes a transaction off the longest chain that the
       pool does not hold and could (one only the skipped block had, not a conflicting
       one), block assembly reloads the pool on its own tip. That is a full reset, as the
       replay's restamp of a stale branch runs. A fork block that never was the best tip,
       or a transaction that lost a double spend, does not cause one.
     - **Retries.** A run that cannot finish, for example on a fork block whose subtree
-      it cannot read, stays pending. Every later block pass on the best tip runs it
+      it cannot read or that block validation has not finished, stays pending. Every later block pass on the best tip runs it
       again, and the reconcile timer wakes it after a back-off that starts at 5s and
       doubles up to 5 minutes, even with `blockassembly_reconcileInterval=0`.
     - **Start fails while it is unfinished.** A restart finishes a pending run before it
       loads the unmined transactions. If it cannot, for example because a fork block's
       subtree is unreadable or gone, block assembly fails to start rather than load a
-      pool without those transactions; it starts once the subtree can be read or the
-      block falls below the retention floor. Watch for `could not finish, not loading
-      the unmined transactions` in the logs.
+      pool without those transactions, and starts once the subtree can be read. In a
+      single-process node a failed start stops block validation too, so the chain does
+      not advance past the block and the start keeps failing until the subtree is
+      restored or the `BlockAssemblerSkippedForkMark` row is deleted from the
+      blockchain store's `state` table, which gives the block's transactions up. Watch
+      for `could not finish, not loading the unmined transactions` in the logs.
 
 - **`GetLastNBlocks` honours `fromHeight` when orphans are included.** The SQL
   blockchain store ignored `fromHeight` with `includeOrphans=true` and always returned
