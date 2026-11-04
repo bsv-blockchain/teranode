@@ -619,3 +619,37 @@ func TestTableNewRejectsABadGrowAt(t *testing.T) {
 		require.Errorf(t, err, "GrowAt %v", g)
 	}
 }
+
+// A grow forced by GrowAt that fails still leaves the key inserted, and says so: inserted=true
+// with the error.
+func TestTableAFailedGrowAtGrowKeepsTheInsert(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory")
+	}
+
+	dir := t.TempDir()
+
+	tbl, err := New(Options{Dir: dir, Prefix: "growatfail", KeySize: 32, ValueSize: 8, Expected: 1, GrowAt: 0.5})
+	require.NoError(t, err)
+	defer tbl.Close()
+
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	for i := uint64(0); i < minSegSlots/2; i++ {
+		_, inserted, err := tbl.Upsert(collidingKey(i), i)
+		require.NoError(t, err)
+		require.True(t, inserted)
+	}
+
+	last := collidingKey(minSegSlots / 2)
+
+	_, inserted, err := tbl.Upsert(last, 7)
+	require.Error(t, err, "the grow past half cannot create its file")
+	require.True(t, inserted, "but the key went in before it")
+
+	v, found, err := tbl.Lookup(last)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, uint64(7), v)
+}

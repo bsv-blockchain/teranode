@@ -2,6 +2,8 @@ package netsync
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/maphash"
 	"io"
 	"os"
 	"path/filepath"
@@ -728,7 +730,8 @@ const (
 	dedupSpillGrowAt = 0.75
 
 	// dedupDiskCheckEvery is how many Puts a spilled map makes between checks of the free disk.
-	// Each Put writes at most one 4 KiB page, so 16,384 of them write at most 64 MiB.
+	// Apart from a grow, which the claim of twice the backing files covers, each Put writes at most
+	// one new 4 KiB page, so 16,384 of them write at most 64 MiB beyond the claim.
 	dedupDiskCheckEvery = 1 << 14
 
 	// dedupDiskSpare is the disk a spilled map leaves free beyond what every spilled map has
@@ -742,6 +745,35 @@ const (
 // a SIGBUS, which kills the process (stores/mmaphash mapRegion), and the bytes driving the table
 // come from a peer whose body has not yet been checked against its header.
 var dedupDiskClaimed atomic.Int64
+
+// newDedupDiskTable creates a spilled map's disk table. A variable so a test can hand back a table
+// whose Puts fail.
+var newDedupDiskTable = model.NewDiskTxMapUint64
+
+// dedupKeySeeds key diskKey. Drawn once per process, so a peer cannot know them.
+var dedupKeySeeds = [2]maphash.Seed{maphash.MakeSeed(), maphash.MakeSeed()}
+
+// diskKey is the key a hash is stored under in a spilled map's disk table: the hash with its first
+// 16 bytes, which pick the table's segment and start slot (stores/mmaphash segOf and bucketOf),
+// XORed with a keyed hash of its last 16.
+//
+// The hash is a txid the peer chose before the merkle check. Used as it is, a peer could grind
+// its transactions into one segment, about 256 attempts each, and since a grow doubles every
+// segment, each such entry would add about 14 KB to the table's files instead of about 60 B,
+// driving the disk claim to the free-disk limit with a few hundred MB of body. Under a seed the
+// peer cannot know, its entries spread like any others. The mapping is reversible, since the last
+// 16 bytes pass through unchanged, so two hashes never share a key and the duplicate check stays
+// exact.
+func diskKey(hash chainhash.Hash) chainhash.Hash {
+	key := hash
+	lo := maphash.Bytes(dedupKeySeeds[0], hash[16:])
+	hi := maphash.Bytes(dedupKeySeeds[1], hash[16:])
+
+	binary.LittleEndian.PutUint64(key[0:8], binary.LittleEndian.Uint64(key[0:8])^lo)
+	binary.LittleEndian.PutUint64(key[8:16], binary.LittleEndian.Uint64(key[8:16])^hi)
+
+	return key
+}
 
 // dedupDiskFree reports the bytes of dir's filesystem available to this process. A variable so a
 // test can stand in for a full disk.
@@ -800,7 +832,7 @@ func (m *pipelineDedupMap) Put(hash chainhash.Hash, value uint64) error {
 	if m.disk == nil {
 		err = m.mem.Put(hash, value)
 	} else {
-		err = m.disk.Put(hash, value)
+		err = m.disk.Put(diskKey(hash), value)
 	}
 
 	if err != nil {
@@ -820,7 +852,7 @@ func (m *pipelineDedupMap) Put(hash chainhash.Hash, value uint64) error {
 // one go. A failure is this node's (ERR_STORAGE_ERROR), never the peer's: the block is drained and
 // asked for again, and the peer is kept.
 func (m *pipelineDedupMap) spill() error {
-	disk, err := model.NewDiskTxMapUint64(model.DiskTxMapUint64Options{
+	disk, err := newDedupDiskTable(model.DiskTxMapUint64Options{
 		BasePaths: []string{m.dir},
 		Prefix:    "legacy-dedup",
 		// Sized for what moves, and grown from there by the entries that arrive; never from the
@@ -845,7 +877,7 @@ func (m *pipelineDedupMap) spill() error {
 	var putErr error
 
 	m.mem.Iter(func(hash chainhash.Hash, value uint64) bool {
-		putErr = disk.Put(hash, value)
+		putErr = disk.Put(diskKey(hash), value)
 
 		return putErr != nil
 	})

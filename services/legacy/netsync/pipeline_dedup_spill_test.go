@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -40,9 +41,12 @@ func stubDiskFree(t *testing.T, free func(dir string) (uint64, error)) {
 }
 
 // newSpillTestMap returns a pipeline dedup map that moves to a disk table under a test directory
-// once it holds maxInMemory entries, and a counter of the times it reported moving.
+// once it holds maxInMemory entries, and a counter of the times it reported moving. The free-disk
+// check sees plentyOfDisk; a test that wants another value stubs it after this call.
 func newSpillTestMap(t *testing.T, maxInMemory int) (*pipelineDedupMap, *[]int) {
 	t.Helper()
+
+	stubDiskFree(t, plentyOfDisk)
 
 	tSettings := test.CreateBaseTestSettings(t)
 	tSettings.Legacy.StreamDedupMaxInMemoryEntries = maxInMemory
@@ -63,8 +67,6 @@ func newSpillTestMap(t *testing.T, maxInMemory int) (*pipelineDedupMap, *[]int) 
 func TestPipelineDedupMap_MovesToDiskPastTheCap(t *testing.T) {
 	const maxInMemory = 8
 
-	stubDiskFree(t, plentyOfDisk)
-
 	m, spills := newSpillTestMap(t, maxInMemory)
 
 	for i := uint64(0); i < maxInMemory; i++ {
@@ -83,7 +85,7 @@ func TestPipelineDedupMap_MovesToDiskPastTheCap(t *testing.T) {
 	require.Nil(t, m.mem, "and the in-memory map is let go")
 
 	for i := uint64(0); i < 3*maxInMemory; i++ {
-		v, ok := m.disk.Get(spillTestHash(i))
+		v, ok := m.disk.Get(diskKey(spillTestHash(i)))
 		require.True(t, ok, "entry %d is in the disk table, moved or put there", i)
 		require.Equal(t, i, v)
 	}
@@ -117,8 +119,6 @@ func TestPipelineDedupMap_StaysInMemoryBelowTheCap(t *testing.T) {
 // A duplicate after the move is still the CVE-2012-2459 refusal, the peer's fault and one of the
 // three that may ban, not a local failure.
 func TestPipelineDedupMap_ABuilderStillRefusesADuplicateAfterTheMove(t *testing.T) {
-	stubDiskFree(t, plentyOfDisk)
-
 	m, spills := newSpillTestMap(t, 2)
 
 	b, err := newBlockStreamBuilder(8, 8, coinbaseTx(t), noopEmit, m)
@@ -218,11 +218,10 @@ func TestNewPipelineDedupMap_TheCapBoundsTheFirstAllocation(t *testing.T) {
 // free disk does not cover what every spilled map claims: a write to a sparse mmap file on a full
 // disk kills the process, and a peer drives these writes before the merkle root is checked.
 func TestPipelineDedupMap_RefusesToSpillOntoAFullDisk(t *testing.T) {
-	stubDiskFree(t, func(string) (uint64, error) { return dedupDiskSpare, nil })
-
 	claimedBefore := dedupDiskClaimed.Load()
 
 	m, spills := newSpillTestMap(t, 2)
+	stubDiskFree(t, func(string) (uint64, error) { return dedupDiskSpare, nil })
 
 	require.NoError(t, m.Put(spillTestHash(0), 0))
 	require.NoError(t, m.Put(spillTestHash(1), 1))
@@ -243,12 +242,12 @@ func TestPipelineDedupMap_RefusesToSpillOntoAFullDisk(t *testing.T) {
 
 // The check repeats as a spilled map grows, and the disk the maps claim is given back on Close.
 func TestPipelineDedupMap_ChecksTheDiskAsItGrowsAndGivesItBackOnClose(t *testing.T) {
-	free := uint64(1 << 50)
-	stubDiskFree(t, func(string) (uint64, error) { return free, nil })
-
 	claimedBefore := dedupDiskClaimed.Load()
 
 	m, spills := newSpillTestMap(t, 2)
+
+	free := uint64(1 << 50)
+	stubDiskFree(t, func(string) (uint64, error) { return free, nil })
 
 	for i := uint64(0); i < 3; i++ {
 		require.NoError(t, m.Put(spillTestHash(i), i))
@@ -278,8 +277,9 @@ func TestPipelineDedupMap_ChecksTheDiskAsItGrowsAndGivesItBackOnClose(t *testing
 }
 
 // End to end: a block with more transactions than the in-memory cap still converts, and a
-// duplicate in such a block is still refused. The same block with nowhere to move the map fails as
-// this node's fault, which is what shows the sink took the disk path at all.
+// duplicate in such a block is still refused, each giving back the disk its map claimed. The same
+// block with nowhere to move the map fails as this node's fault, which is what shows the sink took
+// the disk path at all.
 func TestPipelineSink_ABlockPastTheDedupCapStillConverts(t *testing.T) {
 	store := memory.New()
 	sm := newPipelineParkManager(t, store, 8)
@@ -292,6 +292,8 @@ func TestPipelineSink_ABlockPastTheDedupCapStillConverts(t *testing.T) {
 
 	stubDiskFree(t, func(string) (uint64, error) { return 0, nil })
 
+	claimedBefore := dedupDiskClaimed.Load()
+
 	converted, err := sm.pipelineBlockSink(*blk.Hash(), &blk.MsgBlock().Header, bytes.NewReader(body), sinkPayloadLen(body))
 	require.Error(t, err, "the block passes the cap, so the map must move")
 	require.Contains(t, err.Error(), "disk-backed duplicate map")
@@ -303,6 +305,7 @@ func TestPipelineSink_ABlockPastTheDedupCapStillConverts(t *testing.T) {
 	converted, err = sm.pipelineBlockSink(*blk.Hash(), &blk.MsgBlock().Header, bytes.NewReader(body), sinkPayloadLen(body))
 	require.NoError(t, err)
 	require.True(t, converted)
+	require.Equal(t, claimedBefore, dedupDiskClaimed.Load(), "a converted block gives its disk claim back; the sink's deferred release is the only place that does")
 
 	dup := wireBlockWithTxs(t, 8, false)
 	pipelineHeaderFixture(t, sm, dup)
@@ -312,4 +315,98 @@ func TestPipelineSink_ABlockPastTheDedupCapStillConverts(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "duplicate")
 	require.False(t, converted)
+	require.Equal(t, claimedBefore, dedupDiskClaimed.Load(), "and so does a refused one")
+}
+
+// A peer chooses its txids before the merkle check, so it can grind them into one segment of the
+// disk table (the segment and start slot come from the key's first 16 bytes), and every grow
+// doubles all 256 segments: each ground entry then cost ~14 KB of file instead of ~60 B, and the
+// disk claim reached the free-disk limit cheaply (review of PR 2111). The map scatters the key
+// under a per-process seed first, so entries that agree in those bytes spread like any others.
+func TestPipelineDedupMap_GroundKeysDoNotGrowTheDiskTable(t *testing.T) {
+	m, spills := newSpillTestMap(t, 8)
+
+	for i := uint64(0); i <= 8; i++ {
+		require.NoError(t, m.Put(spillTestHash(i), i))
+	}
+
+	require.Len(t, *spills, 1)
+
+	start := m.disk.FileBytes()
+
+	for i := uint64(1); i <= 2_000; i++ {
+		var h chainhash.Hash // bytes 0 to 16 are the same for every one: one segment, one start slot
+
+		binary.LittleEndian.PutUint64(h[16:], i)
+		require.NoError(t, m.Put(h, i))
+	}
+
+	require.Equal(t, start, m.disk.FileBytes(), "2,000 ground entries across 256 segments of 64 slots grow nothing")
+
+	var first chainhash.Hash
+
+	binary.LittleEndian.PutUint64(first[16:], 1)
+	require.True(t, errors.Is(m.Put(first, 0), errors.ErrTxExists), "and a repeat is still a duplicate")
+}
+
+// The free disk is held against what every spilled map claims, not one map's own claim: two
+// blocks spilling at once share the disk.
+func TestPipelineDedupMap_ChecksTheDiskAgainstEverySpilledMap(t *testing.T) {
+	a, _ := newSpillTestMap(t, 2)
+	b, _ := newSpillTestMap(t, 2)
+
+	free := uint64(1 << 50)
+	stubDiskFree(t, func(string) (uint64, error) { return free, nil })
+
+	for i := uint64(0); i < 3; i++ {
+		require.NoError(t, a.Put(spillTestHash(i), i))
+		require.NoError(t, b.Put(spillTestHash(i), i))
+	}
+
+	require.Positive(t, a.claimed)
+	require.Positive(t, b.claimed)
+
+	// Room for b's own claim but not for a's as well.
+	free = uint64(a.claimed+b.claimed/2) + dedupDiskSpare //nolint:gosec // claims are positive
+
+	err := b.claimDisk()
+	require.Error(t, err, "b's claim fits alone, but not beside a's")
+	require.True(t, isLocalSinkFault(err), "%v", err)
+
+	require.NoError(t, a.Close())
+	require.NoError(t, b.claimDisk(), "with a released, b fits")
+}
+
+// A spill whose copy fails part-way is this node's fault: the half-filled table is released with
+// its claim, and the in-memory map is kept.
+func TestPipelineDedupMap_ACopyThatFailsPartWayIsALocalFault(t *testing.T) {
+	saved := newDedupDiskTable
+	t.Cleanup(func() { newDedupDiskTable = saved })
+
+	newDedupDiskTable = func(opts model.DiskTxMapUint64Options) (*model.DiskTxMapUint64, error) {
+		disk, err := saved(opts)
+		if err == nil {
+			disk.Freeze() // every Put now fails, as a copy into a table that cannot grow would
+		}
+
+		return disk, err
+	}
+
+	claimedBefore := dedupDiskClaimed.Load()
+
+	m, spills := newSpillTestMap(t, 2)
+
+	require.NoError(t, m.Put(spillTestHash(0), 0))
+	require.NoError(t, m.Put(spillTestHash(1), 1))
+
+	err := m.Put(spillTestHash(2), 2)
+	require.Error(t, err)
+	require.True(t, isLocalSinkFault(err), "%v", err)
+	require.False(t, errors.Is(err, errors.ErrTxExists))
+	require.Empty(t, *spills)
+	require.Nil(t, m.disk)
+	require.Equal(t, claimedBefore, dedupDiskClaimed.Load())
+
+	_, ok := m.mem.Get(spillTestHash(1))
+	require.True(t, ok, "the in-memory map is intact")
 }
