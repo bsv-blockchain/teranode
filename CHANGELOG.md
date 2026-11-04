@@ -141,6 +141,15 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Listeners no longer offer Multipath TCP.** Binaries built from this module now
+  default to `GODEBUG=multipathtcp=0` (`godebug` directive in `go.mod`), so on Linux
+  every TCP listener (gRPC, HTTP, legacy P2P, libp2p) opens a plain TCP socket instead
+  of the MPTCP socket Go has opened by default since 1.24. MPTCP clients fall back to
+  TCP. This is interim hardening for CVE-2026-98432; a patched kernel is the real fix.
+  An operator who needs MPTCP listeners can restore the previous behaviour by setting
+  `GODEBUG=multipathtcp=2` (MPTCP on listeners only) in the service's environment.
+  (#2112)
+
 - **Block assembly keeps valid unmined transactions when it reloads them with input
   checks, and retries a reload the UTXO store did not answer.** This affects every
   store. On the sql store, the reload that validates inputs (after a reorg, the
