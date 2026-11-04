@@ -118,6 +118,11 @@ type Options struct {
 	// Used to coordinate cleanup with block persister progress (can be nil)
 	GetPersistedHeight func() uint32
 
+	// ClearParentRefs removes the references surviving parents hold to a transaction about to be
+	// deleted. In defensive mode the pruner calls it for every conflicting record it reaps and
+	// keeps a record whose references could not be cleared.
+	ClearParentRefs func(ctx context.Context, txHash *chainhash.Hash) error
+
 	// Observers is a list of observers to notify when pruning completes
 	Observers []pruner.Observer
 }
@@ -143,6 +148,7 @@ type Service struct {
 	utxoBatchSize                  int
 	blockHeightRetention           uint32
 	defensiveEnabled               bool
+	clearParentRefs                func(ctx context.Context, txHash *chainhash.Hash) error
 	defensiveBatchReadSize         int
 	chunkSize                      int
 	chunkGroupLimit                int
@@ -386,6 +392,7 @@ func NewService(settings *settings.Settings, opts Options) (*Service, error) {
 		utxoBatchSize:                  settings.UtxoStore.UtxoBatchSize,
 		blockHeightRetention:           settings.GetUtxoStoreBlockHeightRetention(),
 		defensiveEnabled:               settings.Pruner.UTXODefensiveEnabled,
+		clearParentRefs:                opts.ClearParentRefs,
 		defensiveBatchReadSize:         settings.Pruner.UTXODefensiveBatchReadSize,
 		chunkSize:                      settings.Pruner.UTXOChunkSize,
 		chunkGroupLimit:                settings.Pruner.UTXOChunkGroupLimit,
@@ -1162,6 +1169,18 @@ func (s *Service) processRecordChunkCarry(ctx context.Context, blockHeight uint3
 					txHash.String(), unsafeChild, len(childrenHashes))
 				skippedCount++
 				continue
+			}
+		}
+
+		if s.defensiveEnabled && s.clearParentRefs != nil {
+			if conflicting, _ := rec.Record.Bins[s.fieldConflicting].(bool); conflicting {
+				if err = s.clearParentRefs(ctx, txHash); err != nil {
+					s.logger.Errorf("Defensive skip - conflicting tx %s kept, failed to clear parent references: %v", txHash.String(), err)
+
+					skippedCount++
+
+					continue
+				}
 			}
 		}
 

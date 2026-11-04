@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
@@ -55,6 +56,7 @@ type Service struct {
 	settings         *settings.Settings
 	db               *usql.DB
 	ctx              context.Context
+	reapConflicting  func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)
 }
 
 // Options contains configuration options for the cleanup service
@@ -76,6 +78,11 @@ type Options struct {
 	// Only ON COMMIT DROP support differs, so an empty value is treated as
 	// "not Postgres" and falls back to the portable form.
 	Engine string
+
+	// ReapConflicting deletes one expired conflicting record and the references its parents hold
+	// to it in one transaction. It returns false when the record is no longer eligible or when a
+	// conflict intent is pending, and the pruner then keeps the record for a later block.
+	ReapConflicting func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)
 }
 
 // NewService creates a new cleanup service for the SQL store
@@ -108,6 +115,7 @@ func NewService(tSettings *settings.Settings, opts Options) (*Service, error) {
 		settings:         tSettings,
 		db:               opts.DB,
 		ctx:              opts.Ctx,
+		reapConflicting:  opts.ReapConflicting,
 	}
 
 	return service, nil
@@ -230,6 +238,102 @@ func isPruneRetryable(err error, engine string) bool {
 	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
 }
 
+// DefensiveDeleteFilter selects the records the defensive pruner may delete. It takes the block height as
+// $1 and the safety window as $2 and expects the transactions table aliased as t. A spent output does not
+// hold its parent back once the pruner has marked that output's spender as deleted, because a marked child
+// is already gone. The SQL store's reapConflicting re-checks it under the record's lock.
+const DefensiveDeleteFilter = `t.delete_at_height IS NOT NULL
+			  AND t.delete_at_height <= $1
+			  AND (t.unmined_since IS NULL OR t.conflicting)
+			  AND NOT EXISTS (
+			    -- Find ANY unstable child - if found, parent cannot be deleted
+			    -- This ensures ALL children must be stable before parent deletion
+			    SELECT 1
+			    FROM outputs o
+			    WHERE o.transaction_id = t.id
+			      AND o.spending_data IS NOT NULL
+			      AND NOT EXISTS (
+			          SELECT 1 FROM deleted_children d
+			          WHERE d.parent_id = t.id
+			            AND d.child_hash = substr(o.spending_data, 1, 32)
+			      )
+			      AND NOT EXISTS (
+			        -- Extract child TX hash from spending_data (first 32 bytes)
+			        -- Check if this child is NOT stable
+			        SELECT 1
+			        FROM transactions child
+			        INNER JOIN block_ids child_blocks ON child.id = child_blocks.transaction_id
+			        WHERE child.hash = substr(o.spending_data, 1, 32)
+			          AND child.unmined_since IS NULL  -- Child must be mined
+			          AND child_blocks.block_height <= ($1 - $2)  -- Child must be stable
+			      )
+			  )`
+
+// excludeConflicting is appended to the defensive candidate selection when a reap function is set.
+const excludeConflicting = `
+			  AND NOT t.conflicting`
+
+// reapExpiredConflicting reaps every expired conflicting record the defensive delete skipped. Each
+// record is reaped in its own transaction by the store, which keeps a record that was promoted or that
+// has a conflict intent pending. A record that cannot be reaped is kept and retried next block.
+func (s *Service) reapExpiredConflicting(ctx context.Context, blockHeight, safetyWindow uint32) (int64, error) {
+	if s.reapConflicting == nil {
+		return 0, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT t.hash FROM transactions t
+		WHERE `+DefensiveDeleteFilter+`
+		  AND t.conflicting
+	`, blockHeight, safetyWindow)
+	if err != nil {
+		return 0, errors.NewStorageError("failed to list expired conflicting transactions", err)
+	}
+
+	defer rows.Close()
+
+	var hashes []chainhash.Hash
+
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return 0, errors.NewStorageError("failed to scan expired conflicting transaction", err)
+		}
+
+		hash, hashErr := chainhash.NewHash(raw)
+		if hashErr != nil {
+			continue
+		}
+
+		hashes = append(hashes, *hash)
+	}
+
+	if err = rows.Err(); err != nil {
+		return 0, errors.NewStorageError("failed to read expired conflicting transactions", err)
+	}
+
+	if err = rows.Close(); err != nil {
+		return 0, errors.NewStorageError("failed to close expired conflicting transactions", err)
+	}
+
+	var reaped int64
+
+	for i := range hashes {
+		ok, reapErr := s.reapConflicting(ctx, hashes[i], blockHeight, safetyWindow)
+		if reapErr != nil {
+			s.logger.Errorf("[pruner] keeping conflicting transaction %s: %v", hashes[i].String(), reapErr)
+
+			continue
+		}
+
+		if ok {
+			reaped++
+		}
+	}
+
+	return reaped, nil
+}
+
 // deleteTombstoned removes transactions that have passed their expiration time,
 // re-running the whole transaction on a serialization or lock conflict.
 //
@@ -251,7 +355,16 @@ func (s *Service) deleteTombstoned(ctx context.Context, blockHeight uint32) (del
 	for attempt := 0; attempt < maxPruneAttempts; attempt++ {
 		deleted, heldBack, err = s.deleteTombstonedTx(ctx, blockHeight)
 		if err == nil {
-			return deleted, heldBack, nil
+			if !s.defensiveEnabled {
+				return deleted, heldBack, nil
+			}
+
+			// The defensive transaction left expired conflicting records out
+			// when a reap function is set. Each is reaped on its own, after the
+			// commit, so a reap that fails never rolls back the prune above.
+			reaped, reapErr := s.reapExpiredConflicting(ctx, blockHeight, s.safetyWindow)
+
+			return deleted + reaped, heldBack, reapErr
 		}
 
 		if !isPruneRetryable(err, s.engine) {
@@ -347,8 +460,9 @@ func (e *pruneStepError) Unwrap() error { return e.err }
 // from the chain. Anything narrower needs a source of truth this table does not
 // have: whether the absent spender was mined and pruned, or merely lost.
 func (s *Service) deleteTombstonedTx(ctx context.Context, blockHeight uint32) (deleted, heldBack int64, err error) {
-	// Every statement below is a complete literal. Nothing is concatenated at
-	// runtime and no part of the SQL is ever built from data.
+	// Every statement below is built from string constants only. The one
+	// runtime join appends the constant excludeConflicting, and no part of the
+	// SQL is ever built from data.
 	//
 	// Non-defensive mode (the deployed configuration) needs no candidates table:
 	// its predicate cannot be changed by anything inside this transaction, so
@@ -528,58 +642,12 @@ func (s *Service) pruneWithDefensiveCheck(ctx context.Context, blockHeight uint3
 	const createCandidatesPostgres = `CREATE TEMP TABLE utxo_prune_candidates ON COMMIT DROP AS
 			SELECT t.id
 			FROM transactions t
-			WHERE t.delete_at_height IS NOT NULL
-			  AND t.delete_at_height <= $1
-			  AND (t.unmined_since IS NULL OR t.conflicting)
-			  AND NOT EXISTS (
-			    -- Find ANY unstable child - if found, parent cannot be deleted
-			    -- This ensures ALL children must be stable before parent deletion
-			    SELECT 1
-			    FROM outputs o
-			    WHERE o.transaction_id = t.id
-			      AND o.spending_data IS NOT NULL
-			      AND NOT EXISTS (
-			          SELECT 1 FROM deleted_children d
-			          WHERE d.parent_id = t.id
-			            AND d.child_hash = substr(o.spending_data, 1, 32)
-			      )
-			      AND NOT EXISTS (
-			        -- Extract child TX hash from spending_data (first 32 bytes)
-			        -- Check if this child is NOT stable
-			        SELECT 1
-			        FROM transactions child
-			        INNER JOIN block_ids child_blocks ON child.id = child_blocks.transaction_id
-			        WHERE child.hash = substr(o.spending_data, 1, 32)
-			          AND child.unmined_since IS NULL  -- Child must be mined
-			          AND child_blocks.block_height <= ($1 - $2)  -- Child must be stable
-			      )
-			  )`
+			WHERE ` + DefensiveDeleteFilter
 
 	const createCandidatesPortable = `CREATE TEMP TABLE utxo_prune_candidates AS
 			SELECT t.id
 			FROM transactions t
-			WHERE t.delete_at_height IS NOT NULL
-			  AND t.delete_at_height <= $1
-			  AND (t.unmined_since IS NULL OR t.conflicting)
-			  AND NOT EXISTS (
-			    SELECT 1
-			    FROM outputs o
-			    WHERE o.transaction_id = t.id
-			      AND o.spending_data IS NOT NULL
-			      AND NOT EXISTS (
-			          SELECT 1 FROM deleted_children d
-			          WHERE d.parent_id = t.id
-			            AND d.child_hash = substr(o.spending_data, 1, 32)
-			      )
-			      AND NOT EXISTS (
-			        SELECT 1
-			        FROM transactions child
-			        INNER JOIN block_ids child_blocks ON child.id = child_blocks.transaction_id
-			        WHERE child.hash = substr(o.spending_data, 1, 32)
-			          AND child.unmined_since IS NULL
-			          AND child_blocks.block_height <= ($1 - $2)
-			      )
-			  )`
+			WHERE ` + DefensiveDeleteFilter
 
 	const markerQuery = `INSERT INTO deleted_children (parent_id, child_hash)
   SELECT DISTINCT parent.id, child.hash
@@ -622,6 +690,13 @@ func (s *Service) pruneWithDefensiveCheck(ctx context.Context, blockHeight uint3
 	createCandidates := createCandidatesPortable
 	if s.engine == "postgres" {
 		createCandidates = createCandidatesPostgres
+	}
+
+	// With a reap function, expired conflicting records are left to
+	// reapExpiredConflicting, which clears the spends their parents hold to them
+	// before deleting them. Both fragments are constants.
+	if s.reapConflicting != nil {
+		createCandidates += excludeConflicting
 	}
 
 	txn, err := s.db.BeginTx(ctx, pruneTxOptions)

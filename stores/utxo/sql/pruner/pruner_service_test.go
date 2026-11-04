@@ -3,13 +3,18 @@ package pruner
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
+	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -519,4 +524,153 @@ func TestUnverifiedClaimClauseIsIdentical(t *testing.T) {
 	require.Equal(t, 2, strings.Count(string(src), clause("child")))
 	require.Equal(t, 4, strings.Count(string(src), clause("transactions")))
 	require.Equal(t, 6, strings.Count(string(src), "LEFT JOIN outputs ho ON"), "every copy of the clause must match the text above")
+}
+
+func newSqlmockService(t *testing.T, defensive bool, reap func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)) (*Service, sqlmock.Sqlmock, *[]string) {
+	t.Helper()
+
+	sqlDB, mock, err := sqlmock.New()
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+	})
+
+	var errorLogs []string
+
+	logger := &MockLogger{
+		ErrorfFunc: func(format string, args ...interface{}) {
+			errorLogs = append(errorLogs, fmt.Sprintf(format, args...))
+		},
+	}
+
+	tSettings := createTestSettings()
+	tSettings.Pruner.UTXODefensiveEnabled = defensive
+
+	service, err := NewService(tSettings, Options{
+		Logger:          logger,
+		DB:              &usql.DB{DB: sqlDB},
+		ReapConflicting: reap,
+	})
+	require.NoError(t, err)
+
+	return service, mock, &errorLogs
+}
+
+func TestReapExpiredConflicting(t *testing.T) {
+	hashA := chainhash.Hash{1}
+	hashB := chainhash.Hash{2}
+
+	t.Run("NoReapFunctionIsANoOp", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, true, nil)
+
+		reaped, err := service.reapExpiredConflicting(context.Background(), 100, 5)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), reaped)
+		require.NoError(t, mock.ExpectationsWereMet(), "no query may run without a reap function")
+	})
+
+	t.Run("ListQueryErrorIsReturned", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, true, func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
+			require.FailNow(t, "nothing must be reaped when the list query fails")
+
+			return false, nil
+		})
+
+		mock.ExpectQuery("SELECT t.hash").WillReturnError(sql.ErrConnDone)
+
+		reaped, err := service.reapExpiredConflicting(context.Background(), 100, 5)
+		require.Error(t, err)
+		require.ErrorIs(t, err, sql.ErrConnDone)
+		require.Equal(t, int64(0), reaped)
+	})
+
+	t.Run("RowIterationErrorIsReturned", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, true, func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
+			require.FailNow(t, "nothing must be reaped when the list cannot be read")
+
+			return false, nil
+		})
+
+		rows := sqlmock.NewRows([]string{"hash"}).AddRow(hashA[:]).RowError(0, sql.ErrConnDone)
+		mock.ExpectQuery("SELECT t.hash").WillReturnRows(rows)
+
+		reaped, err := service.reapExpiredConflicting(context.Background(), 100, 5)
+		require.Error(t, err)
+		require.Equal(t, int64(0), reaped)
+	})
+
+	t.Run("CloseErrorIsReturned", func(t *testing.T) {
+		service, mock, _ := newSqlmockService(t, true, func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
+			require.FailNow(t, "nothing must be reaped when the list cannot be closed")
+
+			return false, nil
+		})
+
+		rows := sqlmock.NewRows([]string{"hash"}).AddRow(hashA[:]).CloseError(sql.ErrConnDone)
+		mock.ExpectQuery("SELECT t.hash").WillReturnRows(rows)
+
+		reaped, err := service.reapExpiredConflicting(context.Background(), 100, 5)
+		require.Error(t, err)
+		require.Equal(t, int64(0), reaped)
+	})
+
+	t.Run("MalformedHashIsSkipped", func(t *testing.T) {
+		var reapedHashes []chainhash.Hash
+
+		service, mock, _ := newSqlmockService(t, true, func(_ context.Context, hash chainhash.Hash, _, _ uint32) (bool, error) {
+			reapedHashes = append(reapedHashes, hash)
+
+			return true, nil
+		})
+
+		rows := sqlmock.NewRows([]string{"hash"}).AddRow([]byte{1, 2, 3}).AddRow(hashB[:])
+		mock.ExpectQuery("SELECT t.hash").WillReturnRows(rows)
+
+		reaped, err := service.reapExpiredConflicting(context.Background(), 100, 5)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), reaped)
+		require.Equal(t, []chainhash.Hash{hashB}, reapedHashes)
+	})
+
+	t.Run("ReapErrorIsLoggedAndTheRestAreStillReaped", func(t *testing.T) {
+		var attempted []chainhash.Hash
+
+		service, mock, errorLogs := newSqlmockService(t, true, func(_ context.Context, hash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error) {
+			require.Equal(t, uint32(100), blockHeight)
+			require.Equal(t, uint32(5), safetyWindow)
+
+			attempted = append(attempted, hash)
+
+			if hash == hashA {
+				return false, errors.NewStorageError("reap failed")
+			}
+
+			return true, nil
+		})
+
+		rows := sqlmock.NewRows([]string{"hash"}).AddRow(hashA[:]).AddRow(hashB[:])
+		mock.ExpectQuery("SELECT t.hash").WillReturnRows(rows)
+
+		reaped, err := service.reapExpiredConflicting(context.Background(), 100, 5)
+		require.NoError(t, err, "a record that cannot be reaped is kept, not a pruning failure")
+		require.Equal(t, int64(1), reaped, "only the record that was reaped is counted")
+		require.Equal(t, []chainhash.Hash{hashA, hashB}, attempted)
+		require.Len(t, *errorLogs, 1)
+		require.Contains(t, (*errorLogs)[0], hashA.String())
+	})
+
+	t.Run("IneligibleRecordIsNotCounted", func(t *testing.T) {
+		service, mock, errorLogs := newSqlmockService(t, true, func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
+			return false, nil
+		})
+
+		rows := sqlmock.NewRows([]string{"hash"}).AddRow(hashA[:])
+		mock.ExpectQuery("SELECT t.hash").WillReturnRows(rows)
+
+		reaped, err := service.reapExpiredConflicting(context.Background(), 100, 5)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), reaped)
+		require.Empty(t, *errorLogs)
+	})
 }

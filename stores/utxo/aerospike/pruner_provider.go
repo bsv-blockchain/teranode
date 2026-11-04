@@ -1,8 +1,11 @@
 package aerospike
 
 import (
+	"context"
 	"sync"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
@@ -59,6 +62,9 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		Namespace:     s.namespace,
 		Set:           s.setName,
 		IndexWaiter:   s,
+		ClearParentRefs: func(ctx context.Context, txHash *chainhash.Hash) error {
+			return utxo.ClearParentRefs(ctx, s, txHash)
+		},
 	}
 
 	// Create a new pruner service
