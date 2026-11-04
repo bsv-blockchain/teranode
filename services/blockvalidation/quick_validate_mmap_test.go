@@ -3,9 +3,13 @@ package blockvalidation
 
 import (
 	"context"
+	"encoding/binary"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -319,4 +323,178 @@ func TestPipeline_MultiBatch_MmapBacked_HonestBodyValidates(t *testing.T) {
 	}
 
 	requireMmapDirEmpty(t, mmapDir)
+}
+
+// auditHostileSubtreeCount is the node count from audit finding B-027
+// (bitcoin-sv/teranode#4861). count * nodeSize wraps, so before go-subtree bounded it
+// the mmap loader mapped a tiny scratch file and then panicked in unsafe.Slice.
+const auditHostileSubtreeCount uint64 = 768614336404564651
+
+// malformedSubtreeBytes returns a 56-byte persisted subtree that declares count nodes
+// and carries none: rootHash(32) | fees(8) | sizeInBytes(8) | count(8).
+func malformedSubtreeBytes(count uint64) []byte {
+	b := make([]byte, 56)
+	binary.LittleEndian.PutUint64(b[48:], count)
+
+	return b
+}
+
+// TestSubtreeFromBytesWithMmap_MalformedCount_ReturnsError pins that a persisted
+// subtree whose declared count cannot be real comes back as an error carrying the
+// go-subtree sentinel, with no panic and no scratch file left behind (#4861). That the
+// heap retry is skipped is pinned by TestReadSubtree_MmapMalformedCount_ReturnsError,
+// where the extra blob read is observable.
+func TestSubtreeFromBytesWithMmap_MalformedCount_ReturnsError(t *testing.T) {
+	tests := []struct {
+		name    string
+		count   uint64
+		wantErr error
+	}{
+		{name: "audit count", count: auditHostileSubtreeCount, wantErr: subtreepkg.ErrNumLeavesOutOfRange},
+		{name: "count exceeds input", count: 1 << 36, wantErr: subtreepkg.ErrNodeCountExceedsInput},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mmapDir := t.TempDir()
+
+			var (
+				st  *subtreepkg.Subtree
+				err error
+			)
+
+			require.NotPanics(t, func() {
+				st, err = subtreeFromBytesWithMmap(malformedSubtreeBytes(tt.count), mmapDir)
+			})
+
+			require.Error(t, err)
+			require.True(t, errors.Is(err, tt.wantErr), "want %v, got %v", tt.wantErr, err)
+			require.Nil(t, st)
+			requireMmapDirEmpty(t, mmapDir)
+		})
+	}
+}
+
+// TestSubtreeFromBytesWithMmap_InfraFailureFallsBackToHeap pins the other half of the
+// gate: an mmap infrastructure failure (here a missing scratch directory, which makes
+// os.CreateTemp fail) still falls back to the heap loader for well-formed bytes.
+func TestSubtreeFromBytesWithMmap_InfraFailureFallsBackToHeap(t *testing.T) {
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddCoinbaseNode())
+
+	b, err := subtree.Serialize()
+	require.NoError(t, err)
+
+	st, err := subtreeFromBytesWithMmap(b, filepath.Join(t.TempDir(), "does-not-exist"))
+	require.NoError(t, err)
+	require.False(t, st.IsMmapBacked(), "expected heap-backed subtree from the fallback path")
+	require.Equal(t, subtree.RootHash(), st.RootHash())
+}
+
+// TestReadSubtree_MmapMalformedCount_ReturnsError drives a malformed persisted subtree
+// through the block-validation read path with the mmap backend enabled. The read must
+// fail with an error rather than a panic, leave no scratch file behind, and not re-open
+// the blob for a heap retry.
+func TestReadSubtree_MmapMalformedCount_ReturnsError(t *testing.T) {
+	tests := []struct {
+		name    string
+		count   uint64
+		wantErr error
+	}{
+		// Rejected before any scratch file is mapped.
+		{name: "audit count", count: auditHostileSubtreeCount, wantErr: subtreepkg.ErrNumLeavesOutOfRange},
+		// The store reader is not seekable, so this count passes every bound, maps a
+		// small sparse scratch file, and fails reading the first node.
+		{name: "short body", count: 1000, wantErr: io.EOF},
+		// Over the deserialization ceiling: rejected before mapping.
+		{name: "terabytes", count: 1 << 36, wantErr: subtreepkg.ErrNodeCountExceedsLimit},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx := context.Background()
+
+			utxoStore, subtreeValidationClient, blockchainClient, txStore, subtreeStore, cleanup := setup(t)
+			defer cleanup()
+
+			tSettings := test.CreateBaseTestSettings(t)
+
+			subtreeHash := chainhash.Hash{0x48, 0x61, 0x10}
+			require.NoError(t, subtreeStore.Set(ctx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck, malformedSubtreeBytes(tt.count)))
+
+			recStore := &recordingSubtreeStore{Store: subtreeStore}
+
+			bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, blockchainClient, recStore, txStore, utxoStore, nil, subtreeValidationClient)
+
+			mmapDir := t.TempDir()
+			bv.mmapDir = mmapDir
+
+			block := &model.Block{
+				Header: &model.BlockHeader{
+					Version:        1,
+					HashPrevBlock:  &chainhash.Hash{},
+					HashMerkleRoot: &subtreeHash,
+					Timestamp:      1,
+				},
+				Height: 1,
+			}
+
+			var result subtreeResult
+
+			require.NotPanics(t, func() {
+				result = bv.readSubtree(ctx, block, 0, &subtreeHash, subtreeReadWithFullSubtree, "batch")
+			})
+
+			require.Error(t, result.err)
+			require.True(t, errors.Is(result.err, tt.wantErr), "want %v, got %v", tt.wantErr, result.err)
+			require.Nil(t, result.subtree)
+			requireMmapDirEmpty(t, mmapDir)
+			require.Equal(t, 1, recStore.readsOf(subtreeHash, fileformat.FileTypeSubtreeToCheck),
+				"malformed bytes must not be re-read for a heap retry")
+		})
+	}
+}
+
+// wrappedErr wraps err with a message the way go-subtree's fmt.Errorf("...: %w") does,
+// so TestIsMmapInfraError can build realistic chains.
+type wrappedErr struct {
+	msg string
+	err error
+}
+
+func (w wrappedErr) Error() string { return w.msg + ": " + w.err.Error() }
+
+func (w wrappedErr) Unwrap() error { return w.err }
+
+// TestIsMmapInfraError pins the fallback classification against the wrapping go-subtree
+// v1.6.4 produces: scratch-file and mapping failures fall back to the heap loader, count
+// and short-body errors from the subtree bytes do not.
+func TestIsMmapInfraError(t *testing.T) {
+	allocFailed := func(err error) error {
+		return wrappedErr{msg: "mmap allocation for 4 nodes failed", err: err}
+	}
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "CreateTemp failure", err: allocFailed(wrappedErr{msg: "failed to create temp file", err: &fs.PathError{Op: "open", Path: "/missing", Err: syscall.ENOENT}}), want: true},
+		{name: "mmap refused", err: allocFailed(wrappedErr{msg: "mmap failed", err: syscall.ENOMEM}), want: true},
+		{name: "mmap unsupported", err: allocFailed(wrappedErr{msg: "mmap failed", err: subtreepkg.ErrMmapUnsupported}), want: true},
+		{name: "recovered mmap panic", err: wrappedErr{msg: "boom", err: subtreepkg.ErrMmapPanic}, want: true},
+		{name: "count out of range", err: wrappedErr{msg: "768614336404564651", err: subtreepkg.ErrNumLeavesOutOfRange}, want: false},
+		{name: "count exceeds input", err: wrappedErr{msg: "2 declared", err: subtreepkg.ErrNodeCountExceedsInput}, want: false},
+		{name: "count exceeds limit", err: wrappedErr{msg: "68719476736 declared", err: subtreepkg.ErrNodeCountExceedsLimit}, want: false},
+		{name: "short body", err: wrappedErr{msg: "unable to read node 0", err: io.EOF}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isMmapInfraError(tt.err))
+		})
+	}
 }
