@@ -2,12 +2,16 @@ package netsync
 
 import (
 	"context"
+	"io"
+	"sync"
 	"testing"
+	"time"
 
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/settings"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -168,4 +172,45 @@ func oneSubtree(t *testing.T, leaves int) (*subtreepkg.Subtree, *subtreepkg.Data
 	}
 
 	return st, data, meta
+}
+
+// returnSignallingStore is a real in-memory blob store that closes returned
+// when a SetFromReader call returns, which it does only once its pipe is closed.
+type returnSignallingStore struct {
+	*blobmemory.Memory
+	returned chan struct{}
+	once     sync.Once
+}
+
+func (s *returnSignallingStore) SetFromReader(ctx context.Context, key []byte, fileType fileformat.FileType, reader io.ReadCloser, opts ...options.FileOption) error {
+	defer s.once.Do(func() { close(s.returned) })
+
+	return s.Memory.SetFromReader(ctx, key, fileType, reader, opts...)
+}
+
+// A write that panics part way through a subtree still ends what it started:
+// its storer is aborted, so the store's write returns and gives back the
+// process-wide write permit the file store holds for it, and its attempt is
+// abandoned, so a later cleanup of the key is not refused as still pending.
+// The panic itself is recovered above (pipelineBlockSink).
+func TestSubtreeWriter_AWriteThatPanicsEndsWhatItStarted(t *testing.T) {
+	ctx := context.Background()
+	store := &returnSignallingStore{Memory: blobmemory.New(), returned: make(chan struct{})}
+	w := newSubtreeWriter(ulogger.TestLogger{}, settings.NewSettings(), store, 800000)
+
+	st, _, meta := oneSubtree(t, 8)
+	root := st.RootHash()
+
+	// Without data the data file's write panics: it is the first artefact written.
+	require.Panics(t, func() { _ = w.Emit(ctx)(0, st, nil, meta) })
+
+	select {
+	case <-store.returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the storer of the write that panicked was never aborted: its store write is still waiting on the pipe")
+	}
+
+	left, err := w.registry().deleteUnlessAdopted(ctx, store, writtenSubtree{Hash: *root, FileType: fileformat.FileTypeSubtreeData})
+	require.NoError(t, err)
+	require.False(t, left, "the attempt of the write that panicked must be abandoned, not left pending")
 }
