@@ -141,6 +141,50 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Block assembly keeps valid unmined transactions when it reloads them with input
+  checks, and retries a reload the UTXO store did not answer.** This affects every
+  store. On the sql store, the reload that validates inputs (after a reorg, the
+  fallback reset, or `ResetBlockAssemblyValidateInputs`) used to drop every unmined
+  transaction, because its `fields.Inputs` read carries no transaction body. It now
+  reads the stored inpoints and keeps the valid ones. On every store, a store error
+  during that reload now fails the load, and the heartbeat retries it, where it used
+  to drop the transaction. While a retry is pending, no unmined transaction is in a
+  block template. A transaction whose inputs stay unchecked for 10 minutes is left out
+  of the template and counted in `teranode_blockassembly_unmined_undecided_excluded`.
+  Operators need do nothing; a template that stays empty after a reorg means the store
+  is not answering, so look at its logs. (#1663)
+
+- **The validator accepts a resubmitted transaction the store already holds.** When
+  every failed input of a transaction is `ErrSpent` with no named spender, and the
+  store holds the same txid with no conflicting mark, validation now answers success.
+  Before, the error went on to the spend-failure handling and the caller saw a spent
+  error. Clients that treated that error as "already submitted" now get success
+  instead. (#1663)
+
+- **The alert service reads the parent output through `ParentOutputsForValidation`.**
+  Freeze, unfreeze and reassign used `Get(fields.Tx)`. Nothing changes on the sql or
+  aerospike stores; on the utxoset store, a freeze or unfreeze of a reassigned UTXO
+  now acts only when the alert names the UTXO's new hash. (#1663)
+
+- **The utxoset store adds two blockchain RPCs and settings, and refuses some settings
+  at startup.** These matter only to a node that enables the utxoset store, or that
+  runs services at mixed versions.
+    - `blockchain_api.proto` adds `GetBestBlockHeaderUncached` and
+      `GetBlockHeadersByParentLinks`. Only the pruner's stamp worker calls them, and only
+      on utxoset. A pruner on this version talking to an older blockchain service gets
+      `Unimplemented`, so upgrade the blockchain service first.
+    - New settings: `utxostore_skipTxBodyBelowCheckpoint` (default false),
+      `utxostore_spendJournalRetentionBlocks` (default 288) and
+      `utxostore_retainWindowsIndefinitely` (default false).
+    - The store refuses to start with `pruner_skipDuringCatchup=true`, because on this
+      store the pruner also runs the stamp and the partition drops, and skipping it fills
+      the disk. Set `utxostore_retainWindowsIndefinitely` to keep partitions instead.
+    - On utxoset, `blockvalidation_outpoint_only_below_checkpoint` and
+      `blockvalidation_legacy_unified_below_checkpoint` are always treated as on.
+    - Startup is refused when `blockvalidation_catchup_checkpoint_hash` and
+      `blockvalidation_catchup_checkpoint_height` are both set, because they replace the
+      hardcoded checkpoints that each netted catch-up window must end at. (#1663)
+
 - **A syncing node refuses unmined transactions at every intake.** While the FSM is
   `CATCHINGBLOCKS`, propagation (gRPC, HTTP `/tx` and `/txs`, UDP), the validator's
   Kafka consumer, legacy `tx` messages, each parked legacy orphan validated after its
