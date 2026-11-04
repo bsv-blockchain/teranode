@@ -240,9 +240,18 @@ type metaReader interface {
 // caller may already have accepted the record as existing, so the record and
 // the spends are kept. The failure is still returned, as a ServiceUnavailable
 // error marked with MarkCreateOutcomeUnknown, because whether the record should
-// stand is unknown: a caller that read success would never look again. A retry
-// heals it either way: a replay meets the marker at the spend, and anything
-// else finds the record and gets ErrTxExists.
+// stand is unknown: a caller that read success would never look again.
+//
+// A retry does not heal it. A retry of a replay meets the marker at the spend
+// and is rejected there, before the create and before this recheck, so it never
+// revisits the record; and when C's parents were pruned too there is no marker,
+// so the retry is blessed on the record the first attempt wrote and its create
+// answers ErrTxExists. On a block path that wrote block ids the block's own
+// cleanup can still remove the record (see recheckUnknownCreate). On the
+// validator intake path nothing does: the record stays, unmined and outside the
+// pruner's reach, with outputs a confirmed descendant already consumed. That
+// needs three failed recheck attempts under their own detached bound, and the
+// log line below names the transaction.
 //
 // Only a transaction whose spend the store had already answered for is
 // rechecked, so a transaction seen for the first time pays nothing.
@@ -285,8 +294,12 @@ func recheckRecreated(ctx context.Context, logger ulogger.Logger, s SequentialSt
 // and the record carries no block id: the pruner marks only a mined child, so
 // an unmined record behind a marker is a recreation, never the original. A
 // record with block ids is left alone, and so is a create from a block path,
-// which writes block ids; those paths fail the attempt and their compensation
-// removes the record on the retry.
+// which writes block ids. Those paths fail the block, and its cleanup
+// (removePrunedReplayGhosts in services/blockvalidation, for both applyList and
+// applyOneByOne) removes the record as a leftover of the attempt when it is
+// locked with the block's id. With blockvalidation_quick_validate_skip_utxo_lock
+// set the record is not locked, the cleanup cannot tell it from a pre-existing
+// one, and it stays.
 //
 // Every outcome returns an error still marked MarkCreateOutcomeUnknown, so the
 // spends are kept. One gap stays: a write still in flight can land after the
@@ -295,7 +308,13 @@ func recheckUnknownCreate(ctx context.Context, logger ulogger.Logger, s Sequenti
 	hash := tx.TxIDChainHash()
 
 	answer, err := recheckSpend(ctx, s, tx, blockHeight, ignoreFlags)
-	if err != nil || !errors.Is(answer, errors.ErrUtxoSpendingTxPruned) {
+	if err != nil {
+		logger.Errorf("[SpendAndCreate] %s: create outcome unknown and the recheck could not answer, keeping whatever the create wrote: %v", hash.String(), err)
+
+		return createErr
+	}
+
+	if !errors.Is(answer, errors.ErrUtxoSpendingTxPruned) {
 		return createErr
 	}
 

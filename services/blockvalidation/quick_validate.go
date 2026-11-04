@@ -2937,7 +2937,7 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 
 			u.logger.Warnf("[applyList][%s] the store refused the list of %d transactions, applying them one at a time: %v", block.Hash().String(), len(txs), err)
 
-			return u.applyOneByOne(ctx, block, txs, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
+			return u.applyOneByOne(ctx, block, txs, txids, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting, replays)
 		case err != nil:
 			// A pass cut short still reports what it wrote and what the store
 			// rejected before the cut, and the cleanup after a pruned replay needs
@@ -3237,9 +3237,15 @@ func withParentsInList(txs []*bt.Tx, txids []chainhash.Hash, failed []int) []int
 // applyOneByOne applies txs one SpendAndCreate at a time, in block order: the path for a list the
 // store refused as malformed. A transaction that already exists is collected for the mined-info
 // stamp; any other failure fails the batch with the store's own error class.
-
-func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, subtreeIdxs []int,
-	lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx)) error {
+//
+// It reports to replays as applyList does, so the cleanup after a pruned replay runs on this path
+// too: each record a call wrote, and each transaction the store answered with a replay answer. The
+// case that needs it is a combined call whose create had an unknown outcome and landed, then a
+// retry of that call rejected at the spend by the pruner's marker. The retry never reaches the
+// create, so nothing else removes the record; the cleanup finds it as a leftover of this attempt
+// (utxo.LeftoversAmong), which needs it locked, so with the catch-up lock skipped it stays.
+func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, txids []chainhash.Hash,
+	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx), replays *listReplays) error {
 	const maxRetries = 10
 
 	backoff := u.spendRetryBackoff
@@ -3283,9 +3289,12 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 
 		switch {
 		case err == nil:
+			replays.observe(txids[i], utxo.SpendAndCreateMultiResult{Status: utxo.MultiTxCreated, Created: true})
 		case errors.Is(err, errors.ErrTxExists):
 			collectExisting(tx)
 		default:
+			replays.observe(txids[i], utxo.SpendAndCreateMultiResult{Status: utxo.MultiTxFailed, Err: err})
+
 			return errors.NewProcessingError("[applyOneByOne][%s] failed to apply tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 		}
 	}
