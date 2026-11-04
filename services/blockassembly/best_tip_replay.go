@@ -1307,7 +1307,16 @@ func (b *BlockAssembler) subtreeConflictingNodes(ctx context.Context, subtreeHas
 // those transactions are in it. A transaction the UTXO store has pruned is left out: it has no
 // record to mark. Invalid blocks are left to block validation, which unmarks their transactions
 // when it processes the invalidation.
+//
+// It first waits for block validation to finish marking every pending block mined. A branch block
+// that was briefly the best tip has its transactions marked mined with onLongestChain=true, in
+// chunks. A chunk written after the mark below would clear it again, and the reload would then
+// miss those transactions while no block of the best chain has them.
 func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockHeaderWithMeta, best *model.BlockHeader) error {
+	if err := b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
+		return errors.NewProcessingError("[restampStaleBranch] error waiting for pending blocks", err)
+	}
+
 	staleIDs := make(map[uint32]struct{}, len(branch))
 	hashes := make([]chainhash.Hash, 0, len(branch)*100)
 

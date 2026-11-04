@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -1035,5 +1036,117 @@ func Test_checkCounterConflictingOnCurrentChainBatch_namesTheConflict(t *testing
 		require.ErrorIs(t, err, errors.ErrTxInvalid)
 		require.Contains(t, err.Error(), counterChild.TxIDChainHash().String())
 		require.NotContains(t, err.Error(), chain[0].String())
+	})
+}
+
+// inpointlessRecordStore wraps a real utxo.Store and hands back the records in
+// stripped the way the utxoset store does below the checkpoint: no stored
+// inpoints, and with noBody no transaction body either.
+type inpointlessRecordStore struct {
+	utxo.Store
+	stripped map[chainhash.Hash]struct{}
+	noBody   bool
+}
+
+func (s *inpointlessRecordStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	txMeta, err := s.Store.Get(ctx, hash, f...)
+	if err != nil || txMeta == nil {
+		return txMeta, err
+	}
+
+	if _, ok := s.stripped[*hash]; ok {
+		txMeta.TxInpoints = subtreepkg.TxInpoints{}
+
+		if s.noBody {
+			txMeta.Tx = nil
+		}
+	}
+
+	return txMeta, nil
+}
+
+// bodyBarrierStore is an inpointlessRecordStore whose body reads (fields.Tx alone)
+// each wait until want of them are in flight, or fail after a few seconds.
+type bodyBarrierStore struct {
+	inpointlessRecordStore
+	want      int32
+	bodyReads atomic.Int32
+	arrived   chan struct{}
+}
+
+func (s *bodyBarrierStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	if len(f) == 1 && f[0] == fields.Tx {
+		if s.bodyReads.Add(1) == s.want {
+			close(s.arrived)
+		}
+
+		select {
+		case <-s.arrived:
+		case <-time.After(3 * time.Second):
+			return nil, errors.NewStorageError("body read %s waited alone: bodies are read one by one", hash.String())
+		}
+	}
+
+	return s.inpointlessRecordStore.Get(ctx, hash, f...)
+}
+
+// Test_checkCounterConflictingOnCurrentChainBatch_recordWithoutInpoints pins the
+// batch to utxo.GetCounterConflictingTxHashes's reading of a record that stores
+// no inpoints: what it spends comes from its body, and a record carrying neither
+// is a processing error. Reading the empty inpoints as "spends nothing" finds no
+// counter-spender, so a block whose conflicting transaction lost to a mined
+// counter-spender would pass.
+func Test_checkCounterConflictingOnCurrentChainBatch_recordWithoutInpoints(t *testing.T) {
+	ctx := context.Background()
+	tSettings := test.CreateBaseTestSettings(t)
+	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 77, BlockHeight: 100})
+
+	t.Run("counter-spenders come from the body", func(t *testing.T) {
+		sqlStore := newSQLUtxoStore(t, ctx, tSettings)
+		counter, chain := buildConflictingChain(t, ctx, sqlStore, 1, false, mined)
+
+		store := &inpointlessRecordStore{Store: sqlStore, stripped: map[chainhash.Hash]struct{}{chain[0]: {}}}
+		s := &Server{logger: ulogger.NewErrorTestLogger(t), settings: tSettings, utxoStore: store}
+
+		_, err := s.checkCounterConflictingOnCurrentChainBatch(ctx, chain, map[uint32]bool{77: true}, failOnMissingRecords)
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.Contains(t, err.Error(), counter.TxIDChainHash().String())
+	})
+
+	// Every body is read in one concurrent pass. The store holds each body read
+	// until all of them have arrived, so a serial read per record times out and the
+	// check fails with a processing error instead of the tx-invalid verdict.
+	t.Run("bodies are read together, not one by one", func(t *testing.T) {
+		sqlStore := newSQLUtxoStore(t, ctx, tSettings)
+		counter, chain := buildConflictingChain(t, ctx, sqlStore, 3, false, mined)
+
+		stripped := make(map[chainhash.Hash]struct{}, len(chain))
+		for _, h := range chain {
+			stripped[h] = struct{}{}
+		}
+
+		store := &bodyBarrierStore{
+			inpointlessRecordStore: inpointlessRecordStore{Store: sqlStore, stripped: stripped},
+			want:                   int32(len(chain)), //nolint:gosec // a test chain length fits
+			arrived:                make(chan struct{}),
+		}
+		s := &Server{logger: ulogger.NewErrorTestLogger(t), settings: tSettings, utxoStore: store}
+
+		_, err := s.checkCounterConflictingOnCurrentChainBatch(ctx, chain, map[uint32]bool{77: true}, failOnMissingRecords)
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.Contains(t, err.Error(), counter.TxIDChainHash().String())
+		require.Equal(t, int32(len(chain)), store.bodyReads.Load(), "one body read per record") //nolint:gosec // a test chain length fits
+	})
+
+	t.Run("neither inpoints nor body is a processing error", func(t *testing.T) {
+		sqlStore := newSQLUtxoStore(t, ctx, tSettings)
+		_, chain := buildConflictingChain(t, ctx, sqlStore, 1, false, mined)
+
+		store := &inpointlessRecordStore{Store: sqlStore, stripped: map[chainhash.Hash]struct{}{chain[0]: {}}, noBody: true}
+		s := &Server{logger: ulogger.NewErrorTestLogger(t), settings: tSettings, utxoStore: store}
+
+		_, err := s.checkCounterConflictingOnCurrentChainBatch(ctx, chain, map[uint32]bool{77: true}, failOnMissingRecords)
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.NotErrorIs(t, err, errors.ErrTxInvalid)
 	})
 }
