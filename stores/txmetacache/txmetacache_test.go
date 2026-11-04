@@ -1298,3 +1298,14 @@ func TestTxMetaCacheSetMinedMulti_UnsetMinedToleratesGap(t *testing.T) {
 type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
+
+// TestTxMetaCache_ConflictingTxHashesAsksTheStore pins that the cache forwards
+// ConflictingTxHashes to its store: it holds no conflicting set of its own.
+func TestTxMetaCache_ConflictingTxHashesAsksTheStore(t *testing.T) {
+	c := newPerHashCache(t, Unallocated)
+
+	hashes, indexed, err := c.ConflictingTxHashes(t.Context())
+	require.NoError(t, err)
+	require.True(t, indexed, "the null store behind the cache answers indexed")
+	require.Empty(t, hashes)
+}

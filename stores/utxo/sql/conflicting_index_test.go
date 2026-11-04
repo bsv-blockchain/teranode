@@ -3,9 +3,13 @@ package sql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/url"
+	"regexp"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -271,4 +275,156 @@ func TestPostgresConflictingIndex_ValidIndexTakesNoTableLock(t *testing.T) {
 	built, err := store.buildPostgresConflictingIndex(ctx)
 	require.NoError(t, err)
 	require.True(t, built)
+}
+
+var (
+	tryBuildLockQuery = regexp.QuoteMeta(`SELECT pg_try_advisory_lock($1)`)
+	buildUnlockExec   = regexp.QuoteMeta(`SELECT pg_advisory_unlock($1)`)
+	indexStateQuery   = regexp.QuoteMeta(`SELECT (SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass('px_transactions_conflicting'))`)
+	dropIndexExec     = regexp.QuoteMeta(`DROP INDEX CONCURRENTLY IF EXISTS px_transactions_conflicting`)
+	createIndexExec   = regexp.QuoteMeta(`CREATE INDEX CONCURRENTLY IF NOT EXISTS px_transactions_conflicting ON transactions (hash) WHERE conflicting = true`)
+)
+
+func expectBuildLock(m sqlmock.Sqlmock, locked bool) {
+	m.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(locked))
+}
+
+func expectBuildUnlock(m sqlmock.Sqlmock) {
+	m.ExpectExec(buildUnlockExec).WithArgs(conflictingIndexLockID).WillReturnResult(sqlmock.NewResult(0, 0))
+}
+
+// TestBuildPostgresConflictingIndex_Steps pins each outcome of one build
+// attempt: an error at any step is reported and the lock is released, and a
+// lock held elsewhere is not an error but not built either.
+func TestBuildPostgresConflictingIndex_Steps(t *testing.T) {
+	failure := errors.New("connection reset")
+
+	tests := map[string]struct {
+		expect    func(sqlmock.Sqlmock)
+		wantBuilt bool
+		wantErr   string
+	}{
+		"lock query fails": {
+			expect: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(failure)
+			},
+			wantErr: "could not take the build lock",
+		},
+		"another process holds the lock": {
+			expect: func(m sqlmock.Sqlmock) { expectBuildLock(m, false) },
+		},
+		"index state unreadable": {
+			expect: func(m sqlmock.Sqlmock) {
+				expectBuildLock(m, true)
+				m.ExpectQuery(indexStateQuery).WillReturnError(failure)
+				expectBuildUnlock(m)
+			},
+			wantErr: "could not read the state",
+		},
+		"invalid leftover cannot be dropped": {
+			expect: func(m sqlmock.Sqlmock) {
+				expectBuildLock(m, true)
+				m.ExpectQuery(indexStateQuery).WillReturnRows(sqlmock.NewRows([]string{"indisvalid"}).AddRow(false))
+				m.ExpectExec(dropIndexExec).WillReturnError(failure)
+				expectBuildUnlock(m)
+			},
+			wantErr: "could not drop the invalid",
+		},
+		"build fails": {
+			expect: func(m sqlmock.Sqlmock) {
+				expectBuildLock(m, true)
+				m.ExpectQuery(indexStateQuery).WillReturnRows(sqlmock.NewRows([]string{"indisvalid"}).AddRow(nil))
+				m.ExpectExec(createIndexExec).WillReturnError(failure)
+				expectBuildUnlock(m)
+			},
+			wantErr: "could not create px_transactions_conflicting",
+		},
+		"invalid leftover is rebuilt": {
+			expect: func(m sqlmock.Sqlmock) {
+				expectBuildLock(m, true)
+				m.ExpectQuery(indexStateQuery).WillReturnRows(sqlmock.NewRows([]string{"indisvalid"}).AddRow(false))
+				m.ExpectExec(dropIndexExec).WillReturnResult(sqlmock.NewResult(0, 0))
+				m.ExpectExec(createIndexExec).WillReturnResult(sqlmock.NewResult(0, 0))
+				expectBuildUnlock(m)
+			},
+			wantBuilt: true,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			store, mock := CreateMockStore(ulogger.TestLogger{})
+			tc.expect(mock)
+
+			built, err := store.buildPostgresConflictingIndex(context.Background())
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+
+			require.Equal(t, tc.wantBuilt, built)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+// TestPostgresConflictingIndexBuild_FailedBuildLeavesTheStoreNotIndexed pins
+// that a build that fails leaves ConflictingTxHashes on the fallback and waits
+// to retry, and that stopping the build does not wait out the retry delay.
+func TestPostgresConflictingIndexBuild_FailedBuildLeavesTheStoreNotIndexed(t *testing.T) {
+	store, mock := CreateMockStore(ulogger.TestLogger{})
+	mock.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(errors.New("connection reset"))
+
+	store.startPostgresConflictingIndexBuild(context.Background())
+
+	require.Eventually(t, func() bool {
+		return mock.ExpectationsWereMet() == nil
+	}, 5*time.Second, 10*time.Millisecond)
+
+	hashes, indexed, err := store.ConflictingTxHashes(context.Background())
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, hashes)
+
+	stopped := make(chan struct{})
+
+	go func() {
+		store.stopPostgresConflictingIndexBuild()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "stopping the build waited for the retry delay")
+	}
+}
+
+// TestHoldConflictingIndexBuildLock_Errors pins that schema startup reports a
+// failed lock query, and gives up when its context ends while another process
+// is building.
+func TestHoldConflictingIndexBuildLock_Errors(t *testing.T) {
+	t.Run("lock query fails", func(t *testing.T) {
+		store, mock := CreateMockStore(ulogger.TestLogger{})
+		mock.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(errors.New("connection reset"))
+
+		release, err := holdConflictingIndexBuildLock(context.Background(), ulogger.TestLogger{}, store.db)
+		require.ErrorContains(t, err, "could not take the index build lock")
+		require.Nil(t, release)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("context ends while another process builds", func(t *testing.T) {
+		store, mock := CreateMockStore(ulogger.TestLogger{})
+		expectBuildLock(mock, false)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		release, err := holdConflictingIndexBuildLock(ctx, ulogger.TestLogger{}, store.db)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Nil(t, release)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
 }

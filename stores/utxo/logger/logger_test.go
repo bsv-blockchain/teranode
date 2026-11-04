@@ -82,6 +82,31 @@ func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpoint
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
 // logger still reports true, and the gates that query through the decorator engage).
+// TestConflictingTxHashes_Delegates pins that the logger decorator returns the
+// wrapped store's answer unchanged, including indexed=false.
+func TestConflictingTxHashes_Delegates(t *testing.T) {
+	ctx := context.Background()
+	want := []chainhash.Hash{{1}, {2}}
+
+	inner := &MockStore{}
+	inner.On("ConflictingTxHashes", ctx).Return(want, true, nil).Once()
+	inner.On("ConflictingTxHashes", ctx).Return(nil, false, nil).Once()
+
+	s := New(ctx, ulogger.TestLogger{}, inner)
+
+	hashes, indexed, err := s.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, want, hashes)
+
+	hashes, indexed, err = s.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, hashes)
+
+	inner.AssertExpectations(t)
+}
+
 func TestSupportsOutpointOnlySpend_Delegates(t *testing.T) {
 	for _, want := range []bool{true, false} {
 		inner := &MockStore{SupportsOutpointOnlySpendResult: want}

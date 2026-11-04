@@ -2,12 +2,17 @@ package sql
 
 import (
 	"context"
+	"errors"
+	"regexp"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -110,4 +115,47 @@ func TestSQLConflictingTxHashes(t *testing.T) {
 	hashes, _, err = store.ConflictingTxHashes(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []chainhash.Hash{*created.TxIDChainHash()}, hashes)
+}
+
+// TestSQLConflictingTxHashes_ReadErrors pins that a failed read is an error, never
+// an indexed empty set, which block validation would read as "none conflicting".
+func TestSQLConflictingTxHashes_ReadErrors(t *testing.T) {
+	query := regexp.QuoteMeta(`SELECT hash FROM transactions WHERE conflicting = true`)
+	goodHash := make([]byte, chainhash.HashSize)
+
+	tests := map[string]struct {
+		expect func(sqlmock.Sqlmock)
+		want   string
+	}{
+		"query fails": {
+			expect: func(m sqlmock.Sqlmock) { m.ExpectQuery(query).WillReturnError(errors.New("connection reset")) },
+			want:   "query failed",
+		},
+		"hash of the wrong length": {
+			expect: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"hash"}).AddRow([]byte{1, 2, 3}))
+			},
+			want: "bad hash",
+		},
+		"iteration fails": {
+			expect: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"hash"}).AddRow(goodHash).RowError(0, errors.New("connection reset")))
+			},
+			want: "row iteration failed",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			store, mock := CreateMockStore(ulogger.TestLogger{})
+			store.conflictingIndexReady.Store(true)
+			tc.expect(mock)
+
+			hashes, indexed, err := store.ConflictingTxHashes(context.Background())
+			require.ErrorContains(t, err, tc.want)
+			require.False(t, indexed)
+			require.Nil(t, hashes)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
