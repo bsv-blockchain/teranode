@@ -1184,6 +1184,17 @@ func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) 
 	return err
 }
 
+// DeleteCompleteIfCreating removes a record that is still tentative and evicts the
+// cache entry whatever the outcome, for the same reason DeleteComplete does.
+func (t *TxMetaCache) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	deleted, err := t.utxoStore.DeleteCompleteIfCreating(ctx, hash)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return deleted, err
+}
+
 // GetCacheStats retrieves current operational statistics from the underlying cache.
 // These statistics are useful for monitoring cache performance and behavior.
 //

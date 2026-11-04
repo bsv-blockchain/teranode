@@ -168,6 +168,11 @@ func (m *MockStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 	return args.Error(0)
 }
 
+func (m *MockStore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, hash)
+	return args.Bool(0), args.Error(1)
+}
+
 func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	args := m.Called(ctx, hashes, minedBlockInfo)
 	return args.Get(0).(map[chainhash.Hash][]uint32), args.Error(1)

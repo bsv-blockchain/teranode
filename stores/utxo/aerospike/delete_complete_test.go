@@ -499,3 +499,59 @@ func TestDeleteComplete_OrphanChildResidueIsUnreachableNotMineable(t *testing.T)
 	_, _, accepted = spendChildOutputStatus(t, ctx, store, child, highVout)
 	require.True(t, accepted, "after adoption and unlock a high-numbered output is spendable again")
 }
+
+func TestDeleteCompleteIfCreating(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	utxoBatchSize := tSettings.UtxoStore.UtxoBatchSize
+	require.Positive(t, utxoBatchSize)
+
+	t.Run("a creating record is deleted with its pagination children", func(t *testing.T) {
+		tx := paginatedSpendAndCreateTx(t, 4, 7001, utxoBatchSize+72)
+		hash := tx.TxIDChainHash()
+
+		_ = store.DeleteComplete(ctx, hash)
+
+		_, err := store.Create(ctx, tx, store.GetBlockHeight()+1, utxo.WithCreating(true))
+		require.NoError(t, err)
+		require.Positive(t, masterChildCount(t, client, store, hash), "precondition: the record really paginates")
+		require.True(t, childRecordExists(t, client, store, hash, 1), "precondition: a pagination child exists")
+
+		deleted, err := store.DeleteCompleteIfCreating(ctx, hash)
+		require.NoError(t, err)
+		require.True(t, deleted)
+		require.ErrorIs(t, store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound)
+		require.False(t, childRecordExists(t, client, store, hash, 1), "the pagination children go with the master")
+	})
+
+	t.Run("a finalized record is left in place", func(t *testing.T) {
+		tx := paginatedSpendAndCreateTx(t, 4, 7002, 3)
+		hash := tx.TxIDChainHash()
+
+		_ = store.DeleteComplete(ctx, hash)
+
+		_, err := store.Create(ctx, tx, store.GetBlockHeight()+1, utxo.WithCreating(true))
+		require.NoError(t, err)
+		require.NoError(t, store.FinalizeTransaction(ctx, tx))
+
+		deleted, err := store.DeleteCompleteIfCreating(ctx, hash)
+		require.NoError(t, err)
+		require.False(t, deleted, "a record a roll-forward finalized must not be deleted")
+		require.NoError(t, store.GetMeta(ctx, hash, &meta.Data{}), "the finalized record survives")
+	})
+
+	t.Run("a missing record reports false without error", func(t *testing.T) {
+		tx := paginatedSpendAndCreateTx(t, 4, 7003, 3)
+		hash := tx.TxIDChainHash()
+
+		_ = store.DeleteComplete(ctx, hash)
+
+		deleted, err := store.DeleteCompleteIfCreating(ctx, hash)
+		require.NoError(t, err)
+		require.False(t, deleted)
+	})
+}
