@@ -227,9 +227,10 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 // It marks the transactions of recent fork blocks that no block of the best chain contains
 // (branchOnlyTxs) and that are marked mined as not on the longest chain, as the replay's restamp
 // does (markOffLongestChain). Which fork block was the best tip does not matter: one still
-// stamped unmined is left as it is. Unless beforeReload, it then reloads the pool when one it
-// marked is not in it and is not conflicting, which the pool never loads. beforeReload says a
-// load of the unmined transactions follows anyway, at start-up or in the reset that comes next;
+// stamped unmined is left as it is. When one it marked is not in the pool and is not conflicting,
+// which the pool never loads, the pool needs a reload (skippedForkReloadPending), which it runs
+// unless beforeReload. beforeReload says a load of the unmined transactions follows anyway, at
+// start-up or in the reset that comes next, and the need stays recorded until that load is done;
 // it also lets the run start off the best tip, since that load is on the best tip. Otherwise the
 // run waits for block assembly to be on the best tip, where its own blocks are not fork blocks:
 // it returns errSkippedForkMarkOffTip and stays pending, without a back-off.
@@ -365,7 +366,7 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 
 			toMark = append(toMark, u.Hash)
 
-			if !beforeReload && !u.Data.Conflicting && !txMap.Exists(u.Hash) {
+			if !u.Data.Conflicting && !txMap.Exists(u.Hash) {
 				poolable[u.Hash] = struct{}{}
 			}
 		}
@@ -453,19 +454,25 @@ func (e *skippedForkSubtreeGoneError) Unwrap() error {
 }
 
 // runSkippedForkMark runs markSkippedForkTxs outside start-up. A run that does not finish stays
-// pending and is retried, except when a fork block lost its subtree: that stops block assembly.
-func (b *BlockAssembler) runSkippedForkMark(ctx context.Context, beforeReload bool) {
+// pending and is retried, except when a fork block lost its subtree: that stops block assembly,
+// and the error is returned so the caller does nothing more.
+func (b *BlockAssembler) runSkippedForkMark(ctx context.Context, beforeReload bool) error {
 	// markSkippedForkTxs returns it unwrapped. errors.As stops at the first *errors.Error in a
 	// chain, which this error wraps, so it would not find it.
-	if err, gone := b.markSkippedForkTxs(ctx, beforeReload).(*skippedForkSubtreeGoneError); gone {
-		prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost").Inc()
-		b.logger.Errorf("[BlockAssembler] stopping block assembly: %v", err)
-
-		select {
-		case b.fatalCh <- err:
-		default:
-		}
+	err, gone := b.markSkippedForkTxs(ctx, beforeReload).(*skippedForkSubtreeGoneError)
+	if !gone {
+		return nil
 	}
+
+	prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost").Inc()
+	b.logger.Errorf("[BlockAssembler] stopping block assembly: %v", err)
+
+	select {
+	case b.fatalCh <- err:
+	default:
+	}
+
+	return err
 }
 
 // Fatal returns a channel that receives an error block assembly cannot continue after. The
@@ -529,6 +536,14 @@ func (b *BlockAssembler) skippedForkBlocks(ctx context.Context, best *model.Bloc
 		pageSize = uint32(limit) //nolint:gosec // limit is positive and below bestTipPageSize
 	}
 
+	// The blockchain service bounds GetLastNBlocks by blockchain_maxBlocksByHeightRange.
+	listMax := uint32(2 * bestTipPageSize)
+	if limit := b.settings.BlockChain.MaxBlocksByHeightRange; limit > 0 && uint64(limit) < uint64(listMax) {
+		listMax = uint32(limit) //nolint:gosec // limit is positive and below 2*bestTipPageSize
+	}
+
+	listPage := min(uint32(bestTipPageSize), listMax)
+
 	onBest := make(map[chainhash.Hash]struct{}, bestHeight-floor+1)
 
 	for next, height := best.Hash(), bestHeight; height >= floor; {
@@ -558,7 +573,7 @@ func (b *BlockAssembler) skippedForkBlocks(ctx context.Context, best *model.Bloc
 	var forks []blockHeaderWithMeta
 
 	seen := make(map[chainhash.Hash]struct{})
-	limit := pageSize
+	limit := listPage
 
 	// fromHeight 0 reads from the highest block. Each later page starts at the lowest height the
 	// one before reached, which it may not have read whole; a page at a single height reads more.
@@ -622,16 +637,16 @@ func (b *BlockAssembler) skippedForkBlocks(ctx context.Context, best *model.Bloc
 		}
 
 		if from != 0 && lowest == from {
-			if limit >= 2*bestTipPageSize {
+			if limit >= listMax {
 				return nil, errors.NewProcessingError("[skippedForkBlocks] more than %d blocks at height %d", limit, from)
 			}
 
-			limit *= 2
+			limit = min(2*limit, listMax)
 
 			continue
 		}
 
-		from, limit = lowest, pageSize
+		from, limit = lowest, listPage
 	}
 }
 

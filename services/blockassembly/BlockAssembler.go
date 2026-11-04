@@ -762,10 +762,11 @@ drain:
 		storageTriggered = storageTriggered || req.StorageTriggered
 	}
 
-	// If FullReset requested, run lightweight consistency scan first
-	if fullReset {
-		if fixErr := b.fixUnminedSinceInconsistencies(ctx); fixErr != nil {
-			b.logger.Errorf("[BlockAssembler] error fixing unmined_since inconsistencies: %v", fixErr)
+	answer := func(err error) {
+		for _, req := range batch {
+			if req.ErrCh != nil {
+				req.ErrCh <- err
+			}
 		}
 	}
 
@@ -775,11 +776,10 @@ drain:
 	// transactions a move to the best header owes. As for that move, it is recorded first,
 	// since the reset persists its new tip, and without the record the reset does not run.
 	// The mark then runs before the reset, whose reload takes in what it unmarks; a mark
-	// that does not finish is run again after the reset, with a reload of its own.
+	// that does not finish is run again after the reset, with a reload of its own. A fork
+	// block that lost its subtree stops block assembly, and the reset does not run either.
 	wasPending := b.bestTipResetReplayPending.Load()
-	if b.bestTipPosKnown.Load() {
-		b.bestTipResetReplayPending.Store(true)
-	} else {
+	if !b.bestTipPosKnown.Load() {
 		if err := b.saveSkippedForkMark(ctx, true); err != nil {
 			b.skippedForkMarkPending = true
 			b.noteSkippedForkMarkFailure(time.Now())
@@ -787,18 +787,31 @@ drain:
 
 			refused := errors.NewProcessingError("[BlockAssembler] reset refused: the mark of skipped fork transactions it would owe cannot be recorded", err)
 			b.logger.Errorf("%v", refused)
-
-			for _, req := range batch {
-				if req.ErrCh != nil {
-					req.ErrCh <- refused
-				}
-			}
+			b.drainPendingInvalidations(ctx)
+			answer(refused)
 
 			return
 		}
 
 		b.skippedForkMarkPending = true
-		b.runSkippedForkMark(ctx, true)
+
+		if err := b.runSkippedForkMark(ctx, true); err != nil {
+			b.drainPendingInvalidations(ctx)
+			answer(err)
+
+			return
+		}
+	}
+
+	// If FullReset requested, run lightweight consistency scan first
+	if fullReset {
+		if fixErr := b.fixUnminedSinceInconsistencies(ctx); fixErr != nil {
+			b.logger.Errorf("[BlockAssembler] error fixing unmined_since inconsistencies: %v", fixErr)
+		}
+	}
+
+	if b.bestTipPosKnown.Load() {
+		b.bestTipResetReplayPending.Store(true)
 	}
 	resp, err := b.resetWithResponse(ctx, validateInputs)
 	if err != nil && !resp.Rotated {
@@ -820,7 +833,7 @@ drain:
 			b.triggerReconcile()
 		}
 	} else if err == nil && b.skippedForkMarkPending {
-		b.runSkippedForkMark(ctx, false)
+		_ = b.runSkippedForkMark(ctx, false)
 	}
 
 	// The Reset path replays moveForward blocks through the same
@@ -829,11 +842,7 @@ drain:
 	// so nothing else would drain them until the next block arrives.
 	b.drainPendingInvalidations(ctx)
 
-	for _, req := range batch {
-		if req.ErrCh != nil {
-			req.ErrCh <- err
-		}
-	}
+	answer(err)
 }
 
 // triggerReconcile asks the channel listener to run processNewBlockAnnouncement.
@@ -1496,7 +1505,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		// to drop it. It does not run off the best tip. Its back-off paces only the idle wake
 		// (reconcileDue), not a pass.
 		if b.skippedForkMarkPending {
-			b.runSkippedForkMark(ctx, false)
+			_ = b.runSkippedForkMark(ctx, false)
 		}
 
 		return
@@ -1541,7 +1550,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	}
 
 	if b.skippedForkMarkPending {
-		b.runSkippedForkMark(ctx, false)
+		_ = b.runSkippedForkMark(ctx, false)
 	}
 }
 
@@ -1781,6 +1790,9 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		// we cannot start block assembly if we have not loaded unmined transactions successfully
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
+
+	// That load is the pool reload a mark of skipped fork transactions at start-up may owe.
+	b.skippedForkReloadPending = false
 
 	recoveredIDs, recoveryErr := b.prepareRecoveredConflictUpdates(ctx)
 	if recoveryErr != nil {
