@@ -1,0 +1,274 @@
+package sql
+
+import (
+	"context"
+	"database/sql"
+	"net/url"
+	"testing"
+	"time"
+
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/usql"
+	"github.com/stretchr/testify/require"
+)
+
+func conflictingIndexSettings(t *testing.T) *settings.Settings {
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.DBTimeout = 30 * time.Second
+	tSettings.BatcherDrainMode = true
+
+	return tSettings
+}
+
+// openConflictingIndexStore opens a store on dbURL within timeout, failing the
+// test if New does not return, and closes it at cleanup.
+func openConflictingIndexStore(t *testing.T, dbURL *url.URL, timeout time.Duration) *Store {
+	t.Helper()
+
+	type result struct {
+		store *Store
+		err   error
+	}
+
+	done := make(chan result, 1)
+
+	go func() {
+		store, err := New(context.Background(), ulogger.TestLogger{}, conflictingIndexSettings(t), dbURL)
+		done <- result{store, err}
+	}()
+
+	select {
+	case res := <-done:
+		require.NoError(t, res.err)
+		t.Cleanup(func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
+			require.NoError(t, res.store.Close(closeCtx))
+		})
+
+		return res.store
+	case <-time.After(timeout):
+		require.FailNow(t, "store startup did not return", "waited %s", timeout)
+		return nil
+	}
+}
+
+// postgresConflictingIndex reports whether px_transactions_conflicting exists,
+// whether Postgres lists it valid, and its definition.
+func postgresConflictingIndex(t *testing.T, db *usql.DB) (exists, valid bool, definition string) {
+	t.Helper()
+
+	err := db.QueryRow(`SELECT i.indisvalid, pg_get_indexdef(i.indexrelid) FROM pg_index i WHERE i.indexrelid = to_regclass('px_transactions_conflicting')`).Scan(&valid, &definition)
+	if err == sql.ErrNoRows {
+		return false, false, ""
+	}
+
+	require.NoError(t, err)
+
+	return true, valid, definition
+}
+
+func awaitValidConflictingIndex(t *testing.T, db *usql.DB) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		_, valid, _ := postgresConflictingIndex(t, db)
+		return valid
+	}, 60*time.Second, 100*time.Millisecond, "px_transactions_conflicting never became valid")
+
+	_, _, definition := postgresConflictingIndex(t, db)
+	require.Contains(t, definition, "ON public.transactions USING btree (hash) WHERE (conflicting = true)")
+	require.NotContains(t, definition, "UNIQUE")
+}
+
+func openAdminDB(t *testing.T, dbURL *url.URL) *usql.DB {
+	t.Helper()
+
+	db, err := util.InitSQLDB(ulogger.TestLogger{}, dbURL, conflictingIndexSettings(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	return db
+}
+
+func conflictingIndexTestTx(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+	require.NoError(t, tx.From("4ff7de8f0b6d5c4a3e2f1d0c9b8a7968574635241302f1e0d9c8b7a695847362", 0, "51", 10_000))
+	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1_000))
+	tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+
+	return tx
+}
+
+// TestPostgresConflictingIndex_BuiltConcurrentlyAfterStartup pins that the
+// index is built with CREATE INDEX CONCURRENTLY after schema startup: while an
+// older transaction holds a snapshot the build has to wait for, the store still
+// starts, accepts writes to transactions, and the index only becomes valid once
+// that transaction ends. A plain CREATE INDEX at startup would block writes for
+// the whole build instead.
+func TestPostgresConflictingIndex_BuiltConcurrentlyAfterStartup(t *testing.T) {
+	dbURL := startPostgres(t)
+	admin := openAdminDB(t, dbURL)
+
+	openConflictingIndexStore(t, dbURL, 60*time.Second)
+	awaitValidConflictingIndex(t, admin)
+
+	_, err := admin.Exec(`DROP INDEX px_transactions_conflicting`)
+	require.NoError(t, err)
+
+	holder, err := admin.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback() }()
+
+	var one int
+	require.NoError(t, holder.QueryRow(`SELECT 1`).Scan(&one))
+
+	store := openConflictingIndexStore(t, dbURL, 30*time.Second)
+
+	writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err = store.Create(writeCtx, conflictingIndexTestTx(t), 0)
+	require.NoError(t, err, "a write to transactions was blocked by the index build")
+
+	require.Eventually(t, func() bool {
+		exists, _, _ := postgresConflictingIndex(t, admin)
+		return exists
+	}, 30*time.Second, 50*time.Millisecond, "the index build never started")
+
+	_, valid, _ := postgresConflictingIndex(t, admin)
+	require.False(t, valid, "the index was built without waiting for older snapshots, so not concurrently")
+
+	// Until the build finishes the store sends block validation to its
+	// per-transaction fallback instead of scanning the table on every block.
+	hashes, indexed, err := store.ConflictingTxHashes(context.Background())
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, hashes)
+
+	require.NoError(t, holder.Commit())
+	awaitValidConflictingIndex(t, admin)
+
+	require.Eventually(t, func() bool {
+		_, indexed, err := store.ConflictingTxHashes(context.Background())
+		require.NoError(t, err)
+
+		return indexed
+	}, 30*time.Second, 50*time.Millisecond, "the store never answered from the built index")
+}
+
+// TestPostgresConflictingIndex_RebuildsAnInvalidLeftover pins that an INVALID
+// index left by a failed concurrent build is dropped and rebuilt, rather than
+// kept forever by CREATE INDEX IF NOT EXISTS.
+func TestPostgresConflictingIndex_RebuildsAnInvalidLeftover(t *testing.T) {
+	dbURL := startPostgres(t)
+	admin := openAdminDB(t, dbURL)
+
+	first := openConflictingIndexStore(t, dbURL, 60*time.Second)
+	awaitValidConflictingIndex(t, admin)
+
+	_, err := first.Create(context.Background(), conflictingIndexTestTx(t), 0)
+	require.NoError(t, err)
+
+	_, err = admin.Exec(`DROP INDEX px_transactions_conflicting`)
+	require.NoError(t, err)
+
+	// Fails on the row created above and leaves an INVALID index behind.
+	_, err = admin.Exec(`CREATE INDEX CONCURRENTLY px_transactions_conflicting ON transactions ((1 / (id - id)))`)
+	require.Error(t, err)
+
+	exists, valid, _ := postgresConflictingIndex(t, admin)
+	require.True(t, exists)
+	require.False(t, valid)
+
+	openConflictingIndexStore(t, dbURL, 60*time.Second)
+	awaitValidConflictingIndex(t, admin)
+}
+
+// TestPostgresConflictingIndex_SchemaStartupWaitsForABuild pins that schema
+// startup does not run while another process builds the index. Its ALTER TABLE
+// on transactions would queue an ACCESS EXCLUSIVE lock behind the build, and
+// every later read and write of the table behind that.
+func TestPostgresConflictingIndex_SchemaStartupWaitsForABuild(t *testing.T) {
+	dbURL := startPostgres(t)
+	admin := openAdminDB(t, dbURL)
+
+	openConflictingIndexStore(t, dbURL, 60*time.Second)
+	awaitValidConflictingIndex(t, admin)
+
+	builder, err := admin.Conn(context.Background())
+	require.NoError(t, err)
+
+	defer func() { _ = builder.Close() }()
+
+	_, err = builder.ExecContext(context.Background(), `SELECT pg_advisory_lock($1)`, conflictingIndexLockID)
+	require.NoError(t, err)
+
+	started := make(chan error, 1)
+
+	go func() {
+		store, newErr := New(context.Background(), ulogger.TestLogger{}, conflictingIndexSettings(t), dbURL)
+		if newErr == nil {
+			t.Cleanup(func() {
+				closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+
+				_ = store.Close(closeCtx)
+			})
+		}
+
+		started <- newErr
+	}()
+
+	select {
+	case newErr := <-started:
+		require.FailNow(t, "schema startup ran while the index build lock was held", "New returned %v", newErr)
+	case <-time.After(3 * time.Second):
+	}
+
+	_, err = builder.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, conflictingIndexLockID)
+	require.NoError(t, err)
+
+	select {
+	case newErr := <-started:
+		require.NoError(t, newErr)
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "schema startup did not resume once the index build lock was released")
+	}
+}
+
+// TestPostgresConflictingIndex_ValidIndexTakesNoTableLock pins that a store
+// finding the index already valid does not issue CREATE INDEX again: that
+// statement takes its table lock before it checks IF NOT EXISTS, and would wait
+// behind anything holding a conflicting lock, such as an anti-wraparound vacuum.
+func TestPostgresConflictingIndex_ValidIndexTakesNoTableLock(t *testing.T) {
+	dbURL := startPostgres(t)
+	admin := openAdminDB(t, dbURL)
+
+	store := openConflictingIndexStore(t, dbURL, 60*time.Second)
+	awaitValidConflictingIndex(t, admin)
+
+	vacuum, err := admin.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+
+	defer func() { _ = vacuum.Rollback() }()
+
+	_, err = vacuum.Exec(`LOCK TABLE transactions IN SHARE UPDATE EXCLUSIVE MODE`)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	built, err := store.buildPostgresConflictingIndex(ctx)
+	require.NoError(t, err)
+	require.True(t, built)
+}

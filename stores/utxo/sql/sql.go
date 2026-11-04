@@ -113,6 +113,14 @@ type Store struct {
 	createBatcher *batcher.Batcher[batchCreateItem]
 	unlockBatcher *batcher.Batcher[batchUnlockItem]
 
+	// conflictingIndexCancel and conflictingIndexDone stop and await the
+	// background px_transactions_conflicting build (Postgres only).
+	conflictingIndexCancel context.CancelFunc
+	conflictingIndexDone   chan struct{}
+	// conflictingIndexReady is whether px_transactions_conflicting is known to
+	// be valid; ConflictingTxHashes answers not indexed until it is.
+	conflictingIndexReady atomic.Bool
+
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
 	// block-state methods. SetBlockHeight, SetMedianBlockTime and SetBlockState
@@ -180,7 +188,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	switch storeURL.Scheme {
 	case "postgres":
-		if err = createPostgresSchema(db); err != nil {
+		if err = createPostgresSchema(logger, db); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
 		}
 
@@ -274,6 +282,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		}
 	}
 
+	if storeURL.Scheme == "postgres" {
+		s.startPostgresConflictingIndexBuild(ctx)
+	} else {
+		// SQLite creates the index with the schema.
+		s.conflictingIndexReady.Store(true)
+	}
+
 	return s, nil
 }
 
@@ -333,6 +348,10 @@ func (s *Store) Close(ctx context.Context) error {
 
 	go func() {
 		defer close(done)
+
+		// The index build uses the pool, so it stops before the DB closes.
+		s.stopPostgresConflictingIndexBuild()
+
 		// Drain in dependency order: state-mutating writers last so they
 		// have the best chance of committing before the deadline.
 		if s.unlockBatcher != nil {
@@ -5388,7 +5407,14 @@ type DBExecutor interface {
 // Advisory lock ID for UTXO schema creation serialization across pods.
 const utxoSchemaLockID int64 = 7_265_726_117 // "tera" + "ux" in ASCII-ish
 
-func createPostgresSchema(db *usql.DB) error {
+func createPostgresSchema(logger ulogger.Logger, db *usql.DB) error {
+	release, err := holdConflictingIndexBuildLock(context.Background(), logger, db)
+	if err != nil {
+		return err
+	}
+
+	defer release()
+
 	return usql.WithAdvisoryLock(context.Background(), db, utxoSchemaLockID, func() error {
 		return createPostgresSchemaImpl(db)
 	})
@@ -5631,12 +5657,9 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not add conflict recovery column", err)
 	}
 
-	// Serves ConflictingTxHashes: block validation reads the conflicting set once
-	// per block instead of one row per transaction of an already-validated subtree.
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_transactions_conflicting ON transactions (hash) WHERE conflicting = true;`); err != nil {
-		_ = db.Close()
-		return errors.NewStorageError("could not create px_transactions_conflicting index - [%+v]", err)
-	}
+	// px_transactions_conflicting is not created here: New builds it in the
+	// background with CREATE INDEX CONCURRENTLY, outside the schema lock (see
+	// conflicting_index.go).
 
 	return nil
 }

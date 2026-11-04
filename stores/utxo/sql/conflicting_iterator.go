@@ -46,9 +46,15 @@ func newConflictingTxIterator(store *Store) (*unminedTxIterator, error) {
 }
 
 // ConflictingTxHashes returns the hash of every transaction flagged conflicting,
-// read through the px_transactions_conflicting partial index. SQL always answers
-// from the index, so indexed is true whenever err is nil.
+// read through the px_transactions_conflicting partial index. indexed is false,
+// with no error, until that index is known to be valid (on PostgreSQL it is
+// built in the background), so block validation falls back instead of scanning
+// the table on every block.
 func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	if !s.conflictingIndexReady.Load() {
+		return nil, false, nil
+	}
+
 	rows, err := s.db.QueryContext(ctx, `SELECT hash FROM transactions WHERE conflicting = true`)
 	if err != nil {
 		return nil, false, errors.NewStorageError("[ConflictingTxHashes] query failed", err)
