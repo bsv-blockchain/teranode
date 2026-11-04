@@ -67,6 +67,8 @@ func (m *MockStore) GetBlockState() utxo.BlockState {
 	}
 }
 
+func (m *MockStore) Stamper() pruner.Stamper { return pruner.NoStamp }
+
 func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	args := m.Called(ctx, checkLiveness)
 	return args.Int(0), args.String(1), args.Error(2)
@@ -1111,6 +1113,11 @@ func TestInterfaceCompliance(t *testing.T) {
 	require.NotNil(t, loggerStore)
 }
 
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
 // newLoggedSQLiteStore wraps a sqlitememory UTXO store in the logger store.
 func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
 	t.Helper()
@@ -1125,6 +1132,15 @@ func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
 	require.NoError(t, err)
 
 	return New(ctx, ulogger.TestLogger{}, base), base
+}
+
+// The logger store forwards Stamper to the inner store. A sql store has nothing to stamp, so
+// what comes back is pruner.NoStamp, and the wrapper does not invent a stamp of its own.
+func TestStamper_Forwards(t *testing.T) {
+	s, base := newLoggedSQLiteStore(t)
+
+	require.Equal(t, base.Stamper(), s.Stamper())
+	require.Equal(t, pruner.NoStamp, s.Stamper())
 }
 
 // The logger store forwards a list to the inner store's SpendAndCreateMulti,
@@ -1256,4 +1272,69 @@ func TestAs_LoggedSQLStoreHasNoIndexWaiter(t *testing.T) {
 func TestAs_NilStore(t *testing.T) {
 	_, ok := utxo.As[*sql.Store](nil)
 	require.False(t, ok)
+}
+
+func (m *MockStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	return nil
+}
+func (m *MockStore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	return nil, nil
+}
+func (m *MockStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, height uint32) error {
+	return nil
+}
+
+func (m *MockStore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *MockStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return nil
+}
+
+// recoveryPassthrough records the conflict recovery calls that the logging store forwards.
+type recoveryPassthrough struct {
+	utxo.Store
+	calls []string
+}
+
+func (s *recoveryPassthrough) SaveConflictRecovery(context.Context, chainhash.Hash, *utxo.ConflictRecovery) error {
+	s.calls = append(s.calls, "save")
+	return nil
+}
+
+func (s *recoveryPassthrough) LoadConflictRecovery(context.Context, chainhash.Hash) (*utxo.ConflictRecovery, error) {
+	s.calls = append(s.calls, "load")
+	return &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryFinished}, nil
+}
+
+func (s *recoveryPassthrough) RestoreConflictSpends(context.Context, []*utxo.Spend, uint32) error {
+	s.calls = append(s.calls, "restore")
+	return nil
+}
+
+func (s *recoveryPassthrough) SetConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash, bool) error {
+	s.calls = append(s.calls, "lock")
+	return nil
+}
+
+func (s *recoveryPassthrough) ReleaseConflictLocks(context.Context, chainhash.Hash, []chainhash.Hash) error {
+	s.calls = append(s.calls, "release")
+	return nil
+}
+
+func TestLoggerStore_ForwardsConflictRecovery(t *testing.T) {
+	inner := &recoveryPassthrough{}
+	store := New(context.Background(), ulogger.TestLogger{}, inner)
+	ctx := context.Background()
+	id := chainhash.Hash{1}
+
+	require.NoError(t, store.SaveConflictRecovery(ctx, id, nil))
+	r, err := store.LoadConflictRecovery(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, utxo.ConflictRecoveryFinished, r.Phase)
+	require.NoError(t, store.RestoreConflictSpends(ctx, nil, 1))
+	require.NoError(t, store.SetConflictLocks(ctx, id, nil, true))
+	require.NoError(t, store.ReleaseConflictLocks(ctx, id, nil))
+	require.Equal(t, []string{"save", "load", "restore", "lock", "release"}, inner.calls)
 }

@@ -1,9 +1,11 @@
 package blockassembly
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -113,89 +115,245 @@ func newInMemoryTxMetaTopic(t *testing.T) (kafka.KafkaAsyncProducerI, *txMetaDel
 	return producer, collector
 }
 
-// TestReplayPendingConflictIntents_ForwardEvictsDemotedFromTxMetaCache pins that
-// replaying a forward intent publishes txmeta DELETEs for every tx the demotion
-// marked conflicting (loser and cascaded child), not the winner. The store is a
-// mock because ProcessConflicting deadlocks inside SetConflicting on sqlitememory.
-func TestReplayPendingConflictIntents_ForwardEvictsDemotedFromTxMetaCache(t *testing.T) {
-	winner := chainhash.HashH([]byte("replay-winner"))
-	loser := chainhash.HashH([]byte("replay-loser"))
-	child := chainhash.HashH([]byte("replay-child"))
+// evictionFaultStore wraps a real UTXO store and injects the faults the replay eviction tests need.
+type evictionFaultStore struct {
+	utxo.Store
 
-	intent := utxo.ConflictIntent{
-		Kind:        utxo.ConflictIntentForward,
-		BlockHeight: 400,
-		BlockHash:   chainhash.HashH([]byte("on-chain-block")),
-		TxHashes:    []chainhash.Hash{winner},
-		StartedAt:   1,
+	// failUnspend applies the first Unspend and then fails it.
+	failUnspend bool
+	// failRollingBackSave fails saving the rolling_back phase, which models a process lost before
+	// its compensation ran.
+	failRollingBackSave bool
+	// failRestore fails every RestoreConflictSpends, so a rollback cannot finish.
+	failRestore bool
+	// failMarkOf fails the SetConflicting(true) write that includes this hash, without applying it.
+	failMarkOf *chainhash.Hash
+}
+
+func (s *evictionFaultStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
+	if err := s.Store.Unspend(ctx, spends, flagAsLocked...); err != nil {
+		return err
 	}
 
-	mockStore := &utxo.MockUtxostore{}
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true}, nil)
-	mockStore.On("GetCounterConflicting", mock.Anything, winner).Return([]chainhash.Hash{loser}, nil)
-	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{loser}, true).Return([]*utxo.Spend{}, []chainhash.Hash{child}, nil)
-	mockStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
-	mockStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil, []*utxo.Spend{}, nil)
-	mockStore.On("SetLocked", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	if s.failUnspend {
+		s.failUnspend = false
+		return errors.NewStorageError("injected unspend failure")
+	}
 
-	bc := blockchainMembershipMock(true, false)
-	bc.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(false, nil)
+	return nil
+}
+
+func (s *evictionFaultStore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *utxo.ConflictRecovery) error {
+	if s.failRollingBackSave && r.Phase == utxo.ConflictRecoveryRollingBack {
+		return errors.NewStorageError("process stopped before compensation")
+	}
+
+	return s.Store.SaveConflictRecovery(ctx, id, r)
+}
+
+func (s *evictionFaultStore) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend, blockHeight uint32) error {
+	if s.failRestore {
+		return errors.NewStorageError("injected restore failure")
+	}
+
+	return s.Store.RestoreConflictSpends(ctx, spends, blockHeight)
+}
+
+func (s *evictionFaultStore) SetConflicting(ctx context.Context, hashes []chainhash.Hash, value bool) ([]*utxo.Spend, []chainhash.Hash, error) {
+	if value && s.failMarkOf != nil && slices.Contains(hashes, *s.failMarkOf) {
+		return nil, nil, errors.NewStorageError("child write failed")
+	}
+
+	return s.Store.SetConflicting(ctx, hashes, value)
+}
+
+// evictionReplayFixture is a real sqlitememory store that holds a parent, a loser L that spends it,
+// L's child C and a winner W that double spends L's input. W is conflicting and L owns the input.
+type evictionReplayFixture struct {
+	items                 *baTestItems
+	store                 utxo.Store
+	winner, loser, child  *bt.Tx
+	intent                utxo.ConflictIntent
+	collector             *txMetaDeleteCollector
+	winnerHash, loserHash chainhash.Hash
+	childHash             chainhash.Hash
+}
+
+func newEvictionReplayFixture(t *testing.T, kind utxo.ConflictIntentKind) *evictionReplayFixture {
+	t.Helper()
+
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t)
+	store := items.utxoStore
+	require.NoError(t, store.SetBlockHeight(10))
+
+	parent := createStaleReverseParent(ctx, t, store, 1)
+	f := &evictionReplayFixture{items: items, store: store}
+
+	if kind == utxo.ConflictIntentForward {
+		f.loser = createStaleReverseSpender(ctx, t, store, parent, 0, 90000, true)
+		f.winner = createStaleReverseSpender(ctx, t, store, parent, 0, 80000, false)
+	} else {
+		// A reverse demotes the applied winner W and promotes the conflicting counter L again.
+		f.loser = createStaleReverseSpender(ctx, t, store, parent, 0, 90000, false)
+		f.winner = createStaleReverseSpender(ctx, t, store, parent, 0, 80000, true)
+	}
+
+	// C spends the output of the transaction that owns the input, so a demotion cascades to it.
+	owner := f.loser
+	if kind == utxo.ConflictIntentReverse {
+		owner = f.winner
+	}
+
+	f.child = createStaleReverseSpender(ctx, t, store, owner, 0, 70000, true)
+
+	f.winnerHash, f.loserHash, f.childHash = *f.winner.TxIDChainHash(), *f.loser.TxIDChainHash(), *f.child.TxIDChainHash()
+	f.intent = utxo.ConflictIntent{Kind: kind, BlockHeight: 10, BlockHash: chainhash.HashH([]byte("eviction-replay-block")), StartedAt: 1}
+
+	if kind == utxo.ConflictIntentForward {
+		f.intent.TxHashes = []chainhash.Hash{f.winnerHash}
+
+		// The intent's block is on the longest chain, so the forward intent replays.
+		bc := blockchainMembershipMock(true, false)
+		bc.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(false, nil)
+		items.blockAssembler.blockchainClient = bc
+	} else {
+		f.intent.TxHashes = []chainhash.Hash{f.winnerHash}
+
+		// An unknown block is off the longest chain, so the reverse intent replays.
+		items.blockAssembler.blockchainClient = blockchainMembershipMock(false, true)
+	}
 
 	producer, collector := newInMemoryTxMetaTopic(t)
+	f.collector = collector
+	items.blockAssembler.txMetaEvictor = subtreeprocessor.NewTxMetaEvictor(ulogger.TestLogger{}, producer)
 
-	spy := &replaySpyStore{MockUtxostore: mockStore, pending: []utxo.ConflictIntent{intent}}
-	b := newReplayTestAssembler(spy, bc)
-	b.txMetaEvictor = subtreeprocessor.NewTxMetaEvictor(ulogger.TestLogger{}, producer)
+	return f
+}
 
-	b.replayPendingConflictIntents(t.Context())
+func (f *evictionReplayFixture) pending(t *testing.T) []utxo.ConflictIntent {
+	t.Helper()
 
-	require.Contains(t, spy.completed, intent.IntentID())
-	require.Eventually(t, func() bool { return collector.has(loser, child) },
+	pending, err := f.store.PendingConflictIntents(t.Context())
+	require.NoError(t, err)
+
+	return pending
+}
+
+// TestReplayPendingConflictIntents_ForwardEvictsDemotedFromTxMetaCache pins
+// that replaying a forward intent publishes txmeta DELETEs for every tx the
+// demotion marked conflicting (loser and cascaded child), not the winner. The
+// process stopped after the operation finished and before block assembly
+// acknowledged it, so replay returns the saved result.
+func TestReplayPendingConflictIntents_ForwardEvictsDemotedFromTxMetaCache(t *testing.T) {
+	ctx := t.Context()
+	f := newEvictionReplayFixture(t, utxo.ConflictIntentForward)
+
+	_, _, err := utxo.ProcessConflicting(ctx, f.store, f.intent.BlockHeight, f.intent.BlockHash, f.intent.TxHashes, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
+	require.NoError(t, err)
+
+	f.items.blockAssembler.replayPendingConflictIntents(ctx)
+
+	require.Len(t, f.pending(t), 1, "a finished forward intent stays pending until block assembly acknowledges it")
+	require.Eventually(t, func() bool { return f.collector.has(f.loserHash, f.childHash) },
 		5*time.Second, 10*time.Millisecond, "DELETEs for the loser and its cascaded child must reach the txmeta topic")
-	require.False(t, collector.has(winner), "the promoted winner must not be evicted")
-	require.Equal(t, 2, collector.count())
+	require.False(t, f.collector.has(f.winnerHash), "the promoted winner must not be evicted")
+	require.Equal(t, 2, f.collector.count())
 }
 
 // TestReplayPendingConflictIntents_ReverseEvictsDemotedFromTxMetaCache pins the
 // reverse direction: a replayed reverse flips the demoted winner (and its
 // descendants) back to conflicting, and those must be evicted too.
 func TestReplayPendingConflictIntents_ReverseEvictsDemotedFromTxMetaCache(t *testing.T) {
-	demoted := chainhash.HashH([]byte("reverse-demoted"))
-	child := chainhash.HashH([]byte("reverse-demoted-child"))
+	ctx := t.Context()
+	f := newEvictionReplayFixture(t, utxo.ConflictIntentReverse)
+	require.NoError(t, f.store.BeginConflictIntent(ctx, f.intent))
 
-	demotedTx := bt.NewTx()
-	require.NoError(t, demotedTx.From(chainhash.HashH([]byte("p")).String(), 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+	f.items.blockAssembler.replayPendingConflictIntents(ctx)
 
-	intent := utxo.ConflictIntent{
-		Kind:        utxo.ConflictIntentReverse,
-		BlockHeight: 401,
-		TxHashes:    []chainhash.Hash{demoted},
-		StartedAt:   1,
-	}
-
-	mockStore := &utxo.MockUtxostore{}
-	mockStore.On("Get", mock.Anything, &demoted, mock.Anything).Return(&meta.Data{Tx: demotedTx}, nil)
-	// parent has no conflicting children: nothing to promote
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
-	mockStore.On("SetConflicting", mock.Anything, []chainhash.Hash{demoted}, true).Return([]*utxo.Spend{}, []chainhash.Hash{child}, nil)
-	mockStore.On("SetConflicting", mock.Anything, mock.Anything, mock.Anything).Return([]*utxo.Spend{}, []chainhash.Hash{}, nil)
-	mockStore.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
-	producer, collector := newInMemoryTxMetaTopic(t)
-
-	spy := &replaySpyStore{MockUtxostore: mockStore, pending: []utxo.ConflictIntent{intent}}
-	// unknown block => off chain => a reverse intent is not stale and replays as is
-	b := newReplayTestAssembler(spy, blockchainMembershipMock(false, true))
-	b.txMetaEvictor = subtreeprocessor.NewTxMetaEvictor(ulogger.TestLogger{}, producer)
-
-	b.replayPendingConflictIntents(t.Context())
-
-	require.Contains(t, spy.completed, intent.IntentID())
-	require.Eventually(t, func() bool { return collector.has(demoted, child) },
+	require.Empty(t, f.pending(t), "a successful reverse replay completes its intent")
+	require.Eventually(t, func() bool { return f.collector.has(f.winnerHash, f.childHash) },
 		5*time.Second, 10*time.Millisecond, "DELETEs for the demoted tx and its cascaded child must reach the txmeta topic")
-	require.Equal(t, 2, collector.count())
+	require.Equal(t, 2, f.collector.count())
+}
+
+// A stale forward heal that rolls back evicts what the rollback changed: every checklist tx.
+func TestHealStaleConflictIntent_ForwardRollbackEvicts(t *testing.T) {
+	ctx := t.Context()
+	f := newEvictionReplayFixture(t, utxo.ConflictIntentForward)
+
+	_, _, err := utxo.ProcessConflicting(ctx, f.store, f.intent.BlockHeight, f.intent.BlockHash, f.intent.TxHashes, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
+	require.NoError(t, err)
+
+	// Nothing is confirmed on the current chain, so the heal rolls the operation back.
+	f.items.blockAssembler.blockchainClient = blockchainMembershipMock(false, false)
+
+	require.NoError(t, f.items.blockAssembler.healStaleConflictIntent(ctx, f.intent))
+
+	require.Eventually(t, func() bool { return f.collector.has(f.winnerHash, f.loserHash, f.childHash) },
+		5*time.Second, 10*time.Millisecond, "the rollback flips the winner and restores the cascade, so all three must be evicted")
+	require.Equal(t, 3, f.collector.count())
+}
+
+// A stale forward heal that changes nothing must evict nothing. A refused heal is retried on every
+// startup, and each eviction leaves txmeta tombstones for the whole checklist.
+func TestHealStaleConflictIntent_ForwardNoChangeEvictsNothing(t *testing.T) {
+	t.Run("rollback refused", func(t *testing.T) {
+		ctx := t.Context()
+		f := newEvictionReplayFixture(t, utxo.ConflictIntentForward)
+
+		_, _, err := utxo.ProcessConflicting(ctx, f.store, f.intent.BlockHeight, f.intent.BlockHash, f.intent.TxHashes, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
+		require.NoError(t, err)
+
+		// The loser is confirmed on the current chain, so the guard refuses the rollback.
+		_, err = f.store.SetMinedMulti(ctx, []*chainhash.Hash{&f.loserHash}, utxo.MinedBlockInfo{BlockID: 5, BlockHeight: 9})
+		require.NoError(t, err)
+		f.items.blockAssembler.blockchainClient = blockchainMembershipMock(true, false)
+
+		require.Error(t, f.items.blockAssembler.healStaleConflictIntent(ctx, f.intent))
+		require.Len(t, f.pending(t), 1, "a refused heal keeps the intent")
+		require.Never(t, func() bool { return f.collector.count() > 0 }, 300*time.Millisecond, 10*time.Millisecond,
+			"a refused rollback changed nothing, so nothing may be evicted")
+	})
+
+	t.Run("reversed checklist retired", func(t *testing.T) {
+		ctx := t.Context()
+		f := newEvictionReplayFixture(t, utxo.ConflictIntentForward)
+
+		_, _, err := utxo.ProcessConflicting(ctx, f.store, f.intent.BlockHeight, f.intent.BlockHash, f.intent.TxHashes, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
+		require.NoError(t, err)
+
+		// A reverse of the block ran and stopped before it retired the forward checklist.
+		_, _, err = utxo.ReverseProcessConflicting(ctx, f.store, f.intent.BlockHeight, f.intent.BlockHash, f.intent.TxHashes)
+		require.NoError(t, err)
+		f.items.blockAssembler.blockchainClient = blockchainMembershipMock(false, false)
+
+		require.NoError(t, f.items.blockAssembler.healStaleConflictIntent(ctx, f.intent))
+		require.Empty(t, f.pending(t), "the heal retires the reversed checklist")
+		require.Never(t, func() bool { return f.collector.count() > 0 }, 300*time.Millisecond, 10*time.Millisecond,
+			"retirement changes no flag, so nothing may be evicted")
+	})
+}
+
+// A stale reverse heal re-applies the winner and evicts what that demotion marked conflicting.
+func TestHealStaleConflictIntent_ReverseEvictsDemoted(t *testing.T) {
+	ctx := t.Context()
+	f := newEvictionReplayFixture(t, utxo.ConflictIntentForward)
+
+	// The reverse completed: W is conflicting and L owns the input. The block is back on the chain.
+	reverse := f.intent
+	reverse.Kind = utxo.ConflictIntentReverse
+
+	require.NoError(t, f.items.blockAssembler.healStaleConflictIntent(ctx, reverse))
+
+	require.Eventually(t, func() bool { return f.collector.has(f.loserHash, f.childHash) },
+		5*time.Second, 10*time.Millisecond, "the loser and its cascaded child must be evicted")
+	require.False(t, f.collector.has(f.winnerHash), "the re-applied winner must not be evicted")
+	require.Equal(t, 2, f.collector.count())
+
+	forward := reverse
+	forward.Kind = utxo.ConflictIntentForward
+	require.NoError(t, f.store.CompleteConflictIntent(ctx, forward.IntentID()))
 }
 
 // TestWithTxMetaProducer pins that a typed-nil producer (what the daemon passes
@@ -338,67 +496,34 @@ func TestValidateParentChain_CascadeErrorEvictsFlippedFromTxMetaCache(t *testing
 		"a cascade that failed partway must still evict what it may have flipped")
 }
 
+// The process stopped while the forward operation was mutating, so the loser and child are
+// conflicting. The replay's rollback then fails. It must still evict what it may have flipped.
 func TestReplayPendingConflictIntents_FailedForwardEvictsFlipped(t *testing.T) {
-	winner := chainhash.HashH([]byte("failed-replay-winner"))
-	loser := chainhash.HashH([]byte("failed-replay-loser"))
-	child := chainhash.HashH([]byte("failed-replay-child"))
+	ctx := t.Context()
+	f := newEvictionReplayFixture(t, utxo.ConflictIntentForward)
 
-	intent := utxo.ConflictIntent{
-		Kind:        utxo.ConflictIntentForward,
-		BlockHeight: 400,
-		BlockHash:   chainhash.HashH([]byte("on-chain-block")),
-		TxHashes:    []chainhash.Hash{winner},
-		StartedAt:   1,
-	}
+	crashed := &evictionFaultStore{Store: f.store, failUnspend: true, failRollingBackSave: true}
+	_, _, err := utxo.ProcessConflicting(ctx, crashed, f.intent.BlockHeight, f.intent.BlockHash, f.intent.TxHashes, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
+	require.Error(t, err)
 
-	mockStore := failingCascadeStore(loser, child)
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{Conflicting: true}, nil)
-	mockStore.On("GetCounterConflicting", mock.Anything, winner).Return([]chainhash.Hash{loser}, nil)
-	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	f.items.blockAssembler.utxoStore = &evictionFaultStore{Store: f.store, failRestore: true}
+	f.items.blockAssembler.replayPendingConflictIntents(ctx)
 
-	bc := blockchainMembershipMock(true, false)
-	bc.On("CheckBlockIsAncestorOfBlock", mock.Anything, mock.Anything, mock.Anything).Return(false, nil)
-
-	producer, collector := newInMemoryTxMetaTopic(t)
-
-	spy := &replaySpyStore{MockUtxostore: mockStore, pending: []utxo.ConflictIntent{intent}}
-	b := newReplayTestAssembler(spy, bc)
-	b.txMetaEvictor = subtreeprocessor.NewTxMetaEvictor(ulogger.TestLogger{}, producer)
-
-	b.replayPendingConflictIntents(t.Context())
-
-	require.NotContains(t, spy.completed, intent.IntentID(), "a failed replay must leave its intent for the next start")
-	require.Eventually(t, func() bool { return collector.has(loser, child) },
+	require.Len(t, f.pending(t), 1, "a failed replay must leave its intent for the next start")
+	require.Eventually(t, func() bool { return f.collector.has(f.loserHash, f.childHash) },
 		5*time.Second, 10*time.Millisecond, "a replay that failed partway must still evict what it may have flipped")
 }
 
+// The reverse cascade fails at the child's write after it flipped the demoted winner.
 func TestReplayPendingConflictIntents_FailedReverseEvictsFlipped(t *testing.T) {
-	demoted := chainhash.HashH([]byte("failed-reverse-demoted"))
-	child := chainhash.HashH([]byte("failed-reverse-child"))
+	ctx := t.Context()
+	f := newEvictionReplayFixture(t, utxo.ConflictIntentReverse)
+	require.NoError(t, f.store.BeginConflictIntent(ctx, f.intent))
 
-	demotedTx := bt.NewTx()
-	require.NoError(t, demotedTx.From(chainhash.HashH([]byte("p")).String(), 0, "76a914000000000000000000000000000000000000000088ac", 1000))
+	f.items.blockAssembler.utxoStore = &evictionFaultStore{Store: f.store, failMarkOf: &f.childHash}
+	f.items.blockAssembler.replayPendingConflictIntents(ctx)
 
-	intent := utxo.ConflictIntent{
-		Kind:        utxo.ConflictIntentReverse,
-		BlockHeight: 401,
-		TxHashes:    []chainhash.Hash{demoted},
-		StartedAt:   1,
-	}
-
-	mockStore := failingCascadeStore(demoted, child)
-	mockStore.On("Get", mock.Anything, &demoted, mock.Anything).Return(&meta.Data{Tx: demotedTx}, nil)
-	mockStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(&meta.Data{}, nil)
-
-	producer, collector := newInMemoryTxMetaTopic(t)
-
-	spy := &replaySpyStore{MockUtxostore: mockStore, pending: []utxo.ConflictIntent{intent}}
-	b := newReplayTestAssembler(spy, blockchainMembershipMock(false, true))
-	b.txMetaEvictor = subtreeprocessor.NewTxMetaEvictor(ulogger.TestLogger{}, producer)
-
-	b.replayPendingConflictIntents(t.Context())
-
-	require.NotContains(t, spy.completed, intent.IntentID(), "a failed replay must leave its intent for the next start")
-	require.Eventually(t, func() bool { return collector.has(demoted, child) },
+	require.Len(t, f.pending(t), 1, "a failed replay must leave its intent for the next start")
+	require.Eventually(t, func() bool { return f.collector.has(f.winnerHash, f.childHash) },
 		5*time.Second, 10*time.Millisecond, "a reverse that failed partway must still evict what it may have flipped")
 }
