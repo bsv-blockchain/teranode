@@ -111,7 +111,7 @@ function classifyAuthor(pr) {
   if (!pr.author.isUser) return { kind: 'exempt', reason: 'author is not a user account' };
   if (TEAM_ASSOCIATIONS.has(pr.authorAssociation)) return { kind: 'team', via: pr.authorAssociation };
   if (TEAM_PERMISSIONS.has(pr.authorPermission)) {
-    return { kind: 'team', via: `${pr.authorPermission} access, reported ${pr.authorAssociation}`, upgraded: true };
+    return { kind: 'team', via: `write access, reported ${pr.authorAssociation}`, upgraded: true };
   }
   if (EXTERNAL_ASSOCIATIONS.has(pr.authorAssociation)) return { kind: 'external', via: pr.authorAssociation };
   return { kind: 'exempt', reason: `unknown author association ${pr.authorAssociation || '(none)'}` };
@@ -323,8 +323,7 @@ function renderSummary(result, opts) {
   const upgraded = new Set(result.decisions.filter((d) => d.authorUpgraded).map((d) => d.author));
   out.push(
     `### Author classification\n\n${permissionLookups} repository permission lookups for authors not reported as ` +
-      `OWNER/MEMBER/COLLABORATOR; ${upgraded.size} upgraded to team by write access` +
-      `${upgraded.size ? ` (${[...upgraded].sort().join(', ')})` : ''}; ${permissionErrors.length} failed.\n`,
+      `OWNER/MEMBER/COLLABORATOR; ${upgraded.size} upgraded to team by write access; ${permissionErrors.length} failed.\n`,
   );
 
   if (result.capHit) {
