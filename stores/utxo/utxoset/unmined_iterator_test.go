@@ -252,3 +252,31 @@ func TestUnminedIteratorEndsWithNilAfterAFullDrain(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, second, "the call after the last row must terminate the caller's loop")
 }
+
+// TestUnminedIteratorStopsWhenItsContextIsCancelled covers block assembly's reload being
+// cancelled at shutdown or by a later reset. The reload loops on Next and never checks its
+// context itself, so Next is the only place the stream can stop, and the open rows hold a pool
+// connection that Store.Close waits for.
+func TestUnminedIteratorStopsWhenItsContextIsCancelled(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	_, err := s.Create(ctx, mkTx(t, 1, 1_000), 700_000)
+	require.NoError(t, err)
+
+	it, err := s.GetUnminedTxIterator()
+	require.NoError(t, err)
+
+	defer func() { _ = it.Close() }()
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	batch, err := it.Next(cancelled)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Empty(t, batch, "a cancelled reload gets nothing more from the stream")
+	require.ErrorIs(t, it.Err(), context.Canceled)
+
+	batch, err = it.Next(ctx)
+	require.ErrorIs(t, err, context.Canceled, "the stream stays stopped")
+	require.Empty(t, batch)
+}

@@ -75,9 +75,20 @@ type unminedIterator struct {
 	err  error
 }
 
-func (it *unminedIterator) Next(_ context.Context) ([]*utxo.UnminedTransaction, error) {
+func (it *unminedIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
 	if it.err != nil || it.rows == nil {
 		return nil, it.err
+	}
+
+	// The caller's context is the only way to stop the stream: the query runs under
+	// context.Background, because GetUnminedTxIterator is given none, and block assembly's
+	// reload loops on Next without checking its context itself. Closing the rows here also
+	// hands the connection back to the pool, which Store.Close waits for.
+	if err := ctx.Err(); err != nil {
+		it.err = err
+		it.rows.Close()
+
+		return nil, err
 	}
 
 	batch := make([]*utxo.UnminedTransaction, 0, unminedBatchSize)
