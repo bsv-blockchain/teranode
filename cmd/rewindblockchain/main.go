@@ -26,6 +26,7 @@ func main() {
 		assumeYes    bool
 		forceNotIdle bool
 		forceDeep    bool
+		resetUTXOP   bool
 		verify       bool
 		concurrency  int
 		showVersion  bool
@@ -36,6 +37,7 @@ func main() {
 	flag.BoolVar(&assumeYes, "assume-yes", false, "Skip interactive confirmation prompt")
 	flag.BoolVar(&forceNotIdle, "force-not-idle", false, "Proceed even if FSM is not IDLE (DANGEROUS)")
 	flag.BoolVar(&forceDeep, "force-deep", false, "Allow rewind deeper than 100 blocks (coinbase-maturity risk)")
+	flag.BoolVar(&resetUTXOP, "reset-utxo-persister", false, "Delete the UTXO persister's lastProcessed marker if above target, forcing a rebuild from genesis (only safe with full delta history to genesis; a seeded node will stall)")
 	flag.BoolVar(&verify, "verify", false, "Run post-rewind consistency checks")
 	flag.IntVar(&concurrency, "concurrency", 0, "Subtree-load concurrency (0 = use settings.BlockAssembly.MoveBackBlockConcurrency or 4)")
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
@@ -70,15 +72,16 @@ func main() {
 	ctx := context.Background()
 
 	opts := rewindblockchain.Options{
-		TargetHeight: targetHeight,
-		DryRun:       dryRun,
-		AssumeYes:    assumeYes,
-		ForceNotIdle: forceNotIdle,
-		ForceDeep:    forceDeep,
-		Verify:       verify,
-		Concurrency:  concurrency,
-		Stdin:        os.Stdin,
-		Stdout:       os.Stdout,
+		TargetHeight:       targetHeight,
+		DryRun:             dryRun,
+		AssumeYes:          assumeYes,
+		ForceNotIdle:       forceNotIdle,
+		ForceDeep:          forceDeep,
+		ResetUTXOPersister: resetUTXOP,
+		Verify:             verify,
+		Concurrency:        concurrency,
+		Stdin:              os.Stdin,
+		Stdout:             os.Stdout,
 	}
 
 	if _, err := rewindblockchain.Rewind(ctx, logger, s, opts); err != nil {

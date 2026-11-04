@@ -43,6 +43,11 @@ import (
 	"github.com/ordishs/gocore"
 )
 
+// LastProcessedFilename is the block-store filename (with no hash prefix) of
+// the marker recording the last height the persister processed. It is shared
+// with cmd/rewindblockchain, which deletes the marker after a rewind.
+const LastProcessedFilename = "lastProcessed"
+
 const confirmations = 100
 
 // Server manages the UTXO persistence operations.
@@ -763,7 +768,7 @@ func (s *Server) BuildUTXOSetToHeight(ctx context.Context, startHeight, endHeigh
 // Other errors during reading or parsing are returned to the caller.
 func (s *Server) readLastHeight(ctx context.Context) (uint32, error) {
 	// Read the file content as a byte slice
-	b, err := s.blockStore.Get(ctx, nil, fileformat.FileTypeDat, options.WithFilename("lastProcessed"), options.WithNoHashPrefix())
+	b, err := s.blockStore.Get(ctx, nil, fileformat.FileTypeDat, options.WithFilename(LastProcessedFilename), options.WithNoHashPrefix())
 	if err != nil {
 		if errors.Is(err, errors.ErrNotFound) {
 			s.logger.Warnf("lastProcessed.dat does not exist, starting from height 0")
@@ -817,7 +822,7 @@ func (s *Server) writeLastHeight(ctx context.Context, height uint32) error {
 		nil,
 		fileformat.FileTypeDat,
 		[]byte(heightStr),
-		options.WithFilename("lastProcessed"),
+		options.WithFilename(LastProcessedFilename),
 		options.WithNoHashPrefix(),
 		options.WithAllowOverwrite(true),
 	)
