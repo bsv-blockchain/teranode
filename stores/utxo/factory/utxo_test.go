@@ -154,6 +154,10 @@ func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash
 	return nil
 }
 
+func (m *MockUTXOStore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	return false, nil
+}
+
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }
