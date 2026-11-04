@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -434,4 +435,58 @@ func TestPrunerReapClearsTheDeleteHeightOfAParentItUnspends(t *testing.T) {
 	reaped, err = store.reapConflicting(ctx, *loser.TxIDChainHash(), store.GetBlockHeight()+1000, store.settings.GlobalBlockHeightRetention)
 	require.NoError(t, err)
 	require.False(t, reaped, "a reaped record is no longer eligible")
+}
+
+// The reap locks conflict_intents before it counts them, so an intent begun during the reap waits for it to
+// end instead of landing after the count and restoring a parent spend of a record the reap then deletes.
+func TestReapLockBlocksConflictIntentCreation_Postgres(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping Postgres integration test in short mode")
+	}
+
+	store, ctx := setupPostgresStore(t)
+	require.Equal(t, "postgres", store.engine)
+
+	txn, err := store.db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+
+	defer func() {
+		_ = txn.Rollback()
+	}()
+
+	_, err = txn.ExecContext(ctx, `LOCK TABLE conflict_intents IN SHARE ROW EXCLUSIVE MODE`)
+	require.NoError(t, err)
+
+	intent := utxo.ConflictIntent{
+		Kind:        utxo.ConflictIntentReverse,
+		BlockHeight: 1,
+		BlockHash:   chainhash.Hash{2},
+		TxHashes:    []chainhash.Hash{{3}},
+		StartedAt:   1,
+	}
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- store.BeginConflictIntent(ctx, intent)
+	}()
+
+	select {
+	case err = <-done:
+		require.FailNow(t, "intent creation must wait for the reap lock", "returned early: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+	}
+
+	require.NoError(t, txn.Commit())
+
+	select {
+	case err = <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "intent creation did not finish after the reap lock was released")
+	}
+
+	pending, err := store.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
 }

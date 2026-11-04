@@ -148,9 +148,12 @@ func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash 
 // after a restore.
 //
 // A tx that is already in the store, because an earlier attempt recreated it, is judged by its live
-// record, not by the saved block IDs: block validation may have mined it since. If the live record is
-// mined on the current chain it is left alone. If it has block IDs that are off the chain, it is marked
-// as not on the longest chain. In both cases the live record decides, the saved file does not.
+// record, not by the saved block IDs: block validation may have mined it since. The retry never writes
+// the chain status of an existing record. The earlier attempt wrote it when it created the record, and
+// later reorgs and block validation own it from then on. The live read decides only whether the tx is
+// returned for block assembly: a tx mined on the current chain is left alone, any other is returned. A
+// tx that block validation mines between the read and the requeue is removed from block assembly when
+// that block is processed, like any tx the validator hands over while the block is being validated.
 //
 // It returns the txs it recreated, or found already recreated and not mined on the current chain, that
 // are not on the longest chain, so the caller can put them back in block assembly. A tx that was skipped
@@ -229,10 +232,8 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 			return nil, errors.NewStorageError("[restoreReorgDeletedTxs][%s] tx %s was not recreated", block.String(), txHash.String(), createErr)
 		}
 
-		markNotOnChain := len(saved.mined) > 0
-
 		if errors.Is(createErr, errors.ErrTxExists) {
-			liveOnChain, hasBlocks, liveErr := stp.existingTxChainState(ctx, txHash)
+			liveOnChain, liveErr := stp.existingTxChainState(ctx, txHash)
 			if liveErr != nil {
 				if errors.Is(liveErr, errors.ErrTxNotFound) {
 					stp.logger.Errorf("[restoreReorgDeletedTxs][%s] tx %s was not recreated, its record disappeared while it was restored: %v", block.String(), txHash.String(), liveErr)
@@ -251,11 +252,12 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 				continue
 			}
 
-			onLongestChain = false
-			markNotOnChain = hasBlocks
+			unmined = append(unmined, saved.tx)
+
+			continue
 		}
 
-		if markNotOnChain && !onLongestChain {
+		if len(saved.mined) > 0 && !onLongestChain {
 			markNotOnLongestChain = append(markNotOnLongestChain, txHash)
 		}
 
@@ -281,24 +283,26 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 	return unmined, nil
 }
 
-// existingTxChainState reads the record that is already in the store for a tx. It reports whether
-// the record has block IDs and whether any of them is on the current chain.
-func (stp *SubtreeProcessor) existingTxChainState(ctx context.Context, txHash chainhash.Hash) (onCurrentChain, hasBlocks bool, err error) {
+// existingTxChainState reads the record that is already in the store for a tx and reports whether
+// any of its block IDs is on the current chain. The caller uses it only to decide whether to requeue
+// the tx. It never writes the chain status of the record, so a block that validation mines after the
+// read cannot be overwritten.
+func (stp *SubtreeProcessor) existingTxChainState(ctx context.Context, txHash chainhash.Hash) (onCurrentChain bool, err error) {
 	txMeta, err := stp.utxoStore.Get(ctx, &txHash, fields.BlockIDs)
 	if err != nil {
-		return false, false, err
+		return false, err
 	}
 
 	if len(txMeta.BlockIDs) == 0 {
-		return false, false, nil
+		return false, nil
 	}
 
 	onCurrentChain, err = stp.blockchainClient.CheckBlockIsInCurrentChain(ctx, txMeta.BlockIDs)
 	if err != nil {
-		return false, true, errors.NewProcessingError("error checking whether the blocks of tx %s are on the current chain", txHash.String(), err)
+		return false, errors.NewProcessingError("error checking whether the blocks of tx %s are on the current chain", txHash.String(), err)
 	}
 
-	return onCurrentChain, true, nil
+	return onCurrentChain, nil
 }
 
 func firstSkippedParent(tx *bt.Tx, skipped map[chainhash.Hash]struct{}) *chainhash.Hash {

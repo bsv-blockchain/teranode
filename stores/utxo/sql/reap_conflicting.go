@@ -13,6 +13,15 @@ import (
 // one transaction. It returns false, without changing anything, when the record is no longer eligible
 // (for example a promotion cleared its conflicting flag) or when a conflict intent is pending: a
 // promotion in flight may be about to make the record live, so its parents must keep naming it.
+//
+// Intent creation is serialized with the reap, so an intent either is visible to the count or begins after
+// the record is gone. On Postgres the reap takes SHARE ROW EXCLUSIVE on conflict_intents before the count,
+// which waits for an INSERT in flight and blocks a new one until the reap ends. On SQLite the shared cache
+// locks whole tables, so the count holds a read lock on conflict_intents until the transaction ends and a
+// concurrent INSERT waits, and an INSERT in flight makes the count fail and the record is kept. An intent
+// begun after the reap commits finds the record and its conflicting-children entries gone: a reverse intent
+// finds no conflicting counter to restore (ReverseProcessConflicting skips an input with no conflicting
+// counter) and a forward intent fails on the missing winner, both as before the reap cleared parent spends.
 func (s *Store) reapConflicting(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error) {
 	txn, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -36,6 +45,12 @@ func (s *Store) reapConflicting(ctx context.Context, txHash chainhash.Hash, bloc
 		}
 
 		return false, errors.NewStorageError("[reapConflicting] failed to lock %s", txHash.String(), err)
+	}
+
+	if s.engine == "postgres" {
+		if _, err = txn.ExecContext(ctx, `LOCK TABLE conflict_intents IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+			return false, errors.NewStorageError("[reapConflicting] failed to lock conflict intents for %s", txHash.String(), err)
+		}
 	}
 
 	var pendingIntents int

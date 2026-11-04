@@ -894,7 +894,7 @@ func TestRestoreReorgDeletedTxsRequeuesAnExistingTxWhoseLiveBlocksLeftTheChain(t
 	_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: 99, BlockHeight: 1300, SubtreeIdx: 0, OnLongestChain: true})
 	require.NoError(t, err)
 
-	live, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs)
+	live, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
 	require.NoError(t, err)
 
 	stp.blockchainClient.(*blockchain.Mock).On("CheckBlockIsInCurrentChain", mock.Anything, live.BlockIDs).Return(false, nil)
@@ -903,9 +903,10 @@ func TestRestoreReorgDeletedTxsRequeuesAnExistingTxWhoseLiveBlocksLeftTheChain(t
 	require.NoError(t, err)
 	require.True(t, containsTx(unmined, first), "a tx whose blocks left the chain goes back in block assembly")
 
-	after, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.UnminedSince)
+	after, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
 	require.NoError(t, err)
-	require.NotZero(t, after.UnminedSince, "the record is marked as not on the longest chain")
+	require.Equal(t, live.BlockIDs, after.BlockIDs)
+	require.Equal(t, live.UnminedSince, after.UnminedSince, "the retry must not change the chain state of the live record")
 
 	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
 	require.NoError(t, err)
