@@ -117,6 +117,10 @@ type SequentialStore interface {
 	// DeleteComplete removes a record entirely; used by the create-first path to drop the
 	// tentative record when its spends fail.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
+	// DeleteCompleteIfCreating removes the record as DeleteComplete does, but only while it
+	// is still tentative. It reports whether it deleted: false means the record was already
+	// finalized or is absent, and nothing was removed.
+	DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error)
 }
 
 // SequentialSpendAndCreate implements the Store.SpendAndCreate contract as the
@@ -235,15 +239,34 @@ func finalizeDetached(ctx context.Context, logger ulogger.Logger, s SequentialSt
 	return finalizeWithRetry(fCtx, logger, s, tx)
 }
 
-// rollbackFailedCreateFirst undoes a create-first whose spend failed. It reverses the
-// spends that succeeded, then deletes the tentative record, both under one detached
-// context. When the reversal fails it does not delete: the record stays creating as the
-// recovery journal for the sweep. It returns the reversal error, or nil when the reversal
-// succeeded, even if the delete failed (the sweep converges a creating record whose
-// inputs are unspent).
+// rollbackFailedCreateFirst undoes a create-first whose spend failed. It deletes the
+// tentative record only while it is still creating, then reverses the spends that
+// succeeded, both under one detached context. The delete-then-unspend order stops a
+// rollback from undoing a finalized record; a concurrent roll-forward that is still
+// mid-spend is not serialized against this rollback. When the record was already
+// finalized it does nothing further, because the finalizer relies on those spends. When
+// the delete fails without removing the master, the record stays creating as the recovery journal for the sweep and
+// the spends are left in place; the sweep re-spends idempotently and converges. When the
+// reversal fails after the delete, the error is returned and the inputs stay spent. A nil
+// return covers the finalized case, the delete error case and the successful rollback.
 func rollbackFailedCreateFirst(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, spends []*Spend) error {
 	rbCtx, cancel := rollbackContext(ctx, s)
 	defer cancel()
+
+	deleted, err := s.DeleteCompleteIfCreating(rbCtx, tx.TxIDChainHash())
+	if !deleted {
+		if err != nil {
+			logger.Errorf("SpendAndCreate create-first: deleting the tentative record failed for %s, tx left creating for recovery: %v", tx.TxIDChainHash().String(), err)
+		} else {
+			logger.Warnf("SpendAndCreate create-first: tentative record for %s was finalized by a concurrent roll-forward, spends left in place", tx.TxIDChainHash().String())
+		}
+
+		return nil
+	}
+
+	if err != nil {
+		logger.Errorf("SpendAndCreate create-first: tentative record for %s deleted but its child records or blobs were not fully removed: %v", tx.TxIDChainHash().String(), err)
+	}
 
 	var succeeded []*Spend
 
@@ -255,14 +278,10 @@ func rollbackFailedCreateFirst(ctx context.Context, logger ulogger.Logger, s Seq
 
 	if len(succeeded) > 0 {
 		if err := unspendWithRetry(rbCtx, logger, s, succeeded); err != nil {
-			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s, tx left creating for recovery: %v", tx.TxIDChainHash().String(), err)
+			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s after the tentative record was deleted: %v", tx.TxIDChainHash().String(), err)
 
 			return err
 		}
-	}
-
-	if err := s.DeleteComplete(rbCtx, tx.TxIDChainHash()); err != nil {
-		logger.Errorf("SpendAndCreate create-first: deleting the tentative record failed for %s, tx left creating for recovery: %v", tx.TxIDChainHash().String(), err)
 	}
 
 	return nil
@@ -279,17 +298,19 @@ func rollbackFailedCreateFirst(ctx context.Context, logger ulogger.Logger, s Seq
 //   - Create returns ErrTxExists (a prior attempt already created the record): return it
 //     unchanged; the caller treats it as a duplicate and the pruner sweeper rolls a
 //     still-creating record forward (re-spend + finalize).
-//   - Spend fails after the tentative create: the spends that succeeded are reversed, then
-//     the tentative record is deleted, both under a detached context bounded like the
-//     spend-first rollback. The store's own partial-spend rollback cannot do this, because
+//   - Spend fails after the tentative create: the tentative record is deleted only while it
+//     is still creating, then the spends that succeeded are reversed, both under a detached
+//     context bounded like the spend-first rollback. The store's own partial-spend rollback cannot do this, because
 //     it probes for the spender record and the tentative record makes that probe succeed.
 //     Without the rollback a partially spent tx would leave its free inputs naming a record
 //     that is later pruned (the #1214 shape), and every rejected double-spend would leave a
 //     durable record. The per-input spends and the error are returned, with nil meta, so
-//     the caller can classify them. If the reversal fails, the record is NOT deleted: it
-//     stays creating as the recovery journal for the sweep, and the returned error wraps
-//     both failures. If only the delete fails, the original spend error is returned and the
-//     sweep converges the creating record whose inputs are unspent. If the spend fails with
+//     the caller can classify them. If the record was already finalized by a concurrent
+//     roll-forward, nothing is reversed, because that finalizer relies on the spends. If the
+//     delete fails without removing the master, nothing is reversed: the record stays creating as the recovery journal
+//     and the sweep re-spends idempotently and finalizes. If the delete succeeds and the
+//     reversal then fails, the inputs that were spent stay spent and name a deleted record,
+//     and the returned error wraps both failures. If the spend fails with
 //     a context error, the spend batch may still commit after the caller returned, so
 //     nothing is reversed or deleted: the creating record stays as the recovery journal and
 //     the sweep re-spends idempotently and finalizes.

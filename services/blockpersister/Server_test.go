@@ -1004,6 +1004,9 @@ func (m *MockUTXOStore) Get(ctx context.Context, hash *chainhash.Hash, fields ..
 }
 func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error         { return nil }
 func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error { return nil }
+func (m *MockUTXOStore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	return false, nil
+}
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
 	return nil, nil
 }

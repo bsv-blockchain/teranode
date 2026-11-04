@@ -3647,6 +3647,17 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	return s.Delete(ctx, hash)
 }
 
+// DeleteCompleteIfCreating deletes the transaction and reports true. The SQL store has no
+// tentative-create state (SupportsCreateFirst is false), so a record is never creating and
+// there is no flag to condition the delete on.
+func (s *Store) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	if err := s.Delete(ctx, hash); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	if len(hashes) == 0 {
 		return make(map[chainhash.Hash][]uint32), nil
