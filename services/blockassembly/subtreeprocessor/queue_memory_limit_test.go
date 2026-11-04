@@ -316,9 +316,8 @@ func TestSubtreeProcessor_HeldAccessors(t *testing.T) {
 func TestSetTxCountFromSubtrees_NeverShowsAPartialTotal(t *testing.T) {
 	stp := newTestProcessorNoStart(t)
 
-	expected := stp.txCount.Load()
 	stp.setTxCountFromSubtrees()
-	expected = stp.txCount.Load()
+	expected := stp.txCount.Load()
 	require.NotZero(t, expected, "the first subtree carries the coinbase placeholder")
 
 	var (
