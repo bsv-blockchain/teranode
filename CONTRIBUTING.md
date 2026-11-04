@@ -2,6 +2,7 @@
 
 * [New Contributor Guide](#contributing-guide)
   * [Pull Request Workflow](#pull-request-workflow)
+  * [Inactive pull requests](#inactive-pull-requests)
 
 Welcome! We are glad you are excited to contribute to Teranode.
 
@@ -33,3 +34,21 @@ To briefly summarize, we expect users to:
 
 The commands for this are shown
 [here](https://github.com/gabrieldemarmiesse/getting_started_open_source?tab=readme-ov-file#All-commands).
+
+## Inactive pull requests
+
+A daily job labels and closes pull requests that nobody is working on.
+
+* After 90 days without human activity a PR gets the `stale` label and a comment.
+* 14 days after that, if there is still no activity, it is closed. The branch is
+  not deleted; reopen the PR when you pick the work back up.
+* Activity means a new commit, a comment, a review, a review comment or a
+  reopen by a person. Bot comments and label changes do not count.
+* A PR is never labelled or closed if it has the `keep-open` label or is
+  approved.
+* A PR from an outside contributor is only closed when it is waiting on its
+  author: changes were requested and the author has not pushed or replied since.
+  A PR waiting on a reviewer is never closed.
+
+The job is `.github/workflows/stale_prs.yaml`. It only reports what it would do
+until maintainers turn it on with the `STALE_PRS_ENABLED` repository variable.
