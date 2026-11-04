@@ -147,6 +147,12 @@ var (
 )
 
 func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Logger) (*uaerospike.Client, *teranode_aerospike.Store, context.Context, func()) {
+	return initAerospikeWith(t, settings, logger, nil)
+}
+
+// initAerospikeWith is initAerospike with beforeStore run on the raw client once
+// the namespace accepts writes and before the store is constructed.
+func initAerospikeWith(t *testing.T, settings *settings.Settings, logger ulogger.Logger, beforeStore func(*uaerospike.Client)) (*uaerospike.Client, *teranode_aerospike.Store, context.Context, func()) {
 	teranode_aerospike.InitPrometheusMetrics()
 
 	ctx := context.Background()
@@ -235,6 +241,10 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 	// fail with a clearer error).
 	require.NoError(t, waitForAerospikeWritesReady(client))
 
+	if beforeStore != nil {
+		beforeStore(client)
+	}
+
 	aerospikeContainerURL := fmt.Sprintf("aerospike://%s:%d/%s?set=%s&block_retention=%d&externalStore=file://./data/externalStore", host, port, aerospikeNamespace, aerospikeSet, aerospikeBlockRetention)
 	aeroURL, err := url.Parse(aerospikeContainerURL)
 	require.NoError(t, err)
@@ -247,6 +257,7 @@ func initAerospike(t *testing.T, settings *settings.Settings, logger ulogger.Log
 	db.SetExternalStore(memory.New())
 
 	return client, db, ctx, func() {
+		db.StopConflictingIndexSelfTest()
 		client.Close()
 	}
 }

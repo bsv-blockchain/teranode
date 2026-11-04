@@ -253,8 +253,11 @@ type Store struct {
 
 	// conflictingIndexState is whether this process trusts the conflicting index
 	// (conflictingIndexUnchecked/Usable/Unusable); see conflicting_index.go.
-	conflictingIndexState   atomic.Int32
-	conflictingIndexProbeMu sync.Mutex
+	// conflictingIndexCancel and conflictingIndexDone stop and await the
+	// background self-test that sets it.
+	conflictingIndexState  atomic.Int32
+	conflictingIndexCancel context.CancelFunc
+	conflictingIndexDone   chan struct{}
 
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
@@ -649,6 +652,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 
+	// Every process checks the conflicting index itself, whichever process
+	// created it. It starts last: the probe needs the Lua module registered
+	// above, and a failed New must not leave it running.
+	s.startConflictingIndexSelfTest(ctx)
+
 	return s, nil
 }
 
@@ -772,6 +780,7 @@ func (s *Store) Close(ctx context.Context) error {
 
 	go func() {
 		defer close(done)
+
 		// Order is dependency-driven: a batcher whose drain callback enqueues
 		// into another batcher MUST be closed before that downstream batcher,
 		// otherwise the drain Puts into an already-closed input channel and
@@ -823,6 +832,10 @@ func (s *Store) Close(ctx context.Context) error {
 		// later store for the same host (e.g. an in-process daemon restart)
 		// would reuse it and fail with INVALID_NODE_ERROR. Done inside the
 		// goroutine so it still runs even when ctx has already expired.
+		// The self-test uses the client, so it stops before the client closes,
+		// and after the drains so a probe in flight cannot delay them.
+		s.stopConflictingIndexSelfTest()
+
 		if s.client != nil {
 			util.CloseAerospikeClient(s.url.Host)
 		}

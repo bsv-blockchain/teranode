@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -16,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,15 +25,31 @@ import (
 func initAerospikeImage(t *testing.T, image string, tSettings *settings.Settings) (*teranode_aerospike.Store, context.Context) {
 	t.Helper()
 
+	_, store, ctx := initAerospikeImageWith(t, image, tSettings, nil)
+
+	return store, ctx
+}
+
+// initAerospikeImageWith runs initAerospikeWith against the given server image
+// and closes the store at cleanup, which stops its background index self-test.
+func initAerospikeImageWith(t *testing.T, image string, tSettings *settings.Settings, beforeStore func(*uaerospike.Client)) (*uaerospike.Client, *teranode_aerospike.Store, context.Context) {
+	t.Helper()
+
 	previous := aerospikeContainerImage
 	aerospikeContainerImage = image
 
 	t.Cleanup(func() { aerospikeContainerImage = previous })
 
-	_, store, ctx, cleanup := initAerospike(t, tSettings, ulogger.NewErrorTestLogger(t))
+	client, store, ctx, cleanup := initAerospikeWith(t, tSettings, ulogger.NewErrorTestLogger(t), beforeStore)
 	t.Cleanup(cleanup)
+	t.Cleanup(func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
-	return store, ctx
+		require.NoError(t, store.Close(closeCtx))
+	})
+
+	return client, store, ctx
 }
 
 // conflictingIndexTx builds a transaction spending the given outputs of parent,
@@ -70,17 +88,20 @@ func conflictingIndexParent(t *testing.T, ctx context.Context, store *teranode_a
 	return parent
 }
 
-// awaitConflictingIndex waits until the store answers from its index; the index
-// is created at startup and builds in the background.
-func awaitConflictingIndex(t *testing.T, ctx context.Context, store *teranode_aerospike.Store) {
+// awaitConflictingIndex waits until the store's startup self-test has trusted
+// the index; the index is created at startup and builds in the background.
+// It deliberately does not call ConflictingTxHashes, so it also pins that the
+// self-test runs without block validation asking for the index.
+func awaitConflictingIndex(t *testing.T, store *teranode_aerospike.Store) {
 	t.Helper()
 
 	require.Eventually(t, func() bool {
-		_, indexed, err := store.ConflictingTxHashes(ctx)
-		require.NoError(t, err)
+		done, _ := store.ConflictingIndexVerdict()
+		return done
+	}, 30*time.Second, 100*time.Millisecond, "conflicting index self-test never finished")
 
-		return indexed
-	}, 30*time.Second, 100*time.Millisecond, "conflicting index never became usable")
+	_, usable := store.ConflictingIndexVerdict()
+	require.True(t, usable, "conflicting index self-test did not trust the index")
 }
 
 func conflictingSet(t *testing.T, ctx context.Context, store *teranode_aerospike.Store) map[chainhash.Hash]struct{} {
@@ -102,10 +123,19 @@ func conflictingSet(t *testing.T, ctx context.Context, store *teranode_aerospike
 }
 
 // TestConflictingTxHashes_TracksTheFlag pins that the index follows the
-// conflicting flag through the store's own writers.
+// conflicting flag through the store's own writers. It runs on a namespace with
+// expiration disabled (nsup-period=0, and the default
+// allow-ttl-without-nsup=false), where the server rejects any write carrying a
+// TTL, so it also pins that the self-test works there and leaves no probe
+// record behind.
 func TestConflictingTxHashes_TracksTheFlag(t *testing.T) {
-	store, ctx := initAerospikeImage(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t))
-	awaitConflictingIndex(t, ctx, store)
+	client, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), func(client *uaerospike.Client) {
+		setNamespaceConfig(t, client, "allow-ttl-without-nsup=false")
+		setNamespaceConfig(t, client, "nsup-period=0")
+	})
+
+	awaitConflictingIndex(t, store)
+	require.Zero(t, probeRecordCount(t, client))
 
 	parent := conflictingIndexParent(t, ctx, store, 1, 2)
 
@@ -138,7 +168,7 @@ func TestConflictingTxHashes_MatchesTheFlagOnEveryRecord(t *testing.T) {
 	tSettings.UtxoStore.UtxoBatchSize = 2
 
 	store, ctx := initAerospikeImage(t, "aerospike/aerospike-server:8.1", tSettings)
-	awaitConflictingIndex(t, ctx, store)
+	awaitConflictingIndex(t, store)
 
 	const children = 40
 
@@ -212,6 +242,71 @@ func TestConflictingTxHashes_MatchesTheFlagOnEveryRecord(t *testing.T) {
 // back instead of reading "nothing is conflicting".
 func TestConflictingTxHashes_ServerWithoutExpressionIndexes(t *testing.T) {
 	store, ctx := initAerospikeImage(t, "aerospike/aerospike-server:8.0", test.CreateBaseTestSettings(t))
+
+	hashes, indexed, err := store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, hashes)
+}
+
+// setNamespaceConfig applies a dynamic namespace setting on every node.
+func setNamespaceConfig(t *testing.T, client *uaerospike.Client, setting string) {
+	t.Helper()
+
+	command := fmt.Sprintf("set-config:context=namespace;id=%s;%s", aerospikeNamespace, setting)
+
+	for _, node := range client.GetNodes() {
+		info, err := node.RequestInfo(aerospike.NewInfoPolicy(), command)
+		require.NoError(t, err)
+		require.Equal(t, "ok", info[command], "%s on node %s", command, node.GetName())
+	}
+}
+
+// probeRecordCount counts records left behind by the index self-test.
+func probeRecordCount(t *testing.T, client *uaerospike.Client) int {
+	t.Helper()
+
+	recordset, err := client.ScanAll(aerospike.NewScanPolicy(), aerospikeNamespace, aerospikeSet)
+	require.NoError(t, err)
+
+	count := 0
+
+	for res := range recordset.Results() {
+		require.NoError(t, res.Err)
+
+		if _, ok := res.Record.Bins["_cfIdxProbe"]; ok {
+			count++
+		}
+	}
+
+	return count
+}
+
+// TestConflictingIndex_NotTrustedWhenItMissesTheFlag pins the self-test against
+// a readable index that gives wrong answers: an index under the store's name
+// that never follows the conflicting bin. The store must report not indexed,
+// so block validation falls back, rather than reading "nothing is conflicting".
+func TestConflictingIndex_NotTrustedWhenItMissesTheFlag(t *testing.T) {
+	_, store, ctx := initAerospikeImageWith(t, "aerospike/aerospike-server:8.1", test.CreateBaseTestSettings(t), func(client *uaerospike.Client) {
+		wrong := aerospike.ExpCond(aerospike.ExpBoolBin("_neverWritten"), aerospike.ExpIntVal(1), aerospike.ExpUnknown())
+
+		task, err := client.CreateIndexWithExpression(aerospike.NewWritePolicy(0, 0), aerospikeNamespace, aerospikeSet, "conflictingIndex", aerospike.NUMERIC, aerospike.ICT_DEFAULT, wrong)
+		require.NoError(t, err)
+		require.NoError(t, <-task.OnComplete())
+	})
+
+	require.Eventually(t, func() bool {
+		done, _ := store.ConflictingIndexVerdict()
+		return done
+	}, 30*time.Second, 100*time.Millisecond, "conflicting index self-test never finished")
+
+	_, usable := store.ConflictingIndexVerdict()
+	require.False(t, usable, "a conflicting index that misses the flag was trusted")
+
+	parent := conflictingIndexParent(t, ctx, store, 3, 1)
+	child := conflictingIndexTx(t, parent, []uint32{0}, 1)
+	_, err := store.Create(ctx, child, 100, utxo.WithConflicting(true))
+	require.NoError(t, err)
 
 	hashes, indexed, err := store.ConflictingTxHashes(ctx)
 	require.NoError(t, err)

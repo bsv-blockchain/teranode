@@ -25,13 +25,21 @@ const conflictingIndexName = "conflictingIndex"
 
 // States of the conflicting index for this process.
 const (
-	// conflictingIndexUnchecked: not yet verified against this server.
+	// conflictingIndexUnchecked: the startup self-test has not finished.
 	conflictingIndexUnchecked int32 = iota
 	// conflictingIndexUsable: the self-test saw the index follow the flag.
 	conflictingIndexUsable
 	// conflictingIndexUnusable: the self-test saw the index miss a flag change,
 	// so it is never trusted by this process.
 	conflictingIndexUnusable
+)
+
+// The startup self-test first checks whether the index is built after
+// conflictingIndexSelfTestInterval, doubling the wait each time up to
+// conflictingIndexSelfTestMaxDelay, which is also its wait after a failed probe.
+const (
+	conflictingIndexSelfTestInterval = time.Second
+	conflictingIndexSelfTestMaxDelay = 30 * time.Second
 )
 
 // conflictingIndexExpression indexes 1 for a record whose conflicting bin is
@@ -75,46 +83,18 @@ func (s *Store) createExpressionIndexIfNotExists(indexName string, exp *aerospik
 // ConflictingTxHashes returns the hash of every transaction whose record is
 // flagged conflicting, read from the conflicting index.
 //
-// indexed is false, with no error, while the index is missing or still building,
-// and for the rest of the process once the self-test has seen it miss a flag
-// change. The caller then has to find the conflicting transactions another way.
+// indexed is false, with no error, until the startup self-test has seen the
+// index follow a flag change, for the rest of the process once it has seen the
+// index miss one, and while the index is not readable. The caller then has to
+// find the conflicting transactions another way.
 func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
-	if s.client == nil || s.client.Client == nil {
+	if s.client == nil || s.client.Client == nil || s.conflictingIndexState.Load() != conflictingIndexUsable {
 		return nil, false, nil
-	}
-
-	switch s.conflictingIndexState.Load() {
-	case conflictingIndexUnusable:
-		return nil, false, nil
-	case conflictingIndexUnchecked:
-		// Until the self-test has passed, use the index only once every node
-		// lists it built. A server without the index (8.0) answers a query naming
-		// it with a bare PARAMETER_ERROR rather than INDEX_NOTFOUND, which this
-		// check keeps from being sent; a building index answers INDEX_NOTREADABLE,
-		// which queryConflictingIndex already reads as not indexed.
-		//
-		// A failed readiness check is reported as not indexed rather than as an
-		// error: the caller's per-transaction fallback is the complete check, so
-		// nothing is skipped, and block validation is not stalled by an info call.
-		ready, readyErr := s.conflictingIndexBuiltOnAllNodes()
-		if readyErr != nil {
-			s.logger.Warnf("[ConflictingTxHashes] could not check whether %s is built, falling back for now: %v", conflictingIndexName, readyErr)
-
-			return nil, false, nil
-		}
-
-		if !ready {
-			return nil, false, nil
-		}
 	}
 
 	hashes, readable, err := s.queryConflictingIndex(ctx)
 	if err != nil || !readable {
 		return nil, false, err
-	}
-
-	if s.conflictingIndexState.Load() != conflictingIndexUsable && !s.verifyConflictingIndex(ctx) {
-		return nil, false, nil
 	}
 
 	return hashes, true, nil
@@ -243,64 +223,127 @@ func conflictingIndexNotReadable(err error) bool {
 	return hasResultCode(err, types.INDEX_NOTFOUND) || hasResultCode(err, types.INDEX_NOTREADABLE)
 }
 
-// verifyConflictingIndex runs the self-test once per process and reports
-// whether the index can be trusted. A test that could not run (a transient
-// store error) leaves the state unchecked, so the next call tries again.
-func (s *Store) verifyConflictingIndex(ctx context.Context) bool {
-	s.conflictingIndexProbeMu.Lock()
-	defer s.conflictingIndexProbeMu.Unlock()
+// startConflictingIndexSelfTest runs the self-test in the background until it
+// reaches a verdict or Close stops it. Until then ConflictingTxHashes reports
+// not indexed, so block validation never waits on it.
+func (s *Store) startConflictingIndexSelfTest(ctx context.Context) {
+	if s.client == nil || s.client.Client == nil {
+		return
+	}
 
-	switch s.conflictingIndexState.Load() {
-	case conflictingIndexUsable:
-		return true
-	case conflictingIndexUnusable:
-		return false
+	ctx, s.conflictingIndexCancel = context.WithCancel(ctx)
+	s.conflictingIndexDone = make(chan struct{})
+
+	go func() {
+		defer close(s.conflictingIndexDone)
+
+		wait := conflictingIndexSelfTestInterval
+
+		for {
+			done, probeErr := s.verifyConflictingIndex(ctx)
+			if done {
+				return
+			}
+
+			if probeErr {
+				wait = conflictingIndexSelfTestMaxDelay
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+
+			wait = min(2*wait, conflictingIndexSelfTestMaxDelay)
+		}
+	}()
+}
+
+// stopConflictingIndexSelfTest stops the background self-test and waits for it.
+func (s *Store) stopConflictingIndexSelfTest() {
+	if s.conflictingIndexCancel == nil {
+		return
+	}
+
+	s.conflictingIndexCancel()
+	<-s.conflictingIndexDone
+}
+
+// verifyConflictingIndex runs the self-test once the index is built on every
+// node and records the verdict. done reports whether a verdict was reached: an
+// index still building, or a store error, leaves the state unchecked for the
+// next attempt. probeErr reports that the probe itself failed.
+func (s *Store) verifyConflictingIndex(ctx context.Context) (done, probeErr bool) {
+	// A server without the index (8.0) answers a query naming it with a bare
+	// PARAMETER_ERROR rather than INDEX_NOTFOUND, so the probe only runs once
+	// every node lists the index built.
+	ready, err := s.conflictingIndexBuiltOnAllNodes()
+	if err != nil {
+		s.logger.Debugf("[ConflictingTxHashes] could not check whether %s is built: %v", conflictingIndexName, err)
+
+		return false, false
+	}
+
+	if !ready {
+		return false, false
 	}
 
 	followsTheFlag, err := s.probeConflictingIndex(ctx)
 	if err != nil {
-		s.logger.Warnf("[ConflictingTxHashes] could not run the conflicting index self-test, falling back for now: %v", err)
+		if ctx.Err() == nil {
+			s.logger.Warnf("[ConflictingTxHashes] could not run the conflicting index self-test, retrying in %s: %v", conflictingIndexSelfTestMaxDelay, err)
+		}
 
-		return false
+		return false, true
 	}
 
 	if !followsTheFlag {
 		s.conflictingIndexState.Store(conflictingIndexUnusable)
 		s.logger.Errorf("[ConflictingTxHashes] the conflicting index did not follow a conflicting flag change on this server; block validation reads every transaction of an already-validated subtree for the rest of this process")
 
-		return false
+		return true, false
 	}
 
 	s.conflictingIndexState.Store(conflictingIndexUsable)
 	s.logger.Infof("[ConflictingTxHashes] conflicting index verified, block validation reads it instead of every transaction of an already-validated subtree")
 
-	return true
+	return true, false
 }
 
 // probeConflictingIndex flips the conflicting flag on a throwaway record through
 // the same write SetConflicting issues (the native op or the Lua function,
 // whichever this store uses) and checks that the index adds and then drops the
 // record. It guards against a server build that maintains the flag on a path
-// the index does not see. The record carries no txID bin, so a concurrent
-// ConflictingTxHashes never reports it, and its 60s TTL bounds its life if the
-// delete below does not happen.
+// the index does not see.
+//
+// The record carries no txID bin, so a concurrent ConflictingTxHashes never
+// reports it. It is written without a TTL, like every other record of the store:
+// a namespace with expiration disabled (nsup-period=0) rejects a write that
+// carries one, and setConflicting would reset it anyway. The deferred delete
+// removes it; a process that dies between the write and the delete leaves the
+// record behind, harmless but permanent. The flag is set with a block height retention of 0, so the record
+// never gets a deleteAtHeight and the pruner never reads it.
 func (s *Store) probeConflictingIndex(ctx context.Context) (bool, error) {
 	key, keyErr := aerospike.NewKey(s.namespace, s.setName, fmt.Sprintf("_teranode-conflicting-index-probe-%d-%d", os.Getpid(), time.Now().UnixNano()))
 	if keyErr != nil {
 		return false, errors.NewProcessingError("could not create the probe key", keyErr)
 	}
 
-	if putErr := s.client.PutBins(aerospike.NewWritePolicy(0, 60), key, aerospike.NewBin("_cfIdxProbe", true)); putErr != nil {
+	// Deleted even when the write reports an error, which may have applied.
+	defer func() {
+		if _, delErr := s.client.Delete(nil, key); delErr != nil {
+			s.logger.Warnf("[ConflictingTxHashes] could not delete the conflicting index probe record %s, delete it by hand: %v", key.Value(), delErr)
+		}
+	}()
+
+	if putErr := s.client.PutBins(aerospike.NewWritePolicy(0, aerospike.TTLDontExpire), key, aerospike.NewBin("_cfIdxProbe", true)); putErr != nil {
 		return false, errors.NewStorageError("could not write the probe record", putErr)
 	}
 
-	defer func() {
-		_, _ = s.client.Delete(nil, key)
-	}()
-
 	setFlag := func(value bool) error {
 		record := s.teranodeBatchRecord(aerospike.NewBatchUDFPolicy(), LuaPackage, key, subOpSetConflicting, "setConflicting",
-			value, int(s.GetBlockHeight()), s.settings.GetUtxoStoreBlockHeightRetention())
+			value, int(s.GetBlockHeight()), 0)
 
 		if opErr := s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), []aerospike.BatchRecordIfc{record}); opErr != nil {
 			return errors.NewStorageError("could not set the probe flag", opErr)
