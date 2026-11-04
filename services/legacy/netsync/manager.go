@@ -3494,6 +3494,14 @@ outside:
 				break
 			}
 
+			// Marked failed since it was queued: processInvMsg's check, made again
+			// for a mark set between the Append and this drain. Consumed, like the
+			// held case above; holding it would stall everything queued behind it
+			// for the mark's TTL.
+			if sm.recentlyFailed(iv.Hash) {
+				break
+			}
+
 			// An owner still sending block bytes has not gone quiet, however
 			// long ago the block was asked for: it is delivering what was queued
 			// ahead of this one, and nothing is arriving for THIS block yet, so
@@ -3604,6 +3612,18 @@ func (sm *SyncManager) processInvMsg(i int, iv *wire.InvVect, processInvs bool, 
 	// inv at the tip. Answered from memory, before the chain round trip
 	// haveInventory makes.
 	if iv.Type == wire.InvTypeBlock && sm.blockHeldLocally(iv.Hash) {
+		return
+	}
+
+	// A block that recently failed is not asked for again while the mark stands,
+	// the rule unownedBlocksUpTo applies to the wanted range. Without it, above
+	// the final checkpoint, every peer that announces the block is sent a getdata
+	// for the mark's whole TTL. drainRequestQueue checks the mark again, which is
+	// what stops the getdata; this check spares the announcement the chain round
+	// trip and the disk read below. Read after blockHeldLocally for the same
+	// reason as there: a block being retried right now is held, so the mark is
+	// read only for a block nothing holds.
+	if iv.Type == wire.InvTypeBlock && sm.recentlyFailed(iv.Hash) {
 		return
 	}
 
