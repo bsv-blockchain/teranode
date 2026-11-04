@@ -27,11 +27,20 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   on the UTXO set at startup. It holds only records whose `conflicting` bin is true,
   so it stays small. Aerospike builds it in the background, and a large namespace
   pays one full scan while it builds. Expression indexes need Aerospike 8.1 or later.
-  On an older server, and until the index is built and passes a startup self-test,
-  block validation keeps reading every transaction, as before, and logs a warning on
-  each block. The SQL stores add the partial index `px_transactions_conflicting`.
-  External `utxo.Store` implementations must implement `ConflictingTxHashes`.
-  (#2110)
+  Once the index is built, every process runs a self-test in the background: it
+  writes one record without a TTL, flips its `conflicting` flag both ways, checks
+  that the index follows, and deletes the record. On an older server, until the
+  self-test passes, and for the life of a process whose self-test saw the index
+  miss a change, block validation keeps reading every transaction, as before, and
+  logs a warning on each block. The PostgreSQL store builds the partial index
+  `px_transactions_conflicting` with `CREATE INDEX CONCURRENTLY` in the background
+  after startup, so writes to `transactions` are not blocked, and retries a failed
+  build; until the index is valid the lookup answers correctly but scans the
+  table. A PostgreSQL UTXO store that starts while another process is building
+  the index waits for the build to finish before it touches the schema. A store
+  running the previous release does not wait, so avoid restarting those while the
+  first upgraded process builds the index. The SQLite store creates it at startup. External `utxo.Store`
+  implementations must implement `ConflictingTxHashes`. (#2110)
 
 - **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
   recovery if a transaction affected by rollback or reverse processing is still
