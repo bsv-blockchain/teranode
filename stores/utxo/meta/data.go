@@ -63,8 +63,9 @@ type Data struct {
 	// When 0, it indicates the transaction has been mined on the longest chain.
 	UnminedSince uint32 `json:"unminedSince"`
 
-	// Cohort is the wall-clock second the record was created in, used by the
-	// cohort-based mined-state design (issue 556). Zero means no cohort was
+	// Cohort is the label stamped at create time, used by the cohort-based
+	// mined-state design (issue 556): a wall-clock second for validator-created
+	// transactions, or a sentinel from util/cohort. Zero means none was
 	// recorded: the record predates the feature, or the feature flag was off.
 	// The full value space is documented in util/cohort.
 	//

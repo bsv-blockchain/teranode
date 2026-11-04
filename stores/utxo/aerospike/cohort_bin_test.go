@@ -6,8 +6,10 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranodeaerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
@@ -105,4 +107,54 @@ func TestGetBinsToStore_Cohort(t *testing.T) {
 			require.False(t, ok, "record %d is a child record and must not carry the cohort bin", i)
 		}
 	})
+}
+
+// TestBatchDecorate_CohortBinGuards writes cohort bins no stamper could produce
+// straight into a record and requires BatchDecorate to treat each one as "no
+// cohort recorded": the read must succeed, the item must carry no error, and
+// Data.Cohort must stay cohort.Unset. A malformed label must never fail the
+// read that block validation depends on.
+func TestBatchDecorate_CohortBinGuards(t *testing.T) {
+	tSettings := test.CreateBaseTestSettings(t)
+	client, store, ctx, cleanup := initAerospike(t, tSettings, ulogger.NewErrorTestLogger(t))
+	defer cleanup()
+
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tx, 0, utxo.WithCohort(cohort.ID(1_700_000_000)))
+	require.NoError(t, err)
+
+	hash := tx.TxIDChainHash()
+	key, aErr := aerospike.NewKey(store.GetNamespace(), store.GetName(), hash[:])
+	require.Nil(t, aErr)
+
+	for _, tc := range []struct {
+		name  string
+		value interface{}
+	}{
+		{name: "negative integer", value: -1},
+		{name: "string", value: "not a cohort"},
+		// Not plain 1<<33: that truncates to 0 as a uint32 and would pass
+		// even with the range check removed.
+		{name: "above the uint32 range", value: 1<<33 + 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Nil(t, client.PutBins(nil, key, aerospike.NewBin(fields.Cohort.String(), tc.value)))
+
+			items := []*utxo.UnresolvedMetaData{{Hash: *hash}}
+			require.NoError(t, store.BatchDecorate(ctx, items, fields.Cohort))
+			require.NoError(t, items[0].Err)
+			require.NotNil(t, items[0].Data)
+			require.Equal(t, uint32(cohort.Unset), items[0].Data.Cohort)
+		})
+	}
+
+	// Control: a well-formed bin is read back, so the cases above are not
+	// passing only because the bin is never decoded.
+	require.Nil(t, client.PutBins(nil, key, aerospike.NewBin(fields.Cohort.String(), 1_700_000_001)))
+
+	items := []*utxo.UnresolvedMetaData{{Hash: *hash}}
+	require.NoError(t, store.BatchDecorate(ctx, items, fields.Cohort))
+	require.NoError(t, items[0].Err)
+	require.Equal(t, uint32(1_700_000_001), items[0].Data.Cohort)
 }

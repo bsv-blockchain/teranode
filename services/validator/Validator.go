@@ -323,7 +323,11 @@ type Validator struct {
 	// validator creates. Transactions that reach the validator have no block ID
 	// at create time - whether they arrived from the mempool or were first seen
 	// inside a block being validated - so they get a wall-clock cohort, the
-	// second they were created in. One stamper per Validator instance, because
+	// second they were created in. The exception is subtree validation's batched
+	// catch-up write (writeList in services/subtreevalidation, used in
+	// CATCHINGBLOCKS above the highest checkpoint), which creates records without
+	// going through these stamp sites and passes no cohort, so those records stay
+	// at cohort.Unset for now. One stamper per Validator instance, because
 	// the stamper keeps a floor across the stamps it issues.
 	//
 	// That floor is therefore per-process, and Teranode runs a validator inside

@@ -582,10 +582,13 @@ var blockchainSchemaExpectedTables = []string{
 
 // blockchainSchemaExpectedIndexes is the list of indexes on blocks that the
 // withIndexes branch guarantees. Kept in sync with the CREATE INDEX statements
-// below. ux_blocks_hash is always created, so it lives in the base set.
+// below. ux_blocks_hash and idx_cohort_map_block_id are always created, so they
+// live in the base set. idx_cohort_map_block_id is probed so that a DDL run that
+// died between CREATE TABLE cohort_map and its CREATE INDEX is re-run next time.
 var (
 	blockchainSchemaExpectedBaseIndexes = []string{
 		"ux_blocks_hash",
+		"idx_cohort_map_block_id",
 	}
 	blockchainSchemaExpectedFullIndexes = []string{
 		"idx_chain_work_peer_id",

@@ -1926,9 +1926,8 @@ func needsBlockIDsQuery(bins []fields.FieldName) bool {
 }
 
 // cohortFromNullInt64 converts the cohort column value into the uint32 stored on
-// meta.Data. The column is declared NOT NULL DEFAULT 0, so a NULL only reaches
-// here from a row written before the column existed; that and any value outside
-// the uint32 range both mean "no cohort recorded", which is cohort.Unset (0).
+// meta.Data. The column is NOT NULL DEFAULT 0, so a NULL should not occur; a
+// NULL or a value outside uint32 maps to cohort.Unset (0).
 func cohortFromNullInt64(v sql.NullInt64) uint32 {
 	if !v.Valid || v.Int64 < 0 || v.Int64 > math.MaxUint32 {
 		return 0

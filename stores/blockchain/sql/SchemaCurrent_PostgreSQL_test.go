@@ -129,6 +129,70 @@ func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
 	assert.False(t, current, "schema must not be current when block_id_reservations is missing")
 }
 
+// TestIsBlockchainSchemaCurrent_MissingCohortMapTable covers a deployment whose
+// blocks table is current but which predates cohort_map. The probe must report
+// not-current, and the DDL run it triggers must create the table and its index.
+func TestIsBlockchainSchemaCurrent_MissingCohortMapTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`DROP TABLE cohort_map`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err, "missing table must not be reported as a transport error")
+	require.False(t, current, "schema must not be current when cohort_map is missing")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, true))
+
+	var hasTable bool
+	require.NoError(t, db.QueryRow(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'cohort_map')`,
+	).Scan(&hasTable))
+	require.True(t, hasTable, "the DDL run must re-create cohort_map")
+
+	current, err = isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "schema must be current again after the DDL run")
+}
+
+// TestIsBlockchainSchemaCurrent_MissingCohortMapIndex covers a DDL run that died
+// after CREATE TABLE cohort_map and before its CREATE INDEX. The probe must
+// report not-current even without withIndexes, since the index is always built.
+func TestIsBlockchainSchemaCurrent_MissingCohortMapIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`DROP INDEX idx_cohort_map_block_id`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, false)
+	require.NoError(t, err)
+	require.False(t, current, "schema must not be current when idx_cohort_map_block_id is missing")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, false))
+
+	current, err = isBlockchainSchemaCurrent(db, false)
+	require.NoError(t, err)
+	require.True(t, current, "the DDL run must re-create idx_cohort_map_block_id")
+}
+
 func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")
