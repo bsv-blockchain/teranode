@@ -803,10 +803,8 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 			// Phase 4: Check for retry and get block ID (only on first batch)
 			// This is specific to quick validation to handle retries gracefully.
 			// batchTxs[0] is the first non-coinbase tx; its recorded mined-in id is
-			// this block's. The legacy quick path (netsync reuseBlockIDFromUTXO) keys
-			// the same recovery on its first non-coinbase tx — keep them in sync.
-			// Unless the tx is shared with another block: recordedBlockID declines
-			// an id a different committed block holds.
+			// this block's, unless the tx is shared with another block:
+			// recordedBlockID declines an id a different committed block holds.
 			if !blockIDSet && len(batch.batchTxs) > 0 {
 				recordedID, reuse, err := u.recordedBlockID(ctx, block, batch.batchTxs[0].TxIDChainHash())
 				if err != nil {
@@ -1231,13 +1229,24 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 	return resultID, wg, freshness.snapshot(), err
 }
 
-// recordedBlockID returns the block id recorded on firstTx, the block's first
+// recordedBlockID returns a block id recorded on firstTx, the block's first
 // non-coinbase transaction, and whether this block may reuse it: a retry keeps
 // the id its earlier attempt stamped. reuse is false when nothing is recorded,
-// and also when a different block is committed under the recorded id, which
+// and also when a different block is committed under every recorded id, which
 // happens when firstTx is shared with that block (utxo.AdoptableBlockID).
 // Adopting that id made every retry of this block fail at AddBlock and treated
 // the other block's locked records as this block's leftovers.
+//
+// The first recorded id is adopted when no other committed block holds it, as
+// before. When firstTx is mined in committed block A as well, its ids read
+// [A, Y], where Y may be the id this block's earlier attempt stamped; stopping
+// at A would reserve a fresh id and leave the records locked under Y
+// unrecognised as this block's leftovers. A later id is adopted only when the
+// blockchain service's reservation for this block is that same id
+// (AssignBlockID is idempotent per block hash while it holds the reservation),
+// because an uncommitted id past the first can also be a third block's
+// reservation, still in flight, whose locked records must not be taken for
+// this block's.
 func (u *BlockValidation) recordedBlockID(ctx context.Context, block *model.Block, firstTx *chainhash.Hash) (uint32, bool, error) {
 	existingMeta, err := u.utxoStore.Get(ctx, firstTx, fields.BlockIDs)
 	if err != nil && !errors.Is(err, errors.ErrTxNotFound) && !errors.Is(err, errors.ErrNotFound) {
@@ -1251,20 +1260,45 @@ func (u *BlockValidation) recordedBlockID(ctx context.Context, block *model.Bloc
 		return 0, false, nil
 	}
 
-	recordedID := existingMeta.BlockIDs[0]
+	lookup := blockchain.CommittedBlockHashLookup(u.blockchainClient)
 
-	adoptable, err := utxo.AdoptableBlockID(ctx, blockchain.CommittedBlockHashLookup(u.blockchainClient), block.Hash(), recordedID)
+	firstID := existingMeta.BlockIDs[0]
+
+	adoptable, err := utxo.AdoptableBlockID(ctx, lookup, block.Hash(), firstID)
 	if err != nil {
 		return 0, false, err
 	}
 
-	if !adoptable {
-		u.logger.Warnf("[recordedBlockID][%s] block id %d recorded on transaction %s is held by another committed block; not reusing it", block.Hash().String(), recordedID, firstTx.String())
+	if adoptable {
+		return firstID, true, nil
+	}
 
+	u.logger.Warnf("[recordedBlockID][%s] block id %d recorded on transaction %s is held by another committed block; not reusing it", block.Hash().String(), firstID, firstTx.String())
+
+	if len(existingMeta.BlockIDs) == 1 {
 		return 0, false, nil
 	}
 
-	return recordedID, true, nil
+	reserved, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
+	if err != nil {
+		return 0, false, err
+	}
+
+	for _, recordedID := range existingMeta.BlockIDs[1:] {
+		if uint64(recordedID) != reserved {
+			continue
+		}
+
+		if adoptable, err = utxo.AdoptableBlockID(ctx, lookup, block.Hash(), recordedID); err != nil {
+			return 0, false, err
+		}
+
+		if adoptable {
+			return recordedID, true, nil
+		}
+	}
+
+	return 0, false, nil
 }
 
 // validateSubtrees validates subtree sizes and merkle root after processing.
@@ -3091,7 +3125,10 @@ func (r *listReplays) observe(txid chainhash.Hash, result utxo.SpendAndCreateMul
 // on a failed list that saw a replay answer, so a block that applies cleanly
 // never pays for the read. A transaction with no parent in the list gets one
 // combined call, which spends before it creates, so a replay of it is rejected
-// before its record exists and leaves nothing behind.
+// before its record exists and leaves nothing behind, with two exceptions: a
+// create whose outcome is unknown can still land, and a recheck that cannot
+// answer keeps the record its create wrote. Either record is found here only
+// as a locked leftover of this block.
 //
 // The limit, stated: that combined call keeps the stores' "already blessed"
 // fallback (see utxo.DefaultSpendAndCreateMulti), so a record of such a

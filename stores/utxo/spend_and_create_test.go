@@ -424,7 +424,7 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 		require.Equal(t, 1, f.deleteCalls)
 	})
 
-	t.Run("after an unknown create, only a marker over an unmined record removes it", func(t *testing.T) {
+	t.Run("after an unknown create, only a marker over an unmined, locked record removes it", func(t *testing.T) {
 		unknown := MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("batch wait ran out"))
 
 		for _, tc := range []struct {
@@ -435,7 +435,10 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 			readErr    error
 			wantDelete bool
 		}{
-			{name: "marker, unmined", spend: Spend{Idempotent: true}, recheck: pruned, wantDelete: true},
+			{name: "marker, unmined, locked", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, wantDelete: true},
+			// An original whose block was invalidated after the pruner marked it
+			// is unmined and unlocked too; it is a live transaction and stays.
+			{name: "marker, unmined, unlocked", spend: Spend{Idempotent: true}, recheck: pruned},
 			{name: "marker, mined", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{BlockIDs: []uint32{7}}},
 			{name: "marker, record unreadable", spend: Spend{Idempotent: true}, recheck: pruned, readErr: errors.NewStorageError("down")},
 			{name: "missing parent", spend: Spend{Blessed: true}, recheck: errors.NewTxNotFoundError("parent gone")},

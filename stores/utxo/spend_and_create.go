@@ -142,6 +142,10 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 	if !options.CreateOnly {
 		spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
 		if err != nil {
+			if errors.Is(err, errors.ErrUtxoSpendingTxPruned) {
+				_, _ = removeMarkedRecreation(ctx, logger, s, tx.TxIDChainHash())
+			}
+
 			return nil, spends, err
 		}
 
@@ -240,18 +244,14 @@ type metaReader interface {
 // caller may already have accepted the record as existing, so the record and
 // the spends are kept. The failure is still returned, as a ServiceUnavailable
 // error marked with MarkCreateOutcomeUnknown, because whether the record should
-// stand is unknown: a caller that read success would never look again.
-//
-// A retry does not heal it. A retry of a replay meets the marker at the spend
-// and is rejected there, before the create and before this recheck, so it never
-// revisits the record; and when C's parents were pruned too there is no marker,
-// so the retry is blessed on the record the first attempt wrote and its create
-// answers ErrTxExists. On a block path that wrote block ids the block's own
-// cleanup can still remove the record (see recheckUnknownCreate). On the
-// validator intake path nothing does: the record stays, unmined and outside the
-// pruner's reach, with outputs a confirmed descendant already consumed. That
-// needs three failed recheck attempts under their own detached bound, and the
-// log line below names the transaction.
+// stand is unknown: a caller that read success would never look again. A retry
+// settles it either way. A replay meets the marker at the spend, and the spend
+// arm of SequentialSpendAndCreate removes the unmined record this call kept
+// (removeMarkedRecreation); anything else finds the record and gets
+// ErrTxExists. One case a retry does not settle: when every parent of the
+// replay was pruned as well, no marker survives, so the retry's spend is
+// blessed on the kept record and the create answers ErrTxExists. That record
+// then stands.
 //
 // Only a transaction whose spend the store had already answered for is
 // rechecked, so a transaction seen for the first time pays nothing.
@@ -291,15 +291,15 @@ func recheckRecreated(ctx context.Context, logger ulogger.Logger, s SequentialSt
 // missing parent, and a C the pruner held back after writing one parent's
 // marker answers that marker. Deleting either would remove a mined transaction
 // with unspent outputs. So the record is removed only when the marker answers
-// and the record carries no block id: the pruner marks only a mined child, so
-// an unmined record behind a marker is a recreation, never the original. A
+// and the record is locked and carries no block id (removeMarkedRecreation):
+// the pruner marks only a mined child, so such a record is a recreation, never
+// the original. A
 // record with block ids is left alone, and so is a create from a block path,
-// which writes block ids. Those paths fail the block, and its cleanup
-// (removePrunedReplayGhosts in services/blockvalidation, for both applyList and
-// applyOneByOne) removes the record as a leftover of the attempt when it is
-// locked with the block's id. With blockvalidation_quick_validate_skip_utxo_lock
-// set the record is not locked, the cleanup cannot tell it from a pre-existing
-// one, and it stays.
+// which writes block ids. Those paths fail the attempt, and their compensation
+// (removePrunedReplayGhosts in blockvalidation, on the list path and the
+// one-at-a-time fallback alike) removes the record on the retry as a leftover
+// of the block. It finds a leftover only while it is locked, so with
+// blockvalidation_quick_validate_skip_utxo_lock set such a record stands.
 //
 // Every outcome returns an error still marked MarkCreateOutcomeUnknown, so the
 // spends are kept. One gap stays: a write still in flight can land after the
@@ -309,7 +309,7 @@ func recheckUnknownCreate(ctx context.Context, logger ulogger.Logger, s Sequenti
 
 	answer, err := recheckSpend(ctx, s, tx, blockHeight, ignoreFlags)
 	if err != nil {
-		logger.Errorf("[SpendAndCreate] %s: create outcome unknown and the recheck could not answer, keeping whatever the create wrote: %v", hash.String(), err)
+		logger.Errorf("[SpendAndCreate] %s: recheck after a create with an unknown outcome could not answer, keeping any record the create wrote: %v", hash.String(), err)
 
 		return createErr
 	}
@@ -318,46 +318,89 @@ func recheckUnknownCreate(ctx context.Context, logger ulogger.Logger, s Sequenti
 		return createErr
 	}
 
+	gone, removed := removeMarkedRecreation(ctx, logger, s, hash)
+	if !gone {
+		return createErr
+	}
+
+	if !removed {
+		logger.Warnf("[SpendAndCreate] %s: create with an unknown outcome over a pruned transaction's marker left no record yet; a write still in flight could land after this", hash.String())
+
+		return MarkCreateOutcomeUnknown(errors.NewUtxoSpendingTxPrunedError("SpendAndCreate: %s is a pruned transaction and its create with an unknown outcome left no record yet", hash.String(), createErr))
+	}
+
+	return MarkCreateOutcomeUnknown(errors.NewUtxoSpendingTxPrunedError("SpendAndCreate: %s recreated a pruned transaction after a create with an unknown outcome and it was removed; a write still in flight could land after this", hash.String(), createErr))
+}
+
+// removeMarkedRecreation removes the record of a transaction whose spend has
+// just met a pruner marker, when that record is locked and carries no block id,
+// and reports whether no such record is left. That is the record a create
+// leaves when it lands after the pruner removed the original and its recheck
+// could not answer, or its outcome was unknown: the validator creates a record
+// locked and unlocks it only once block assembly has it, and this one never got
+// there. Without this, a retry of that replay would be rejected at the spend
+// and never look at the record again, and the record would stand for good,
+// locked and unmined, where the block-assembly reload picks it up as a
+// transaction to mine.
+//
+// Anything else is left alone. A record with block ids is the original, held
+// back by the pruner after writing one parent's marker, or a block path's
+// write, which that path's own compensation removes on the failed attempt. An
+// unlocked record with no block ids can be an original whose block was
+// invalidated after the pruner marked it, which is a live unmined transaction;
+// the cost is that a recreation written unlocked (block assembly disabled)
+// stands. No record at all is the normal case and costs one read. A read or
+// delete that fails is logged and leaves the record.
+func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s SequentialStore, hash *chainhash.Hash) (gone, removed bool) {
 	deleter, canDelete := s.(completeDeleter)
 	reader, canRead := s.(metaReader)
 
 	if !canDelete || !canRead {
-		logger.Errorf("[SpendAndCreate] %s: create outcome unknown over a pruned transaction's marker and the store cannot check or remove the record", hash.String())
+		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and the store cannot check or remove a recreated record", hash.String())
 
-		return createErr
+		return false, false
 	}
 
 	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackBound(s))
 	defer cancel()
 
-	var record meta.Data
+	var (
+		record meta.Data
+		absent bool
+	)
 
-	if err = retryStoreCall(readCtx, func() error {
+	if err := retryStoreCall(readCtx, func() error {
 		err := reader.GetMeta(readCtx, hash, &record)
 		if err != nil && (errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound)) {
+			absent = true
+
 			return nil
 		}
 
 		return err
 	}); err != nil {
-		logger.Errorf("[SpendAndCreate] %s: create outcome unknown over a pruned transaction's marker and the record could not be read: %v", hash.String(), err)
+		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and the record could not be read: %v", hash.String(), err)
 
-		return createErr
+		return false, false
 	}
 
-	if len(record.BlockIDs) > 0 {
-		return createErr
+	if absent {
+		return true, false
 	}
 
-	if err = removeRecreated(ctx, s, deleter, hash); err != nil {
-		logger.Errorf("[SpendAndCreate] %s: create outcome unknown over a pruned transaction's marker and the record could not be removed: %v", hash.String(), err)
-
-		return createErr
+	if len(record.BlockIDs) > 0 || !record.Locked {
+		return false, false
 	}
 
-	logger.Warnf("[SpendAndCreate] %s: removed a recreated pruned transaction after a create with an unknown outcome; a write still in flight could land after this", hash.String())
+	if err := removeRecreated(ctx, s, deleter, hash); err != nil {
+		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and the recreated record could not be removed: %v", hash.String(), err)
 
-	return MarkCreateOutcomeUnknown(errors.NewUtxoSpendingTxPrunedError("SpendAndCreate: %s recreated a pruned transaction after a create with an unknown outcome and it was removed", hash.String(), createErr))
+		return false, false
+	}
+
+	logger.Warnf("[SpendAndCreate] %s: removed a locked, unmined record of a pruned transaction whose spend met the pruner's marker", hash.String())
+
+	return true, true
 }
 
 // recheckSpend spends tx again with RequireParentOutputs, detached from ctx and

@@ -2000,6 +2000,40 @@ func TestQuickValidateLeftoverDependentIsRemovedOnRetry(t *testing.T) {
 	require.NotNil(t, meta)
 }
 
+// TestQuickValidateOneByOneRemovesPrunedReplayLeftover: the one-at-a-time
+// fallback, taken for a list the store refused, replays C, which the pruner
+// removed behind P's marker. An earlier combined call for C left its record
+// behind, locked under this block's id, as a create whose outcome was unknown
+// does when the write still lands. The fallback's spend meets the marker and
+// fails the block; the cleanup must find that record as this block's leftover
+// and remove it, as it does after the list path.
+func TestQuickValidateOneByOneRemovesPrunedReplayLeftover(t *testing.T) {
+	bv, store, cleanup := newBlockValidationWithRealStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	f := newPrunedChainFixture(t, store)
+
+	block, _ := assignedReplayBatch(t, bv, f.child)
+
+	_, _, err := store.SpendAndCreate(ctx, f.child, block.Height, utxo.WithCreateOnly(),
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height}), utxo.WithLocked(true))
+	require.NoError(t, err, "fixture: the earlier call's record landed")
+
+	txs := []*bt.Tx{f.child}
+	txids := []chainhash.Hash{*f.child.TxIDChainHash()}
+	replays := newListReplays()
+
+	err = bv.applyOneByOne(ctx, block, txs, txids, []int{0}, true, false, func(*bt.Tx) {}, replays)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is rejected at its spend")
+
+	require.NoError(t, bv.removePrunedReplayGhosts(ctx, block, txs, txids, replays))
+
+	_, err = store.Get(ctx, f.child.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "the recreated record must be removed")
+}
+
 // TestQuickValidateSiblingBlockIDIsNotAdoptedAsLeftover: block X shares a
 // transaction with block Y, X is committed under id N, and X's post-commit
 // unlock failed, so its record is still locked under N. Block Y then took N, as
@@ -2081,6 +2115,54 @@ func TestQuickValidateDeclinesARecordedIDACommittedBlockHolds(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, reuse, "control: X retried keeps its own id")
 	require.Equal(t, xMeta.ID, id)
+}
+
+// TestQuickValidateRecordedIDPastACommittedHolder: Y's first transaction is
+// mined in committed block X too, and Y's earlier attempt stamped its own id
+// after X's, so the transaction's ids read [X, Y]. The retry must find Y's id
+// past X's and reuse it; reserving a fresh one would leave the records locked
+// under Y's id unrecognised as Y's leftovers.
+func TestQuickValidateRecordedIDPastACommittedHolder(t *testing.T) {
+	bv, store, cleanup := newBlockValidationWithRealStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	f := newPrunedChainFixture(t, store)
+
+	tip, _, err := bv.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	x := testhelpers.CreateTestBlocksWithPrev(t, 1, tip.Hash())[0]
+	require.NoError(t, bv.blockchainClient.AddBlock(ctx, x, "test-peer"))
+
+	_, xMeta, err := bv.blockchainClient.GetBlockHeader(ctx, x.Hash())
+	require.NoError(t, err)
+
+	_, _, err = store.SpendAndCreate(ctx, f.child, 1400, utxo.WithCreateOnly(),
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: xMeta.ID, BlockHeight: 1400}))
+	require.NoError(t, err)
+
+	y, _ := assignedReplayBatch(t, bv, f.child, f.sibling)
+
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{f.child.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: y.ID, BlockHeight: 1400})
+	require.NoError(t, err)
+
+	id, reuse, err := bv.recordedBlockID(ctx, y, f.child.TxIDChainHash())
+	require.NoError(t, err)
+	require.True(t, reuse, "Y must find its own id past the one committed block X holds")
+	require.Equal(t, y.ID, id)
+
+	// Block W shares the transaction too and holds its own reservation. Y's id
+	// past X's belongs to Y, not to W, so W must not adopt it.
+	w := &model.Block{Height: 1400, Header: &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{0x57}, Nonce: 0x57}}
+	wID, err := bv.blockchainClient.AssignBlockID(ctx, w.Hash())
+	require.NoError(t, err)
+	w.ID = uint32(wID)
+	require.NotEqual(t, y.ID, w.ID, "fixture: W holds a reservation of its own")
+
+	_, reuse, err = bv.recordedBlockID(ctx, w, f.child.TxIDChainHash())
+	require.NoError(t, err)
+	require.False(t, reuse, "another block's uncommitted id past the first must not be adopted")
 }
 
 // failingUtxoGetStore fails Get with a storage error. Everything else goes to the

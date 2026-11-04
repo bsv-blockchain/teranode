@@ -402,6 +402,38 @@ func SpendAndCreateMultiBelowCheckpointCancelMidCall(t *testing.T, db utxostore.
 	requireUnspent(t, db, w.Roots[1], 0)
 }
 
+// SpendAndCreateMultiBelowCheckpointCancelKeepsCreated: a cancel that lands
+// while the first wave writes B, a child of A in the list, stops the call before
+// B's spends. B is answered as not attempted, but its record is this call's
+// write, so Created stays set: the block path's cleanup after a pruned replay
+// reads Created to know which records it may delete.
+func SpendAndCreateMultiBelowCheckpointCancelKeepsCreated(t *testing.T, db utxostore.Store) {
+	const height = 855
+
+	w := BuildMultiWorkload(t, 0xc1, 0, 1)
+	w.StoreRoots(t, db, height-1)
+
+	parent := multiSpend(t, 1, []*bt.Tx{w.Roots[0]}, []uint32{0}, 1)
+	child := multiSpend(t, 2, []*bt.Tx{parent}, []uint32{0}, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store := &cancelInsideCall{Store: db, hold: *child.TxIDChainHash(), cancel: cancel, seen: make(chan error, 1)}
+
+	results, err := utxostore.DefaultSpendAndCreateMulti(ctx, store, utxostore.UniformSpendAndCreateMultiWidths(1),
+		[]*bt.Tx{parent, child}, height, utxostore.WithBelowCheckpoint(), utxostore.WithIgnoreLocked(true))
+
+	require.NoError(t, <-store.seen, "the in-flight call must not see the caller's cancel")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, results, 2)
+	require.Equal(t, utxostore.MultiTxNotAttempted, results[1].Status, "B's spends never ran")
+	require.True(t, results[1].Created, "B's record is this call's write")
+
+	_, err = db.Get(context.Background(), child.TxIDChainHash())
+	require.NoError(t, err, "B's record was written")
+}
+
 // SpendAndCreateMultiBelowCheckpointRollbackOutlivesDeadline: a combined call
 // whose context ends during its create. When the create then definitely fails,
 // the spends already made are rolled back all the same: the rollback runs on a
