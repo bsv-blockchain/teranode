@@ -592,7 +592,9 @@ func (sm *SyncManager) applyParkDisposition(entry parkedBlock, d parkDisposition
 //     TestParkDispositions_ReAskIsSetOnTheDropRowsThatWantTheBlockBack).
 //
 // What still stops it is a request that would really be a duplicate: the block parked again,
-// arriving, being converted, or asked of any peer within the retry window. The dispatcher's
+// arriving, being converted, or asked of any peer within the retry window. So does a mark
+// another source set on the block while the re-ask waited (the sink-panic verdict, say): a
+// copy asked for then would meet the same failure. The dispatcher's
 // own in-flight entry for this block is not asked, because this disposition is how that entry
 // ends. livePeer may fall back to the sync peer: a re-ask is a sync action, not a misbehaviour
 // signal.
@@ -621,8 +623,8 @@ func (sm *SyncManager) askDroppedBlockAgain(entry parkedBlock) {
 	_, peer, _ = sm.peerStateResolvingPrimary(peer)
 
 	if sm.blockPark.Has(entry.hash) || sm.streams.arriving(entry.hash) || sm.conversionInFlight(entry.hash) ||
-		sm.blockDownloads.RequestedWithin(entry.hash, blockRequestRetryInterval) {
-		sm.logger.Infof("[applyParkDisposition][%s] not asking again for the dropped block: it is already parked, arriving, converting or requested", entry.hash)
+		sm.blockDownloads.RequestedWithin(entry.hash, blockRequestRetryInterval) || sm.recentlyFailed(entry.hash) {
+		sm.logger.Infof("[applyParkDisposition][%s] not asking again for the dropped block: it is already parked, arriving, converting, requested or marked failed", entry.hash)
 
 		return
 	}
