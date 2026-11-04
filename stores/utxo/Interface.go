@@ -666,6 +666,12 @@ type Store interface {
 	// Delete.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
 
+	// DeleteCompleteIfCreating is DeleteComplete restricted to a record that still carries
+	// the tentative creating state. It reports whether it deleted: false means the record
+	// was already finalized or is absent, and nothing was removed. Used by the create-first
+	// rollback so it cannot delete a record a concurrent roll-forward has finalized.
+	DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error)
+
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 

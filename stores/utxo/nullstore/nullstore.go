@@ -308,6 +308,10 @@ func (m *NullStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 	return nil
 }
 
+func (m *NullStore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	return false, nil
+}
+
 func (m *NullStore) FreezeUTXOs(ctx context.Context, spends []*utxo.Spend, tSettings *settings.Settings) error {
 	return nil
 }

@@ -169,6 +169,12 @@ func (m *MockUtxostore) DeleteComplete(ctx context.Context, hash *chainhash.Hash
 	return args.Error(0)
 }
 
+// DeleteCompleteIfCreating mocks the conditional complete deletion of a tentative record.
+func (m *MockUtxostore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, hash)
+	return args.Bool(0), args.Error(1)
+}
+
 // GetSpend mocks the retrieval of spend information from the UTXO store.
 // Returns the configured mock response for spend lookup operations.
 func (m *MockUtxostore) GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) {

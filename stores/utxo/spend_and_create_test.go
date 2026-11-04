@@ -22,6 +22,8 @@ type fakeSequentialStore struct {
 	// finalizeErrs is popped once per FinalizeTransaction call; finalizeErr applies when exhausted.
 	finalizeErrs []error
 	deleteErr    error
+	// deleteDeclined makes DeleteCompleteIfCreating report that the record was no longer creating.
+	deleteDeclined bool
 	// unspendErrs is popped once per Unspend call; nil result when exhausted.
 	unspendErrs []error
 
@@ -101,6 +103,23 @@ func (f *fakeSequentialStore) DeleteComplete(_ context.Context, hash *chainhash.
 	f.callSeq = append(f.callSeq, "delete")
 
 	return f.deleteErr
+}
+
+func (f *fakeSequentialStore) DeleteCompleteIfCreating(_ context.Context, hash *chainhash.Hash) (bool, error) {
+	f.deleteCalls++
+	f.callSeq = append(f.callSeq, "delete")
+
+	if f.deleteErr != nil {
+		return false, f.deleteErr
+	}
+
+	if f.deleteDeclined {
+		return false, nil
+	}
+
+	f.deletedHashes = append(f.deletedHashes, hash)
+
+	return true, nil
 }
 
 func shortenUnspendBackoff(t *testing.T) {
@@ -459,7 +478,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.False(t, md.Creating, "returned meta must reflect the finalized state")
 	})
 
-	t.Run("spend failure reverses the partial spends then deletes the tentative record", func(t *testing.T) {
+	t.Run("spend failure deletes the tentative record then reverses the partial spends", func(t *testing.T) {
 		shortenUnspendBackoff(t)
 
 		free := &Spend{}
@@ -473,7 +492,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.Nil(t, md)
-		require.Equal(t, []string{"create", "spend", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"create", "spend", "delete", "unspend"}, f.callSeq)
 		require.Equal(t, 0, f.finalizeCalls)
 		require.Equal(t, []*Spend{free}, f.unspentWith, "only the spends that succeeded are reversed")
 		require.Len(t, f.deletedHashes, 1)
@@ -517,7 +536,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		}
 	})
 
-	t.Run("failed reversal keeps the creating record and wraps both errors", func(t *testing.T) {
+	t.Run("failed reversal after the delete wraps both errors", func(t *testing.T) {
 		shortenUnspendBackoff(t)
 
 		f := &fakeSequentialStore{
@@ -535,7 +554,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, md)
 		require.Equal(t, 3, f.unspendCalls)
-		require.Equal(t, 0, f.deleteCalls, "the record stays creating as the recovery journal")
+		require.Equal(t, 1, f.deleteCalls, "the delete runs before the reversal")
 		require.Contains(t, err.Error(), "double spend")
 		require.Contains(t, err.Error(), "u3")
 		require.Len(t, spends, 2)
@@ -552,9 +571,42 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.NotContains(t, err.Error(), "delete boom")
-		require.Equal(t, 1, f.unspendCalls)
+		require.Equal(t, 0, f.unspendCalls, "a record left creating keeps its spends for the sweep")
 		require.Equal(t, 1, f.deleteCalls)
 		require.Len(t, spends, 2)
+	})
+
+	t.Run("record finalized by a concurrent roll-forward is not deleted or unspent", func(t *testing.T) {
+		f := &fakeSequentialStore{
+			spends:         []*Spend{{Err: errors.ErrSpent}, {}},
+			spendErr:       errors.NewStorageError("transient"),
+			createMeta:     &meta.Data{Creating: true},
+			deleteDeclined: true,
+		}
+
+		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		require.Error(t, err)
+		require.Nil(t, md)
+		require.Equal(t, []string{"create", "spend", "delete"}, f.callSeq)
+		require.Equal(t, 0, f.unspendCalls, "the finalizer relies on the spends that succeeded")
+		require.Empty(t, f.deletedHashes)
+		require.Len(t, spends, 2)
+	})
+
+	t.Run("record still creating is deleted and its successful spends are unspent", func(t *testing.T) {
+		free := &Spend{}
+		f := &fakeSequentialStore{
+			spends:     []*Spend{{Err: errors.ErrSpent}, free},
+			spendErr:   errors.NewStorageError("transient"),
+			createMeta: &meta.Data{Creating: true},
+		}
+
+		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
+		require.Error(t, err)
+		require.Equal(t, []string{"create", "spend", "delete", "unspend"}, f.callSeq)
+		require.Equal(t, []*Spend{free}, f.unspentWith)
+		require.Len(t, f.deletedHashes, 1)
+		require.Equal(t, tx.TxIDChainHash().String(), f.deletedHashes[0].String())
 	})
 
 	t.Run("create ErrTxExists returns without spending", func(t *testing.T) {
