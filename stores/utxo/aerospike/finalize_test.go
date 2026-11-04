@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -73,6 +75,56 @@ func TestFinalizeTransaction_MultiRecord(t *testing.T) {
 	child := spendableChildTx(t, tx, 0)
 	_, err = store.Spend(ctx, child, 101)
 	require.NoError(t, err)
+}
+
+// TestFinalizeTransaction_RollingBack pins that a record whose rollback has begun cannot be
+// finalized: the finalize reports ErrTxNotFound and leaves the creating bin, so the outputs
+// stay unspendable until the rollback owner deletes the record.
+func TestFinalizeTransaction_RollingBack(t *testing.T) {
+	for name, batchSize := range map[string]int{"single record": 0, "multi record": 2} {
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if batchSize > 0 {
+				tSettings.UtxoStore.UtxoBatchSize = batchSize // tx has 6 outputs → multiple records
+			}
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			began, err := store.BeginCreateFirstRollback(ctx, tx.TxIDChainHash())
+			require.NoError(t, err)
+			require.True(t, began)
+
+			err = store.FinalizeTransaction(ctx, tx)
+			require.ErrorIs(t, err, errors.ErrTxNotFound, "a rolling-back record must not be finalized")
+			require.Contains(t, err.Error(), "rolling back")
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+			require.True(t, got.Creating, "the creating bin must survive the refused finalize")
+			require.True(t, got.RollingBack)
+
+			if batchSize > 0 {
+				for idx := uint32(1); idx < 3; idx++ {
+					bins := recordBins(t, client, store, tx.TxIDChainHash(), idx, fields.Creating)
+					require.Equal(t, true, bins[fields.Creating.String()], "child record %d must be untouched by the refused finalize", idx)
+				}
+			}
+
+			child := spendableChildTx(t, tx, 0)
+			_, err = store.Spend(ctx, child, 101)
+			require.ErrorIs(t, err, errors.ErrTxCreating, "the outputs of a rolling-back record stay unspendable")
+		})
+	}
 }
 
 // TestQueryStaleCreatingTxs verifies the sweeper query returns only creating-state

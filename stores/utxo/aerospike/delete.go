@@ -62,7 +62,6 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
-	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -249,68 +248,6 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	}
 
 	return s.deleteCompleteTail(ctx, hash, childCount)
-}
-
-// DeleteCompleteIfCreating is DeleteComplete restricted to a master record that still
-// carries the creating bin. The master delete carries a filter expression on that bin, so
-// a record a concurrent finalize has cleared is left in place and the call reports false.
-// An absent master also reports false. When the master was deleted, the pagination
-// children and external blob(s) are removed exactly as DeleteComplete removes them, and
-// the result is true even when that cascade fails, because the master is already gone.
-func (s *Store) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	readPolicy := util.GetAerospikeReadPolicy(s.settings)
-
-	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
-	if err != nil {
-		return false, errors.NewProcessingError("error in aerospike NewKey", err)
-	}
-
-	masterRecord, aErr := s.client.Get(readPolicy, key, fields.TotalExtraRecs.String())
-	if aErr != nil {
-		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
-			return false, nil
-		}
-
-		return false, errors.NewStorageError("error reading master record for conditional complete delete", aErr)
-	}
-
-	childCount := 0
-	if masterRecord != nil && masterRecord.Bins != nil {
-		if v, ok := masterRecord.Bins[fields.TotalExtraRecs.String()].(int); ok {
-			childCount = v
-		}
-	}
-
-	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
-	writePolicy.FilterExpression = aerospike.ExpBinExists(fields.Creating.String())
-
-	existed, dErr := s.client.Delete(writePolicy, key)
-	if dErr != nil {
-		if errors.Is(dErr, aerospike.ErrKeyNotFound) {
-			return false, nil
-		}
-
-		e, isAerospikeErr := dErr.(*aerospike.AerospikeError)
-		if isAerospikeErr && e.ResultCode == types.FILTERED_OUT {
-			return false, nil
-		}
-
-		if isAerospikeErr {
-			prometheusUtxoMapErrors.WithLabelValues("DeleteIfCreating", e.ResultCode.String()).Inc()
-		} else {
-			prometheusUtxoMapErrors.WithLabelValues("DeleteIfCreating", "unknown").Inc()
-		}
-
-		return false, errors.NewStorageError("error in aerospike conditional delete key", dErr)
-	}
-
-	if !existed {
-		return false, nil
-	}
-
-	prometheusUtxoMapDelete.Inc()
-
-	return true, s.deleteCompleteTail(ctx, hash, childCount)
 }
 
 // deleteCompleteTail removes the pagination children and external blob(s) of a
