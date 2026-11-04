@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -299,4 +300,179 @@ func TestSetConflictingReturnsSpendersOfOutputs(t *testing.T) {
 	_, spenders, err := store.SetConflicting(ctx, []chainhash.Hash{hash}, true)
 	require.NoError(t, err)
 	require.Equal(t, []chainhash.Hash{*spendTx.TxIDChainHash()}, spenders)
+}
+
+func forEachFloorBackend(t *testing.T, fn func(t *testing.T, ctx context.Context, store *Store, postgres bool)) {
+	t.Helper()
+
+	t.Run("sqlite", func(t *testing.T) {
+		ctx := context.Background()
+		store, _ := setup(ctx, t)
+
+		fn(t, ctx, store, false)
+	})
+
+	t.Run("postgres", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("skipping Postgres integration test in short mode")
+		}
+
+		store, ctx := setupPostgresStore(t)
+
+		fn(t, ctx, store, true)
+	})
+}
+
+func floorRowID(ctx context.Context, t *testing.T, store *Store, hash chainhash.Hash) int {
+	t.Helper()
+
+	var id int
+
+	require.NoError(t, store.db.QueryRowContext(ctx, "SELECT id FROM transactions WHERE hash = $1", hash[:]).Scan(&id))
+
+	return id
+}
+
+// setDAH decides from an unlocked read. A concurrent mining commit that adds a higher
+// block and raises the stamp after that read must survive the write: the decision is a
+// stale value and the UPDATE has to reconcile it with the row.
+func TestWriteDAHKeepsConcurrentlyRaisedStamp(t *testing.T) {
+	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, postgres bool) {
+		retention := floorRetention(t, store)
+
+		require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+		_, err := store.Create(ctx, tests.ParentTx, floorCachedTip)
+		require.NoError(t, err)
+
+		_, err = store.Create(ctx, tests.Tx, floorCachedTip)
+		require.NoError(t, err)
+
+		hash := *tests.Tx.TxIDChainHash()
+
+		_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{&hash}, utxo.MinedBlockInfo{
+			BlockID: 100, BlockHeight: 600, SubtreeIdx: 0, OnLongestChain: true,
+		})
+		require.NoError(t, err)
+
+		spendAllOutputsForMinedFloor(ctx, t, store, hash, tests.Tx, floorCachedTip+1)
+
+		id := floorRowID(ctx, t, store, hash)
+		stale := readDAH(ctx, t, store, hash)
+		require.NotNil(t, stale)
+		require.Equal(t, int64(600)+retention, *stale)
+
+		raise := func() {
+			_, execErr := store.db.ExecContext(ctx,
+				"INSERT INTO block_ids (transaction_id, block_id, block_height, subtree_idx) VALUES ($1, 101, $2, 0)",
+				id, int64(floorMinedHeight))
+			require.NoError(t, execErr)
+
+			_, execErr = store.db.ExecContext(ctx,
+				"UPDATE transactions SET delete_at_height = $2 WHERE id = $1", id, int64(floorMinedHeight)+retention)
+			require.NoError(t, execErr)
+		}
+
+		var txn *sql.Tx
+
+		if postgres {
+			txn, err = store.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+
+			raise()
+		} else {
+			raise()
+
+			txn, err = store.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+		}
+
+		require.NoError(t, store.writeDAH(ctx, txn, id, sql.NullInt64{Int64: *stale, Valid: true}, uint32(retention)))
+		require.NoError(t, txn.Commit())
+
+		after := readDAH(ctx, t, store, hash)
+		require.NotNil(t, after)
+		require.Equal(t, int64(floorMinedHeight)+retention, *after, "a stale value must not overwrite the higher stamp")
+	})
+}
+
+// A value below the row's mined floor is raised by the write, and a NULL decision still clears.
+func TestWriteDAHFloorsValueAndClearsOnNull(t *testing.T) {
+	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
+		retention := floorRetention(t, store)
+
+		hash := createMinedAboveTip(ctx, t, store)
+		id := floorRowID(ctx, t, store, hash)
+
+		write := func(value sql.NullInt64) {
+			txn, err := store.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			require.NoError(t, store.writeDAH(ctx, txn, id, value, uint32(retention)))
+			require.NoError(t, txn.Commit())
+		}
+
+		write(sql.NullInt64{Int64: int64(floorCachedTip) + 1 + retention, Valid: true})
+
+		dah := readDAH(ctx, t, store, hash)
+		require.NotNil(t, dah)
+		require.Equal(t, int64(floorMinedHeight)+retention, *dah)
+
+		write(sql.NullInt64{})
+		require.Nil(t, readDAH(ctx, t, store, hash))
+	})
+}
+
+// Flagged conflicting while unmined at the lagging tip, then mined into a fork far
+// above it: the stamp must follow the mined height, not stay at tip + retention.
+func TestSetMinedOffLongestChainRaisesConflictingStamp(t *testing.T) {
+	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
+		retention := floorRetention(t, store)
+
+		require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+		_, err := store.Create(ctx, tests.ParentTx, floorCachedTip)
+		require.NoError(t, err)
+
+		_, err = store.Create(ctx, tests.Tx, floorCachedTip)
+		require.NoError(t, err)
+
+		hash := *tests.Tx.TxIDChainHash()
+
+		_, _, err = store.SetConflicting(ctx, []chainhash.Hash{hash}, true)
+		require.NoError(t, err)
+
+		before := readDAH(ctx, t, store, hash)
+		require.NotNil(t, before)
+		require.Less(t, *before, int64(floorMinedHeight), "setup: the stamp must come from the lagging tip")
+
+		_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{&hash}, utxo.MinedBlockInfo{
+			BlockID: 100, BlockHeight: floorMinedHeight, SubtreeIdx: 0, OnLongestChain: false,
+		})
+		require.NoError(t, err)
+
+		after := readDAH(ctx, t, store, hash)
+		require.NotNil(t, after)
+		require.GreaterOrEqual(t, *after, int64(floorMinedHeight)+retention)
+	})
+}
+
+// A conflicting record with a stale low stamp and a high mined block is raised when
+// it is put back on the longest chain.
+func TestMarkOnLongestChainRaisesConflictingStamp(t *testing.T) {
+	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
+		retention := floorRetention(t, store)
+
+		hash := createMinedAboveTip(ctx, t, store)
+
+		_, err := store.db.ExecContext(ctx,
+			"UPDATE transactions SET conflicting = true, delete_at_height = $2 WHERE hash = $1",
+			hash[:], int64(floorCachedTip)+1+retention)
+		require.NoError(t, err)
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{hash}, true))
+
+		dah := readDAH(ctx, t, store, hash)
+		require.NotNil(t, dah)
+		require.GreaterOrEqual(t, *dah, int64(floorMinedHeight)+retention)
+	})
 }

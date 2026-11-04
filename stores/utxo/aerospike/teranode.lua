@@ -85,6 +85,7 @@ local FIELD_SIGNAL = "signal"
 local FIELD_BLOCK_IDS = "blockIDs"
 local FIELD_ERRORS = "errors"
 local FIELD_CHILD_COUNT = "childCount"
+local FIELD_DELETE_AT_HEIGHT = "deleteAtHeight"
 local FIELD_SPENDING_DATA = "spendingData"
 -- local FIELD_DEBUG = "debug"
 
@@ -457,6 +458,9 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end
@@ -546,6 +550,9 @@ function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight
     response[FIELD_STATUS] = STATUS_OK
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end
@@ -672,6 +679,9 @@ function setMined(rec, blockID, blockHeight, subtreeIdx, currentBlockHeight, blo
     response[FIELD_STATUS] = STATUS_OK
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end
@@ -1118,6 +1128,9 @@ function setConflicting(rec, setValue, currentBlockHeight, blockHeightRetention)
     response[FIELD_STATUS] = STATUS_OK
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end
@@ -1306,6 +1319,9 @@ function incrementSpentExtraRecs(rec, inc, currentBlockHeight, blockHeightRetent
     response[FIELD_STATUS] = STATUS_OK
     if signal and signal ~= "" then
         response[FIELD_SIGNAL] = signal
+        if signal == SIGNAL_DELETE_AT_HEIGHT_SET then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
         if childCount then
             response[FIELD_CHILD_COUNT] = childCount
         end

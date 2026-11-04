@@ -335,6 +335,8 @@ Signals provide additional information about operations that may require follow-
 
 **Note:** Child count information is now returned as a separate `childCount` field in the response, not embedded in the signal string.
 
+**Delete-at-height floor:** The Lua `setDeleteAtHeight` raises every stamp to the record's highest mined block height plus retention, so a lagging cached tip cannot stamp a mined record for deletion inside its retention window. With a `DAHSET` signal the response also carries a `deleteAtHeight` field holding the master's stamp, and the Go side stamps pagination (child) records with that value so they are never pruned before the master. A package that omits the field makes the Go side fall back to the caller's height plus retention. With `aerospike_use_native_teranode_ops` enabled the native dispatcher in the aerospike-server fork does not apply the floor yet, so keep native ops off where a lagging tip matters.
+
 ## Error Handling
 
 When `status="ERROR"`:

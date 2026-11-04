@@ -133,7 +133,7 @@ func TestSetMinedNotOnLongestChainReevaluatesDAH(t *testing.T) {
 // TestSetMinedNotOnLongestChainDAHMatrixLua checks the Lua setDeleteAtHeight order of checks on a
 // fork block (onLongestChain=false), mirroring the SQL matrix test of the same name: unspent
 // outputs and a non-nil unmined_since clear the DAH, preserveUntil and retention 0 leave it
-// untouched, conflicting sets it when absent and otherwise leaves it unchanged.
+// untouched, conflicting sets it when absent, raises it to the mined floor when below it, and otherwise leaves it unchanged.
 func TestSetMinedNotOnLongestChainDAHMatrixLua(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
@@ -178,12 +178,20 @@ func TestSetMinedNotOnLongestChainDAHMatrixLua(t *testing.T) {
 			wantDAH: func(r uint32) interface{} { return int(forkHeight + r) },
 		},
 		{
-			name: "conflicting with a DAH leaves it unchanged", spendAll: true,
+			name: "conflicting with a DAH below the mined floor raises it to the floor", spendAll: true,
 			bins: []*aerospike.Bin{
 				aerospike.NewBin(fields.Conflicting.String(), true),
 				aerospike.NewBin(fields.DeleteAtHeight.String(), 5),
 			},
-			wantDAH: func(uint32) interface{} { return 5 },
+			wantDAH: func(r uint32) interface{} { return int(forkHeight + r) },
+		},
+		{
+			name: "conflicting with a DAH above the mined floor leaves it unchanged", spendAll: true,
+			bins: []*aerospike.Bin{
+				aerospike.NewBin(fields.Conflicting.String(), true),
+				aerospike.NewBin(fields.DeleteAtHeight.String(), 5000000),
+			},
+			wantDAH: func(uint32) interface{} { return 5000000 },
 		},
 	}
 

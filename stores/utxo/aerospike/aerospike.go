@@ -72,6 +72,7 @@ import (
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -733,6 +734,38 @@ func (s *Store) deleteAtHeightFor(blockHeight uint32) (uint32, bool) {
 	}
 
 	return s.effectiveBlockHeight(blockHeight) + retention, true
+}
+
+// reportedDeleteAtHeight returns the master record's stamped DAH when the Lua package
+// reported it with a DAHSET signal. The master's stamp is floored at its mined height,
+// so child records must take it rather than a height derived from the caller's tip. A
+// Lua package that does not report it (mixed deployment) yields false.
+func reportedDeleteAtHeight(res *LuaMapResponse) (uint32, bool) {
+	if res == nil || !res.HasDeleteAtHeight || res.DeleteAtHeight <= 0 {
+		return 0, false
+	}
+
+	dah, err := safeconversion.IntToUint32(res.DeleteAtHeight)
+	if err != nil {
+		return 0, false
+	}
+
+	return dah, true
+}
+
+// childDeleteAtHeightFor returns the DAH to stamp on a paginated tx's child records
+// after a DAHSET signal: the master's reported stamp, else deleteAtHeightFor(blockHeight).
+func (s *Store) childDeleteAtHeightFor(res *LuaMapResponse, blockHeight uint32) (uint32, bool) {
+	dah, enabled := s.deleteAtHeightFor(blockHeight)
+	if !enabled {
+		return 0, false
+	}
+
+	if reported, ok := reportedDeleteAtHeight(res); ok {
+		return reported, true
+	}
+
+	return dah, true
 }
 
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {

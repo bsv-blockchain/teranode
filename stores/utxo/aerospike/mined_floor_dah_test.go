@@ -3,6 +3,7 @@ package aerospike_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -62,19 +63,7 @@ func createParentAndChild(ctx context.Context, t *testing.T, store *teranode_aer
 func readMasterDAH(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash) (int, bool) {
 	t.Helper()
 
-	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, 0))
-	require.NoError(t, err)
-
-	rec, err := client.Get(nil, key)
-	require.NoError(t, err)
-	require.NotNil(t, rec)
-
-	v, ok := rec.Bins[fields.DeleteAtHeight.String()]
-	if !ok || v == nil {
-		return 0, false
-	}
-
-	return v.(int), true
+	return readRecordDAH(t, client, store, hash, 0)
 }
 
 // Mined far above the cached tip, then flagged conflicting. The conflicting stamp
@@ -229,4 +218,170 @@ func TestSpendStampsDAHAtMinedFloor(t *testing.T) {
 				"the stamp must be at least mined height + retention, not the lagging tip + retention")
 		})
 	}
+}
+
+func floorCreatePaginatedParent(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, vout uint32) *bt.Tx {
+	t.Helper()
+
+	parent := bt.NewTx()
+	require.NoError(t, parent.From(
+		"1111111111111111111111111111111111111111111111111111111111111111",
+		vout,
+		"76a914000000000000000000000000000000000000000088ac",
+		100000,
+	))
+	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x6a})
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+
+	_, err := store.Create(ctx, parent, floorCachedTip)
+	require.NoError(t, err)
+
+	return parent
+}
+
+func floorSpendOutput(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, parent *bt.Tx, vout uint32) {
+	t.Helper()
+
+	spender := bt.NewTx()
+	require.NoError(t, spender.From(parent.TxID(), vout, parent.Outputs[vout].LockingScript.String(), parent.Outputs[vout].Satoshis))
+	spender.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x6a})
+	require.NoError(t, spender.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	_, err := store.Spend(ctx, spender, floorCachedTip)
+	require.NoError(t, err)
+}
+
+func readRecordDAH(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash, recordIdx uint32) (int, bool) {
+	t.Helper()
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(hash, recordIdx))
+	require.NoError(t, err)
+
+	rec, err := client.Get(nil, key)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+
+	v, ok := rec.Bins[fields.DeleteAtHeight.String()]
+	if !ok || v == nil {
+		return 0, false
+	}
+
+	return v.(int), true
+}
+
+// A paginated tx mined far above the cached tip and then fully spent at the lagging
+// tip. The master is stamped at mined height + retention, and the pagination record
+// must carry the same stamp, or the pruner deletes it while the master still points
+// at it. Spending the master's output last exercises the spend signal, spending the
+// pagination record's output last exercises the incrementSpentExtraRecs signal.
+func TestSpendStampsPaginationRecordsAtMinedFloor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	tests := []struct {
+		name       string
+		spendOrder []uint32
+	}{
+		{name: "master output spent last", spendOrder: []uint32{1, 0}},
+		{name: "pagination output spent last", spendOrder: []uint32{0, 1}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.UtxoStore.UtxoBatchSize = 1 // master holds output 0, the pagination record holds output 1
+			retention := tSettings.GetUtxoStoreBlockHeightRetention()
+			require.Greater(t, retention, uint32(0))
+
+			client, store, _, cleanup := initAerospike(t, tSettings, logger)
+			defer cleanup()
+			cleanDB(t, client)
+
+			require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+			parent := floorCreatePaginatedParent(ctx, t, store, 0)
+			parentHash := parent.TxIDChainHash()
+
+			_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, utxo.MinedBlockInfo{
+				BlockID: floorMinedBlockID, BlockHeight: floorMinedHeight, SubtreeIdx: 0, OnLongestChain: true,
+			})
+			require.NoError(t, err)
+
+			for _, vout := range tc.spendOrder {
+				floorSpendOutput(ctx, t, store, parent, vout)
+			}
+
+			want := int(floorMinedHeight + retention)
+
+			masterDAH, ok := readRecordDAH(t, client, store, parentHash, 0)
+			require.True(t, ok, "a fully spent mined tx must carry a delete-at-height")
+			require.Equal(t, want, masterDAH)
+
+			require.Eventually(t, func() bool {
+				childDAH, childOK := readRecordDAH(t, client, store, parentHash, 1)
+
+				return childOK && childDAH == want
+			}, 5*time.Second, 50*time.Millisecond, "the pagination record must carry the master's stamp %d", want)
+		})
+	}
+}
+
+// The tx is mined on a fork at a high block, fully spent (no stamp, it is not on the
+// longest chain), then mined on the longest chain at a much lower block. setMined
+// stamps from the master's highest mined height, which is the fork block, so the
+// pagination record must follow that stamp and not the lower block it was just mined at.
+func TestSetMinedStampsPaginationRecordsAtMinedFloor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 1
+	retention := tSettings.GetUtxoStoreBlockHeightRetention()
+	require.Greater(t, retention, uint32(0))
+
+	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	parent := floorCreatePaginatedParent(ctx, t, store, 1)
+	parentHash := parent.TxIDChainHash()
+
+	_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, utxo.MinedBlockInfo{
+		BlockID: floorMinedBlockID, BlockHeight: floorMinedHeight, SubtreeIdx: 0, OnLongestChain: false,
+	})
+	require.NoError(t, err)
+
+	floorSpendOutput(ctx, t, store, parent, 0)
+	floorSpendOutput(ctx, t, store, parent, 1)
+
+	_, ok := readRecordDAH(t, client, store, parentHash, 0)
+	require.False(t, ok, "setup: a tx mined off the longest chain must carry no stamp")
+
+	const lowBlockHeight uint32 = 500
+
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{parentHash}, utxo.MinedBlockInfo{
+		BlockID: floorMinedBlockID + 1, BlockHeight: lowBlockHeight, SubtreeIdx: 0, OnLongestChain: true,
+	})
+	require.NoError(t, err)
+
+	want := int(floorMinedHeight + retention)
+
+	masterDAH, ok := readRecordDAH(t, client, store, parentHash, 0)
+	require.True(t, ok, "mining a fully spent tx on the longest chain must stamp a delete-at-height")
+	require.Equal(t, want, masterDAH)
+
+	require.Eventually(t, func() bool {
+		childDAH, childOK := readRecordDAH(t, client, store, parentHash, 1)
+
+		return childOK && childDAH == want
+	}, 5*time.Second, 50*time.Millisecond, "the pagination record must carry the master's stamp %d", want)
 }

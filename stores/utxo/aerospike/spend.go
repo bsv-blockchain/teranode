@@ -1249,7 +1249,7 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 
 	// Handle signals
 	if res.Signal != "" {
-		s.handleSpendSignal(ctx, res.Signal, txID, res.ChildCount, thisBlockHeight)
+		s.handleSpendSignal(ctx, res, txID, thisBlockHeight)
 	}
 
 	// Process based on status
@@ -1307,8 +1307,10 @@ func (s *Store) handleParseError(batchByKey []aerospike.MapValue, batch []*batch
 }
 
 // handleSpendSignal handles signals from spend operations
-func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *chainhash.Hash, childCount int, thisBlockHeight uint32) {
-	switch signal {
+func (s *Store) handleSpendSignal(ctx context.Context, res *LuaMapResponse, txID *chainhash.Hash, thisBlockHeight uint32) {
+	childCount := res.ChildCount
+
+	switch res.Signal {
 	case LuaSignalAllSpent:
 		if err := s.handleExtraRecords(ctx, txID, 1, thisBlockHeight); err != nil {
 			s.logger.Errorf("Failed to handle extra records: %v", err)
@@ -1317,7 +1319,7 @@ func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *c
 	case LuaSignalDAHSet:
 		// Only set DAH if BlockHeightRetention is configured (> 0)
 		// When retention is 0, it means "don't use automatic retention"
-		if dahHeight, ok := s.deleteAtHeightFor(thisBlockHeight); ok {
+		if dahHeight, ok := s.childDeleteAtHeightFor(res, thisBlockHeight); ok {
 			if err := s.SetDAHForChildRecords(txID, childCount, dahHeight); err != nil {
 				s.logger.Errorf("Failed to set DAH for child records: %v", err)
 			}
@@ -1546,7 +1548,7 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 		if ret.Signal != "" {
 			switch ret.Signal {
 			case LuaSignalDAHSet:
-				if err := s.handleDAHSetSignal(ctx, txID, ret.ChildCount, blockHeight); err != nil {
+				if err := s.handleDAHSetSignal(ctx, txID, ret, blockHeight); err != nil {
 					return err
 				}
 
@@ -1569,10 +1571,12 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 // drift after interrupted rollbacks), clear the drifted master DAH when they
 // are not, and otherwise propagate the DAH to the child records. Extracted
 // verbatim from handleExtraRecords.
-func (s *Store) handleDAHSetSignal(ctx context.Context, txID *chainhash.Hash, childCount int, blockHeight uint32) error {
+func (s *Store) handleDAHSetSignal(ctx context.Context, txID *chainhash.Hash, res *LuaMapResponse, blockHeight uint32) error {
+	childCount := res.ChildCount
+
 	// Only set DAH if BlockHeightRetention is configured (> 0)
 	// When retention is 0, it means "don't use automatic retention"
-	dah, ok := s.deleteAtHeightFor(blockHeight)
+	dah, ok := s.childDeleteAtHeightFor(res, blockHeight)
 	if !ok {
 		return nil
 	}

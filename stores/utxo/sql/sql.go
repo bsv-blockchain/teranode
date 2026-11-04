@@ -2793,7 +2793,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			newDAH := int64(s.GetBlockHeight() + 1 + retention)
 			dahIdx := pidx
 			updateArgs = append(updateArgs, newDAH)
-			flooredDAH := flooredDAHSQL("t.id", fmt.Sprintf("$%d", dahIdx), retention)
+			flooredDAH := flooredDAHSQL("p.transaction_id", fmt.Sprintf("$%d", dahIdx), retention)
 			// Postgres CTEs share a snapshot, so the count(*) over outputs inside
 			// dah_upd sees the PRE-update state. "unspent-before == spent_in_batch"
 			// ⇔ this batch just drained the tx's last unspent output.
@@ -2842,9 +2842,13 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				WHERE o.spending_data IS NULL
 				GROUP BY o.transaction_id
 			),
-			dah_upd AS (
-				UPDATE transactions t SET delete_at_height = %s
+			parent_dah AS (
+				SELECT p.transaction_id, p.spent_in_batch, %s AS new_dah
 				FROM parents p
+			),
+			dah_upd AS (
+				UPDATE transactions t SET delete_at_height = p.new_dah
+				FROM parent_dah p
 				LEFT JOIN unspent_before u ON u.transaction_id = p.transaction_id
 				WHERE t.id = p.transaction_id
 				  AND t.preserve_until IS NULL
@@ -2852,12 +2856,12 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				  AND NOT t.conflicting
 				  AND EXISTS (SELECT 1 FROM block_ids bi WHERE bi.transaction_id = t.id)
 				  AND COALESCE(u.n_unspent, 0) = p.spent_in_batch
-				  AND (t.delete_at_height IS NULL OR t.delete_at_height < %s)
+				  AND (t.delete_at_height IS NULL OR t.delete_at_height < p.new_dah)
 				RETURNING 1
 			)
 			SELECT batch_idx FROM upd_spent
 			UNION ALL
-			SELECT batch_idx FROM upd_idem`, flooredDAH, flooredDAH))
+			SELECT batch_idx FROM upd_idem`, flooredDAH))
 		} else {
 			ub.WriteString(`) AS v(transaction_id,idx,spending_data,batch_idx)
 			WHERE o.transaction_id = v.transaction_id AND o.idx = v.idx
@@ -3433,22 +3437,31 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	}
 	// else: conditions not met and no existing DAH, leave as NULL
 
-	// Short-circuit: if the computed DAH equals what's already stored (including
-	// NULL→NULL), skip the UPDATE entirely. Avoids taking a row lock, writing a
-	// new row version and generating WAL for a no-op — matters on the spend hot
-	// path where setDAH is called for every touched parent per batch.
-	if dahUnchanged(existingDAH, deleteAtHeightOrNull) {
+	// A NULL decision over a NULL stamp writes nothing, which spares a row lock and WAL
+	// on the spend hot path. A value decision always writes: the read above is unlocked,
+	// so only the UPDATE can reconcile it with a concurrently mined block.
+	if !deleteAtHeightOrNull.Valid && !existingDAH.Valid {
 		return nil
 	}
 
-	// Update delete_at_height
-	qUpdate := `
-		UPDATE transactions
-		SET delete_at_height = $2
-		WHERE id = $1
-	`
+	return s.writeDAH(ctx, txn, transactionID, deleteAtHeightOrNull, retention)
+}
 
-	if _, err := txn.ExecContext(ctx, qUpdate, transactionID, deleteAtHeightOrNull); err != nil {
+// writeDAH stores a delete_at_height decision taken from an unlocked read. A value is
+// raised to the row's mined floor and never lowers a stamp a concurrent writer has
+// raised since, so a stale read cannot undo mining. A NULL clears the stamp.
+func (s *Store) writeDAH(ctx context.Context, txn *sql.Tx, transactionID int, value sql.NullInt64, retention uint32) error {
+	qUpdate := fmt.Sprintf(`
+		UPDATE transactions
+		SET delete_at_height = CASE
+		        WHEN CAST($2 AS BIGINT) IS NULL THEN NULL
+		        WHEN delete_at_height IS NOT NULL AND delete_at_height > %[1]s THEN delete_at_height
+		        ELSE %[1]s
+		    END
+		WHERE id = $1
+	`, flooredDAHSQL("transactions.id", "CAST($2 AS BIGINT)", retention))
+
+	if _, err := txn.ExecContext(ctx, qUpdate, transactionID, value); err != nil {
 		return errors.NewStorageError("[setDAH] error setting DAH for %d", transactionID, err)
 	}
 
@@ -3944,7 +3957,10 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 				UPDATE transactions
 				SET delete_at_height = CASE
 				        WHEN preserve_until IS NOT NULL THEN delete_at_height
-				        WHEN conflicting THEN COALESCE(delete_at_height, $1)
+				        WHEN conflicting THEN CASE
+				             WHEN delete_at_height IS NULL OR delete_at_height < %[2]s THEN %[3]s
+				             ELSE delete_at_height
+				        END
 				        WHEN unmined_since IS NULL
 				             AND NOT EXISTS (
 				                 SELECT 1 FROM outputs o
@@ -3956,8 +3972,8 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 				             END
 				        ELSE NULL
 				    END
-				WHERE hash IN %s
-			`, inClause3c)
+				WHERE hash IN %[1]s
+			`, inClause3c, minedFloorSQL("transactions.id", retention), flooredDAHSQL("transactions.id", "$1", retention))
 			args := append([]interface{}{newDAH}, inArgs3c...)
 			if _, err = txn.ExecContext(ctx, qDAH, args...); err != nil {
 				return nil, errors.NewStorageError(errSQLUpdatingTransactions, err)
@@ -5348,14 +5364,13 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				// the setMined value or later.
 				//
 				// Same rules as Lua setDeleteAtHeight and the Aerospike path: a preserved tx is left
-				// alone; a conflicting tx gets a DAH if it has none and keeps an existing one; any other
+				// alone; a conflicting tx gets a DAH if it has none, raised to the mined floor if lower; any other
 				// tx gets the DAH (set if none, raised if lower, never lowered) when it is in a block and
 				// has no unspent output, and a stale DAH is cleared when it is not.
 				// Current height is $1, retention $2, hashes start at $3.
 				inClause, inArgs := buildINClause(chunk, 3)
-				newDAH := `(CASE WHEN COALESCE((SELECT MAX(b.block_height) FROM block_ids b WHERE b.transaction_id = transactions.id), 0) > CAST($1 AS BIGINT)
-				                 THEN (SELECT MAX(b.block_height) FROM block_ids b WHERE b.transaction_id = transactions.id)
-				                 ELSE CAST($1 AS BIGINT) END + CAST($2 AS BIGINT))`
+				newDAH := flooredDAHSQL("transactions.id", "CAST($1 AS BIGINT) + CAST($2 AS BIGINT)", retention)
+				minedFloor := minedFloorSQL("transactions.id", retention)
 				eligible := `(EXISTS (SELECT 1 FROM block_ids b WHERE b.transaction_id = transactions.id)
 				              AND NOT EXISTS (SELECT 1 FROM outputs o WHERE o.transaction_id = transactions.id AND o.spending_data IS NULL))`
 				q = fmt.Sprintf(`
@@ -5363,13 +5378,16 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					SET unmined_since = NULL
 					   ,delete_at_height = CASE
 					        WHEN preserve_until IS NOT NULL THEN delete_at_height
-					        WHEN conflicting THEN COALESCE(delete_at_height, %[1]s)
+					        WHEN conflicting THEN CASE
+					            WHEN delete_at_height IS NULL OR delete_at_height < %[4]s THEN %[1]s
+					            ELSE delete_at_height
+					        END
 					        WHEN %[3]s THEN
 					            CASE WHEN delete_at_height IS NULL OR delete_at_height < %[1]s THEN %[1]s ELSE delete_at_height END
 					        ELSE NULL
 					    END
 					WHERE hash IN %[2]s
-				`, newDAH, inClause, eligible)
+				`, newDAH, inClause, eligible, minedFloor)
 				args = append([]interface{}{int64(currentBlockHeight) + 1, int64(retention)}, inArgs...)
 			} else {
 				// hashes start at $1

@@ -74,7 +74,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v63" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v64" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -275,6 +275,9 @@ type LuaMapResponse struct {
 	BlockIDs   []int                `json:"blockIDs,omitempty"`
 	Errors     map[int]LuaErrorInfo `json:"errors,omitempty"`
 	ChildCount int                  `json:"childCount,omitempty"`
+	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
+	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`
+	HasDeleteAtHeight bool `json:"-"`
 	// Debug      string               `json:"debug,omitempty"`
 }
 
@@ -307,6 +310,8 @@ func (r *LuaMapResponse) Reset() {
 		}
 	}
 	r.ChildCount = 0
+	r.DeleteAtHeight = 0
+	r.HasDeleteAtHeight = false
 }
 
 // luaMapResponsePool reuses LuaMapResponse structs across set_mined batch records,
@@ -443,6 +448,13 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 	if childCount, ok := respMap["childCount"]; ok {
 		if count, ok := luaResponseInt(childCount); ok {
 			result.ChildCount = count
+		}
+	}
+
+	if dah, ok := respMap["deleteAtHeight"]; ok {
+		if height, ok := luaResponseInt(dah); ok {
+			result.DeleteAtHeight = height
+			result.HasDeleteAtHeight = true
 		}
 	}
 
