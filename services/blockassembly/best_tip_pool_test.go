@@ -2,7 +2,9 @@ package blockassembly
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -11,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -385,4 +388,205 @@ func poolContains(ba *BlockAssembler, hash *chainhash.Hash) bool {
 	}
 
 	return false
+}
+
+// minedRaceStore signals contend once restampStaleBranch has stamped the stale branch unmined.
+type minedRaceStore struct {
+	utxo.Store
+
+	signal func()
+}
+
+func (s *minedRaceStore) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []chainhash.Hash, onLongestChain bool) error {
+	err := s.Store.MarkTransactionsOnLongestChain(ctx, txHashes, onLongestChain)
+	if !onLongestChain {
+		s.signal()
+	}
+
+	return err
+}
+
+// minedRaceClient signals contend once the subtree processor asks which blocks are still being
+// marked mined, that is once block assembly waits for block validation.
+type minedRaceClient struct {
+	blockchain.ClientI
+
+	signal func()
+}
+
+func (c *minedRaceClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
+	c.signal()
+
+	return c.ClientI.GetBlocksMinedNotSet(ctx)
+}
+
+// TestRestampStaleBranch_WaitsForPendingMinedSet is the race icellan found in the restamp. Branch
+// block Y was briefly the best tip, so block validation's setTxMined(Y) runs with
+// onLongestChain=true and clears unmined_since chunk by chunk. If the restamp stamps Y's
+// transactions unmined while that is still running, the remaining chunks clear the stamp again,
+// the pool reload misses P, and P reads as mined while no block of the best chain has it.
+//
+// The fake block validation holds its last chunk until block assembly either stamps the branch or
+// asks which blocks are still pending, then writes the chunk and sets Y's mined_set. The restamp
+// must wait first, so the chunk lands before the stamp and P reaches the pool.
+func TestRestampStaleBranch_WaitsForPendingMinedSet(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+	}, withCoinbaseMaturity(testCoinbaseMaturity))
+	ba := items.blockAssembler
+
+	var once sync.Once
+	contend := make(chan struct{})
+	signal := func() { once.Do(func() { close(contend) }) }
+
+	ba.subtreeProcessor.Stop(context.Background())
+	stp, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, ba.settings, items.blobStore, &minedRaceClient{ClientI: items.blockchainClient, signal: signal}, items.utxoStore, items.newSubtreeChan)
+	require.NoError(t, err)
+	ba.subtreeProcessor = stp
+	stp.Start(ctx)
+
+	genesis := genesisHeader(t, items)
+	a1 := buildChain(genesis, 1, 60000)[0]
+	addBlockWithMinedSet(ctx, t, items, a1)
+	startReplayAt(t, items, a1, 1)
+	stp.InitCurrentBlockHeader(a1)
+	require.NoError(t, items.utxoStore.SetBlockHeight(2))
+
+	// P spends a confirmed transaction, and only Y contains it.
+	funding := replayPoolTx(&chainhash.Hash{}, 100)
+	blockOnly := replayPoolTx(funding.TxIDChainHash(), 99)
+	for _, tx := range []*bt.Tx{funding, blockOnly} {
+		_, err = items.utxoStore.(*utxosql.Store).Create(ctx, tx, 1)
+		require.NoError(t, err)
+	}
+	require.NoError(t, items.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*funding.TxIDChainHash(), *blockOnly.TxIDChainHash()}, true))
+
+	tree, err := subtree.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, tree.AddCoinbaseNode())
+	require.NoError(t, tree.AddNode(*blockOnly.TxIDChainHash(), 1, uint64(len(blockOnly.Bytes()))))
+	treeBytes, err := tree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
+
+	// Y is A1's sibling, stored with subtrees_set true and mined_set still false: block validation
+	// only starts setTxMined(Y) after SetBlockSubtreesSet, and it has not finished yet.
+	y := buildChain(genesis, 1, 61000)[0]
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+	require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: y, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, "", blockchainoptions.WithSubtreesSet(true)))
+
+	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, a1.Hash().String(), best.Hash().String(), "A1 is the best tip and Y is stale")
+
+	_, genMeta, err := items.blockchainClient.GetBlockHeader(ctx, genesis.Hash())
+	require.NoError(t, err)
+	_, yMeta, err := items.blockchainClient.GetBlockHeader(ctx, y.Hash())
+	require.NoError(t, err)
+	require.False(t, yMeta.MinedSet, "Y's mined marking is still running")
+
+	// GetBlocksMinedNotSet only lists blocks with subtrees_set true and mined_set false, so this
+	// pins that the wait in restampStaleBranch can see Y at all.
+	pending, err := items.blockchainClient.GetBlocksMinedNotSet(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "Y must be pending, or the wait returns on its first poll")
+
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	// setTxMined(Y)'s first chunk already gave P Y's block id with onLongestChain=true.
+	yMined := utxo.MinedBlockInfo{BlockID: yMeta.ID, BlockHeight: 1, OnLongestChain: true}
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{blockOnly.TxIDChainHash()}, yMined)
+	require.NoError(t, err)
+
+	ba.utxoStore = &minedRaceStore{Store: items.utxoStore, signal: signal}
+
+	// The last chunk of setTxMined(Y), then mined_set, as block validation finishes.
+	validationDone := make(chan error, 1)
+	go func() {
+		<-contend
+		if _, err := items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{blockOnly.TxIDChainHash()}, yMined); err != nil {
+			validationDone <- err
+			return
+		}
+		validationDone <- items.blockchainClient.SetBlockMinedSet(ctx, y.Hash(), yMeta.MinedSetGeneration)
+	}()
+
+	require.NoError(t, ba.restampStaleBranch(ctx, []blockHeaderWithMeta{{header: y, meta: yMeta}}, best))
+	require.NoError(t, <-validationDone)
+	requireBlockAssemblyTip(t, items, a1)
+
+	data, err := items.utxoStore.Get(ctx, blockOnly.TxIDChainHash())
+	require.NoError(t, err)
+	require.NotZero(t, data.UnminedSince, "P is on no block of the best chain, so it must read as unmined")
+	require.True(t, poolContains(ba, blockOnly.TxIDChainHash()), "the transaction only stale Y had must be in the pool")
+}
+
+// TestRestampStaleBranch_RefusesWhileMinedSetPending covers the restamp giving up when block
+// validation never finishes marking stale Y mined. The wait ends only when the context does, and the
+// restamp must then return an error without stamping anything, because a stamp written while Y's
+// chunks may still land could be cleared again behind it.
+func TestRestampStaleBranch_RefusesWhileMinedSetPending(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = true
+	}, withCoinbaseMaturity(testCoinbaseMaturity))
+	ba := items.blockAssembler
+
+	genesis := genesisHeader(t, items)
+	a1 := buildChain(genesis, 1, 62000)[0]
+	addBlockWithMinedSet(ctx, t, items, a1)
+	startReplayAt(t, items, a1, 1)
+	ba.subtreeProcessor.InitCurrentBlockHeader(a1)
+	require.NoError(t, items.utxoStore.SetBlockHeight(2))
+
+	funding := replayPoolTx(&chainhash.Hash{}, 100)
+	blockOnly := replayPoolTx(funding.TxIDChainHash(), 99)
+	for _, tx := range []*bt.Tx{funding, blockOnly} {
+		_, err := items.utxoStore.(*utxosql.Store).Create(ctx, tx, 1)
+		require.NoError(t, err)
+	}
+	require.NoError(t, items.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*funding.TxIDChainHash(), *blockOnly.TxIDChainHash()}, true))
+
+	tree, err := subtree.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, tree.AddCoinbaseNode())
+	require.NoError(t, tree.AddNode(*blockOnly.TxIDChainHash(), 1, uint64(len(blockOnly.Bytes()))))
+	treeBytes, err := tree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
+
+	// Y stays pending: subtrees_set true, mined_set never set.
+	y := buildChain(genesis, 1, 63000)[0]
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+	require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: y, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, "", blockchainoptions.WithSubtreesSet(true)))
+
+	pending, err := items.blockchainClient.GetBlocksMinedNotSet(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "Y must be pending, or the wait returns on its first poll")
+
+	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, a1.Hash().String(), best.Hash().String(), "A1 is the best tip and Y is stale")
+
+	_, yMeta, err := items.blockchainClient.GetBlockHeader(ctx, y.Hash())
+	require.NoError(t, err)
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{blockOnly.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: yMeta.ID, BlockHeight: 1, OnLongestChain: true})
+	require.NoError(t, err)
+
+	waitCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+
+	err = ba.restampStaleBranch(waitCtx, []blockHeaderWithMeta{{header: y, meta: yMeta}}, best)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "[restampStaleBranch] error waiting for pending blocks", "the restamp's own wait must refuse, not the reset's")
+
+	data, err := items.utxoStore.Get(ctx, blockOnly.TxIDChainHash())
+	require.NoError(t, err)
+	require.Zero(t, data.UnminedSince, "the restamp must not stamp the branch before Y's marking has finished")
 }

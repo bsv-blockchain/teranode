@@ -6,8 +6,10 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	mathbits "math/bits"
 	"os"
-	"sort"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -103,6 +105,29 @@ var StateStrings = map[State]string{
 type BlockAssembler struct {
 	// logger provides logging functionality for the assembler
 	logger ulogger.Logger
+
+	// undecidedMu guards undecidedSince: each unmined transaction whose input check the store
+	// has not answered, with the time it was first left undecided. One undecided for longer than
+	// undecidedExcludeAfter is left out of a load instead of failing it (see undecidedLoad).
+	undecidedMu    sync.Mutex
+	undecidedSince map[chainhash.Hash]time.Time
+
+	// undecidedExcludeAfter overrides defaultUndecidedExcludeAfter; zero means the default.
+	// Tests shorten it.
+	undecidedExcludeAfter time.Duration
+
+	// unminedReloadPending is set when the unmined reload inside a reset failed after the reset
+	// had already cleared the subtrees, which leaves the mempool out of every template. The
+	// heartbeat tick queues a fresh reset for it, no sooner than unminedReloadRetryInterval after
+	// the failure or the last retry, until a reload succeeds (see retryFailedUnminedReload). Atomics, because the reload runs on the subtree
+	// processor's goroutine and the tick on the assembler's.
+	unminedReloadPending  atomic.Bool
+	unminedReloadValidate atomic.Bool
+	unminedReloadFailedAt atomic.Int64
+
+	// unminedReloadRetryInterval overrides defaultUnminedReloadRetryInterval; zero means the
+	// default. Tests shorten it.
+	unminedReloadRetryInterval time.Duration
 
 	// staleTip remembers since when block assembly has differed from the same chain tip, so a
 	// candidate is only reported as stale once the gap outlasts the normal new-block notification delay.
@@ -615,6 +640,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 				// dequeued in no subtree. Not a storage fault, so it resets
 				// even while degraded, as a plain (not storage-triggered)
 				// reset.
+				b.retryFailedUnminedReload()
+
 				if b.subtreeProcessor.TakeDrainResetRequested() {
 					b.logger.Warnf("[BlockAssembler] the queue drain after a block failed; resetting block assembly")
 					b.resetAfterDrainFailure()
@@ -1136,8 +1163,17 @@ func (b *BlockAssembler) resetToBlockWithResponse(ctx context.Context, bestBlock
 	postProcessFn := func() error {
 		// reload the unmined transactions
 		if err = b.loadUnminedTransactions(ctx, true, shouldValidateInputs); err != nil {
+			// The reset has already cleared the subtrees, so the mempool is out of every
+			// template until a load succeeds. The callers only log this error, so the retry
+			// is queued here rather than left to an operator.
+			if ctx.Err() == nil {
+				b.noteFailedUnminedReload(shouldValidateInputs)
+			}
+
 			return errors.NewProcessingError("[Reset] error loading unmined transactions", err)
 		}
+
+		b.clearPendingUnminedReload(shouldValidateInputs)
 
 		// Drop any in-flight children of cascaded conflicting parents from
 		// the input queue before the existing post-postProcess drain runs
@@ -2093,6 +2129,84 @@ func (b *BlockAssembler) healStaleConflictIntent(ctx context.Context, intent utx
 	default:
 		return errors.NewProcessingError("[healStaleConflictIntent] unknown conflict intent kind %q", intent.Kind)
 	}
+}
+
+// spentOutpoints returns the outpoints a stored transaction spends, preferring
+// the stored inpoints on the identity record over the serialized body.
+//
+// The two carry the same set, but only the inpoints survive the loss of the
+// body, and a UTXO store may legitimately hold a transaction with Tx nil: once
+// its tx_body partition has aged out, and, with utxostore_skipTxBodyBelowCheckpoint
+// on, for every transaction mined at or below the hardcoded checkpoint, whose
+// bytes were never written. Reading the body alone meant every such record
+// yielded no outpoints and was skipped in silence.
+//
+// A record carrying NEITHER is an error rather than an empty result, which is
+// the same call the store layer already makes for the same question (see
+// counterConflictingInpoints in stores/utxo/process_conflicting.go): an empty
+// result reports a transaction that spends nothing, and the caller here acts on
+// that answer: it decides whether a transaction may be mined. Both shapes exist on the utxoset store below the checkpoint, where
+// createMinedPlanSQL stores NULL tx_inpoints and the skip-body gate stores no
+// body, so this is not a hypothetical.
+//
+// Precondition: hash is never a coinbase. A coinbase genuinely spends nothing, so
+// the both-absent branch would refuse it for telling the truth. The caller cannot
+// be handed one, because a coinbase is never an unmined transaction, which is why there is no coinbase carve-out here
+// rather than a silent exemption that would also swallow the real case.
+func spentOutpoints(hash *chainhash.Hash, txMeta *meta.Data, caller string) ([]subtree.Inpoint, error) {
+	if txMeta == nil {
+		return nil, errors.NewTxNotFoundError("[%s][%s] no metadata for the transaction", caller, hash.String())
+	}
+
+	if len(txMeta.TxInpoints.ParentTxHashes) > 0 {
+		return txMeta.TxInpoints.GetTxInpoints(), nil
+	}
+
+	if txMeta.Tx == nil {
+		// Permanent: asking again reads the same record. Marked here, at the one place the
+		// condition is known, so a caller can tell it from a store that did not answer.
+		return nil, permanentInputCheck{errors.NewProcessingError("[%s][%s] record carries neither stored inpoints nor a transaction body, so its parents cannot be resolved (a body-less record is the steady state once the tx_body partition has aged out, or below the boundary when utxostore_skipTxBodyBelowCheckpoint is on)", caller, hash.String())}
+	}
+
+	inpoints := make([]subtree.Inpoint, 0, len(txMeta.Tx.Inputs))
+
+	for _, in := range txMeta.Tx.Inputs {
+		inpoints = append(inpoints, subtree.Inpoint{
+			Hash:  *in.PreviousTxIDChainHash(),
+			Index: in.PreviousTxOutIndex,
+		})
+	}
+
+	return inpoints, nil
+}
+
+// spentOutpointsFromStore is spentOutpoints with the body fetched lazily: the
+// stored inpoints answer on their own for every record that has them, and only a
+// record without them is worth a second read.
+//
+// Splitting the read matters on the reload path. validateUnminedTxInputs runs
+// once per unmined transaction at startup, and asking for fields.Tx up front
+// undoes what the original "NOT full Tx (avoids loading heavy output data)"
+// comment was protecting: on the SQL store it adds an outputs query per
+// transaction, and on aerospike it pulls a large transaction back from the
+// external blob store. The fallback exists for correctness, not for the common
+// case, so it costs nothing until it is needed.
+func (b *BlockAssembler) spentOutpointsFromStore(ctx context.Context, hash *chainhash.Hash,
+	txMeta *meta.Data, caller string) ([]subtree.Inpoint, error) {
+	if txMeta != nil && len(txMeta.TxInpoints.ParentTxHashes) > 0 {
+		return txMeta.TxInpoints.GetTxInpoints(), nil
+	}
+
+	withBody, err := b.utxoStore.Get(ctx, hash, fields.Tx)
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+			return nil, errors.NewTxNotFoundError("[%s][%s] no record for the transaction", caller, hash.String())
+		}
+
+		return nil, errors.NewProcessingError("[%s][%s] failed to load the transaction body", caller, hash.String(), err)
+	}
+
+	return spentOutpoints(hash, withBody, caller)
 }
 
 // Wait blocks until all background goroutines have finished.
@@ -3381,12 +3495,11 @@ func (b *BlockAssembler) validateParentChain(
 // and drops the child (cascading to its descendants). The stable base sort
 // preserves iterator order on ties, and the per-run reorder guarantees parents
 // precede their children regardless of iterator order.
-func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
-	sort.SliceStable(txs, func(i, j int) bool {
-		return txs[i].CreatedAt < txs[j].CreatedAt
-	})
-
-	orderEqualCreatedAtRunsParentsFirst(txs)
+//
+// It runs on every core with a radix sort (see sortUnminedByCreatedAt) and returns
+// false when it had to fall back to the comparison sort.
+func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) bool {
+	return sortUnminedByCreatedAt(txs, runtime.GOMAXPROCS(0))
 }
 
 // orderEqualCreatedAtRunsParentsFirst reorders, within each maximal run of equal
@@ -3394,6 +3507,8 @@ func stableSortUnminedByCreatedAt(txs []*utxo.UnminedTransaction) {
 // children. Only same-timestamp transactions can be misordered, so unrelated
 // timestamps are left untouched.
 func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
+	var scratch runOrderScratch
+
 	for start := 0; start < len(txs); {
 		end := start + 1
 		for end < len(txs) && txs[end].CreatedAt == txs[start].CreatedAt {
@@ -3401,11 +3516,31 @@ func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
 		}
 
 		if end-start > 1 {
-			orderRunParentsFirst(txs[start:end])
+			orderRunParentsFirst(txs[start:end], &scratch)
 		}
 
 		start = end
 	}
+}
+
+// runOrderScratch holds the buffers orderRunParentsFirst reuses from one run to
+// the next. A reload has hundreds of thousands of runs, and allocating a map and
+// slices per run dominated the reorder.
+type runOrderScratch struct {
+	slotKeys  []uint64
+	slots     []int
+	edgeStart []int
+	edges     []int
+	depth     []int
+	state     []int8
+	stack     []int
+	count     []int
+	reordered []*utxo.UnminedTransaction
+}
+
+// hashPrefix is the first 8 bytes of a tx hash, the slot table's key.
+func hashPrefix(h *chainhash.Hash) uint64 {
+	return binary.LittleEndian.Uint64(h[:8])
 }
 
 // orderRunParentsFirst reorders, in place, a run of transactions that all share
@@ -3413,27 +3548,76 @@ func orderEqualCreatedAtRunsParentsFirst(txs []*utxo.UnminedTransaction) {
 // appears before its children. Transactions with no parent/child relationship
 // inside the run keep their incoming relative order (the sort is stable), which
 // preserves the iterator's ordering for unrelated transactions.
-func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
+func orderRunParentsFirst(run []*utxo.UnminedTransaction, s *runOrderScratch) {
 	n := len(run)
 
-	// Map each hash in the run to its slot so intra-run parent edges can be found.
-	pos := make(map[chainhash.Hash]int, n)
-	for i, tx := range run {
-		pos[tx.Node.Hash] = i
+	// Map each hash in the run to its slot so intra-run parent edges can be found:
+	// an open-addressing table indexed by the hash's first 8 bytes (tx hashes are
+	// uniformly distributed), at most half full. slots holds slot+1, 0 is empty.
+	// The prefix only narrows the probe; a match is always the full hash.
+	tableSize := 1 << mathbits.Len(uint(2*n-1))
+	mask := uint64(tableSize - 1)
+
+	if cap(s.slots) < tableSize {
+		s.slotKeys = make([]uint64, tableSize)
+		s.slots = make([]int, tableSize)
 	}
 
-	// parents[i] = slots within the run whose outputs transaction i spends.
-	parents := make([][]int, n)
+	slotKeys, slots := s.slotKeys[:tableSize], s.slots[:tableSize]
+	clear(slots)
+
 	for i, tx := range run {
+		k := hashPrefix(&tx.Node.Hash)
+
+		idx := k & mask
+		for slots[idx] != 0 && (slotKeys[idx] != k || run[slots[idx]-1].Node.Hash != tx.Node.Hash) {
+			idx = (idx + 1) & mask
+		}
+
+		// A repeated hash takes the later slot, as a map assignment would.
+		slotKeys[idx], slots[idx] = k, i+1
+	}
+
+	slotOf := func(h *chainhash.Hash) (int, bool) {
+		k := hashPrefix(h)
+
+		for idx := k & mask; slots[idx] != 0; idx = (idx + 1) & mask {
+			if p := slots[idx] - 1; slotKeys[idx] == k && run[p].Node.Hash == *h {
+				return p, true
+			}
+		}
+
+		return 0, false
+	}
+
+	// The parents of transaction i, as slots within the run, are
+	// edges[edgeStart[i]:edgeStart[i+1]].
+	s.edgeStart = resizeInts(s.edgeStart, n+1)
+	s.edges = s.edges[:0]
+
+	for i, tx := range run {
+		s.edgeStart[i] = len(s.edges)
+
 		if tx.TxInpoints == nil {
 			continue
 		}
 
 		for _, parentHash := range tx.TxInpoints.GetParentTxHashes() {
-			if p, ok := pos[parentHash]; ok && p != i {
-				parents[i] = append(parents[i], p)
+			if p, ok := slotOf(&parentHash); ok && p != i {
+				s.edges = append(s.edges, p)
 			}
 		}
+	}
+
+	s.edgeStart[n] = len(s.edges)
+
+	// Every depth would be 0 and the stable order unchanged.
+	if len(s.edges) == 0 {
+		return
+	}
+
+	parents := func(v int) []int {
+		return s.edges[s.edgeStart[v]:s.edgeStart[v+1]]
 	}
 
 	// depth[i] = length of the longest in-run ancestor chain ending at i. A
@@ -3446,38 +3630,47 @@ func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
 		done
 	)
 
-	depth := make([]int, n)
-	state := make([]int8, n)
-	stack := make([]int, 0, n)
+	s.depth = resizeInts(s.depth, n)
+	s.stack = s.stack[:0]
+
+	if cap(s.state) < n {
+		s.state = make([]int8, n)
+	}
+
+	s.state = s.state[:n]
+	clear(s.state)
+
+	depth, state := s.depth, s.state
+	maxDepth := 0
 
 	for i := 0; i < n; i++ {
 		if state[i] != unvisited {
 			continue
 		}
 
-		stack = append(stack, i)
+		s.stack = append(s.stack, i)
 
-		for len(stack) > 0 {
-			v := stack[len(stack)-1]
+		for len(s.stack) > 0 {
+			v := s.stack[len(s.stack)-1]
 
 			if state[v] == unvisited {
 				state[v] = active
-				for _, p := range parents[v] {
+				for _, p := range parents(v) {
 					if state[p] == unvisited {
-						stack = append(stack, p)
+						s.stack = append(s.stack, p)
 					}
 				}
 
 				continue
 			}
 
-			stack = stack[:len(stack)-1]
+			s.stack = s.stack[:len(s.stack)-1]
 			if state[v] == done {
 				continue
 			}
 
 			d := 0
-			for _, p := range parents[v] {
+			for _, p := range parents(v) {
 				// Parents still active indicate a cycle (impossible for a tx
 				// DAG); skip them so this terminates rather than looping.
 				if state[p] == done && depth[p]+1 > d {
@@ -3487,25 +3680,44 @@ func orderRunParentsFirst(run []*utxo.UnminedTransaction) {
 
 			depth[v] = d
 			state[v] = done
+			maxDepth = max(maxDepth, d)
 		}
 	}
 
-	// Stable-sort slot indices by depth; equal depths keep original order.
-	order := make([]int, n)
-	for i := range order {
-		order[i] = i
+	// Counting sort by depth: stable, so equal depths keep their order.
+	s.count = resizeInts(s.count, maxDepth+2)
+	clear(s.count)
+
+	for _, d := range depth {
+		s.count[d+1]++
 	}
 
-	sort.SliceStable(order, func(a, b int) bool {
-		return depth[order[a]] < depth[order[b]]
-	})
+	for d := 1; d < len(s.count); d++ {
+		s.count[d] += s.count[d-1]
+	}
 
-	reordered := make([]*utxo.UnminedTransaction, n)
-	for k, idx := range order {
-		reordered[k] = run[idx]
+	if cap(s.reordered) < n {
+		s.reordered = make([]*utxo.UnminedTransaction, n)
+	}
+
+	reordered := s.reordered[:n]
+
+	for i, tx := range run {
+		reordered[s.count[depth[i]]] = tx
+		s.count[depth[i]]++
 	}
 
 	copy(run, reordered)
+	clear(reordered)
+}
+
+// resizeInts returns buf with length n, reallocating only when it is too small.
+func resizeInts(buf []int, n int) []int {
+	if cap(buf) < n {
+		return make([]int, n)
+	}
+
+	return buf[:n]
 }
 
 // fixUnminedSinceInconsistencies performs a lightweight scan of all records in the UTXO store
@@ -3790,6 +4002,11 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	lockedCount := atomic.Int64{}
 	invalidInputCount := atomic.Int64{}
 
+	// The input checks the store could not answer. See undecidedLoad.
+	b.undecidedMu.Lock()
+	undecided := newUndecidedLoad(b.undecidedSince, b.undecidedExcludeAfterOrDefault(), time.Now())
+	b.undecidedMu.Unlock()
+
 	// Worker pool configuration — workers only filter and append to slices,
 	// they are not the bottleneck (Aerospike partition queries are). Keep low.
 	numWorkers := 4
@@ -3878,6 +4095,7 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 		if err != nil {
 			close(workChan)
 			wg.Wait()
+
 			return errors.NewProcessingError("error getting unmined transaction", err)
 		}
 
@@ -3929,50 +4147,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 	iteratorClosed = true
 
 	if shouldValidateInputs {
-		// Keep store reads bounded and concurrent as in the original reload.
-		// Apply conflict cascades afterwards: they mutate the processor and the
-		// shared drop set, and must finish before filtering accepted children.
-		type validationResult struct{ valid, markConflicting bool }
-		results := make([]validationResult, len(unminedTransactions))
-		validationWork := make(chan int, numWorkers)
-		var validatedCount atomic.Int64
-		for i := 0; i < numWorkers; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for idx := range validationWork {
-					b.heartbeat.BeatIfStarted()
-					results[idx].valid, results[idx].markConflicting = b.checkUnminedTxInputs(ctx, unminedTransactions[idx].Hash, bestBlockHeaderIDsMap)
-					if n := validatedCount.Add(1); n%1000 == 0 {
-						b.logger.Infof("[loadUnminedTransactions] validated %d/%d unmined transactions", n, len(unminedTransactions))
-					}
-				}
-			}()
-		}
-		for idx := range unminedTransactions {
-			validationWork <- idx
-		}
-		close(validationWork)
-		wg.Wait()
-
-		valid := unminedTransactions[:0]
-		for idx, tx := range unminedTransactions {
-			if results[idx].markConflicting {
-				b.markAsConflicting(ctx, tx.Hash)
-			}
-			if results[idx].valid {
-				valid = append(valid, tx)
-			} else {
-				invalidInputCount.Add(1)
-			}
-		}
-		// An invalid parent can cascade to a child that was validated earlier.
-		// Those children must not be re-added after Remove ran against the old pool.
-		unminedTransactions = valid[:0]
-		for _, tx := range valid {
-			if _, dropped := b.unminedDropHashes[tx.Hash]; !dropped {
-				unminedTransactions = append(unminedTransactions, tx)
-			}
+		unminedTransactions, lockedTransactions, err = b.validateLoadedUnminedTxs(ctx, unminedTransactions, lockedTransactions,
+			bestBlockHeaderIDsMap, undecided, numWorkers, &invalidInputCount)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -4003,7 +4181,9 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	b.logger.Infof("[loadUnminedTransactions] sorting %d unmined transactions by createdAt", len(unminedTransactions))
 
-	stableSortUnminedByCreatedAt(unminedTransactions)
+	if !stableSortUnminedByCreatedAt(unminedTransactions) {
+		b.logger.Warnf("[loadUnminedTransactions] CreatedAt range of %d unmined transactions too wide for the radix sort, used the comparison sort", len(unminedTransactions))
+	}
 
 	txCount := len(unminedTransactions)
 
@@ -4160,63 +4340,296 @@ func clearUnminedTxInpoints(tx *utxo.UnminedTransaction) {
 	*tx.TxInpoints = subtree.TxInpoints{}
 }
 
+// validateLoadedUnminedTxs checks the inputs of every loaded transaction, with workers
+// bounded and concurrent store reads, once the unmined iterator is closed. It returns the
+// transactions and locked hashes that stay in the candidate.
+//
+// The checks only read. A transaction found conflicting is collected, and the marks are written
+// after every check has finished (applyDeferredConflictMarks), so its cascade also drops any
+// child that was checked first. An input check the store could not answer fails the load, as an
+// iterator error does, unless it has stayed undecided long enough to be left out (undecidedLoad).
+func (b *BlockAssembler) validateLoadedUnminedTxs(ctx context.Context, txs []*utxo.UnminedTransaction, locked []chainhash.Hash,
+	bestBlockHeaderIDsMap map[uint32]bool, undecided *undecidedLoad, numWorkers int, invalidInputCount *atomic.Int64) ([]*utxo.UnminedTransaction, []chainhash.Hash, error) {
+	type validationResult struct{ keep, conflicting bool }
+
+	results := make([]validationResult, len(txs))
+	work := make(chan int, numWorkers)
+
+	var (
+		wg             sync.WaitGroup
+		validatedCount atomic.Int64
+	)
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for idx := range work {
+				b.heartbeat.BeatIfStarted()
+
+				if n := validatedCount.Add(1); n%1000 == 0 {
+					b.logger.Infof("[loadUnminedTransactions] validated %d/%d unmined transactions, %d invalid", n, len(txs), invalidInputCount.Load())
+				}
+
+				// The load is already failing, so nothing it would decide here is used. Not
+				// checking keeps a store outage from costing a timeout per transaction.
+				if undecided.failing.Load() {
+					continue
+				}
+
+				hash := txs[idx].Hash
+
+				valid, conflicting, validateErr := b.checkUnminedTxInputsRetrying(ctx, hash, bestBlockHeaderIDsMap, &undecided.failing)
+				results[idx].conflicting = conflicting
+
+				if validateErr != nil {
+					if isPermanentInputCheck(validateErr) {
+						// It cannot be decided, now or by retrying, so it is left out, and the
+						// load goes on.
+						undecided.answered.Add(1)
+
+						b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs (permanent), leaving the transaction out of the candidate: %v",
+							hash.String(), validateErr)
+						prometheusBlockAssemblerUnminedUndecidedExcluded.Inc()
+						invalidInputCount.Add(1)
+
+						continue
+					}
+
+					// Undecided, not decided: the store did not answer, even on a retry. It
+					// stays out of this load either way. Whether the load fails for it or goes
+					// on without it is undecidedLoad's call, made from how long it has been
+					// undecided.
+					if !undecided.undecided(hash, validateErr) {
+						b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs, failing the load: %v", hash.String(), validateErr)
+					}
+
+					continue
+				}
+
+				undecided.decided(hash)
+
+				if !valid {
+					invalidInputCount.Add(1)
+					continue
+				}
+
+				results[idx].keep = true
+			}
+		}()
+	}
+
+	for idx := range txs {
+		work <- idx
+	}
+
+	close(work)
+	wg.Wait()
+
+	// The collected conflicting marks are dropped with a failed load, for the same cause.
+	undecidedErr := undecided.finish()
+
+	b.undecidedMu.Lock()
+	b.undecidedSince = undecided.next()
+	b.undecidedMu.Unlock()
+
+	if undecidedErr != nil {
+		return nil, nil, undecidedErr
+	}
+
+	for _, p := range undecided.persistent {
+		b.logger.Errorf("[loadUnminedTransactions][%s] could not validate inputs, undecided since %s, leaving the transaction out of the candidate: %v",
+			p.hash.String(), p.since.Format(time.RFC3339), p.err)
+		prometheusBlockAssemblerUnminedUndecidedExcluded.Inc()
+		invalidInputCount.Add(1)
+	}
+
+	conflictingTxs := make([]chainhash.Hash, 0)
+
+	for idx := range txs {
+		if results[idx].conflicting {
+			conflictingTxs = append(conflictingTxs, txs[idx].Hash)
+		}
+	}
+
+	markedConflicting := b.applyDeferredConflictMarks(ctx, conflictingTxs, numWorkers)
+
+	// Leave out every transaction that failed its check, and anything the marks above made
+	// conflicting, including a child checked before its parent was marked.
+	dropped := make(map[chainhash.Hash]struct{})
+	kept := txs[:0]
+
+	for idx, tx := range txs {
+		_, marked := markedConflicting[tx.Hash]
+		if results[idx].keep && !marked {
+			kept = append(kept, tx)
+			continue
+		}
+
+		dropped[tx.Hash] = struct{}{}
+	}
+
+	clear(txs[len(kept):])
+
+	locked = slices.DeleteFunc(locked, func(h chainhash.Hash) bool {
+		_, isDropped := dropped[h]
+		return isDropped
+	})
+
+	return kept, locked, nil
+}
+
 // validateUnminedTxInputs checks that each input of an unmined transaction is still validly
 // spent by THIS transaction. Catches two cases:
 //  1. Input is spent by a DIFFERENT tx (spending data doesn't match)
 //  2. Input is spent by THIS tx, but a counter-conflicting tx is confirmed on the current chain
 //     (e.g. ProcessConflicting incorrectly made this tx the winner over a confirmed tx)
 //
-// Returns true if the transaction is valid for inclusion in block assembly.
-func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool, dryRun bool) bool {
-	valid, mark := b.checkUnminedTxInputs(ctx, txHash, bestBlockIDsMap)
-	if mark && !dryRun {
+// Returns true if the transaction is valid for inclusion in block assembly, and
+// an error when it could not be decided at all -- which is NOT the same answer.
+// "Invalid" drops a transaction from the mining candidate on purpose; "could not
+// decide" must not be reported as that, and used to be: the read asked for
+// fields.Inputs and bailed on a nil txMeta.Tx, so on the SQL store, which sets
+// data.Tx only for fields.Tx (sql.go:1757), EVERY transaction was silently
+// dropped, and on the utxoset store every record whose body had aged out was
+// too. The parents and their vouts are read from the stored inpoints now, which
+// is where an unmined record keeps them.
+//
+// Every store read here follows the same rule: a not-found is a decision about
+// the transaction (a parent that is gone cannot be validly spent, a counter with
+// no record is on no block), and any other store failure is returned. The two
+// counter-conflict reads matter most, because they used to `continue` on error:
+// that is the check which drops a transaction whose counter-conflict is confirmed
+// on chain, so skipping it on a transient failure failed OPEN and let exactly that
+// transaction into the candidate.
+func (b *BlockAssembler) validateUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool, dryRun bool) (bool, error) {
+	valid, conflicting, err := b.checkUnminedTxInputs(ctx, txHash, bestBlockIDsMap)
+	if conflicting && !dryRun {
 		b.markAsConflicting(ctx, txHash)
 	}
-	return valid
+
+	return valid, err
 }
 
-// checkUnminedTxInputs performs only reads. Its second result requests a
-// conflict cascade, which reload applies serially after parallel validation.
-func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool) (bool, bool) {
-	// Both stores populate TxInpoints; full outputs and scripts are unnecessary.
+// permanentInputCheck marks an input check that can never be answered for this record, such as
+// a record with neither stored inpoints nor a body. A reload leaves such a transaction out of
+// the candidate instead of failing, because no retry can decide it. Every other error from the
+// check is a store that did not answer this time.
+type permanentInputCheck struct{ err error }
+
+func (p permanentInputCheck) Error() string { return p.err.Error() }
+
+func (p permanentInputCheck) Unwrap() error { return p.err }
+
+func isPermanentInputCheck(err error) bool {
+	_, ok := err.(permanentInputCheck) //nolint:errorlint // returned unwrapped by checkUnminedTxInputs
+
+	return ok
+}
+
+// checkUnminedTxInputs is validateUnminedTxInputs without the write: it reports
+// whether the transaction must be marked conflicting instead of marking it, and
+// only ever reads the store. loadUnminedTransactions calls it from its workers
+// while the unmined iterator is still open, and applies the marks itself once
+// the iterator is closed. On the SQL store over SQLite that ordering is
+// load-bearing: the iterator holds a read cursor on the transactions table, a
+// SetConflicting UPDATE on that table waits for the cursor, and the iterator's
+// own next read then waits behind the pending write, so marking from a worker
+// wedged the reload for good.
+//
+// It returns (valid, conflicting, err); conflicting is true only together with
+// valid == false and a nil error.
+func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainhash.Hash, bestBlockIDsMap map[uint32]bool) (bool, bool, error) {
+	// TxInpoints, not the body: the parent hashes and their vouts are on the
+	// identity record, so this neither loads heavy output data nor depends on a
+	// body the store may no longer hold. spentOutpointsFromStore fetches the body
+	// only for a record that carries no inpoints.
 	txMeta, err := b.utxoStore.Get(ctx, &txHash, fields.TxInpoints, fields.Conflicting)
-	if err != nil || txMeta == nil {
-		return false, false
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+			// No record at all: there is nothing to mine, and that is a decision,
+			// not a failure to make one.
+			return false, false, nil
+		}
+
+		return false, false, recordUnread{errors.NewProcessingError("[validateUnminedTxInputs][%s] failed to load tx", txHash.String(), err)}
+	}
+
+	if txMeta == nil {
+		return false, false, permanentInputCheck{errors.NewProcessingError("[validateUnminedTxInputs][%s] store returned no record and no error", txHash.String())}
 	}
 
 	if txMeta.Conflicting {
-		return false, false
+		return false, false, nil
 	}
 
-	parents := txMeta.TxInpoints.GetParentTxHashes()
-	if len(parents) == 0 {
-		return false, false
-	}
-	for parentIdx, parent := range parents {
-		parentHash := &parent
-		vouts, err := txMeta.TxInpoints.GetParentVoutsAtIndex(parentIdx)
-		if err != nil {
-			return false, false
-		}
-		if len(vouts) == 0 {
-			continue
+	inpoints, err := b.spentOutpointsFromStore(ctx, &txHash, txMeta, "validateUnminedTxInputs")
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) {
+			// The record went away between the two reads: nothing to mine, and
+			// that is a decision rather than a failure to make one.
+			return false, false, nil
 		}
 
-		// Read the parent once for all the outputs this tx spends from it.
+		// A record with neither stored inpoints nor a body is marked permanent where
+		// spentOutpoints finds it. Anything else here is the body read failing, which is
+		// the store not answering this time, and a retry can decide it.
+		return false, false, err
+	}
+
+	// Read each parent once for all the outputs this transaction spends from it, keeping the
+	// order the parents first appear in.
+	type parentVouts struct {
+		hash  chainhash.Hash
+		vouts []uint32
+	}
+
+	parents := make([]parentVouts, 0, len(inpoints))
+	parentIdx := make(map[chainhash.Hash]int, len(inpoints))
+
+	for _, inpoint := range inpoints {
+		idx, seen := parentIdx[inpoint.Hash]
+		if !seen {
+			idx = len(parents)
+			parentIdx[inpoint.Hash] = idx
+			parents = append(parents, parentVouts{hash: inpoint.Hash})
+		}
+
+		parents[idx].vouts = append(parents[idx].vouts, inpoint.Index)
+	}
+
+	for i := range parents {
+		parentHash := &parents[i].hash
+
 		parentMeta, err := b.utxoStore.Get(ctx, parentHash, fields.Utxos)
-		if err != nil || parentMeta == nil {
-			// Log the offending tx and parent so CheckBlockAssemblyValidateInputs is
-			// diagnosable: a pruned parent of a live unmined tx (issue 1768) surfaces here.
-			b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d parent could not be loaded (err=%v, meta nil=%t) — counting as invalid",
-				txHash.String(), parentHash.String(), vouts[0], err, parentMeta == nil)
+		if err != nil {
+			if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+				// The parent is gone. That is the one classified outcome here: an
+				// input whose parent no longer exists cannot be validly spent, so
+				// this is a decision about the transaction. Logged so a pruned
+				// parent of a live unmined transaction (issue 1768) is diagnosable.
+				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d parent could not be loaded (%v) — counting as invalid",
+					txHash.String(), parentHash.String(), parents[i].vouts[0], err)
 
-			return false, false
+				return false, false, nil
+			}
+
+			// Anything else is the store failing to answer. Reporting that as
+			// "invalid" is the same conflation the inpoint resolution above stopped
+			// making, one loop iteration later.
+			return false, false, errors.NewProcessingError("[validateUnminedTxInputs][%s] failed to load parent %s", txHash.String(), parentHash.String(), err)
+		}
+
+		if parentMeta == nil {
+			return false, false, errors.NewProcessingError("[validateUnminedTxInputs][%s] store returned no record and no error for parent %s", txHash.String(), parentHash.String())
 		}
 
 		// The vout of the first output this tx spends, or -1 when it spends none of them.
 		spentVout := -1
 
-		for _, outputIndex := range vouts {
+		for _, outputIndex := range parents[i].vouts {
 			vout := int(outputIndex)
 			if parentMeta.SpendingDatas == nil || vout >= len(parentMeta.SpendingDatas) {
 				continue
@@ -4232,7 +4645,7 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d is spent by different tx %s — marking conflicting",
 					txHash.String(), parentHash.String(), vout, spendingData.TxID.String())
 
-				return false, true
+				return false, true, nil
 			}
 
 			if spentVout < 0 {
@@ -4246,38 +4659,96 @@ func (b *BlockAssembler) checkUnminedTxInputs(ctx context.Context, txHash chainh
 
 		// Case 2: spending data matches, but check if the counter-conflicting tx
 		// (the one this tx replaced via ProcessConflicting) is on the current chain.
-		// This catches the scenario where ProcessConflicting incorrectly flipped a
-		// confirmed transaction to "loser" status. The answer is the same for every
-		// output of the parent, so it is checked once per parent.
-		counterTxMeta, err := b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren)
-		if err != nil || counterTxMeta == nil {
+		// The answer is the same for every output of the parent, so it is checked once.
+		counterConfirmed, err := b.counterConflictConfirmed(ctx, txHash, parentHash, spentVout, bestBlockIDsMap)
+		if err != nil {
+			return false, false, err
+		}
+
+		if counterConfirmed {
+			return false, true, nil
+		}
+	}
+
+	return true, false, nil
+}
+
+// counterConflictConfirmed reports whether a transaction that contests the
+// same parent as txHash (the one txHash replaced via ProcessConflicting) is
+// confirmed on the current chain. This catches the scenario where
+// ProcessConflicting incorrectly flipped a confirmed transaction to "loser"
+// status. It only reads the store, and a store failure is returned rather than
+// read as "not confirmed".
+func (b *BlockAssembler) counterConflictConfirmed(ctx context.Context, txHash chainhash.Hash, parentHash *chainhash.Hash, vout int, bestBlockIDsMap map[uint32]bool) (bool, error) {
+	counterTxMeta, err := b.utxoStore.Get(ctx, parentHash, fields.ConflictingChildren)
+	if err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+			// No parent record, so no contest recorded against it.
+			return false, nil
+		}
+
+		// Skipping on a store failure fails OPEN: this check is what drops a
+		// transaction whose counter-conflict is confirmed on chain, so a
+		// transient error would let exactly that transaction into the
+		// candidate. Fail closed by reporting it instead.
+		return false, errors.NewProcessingError("[validateUnminedTxInputs][%s] failed to load the contest on parent %s", txHash.String(), parentHash.String(), err)
+	}
+
+	if counterTxMeta == nil {
+		return false, nil
+	}
+
+	for _, counterChild := range counterTxMeta.ConflictingChildren {
+		if counterChild.IsEqual(&txHash) {
 			continue
 		}
 
-		for _, counterChild := range counterTxMeta.ConflictingChildren {
-			if counterChild.IsEqual(&txHash) {
+		counterMeta, err := b.utxoStore.Get(ctx, &counterChild, fields.BlockIDs)
+		if err != nil {
+			if errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound) {
+				// The counter's own record is gone, so it is on no block.
 				continue
 			}
 
-			counterMeta, err := b.utxoStore.Get(ctx, &counterChild, fields.BlockIDs)
-			if err != nil || counterMeta == nil {
-				continue
-			}
+			// Same fail-open hazard as the read above: this is the lookup that
+			// decides whether the counter is confirmed on the current chain.
+			return false, errors.NewProcessingError("[validateUnminedTxInputs][%s] failed to load counter-conflicting tx %s", txHash.String(), counterChild.String(), err)
+		}
 
-			for _, blockID := range counterMeta.BlockIDs {
-				if bestBlockIDsMap[blockID] {
-					b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d has counter-conflicting tx %s confirmed on chain (blockID %d) — marking conflicting",
-						txHash.String(), parentHash.String(), spentVout, counterChild.String(), blockID)
+		if counterMeta == nil {
+			continue
+		}
 
-					return false, true
-				}
+		for _, blockID := range counterMeta.BlockIDs {
+			if bestBlockIDsMap[blockID] {
+				b.logger.Warnf("[validateUnminedTxInputs][%s] input %s:%d has counter-conflicting tx %s confirmed on chain (blockID %d) — marking conflicting",
+					txHash.String(), parentHash.String(), vout, counterChild.String(), blockID)
+
+				return true, nil
 			}
 		}
 	}
-	return true, false
+
+	return false, nil
 }
 
 func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash.Hash) {
+	cascadedHashes := b.markConflictingCascade(ctx, txHash)
+
+	// Stash cascade hashes for the post-load DrainQueue call. Safe because
+	// loadUnminedTransactions is serialised by unminedTransactionsLoading, and
+	// its own marks are stashed by applyDeferredConflictMarks from one goroutine.
+	if b.unminedDropHashes != nil {
+		for _, h := range cascadedHashes {
+			b.unminedDropHashes[h] = struct{}{}
+		}
+	}
+}
+
+// markConflictingCascade is markAsConflicting without the drop-filter stash, so
+// it is safe to call from several goroutines at once. It returns every hash it
+// marked, txHash first, or nil when the store write failed.
+func (b *BlockAssembler) markConflictingCascade(ctx context.Context, txHash chainhash.Hash) []chainhash.Hash {
 	_, cascadedHashes, err := utxo.MarkConflictingRecursively(ctx, b.utxoStore, []chainhash.Hash{txHash})
 
 	// a failed cascade may still have flipped some of them
@@ -4285,15 +4756,7 @@ func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash
 
 	if err != nil {
 		b.logger.Errorf("[validateUnminedTxInputs][%s] failed to mark as conflicting: %v", txHash.String(), err)
-		return
-	}
-
-	// Stash cascade hashes for the post-load DrainQueue call. Safe because
-	// loadUnminedTransactions is serialised by unminedTransactionsLoading.
-	if b.unminedDropHashes != nil {
-		for _, h := range cascadedHashes {
-			b.unminedDropHashes[h] = struct{}{}
-		}
+		return nil
 	}
 
 	for _, h := range cascadedHashes {
@@ -4301,6 +4764,81 @@ func (b *BlockAssembler) markAsConflicting(ctx context.Context, txHash chainhash
 			b.logger.Warnf("[validateUnminedTxInputs][%s] failed to evict cascaded tx from subtree processor: %v", h.String(), removeErr)
 		}
 	}
+
+	return cascadedHashes
+}
+
+// applyDeferredConflictMarks writes the conflicting marks input validation
+// collected during an unmined load and returns every hash those marks covered:
+// the roots and their spending descendants. What was marked is also added to
+// b.unminedDropHashes for the post-load queue drain.
+//
+// It runs after the unmined iterator is closed, so no mark is written while
+// the SQL store's read cursor is open. The cost of deferring is that the
+// workers no longer see a mark an earlier transaction's cascade would have
+// written: a descendant of a conflicting transaction can read as not
+// conflicting and pass validation. The caller closes that gap by dropping
+// every returned hash from what it loads, and from what it unlocks. That is
+// tighter than marking inline ever was, since there whether a descendant was
+// dropped depended on which worker reached it first.
+//
+// The marks are written by up to `workers` goroutines, the same concurrency
+// the load's workers wrote them with before: each one waits on the store's
+// read batchers, so writing them one at a time made a large conflicting set
+// several times slower to clear. Two roots that share descendants mark them
+// twice, which is idempotent. A root whose mark fails is logged by
+// markConflictingCascade and stays out of the load, as it did when it was
+// marked inline.
+func (b *BlockAssembler) applyDeferredConflictMarks(ctx context.Context, roots []chainhash.Hash, workers int) map[chainhash.Hash]struct{} {
+	if len(roots) == 0 {
+		return nil
+	}
+
+	cascades := make([][]chainhash.Hash, len(roots))
+	next := atomic.Int64{}
+
+	var wg sync.WaitGroup
+
+	for w := 0; w < min(workers, len(roots)); w++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for {
+				idx := int(next.Add(1) - 1)
+				if idx >= len(roots) {
+					return
+				}
+
+				// Scales with the conflicting set and runs inside reset's
+				// post-process step, so it beats like the feed loop does
+				// (issue 1447).
+				b.heartbeat.BeatIfStarted()
+
+				cascades[idx] = b.markConflictingCascade(ctx, roots[idx])
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	marked := make(map[chainhash.Hash]struct{}, len(roots))
+
+	for idx, root := range roots {
+		marked[root] = struct{}{}
+
+		// Only what was actually marked goes to the queue drain, as before.
+		for _, h := range cascades[idx] {
+			marked[h] = struct{}{}
+
+			if b.unminedDropHashes != nil {
+				b.unminedDropHashes[h] = struct{}{}
+			}
+		}
+	}
+
+	return marked
 }
 
 // CheckInputValidation iterates all unmined transactions and checks whether their inputs
@@ -4352,7 +4890,12 @@ func (b *BlockAssembler) CheckInputValidation(ctx context.Context) (int, error) 
 			if alreadyMined {
 				continue
 			}
-			if !b.validateUnminedTxInputs(ctx, tx.Hash, bestBlockHeaderIDsMap, true) {
+			valid, validateErr := b.validateUnminedTxInputs(ctx, tx.Hash, bestBlockHeaderIDsMap, true)
+			if validateErr != nil {
+				b.logger.Errorf("[BlockAssembler][%s] could not validate inputs during the dry run: %v", tx.Hash.String(), validateErr)
+			}
+
+			if !valid {
 				invalidCount++
 			}
 		}
