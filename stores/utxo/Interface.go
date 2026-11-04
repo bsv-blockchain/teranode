@@ -235,6 +235,9 @@ type IgnoreFlags struct {
 	// ONLY by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
 	// whose records the first wave created before any of those spends, so the record proves
 	// nothing. Its first-wave combined calls spend before they create and leave it unset.
+	// The fresh create-first spend sets it too: the record it would find is its own tentative
+	// one, so it proves nothing. A create-first roll-forward re-spend leaves it unset: that
+	// record exists by design, and a parent is pruned only once every output is spent.
 	RequireParentOutputs bool
 }
 
@@ -256,7 +259,7 @@ type BlockIDsRemoval struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating}
+	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating, fields.RollingBack}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
 	MetaFieldsWithTx = append(MetaFields, fields.Tx)
 )
@@ -666,11 +669,13 @@ type Store interface {
 	// Delete.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
 
-	// DeleteCompleteIfCreating is DeleteComplete restricted to a record that still carries
-	// the tentative creating state. It reports whether it deleted: false means the record
-	// was already finalized or is absent, and nothing was removed. Used by the create-first
-	// rollback so it cannot delete a record a concurrent roll-forward has finalized.
-	DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error)
+	// BeginCreateFirstRollback marks a record that is still creating as rolling back, so no
+	// concurrent roll-forward can finalize it. It reports true when the record is rolling back
+	// after the call, whether this call set the marker or an earlier rollback of the same
+	// transaction did; false when the record is absent or already finalized, and nothing was
+	// written. A store with no tentative state reports false. Used by the create-first
+	// rollback, which then reverses its spends and calls DeleteComplete.
+	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error)
 
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
@@ -687,6 +692,11 @@ type Store interface {
 	//     ErrTxExists, successful spends are rolled back before returning.
 	//   - ErrTxExists from the create phase is returned to the caller WITH the
 	//     spends left in place; the caller decides what to do with the existing tx.
+	//     The create-first path differs: when the existing record is still creating,
+	//     the call rolls it forward itself (re-spend, finalize) under the caller's
+	//     ignore flags and returns an error for which IsRolledForward is true, with the
+	//     spends. When it cannot complete the record it returns that failure instead,
+	//     and a rolling-back record is an error that is not ErrTxExists.
 	//   - WithCreateOnly(): skip the spend phase (coinbase, seeding, batch flows
 	//     whose inputs are spent elsewhere). Returned []*Spend is nil.
 	//   - WithSpendOnly(): skip the create phase (reorg/conflict helpers, batch

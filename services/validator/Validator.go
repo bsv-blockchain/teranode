@@ -1151,6 +1151,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// create phase: the tx already exists in the store
 			v.logger.Debugf("[Validate][%s] tx already exists in store, not sending to block assembly: %v", txID, err)
 
+			rolledForward = utxo.IsRolledForward(err)
+			existsErr := err
+
 			txMetaData = &meta.Data{}
 			if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
 				return nil, errors.NewProcessingError("[Validate][%s] failed to get tx meta data from store", txID, err)
@@ -1160,26 +1163,25 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// prior attempt (a TX_LOCKED retry, a crash, or a spend failure) can leave the
 			// record in the tentative "creating" state with its inputs NOT yet spent. Returning
 			// it as validated here would let a block be accepted whose parent outputs are still
-			// unspent — the mirror image of #1214. Roll the record forward before trusting it,
-			// and FAIL CLOSED if the roll-forward cannot complete every input spend.
+			// unspent — the mirror image of #1214.
 			//
-			// The roll-forward re-spend carries the caller's own ignore flags, exactly like the
-			// original spend (spendIgnoreOptions): a mempool caller that leaves IgnoreLocked
-			// false must still wait out a parent's two-phase commit rather than bulldoze its
-			// lock, and a block-context caller keeps its outpoint-only fast path.
+			// The store rolls such a record forward inside SpendAndCreate, under this call's own
+			// ignore flags (spendIgnoreOptions), and marks the ErrTxExists it returns as rolled
+			// forward. A mempool caller that leaves IgnoreLocked false therefore still waits out a
+			// parent's two-phase commit, and a block-context caller keeps its outpoint-only fast
+			// path. A record still creating without that mark was not completed by the store, so
+			// FAIL CLOSED rather than trust it.
 			//
 			// A rolled-forward record is NOT returned early: it falls through to the normal
 			// post-create flow so the block-assembly hand-off and the unlock after it run
-			// exactly as for a fresh create. RollForwardCreating leaves the record Locked.
-			if txMetaData.Creating {
-				rolledForwardSpends, rfErr := utxo.RollForwardCreating(decoupledCtx, v.utxoStore, tx, blockHeight, spendIgnoreOptions(validationOptions)...)
-				if rfErr != nil {
-					return nil, errors.NewProcessingError("[Validate][%s] tx exists in creating state and roll-forward re-spend did not complete; not treating as validated", txID, rfErr)
-				}
+			// exactly as for a fresh create. The roll-forward leaves the record Locked. This
+			// attempt did not create it, so a shed hand-off must not unwind it (see below).
+			if txMetaData.Creating && !rolledForward {
+				return nil, errors.NewProcessingError("[Validate][%s] tx exists in creating state and the store did not roll it forward; not treating as validated", txID, existsErr)
+			}
 
-				spentUtxos = rolledForwardSpends
+			if rolledForward {
 				txMetaData.Creating = false
-				rolledForward = true
 
 				// the ErrTxExists is consumed here, so the tail guard and the deferred unlock do not depend on GetMeta having reset err
 				err = nil
@@ -1625,7 +1627,17 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// master was already gone leaves nothing to reload — the inputs are
 					// then unspent unless that unspend itself fails, and only unreachable
 					// residue can survive, counted by shed_unwind_residue_total.
-					_ = v.unwindShed(decoupledCtx, tx, txID, spentUtxos, !validationOptions.SkipUtxoCreation)
+					//
+					// A record this attempt only rolled forward (the store found it creating
+					// and completed it) is not this call's work: another attempt created it
+					// and may be handing it off. It is left finalized and locked for the
+					// unmined reload instead.
+					if rolledForward {
+						prometheusValidatorShedRolledForwardKept.Inc()
+						v.logger.Warnf("[Validate][%s] block-assembly queue full on a rolled-forward record; left finalized and locked for the unmined reload because this attempt did not create it", txID)
+					} else {
+						_ = v.unwindShed(decoupledCtx, tx, txID, spentUtxos, !validationOptions.SkipUtxoCreation)
+					}
 
 					// On the ingest path the submitter was already told the transaction was
 					// accepted (propagation returns success before the validator sees it),
@@ -2881,9 +2893,11 @@ func (v *Validator) handoffFloor() time.Duration {
 // # Preconditions, each naming the code that enforces it
 //
 //   - Only this call's own work is ever undone: on the created-record shape the
-//     already-exists branch returns before the hand-off, so an existing record
-//     from another submitter is unreachable from here; on the spend-only shape
-//     the record gate immediately before the unspend is what enforces it.
+//     already-exists branch returns before the hand-off, except for a record the
+//     store rolled forward (utxo.IsRolledForward), which another attempt created and
+//     which the shed branch in Validate leaves finalized and locked instead of calling
+//     this function; on the spend-only shape the record gate immediately before the
+//     unspend is what enforces it.
 //
 //     Read that in one direction only. It means this call never undoes another
 //     submitter's STORE WORK. The converse is NOT claimed: a concurrent duplicate

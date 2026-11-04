@@ -3835,6 +3835,15 @@ func TestSQLStore_CreateFirstNoOps(t *testing.T) {
 	require.False(t, store.SupportsCreateFirst())
 	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}))
 
+	// Every record is final, so the rollback marker reports false and deletes nothing.
+	_, err = store.Create(ctx, tests.Tx, 100)
+	require.NoError(t, err)
+
+	began, err := store.BeginCreateFirstRollback(ctx, tests.Tx.TxIDChainHash())
+	require.NoError(t, err)
+	require.False(t, began)
+	require.NoError(t, store.GetMeta(ctx, tests.Tx.TxIDChainHash(), &meta.Data{}), "a final record must survive")
+
 	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
 	require.NoError(t, err)
 	require.Nil(t, hashes)

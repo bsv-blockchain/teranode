@@ -58,8 +58,34 @@ func IsCreateOutcomeUnknown(err error) bool {
 		return true
 	}
 
+	return hasErrorData(err, createOutcomeUnknownKey)
+}
+
+// rolledForwardKey is the error-data key MarkRolledForward sets.
+const rolledForwardKey = "rolledForward"
+
+// MarkRolledForward marks err as the ErrTxExists a create-first SpendAndCreate returns after
+// it found a record still creating and rolled it forward itself (re-spend, finalize). The
+// record is then final and its spends are in effect, so the caller hands the transaction on
+// without spending again. It returns err.
+func MarkRolledForward(err *errors.Error) *errors.Error {
+	if err != nil {
+		err.SetData(rolledForwardKey, true)
+	}
+
+	return err
+}
+
+// IsRolledForward reports whether an error carries the MarkRolledForward marker anywhere in
+// its chain. It walks Unwrap because callers wrap the error before they test it.
+func IsRolledForward(err error) bool {
+	return hasErrorData(err, rolledForwardKey)
+}
+
+// hasErrorData reports whether any *errors.Error in the Unwrap chain of err carries key set to true.
+func hasErrorData(err error, key string) bool {
 	for cur := err; cur != nil; {
-		if te, ok := cur.(*errors.Error); ok && te.GetData(createOutcomeUnknownKey) == true {
+		if te, ok := cur.(*errors.Error); ok && te.GetData(key) == true {
 			return true
 		}
 
@@ -117,10 +143,12 @@ type SequentialStore interface {
 	// DeleteComplete removes a record entirely; used by the create-first path to drop the
 	// tentative record when its spends fail.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
-	// DeleteCompleteIfCreating removes the record as DeleteComplete does, but only while it
-	// is still tentative. It reports whether it deleted: false means the record was already
-	// finalized or is absent, and nothing was removed.
-	DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error)
+	// BeginCreateFirstRollback marks a still-creating record as rolling back, so no concurrent
+	// roll-forward can finalize it; see Store.BeginCreateFirstRollback.
+	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error)
+	// GetMeta reads the record's flags; used to tell a creating, rolling-back or final
+	// record apart when Create reports ErrTxExists.
+	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 }
 
 // SequentialSpendAndCreate implements the Store.SpendAndCreate contract as the
@@ -213,7 +241,7 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 
 // rollbackContext returns a context that ignores ctx's cancellation and deadline
 // and carries the rollback's own bound instead.
-func rollbackContext(ctx context.Context, s SequentialStore) (context.Context, context.CancelFunc) {
+func rollbackContext(ctx context.Context, s any) (context.Context, context.CancelFunc) {
 	bound := defaultSequentialRollbackTimeout
 
 	if b, ok := s.(spendRollbackBounded); ok && b.SpendRollbackTimeout() > 0 {
@@ -224,7 +252,7 @@ func rollbackContext(ctx context.Context, s SequentialStore) (context.Context, c
 }
 
 // unspendDetached runs unspendWithRetry under rollbackContext.
-func unspendDetached(ctx context.Context, logger ulogger.Logger, s SequentialStore, spends []*Spend) error {
+func unspendDetached(ctx context.Context, logger ulogger.Logger, s SpendReverser, spends []*Spend) error {
 	rbCtx, cancel := rollbackContext(ctx, s)
 	defer cancel()
 
@@ -239,35 +267,20 @@ func finalizeDetached(ctx context.Context, logger ulogger.Logger, s SequentialSt
 	return finalizeWithRetry(fCtx, logger, s, tx)
 }
 
-// rollbackFailedCreateFirst undoes a create-first whose spend failed. It deletes the
-// tentative record only while it is still creating, then reverses the spends that
-// succeeded, both under one detached context. The delete-then-unspend order stops a
-// rollback from undoing a finalized record; a concurrent roll-forward that is still
-// mid-spend is not serialized against this rollback. When the record was already
-// finalized it does nothing further, because the finalizer relies on those spends. When
-// the delete fails without removing the master, the record stays creating as the recovery journal for the sweep and
-// the spends are left in place; the sweep re-spends idempotently and converges. When the
-// reversal fails after the delete, the error is returned and the inputs stay spent. A nil
-// return covers the finalized case, the delete error case and the successful rollback.
-func rollbackFailedCreateFirst(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx, spends []*Spend) error {
-	rbCtx, cancel := rollbackContext(ctx, s)
-	defer cancel()
+// SpendReverser is the store subset that reverses spends.
+type SpendReverser interface {
+	Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error
+}
 
-	deleted, err := s.DeleteCompleteIfCreating(rbCtx, tx.TxIDChainHash())
-	if !deleted {
-		if err != nil {
-			logger.Errorf("SpendAndCreate create-first: deleting the tentative record failed for %s, tx left creating for recovery: %v", tx.TxIDChainHash().String(), err)
-		} else {
-			logger.Warnf("SpendAndCreate create-first: tentative record for %s was finalized by a concurrent roll-forward, spends left in place", tx.TxIDChainHash().String())
-		}
+// CreatingRollBacker is the store subset RollBackCreating needs.
+type CreatingRollBacker interface {
+	SpendReverser
+	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error)
+	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
+}
 
-		return nil
-	}
-
-	if err != nil {
-		logger.Errorf("SpendAndCreate create-first: tentative record for %s deleted but its child records or blobs were not fully removed: %v", tx.TxIDChainHash().String(), err)
-	}
-
+// succeededSpends returns the spends that carry no per-input error.
+func succeededSpends(spends []*Spend) []*Spend {
 	var succeeded []*Spend
 
 	for _, sp := range spends {
@@ -276,12 +289,63 @@ func rollbackFailedCreateFirst(ctx context.Context, logger ulogger.Logger, s Seq
 		}
 	}
 
-	if len(succeeded) > 0 {
+	return succeeded
+}
+
+// RollBackCreating undoes a create-first transition whose spend failed: it marks the record
+// rolling back, reverses the spends that succeeded, then deletes the record. It runs under
+// one detached context bounded like the spend-first rollback (SpendRollbackTimeout).
+//
+// The marker is what makes the order safe. While the record carries it, no roll-forward
+// can finalize the record, so the rollback owner is the only writer of its final outcome.
+// The store's own partial-spend rollback cannot do this work, because it probes for the
+// spender record and the tentative record makes that probe succeed.
+//
+//   - The marker call fails: the record is left creating and nothing is reversed. The error
+//     is returned, and the sweep re-spends the record and either finalizes or rolls it back.
+//   - The record is absent or already final: a concurrent roll-forward finalized it and
+//     relies on the spends, so nothing is reversed. The return is nil.
+//   - The reversal fails: the record is left rolling back and the error is returned. Nobody
+//     can finalize it, and the sweep finishes the rollback.
+//   - The delete fails: same, the record is left rolling back for the sweep.
+//
+// Residual: an unspend cannot tell two attempts of the same txid apart, because
+// SpendingData is the txid and the input index. The marker stops a finalize while a rollback
+// runs, and the sweep finishes an abandoned rollback only after CreatingTxSweepMinAgeBlocks,
+// which must outlast utxostore_spendRollbackTimeout in wall-clock time. A rollback owner
+// that stalls past that bound and resumes after a fresh create of the same txid can still
+// clear that create's spends. That is the attempt-identity gap tracked in issue 1291.
+func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, tx *bt.Tx, spends []*Spend) error {
+	rbCtx, cancel := rollbackContext(ctx, s)
+	defer cancel()
+
+	hash := tx.TxIDChainHash()
+
+	began, err := s.BeginCreateFirstRollback(rbCtx, hash)
+	if err != nil {
+		logger.Errorf("SpendAndCreate create-first: marking %s as rolling back failed, tx left creating for recovery: %v", hash.String(), err)
+
+		return err
+	}
+
+	if !began {
+		logger.Warnf("SpendAndCreate create-first: tentative record for %s was finalized by a concurrent roll-forward, spends left in place", hash.String())
+
+		return nil
+	}
+
+	if succeeded := succeededSpends(spends); len(succeeded) > 0 {
 		if err := unspendWithRetry(rbCtx, logger, s, succeeded); err != nil {
-			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s after the tentative record was deleted: %v", tx.TxIDChainHash().String(), err)
+			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
 
 			return err
 		}
+	}
+
+	if err := s.DeleteComplete(rbCtx, hash); err != nil {
+		logger.Errorf("SpendAndCreate create-first: deleting the rolled back record failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
+
+		return err
 	}
 
 	return nil
@@ -295,25 +359,28 @@ func rollbackFailedCreateFirst(ctx context.Context, logger ulogger.Logger, s Seq
 // mechanism related to #1214); it does not by itself satisfy #1214's delete-path audit.
 //
 // Failure handling:
-//   - Create returns ErrTxExists (a prior attempt already created the record): return it
-//     unchanged; the caller treats it as a duplicate and the pruner sweeper rolls a
-//     still-creating record forward (re-spend + finalize).
-//   - Spend fails after the tentative create: the tentative record is deleted only while it
-//     is still creating, then the spends that succeeded are reversed, both under a detached
-//     context bounded like the spend-first rollback. The store's own partial-spend rollback cannot do this, because
-//     it probes for the spender record and the tentative record makes that probe succeed.
-//     Without the rollback a partially spent tx would leave its free inputs naming a record
-//     that is later pruned (the #1214 shape), and every rejected double-spend would leave a
-//     durable record. The per-input spends and the error are returned, with nil meta, so
-//     the caller can classify them. If the record was already finalized by a concurrent
-//     roll-forward, nothing is reversed, because that finalizer relies on the spends. If the
-//     delete fails without removing the master, nothing is reversed: the record stays creating as the recovery journal
-//     and the sweep re-spends idempotently and finalizes. If the delete succeeds and the
-//     reversal then fails, the inputs that were spent stay spent and name a deleted record,
-//     and the returned error wraps both failures. If the spend fails with
-//     a context error, the spend batch may still commit after the caller returned, so
-//     nothing is reversed or deleted: the creating record stays as the recovery journal and
-//     the sweep re-spends idempotently and finalizes.
+//   - Create returns ErrTxExists: the record is read back. A final record is an ordinary
+//     duplicate and ErrTxExists is returned unchanged. A rolling-back record is a transient
+//     ProcessingError, because its owner deletes it within the rollback bound or the sweep
+//     does. A still-creating record is rolled forward here, by the rule RollForwardCreating
+//     defines, under the caller's ignore flags and without RequireParentOutputs: that
+//     record exists by design, and a parent is pruned only once every output is spent. On
+//     success the call returns the spends and ErrTxExists marked with MarkRolledForward.
+//     On failure it returns the roll-forward's error and its spends, and the record is
+//     left for the sweep.
+//   - The first spend sets RequireParentOutputs. The record it would otherwise find is this
+//     call's own tentative one, which proves nothing about a missing parent.
+//   - Spend fails with no per-input result, with a context error or with ErrServiceUnavailable:
+//     the spend batch may still commit after the caller returned, so nothing is reversed or
+//     deleted. The creating record stays as the recovery journal and the sweep re-spends
+//     idempotently.
+//   - Spend fails otherwise: RollBackCreating marks the record rolling back, reverses the
+//     spends that succeeded and deletes the record, under a detached context bounded like the
+//     spend-first rollback. Without the rollback a partially spent tx would leave its free
+//     inputs naming a record that is later pruned (the #1214 shape), and every rejected
+//     double-spend would leave a durable record. The per-input spends and the error are
+//     returned, with nil meta, so the caller can classify them. If the rollback fails, the
+//     returned error wraps both failures.
 //   - FinalizeTransaction fails after successful spends: it is retried up to 3 times with
 //     exponential backoff under a detached context. If every attempt fails, return an
 //     error. The inputs are durably spent but the tentative flag could not be cleared, so
@@ -327,19 +394,46 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 	// suspenders alongside the caller-supplied WithCreating rejection in SequentialSpendAndCreate).
 	createOpts := append(append([]CreateOption{}, opts...), WithCreating(true))
 
+	hash := tx.TxIDChainHash()
+
 	md, err := s.Create(ctx, tx, blockHeight, createOpts...)
 	if err != nil {
-		// ErrTxExists or any create error: nothing has been spent yet, nothing to roll back.
-		return nil, nil, err
+		if !errors.Is(err, errors.ErrTxExists) {
+			return nil, nil, err
+		}
+
+		existing := &meta.Data{}
+		if getErr := s.GetMeta(ctx, hash, existing); getErr != nil {
+			return nil, nil, errors.NewProcessingError("SpendAndCreate create-first: tx %s exists but its state could not be read", hash.String(), getErr)
+		}
+
+		switch {
+		case !existing.Creating:
+			return nil, nil, err
+		case existing.RollingBack:
+			return nil, nil, errors.NewProcessingError("SpendAndCreate create-first: tx %s is rolling back; retry after it completes", hash.String())
+		}
+
+		spends, rfErr := rollForwardCreating(ctx, logger, s, tx, func() ([]*Spend, error) {
+			return s.Spend(ctx, tx, blockHeight, ignoreFlags)
+		})
+		if rfErr != nil {
+			return nil, spends, rfErr
+		}
+
+		return nil, spends, MarkRolledForward(errors.NewTxExistsError("SpendAndCreate create-first: tx %s was creating and has been rolled forward", hash.String()))
 	}
 
-	spends, err := s.Spend(ctx, tx, blockHeight, ignoreFlags)
+	freshFlags := ignoreFlags
+	freshFlags.RequireParentOutputs = true
+
+	spends, err := s.Spend(ctx, tx, blockHeight, freshFlags)
 	if err != nil {
-		if errors.IsContextError(err) {
+		if spends == nil || errors.IsContextError(err) || errors.Is(err, errors.ErrServiceUnavailable) {
 			return nil, spends, err
 		}
 
-		if rollbackErr := rollbackFailedCreateFirst(ctx, logger, s, tx, spends); rollbackErr != nil {
+		if rollbackErr := RollBackCreating(ctx, logger, s, tx, spends); rollbackErr != nil {
 			return nil, spends, errors.NewProcessingError("SpendAndCreate: error reversing utxo spends: %v", rollbackErr, err)
 		}
 
@@ -347,10 +441,10 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 	}
 
 	if finErr := finalizeDetached(ctx, logger, s, tx); finErr != nil {
-		logger.Errorf("SpendAndCreate create-first: FinalizeTransaction failed for %s, tx left creating for recovery: %v", tx.TxIDChainHash().String(), finErr)
+		logger.Errorf("SpendAndCreate create-first: FinalizeTransaction failed for %s, tx left creating for recovery: %v", hash.String(), finErr)
 		prometheusCreateFirstFinalizeFailed.Inc()
 
-		return md, spends, errors.NewProcessingError("SpendAndCreate create-first: finalize failed for %s, tx left creating for recovery", tx.TxIDChainHash().String(), finErr)
+		return md, spends, errors.NewProcessingError("SpendAndCreate create-first: finalize failed for %s, tx left creating for recovery", hash.String(), finErr)
 	}
 
 	md.Creating = false
@@ -378,8 +472,10 @@ func AllInputsSpent(tx *bt.Tx, spends []*Spend) bool {
 }
 
 // CreatingRollForwarder is the store subset needed to roll a creating record forward:
-// re-run the spend-only phase and clear the tentative flag.
+// re-run the spend-only phase, clear the tentative flag, and reverse this call's spends
+// when the record turns out not to be completable.
 type CreatingRollForwarder interface {
+	SpendReverser
 	SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) (*meta.Data, []*Spend, error)
 	FinalizeTransaction(ctx context.Context, tx *bt.Tx) error
 }
@@ -391,17 +487,45 @@ type CreatingRollForwarder interface {
 // roll-forward for a completed one. It returns the spends so the caller can hand the tx
 // to block assembly. It does NOT unlock the record: the caller unlocks only after block
 // assembly holds the tx, the order loadUnminedTransactions enforces, so a child cannot
-// be mined ahead of a parent that is in no template. Shared by the ErrTxExists validator fast-path, the
-// setMined pre-flight, and the pruner sweeper so the "is this really spent?" rule has a
-// single definition.
+// be mined ahead of a parent that is in no template. Shared by the create-first
+// SpendAndCreate on ErrTxExists, the setMined pre-flight, and the pruner sweeper so the
+// "is this really spent?" rule has a single definition.
+//
+// The outcomes:
+//   - A spend error, or a spend that did not cover every input: the error is returned and the
+//     spends stay in place. The record is still creating and remains the recovery journal.
+//   - FinalizeTransaction fails with ErrTxNotFound: the record is gone or rolling back, so it
+//     will not be completed and the spends this call made are its own to remove. They are
+//     reversed best effort under a detached context bounded by the store's rollback bound,
+//     and the error is returned.
+//   - FinalizeTransaction fails otherwise: the error is returned and the spends stay in place,
+//     because the record is still creating.
 //
 // opts thread the caller's IgnoreFlags into the re-spend. A roll-forward is COMPLETING a
-// spend the node already committed to, so recovery callers should pass at least as
-// permissive a set as the original spend (e.g. WithIgnoreLocked) — otherwise a condition
-// the original spend was told to tolerate (a locked parent) turns a fail-closed roll-forward
-// into a hard stop, and the record never converges.
-func RollForwardCreating(ctx context.Context, s CreatingRollForwarder, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) ([]*Spend, error) {
-	_, spends, err := s.SpendAndCreate(ctx, tx, blockHeight, append([]CreateOption{WithSpendOnly()}, opts...)...)
+// spend the node already committed to, so recovery callers that are in block context may
+// pass at least as permissive a set as the original spend (e.g. WithIgnoreLocked). A caller
+// that is not in block context must not bypass the lock: a locked parent is the handoff
+// barrier, and the roll-forward then fails with ErrTxLocked, which is a retry. The re-spend
+// does not set RequireParentOutputs, because the record it finds exists by design and a
+// parent is pruned only once every output is spent.
+func RollForwardCreating(ctx context.Context, logger ulogger.Logger, s CreatingRollForwarder, tx *bt.Tx, blockHeight uint32, opts ...CreateOption) ([]*Spend, error) {
+	return rollForwardCreating(ctx, logger, s, tx, func() ([]*Spend, error) {
+		_, spends, err := s.SpendAndCreate(ctx, tx, blockHeight, append([]CreateOption{WithSpendOnly()}, opts...)...)
+
+		return spends, err
+	})
+}
+
+// creatingFinisher is the store subset the roll-forward rule needs after the re-spend.
+type creatingFinisher interface {
+	SpendReverser
+	FinalizeTransaction(ctx context.Context, tx *bt.Tx) error
+}
+
+// rollForwardCreating is the single definition of the roll-forward rule; spend is the
+// re-spend of the caller's store.
+func rollForwardCreating(ctx context.Context, logger ulogger.Logger, s creatingFinisher, tx *bt.Tx, spend func() ([]*Spend, error)) ([]*Spend, error) {
+	spends, err := spend()
 	if err != nil {
 		return spends, err
 	}
@@ -412,6 +536,15 @@ func RollForwardCreating(ctx context.Context, s CreatingRollForwarder, tx *bt.Tx
 	}
 
 	if err := s.FinalizeTransaction(ctx, tx); err != nil {
+		if errors.Is(err, errors.ErrTxNotFound) {
+			rbCtx, cancel := rollbackContext(ctx, s)
+			defer cancel()
+
+			if unspendErr := unspendWithRetry(rbCtx, logger, s, succeededSpends(spends)); unspendErr != nil {
+				logger.Errorf("RollForwardCreating: %s will not be completed and reversing its spends failed: %v", tx.TxIDChainHash().String(), unspendErr)
+			}
+		}
+
 		return spends, err
 	}
 
@@ -421,7 +554,7 @@ func RollForwardCreating(ctx context.Context, s CreatingRollForwarder, tx *bt.Tx
 // unspendWithRetry reverses spends with up to 3 attempts and exponential backoff,
 // ported from the validator's reverseSpends. The backoff aborts early when ctx
 // is cancelled.
-func unspendWithRetry(ctx context.Context, logger ulogger.Logger, s SequentialStore, spends []*Spend) error {
+func unspendWithRetry(ctx context.Context, logger ulogger.Logger, s SpendReverser, spends []*Spend) error {
 	for retries := uint(0); retries < 3; retries++ {
 		if errReset := s.Unspend(ctx, spends); errReset != nil {
 			if retries < 2 {

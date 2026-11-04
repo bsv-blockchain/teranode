@@ -66,7 +66,7 @@ func ClearParentRefs(ctx context.Context, s Store, txHash *chainhash.Hash) error
 		})
 	}
 
-	if err = unspendTolerantOfMissingParents(ctx, s, spends); err != nil {
+	if err = UnspendTolerantOfMissingParents(ctx, s, spends); err != nil {
 		return errors.NewStorageError("[ClearParentRefs][%s] failed to unspend parents", txHash.String(), err)
 	}
 
@@ -102,10 +102,10 @@ func ClearParentRefs(ctx context.Context, s Store, txHash *chainhash.Hash) error
 	return nil
 }
 
-// unspendTolerantOfMissingParents unspends the outputs, skipping any whose parent is gone. A store may
+// UnspendTolerantOfMissingParents unspends the outputs, skipping any whose parent is gone. A store may
 // run one Unspend call as one database transaction, so a missing parent would undo the unspends of the
 // surviving parents in the same call. On not found, it repeats one spend at a time.
-func unspendTolerantOfMissingParents(ctx context.Context, s Store, spends []*Spend) error {
+func UnspendTolerantOfMissingParents(ctx context.Context, s SpendReverser, spends []*Spend) error {
 	if len(spends) == 0 {
 		return nil
 	}

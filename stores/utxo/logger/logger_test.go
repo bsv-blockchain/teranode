@@ -168,7 +168,7 @@ func (m *MockStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 	return args.Error(0)
 }
 
-func (m *MockStore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (m *MockStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	args := m.Called(ctx, hash)
 	return args.Bool(0), args.Error(1)
 }
@@ -525,6 +525,23 @@ func TestSpendAndCreate(t *testing.T) {
 
 	assert.Equal(t, expectedData, data)
 	assert.Equal(t, expectedSpends, spends)
+	assert.Equal(t, expectedErr, err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestBeginCreateFirstRollback_Delegates(t *testing.T) {
+	mockStore := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, mockStore).(*Store)
+
+	ctx := context.Background()
+	hash := createTestTx(1).TxIDChainHash()
+	expectedErr := errors.NewError("begin error")
+
+	mockStore.On("BeginCreateFirstRollback", ctx, hash).Return(true, expectedErr)
+
+	began, err := store.BeginCreateFirstRollback(ctx, hash)
+
+	assert.True(t, began)
 	assert.Equal(t, expectedErr, err)
 	mockStore.AssertExpectations(t)
 }

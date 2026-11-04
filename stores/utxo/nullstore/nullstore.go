@@ -308,7 +308,8 @@ func (m *NullStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 	return nil
 }
 
-func (m *NullStore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+// BeginCreateFirstRollback reports false: the null store holds no records, so none is creating.
+func (m *NullStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	return false, nil
 }
 

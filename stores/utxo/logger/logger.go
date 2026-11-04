@@ -269,11 +269,11 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	return err
 }
 
-func (s *Store) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	deleted, err := s.store.DeleteCompleteIfCreating(ctx, hash)
-	s.logger.Debugf("[UTXOStore][logger][DeleteCompleteIfCreating] hash %s deleted %v err %v : %s", hash.String(), deleted, err, caller())
+func (s *Store) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	began, err := s.store.BeginCreateFirstRollback(ctx, hash)
+	s.logger.Debugf("[UTXOStore][logger][BeginCreateFirstRollback] hash %s began %v err %v : %s", hash.String(), began, err, caller())
 
-	return deleted, err
+	return began, err
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
