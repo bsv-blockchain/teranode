@@ -148,7 +148,10 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// (lag - CatchupMaxAccumulatedHeaders) — the same over-measurement this ceiling change
 	// exists to remove, reached by a different route. That needs a lag of 100k blocks by
 	// default, so the cap is kept for now rather than removed alongside the ceiling fix, but
-	// it is a correctness trade and not the free conservatism it looks like. Note it also sets
+	// it is a correctness trade and not the free conservatism it looks like. On the netted
+	// route the caveat does not apply: the window there counts from the locator height to the
+	// next checkpoint (model.NettedRouteCatchupWindow), so lag lengthens the window instead of
+	// truncating it. Note it also sets
 	// startHash/startHeight, which are reported on the catchup Result and not used in any
 	// decision.
 	if u.utxoStore != nil {
@@ -196,7 +199,11 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 
 	// iteration variables
 	iteration := 0
-	maxAccumulatedHeaders := u.settings.BlockValidation.CatchupMaxAccumulatedHeaders
+	// When the next block is on the netted route, the window ends at the next hardcoded checkpoint
+	// above the tip, counted from the height the locator starts at (model.NettedRouteCatchupWindow);
+	// elsewhere this is the setting.
+	maxAccumulatedHeaders := model.NettedRouteCatchupWindow(u.settings, u.utxoStore, bestBlockMeta.Height, locatorHeight)
+	windowEndsAtCheckpoint := model.NettedRouteAt(u.settings, u.utxoStore, bestBlockMeta.Height+1)
 	totalHeadersFetched := 0
 	reachedTarget := false
 	stopReason := ""
@@ -452,6 +459,9 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 					totalHeadersFetched += len(headersToAppend)
 				}
 				stopReason = fmt.Sprintf("Memory limit reached (%d headers)", maxAccumulatedHeaders)
+				if windowEndsAtCheckpoint {
+					stopReason = fmt.Sprintf("Reached the next checkpoint (%d headers)", maxAccumulatedHeaders)
+				}
 				break
 			}
 

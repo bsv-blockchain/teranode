@@ -27,6 +27,11 @@ type errStore struct {
 	setConflicting func([]chainhash.Hash, bool) ([]*Spend, []chainhash.Hash, error)
 	counter        func(chainhash.Hash) ([]chainhash.Hash, error)
 	release        func(chainhash.Hash, []chainhash.Hash) error
+	spendsMadeBy   func(chainhash.Hash) ([]*Spend, error)
+}
+
+func (s errStore) SpendsMadeBy(_ context.Context, h chainhash.Hash) ([]*Spend, error) {
+	return s.spendsMadeBy(h)
 }
 
 func (s errStore) Get(_ context.Context, h *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
@@ -118,7 +123,10 @@ func TestPrepareConflictRecovery_ReadFailures(t *testing.T) {
 	}{
 		{"tx read fails", errStore{get: func(*chainhash.Hash, ...fields.FieldName) (*meta.Data, error) { return nil, errInjected }}, "injected"},
 		{"tx missing", errStore{get: func(*chainhash.Hash, ...fields.FieldName) (*meta.Data, error) { return nil, nil }}, "cannot snapshot conflict transaction"},
-		{"tx body missing", errStore{get: func(*chainhash.Hash, ...fields.FieldName) (*meta.Data, error) { return &meta.Data{}, nil }}, "cannot snapshot conflict transaction"},
+		// With no body to read the spends from, the store is asked what the transaction took, and
+		// a store that cannot say fails the snapshot.
+		{"tx body missing", errStore{get: func(*chainhash.Hash, ...fields.FieldName) (*meta.Data, error) { return &meta.Data{}, nil },
+			spendsMadeBy: func(chainhash.Hash) ([]*Spend, error) { return nil, errInjected }}, "cannot snapshot conflict transaction"},
 		{"spend read fails", errStore{get: okMeta, getSpend: func(*Spend) (*SpendResponse, error) { return nil, errInjected }}, "injected"},
 		{"outpoint missing", errStore{get: okMeta, getSpend: func(*Spend) (*SpendResponse, error) { return &SpendResponse{Status: int(Status_NOT_FOUND)}, nil }}, "cannot snapshot conflict outpoint"},
 		{"parent read fails", errStore{get: func(h *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {

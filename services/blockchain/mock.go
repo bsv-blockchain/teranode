@@ -193,6 +193,17 @@ func (m *Mock) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *mod
 	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), args.Error(2)
 }
 
+// GetBestBlockHeaderUncached mocks the GetBestBlockHeaderUncached method
+func (m *Mock) GetBestBlockHeaderUncached(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	args := m.Called(ctx)
+
+	if args.Error(2) != nil {
+		return nil, nil, args.Error(2)
+	}
+
+	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), args.Error(2)
+}
+
 // GetBlockHeader mocks the GetBlockHeader method
 func (m *Mock) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, blockHash)
@@ -206,6 +217,17 @@ func (m *Mock) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*
 
 // GetBlockHeaders mocks the GetBlockHeaders method
 func (m *Mock) GetBlockHeaders(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
+	args := m.Called(ctx, blockHash, numberOfHeaders)
+
+	if args.Error(2) != nil {
+		return nil, nil, args.Error(2)
+	}
+
+	return args.Get(0).([]*model.BlockHeader), args.Get(1).([]*model.BlockHeaderMeta), args.Error(2)
+}
+
+// GetBlockHeadersByParentLinks mocks the GetBlockHeadersByParentLinks method
+func (m *Mock) GetBlockHeadersByParentLinks(ctx context.Context, blockHash *chainhash.Hash, numberOfHeaders uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	args := m.Called(ctx, blockHash, numberOfHeaders)
 
 	if args.Error(2) != nil {

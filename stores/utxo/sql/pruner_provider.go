@@ -26,6 +26,12 @@ func ResetPrunerServiceForTests() {
 	prunerServiceInstance = nil
 }
 
+// Stamper returns pruner.NoStamp: a SQL store writes each UTXO's block when it is mined, so it
+// has nothing to stamp.
+func (s *Store) Stamper() pruner.Stamper {
+	return pruner.NoStamp
+}
+
 // GetPrunerService returns a pruner service for the SQL store.
 // This implements the pruner.PrunerProvider interface.
 func (s *Store) GetPrunerService() (pruner.Service, error) {
