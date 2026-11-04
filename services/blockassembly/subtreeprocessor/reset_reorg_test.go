@@ -1381,9 +1381,15 @@ func buildReorgSubtree(t *testing.T, ctx context.Context, blobStore *blob_memory
 	require.NoError(t, err)
 	require.NoError(t, blobStore.Set(ctx, key[:], fileformat.FileTypeSubtree, stBytes))
 
+	// Node 0 is the coinbase placeholder, which has no parents. Every other node
+	// gets one, as every real transaction spends at least one input: the meta
+	// reader rejects a zero parent count anywhere else (issue 1638).
 	meta := subtree.NewSubtreeMeta(st)
-	for i := range st.Nodes {
-		require.NoError(t, meta.SetTxInpoints(i, subtree.NewTxInpoints()))
+	require.NoError(t, meta.SetTxInpoints(0, subtree.NewTxInpoints()))
+
+	for i := 1; i < len(st.Nodes); i++ {
+		parent := chainhash.HashH(st.Nodes[i].Hash[:])
+		require.NoError(t, meta.SetTxInpoints(i, subtree.NewTxInpointsFromPacked([]chainhash.Hash{parent}, []uint32{1, 0})))
 	}
 
 	metaBytes, err := meta.Serialize()

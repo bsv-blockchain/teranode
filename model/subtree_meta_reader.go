@@ -180,7 +180,46 @@ func NewSubtreeMetaFromValidatedReader(subtreeHash chainhash.Hash, subtree *subt
 		return nil, errors.NewProcessingError("failed to deserialize subtree meta for %s", subtreeHash.String(), err)
 	}
 
+	if err = validateSubtreeMetaHasParents(subtree, subtreeMeta, subtreeLength); err != nil {
+		return nil, errors.NewProcessingError("subtree meta for %s is corrupt", subtreeHash.String(), err)
+	}
+
 	return subtreeMeta, nil
+}
+
+// validateSubtreeMetaHasParents rejects a meta whose entry for an ordinary
+// transaction has no parents (issue 1638).
+//
+// Every real transaction spends at least one input, so it has at least one
+// parent; every producer fills a node's inpoints from its transaction's inputs.
+// A zero parent count is therefore legitimate only for the coinbase placeholder
+// at node 0. (Meta.Serialize does not enforce this: it refuses nil parents on
+// any node but the first, yet writes an empty non-nil list as a zero count.) Anywhere else it is a corrupted count that passes both
+// header checks, and block validation would read the nil parents as a
+// transaction missing from the meta and persist an invalid verdict on a valid
+// block. Failing the read sends the caller to meta regeneration instead.
+//
+// The placeholder is exempt by its position and hash, not by whether this is the
+// block's first subtree: the reader is not told which subtree it reads, and a
+// placeholder in a later subtree is rejected by block validation on its own.
+func validateSubtreeMetaHasParents(subtree *subtreepkg.Subtree, meta *subtreepkg.Meta, count uint32) error {
+	if uint64(count) > uint64(len(subtree.Nodes)) || uint64(count) > uint64(len(meta.TxInpoints)) {
+		return errors.NewProcessingError("subtree meta holds %d entries, subtree has %d nodes", count, len(subtree.Nodes))
+	}
+
+	for i := range int(count) {
+		if len(meta.TxInpoints[i].ParentTxHashes) > 0 {
+			continue
+		}
+
+		if i == 0 && subtree.Nodes[0].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		return errors.NewProcessingError("subtree meta entry %d for transaction %s has no parents", i, subtree.Nodes[i].Hash.String())
+	}
+
+	return nil
 }
 
 const (

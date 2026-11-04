@@ -428,3 +428,82 @@ func TestValidatedReaderBuffersSource(t *testing.T) {
 	// the header, the body and the EOF probe. Unbuffered this is several per leaf.
 	require.LessOrEqual(t, src.reads, 8, "meta must be read through a buffer, got %d reads for %d bytes", src.reads, len(metaBytes))
 }
+
+// metaBytesWithEntries serializes a .subtreeMeta for subtree whose body is entries,
+// so a test can write the zero parent count that Meta.Serialize refuses to write.
+func metaBytesWithEntries(subtree *subtreepkg.Subtree, entries []metaEntry) []byte {
+	out := append([]byte{}, subtree.RootHash()[:]...)
+	out = binary.LittleEndian.AppendUint32(out, uint32(len(entries))) // nolint: gosec
+
+	return append(out, encodeMetaBody(entries)...)
+}
+
+// oneParent is a meta entry with a single parent spent at vout 0.
+func oneParent(seed byte) metaEntry {
+	return metaEntry{{parent: chainhash.HashH([]byte{seed, 0xbb}), vouts: []uint32{0}}}
+}
+
+// TestZeroParentCountRejected pins issue 1638. A real transaction always has at
+// least one input, so a zero parent count in the meta is only legitimate for the
+// coinbase placeholder. Anywhere else it is a corrupt count that passes both
+// header checks, and validateTransaction would read the nil parents as a
+// transaction missing from the meta and condemn a valid block. The read has to
+// fail instead, so the caller regenerates the meta.
+func TestZeroParentCountRejected(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a zero parent count on an ordinary node fails the read", func(t *testing.T) {
+		subtree, _, block := buildMetaFixture(t)
+		metaBytes := metaBytesWithEntries(subtree, []metaEntry{oneParent(0), oneParent(1), nil, oneParent(3)})
+		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
+
+		_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no parents")
+		require.Contains(t, err.Error(), subtree.Nodes[2].Hash.String())
+	})
+
+	t.Run("a zero parent count on node 0 that is not the coinbase placeholder fails the read", func(t *testing.T) {
+		subtree, _, block := buildMetaFixture(t)
+		metaBytes := metaBytesWithEntries(subtree, []metaEntry{nil, oneParent(1), oneParent(2), oneParent(3)})
+		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
+
+		_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no parents")
+	})
+
+	t.Run("the coinbase placeholder with no parents is accepted", func(t *testing.T) {
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, subtree.AddCoinbaseNode())
+
+		for i := byte(1); i < 4; i++ {
+			require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{i, 0xaa}), 1, 0))
+		}
+
+		block := &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+		metaBytes := metaBytesWithEntries(subtree, []metaEntry{nil, oneParent(1), oneParent(2), oneParent(3)})
+		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
+
+		got, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
+		require.NoError(t, err)
+		require.Nil(t, got.TxInpoints[0].ParentTxHashes)
+	})
+
+	t.Run("block validation sends the rejected meta to regeneration", func(t *testing.T) {
+		subtree, _, block := buildMetaFixture(t)
+		metaBytes := metaBytesWithEntries(subtree, []metaEntry{oneParent(0), oneParent(1), nil, oneParent(3)})
+		reg := &countingRegenerator{}
+		deps := &validationDependencies{subtreeStore: newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes), metaRegenerator: reg}
+		validationCtx := &validationContext{
+			currentBlockHeaderHashesMap: map[chainhash.Hash]struct{}{},
+			currentBlockHeaderIDsMap:    map[uint32]struct{}{},
+		}
+
+		err := block.validateSubtree(ctx, ulogger.TestLogger{}, deps, validationCtx, subtree, 0)
+		require.Error(t, err)
+		require.Equal(t, 1, reg.calls, "a corrupt parent count must reach the regenerator, not condemn the block")
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a corrupt cache file is not a verdict on the block")
+	})
+}
