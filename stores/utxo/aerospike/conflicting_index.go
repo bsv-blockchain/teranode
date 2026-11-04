@@ -163,11 +163,30 @@ func (s *Store) conflictingIndexRecords(ctx context.Context, binNames []string, 
 		return false, false, errors.NewStorageError("[ConflictingTxHashes] index query failed", aErr)
 	}
 
-	defer func() {
-		_ = recordset.Close()
-	}()
+	return readConflictingIndexResults(ctx, recordset.Results(), func() { _ = recordset.Close() }, visit)
+}
 
-	results := recordset.Results()
+// readConflictingIndexResults hands each record of an index query to visit until the results
+// end, and closes the recordset.
+//
+// Closing a recordset waits for every node goroutine of the query, and one stuck in a socket
+// read holds it until the query policy's socket timeout. So when the read stops early, on a
+// cancelled context or a node error, the recordset is closed in the background and the caller
+// returns at once; that goroutine lives no longer than the socket timeout. While it closes, the
+// results are drained: the client sends a node's error without watching for cancellation, so a
+// node goroutine can otherwise block on a full results buffer and the close never finish. When
+// the results end, the node goroutines are done and the close is immediate.
+func readConflictingIndexResults(ctx context.Context, results <-chan *aerospike.Result, closeRecordset func(), visit func(*aerospike.Record) bool) (found, readable bool, err error) {
+	closeInBackground := func() {
+		go func() {
+			go func() {
+				for range results { //nolint:revive // drained until the closing recordset ends them
+				}
+			}()
+
+			closeRecordset()
+		}()
+	}
 
 	for {
 		var (
@@ -175,19 +194,21 @@ func (s *Store) conflictingIndexRecords(ctx context.Context, binNames []string, 
 			more bool
 		)
 
-		// A stalled node would otherwise hold the caller until the query
-		// policy's socket timeouts and retries run out.
 		select {
 		case <-ctx.Done():
+			closeInBackground()
 			return false, false, ctx.Err()
 		case res, more = <-results:
 		}
 
 		if !more {
+			closeRecordset()
 			return found, true, nil
 		}
 
 		if res.Err != nil {
+			closeInBackground()
+
 			if conflictingIndexNotReadable(res.Err) {
 				return false, false, nil
 			}

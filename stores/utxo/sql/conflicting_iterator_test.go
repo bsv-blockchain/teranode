@@ -2,15 +2,14 @@ package sql
 
 import (
 	"context"
-	"errors"
 	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/assert"
@@ -128,8 +127,10 @@ func TestSQLConflictingTxHashes_ReadErrors(t *testing.T) {
 		want   string
 	}{
 		"query fails": {
-			expect: func(m sqlmock.Sqlmock) { m.ExpectQuery(query).WillReturnError(errors.New("connection reset")) },
-			want:   "query failed",
+			expect: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(query).WillReturnError(errors.NewStorageError("connection reset"))
+			},
+			want: "query failed",
 		},
 		"hash of the wrong length": {
 			expect: func(m sqlmock.Sqlmock) {
@@ -139,7 +140,7 @@ func TestSQLConflictingTxHashes_ReadErrors(t *testing.T) {
 		},
 		"iteration fails": {
 			expect: func(m sqlmock.Sqlmock) {
-				m.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"hash"}).AddRow(goodHash).RowError(0, errors.New("connection reset")))
+				m.ExpectQuery(query).WillReturnRows(sqlmock.NewRows([]string{"hash"}).AddRow(goodHash).RowError(0, errors.NewStorageError("connection reset")))
 			},
 			want: "row iteration failed",
 		},

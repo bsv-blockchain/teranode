@@ -3,16 +3,15 @@ package sql
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"net/url"
 	"regexp"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -305,7 +304,7 @@ func expectBuildUnlock(m sqlmock.Sqlmock) {
 // attempt: an error at any step is reported and the lock is released, and a
 // lock held elsewhere is not an error but not built either.
 func TestBuildPostgresConflictingIndex_Steps(t *testing.T) {
-	failure := errors.New("connection reset")
+	failure := errors.NewStorageError("connection reset")
 
 	tests := map[string]struct {
 		expect    func(sqlmock.Sqlmock)
@@ -410,7 +409,7 @@ func TestBuildPostgresConflictingIndex_Steps(t *testing.T) {
 func TestPostgresConflictingIndexBuild_FailedBuildLeavesTheStoreNotIndexed(t *testing.T) {
 	store, mock := CreateMockStore(ulogger.TestLogger{})
 	expectIndexState(mock, nil)
-	mock.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(errors.New("connection reset"))
+	mock.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(errors.NewStorageError("connection reset"))
 
 	store.startPostgresConflictingIndexBuild(context.Background())
 
@@ -443,7 +442,7 @@ func TestPostgresConflictingIndexBuild_FailedBuildLeavesTheStoreNotIndexed(t *te
 func TestHoldConflictingIndexBuildLock_Errors(t *testing.T) {
 	t.Run("lock query fails", func(t *testing.T) {
 		store, mock := CreateMockStore(ulogger.TestLogger{})
-		mock.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(errors.New("connection reset"))
+		mock.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(errors.NewStorageError("connection reset"))
 
 		conn, err := store.db.Conn(context.Background())
 		require.NoError(t, err)
