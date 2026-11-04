@@ -1020,26 +1020,10 @@ func (sp *serverPeer) openRequiredStreams() {
 		return
 	}
 
-	// Send CREATESTREAM message on the new connection.
-	createMsg := wire.NewMsgCreateStream(assoc.RawID(), wire.StreamTypeData1, wire.BlockPriorityStreamPolicy)
-	if err := wire.WriteMessage(conn, createMsg, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net); err != nil {
-		sp.server.logger.Warnf("Failed to send createstream to %s: %v", peerAddr, err)
+	if err := negotiateData1Stream(conn, assoc.RawID(), sp.server.settings.ChainCfgParams.Net, peer.NegotiateTimeout); err != nil {
+		sp.server.logger.Warnf("Failed to open DATA1 stream to %s: %v", peerAddr, err)
 		conn.Close()
-		return
-	}
 
-	// Read STREAMACK response before creating the peer to avoid resource
-	// leaks if the remote side rejects or fails to acknowledge the stream.
-	_, msg, _, err := peer.ReadHandshakeMessage(conn, nil, wire.ProtocolVersion, sp.server.settings.ChainCfgParams.Net, wire.BaseEncoding)
-	if err != nil {
-		sp.server.logger.Warnf("Failed to read streamack from %s: %v", peerAddr, err)
-		conn.Close()
-		return
-	}
-
-	if _, ok := msg.(*wire.MsgStreamAck); !ok {
-		sp.server.logger.Warnf("Expected streamack from %s, got %s", peerAddr, msg.Command())
-		conn.Close()
 		return
 	}
 
@@ -1048,6 +1032,40 @@ func (sp *serverPeer) openRequiredStreams() {
 
 	go sp.server.peerDoneHandler(streamSP)
 	sp.server.logger.Infof("DATA1 stream established to %s for association %s", peerAddr, assoc.ID())
+}
+
+// negotiateData1Stream sends createstream for a DATA1 stream on conn and waits for
+// the remote's streamack, before any peer is built on the connection, so a remote
+// that rejects or never acknowledges the stream leaks nothing.
+//
+// The exchange is bounded by timeout. openRequiredStreams runs inside OnProtoconf,
+// so a remote that accepts the connection and never answers would otherwise hold
+// the primary peer's message handling, and this connection, forever. The deadline
+// is cleared once the ack is in, or it would kill the stream peer built on conn.
+func negotiateData1Stream(conn net.Conn, assocID []byte, bsvnet wire.BitcoinNet, timeout time.Duration) error {
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return errors.NewNetworkError("failed to set the stream handshake deadline", err)
+	}
+
+	createMsg := wire.NewMsgCreateStream(assocID, wire.StreamTypeData1, wire.BlockPriorityStreamPolicy)
+	if err := wire.WriteMessage(conn, createMsg, wire.ProtocolVersion, bsvnet); err != nil {
+		return errors.NewNetworkError("failed to send createstream", err)
+	}
+
+	_, msg, _, err := peer.ReadHandshakeMessage(conn, nil, wire.ProtocolVersion, bsvnet, wire.BaseEncoding)
+	if err != nil {
+		return errors.NewNetworkError("failed to read streamack", err)
+	}
+
+	if _, ok := msg.(*wire.MsgStreamAck); !ok {
+		return errors.NewNetworkInvalidResponseError("expected streamack, got %s", msg.Command())
+	}
+
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return errors.NewNetworkError("failed to clear the stream handshake deadline", err)
+	}
+
+	return nil
 }
 
 // newStreamServerPeer builds the serverPeer for an outbound DATA1 stream to the

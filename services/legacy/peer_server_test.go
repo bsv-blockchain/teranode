@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"testing"
@@ -1599,4 +1600,87 @@ func TestAnnounceNewTransactionsReachesPeerInBatchOrder(t *testing.T) {
 	defer mu.Unlock()
 
 	require.Equal(t, want, seen)
+}
+
+// data1Remote is the far end of an outbound DATA1 stream: it accepts one
+// connection, reads the createstream, and hands the connection to reply.
+func data1Remote(t *testing.T, reply func(net.Conn)) net.Conn {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+
+		defer conn.Close()
+
+		if _, _, err := wire.ReadMessage(conn, wire.ProtocolVersion, chaincfg.MainNetParams.Net); err != nil {
+			return
+		}
+
+		reply(conn)
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	return conn
+}
+
+// A remote that accepts the stream connection and never answers used to hold the
+// streamack read forever, and openRequiredStreams runs inside OnProtoconf, so the
+// primary peer's message handling stopped with it.
+func TestNegotiateData1Stream_ARemoteThatNeverAnswersTimesOut(t *testing.T) {
+	hold := make(chan struct{})
+	t.Cleanup(func() { close(hold) })
+
+	conn := data1Remote(t, func(net.Conn) { <-hold })
+
+	done := make(chan error, 1)
+
+	go func() { done <- negotiateData1Stream(conn, []byte{0x01}, chaincfg.MainNetParams.Net, 100*time.Millisecond) }()
+
+	select {
+	case err := <-done:
+		require.True(t, errors.Is(err, os.ErrDeadlineExceeded), "want the deadline's timeout, got %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the streamack read did not give up at the deadline")
+	}
+}
+
+// The deadline bounds the handshake only. Left on the connection it would kill
+// the stream peer built on it once the deadline passed.
+func TestNegotiateData1Stream_TheDeadlineIsClearedOnAnAck(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+
+	conn := data1Remote(t, func(c net.Conn) {
+		if err := wire.WriteMessage(c, wire.NewMsgStreamAck([]byte{0x01}, wire.StreamTypeData1), wire.ProtocolVersion, chaincfg.MainNetParams.Net); err != nil {
+			return
+		}
+
+		time.Sleep(3 * timeout)
+
+		_ = wire.WriteMessage(c, wire.NewMsgPing(1), wire.ProtocolVersion, chaincfg.MainNetParams.Net)
+	})
+
+	require.NoError(t, negotiateData1Stream(conn, []byte{0x01}, chaincfg.MainNetParams.Net, timeout))
+
+	msg, _, err := wire.ReadMessage(conn, wire.ProtocolVersion, chaincfg.MainNetParams.Net)
+	require.NoError(t, err, "a read after the handshake deadline must not time out")
+	require.IsType(t, &wire.MsgPing{}, msg)
+}
+
+func TestNegotiateData1Stream_AReplyThatIsNotAStreamAckFails(t *testing.T) {
+	conn := data1Remote(t, func(c net.Conn) {
+		_ = wire.WriteMessage(c, wire.NewMsgPing(1), wire.ProtocolVersion, chaincfg.MainNetParams.Net)
+	})
+
+	err := negotiateData1Stream(conn, []byte{0x01}, chaincfg.MainNetParams.Net, time.Second)
+	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "want the wrong-reply error, got %v", err)
 }
