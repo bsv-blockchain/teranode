@@ -341,6 +341,40 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   owed) and `teranode_blockchain_sql_on_main_chain_write_failures{path}`. No action is
   needed. (#2049)
 
+- **Deleting a transaction record now clears the references parents hold to it.**
+  A reorg that removes a coinbase also removes the transactions spending it. Block
+  assembly now unspends each removed transaction's inputs, and removes it from its
+  parents' conflicting-children lists, before it deletes the record. Before, a
+  surviving parent could keep naming the deleted record as its spender. With
+  `pruner_utxoDefensiveEnabled` set, the SQL pruner reaps each expired conflicting
+  record and the references its parents hold to it in one database transaction. It
+  keeps the record, and its parents' references, while a conflict intent is pending
+  and when a promotion cleared its conflicting flag. On PostgreSQL, creating a
+  conflict intent waits for a reap in progress to finish. It also keeps a record it cannot
+  reap until the next block. With the setting off, pruner behaviour does not change.
+  Before it deletes those transactions, block assembly now saves them to the subtree
+  store under the hash of the block that was moved back (new file type
+  `reorgDeletedTxs`, expiry as for kept-aside subtree transactions). If saving fails,
+  the move back fails and nothing is deleted. When a reorg or a block assembly reset
+  moves that block forward again, block assembly recreates the saved transactions
+  after the coinbase, then deletes the saved file. Block assembly does not recreate a
+  saved transaction when another transaction now spends one of its inputs or when one
+  of its parents is missing, nor the saved transactions that spend it, and it logs an
+  error for each. Any other failure still fails the move. Each recreated transaction
+  gets back the block IDs it had when it was deleted, and gets its chain state from
+  the current chain: it is on the longest chain only if its blocks are. A recreated
+  transaction that is not on the longest chain goes back into block assembly when a
+  reorg moves the block forward. If saving the transactions fails, block assembly
+  unlocks them. A retry after a partial delete deletes every transaction in the saved
+  file. A retry repairs the chain status of a transaction that an earlier
+  attempt left looking mined, clears an unmined marker that an interrupted repair left
+  on a transaction mined on the current chain, keeps the saved file until the status is
+  right, and otherwise leaves the status of an existing record alone. It puts that transaction back in block assembly only when its live record is
+  not mined on the current chain. The saved file expires at the same height as kept-aside subtree transactions.
+  If the block returns after that, block assembly recreates nothing and does not log a
+  warning. No action is needed. Parent spends that were left dangling before the
+  upgrade are not repaired. (#1214)
+
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**
   Every catch-up moves the FSM to `CATCHINGBLOCKS`, and subtree validation used to stop

@@ -46,8 +46,9 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 
 	// Create a new pruner service
 	prunerService, err := sqlpruner.NewService(s.settings, sqlpruner.Options{
-		Logger: s.logger,
-		DB:     s.db,
+		Logger:          s.logger,
+		DB:              s.db,
+		ReapConflicting: s.reapConflicting,
 	})
 	if err != nil {
 		return nil, err
