@@ -144,3 +144,60 @@ func TestSetMinedMultiTellsABlockAboutAnOlderBlockOfAHeldTransaction(t *testing.
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxNotFound), "got %v", err)
 }
+
+// TestSetMinedMultiTellsABlockAboutAnOlderBlockOfASpentTransaction is the same long-ago answer
+// for a transaction whose outputs were all spent after the stamp and drop. Its UTXOs are gone,
+// so no pair on them records block 7; the undo copies the spend journalled do, and the answer
+// must still name block 7 and then the new block.
+func TestSetMinedMultiTellsABlockAboutAnOlderBlockOfASpentTransaction(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	tx := mkTx(t, 2, 5_000)
+	_, err := s.Create(ctx, tx, 100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, retireWindows(t, s, ctx, 0, map[uint32]uint32{100: 7}))
+
+	spendAt := s.GetBlockHeight() + 1
+	require.NoError(t, s.SetBlockHeight(spendAt))
+
+	_, err = spendOnly(ctx, s, spendParentTx(t, tx, nil, 1_000, 0, 1), spendAt)
+	require.NoError(t, err)
+	require.Zero(t, utxoCount(t, s, ctx, tx), "fixture: every output is spent, so no UTXO pair is left")
+	require.False(t, identExists(t, s, ctx, tx), "fixture: the stamp deleted the identity row")
+	require.Zero(t, minedRows(t, s, ctx, tx), "fixture: the drop removed the containment row")
+
+	newHeight := spendAt + 1
+	require.NoError(t, s.SetBlockHeight(newHeight))
+
+	ids, err := s.SetMinedMulti(ctx, hashes(tx), utxo.MinedBlockInfo{BlockID: 9_999, BlockHeight: newHeight, OnLongestChain: true})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{7, 9_999}, ids[*tx.TxIDChainHash()])
+}
+
+// TestSetMinedMultiNamesTheOlderBlockOnceWhenAskedForItAgain is the long-ago answer when the
+// block asked for is already in the older list. Its answer is that list as it is, without
+// appending the same id a second time.
+//
+// The call names block 7 at a live height rather than at its own height 100. At 100 the call
+// never gets this far: on the longest chain recordMined refuses to recreate the dropped
+// partition, and off it the call takes the quiet branch and returns first. So this reaches
+// the guard directly, by id, which is the only thing the guard compares.
+func TestSetMinedMultiNamesTheOlderBlockOnceWhenAskedForItAgain(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	tx := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, tx, 100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, retireWindows(t, s, ctx, 0, map[uint32]uint32{100: 7}))
+
+	newHeight := s.GetBlockHeight() + 1
+	require.NoError(t, s.SetBlockHeight(newHeight))
+
+	ids, err := s.SetMinedMulti(ctx, hashes(tx), utxo.MinedBlockInfo{BlockID: 7, BlockHeight: newHeight, OnLongestChain: true})
+	require.NoError(t, err)
+	require.Equal(t, []uint32{7}, ids[*tx.TxIDChainHash()], "block 7 is answered once")
+}

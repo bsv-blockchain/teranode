@@ -288,3 +288,64 @@ func TestNetRange_FailureCountIsAtomic(t *testing.T) {
 
 	require.Equal(t, int64(n), bv.netFailureCount(*block.Hash()))
 }
+
+// A block whose UTXO write fails on fewer than netFailureLimit attempts and then succeeds is
+// written, and quick validation forgets its failure count once it is. A count left behind would
+// carry those failures into the next time the block is written, which a reorg or a restart can
+// bring about, and report it as needing an operator sooner than it should. Both routes are
+// driven end to end, quickValidateBlock and the catch-up loop's quickValidateBlockAsync, over a
+// real UTXO store whose list write is made to fail.
+func TestNetRange_QuickValidationClearsTheFailureCountOnceTheBlockIsWritten(t *testing.T) {
+	routes := map[string]func(h *preBindHarness, block *model.Block) error{
+		"quickValidateBlock": func(h *preBindHarness, block *model.Block) error {
+			return h.bv.quickValidateBlock(h.ctx, block, "peer", "")
+		},
+		"quickValidateBlockAsync": func(h *preBindHarness, block *model.Block) error {
+			return h.quickValidateAsync(block)
+		},
+	}
+
+	for name, validate := range routes {
+		t.Run(name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			h.enableOutpointOnlyFastPath()
+			h.bv.settings.BlockValidation.QuickValidateSkipUtxoLock = true
+			h.bv.spendRetryBackoff = time.Millisecond
+
+			recorder := &applyRecorder{Store: h.utxoStore}
+			h.bv.utxoStore = nettingRecorder{recorder}
+			require.True(t, h.bv.netsBelowCheckpoint(&model.Block{Height: preBindHeight}, true),
+				"precondition: the block must be written by a netting store, or nothing is counted")
+
+			coinbase := preBindCoinbase(t, 0x3c)
+			parent := h.storeGenuineParent(0x4d)
+			child := preBindSpendOf(t, parent, 9_000)
+
+			served := h.oneSubtreeBody(coinbase, child)
+
+			block := h.newPreBindBlock(coinbase,
+				[]*chainhash.Hash{served.RootHash()},
+				composeBlockMerkleRoot(t, []chainhash.Hash{coinbaseSubstitutedRoot(t, served, coinbase)}),
+				2)
+
+			for attempt := 1; attempt < netFailureLimit; attempt++ {
+				recorder.mu.Lock()
+				recorder.failMulti = errors.NewStorageError("injected fault in the list write")
+				recorder.failMultiTimes = 1_000 // every retry inside the batch fails too
+				recorder.mu.Unlock()
+
+				require.Error(t, validate(h, block), "attempt %d", attempt)
+
+				recorder.mu.Lock()
+				recorder.failMulti = nil
+				recorder.mu.Unlock()
+
+				require.Equal(t, int64(attempt), h.bv.netFailureCount(*block.Hash()), "attempt %d", attempt)
+			}
+
+			require.NoError(t, validate(h, block))
+			h.requireParentSpent(parent)
+			require.Zero(t, h.bv.netFailureCount(*block.Hash()), "a block written in full keeps no failure count")
+		})
+	}
+}

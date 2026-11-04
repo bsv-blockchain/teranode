@@ -257,3 +257,97 @@ func TestUnspendKeepsTheLockOfATransactionStillLocked(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(spends[0].Err, errors.ErrTxLocked), "got %v", spends[0].Err)
 }
+
+// lockedStampedParentSpent is the fixture for the stamped-lock tests: a parent mined in block 7
+// at height 100, stamped so its identity row is gone and only its containment row in tx_mined
+// records it, then locked through SetLocked, which reaches that containment row, and spent
+// through IgnoreLocked by an unmined loser. It returns the parent, the loser's spends and the
+// store's height after the spend.
+func lockedStampedParentSpent(t *testing.T, s *Store, ctx context.Context) (*bt.Tx, []*utxo.Spend, uint32) {
+	t.Helper()
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	tip := stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+
+	require.False(t, identExists(t, s, ctx, parent), "fixture: the stamp deleted the identity row")
+	require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the containment row is the only record")
+	require.Zero(t, s.lookupFloor(), "fixture: the containment row at 100 is above the lookup floor")
+
+	require.NoError(t, s.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+	var minedFlags int16
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT flags FROM tx_mined WHERE txid = $1`,
+		hashBytes(parent)).Scan(&minedFlags))
+	require.NotZero(t, minedFlags&FlagLocked, "fixture: SetLocked locked the containment row")
+
+	spendAt := tip + 1
+	require.NoError(t, s.SetBlockHeight(spendAt))
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), spendAt, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	return parent, spends, spendAt
+}
+
+// TestUnspendGivesAStampedTransactionsRestoredUTXOItsLockAsItIsNow is
+// TestUnspendGivesTheRestoredUTXOItsTransactionsLockAsItIsNow for a mined transaction the stamp
+// has moved out of tx_ident: the lock the restore reads is the one on its containment row, and
+// that row was unlocked after the spend, so the restored coin is spendable.
+func TestUnspendGivesAStampedTransactionsRestoredUTXOItsLockAsItIsNow(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends, spendAt := lockedStampedParentSpent(t, s, ctx)
+
+	require.NoError(t, s.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, false))
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+
+	_, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), spendAt+1)
+	require.NoError(t, err, "the restored UTXO of an unlocked stamped transaction must be spendable")
+}
+
+// TestUnspendKeepsTheLockOfAStampedTransactionStillLocked is the other half: the containment
+// row is still locked when the coin is restored, so the coin comes back locked and a plain spend
+// is refused. The lock is on tx_mined alone here, so a restore that read only tx_ident would
+// hand back a spendable coin.
+func TestUnspendKeepsTheLockOfAStampedTransactionStillLocked(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends, spendAt := lockedStampedParentSpent(t, s, ctx)
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), spendAt+1)
+	require.Error(t, err)
+	require.True(t, errors.Is(spends[0].Err, errors.ErrTxLocked), "got %v", spends[0].Err)
+}
+
+// TestUnspendIgnoresALockOnAContainmentRowBelowTheLookupFloor: the restore reads a containment
+// row's lock only at or above the lookup floor, the same bound SetLocked writes and the reads
+// look within. Here the containment row at height 100 is still locked but the tip has moved so
+// the floor is 288, so the restore does not see that lock and the coin comes back spendable.
+func TestUnspendIgnoresALockOnAContainmentRowBelowTheLookupFloor(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends, _ := lockedStampedParentSpent(t, s, ctx)
+
+	// 864 is the lowest height whose floor is one partition: 864 - (stamp depth 288 + 288) = 288.
+	const tipAboveFloor = 864
+
+	require.NoError(t, s.SetBlockHeight(tipAboveFloor))
+	require.Equal(t, int32(TxMinedPartitionBlocks), s.lookupFloor(), "fixture: the floor is above the row at 100")
+	require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the locked containment row is still there")
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+
+	_, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), tipAboveFloor+1)
+	require.NoError(t, err, "a lock below the lookup floor must not be copied onto the restored UTXO")
+}
