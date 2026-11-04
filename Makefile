@@ -179,6 +179,15 @@ test:
 	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
 	SETTINGS_CONTEXT=test $$(go env GOPATH)/bin/gotestsum --format pkgname -- -race -tags "testtxmetacache" -count=1 -timeout=10m -coverprofile=coverage.out -coverpkg=./... $$(go list ./... | grep -v github.com/bsv-blockchain/teranode/test/ | sort)
 
+# TeraSlab integration tests (testcontainers). Behind the `teraslab` build tag so
+# they are excluded from `make test` — they start a TeraSlab container per test and
+# the full suite far exceeds the 10m default-`test` budget. Run separately with a
+# longer timeout (requires Docker; override the image via TERASLAB_IMAGE).
+.PHONY: test-teraslab
+test-teraslab:
+	@command -v gotestsum >/dev/null 2>&1 || { echo "gotestsum not found. Installing..."; $(MAKE) install-tools; }
+	SETTINGS_CONTEXT=test gotestsum --format pkgname -- -race -tags "testtxmetacache,teraslab" -count=1 -timeout=30m -coverprofile=coverage-teraslab.out -coverpkg=github.com/bsv-blockchain/teranode/stores/utxo/teraslab/... ./stores/utxo/teraslab/...
+
 # run the tests too slow for `make test` under -race and coverage (TERANODE_HEAVY_TESTS), without -race.
 # The PR test job runs it after `make test`.
 .PHONY: test-heavy
