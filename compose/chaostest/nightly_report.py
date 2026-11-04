@@ -161,7 +161,7 @@ def main(argv):
         md += ["", "**Setup failed:** " + error]
     if integrity:
         md += ["", "### Integrity audits", "",
-               "| Scenario | Heights | Divergences | Stale tips (deepest) | SV nodes: heights held, divergences | Proofs checked | Proven | Unproven | Mismatched | Latency p50 / p95 |",
+               "| Scenario | Heights | Divergences | Stale tips (deepest) | All nodes incl. SV: heights, divergences | Proofs checked | Proven | Unproven | Mismatched | Latency p50 / p95 |",
                "|---|---|---|---|---|---|---|---|---|---|"]
         for r, c, p, v in integrity:
             c, p, v = c or {}, p or {}, v or {}

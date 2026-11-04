@@ -111,7 +111,7 @@ steps:
         with: { left: "${chain.divergences}", right: "0" }
         message: every node and the broadcaster hold the same chain
 
-  - name: cross-check the SV nodes on the heights they hold
+  - name: cross-check every node, SV nodes included
     action: chain_audit
     with: {}
     as: svchain
