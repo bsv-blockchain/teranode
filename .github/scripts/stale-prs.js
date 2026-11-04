@@ -110,7 +110,9 @@ function classifyAuthor(pr) {
   if (pr.author.isBot) return { kind: 'exempt', reason: 'bot author' };
   if (!pr.author.isUser) return { kind: 'exempt', reason: 'author is not a user account' };
   if (TEAM_ASSOCIATIONS.has(pr.authorAssociation)) return { kind: 'team', via: pr.authorAssociation };
-  if (TEAM_PERMISSIONS.has(pr.authorPermission)) return { kind: 'team', via: `${pr.authorPermission} access` };
+  if (TEAM_PERMISSIONS.has(pr.authorPermission)) {
+    return { kind: 'team', via: `${pr.authorPermission} access, reported ${pr.authorAssociation}`, upgraded: true };
+  }
   if (EXTERNAL_ASSOCIATIONS.has(pr.authorAssociation)) return { kind: 'external', via: pr.authorAssociation };
   return { kind: 'exempt', reason: `unknown author association ${pr.authorAssociation || '(none)'}` };
 }
@@ -169,11 +171,16 @@ function iso(t) {
 //   exempt  - never labelled or closed (reason says why)
 function decide(pr, now, cfgIn) {
   const cfg = config(cfgIn);
+  const author = classifyAuthor(pr);
   const base = {
     number: pr.number,
     title: pr.title,
     author: pr.author ? pr.author.login : null,
-    authorKind: classifyAuthor(pr).kind,
+    authorKind: author.kind,
+    authorVia: author.via || null,
+    authorUpgraded: Boolean(author.upgraded),
+    authorAssociation: pr.authorAssociation || null,
+    authorPermission: pr.authorPermission || null,
     isDraft: Boolean(pr.isDraft),
   };
   const hasStale = pr.labels.includes(cfg.staleLabel);
@@ -262,11 +269,11 @@ function table(header, rows) {
 }
 
 function renderSummary(result, opts) {
-  const { live, repo, writes = [], failures = [], permissionErrors = [] } = opts;
+  const { live, repo, writes = [], failures = [], permissionErrors = [], permissionLookups = 0 } = opts;
   const cfg = result.config;
   const by = (a) => result.decisions.filter((d) => d.action === a);
   const date = (s) => (s ? s.slice(0, 10) : '');
-  const who = (d) => `${d.author || '(none)'} (${d.authorKind})${d.isDraft ? ', draft' : ''}`;
+  const who = (d) => `${d.author || '(none)'} (${d.authorKind}${d.authorVia ? ` via ${d.authorVia}` : ''})${d.isDraft ? ', draft' : ''}`;
   const out = [];
 
   out.push(`## Stale PRs: ${live ? 'live run' : 'dry run'}, ${date(result.now)}\n`);
@@ -312,6 +319,13 @@ function renderSummary(result, opts) {
 
   out.push(`### Active (${by('active').length})\n`);
   out.push(`Human activity within ${cfg.staleDays} days; nothing to do.\n`);
+
+  const upgraded = new Set(result.decisions.filter((d) => d.authorUpgraded).map((d) => d.author));
+  out.push(
+    `### Author classification\n\n${permissionLookups} repository permission lookups for authors not reported as ` +
+      `OWNER/MEMBER/COLLABORATOR; ${upgraded.size} upgraded to team by write access` +
+      `${upgraded.size ? ` (${[...upgraded].sort().join(', ')})` : ''}; ${permissionErrors.length} failed.\n`,
+  );
 
   if (result.capHit) {
     out.push(
@@ -449,7 +463,7 @@ async function resolvePermissions(github, owner, repo, prs) {
     }
     pr.authorPermission = cache.get(login);
   }
-  return errors;
+  return { errors, lookups: cache.size };
 }
 
 async function ensureLabels(github, owner, repo, cfg) {
@@ -494,7 +508,7 @@ async function run({ github, context, core, live = false, now = Date.now(), cfg:
   const full = `${owner}/${repo}`;
 
   const prs = await fetchOpenPRs(github, owner, repo);
-  const permissionErrors = await resolvePermissions(github, owner, repo, prs);
+  const { errors: permissionErrors, lookups: permissionLookups } = await resolvePermissions(github, owner, repo, prs);
   const result = plan(prs, now, cfg);
 
   const writes = [];
@@ -511,9 +525,9 @@ async function run({ github, context, core, live = false, now = Date.now(), cfg:
     }
   }
 
-  const md = renderSummary(result, { live, repo: full, writes, failures, permissionErrors });
+  const md = renderSummary(result, { live, repo: full, writes, failures, permissionErrors, permissionLookups });
+  log(md);
   if (core && core.summary) await core.summary.addRaw(md).write();
-  else log(md);
   if (core && failures.length) core.setFailed(`${failures.length} write(s) failed; see the job summary`);
   return { result, writes, failures, permissionErrors, markdown: md };
 }

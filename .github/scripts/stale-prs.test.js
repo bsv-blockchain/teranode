@@ -349,6 +349,8 @@ test('a dry run makes no write calls', async () => {
   const out = await run({ github, context, core: null, live: false, now: NOW, log: () => {} });
   assert.equal(out.result.decisions[0].action, 'stale');
   assert.deepEqual(github.writes, []);
+  assert.match(out.markdown, /1 repository permission lookups .*; 1 upgraded to team by write access \(alice\); 0 failed/);
+  assert.match(out.markdown, /alice \(team via write access, reported CONTRIBUTOR\)/);
 });
 
 test('a live run labels and comments, and creates missing labels', async () => {
