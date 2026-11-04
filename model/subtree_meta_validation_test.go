@@ -430,7 +430,7 @@ func TestValidatedReaderBuffersSource(t *testing.T) {
 }
 
 // metaBytesWithEntries serializes a .subtreeMeta for subtree whose body is entries,
-// so a test can write the zero parent count that Meta.Serialize refuses to write.
+// so a test controls the meta body directly, down to a zero parent count on any node.
 func metaBytesWithEntries(subtree *subtreepkg.Subtree, entries []metaEntry) []byte {
 	out := append([]byte{}, subtree.RootHash()[:]...)
 	out = binary.LittleEndian.AppendUint32(out, uint32(len(entries))) // nolint: gosec
@@ -489,6 +489,28 @@ func TestZeroParentCountRejected(t *testing.T) {
 		got, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.NoError(t, err)
 		require.Nil(t, got.TxInpoints[0].ParentTxHashes)
+	})
+
+	t.Run("the coinbase placeholder hash above node 0 with no parents fails the read", func(t *testing.T) {
+		// AddNode refuses the placeholder, but a subtree decoded from bytes can
+		// carry it at any index. Only node 0 is exempt, so the hash alone must
+		// not let a zero parent count through.
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+
+		for i := byte(0); i < 4; i++ {
+			require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{i, 0xaa}), 1, 0))
+		}
+
+		subtree.Nodes[2].Hash = subtreepkg.CoinbasePlaceholderHashValue
+
+		block := &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+		metaBytes := metaBytesWithEntries(subtree, []metaEntry{oneParent(0), oneParent(1), nil, oneParent(3)})
+		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
+
+		_, err = block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no parents")
 	})
 
 	t.Run("block validation sends the rejected meta to regeneration", func(t *testing.T) {
