@@ -526,14 +526,17 @@ func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error
 
 // NewUtxoSpendingTxPrunedError creates a new error indicating that the
 // transaction attempting to spend an output is one the pruner has already
-// removed. The store keeps a marker for every child it prunes, so a replay of
-// that child is rejected here instead of silently succeeding as an idempotent
-// re-spend and letting the caller recreate the pruned transaction.
+// removed. The pruner marks a parent for each child whose output on that parent
+// still names the child as its spender, so a replay of that child is rejected
+// here instead of silently succeeding as an idempotent re-spend and letting the
+// caller recreate the pruned transaction. A child whose output names another
+// spender, or a released conflicting loser, is pruned with no marker.
 //
 // It carries its own code rather than ERR_UTXO_ERROR because callers have to
 // tell it apart from the generic utxo error: it is one of the rejections that
 // must roll back the sibling spends of the same transaction (see
-// needsSpendRollback / isSpendRollbackError in the SQL and Aerospike stores).
+// utxo.IsSpendRollbackError / utxo.NeedsSpendRollback in
+// stores/utxo/compensate_created.go).
 func NewUtxoSpendingTxPrunedError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_SPENDING_TX_PRUNED, message, params...)
 }

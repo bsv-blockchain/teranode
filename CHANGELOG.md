@@ -159,12 +159,14 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   rising value. The Aerospike pruner writes each marker with a plain map write
   that checks the parent output on the server, instead of the `addDeletedChildren`
   UDF, and deletes each chunk's children in the batch that carries the next
-  chunk's markers, so a pass costs one batch per chunk plus one at the end. The SQL store (Postgres and SQLite) creates a new table,
-  `deleted_children`, on startup to hold the markers: one row per pruned child per
-  surviving parent, removed when that parent is pruned, so it adds disk use in
-  proportion to the pruned transactions whose parents are still unspent. The
-  Aerospike store keeps the markers in a new bin on the parent record and registers
-  a new UDF module, `teranode_v66`, on startup.
+  chunk's markers, so a pass costs one batch per chunk plus one at the end. The SQL
+  store (Postgres and SQLite) creates a new table, `deleted_children`, on startup to
+  hold the markers: one row per pruned child per surviving parent, removed when that
+  parent is pruned, so it adds disk use in proportion to the pruned transactions
+  whose parents are still unspent. The Aerospike store writes the markers to the
+  existing `deletedChildren` bin of the record that holds the spent output (the
+  parent, or its output page for a paginated parent), and registers a new UDF
+  module, `teranode_v66`, on startup.
 
   One validator request field is new, `ignore_locked`, and the gRPC client now
   sends it, where it used to drop it. On a deployment with a remote validator
