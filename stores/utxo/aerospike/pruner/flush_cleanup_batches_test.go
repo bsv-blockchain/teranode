@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -540,6 +541,52 @@ func TestFlushCleanupBatches_RefusedMasterKeepsItsPages(t *testing.T) {
 	exists, err := client.Exists(nil, pageKey)
 	require.NoError(t, err)
 	require.True(t, exists, "the page of a master the server refused to delete must stay")
+}
+
+// TestFlushCleanupBatches_FailedDeleteStillDeletesTheGoneChildsBlob: one
+// batch deletes child A, which is stored externally, and is refused child B's
+// master. A's record is gone, so no later scan finds it again, and its blob has
+// no delete-at-height, so the blob must go in this flush even though the batch
+// as a whole failed. B's record stays, and so does B's blob.
+func TestFlushCleanupBatches_FailedDeleteStillDeletesTheGoneChildsBlob(t *testing.T) {
+	s, client := newFlushTestService(t)
+	ctx := context.Background()
+
+	gone := chainhash.HashH([]byte("failed-batch-gone-child"))
+	kept := chainhash.HashH([]byte("failed-batch-kept-child"))
+
+	goneKey := putRecord(t, client, &gone, aerospike.BinMap{fields.TxID.String(): gone.CloneBytes()})
+
+	refusedMaster, err := aerospike.NewKey("nosuchnamespace", "test", kept.String())
+	require.NoError(t, err)
+
+	for _, txHash := range []*chainhash.Hash{&gone, &kept} {
+		require.NoError(t, s.external.Set(ctx, txHash.CloneBytes(), fileformat.FileTypeTx, []byte("tx")))
+	}
+
+	deletions := []*pendingDeletion{
+		{txHash: &gone, keys: []*aerospike.Key{goneKey}},
+		{txHash: &kept, keys: []*aerospike.Key{refusedMaster}},
+	}
+	files := []*externalFileInfo{
+		{txHash: &gone, fileType: fileformat.FileTypeTx},
+		{txHash: &kept, fileType: fileformat.FileTypeTx},
+	}
+
+	_, flushErr := s.flushCleanupBatches(ctx, map[string]*parentUpdateInfo{}, deletions, files)
+	require.Error(t, flushErr, "the refused delete is still reported")
+
+	exists, err := client.Exists(nil, goneKey)
+	require.NoError(t, err)
+	require.False(t, exists, "A's record is deleted")
+
+	goneBlob, blobErr := s.external.Exists(ctx, gone.CloneBytes(), fileformat.FileTypeTx)
+	require.NoError(t, blobErr)
+	require.False(t, goneBlob, "the blob of a child whose record went must go in the same flush")
+
+	keptBlob, blobErr := s.external.Exists(ctx, kept.CloneBytes(), fileformat.FileTypeTx)
+	require.NoError(t, blobErr)
+	require.True(t, keptBlob, "the blob of a child whose master delete was refused must stay")
 }
 
 // TestIsPaginationRecord: processRecordChunk sets pendingDeletion.page from

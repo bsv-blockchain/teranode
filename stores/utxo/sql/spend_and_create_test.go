@@ -236,3 +236,76 @@ func TestSpendAndCreateRecheckAfterAnUnknownCreate(t *testing.T) {
 		})
 	}
 }
+
+// TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord: an earlier call
+// for a pruned C wrote C again and kept the record, because its recheck could
+// not answer. The retry's spend meets the pruner's marker and is rejected before
+// the create, so the recheck never runs again. The spend arm must remove the
+// kept record itself, or it stands for good, locked and unmined, where the
+// block-assembly reload offers it for mining.
+//
+// The rows:
+//   - unmined record: the kept recreation. It is removed.
+//   - mined record: the original, which the pruner held back after writing the
+//     marker. It is kept.
+//   - no record: nothing to remove, and the replay is still rejected.
+func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		record   bool
+		mined    bool
+		wantGone bool
+	}{
+		{name: "unmined record", record: true, wantGone: true},
+		{name: "mined record", record: true, mined: true},
+		{name: "no record", wantGone: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, _ := setup(ctx, t)
+
+			parent := bt.NewTx()
+			require.NoError(t, parent.From("5555555555555555555555555555555555555555555555555555555555555555", 0, "51", 30000))
+			parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+			_, err := store.Create(ctx, parent, 1000)
+			require.NoError(t, err)
+
+			child := bt.NewTx()
+			require.NoError(t, child.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, child.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 3000))
+
+			_, err = store.Spend(ctx, child, 1000)
+			require.NoError(t, err)
+
+			if tc.record {
+				opts := []utxo.CreateOption{utxo.WithLocked(true)}
+				if tc.mined {
+					opts = []utxo.CreateOption{utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 1000})}
+				}
+
+				_, err = store.Create(ctx, child, 1000, opts...)
+				require.NoError(t, err)
+			}
+
+			_, err = store.db.ExecContext(ctx,
+				`INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1`,
+				parent.TxIDChainHash()[:], child.TxIDChainHash()[:])
+			require.NoError(t, err)
+
+			_, _, err = utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, store, child, 1000)
+			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is rejected at the spend")
+
+			_, getErr := store.Get(ctx, child.TxIDChainHash())
+			if tc.wantGone {
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "no record of the pruned transaction may remain")
+			} else {
+				require.NoError(t, getErr, "a mined record is never removed on this path")
+			}
+
+			require.Equal(t, spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, parent, 0),
+				"the parent keeps C's spend")
+		})
+	}
+}

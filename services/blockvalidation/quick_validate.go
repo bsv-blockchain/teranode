@@ -2867,7 +2867,7 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			// as a spend.
 			u.logger.Warnf("[applyList][%s] the store refused the list of %d transactions, applying them one at a time: %v", block.Hash().String(), len(txs), err)
 
-			return u.applyOneByOne(ctx, block, txs, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
+			return u.applyOneByOne(ctx, block, txs, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting, replays)
 		case err != nil:
 			// A pass cut short still reports what it wrote and what the store
 			// rejected before the cut, and the cleanup after a pruned replay needs
@@ -2998,6 +2998,23 @@ func (r *listReplays) observe(txid chainhash.Hash, result utxo.SpendAndCreateMul
 
 	if result.Status == utxo.MultiTxFailed && utxo.IsReplayAnswer(result.Err) {
 		r.rejected[txid] = result.Err
+	}
+}
+
+// observeOne records one combined SpendAndCreate's answer, from applyOneByOne:
+// no error means the call wrote the record, and a pruned-replay answer is a
+// rejection, as observe reads a list result.
+func (r *listReplays) observeOne(txid chainhash.Hash, err error) {
+	if r == nil {
+		return
+	}
+
+	if err == nil {
+		r.created[txid] = struct{}{}
+	}
+
+	if err != nil && utxo.IsReplayAnswer(err) {
+		r.rejected[txid] = err
 	}
 }
 
@@ -3167,8 +3184,14 @@ func withParentsInList(txs []*bt.Tx, txids []chainhash.Hash, failed []int) []int
 // applyOneByOne applies txs one SpendAndCreate at a time, in block order: the path for a list the
 // store refused as malformed. A transaction that already exists is collected for the mined-info
 // stamp; any other failure fails the batch with the store's own error class.
+//
+// Each call's answer goes into replays as the list's do, so a failed block that replays a pruned
+// transaction gets the same cleanup (removePrunedReplayGhosts). The combined call can leave a
+// record behind for a replay: a create whose outcome is unknown can still land, and the store
+// keeps a record whose recheck could not answer. The retry's spend then meets the marker, and
+// the cleanup finds that record as this block's leftover.
 func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, subtreeIdxs []int,
-	lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx)) error {
+	lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx), replays *listReplays) error {
 	const maxRetries = 10
 
 	backoff := u.spendRetryBackoff
@@ -3204,6 +3227,8 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 				utxo.WithSkipUTXOHashCheck(outpointOnly))
 
 			cancel()
+
+			replays.observeOne(*tx.TxIDChainHash(), err)
 
 			if err == nil || !errors.IsRetryableError(err) {
 				break

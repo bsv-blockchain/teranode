@@ -2001,6 +2001,40 @@ func TestQuickValidateLeftoverDependentIsRemovedOnRetry(t *testing.T) {
 	require.NotNil(t, meta)
 }
 
+// TestQuickValidateOneByOneRemovesPrunedReplayLeftover: the one-at-a-time
+// fallback, taken for a list the store refused, replays C, which the pruner
+// removed behind P's marker. An earlier combined call for C left its record
+// behind, locked under this block's id, as a create whose outcome was unknown
+// does when the write still lands. The fallback's spend meets the marker and
+// fails the block; the cleanup must find that record as this block's leftover
+// and remove it, as it does after the list path.
+func TestQuickValidateOneByOneRemovesPrunedReplayLeftover(t *testing.T) {
+	bv, store, cleanup := newBlockValidationWithRealStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	f := newPrunedChainFixture(t, store)
+
+	block, _ := assignedReplayBatch(t, bv, f.child)
+
+	_, _, err := store.SpendAndCreate(ctx, f.child, block.Height, utxo.WithCreateOnly(),
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: block.ID, BlockHeight: block.Height}), utxo.WithLocked(true))
+	require.NoError(t, err, "fixture: the earlier call's record landed")
+
+	txs := []*bt.Tx{f.child}
+	txids := []chainhash.Hash{*f.child.TxIDChainHash()}
+	replays := newListReplays()
+
+	err = bv.applyOneByOne(ctx, block, txs, []int{0}, true, false, func(*bt.Tx) {}, replays)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is rejected at its spend")
+
+	require.NoError(t, bv.removePrunedReplayGhosts(ctx, block, txs, txids, replays))
+
+	_, err = store.Get(ctx, f.child.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "the recreated record must be removed")
+}
+
 // TestQuickValidateSiblingBlockIDIsNotAdoptedAsLeftover: block X shares a
 // transaction with block Y, X is committed under id N, and X's post-commit
 // unlock failed, so its record is still locked under N. Block Y then took N, as

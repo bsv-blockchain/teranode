@@ -2670,17 +2670,28 @@ func (s *Service) settleCarriedDeletes(ctx context.Context, carry *deleteCarry, 
 		s.logger.Errorf("Deletion error for key %v: result code %v, err %v", rec.Key, rec.ResultCode, rec.Err)
 	}
 
+	// remaining holds only the blobs of children whose master record is
+	// definitely gone, so they are deleted even when another record in the
+	// batch failed. No later scan finds a deleted record again, and the
+	// external store keeps no delete-at-height for these blobs, so a blob
+	// skipped here would be kept for good.
+	var blobErr error
+	if len(remaining) > 0 {
+		blobErr = s.executeBatchExternalFileDeletions(ctx, remaining)
+	}
+
 	if len(results.failedRecords) > 0 {
-		// The blobs of children whose records definitely went are still
-		// deleted below only when nothing failed, as before: a failed batch
-		// fails the cycle, and the next cycle re-finds what is left.
+		// a failed batch fails the cycle; the next cycle re-finds the records
+		// that are still present
+		if blobErr != nil {
+			return deleted, heldBack, errors.NewStorageError("%d deletion operations failed", len(results.failedRecords), blobErr)
+		}
+
 		return deleted, heldBack, errors.NewStorageError("%d deletion operations failed", len(results.failedRecords))
 	}
 
-	if len(remaining) > 0 {
-		if err := s.executeBatchExternalFileDeletions(ctx, remaining); err != nil {
-			return deleted, heldBack, err
-		}
+	if blobErr != nil {
+		return deleted, heldBack, blobErr
 	}
 
 	return deleted, heldBack, nil
@@ -2711,9 +2722,11 @@ func pageKeysDone(records []aerospike.BatchRecordIfc, deletion *pendingDeletion,
 
 // dropPagesOfPresentMasters removes from deletions every pagination record
 // scanned on its own whose master record is not known to be gone. It returns how
-// many of those it kept back because the master could not be read; a page whose
-// master is present is not counted, since that master's own deletion, or its
-// own hold-back, already accounts for it.
+// many of those it kept back because the master could not be read. A page whose
+// master is present is counted nowhere, neither deleted nor skipped: the
+// master's own deletion or hold-back counts once for the whole transaction,
+// whichever chunk the master is in, so the pruner's deleted and skipped counts
+// leave out the pages found on their own this way.
 //
 // The hold-back in flushChunk is keyed on the transaction, but it is
 // filled per chunk from the master's inputs, and only the master carries them.
