@@ -156,6 +156,18 @@ func TestNettedRoute_CatchupSettingsRefusedAtStartup(t *testing.T) {
 	s.BlockValidation.CatchupAllowQuickValidation = false
 	require.NoError(t, model.CheckNettedRouteCatchupSettings(s, bv.utxoStore), "quick validation off is ignored, not refused")
 
+	// A net range the store would not use as configured is refused, not replaced with the default.
+	for _, bad := range []int{0, -1, 100000} {
+		s.BlockValidation.QuickValidateNetRange = bad
+		err = model.CheckNettedRouteCatchupSettings(s, bv.utxoStore)
+		require.True(t, errors.Is(err, errors.ErrConfiguration), "net range %d, got %v", bad, err)
+		require.NoError(t, model.CheckNettedRouteCatchupSettings(s, bv.utxoStore.(nettingRecorder).applyRecorder),
+			"a store that does not net ignores the net range")
+	}
+
+	s.BlockValidation.QuickValidateNetRange = 32768
+	require.NoError(t, model.CheckNettedRouteCatchupSettings(s, bv.utxoStore))
+
 	// A store that does not net needs no check.
 	s.BlockValidation.CatchupCheckpointHash = "000000000000000000000000000000000000000000000000000000000000000a"
 	s.BlockValidation.CatchupCheckpointHeight = 700

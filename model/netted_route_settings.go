@@ -2,6 +2,7 @@ package model
 
 import (
 	"github.com/bsv-blockchain/go-chaincfg"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -97,6 +98,12 @@ func NettedRouteCatchupWindow(tSettings *settings.Settings, store utxo.Store, ti
 // honour, so it is refused rather than ignored.
 //
 // The window size itself is not refused: NettedRouteCatchupWindow sets it on this route.
+//
+// It also refuses a blockvalidation_quick_validate_net_range that is not a positive power of two.
+// Block validation would replace such a value with the default, so the operator would believe a
+// range is in force that is not, and the obvious later correction to a valid value is a change of
+// range, which is safe between blocks but brings a spent output back as a coin if it lands while a
+// block is partly applied. Refusing at startup makes the value in force the value configured.
 func CheckNettedRouteCatchupSettings(tSettings *settings.Settings, store utxo.Store) error {
 	if !nettedRouteOn(tSettings, store) {
 		return nil
@@ -106,6 +113,10 @@ func CheckNettedRouteCatchupSettings(tSettings *settings.Settings, store utxo.St
 
 	if bv.CatchupCheckpointHash != "" && bv.CatchupCheckpointHeight != 0 {
 		return errors.NewConfigurationError("the UTXO store nets the blocks below the checkpoint, so each catch-up window must hold a hardcoded checkpoint, but blockvalidation_catchup_checkpoint_hash and blockvalidation_catchup_checkpoint_height replace the hardcoded checkpoints in catch-up")
+	}
+
+	if r := bv.QuickValidateNetRange; r <= 0 || !subtreepkg.IsPowerOfTwo(r) {
+		return errors.NewConfigurationError("blockvalidation_quick_validate_net_range is %d; the UTXO store nets the blocks below the checkpoint, and the range must be a positive power of two such as the default 65536", r)
 	}
 
 	return nil
