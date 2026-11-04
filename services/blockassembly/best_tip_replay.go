@@ -144,6 +144,17 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 			return false
 		}
 
+		// The history given up may hold blocks that were the best tip only briefly, also when
+		// block assembly is on the best tip already, for example after a reset, which does not
+		// pass them. Giving it up persists the replay position past them, so the mark they owe
+		// is recorded first; without the record the history is kept, and the next pass, a
+		// failure again, tries once more.
+		if err = b.saveSkippedForkMark(ctx, true); err != nil {
+			b.logger.Errorf("[BlockAssembler] replay of best tip changes failed %d times in a row, keeping its history: the mark of skipped fork transactions giving it up owes cannot be recorded: %v", failures, err)
+			return false
+		}
+
+		b.skippedForkMarkPending = true
 		b.bestTipReplayFailures.Store(0)
 
 		// The best-header path moves straight to the tip, so the blocks before it are
@@ -170,11 +181,6 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 		b.logger.Errorf("[BlockAssembler] replay of best tip changes failed %d times in a row, following the best header instead: %v", failures, err)
 
 		b.giveUpBestTipHistory(ctx)
-
-		// The history given up may hold blocks that were the best tip only briefly, also when
-		// block assembly is on the best tip already, for example after a reset, which does not
-		// pass them. The caller records and runs the mark they owe.
-		b.skippedForkMarkPending = true
 
 		return true
 	}
@@ -274,11 +280,17 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 		return errors.NewProcessingError("[markSkippedForkTxs] error getting chain tips", err)
 	}
 
+	// Block assembly's tip must be the best block, and the active chain tip when one reads
+	// active: the best tip may have moved between the two reads. A best block with a child,
+	// such as an invalid block, is no chain tip, and then none reads active.
 	if !atStart {
 		tip, _ := b.CurrentBlock()
+		if tip == nil || !tip.Hash().IsEqual(best.Hash()) {
+			return errors.NewProcessingError("[markSkippedForkTxs] block assembly is not on the best tip %s", best.Hash())
+		}
 
 		for _, chainTip := range tips {
-			if chainTip.Status == "active" && (tip == nil || chainTip.Hash != tip.Hash().String()) {
+			if chainTip.Status == "active" && chainTip.Hash != tip.Hash().String() {
 				return errors.NewProcessingError("[markSkippedForkTxs] block assembly is not on the best tip %s", chainTip.Hash)
 			}
 		}
@@ -341,11 +353,20 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 	for _, fb := range forkBlocks {
 		hash := *fb.header.Hash()
 
+		// The header read can be served from a cache SetBlockMinedSet does not clear, so a block
+		// it reads as unfinished is asked again, as block validation does.
 		if !fb.meta.MinedSet {
-			b.logger.Infof("[BlockAssembler] fork block %s is not processed by block validation yet, marking its skipped transactions on a later run", hash)
-			unfinished++
+			mined, err := b.blockchainClient.GetBlockIsMined(ctx, &hash)
+			if err != nil {
+				return errors.NewProcessingError("[markSkippedForkTxs] error checking whether fork block %s is processed", hash, err)
+			}
 
-			continue
+			if !mined {
+				b.logger.Infof("[BlockAssembler] fork block %s is not processed by block validation yet, marking its skipped transactions on a later run", hash)
+				unfinished++
+
+				continue
+			}
 		}
 
 		hashes, err := b.blockTxHashes(ctx, fb.header)
@@ -393,6 +414,12 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 			}
 
 			b.logger.Warnf("[BlockAssembler] followed the best header without the replay: marked %d transactions of fork block %s as not on the longest chain", len(toMark)-len(onBest), hash)
+
+			// The block may have joined the best chain during the run and could leave it again
+			// without block assembly moving onto it, so it is read again on a later run.
+			if len(onBest) > 0 {
+				continue
+			}
 		}
 
 		marked[hash] = fb.meta.Height

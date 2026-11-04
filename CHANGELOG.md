@@ -159,8 +159,9 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   fork is, and reads, once, each fork block block validation has finished whose subtree
   files the subtree retention still keeps. It runs only with block assembly on the best
   tip. The run is recorded as pending under a new blockchain state key,
-  `BlockAssemblerSkippedForkMark`, before block assembly follows the best header; if
-  that write fails, block assembly stays on its tip and tries again. An older binary
+  `BlockAssemblerSkippedForkMark`, before block assembly follows the best header or
+  gives the replay's history up; if that write fails, block assembly stays on its tip,
+  or keeps the history, and tries again. An older binary
   ignores the key. A reset still marks every transaction in block assembly. (#2065)
     - **Pool reload.** When the mark takes a transaction off the longest chain that the
       pool does not hold and could (one only the skipped block had, not a conflicting
