@@ -392,3 +392,26 @@ func TestReorgBlocks_InvalidMoveBackChecksOnlyItsOwnTxs(t *testing.T) {
 	require.False(t, store.markedFalse(dup), "a tx also in a valid block stays on the longest chain")
 	require.False(t, store.markedFalse(m1), "a pure mempool tx must not be re-marked")
 }
+
+// existsSet is a tx map that holds the given hashes.
+type existsSet map[chainhash.Hash]struct{}
+
+func (s existsSet) Exists(hash chainhash.Hash) bool {
+	_, ok := s[hash]
+	return ok
+}
+
+// TestMovedBackStillInAssembly: of the moved-back transactions, a reorg marks only those no
+// moveForward block mines and block assembly still holds. One block assembly dropped, such as
+// a reverse-cascade transaction it evicted, may have no record left to mark.
+func TestMovedBackStillInAssembly(t *testing.T) {
+	kept := chainhash.HashH([]byte("kept"))
+	won := chainhash.HashH([]byte("won"))
+	evicted := chainhash.HashH([]byte("evicted"))
+
+	movedBack := map[chainhash.Hash]struct{}{kept: {}, won: {}, evicted: {}}
+	winning := map[chainhash.Hash]struct{}{won: {}}
+	inAssembly := existsSet{kept: {}, won: {}}
+
+	require.Equal(t, []chainhash.Hash{kept}, movedBackStillInAssembly(movedBack, winning, inAssembly))
+}

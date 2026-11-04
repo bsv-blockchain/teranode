@@ -82,7 +82,7 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 
 		var found map[utxo.Outpoint]utxo.ParentOutput
 
-		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, "[ParentOutputsForValidation]", func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, linearLockBackoff, "[ParentOutputsForValidation]", func() error {
 			attempts++
 			if attempts < parentOutputsReadRetries {
 				return lockErr
@@ -106,7 +106,7 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 	t.Run("a lock that never clears returns the lock error", func(t *testing.T) {
 		attempts := 0
 
-		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, "[ParentOutputsForValidation]", func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, linearLockBackoff, "[ParentOutputsForValidation]", func() error {
 			attempts++
 			return lockErr
 		})
@@ -118,7 +118,7 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 		attempts := 0
 		other := errors.NewStorageError("no such table: outputs")
 
-		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, "[ParentOutputsForValidation]", func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, parentOutputsReadRetries, linearLockBackoff, "[ParentOutputsForValidation]", func() error {
 			attempts++
 			return other
 		})
@@ -130,7 +130,7 @@ func TestParentOutputsForValidationRetriesLockError(t *testing.T) {
 		cctx, cancel := context.WithCancel(ctx)
 		attempts := 0
 
-		err := retryOnLockError(cctx, ulogger.TestLogger{}, parentOutputsReadRetries, "[ParentOutputsForValidation]", func() error {
+		err := retryOnLockError(cctx, ulogger.TestLogger{}, parentOutputsReadRetries, linearLockBackoff, "[ParentOutputsForValidation]", func() error {
 			attempts++
 			cancel()
 

@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -38,7 +39,7 @@ func TestSetMinedMultiRetriesLockError(t *testing.T) {
 
 		var blockIDs map[chainhash.Hash][]uint32
 
-		err := retryOnLockError(ctx, ulogger.TestLogger{}, setMinedMultiRetries, "[SetMinedMulti]", func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, setMinedMultiRetries, linearLockBackoff, "[SetMinedMulti]", func() error {
 			attempts++
 			if attempts < setMinedMultiRetries {
 				return lockErr
@@ -58,7 +59,7 @@ func TestSetMinedMultiRetriesLockError(t *testing.T) {
 	t.Run("a lock that never clears returns the lock error", func(t *testing.T) {
 		attempts := 0
 
-		err := retryOnLockError(ctx, ulogger.TestLogger{}, setMinedMultiRetries, "[SetMinedMulti]", func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, setMinedMultiRetries, linearLockBackoff, "[SetMinedMulti]", func() error {
 			attempts++
 			return lockErr
 		})
@@ -70,7 +71,7 @@ func TestSetMinedMultiRetriesLockError(t *testing.T) {
 		attempts := 0
 		other := errors.NewTxNotFoundError("transaction not found")
 
-		err := retryOnLockError(ctx, ulogger.TestLogger{}, setMinedMultiRetries, "[SetMinedMulti]", func() error {
+		err := retryOnLockError(ctx, ulogger.TestLogger{}, setMinedMultiRetries, linearLockBackoff, "[SetMinedMulti]", func() error {
 			attempts++
 			return other
 		})
@@ -82,7 +83,7 @@ func TestSetMinedMultiRetriesLockError(t *testing.T) {
 		cctx, cancel := context.WithCancel(ctx)
 		attempts := 0
 
-		err := retryOnLockError(cctx, ulogger.TestLogger{}, setMinedMultiRetries, "[SetMinedMulti]", func() error {
+		err := retryOnLockError(cctx, ulogger.TestLogger{}, setMinedMultiRetries, linearLockBackoff, "[SetMinedMulti]", func() error {
 			attempts++
 			cancel()
 
@@ -129,14 +130,96 @@ func TestSetMinedMultiRetriesLockErrorFromChunk(t *testing.T) {
 		_, _ = db.db.ExecContext(ctx, "DROP TRIGGER IF EXISTS setmined_lock_refusal")
 	})
 
-	setMinedLockRefusals.Store(1)
+	// A lock cycle can re-form while a wave of creates runs, so the chunk gets as many
+	// attempts as Create: every one but the last is refused here.
+	setMinedLockRefusals.Store(setMinedMultiRetries - 1)
 
 	hash := tx.TxIDChainHash()
 
 	blockIDs, err := db.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 1, OnLongestChain: true})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{7}, blockIDs[*hash])
-	require.Equal(t, int32(-1), setMinedLockRefusals.Load(), "the first insert was refused and the second ran")
+	require.Equal(t, int32(-1), setMinedLockRefusals.Load(), "every insert but the last was refused and the last ran")
+}
+
+// SetMinedMulti waits as long between lock retries as Create does, 100ms, 200ms and 400ms:
+// a 10-20ms backoff lets a wave of concurrent creates re-form the lock cycle.
+func TestSetMinedMultiLockBackoff(t *testing.T) {
+	require.Equal(t, 4, setMinedMultiRetries)
+	require.Equal(t, 100*time.Millisecond, setMinedMultiLockBackoff(1))
+	require.Equal(t, 200*time.Millisecond, setMinedMultiLockBackoff(2))
+	require.Equal(t, 400*time.Millisecond, setMinedMultiLockBackoff(3))
+}
+
+// fakeRows yields its rows and then fails with err, as a driver error part way through a result
+// does.
+type fakeRows struct {
+	rows   [][]any
+	err    error
+	closed bool
+}
+
+func (r *fakeRows) Next() bool {
+	return len(r.rows) > 0
+}
+
+func (r *fakeRows) Scan(dest ...any) error {
+	row := r.rows[0]
+	r.rows = r.rows[1:]
+
+	for i := range dest {
+		switch d := dest[i].(type) {
+		case *[]byte:
+			*d = row[i].([]byte)
+		case **uint32:
+			*d = row[i].(*uint32)
+		}
+	}
+
+	return nil
+}
+
+func (r *fakeRows) Err() error {
+	return r.err
+}
+
+func (r *fakeRows) Close() error {
+	r.closed = true
+	return nil
+}
+
+// An error part way through a SetMinedMulti read is returned, not read as missing rows or a
+// short list of block ids.
+func TestSetMinedMultiRowReadersReturnRowErrors(t *testing.T) {
+	hash := chainhash.HashH([]byte("tx"))
+	id := uint32(7)
+	rowErr := errors.NewStorageError("connection reset")
+
+	t.Run("existing hashes", func(t *testing.T) {
+		rows := &fakeRows{rows: [][]any{{hash[:]}}, err: rowErr}
+
+		_, err := readExistingHashes(rows)
+		require.ErrorContains(t, err, "connection reset")
+		require.True(t, rows.closed)
+
+		rows = &fakeRows{rows: [][]any{{hash[:]}}}
+		found, err := readExistingHashes(rows)
+		require.NoError(t, err)
+		require.True(t, found[hash])
+	})
+
+	t.Run("block ids", func(t *testing.T) {
+		rows := &fakeRows{rows: [][]any{{hash[:], &id}}, err: rowErr}
+
+		_, err := readBlockIDs(rows)
+		require.ErrorContains(t, err, "connection reset")
+		require.True(t, rows.closed)
+
+		rows = &fakeRows{rows: [][]any{{hash[:], &id}}}
+		blockIDs, err := readBlockIDs(rows)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{7}, blockIDs[hash])
+	})
 }
 
 // A PostgreSQL deadlock (SQLSTATE 40P01) is still recognised after

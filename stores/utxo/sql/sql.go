@@ -2425,10 +2425,11 @@ func isDeadlock(err error) bool {
 }
 
 // retryOnLockError runs op up to attempts times while it fails with an error
-// isDeadlock recognises, and returns its last error. what names the operation
-// in the warning logged before each retry. op must be safe to run again after
-// such a failure: a failed statement or rolled-back transaction holds no locks.
-func retryOnLockError(ctx context.Context, logger ulogger.Logger, attempts int, what string, op func() error) error {
+// isDeadlock recognises, and returns its last error. backoff gives the wait
+// after the given failed attempt, counting from 1. what names the operation in
+// the warning logged before each retry. op must be safe to run again after such
+// a failure: a failed statement or rolled-back transaction holds no locks.
+func retryOnLockError(ctx context.Context, logger ulogger.Logger, attempts int, backoff func(attempt int) time.Duration, what string, op func() error) error {
 	for attempt := 1; ; attempt++ {
 		err := op()
 		if err == nil || !isDeadlock(err) || attempt >= attempts {
@@ -2440,9 +2441,93 @@ func retryOnLockError(ctx context.Context, logger ulogger.Logger, attempts int, 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Duration(attempt) * 10 * time.Millisecond):
+		case <-time.After(backoff(attempt)):
 		}
 	}
+}
+
+// linearLockBackoff waits 10ms more after each failed attempt.
+func linearLockBackoff(attempt int) time.Duration {
+	return time.Duration(attempt) * 10 * time.Millisecond
+}
+
+// setMinedMultiLockBackoff is Create's lock retry budget: 100ms, 200ms, 400ms. On
+// sqlitememory a lock error is the engine breaking a cycle with a concurrent create,
+// and a wave of concurrent creates re-forms that cycle faster than a 10-20ms backoff
+// lets them finish.
+func setMinedMultiLockBackoff(attempt int) time.Duration {
+	return 100 * time.Millisecond << (attempt - 1)
+}
+
+// sqlRows is the part of *sql.Rows the row readers below use.
+type sqlRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close() error
+}
+
+// readExistingHashes reads the hash column of every row and closes rows. An error
+// part way through the rows would otherwise read as missing rows, which an UnsetMined
+// write tolerates; returned, it fails the chunk, and a lock error retries it.
+func readExistingHashes(rows sqlRows) (map[chainhash.Hash]bool, error) {
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	existingHashes := make(map[chainhash.Hash]bool)
+
+	for rows.Next() {
+		var hb []byte
+		if err := rows.Scan(&hb); err != nil {
+			return nil, errors.NewStorageError("SQL error scanning existing hash: %v", err)
+		}
+
+		var h chainhash.Hash
+		copy(h[:], hb)
+		existingHashes[h] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("SQL error reading existing hashes: %v", err)
+	}
+
+	return existingHashes, nil
+}
+
+// readBlockIDs reads (hash, nullable block id) rows into each hash's block ids and
+// closes rows. A hash with no block id is in the map with none. An error part way
+// through the rows is returned rather than read as a short list.
+func readBlockIDs(rows sqlRows) (map[chainhash.Hash][]uint32, error) {
+	defer func() {
+		_ = rows.Close()
+	}()
+
+	blockIDsMap := make(map[chainhash.Hash][]uint32)
+
+	for rows.Next() {
+		var hb []byte
+		var blockID *uint32 // nullable from LEFT JOIN
+		if err := rows.Scan(&hb, &blockID); err != nil {
+			return nil, errors.NewStorageError("SQL error scanning block IDs: %v", err)
+		}
+
+		var h chainhash.Hash
+		copy(h[:], hb)
+
+		if blockID != nil {
+			blockIDsMap[h] = append(blockIDsMap[h], *blockID)
+		} else if _, exists := blockIDsMap[h]; !exists {
+			// Ensure the hash is in the map even with no block_ids
+			blockIDsMap[h] = nil
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.NewStorageError("SQL error reading block IDs: %v", err)
+	}
+
+	return blockIDsMap, nil
 }
 
 // sendSpendBatch is the batcher callback that processes a batch of spend operations
@@ -3666,7 +3751,7 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 
 		var chunkResult map[chainhash.Hash][]uint32
 
-		err := retryOnLockError(ctx, s.logger, setMinedMultiRetries, "[SetMinedMulti] chunk", func() error {
+		err := retryOnLockError(ctx, s.logger, setMinedMultiRetries, setMinedMultiLockBackoff, "[SetMinedMulti] chunk", func() error {
 			var err error
 
 			chunkResult, err = s.setMinedMultiChunk(ctx, hashes[i:end], minedBlockInfo)
@@ -3686,8 +3771,9 @@ func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, min
 }
 
 // setMinedMultiRetries bounds how many times one SetMinedMulti chunk is tried
-// when the database refuses it with a lock error.
-const setMinedMultiRetries = 3
+// when the database refuses it with a lock error: once and three retries, as
+// Create does.
+const setMinedMultiRetries = 4
 
 // setMinedMultiChunk processes a single chunk of hashes (up to maxINClauseSize).
 // Uses portable IN ($1,$2,...,$N) clauses that work on both PostgreSQL and SQLite.
@@ -3722,26 +3808,10 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		return nil, errors.NewStorageError("SQL error checking transaction existence: %v", err)
 	}
 
-	existingHashes := make(map[chainhash.Hash]bool)
-	for rows.Next() {
-		var hb []byte
-		if err := rows.Scan(&hb); err != nil {
-			rows.Close()
-			return nil, errors.NewStorageError("SQL error scanning existing hash: %v", err)
-		}
-		var h chainhash.Hash
-		copy(h[:], hb)
-		existingHashes[h] = true
+	existingHashes, err := readExistingHashes(rows)
+	if err != nil {
+		return nil, err
 	}
-
-	// An error part way through the rows would otherwise read as missing rows, which an
-	// UnsetMined write tolerates; returned, it fails the chunk, and a lock error retries it.
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, errors.NewStorageError("SQL error reading existing hashes: %v", err)
-	}
-
-	rows.Close()
 
 	// Postcondition (see stores/utxo/Interface.go SetMinedMulti docstring): when
 	// !UnsetMined every submitted hash MUST exist in the transactions table.
@@ -3971,24 +4041,10 @@ func (s *Store) setMinedMultiChunk(ctx context.Context, hashes []*chainhash.Hash
 		return nil, errors.NewStorageError("SQL error fetching block IDs: %v", err)
 	}
 
-	blockIDsMap := make(map[chainhash.Hash][]uint32)
-	for rows.Next() {
-		var hb []byte
-		var blockID *uint32 // nullable from LEFT JOIN
-		if err := rows.Scan(&hb, &blockID); err != nil {
-			rows.Close()
-			return nil, errors.NewStorageError("SQL error scanning block IDs: %v", err)
-		}
-		var h chainhash.Hash
-		copy(h[:], hb)
-		if blockID != nil {
-			blockIDsMap[h] = append(blockIDsMap[h], *blockID)
-		} else if _, exists := blockIDsMap[h]; !exists {
-			// Ensure the hash is in the map even with no block_ids
-			blockIDsMap[h] = nil
-		}
+	blockIDsMap, err := readBlockIDs(rows)
+	if err != nil {
+		return nil, err
 	}
-	rows.Close()
 
 	if err = txn.Commit(); err != nil {
 		return nil, errors.NewStorageError("SQL error committing SetMinedMulti transaction: %v", err)

@@ -772,18 +772,33 @@ drain:
 	// A reset traverses only its endpoint lineages. Keep the replay position so any
 	// briefly winning branch outside those lineages is still replayed afterwards. Without a
 	// replay position nothing replays them, so the reset owes the mark of skipped fork
-	// transactions a move to the best header owes. It is recorded first, since the reset
-	// persists its new tip; a reset is not refused for a failed record, which leaves the mark
-	// pending in this process only.
+	// transactions a move to the best header owes. As for that move, it is recorded first,
+	// since the reset persists its new tip, and without the record the reset does not run.
+	// The mark then runs before the reset, whose reload takes in what it unmarks; a mark
+	// that does not finish is run again after the reset, with a reload of its own.
 	wasPending := b.bestTipResetReplayPending.Load()
 	if b.bestTipPosKnown.Load() {
 		b.bestTipResetReplayPending.Store(true)
 	} else {
 		if err := b.saveSkippedForkMark(ctx, true); err != nil {
-			b.logger.Errorf("[BlockAssembler] error recording the mark of skipped fork transactions a reset owes, marking them in this process only: %v", err)
+			b.skippedForkMarkPending = true
+			b.noteSkippedForkMarkFailure(time.Now())
+			prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
+
+			refused := errors.NewProcessingError("[BlockAssembler] reset refused: the mark of skipped fork transactions it would owe cannot be recorded", err)
+			b.logger.Errorf("%v", refused)
+
+			for _, req := range batch {
+				if req.ErrCh != nil {
+					req.ErrCh <- refused
+				}
+			}
+
+			return
 		}
 
 		b.skippedForkMarkPending = true
+		b.runSkippedForkMark(ctx, true)
 	}
 	resp, err := b.resetWithResponse(ctx, validateInputs)
 	if err != nil && !resp.Rotated {
@@ -805,7 +820,7 @@ drain:
 			b.triggerReconcile()
 		}
 	} else if err == nil && b.skippedForkMarkPending {
-		b.runSkippedForkMark(ctx)
+		b.runSkippedForkMark(ctx, false)
 	}
 
 	// The Reset path replays moveForward blocks through the same
@@ -1481,7 +1496,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		// to drop it. It does not run off the best tip. Its back-off paces only the idle wake
 		// (reconcileDue), not a pass.
 		if b.skippedForkMarkPending {
-			b.runSkippedForkMark(ctx)
+			b.runSkippedForkMark(ctx, false)
 		}
 
 		return
@@ -1508,6 +1523,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		if err = b.saveSkippedForkMark(ctx, true); err != nil {
 			b.skippedForkMarkPending = true
 			b.noteSkippedForkMarkFailure(time.Now())
+			prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
 			b.logger.Errorf("[BlockAssembler] not following the best header to %s, the mark of skipped fork transactions it would owe cannot be recorded, retrying at %s: %v", bestBlockchainBlockHeader.Hash(), b.skippedForkMarkRetryAt.Format(time.RFC3339), err)
 
 			return
@@ -1516,14 +1532,16 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		b.skippedForkMarkPending = true
 	}
 
-	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil {
+	// A move that ran a reset ends on the best tip as well (errBestTipReset is the replay's
+	// version of the same outcome).
+	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil && !errors.Is(err, errors.ErrBlockAssemblyReset) {
 		// The pending mark keeps the idle wake retrying the move, after a back-off.
 		b.noteSkippedForkMarkFailure(time.Now())
 		return
 	}
 
 	if b.skippedForkMarkPending {
-		b.runSkippedForkMark(ctx)
+		b.runSkippedForkMark(ctx, false)
 	}
 }
 
@@ -2555,6 +2573,12 @@ func (b *BlockAssembler) onResetDone(storageTriggered bool, resp subtreeprocesso
 	// Any rotation discards the phantom a pending reset was for.
 	if resp.Rotated {
 		b.diskTxMapResetPending = false
+	}
+
+	// A reset that finished reloaded every unmined transaction, which is the pool reload a
+	// mark of skipped fork transactions may still owe.
+	if resetErr == nil {
+		b.skippedForkReloadPending = false
 	}
 
 	switch {

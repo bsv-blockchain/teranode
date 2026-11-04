@@ -154,30 +154,35 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   reset while the blockchain service does not serve it, block assembly marks as not on
   the longest chain the transactions of recent fork blocks that no block of the best
   chain contains and that a block marked mined. A transaction a best-chain block mines by
-  the time the mark is written is marked as mined again. It walks every fork down from
-  its chain tip to the fork point, past invalid blocks and in pages however long the
-  fork is, and reads, once, each fork block block validation has finished whose subtree
-  files the subtree retention still keeps. It runs only with block assembly on the best
-  tip. The run is recorded as pending under a new blockchain state key,
-  `BlockAssemblerSkippedForkMark`, before block assembly follows the best header or
-  gives the replay's history up; if that write fails, block assembly stays on its tip,
-  or keeps the history, and tries again. An older binary
-  ignores the key. A reset still marks every transaction in block assembly. (#2065)
+  the time the mark is written is marked as mined again. It lists the valid blocks above
+  its floor that the best chain does not hold, in pages, without computing chain tips'
+  branch lengths, and reads, once, each one block validation has finished whose subtree
+  files the subtree retention still keeps. It runs with block assembly on the best tip,
+  or before the reset it follows. The run is recorded as pending under a new blockchain
+  state key, `BlockAssemblerSkippedForkMark`, before block assembly follows the best
+  header, resets without a replay position, or gives the replay's history up; if that
+  write fails, block assembly stays on its tip, refuses the reset or keeps the history,
+  and tries again. An older binary ignores the key. A reset still marks every
+  transaction in block assembly. Each failure path counts in
+  `teranode_blockassembly_processing_stuck_total` under `skipped_fork_mark_unfinished`,
+  `skipped_fork_mark_record` or `skipped_fork_subtree_lost`. (#2065)
     - **Pool reload.** When the mark takes a transaction off the longest chain that the
       pool does not hold and could (one only the skipped block had, not a conflicting
       one), block assembly reloads the pool on its own tip. That is a full reset, as the
       replay's restamp of a stale branch runs. A fork block that never was the best tip,
       or a transaction that lost a double spend, does not cause one.
     - **Retries.** A run that cannot finish, for example on a fork block whose subtree
-      store cannot be reached or that block validation has not finished, stays pending. Every later block pass on the best tip runs it
-      again, and the reconcile timer wakes it after a back-off that starts at 5s and
-      doubles up to 5 minutes, even with `blockassembly_reconcileInterval=0`.
+      store cannot be reached or that block validation has not finished, stays pending.
+      Every later block pass on the best tip runs it again, and the reconcile timer wakes
+      it after a back-off that starts at 5s and doubles up to 5 minutes, even with
+      `blockassembly_reconcileInterval=0`.
     - **A lost subtree stops block assembly.** Block validation finished a fork block
       the mark reads and its subtree files are within their retention, so a missing one
       is an infrastructure failure: the block assembly service stops with `has lost its
       subtree` rather than leave the block's transactions marked mined.
     - **Start fails while it is unfinished.** A restart finishes a pending run before it
-      loads the unmined transactions. If it cannot, for example because a fork block's
+      loads the unmined transactions, waiting once for a fork block block validation is
+      still finishing. If it cannot, for example because a fork block's
       subtree is unreadable or gone, block assembly fails to start rather than load a
       pool without those transactions, and starts once the subtree can be read. In a
       single-process node a failed start stops block validation too, so the chain does

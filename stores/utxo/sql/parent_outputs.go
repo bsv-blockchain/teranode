@@ -109,7 +109,7 @@ const parentOutputsReadRetries = 3
 func (s *Store) parentOutputsChunkWithRetry(ctx context.Context, chunk []outpointPair) (map[utxo.Outpoint]utxo.ParentOutput, error) {
 	var found map[utxo.Outpoint]utxo.ParentOutput
 
-	err := retryOnLockError(ctx, s.logger, parentOutputsReadRetries, "[ParentOutputsForValidation] outpoints chunk", func() error {
+	err := retryOnLockError(ctx, s.logger, parentOutputsReadRetries, linearLockBackoff, "[ParentOutputsForValidation] outpoints chunk", func() error {
 		var err error
 
 		found, err = s.parentOutputsChunk(ctx, chunk)

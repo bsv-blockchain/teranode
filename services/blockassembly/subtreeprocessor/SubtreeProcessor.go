@@ -1633,7 +1633,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// Mark all currently-in-assembly transactions as NOT on longest chain before clearing state.
 	//
 	// Some assembly transactions may have unmined_since=NULL in the UTXO store if a competing
-	// fork's BlockValidation processed them (it inserts them with UnminedSince=0, i.e. "mined").
+	// fork's BlockValidation processed them (its setTxMined clears unmined_since, i.e. "mined").
 	// Without this step, loadUnminedTransactions() — which uses the unmined_since index
 	// (WHERE unmined_since IS NOT NULL) — will not find them, and they will be silently dropped
 	// from block assembly after the reset.
@@ -1641,7 +1641,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// reorgBlocks() marks only the transactions it moved back (issue 2051), so this sweep no
 	// longer mirrors it. It stays as the catch-all: reset is rare, and it is where such a gap
 	// drops transactions from block assembly. For transactions that already have
-	// unmined_since set, it is a no-op.
+	// unmined_since set, it is a no-op on the sql and aerospike stores; the utxoset store
+	// restarts their clock.
 	{
 		currentSubtree := stp.currentSubtree.Load()
 		subtreeNodeCount := len(currentSubtree.Nodes)
@@ -5231,37 +5232,16 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// a tx block assembly still holds is guaranteed to exist. Reverse-cascade txs evicted by
 	// stp.Remove above stay unmarked, as before.
 	//
-	// MarkTransactionsOnLongestChain(false) keeps an existing unmined_since and stamps only
-	// an absent one. Before that guard (issue 1768) every reorg rewrote
+	// On the sql and aerospike stores MarkTransactionsOnLongestChain(false) keeps an existing
+	// unmined_since and stamps only an absent one; the utxoset store restarts the clock on
+	// purpose (see its MarkTransactionsOnLongestChain). Before that guard (issue 1768) every
+	// reorg rewrote
 	// unmined_since = currentBlockHeight, which restarted the pruner's parent-preservation
 	// clock for every unmined child while each parent's deleteAtHeight kept counting from
 	// the original spend — a one-block fork opened a
 	// blockHeightRetention-unminedTxRetention window in which parents were pruned from
 	// under live children.
-	subtreeNodeCount := 0
-	for _, subtree := range stp.chainedSubtrees {
-		subtreeNodeCount += len(subtree.Nodes)
-	}
-	currentSubtree := stp.currentSubtree.Load()
-	subtreeNodeCount += len(currentSubtree.Nodes)
-
-	// Coinbase placeholders are never in movedBackBlockTxMap, so they drop out here.
-	movedBackAssemblyHashes := make([]chainhash.Hash, 0, min(len(movedBackBlockTxMap), subtreeNodeCount))
-	collectMovedBack := func(nodes []subtreepkg.Node) {
-		for _, node := range nodes {
-			if _, movedBack := movedBackBlockTxMap[node.Hash]; !movedBack {
-				continue
-			}
-			if _, winning := winningTxSet[node.Hash]; winning {
-				continue
-			}
-			movedBackAssemblyHashes = append(movedBackAssemblyHashes, node.Hash)
-		}
-	}
-	for _, subtree := range stp.chainedSubtrees {
-		collectMovedBack(subtree.Nodes)
-	}
-	collectMovedBack(currentSubtree.Nodes)
+	movedBackAssemblyHashes := movedBackStillInAssembly(movedBackBlockTxMap, winningTxSet, stp.currentTxMap)
 
 	movedBackBlockTxMap = nil // free up memory
 
@@ -5343,6 +5323,26 @@ func appendAllTxHashes(dst []chainhash.Hash, m txmap.TxMap) []chainhash.Hash {
 	return dst
 }
 
+// movedBackStillInAssembly returns the moved-back transactions that no moveForward block mines
+// and that block assembly still holds. Its tx map holds exactly the transactions in its
+// subtrees, so it answers with one probe per moved-back transaction, rather than one per
+// transaction in block assembly. Coinbase placeholders are never in movedBack.
+func movedBackStillInAssembly(movedBack, winning map[chainhash.Hash]struct{}, txMap interface{ Exists(chainhash.Hash) bool }) []chainhash.Hash {
+	hashes := make([]chainhash.Hash, 0, len(movedBack))
+
+	for hash := range movedBack {
+		if _, won := winning[hash]; won {
+			continue
+		}
+
+		if txMap.Exists(hash) {
+			hashes = append(hashes, hash)
+		}
+	}
+
+	return hashes
+}
+
 // partitionLongestChainMarks splits transactions into the two disjoint sets used by the
 // concurrent MarkTransactionsOnLongestChain calls during a reorg:
 //
@@ -5352,8 +5352,8 @@ func appendAllTxHashes(dst []chainhash.Hash, m txmap.TxMap) []chainhash.Hash {
 //     assembly).
 //
 // losingTxHashes is expected to already be deduped (against the winning set and itself);
-// assemblyHashes is a raw set of assembly node hashes and may contain coinbase
-// placeholders and duplicates. The returned slices are guaranteed to be:
+// assemblyHashes are the moved-back transactions still in block assembly. A coinbase
+// placeholder or a duplicate in either is dropped. The returned slices are guaranteed to be:
 //
 //   - de-duplicated (markFalse contains each hash at most once), and
 //   - mutually disjoint — any hash present in both the markOnLongestChain input and the

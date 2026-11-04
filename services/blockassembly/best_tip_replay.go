@@ -150,8 +150,10 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 		// pass them. Giving it up persists the replay position past them, so the mark they owe
 		// is recorded first; without the record the history is kept, and the next pass, a
 		// failure again, tries once more.
-		if err = b.saveSkippedForkMark(ctx, true); err != nil {
-			b.logger.Errorf("[BlockAssembler] replay of best tip changes failed %d times in a row, keeping its history: the mark of skipped fork transactions giving it up owes cannot be recorded: %v", failures, err)
+		if saveErr := b.saveSkippedForkMark(ctx, true); saveErr != nil {
+			prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
+			b.logger.Errorf("[BlockAssembler] replay of best tip changes failed %d times in a row, keeping its history: the mark of skipped fork transactions giving it up owes cannot be recorded: %v (replay: %v)", failures, saveErr, err)
+
 			return false
 		}
 
@@ -225,25 +227,35 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 // It marks the transactions of recent fork blocks that no block of the best chain contains
 // (branchOnlyTxs) and that are marked mined as not on the longest chain, as the replay's restamp
 // does (markOffLongestChain). Which fork block was the best tip does not matter: one still
-// stamped unmined is left as it is. Unless it runs at start-up, before the unmined transactions
-// are loaded, it reloads the pool when one it marked is not in it and is not conflicting, which
-// the pool never loads. Outside start-up it runs only with block assembly on the best tip, since
-// otherwise block assembly's own blocks read as fork blocks.
+// stamped unmined is left as it is. Unless beforeReload, it then reloads the pool when one it
+// marked is not in it and is not conflicting, which the pool never loads. beforeReload says a
+// load of the unmined transactions follows anyway, at start-up or in the reset that comes next;
+// it also lets the run start off the best tip, since that load is on the best tip. Otherwise the
+// run waits for block assembly to be on the best tip, where its own blocks are not fork blocks:
+// it returns errSkippedForkMarkOffTip and stays pending, without a back-off.
 //
-// The fork blocks are walked down from every chain tip but the active one, to the fork point or
-// the floor (forkBlocksBelow, skippedForkMarkFloor). A tip may be an invalid block whose valid
-// parent is the one that was briefly best, and a fork block block assembly never processed has
-// no processed_at, so its tip reads valid-headers rather than valid-fork. Of the blocks walked,
-// the valid ones with subtrees are read: block validation sets subtrees_set before it marks a
-// block's transactions mined. One whose mined_set is not set yet is left for a later run, so a
-// setTxMined still writing it cannot clear unmined_since again after the mark. A block is
-// recorded once its transactions are marked and the pool reloaded, and is not read again.
+// The fork blocks are the valid blocks at or above the floor that the best chain does not hold
+// (skippedForkBlocks, skippedForkMarkFloor). Of them, the ones with subtrees are read: block
+// validation sets subtrees_set before it marks a block's transactions mined. One whose mined_set
+// is not set yet is left for a later run, so a setTxMined still writing it cannot clear
+// unmined_since again after the mark. A block is recorded as soon as its transactions are marked,
+// and is not read again; the pool reload it may need is kept apart (skippedForkReloadPending).
 //
 // It returns an error when the run did not finish, for example on a fork block it cannot read.
 // The run then stays pending, in memory and under SkippedForkMarkStateKey: every later pass runs
 // it again, the idle reconcile wakes one after a back-off (noteSkippedForkMarkFailure), and the
-// next start finishes it before it loads the unmined transactions, or fails.
-func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (err error) {
+// next start finishes it before it loads the unmined transactions, or fails. A fork block whose
+// subtree is gone is a skippedForkSubtreeGoneError, which stops block assembly.
+func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bool) (err error) {
+	best, bestMeta, bestErr := b.blockchainClient.GetBestBlockHeader(ctx)
+
+	if bestErr == nil && !beforeReload {
+		if tip, _ := b.CurrentBlock(); tip == nil || !tip.Hash().IsEqual(best.Hash()) {
+			b.logger.Debugf("[BlockAssembler] block assembly is not on the best tip %s, marking skipped fork transactions once it is", best.Hash())
+			return errSkippedForkMarkOffTip
+		}
+	}
+
 	b.skippedForkMarkPending = true
 
 	defer func() {
@@ -264,81 +276,18 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 		}
 
 		// A lost subtree stops block assembly (runSkippedForkMark), so it is not retried.
-		if _, gone := err.(*skippedForkSubtreeGoneError); !atStart && !gone {
+		if _, gone := err.(*skippedForkSubtreeGoneError); !gone {
+			prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_unfinished").Inc()
 			b.noteSkippedForkMarkFailure(time.Now())
 			b.logger.Errorf("[BlockAssembler] mark of skipped fork transactions unfinished, retrying at %s: %v", b.skippedForkMarkRetryAt.Format(time.RFC3339), err)
 		}
 	}()
 
-	best, bestMeta, err := b.blockchainClient.GetBestBlockHeader(ctx)
-	if err != nil {
-		return errors.NewProcessingError("[markSkippedForkTxs] error getting the best block header", err)
-	}
-
-	// GetChainTips reads its rows before it computes branch lengths, so under SQLite's shared
-	// cache it cannot deadlock against a concurrent writer.
-	tips, err := b.blockchainClient.GetChainTips(ctx)
-	if err != nil {
-		return errors.NewProcessingError("[markSkippedForkTxs] error getting chain tips", err)
-	}
-
-	// Block assembly's tip must be the best block, and the active chain tip when one reads
-	// active: the best tip may have moved between the two reads. A best block with a child,
-	// such as an invalid block, is no chain tip, and then none reads active.
-	if !atStart {
-		tip, _ := b.CurrentBlock()
-		if tip == nil || !tip.Hash().IsEqual(best.Hash()) {
-			return errors.NewProcessingError("[markSkippedForkTxs] block assembly is not on the best tip %s", best.Hash())
-		}
-
-		for _, chainTip := range tips {
-			if chainTip.Status == "active" && chainTip.Hash != tip.Hash().String() {
-				return errors.NewProcessingError("[markSkippedForkTxs] block assembly is not on the best tip %s", chainTip.Hash)
-			}
-		}
+	if bestErr != nil {
+		return errors.NewProcessingError("[markSkippedForkTxs] error getting the best block header", bestErr)
 	}
 
 	floor := b.skippedForkMarkFloor(bestMeta.Height)
-	walked := make(map[chainhash.Hash]struct{})
-
-	var forkBlocks []blockHeaderWithMeta
-
-	for _, chainTip := range tips {
-		if chainTip.Status == "active" || chainTip.Height < floor {
-			continue
-		}
-
-		tipHash, err := chainhash.NewHashFromStr(chainTip.Hash)
-		if err != nil {
-			return errors.NewProcessingError("[markSkippedForkTxs] error parsing chain tip hash %s", chainTip.Hash, err)
-		}
-
-		headers, metas, err := b.forkBlocksBelow(ctx, tipHash, chainTip.Height, chainTip.Branchlen, floor, best, walked)
-		if err != nil {
-			return errors.NewProcessingError("[markSkippedForkTxs] error getting the blocks of fork %s", tipHash, err)
-		}
-
-		for i, header := range headers {
-			// A block without subtrees has not been through block validation, which marked
-			// nothing mined in it; it is looked at again on a later run. An invalid block's
-			// transactions are block validation's to unmark.
-			if metas[i].Invalid || !metas[i].SubtreesSet {
-				continue
-			}
-
-			if _, done := b.skippedForkBlocksMarked[*header.Hash()]; !done {
-				forkBlocks = append(forkBlocks, blockHeaderWithMeta{header: header, meta: metas[i]})
-			}
-		}
-	}
-
-	if len(forkBlocks) == 0 {
-		return b.reloadAfterSkippedForkMark(ctx, atStart)
-	}
-
-	if b.skippedForkBlocksMarked == nil {
-		b.skippedForkBlocksMarked = make(map[chainhash.Hash]uint32)
-	}
 
 	for hash, height := range b.skippedForkBlocksMarked {
 		if height < floor {
@@ -346,13 +295,27 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 		}
 	}
 
+	forkBlocks, err := b.skippedForkBlocks(ctx, best, bestMeta.Height, floor)
+	if err != nil {
+		return errors.NewProcessingError("[markSkippedForkTxs] error listing the fork blocks", err)
+	}
+
+	if len(forkBlocks) == 0 {
+		return b.reloadAfterSkippedForkMark(ctx, beforeReload)
+	}
+
+	if b.skippedForkBlocksMarked == nil {
+		b.skippedForkBlocksMarked = make(map[chainhash.Hash]uint32)
+	}
+
 	txMap := b.subtreeProcessor.GetCurrentTxMap()
-	unfinished := 0
-	marked := make(map[chainhash.Hash]uint32, len(forkBlocks))
+	unread, unprocessed := 0, 0
 
 	// Block by block, so a block that cannot be read does not hold up the others; it is not
 	// recorded, and the next run reads it again.
 	for _, fb := range forkBlocks {
+		b.heartbeat.BeatIfStarted()
+
 		hash := *fb.header.Hash()
 
 		// The header read can be served from a cache SetBlockMinedSet does not clear, so a block
@@ -365,7 +328,7 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 
 			if !mined {
 				b.logger.Infof("[BlockAssembler] fork block %s is not processed by block validation yet, marking its skipped transactions on a later run", hash)
-				unfinished++
+				unprocessed++
 
 				continue
 			}
@@ -380,7 +343,7 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 			}
 
 			b.logger.Errorf("[BlockAssembler] error reading fork block %s to mark skipped fork transactions: %v", hash, err)
-			unfinished++
+			unread++
 
 			continue
 		}
@@ -402,24 +365,35 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 
 			toMark = append(toMark, u.Hash)
 
-			if !atStart && !u.Data.Conflicting && !txMap.Exists(u.Hash) {
+			if !beforeReload && !u.Data.Conflicting && !txMap.Exists(u.Hash) {
 				poolable[u.Hash] = struct{}{}
 			}
 		}
 
 		if len(toMark) > 0 {
+			// Set before the write: once it is written, a later run finds those transactions
+			// unmined already and would not know the pool still lacks them.
+			reloadOwed := b.skippedForkReloadPending
+			if len(poolable) > 0 {
+				b.skippedForkReloadPending = true
+			}
+
+			b.heartbeat.BeatIfStarted()
+
 			onBest, err := b.markOffLongestChain(ctx, toMark)
 			if err != nil {
 				return errors.NewProcessingError("[markSkippedForkTxs] error marking %d transactions of fork block %s as not on the longest chain", len(toMark), hash, err)
 			}
 
+			b.heartbeat.BeatIfStarted()
+
+			// Those the best chain holds by now are marked mined again and stay out of the pool,
+			// and a reload would stamp the pool's copies of them unmined.
 			for _, txHash := range onBest {
 				delete(poolable, txHash)
 			}
 
-			if len(poolable) > 0 {
-				b.skippedForkReloadPending = true
-			}
+			b.skippedForkReloadPending = reloadOwed || len(poolable) > 0
 
 			b.logger.Warnf("[BlockAssembler] followed the best header without the replay: marked %d transactions of fork block %s as not on the longest chain", len(toMark)-len(onBest), hash)
 
@@ -430,22 +404,35 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 			}
 		}
 
-		marked[hash] = fb.meta.Height
+		b.skippedForkBlocksMarked[hash] = fb.meta.Height
 	}
 
-	if err = b.reloadAfterSkippedForkMark(ctx, atStart); err != nil {
+	if err = b.reloadAfterSkippedForkMark(ctx, beforeReload); err != nil {
 		return err
 	}
 
-	for hash, height := range marked {
-		b.skippedForkBlocksMarked[hash] = height
+	if unread > 0 {
+		return errors.NewProcessingError("[markSkippedForkTxs] %d of %d fork blocks could not be read", unread, len(forkBlocks))
 	}
 
-	if unfinished > 0 {
-		return errors.NewProcessingError("[markSkippedForkTxs] %d of %d fork blocks could not be marked yet", unfinished, len(forkBlocks))
+	if unprocessed > 0 {
+		return &skippedForkUnprocessedError{count: unprocessed}
 	}
 
 	return nil
+}
+
+// errSkippedForkMarkOffTip is markSkippedForkTxs waiting for block assembly to reach the best tip.
+var errSkippedForkMarkOffTip = errors.NewProcessingError("[markSkippedForkTxs] block assembly is not on the best tip")
+
+// skippedForkUnprocessedError reports a run of markSkippedForkTxs that read every fork block it
+// could except some block validation has not finished.
+type skippedForkUnprocessedError struct {
+	count int
+}
+
+func (e *skippedForkUnprocessedError) Error() string {
+	return fmt.Sprintf("[markSkippedForkTxs] %d fork blocks are not processed by block validation yet", e.count)
 }
 
 // skippedForkSubtreeGoneError reports a fork block, owed a mark of skipped fork transactions,
@@ -467,10 +454,11 @@ func (e *skippedForkSubtreeGoneError) Unwrap() error {
 
 // runSkippedForkMark runs markSkippedForkTxs outside start-up. A run that does not finish stays
 // pending and is retried, except when a fork block lost its subtree: that stops block assembly.
-func (b *BlockAssembler) runSkippedForkMark(ctx context.Context) {
+func (b *BlockAssembler) runSkippedForkMark(ctx context.Context, beforeReload bool) {
 	// markSkippedForkTxs returns it unwrapped. errors.As stops at the first *errors.Error in a
 	// chain, which this error wraps, so it would not find it.
-	if err, gone := b.markSkippedForkTxs(ctx, false).(*skippedForkSubtreeGoneError); gone {
+	if err, gone := b.markSkippedForkTxs(ctx, beforeReload).(*skippedForkSubtreeGoneError); gone {
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost").Inc()
 		b.logger.Errorf("[BlockAssembler] stopping block assembly: %v", err)
 
 		select {
@@ -529,105 +517,158 @@ func (b *BlockAssembler) skippedForkMarkFloor(bestHeight uint32) uint32 {
 	return floor
 }
 
+// skippedForkBlocks returns the blocks markSkippedForkTxs has to read: the valid blocks at or
+// above floor that the best chain does not hold, that block validation has set subtrees for, and
+// that are not recorded as marked already, with their meta. GetLastNBlocks lists every valid block,
+// highest first and also above the best tip, which a fork of less work can reach, and the best
+// chain is read from the best header down; both read in pages. Neither computes a branch length,
+// which on the SQL store costs up to a 1000-block walk per stale leaf.
+func (b *BlockAssembler) skippedForkBlocks(ctx context.Context, best *model.BlockHeader, bestHeight, floor uint32) ([]blockHeaderWithMeta, error) {
+	pageSize := uint32(bestTipPageSize)
+	if limit := b.settings.BlockChain.MaxBlockHeadersPerRequest; limit > 0 && uint64(limit) < uint64(pageSize) {
+		pageSize = uint32(limit) //nolint:gosec // limit is positive and below bestTipPageSize
+	}
+
+	onBest := make(map[chainhash.Hash]struct{}, bestHeight-floor+1)
+
+	for next, height := best.Hash(), bestHeight; height >= floor; {
+		b.heartbeat.BeatIfStarted()
+
+		headers, metas, err := b.blockchainClient.GetBlockHeaders(ctx, next, uint64(min(pageSize, height-floor+1)))
+		if err != nil {
+			return nil, err
+		}
+
+		if len(headers) == 0 || len(metas) != len(headers) {
+			return nil, errors.NewProcessingError("[skippedForkBlocks] read %d headers with %d metas from %s", len(headers), len(metas), next)
+		}
+
+		for _, header := range headers {
+			onBest[*header.Hash()] = struct{}{}
+		}
+
+		last := metas[len(metas)-1]
+		if last.Height == 0 {
+			break
+		}
+
+		next, height = headers[len(headers)-1].HashPrevBlock, last.Height-1
+	}
+
+	var forks []blockHeaderWithMeta
+
+	seen := make(map[chainhash.Hash]struct{})
+	limit := pageSize
+
+	// fromHeight 0 reads from the highest block. Each later page starts at the lowest height the
+	// one before reached, which it may not have read whole; a page at a single height reads more.
+	for from := uint32(0); ; {
+		b.heartbeat.BeatIfStarted()
+
+		infos, err := b.blockchainClient.GetLastNBlocks(ctx, int64(limit), true, from)
+		if err != nil {
+			return nil, err
+		}
+
+		lowest := from
+		below := false
+
+		for _, info := range infos {
+			if info.Height < floor {
+				below = true
+				break
+			}
+
+			lowest = info.Height
+
+			header, err := model.NewBlockHeaderFromBytes(info.BlockHeader)
+			if err != nil {
+				return nil, errors.NewProcessingError("[skippedForkBlocks] error decoding the header of a block at height %d", info.Height, err)
+			}
+
+			hash := *header.Hash()
+
+			if _, dup := seen[hash]; dup {
+				continue
+			}
+
+			seen[hash] = struct{}{}
+
+			if _, main := onBest[hash]; main {
+				continue
+			}
+
+			if _, done := b.skippedForkBlocksMarked[hash]; done {
+				continue
+			}
+
+			_, meta, err := b.blockchainClient.GetBlockHeader(ctx, &hash)
+			if err != nil {
+				return nil, err
+			}
+
+			// A block without subtrees has not been through block validation, which marked
+			// nothing mined in it; it is looked at again on a later run. An invalid block's
+			// transactions are block validation's to unmark.
+			if meta.Invalid || !meta.SubtreesSet {
+				continue
+			}
+
+			forks = append(forks, blockHeaderWithMeta{header: header, meta: meta})
+		}
+
+		if below || uint32(len(infos)) < limit || lowest == 0 { //nolint:gosec // a page is at most limit blocks
+			return forks, nil
+		}
+
+		if from != 0 && lowest == from {
+			if limit >= 2*bestTipPageSize {
+				return nil, errors.NewProcessingError("[skippedForkBlocks] more than %d blocks at height %d", limit, from)
+			}
+
+			limit *= 2
+
+			continue
+		}
+
+		from, limit = lowest, pageSize
+	}
+}
+
 // reloadAfterSkippedForkMark reloads the pool on block assembly's tip, as the replay's restamp
 // does, once markSkippedForkTxs marked a transaction the pool could hold and does not, such as
 // one only a skipped fork block had. It is a full reset, so it runs only then. The need is kept
-// until a reload succeeds, since a later run finds those transactions unmined already. At
-// start-up the load of the unmined transactions that follows does it.
-func (b *BlockAssembler) reloadAfterSkippedForkMark(ctx context.Context, atStart bool) error {
-	if atStart || !b.skippedForkReloadPending {
+// until a reset succeeds (onResetDone), since a later run finds those transactions unmined
+// already. Before a load of the unmined transactions (beforeReload) that load does it.
+//
+// A reset whose reload did not finish leaves the pool partial. With a replay position, the
+// replay retries that reset (retryIncompleteReset) and its reload covers this one, so the run
+// waits for it rather than run a second reset in the same pass. Without one nothing else retries
+// it, and this reload is the retry.
+func (b *BlockAssembler) reloadAfterSkippedForkMark(ctx context.Context, beforeReload bool) error {
+	if beforeReload || !b.skippedForkReloadPending {
 		return nil
+	}
+
+	if b.bestTipResetIncomplete.Load() && b.bestTipPosKnown.Load() {
+		return errors.NewProcessingError("[reloadAfterSkippedForkMark] the pool reload waits for the retry of a reset that did not finish")
 	}
 
 	tip, height := b.CurrentBlock()
 
 	// The reset marks tip history pending when the replay position is known, which keeps mining
 	// candidates empty until a replay passes it. It stays on block assembly's own tip, so it
-	// leaves no history behind.
+	// leaves no history behind, also when its reload fails: bestTipResetIncomplete then has it
+	// retried.
 	wasPending := b.bestTipResetReplayPending.Load()
+	err := b.resetToBlockAndRecord(ctx, tip, height, true)
+	b.bestTipResetReplayPending.Store(wasPending)
 
-	if err := b.resetToBlockAndRecord(ctx, tip, height, true); err != nil {
+	if err != nil {
 		return errors.NewProcessingError("[reloadAfterSkippedForkMark] error reloading the pool after marking skipped fork transactions", err)
 	}
 
-	b.bestTipResetReplayPending.Store(wasPending)
-	b.skippedForkReloadPending = false
-
 	return nil
-}
-
-// forkBlocksBelow returns the blocks of the fork ending at tipHash, from the tip down to the
-// fork point, the first block that is an ancestor of best, or to the floor, with their meta.
-// It reads the headers in pages of at most bestTipPageSize and blockchain_maxBlockHeadersPerRequest,
-// so a fork longer than one read is read whole. branchLen is the branch length GetChainTips
-// reported: the blocks within it are taken as off the best chain without asking, and it sizes the
-// first read. The store caps the walk that computes it, and reports 0 when it could not compute
-// one, so below it every block is checked. A block in walked, read from another tip, ends the
-// walk, since the rest is that tip's; every block returned is added to walked. An error leaves
-// the fork unread.
-func (b *BlockAssembler) forkBlocksBelow(ctx context.Context, tipHash *chainhash.Hash, tipHeight, branchLen, floor uint32, best *model.BlockHeader, walked map[chainhash.Hash]struct{}) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
-	pageSize := uint32(bestTipPageSize)
-	if limit := b.settings.BlockChain.MaxBlockHeadersPerRequest; limit > 0 && uint64(limit) < uint64(pageSize) {
-		pageSize = uint32(limit) //nolint:gosec // limit is positive and below bestTipPageSize
-	}
-
-	// The fork and the block below it, which is on the best chain.
-	count := pageSize
-	if branchLen > 0 && branchLen < pageSize {
-		count = branchLen + 1
-	}
-
-	var (
-		headers []*model.BlockHeader
-		metas   []*model.BlockHeaderMeta
-	)
-
-	next, height := tipHash, tipHeight
-
-	for height >= floor {
-		page, pageMetas, err := b.blockchainClient.GetBlockHeaders(ctx, next, uint64(min(count, height-floor+1)))
-		if err != nil {
-			return nil, nil, err
-		}
-
-		if len(page) == 0 || len(pageMetas) != len(page) {
-			return nil, nil, errors.NewProcessingError("[forkBlocksBelow] read %d headers with %d metas from %s", len(page), len(pageMetas), next)
-		}
-
-		for i := range page {
-			if pageMetas[i].Height < floor {
-				return headers, metas, nil
-			}
-
-			if _, done := walked[*page[i].Hash()]; done {
-				return headers, metas, nil
-			}
-
-			if uint32(len(headers)) >= branchLen { //nolint:gosec // a fork walk is far below 2^32 blocks
-				onBest, err := b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{pageMetas[i].ID}, best.Hash())
-				if err != nil {
-					return nil, nil, err
-				}
-
-				if onBest {
-					return headers, metas, nil
-				}
-			}
-
-			walked[*page[i].Hash()] = struct{}{}
-			headers = append(headers, page[i])
-			metas = append(metas, pageMetas[i])
-		}
-
-		last := pageMetas[len(pageMetas)-1]
-		if last.Height == 0 {
-			break
-		}
-
-		next, height, count = page[len(page)-1].HashPrevBlock, last.Height-1, pageSize
-	}
-
-	return headers, metas, nil
 }
 
 // saveSkippedForkMark records under SkippedForkMarkStateKey whether a run of markSkippedForkTxs
@@ -655,8 +696,10 @@ func (b *BlockAssembler) saveSkippedForkMark(ctx context.Context, pending bool) 
 
 // finishSkippedForkMarkAtStart runs a mark of skipped fork transactions left pending before a
 // restart, before the start loads the unmined transactions, so it finds those the mark makes
-// unmined. Without a record there is nothing pending. A run that does not finish fails the start:
-// the pool would be loaded without the transactions it owes.
+// unmined. Without a record there is nothing pending; a record that is not the single byte 0 is
+// read as pending. A run that does not finish fails the start: the pool would be loaded without
+// the transactions it owes. Block validation starts alongside block assembly, so a fork block it
+// is still finishing is waited for and the run tried once more first.
 func (b *BlockAssembler) finishSkippedForkMarkAtStart(ctx context.Context) error {
 	data, err := b.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
 
@@ -665,16 +708,30 @@ func (b *BlockAssembler) finishSkippedForkMarkAtStart(ctx context.Context) error
 		return nil
 	case err != nil:
 		return errors.NewStorageError("[BlockAssembler] error reading state[%s]", SkippedForkMarkStateKey, err)
-	case len(data) != 1 || data[0] == 0:
+	case len(data) == 1 && data[0] == 0:
 		b.skippedForkMarkSaved, b.skippedForkMarkSavedPending = true, false
 		return nil
 	}
 
-	b.skippedForkMarkSaved, b.skippedForkMarkSavedPending = true, true
+	b.skippedForkMarkSaved, b.skippedForkMarkSavedPending = len(data) == 1, true
 
 	b.logger.Warnf("[BlockAssembler] a mark of skipped fork transactions was left unfinished before the restart, finishing it")
 
-	if err = b.markSkippedForkTxs(ctx, true); err != nil {
+	err = b.markSkippedForkTxs(ctx, true)
+
+	if _, unprocessed := err.(*skippedForkUnprocessedError); unprocessed {
+		b.logger.Warnf("[BlockAssembler] waiting for block validation before marking skipped fork transactions again: %v", err)
+
+		if !b.skipWaitForPendingBlocks {
+			if err = b.subtreeProcessor.WaitForPendingBlocks(ctx); err != nil {
+				return errors.NewProcessingError("[BlockAssembler] error waiting for pending blocks to finish a mark of skipped fork transactions", err)
+			}
+		}
+
+		err = b.markSkippedForkTxs(ctx, true)
+	}
+
+	if err != nil {
 		return errors.NewProcessingError("[BlockAssembler] a mark of skipped fork transactions left unfinished before the restart could not finish, not loading the unmined transactions without it", err)
 	}
 
@@ -720,7 +777,12 @@ func (b *BlockAssembler) blockTxHashes(ctx context.Context, header *model.BlockH
 		return nil, errors.NewProcessingError("error getting subtrees of block %s", header.Hash(), err)
 	}
 
-	hashes := make([]chainhash.Hash, 0, len(subtrees)*100)
+	count := 0
+	for _, st := range subtrees {
+		count += len(st.Nodes)
+	}
+
+	hashes := make([]chainhash.Hash, 0, count)
 
 	for _, st := range subtrees {
 		for _, node := range st.Nodes {
@@ -1329,23 +1391,12 @@ func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockH
 
 		staleIDs[hm.meta.ID] = struct{}{}
 
-		block, err := b.blockchainClient.GetBlock(ctx, hm.header.Hash())
+		blockHashes, err := b.blockTxHashes(ctx, hm.header)
 		if err != nil {
-			return errors.NewProcessingError("[restampStaleBranch] error getting block %s", hm.header.Hash(), err)
+			return errors.NewProcessingError("[restampStaleBranch] error reading block %s", hm.header.Hash(), err)
 		}
 
-		subtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
-		if err != nil {
-			return errors.NewProcessingError("[restampStaleBranch] error getting subtrees of block %s", hm.header.Hash(), err)
-		}
-
-		for _, st := range subtrees {
-			for _, node := range st.Nodes {
-				if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
-					hashes = append(hashes, node.Hash)
-				}
-			}
-		}
+		hashes = append(hashes, blockHashes...)
 	}
 
 	branchOnly, err := b.branchOnlyTxs(ctx, hashes, staleIDs, best)
@@ -1404,7 +1455,7 @@ func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.
 		}
 
 		if err := b.utxoStore.BatchDecorate(ctx, unresolved, requested...); err != nil {
-			return nil, nil, errors.NewProcessingError("[branchOnlyTxs] error reading block ids", err)
+			return nil, nil, errors.NewProcessingError("[branchOnlyMeta] error reading block ids", err)
 		}
 
 	next:
@@ -1413,7 +1464,7 @@ func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.
 			case errors.Is(u.Err, errors.ErrTxNotFound):
 				continue
 			case u.Err != nil:
-				return nil, nil, errors.NewProcessingError("[branchOnlyTxs] error reading block ids of %s", chunk[i], u.Err)
+				return nil, nil, errors.NewProcessingError("[branchOnlyMeta] error reading block ids of %s", chunk[i], u.Err)
 			}
 
 			if u.Data != nil {
@@ -1426,7 +1477,7 @@ func (b *BlockAssembler) branchOnlyMeta(ctx context.Context, hashes []chainhash.
 					if !known {
 						var err error
 						if on, err = b.blockchainClient.CheckBlockIsAncestorOfBlock(ctx, []uint32{id}, best.Hash()); err != nil {
-							return nil, nil, errors.NewProcessingError("[branchOnlyTxs] error checking whether block %d is on the best chain", id, err)
+							return nil, nil, errors.NewProcessingError("[branchOnlyMeta] error checking whether block %d is on the best chain", id, err)
 						}
 
 						onBest[id] = on

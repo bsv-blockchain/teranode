@@ -2547,3 +2547,35 @@ func TestMoreCoveragePaths(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	})
 }
+
+// TestStartReturnsBlockAssemblersFatalError: an error block assembly cannot continue after, such
+// as a fork block that lost its subtree, stops the service.
+func TestStartReturnsBlockAssemblersFatalError(t *testing.T) {
+	server, _ := setupServer(t)
+	server.settings.BlockAssembly.GRPCListenAddress = "localhost:0"
+
+	readyCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	go func() {
+		errCh <- server.Start(t.Context(), readyCh)
+	}()
+
+	select {
+	case <-readyCh:
+	case err := <-errCh:
+		t.Fatalf("Start returned before it was ready: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Start did not get ready")
+	}
+
+	server.blockAssembler.fatalCh <- errors.NewProcessingError("fork block lost its subtree")
+
+	select {
+	case err := <-errCh:
+		require.ErrorContains(t, err, "block assembler stopped")
+		require.ErrorContains(t, err, "fork block lost its subtree")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Start did not return on the fatal error")
+	}
+}
