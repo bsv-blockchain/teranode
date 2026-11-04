@@ -214,7 +214,9 @@ RETURNING m.txid, m.flags`
 // The clock is the store's current tip, NOT the transaction's creation height, and that is the
 // fact that decides whether these two columns are one concept or two. A transaction created at
 // height 100 and un-mined while the tip is 5,000 must wait from 5,000, or the preservation pass
-// fires on it immediately. Both reference stores do the same. It RETURNS the ids it reached,
+// fires on it immediately. The aerospike and sql stores choose the other way: they backdate the
+// clock (utxo.BackdatedUnminedSince, issue 1768) so their preservation pass picks the transaction
+// up on its next cycle. It RETURNS the ids it reached,
 // which is how the caller tells an un-mined transaction that has an identity row from one that
 // has not.
 const setMarkerSQL = `

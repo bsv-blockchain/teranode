@@ -34,7 +34,9 @@ const SpendJournalPartitionBlocks = 288
 // the journal to show the coins it finds gone were taken by itself. That job now belongs to
 // the validator, which looks the transaction up by its own txid when a spend finds its coins
 // gone (Validator.knownTxResubmission): an unmined transaction keeps its identity row while it
-// waits, and a mined one keeps its block on its unspent coins. At mainnet heights near 876,000
+// waits, and a mined one keeps its block on its unspent coins. That lookup is reached only while
+// the spent parent outputs can still be read, about 288 blocks on this store, so a resubmission
+// older than that is refused by the parent-output read either way. At mainnet heights near 876,000
 // a 288-block partition holds about 36 GB, so the 1440-block journal was 214 GB and filled a
 // disk on 2026-09-27.
 //

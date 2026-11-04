@@ -32,7 +32,7 @@ type querier interface {
 
 // Store is the delete-on-spend UTXO-set store.
 //
-// It satisfies the same utxo.Store contract as the postgres, aerospike and sql stores,
+// It satisfies the same utxo.Store contract as the aerospike and sql stores,
 // so the store-agnostic conformance suite in stores/utxo/tests applies to it unchanged.
 // That suite is the specification: M1 is complete when it passes.
 type Store struct {

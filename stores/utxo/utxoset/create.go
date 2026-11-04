@@ -112,7 +112,7 @@ func minedBlock(infos []utxo.MinedBlockInfo) (utxo.MinedBlockInfo, bool) {
 // Only SPENDABLE outputs get a row. A provably-unspendable output — an OP_RETURN data
 // carrier — creates nothing, because a row that can never be deleted would sit in the
 // table forever and the UTXO table's size is the entire budget. This mirrors the
-// postgres store's spendable_count and the aerospike store's ShouldStoreOutputAsUTXO
+// PR 684 queue store's spendable_count and the aerospike store's ShouldStoreOutputAsUTXO
 // gate, so all three agree on what "spendable" means.
 func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	// Parsed up front rather than only on the batched path, because the single path now needs

@@ -52,7 +52,7 @@ func (s *Store) PreviousOutputsDecorate(ctx context.Context, tx *bt.Tx) error {
 
 // BatchPreviousOutputsDecorate decorates many transactions in one round trip.
 //
-// Inputs that already carry a script are skipped, matching the postgres store: the
+// Inputs that already carry a script are skipped, matching the queue store of PR 684 (not in this repository): the
 // spend path populates them via RETURNING, so a transaction that has already been
 // spent through this store arrives here needing nothing at all.
 func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) error {
@@ -160,7 +160,7 @@ func (s *Store) BatchPreviousOutputsDecorate(ctx context.Context, txs []*bt.Tx) 
 
 	if resolved < len(refs) {
 		// A parent that is absent from the UTXO table is spent or was never created. Note
-		// the behavioural difference from the postgres store, which can still decorate
+		// the behavioural difference from the queue store of PR 684 (not in this repository), which can still decorate
 		// from a spent parent's surviving txs row until the pruner removes it: here the
 		// row is gone the moment it is spent. That is the correct answer for a
 		// validation path -- a transaction spending an already-spent output is invalid

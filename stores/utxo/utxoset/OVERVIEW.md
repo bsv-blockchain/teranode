@@ -61,7 +61,7 @@ That one `DELETE` does four jobs:
 3. **It reclaims the space.** No background job has to find and remove spent outputs later.
 4. **It is the write.**
 
-A deleted row cannot be put back unless something kept a copy. So the same statement also writes a copy into the **spend journal**, the undo record. This is SV Node's `rev*.dat` file, kept in a table. A UTXO is never removed without a record that can restore it.
+A deleted row cannot be put back unless something kept a copy. So the same statement also writes a copy into the **spend journal**, the undo record. This is SV Node's `rev*.dat` file, kept in a table. A UTXO is never removed without a record that can restore it, with one exception. The below-checkpoint netted write (section 7) deletes the coins a block spends with no journal row, because a block below the checkpoint is never un-mined, so nothing would read one.
 
 **The cost.** PostgreSQL does not free a deleted row at once. Autovacuum reclaims it later, so autovacuum is the background job that must keep up. The store sets its autovacuum thresholds for that load. It also rebuilds a bloated UTXO index with `REINDEX CONCURRENTLY`, one partition at a time, from the pruner.
 
@@ -70,7 +70,7 @@ A deleted row cannot be put back unless something kept a copy. So the same state
 | Question | aerospike and sql | utxoset |
 |---|---|---|
 | What is indexed? | One record for each transaction, with each output's spend state on it | One row for each **unspent** output; spent outputs are gone |
-| What is a spend? | An update that marks the output spent | A `DELETE` of the UTXO row, plus an undo copy in the journal |
+| What is a spend? | An update that marks the output spent | A `DELETE` of the UTXO row, plus an undo copy in the journal (no copy below the checkpoint, on the netted write) |
 | Can a spend be partial? | Yes: each input is a separate write, and an undo runs when a later input fails | No, for `SpendAndCreate`: all inputs and the create are one PostgreSQL transaction. See section 7 for the multi-transaction path |
 | A stored transaction validated again after a parent was locked | `ErrTxLocked` or `ErrTxConflicting` | Success: the same transaction already spent each input |
 | How long is the transaction body kept? | While the record exists | 288 blocks after the pruner height, then only in the blob store, unless the transaction still waits to be mined |
@@ -79,7 +79,7 @@ A deleted row cannot be put back unless something kept a copy. So the same state
 | Which block is a UTXO in? | Kept on the record and updated | Written once: at create below the checkpoint, otherwise by the stamp when the block is deep enough that it cannot change |
 | Is `meta.Data.Frozen` set by `Get`? | Depends on the store | No, the same as aerospike. The spend path refuses frozen outputs, and a metadata read gives the frozen marker for each frozen output |
 
-The shared conformance tests in `stores/utxo/tests` run against all three stores. Where the stores differ on purpose, `SpendModel` says which model a store uses, and the test checks each store against its own model. `docs/topics/stores/utxo.md` explains the two spend models.
+The shared conformance tests in `stores/utxo/tests` run against all three stores, but utxoset runs only the subset listed in `conformance_test.go`. The `ConflictRecovery*`, `DeleteThenUnspend*`, `SetConflictingAfterCreate`, `AbsentRecordObservables` and remaining `SpendAndCreateMulti*` suites are not run against it yet. Where the stores differ on purpose, `SpendModel` says which model a store uses, and the test checks each store against its own model. `docs/topics/stores/utxo.md` explains the two spend models.
 
 ## 5. The tables
 

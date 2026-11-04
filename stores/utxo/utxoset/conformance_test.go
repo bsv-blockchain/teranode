@@ -14,13 +14,15 @@ import (
 // the known gap. It passes now, so the gate is gone: it runs with everything else, and a
 // failure means a regression rather than a to-do list.
 
-// The store-agnostic conformance suite is this store's specification. Every other
-// implementation (postgres, aerospike, sql) is held to it, and the same invariants must
-// hold here regardless of how radically the storage model differs underneath.
+// The store-agnostic conformance suite is this store's specification. The aerospike and sql
+// stores are held to it, and the same invariants must hold here regardless of how radically the
+// storage model differs underneath.
 //
 // Each subtest is named for the capability it pins, so a failure says what is missing rather
-// than merely that something is. They all pass; a suite not listed here is one this store does
-// not implement the entry point for, not one that is failing quietly.
+// than merely that something is. They all pass. This is a subset of what the sql store runs:
+// the ConflictRecovery*, DeleteThenUnspend*, SetConflictingAfterCreate, AbsentRecordObservables
+// and remaining SpendAndCreateMulti* suites take a plain utxo.Store but are not run against this
+// store yet.
 //
 // Every subtest runs on a store whose network has NO chain checkpoints. The suite describes
 // tip behaviour through the interface: it records and un-mines blocks at heights like 101 and

@@ -174,8 +174,13 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       on utxoset. A pruner on this version talking to an older blockchain service gets
       `Unimplemented`, so upgrade the blockchain service first.
     - New settings: `utxostore_skipTxBodyBelowCheckpoint` (default false),
-      `utxostore_spendJournalRetentionBlocks` (default 288) and
-      `utxostore_retainWindowsIndefinitely` (default false).
+      `utxostore_spendJournalRetentionBlocks` (default 288, held to 100 through 1440),
+      `utxostore_retainWindowsIndefinitely` (default false),
+      `utxostore_nettedBelowWorkers` (default 16) and
+      `blockvalidation_quick_validate_net_range` (default 65536). The net range must be a
+      positive power of two, and a netting store refuses to start otherwise. Do not
+      change it while a block is partly applied: a repeat of that block with a different
+      range nets different pairs of transactions and can leave a spent output as a coin.
     - The store refuses to start with `pruner_skipDuringCatchup=true`, because on this
       store the pruner also runs the stamp and the partition drops, and skipping it fills
       the disk. Set `utxostore_retainWindowsIndefinitely` to keep partitions instead.

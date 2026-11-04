@@ -1,6 +1,6 @@
 // Package utxoset is a delete-on-spend UTXO-set store.
 //
-// It inverts what the postgres store indexes. That store records a spend as the
+// It inverts what the queue store of PR 684 (not in this repository) indexes. That store records a spend as the
 // PRESENCE of a row in an append-only `spends` table and detects a double-spend as a
 // unique-constraint violation, which means the indexed structure is the set of
 // everything ever spent — measured at 392,884,647 rows and growing with every block.
@@ -60,12 +60,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// NumLeaves is the partition count. Deliberately 8, matching the postgres store.
+// NumLeaves is the partition count. Deliberately 8, matching the queue store of PR 684 (not in this repository).
 //
 // Partitioning is BY LIST on leaf = txid[0] & 7 — derived from the TXID, not from the
 // outpoint and not by hashing ukey. Every output of one transaction must co-locate in a
 // single leaf, otherwise the BIP30 probe, SetLocked, freeze and reorg restore each fan
-// out across all 8 partitions. That fan-out is the 21x by-hash penalty the postgres
+// out across all 8 partitions. That fan-out is the 21x by-hash penalty the PR 684 queue
 // store's invariant 6 exists to prevent.
 const NumLeaves = 8
 

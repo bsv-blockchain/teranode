@@ -11,8 +11,9 @@ import (
 )
 
 // TxBodyPartitionBlocks is the width of one tx_body partition. Reclaim drops whole partitions, so
-// retention is granular to this. It matches the spend journal's width deliberately: the two
-// are reclaimed by the same pruner session and there is no reason for them to disagree.
+// retention is granular to this. It is narrower than the spend journal's 288-block partition
+// (SpendJournalPartitionBlocks), so body retention is granular to 48 blocks and journal retention
+// to 288. The same pruner session reclaims both.
 const TxBodyPartitionBlocks = 48
 
 // DefaultTxBodyRetentionBlocks is how long the serialized bytes are kept.

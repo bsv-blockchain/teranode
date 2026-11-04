@@ -3228,9 +3228,11 @@ func (v *Validator) readMTPsLocked(blockMTPHeight uint32, utxoHeights []uint32) 
 // coins are gone because this same transaction took them. A double spend is a different
 // transaction, with a different txid, so looking this one up by its own txid tells the two
 // apart. The utxoset store keeps an unmined transaction's identity row while it waits and a
-// mined one's block on its unspent coins, so the lookup answers for a transaction submitted
-// again weeks later, long after the undo journal has dropped the spends. The journal used to be
-// kept for 1440 blocks for exactly this and no longer needs to be.
+// mined one's block on its unspent coins, so the lookup answers after the undo journal has
+// dropped the spends. It is reached only while the validator can still read every spent parent
+// output, which on utxoset is from the journal or the parent's body, about 288 blocks. After that
+// the parent-output read refuses the resubmission first, as a missing output or a missing
+// parent, and this lookup never runs.
 //
 // It answers the way the ErrTxExists path above does, because that is the answer the same
 // resubmission gets while the journal still has the spends (the store reads them as a replay

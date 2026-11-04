@@ -28,7 +28,7 @@ import (
 // The interface says the error is returned "with the spends left in place", which reads
 // like a required partial commit but is not: if the transaction already exists then it
 // was already processed, its inputs were already spent BY IT, and the spend phase wrote
-// nothing. The postgres store makes that explicit -- its spend is
+// nothing. The queue store of PR 684 makes that explicit -- its spend is
 // ON CONFLICT (prev_tx_hash, prev_output_idx) DO NOTHING, so a re-spend is a no-op. So
 // there is nothing to leave in place and nothing to undo, and a ROLLBACK reaches the
 // same state a COMMIT would. Every path here is genuinely atomic.
