@@ -1404,7 +1404,9 @@ func (u *BlockValidation) readSubtreeStructure(ctx context.Context, block *model
 	var subtree *subtreepkg.Subtree
 	if u.mmapDir != "" {
 		subtree, err = subtreepkg.NewSubtreeFromReaderMmap(bufferedReader, u.mmapDir)
-		if err != nil {
+		// Only an mmap infrastructure failure is retried on the heap. Malformed bytes
+		// skip the fallback and reach the deserialize error below.
+		if err != nil && isMmapInfraError(err) {
 			// Fallback to heap on mmap failure. The mmap attempt has already consumed
 			// bytes from subtreeReader, which is not seekable, so resetting the buffered
 			// reader onto it would read from mid-stream and produce a corrupt subtree.

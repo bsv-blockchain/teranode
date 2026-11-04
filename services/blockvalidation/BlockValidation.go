@@ -19,12 +19,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -380,18 +382,41 @@ type BlockValidation struct {
 }
 
 // subtreeFromBytesWithMmap creates a subtree from bytes, using mmap if dir is non-empty.
-// Falls back to heap allocation on mmap failure.
+// Falls back to heap allocation when the mmap machinery itself fails.
 func subtreeFromBytesWithMmap(b []byte, mmapDir string) (*subtreepkg.Subtree, error) {
 	if mmapDir != "" {
 		st, err := subtreepkg.NewSubtreeFromReaderMmap(bytes.NewReader(b), mmapDir)
-		if err != nil {
+		if err != nil && isMmapInfraError(err) {
 			// mmap failed — fall back to heap. This can happen if the mmap dir is
-			// misconfigured, out of disk, or permissions are wrong.
+			// misconfigured or permissions are wrong. Malformed bytes are returned
+			// as-is: the heap loader cannot do better.
 			return subtreepkg.NewSubtreeFromBytes(b)
 		}
-		return st, nil
+		return st, err
 	}
 	return subtreepkg.NewSubtreeFromBytes(b)
+}
+
+// isMmapInfraError reports whether an mmap deserialization error came from the mmap
+// scratch-file machinery (dir missing, permissions, mmap refused, no mmap on this
+// platform, a recovered panic in the mapping code) rather than from the subtree bytes.
+// go-subtree wraps those failures with the *fs.PathError from os.CreateTemp / Truncate,
+// the syscall.Errno from mmap, ErrMmapUnsupported or ErrMmapPanic. Only they are worth
+// retrying on the heap loader: malformed bytes fail there too, after a second read of
+// the blob.
+func isMmapInfraError(err error) bool {
+	if errors.Is(err, subtreepkg.ErrMmapUnsupported) || errors.Is(err, subtreepkg.ErrMmapPanic) {
+		return true
+	}
+
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return true
+	}
+
+	var errno syscall.Errno
+
+	return errors.As(err, &errno)
 }
 
 // newSubtreeFromBytes creates a subtree from bytes, using mmap when configured.
