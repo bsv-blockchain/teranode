@@ -584,7 +584,7 @@ func TestRestampStaleBranch_RefusesWhileMinedSetPending(t *testing.T) {
 
 	err = ba.restampStaleBranch(waitCtx, []blockHeaderWithMeta{{header: y, meta: yMeta}}, best)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "error waiting for pending blocks")
+	require.ErrorContains(t, err, "[restampStaleBranch] error waiting for pending blocks", "the restamp's own wait must refuse, not the reset's")
 
 	data, err := items.utxoStore.Get(ctx, blockOnly.TxIDChainHash())
 	require.NoError(t, err)
