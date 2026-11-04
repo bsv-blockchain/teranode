@@ -20,21 +20,113 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// faultyGetStore fails the batch's phase-1 read of one hash, the one asking for
-// its inpoints, with a storage error. The cached path reads the tx's body first
-// (checkStoredTxAtHeight), and that read is left alone, so the fault reaches the
-// batch.
+// faultyGetStore fails the batch's reads of one hash with a storage error: its
+// phase-1 read, the one asking for its inpoints, and its read as a member of the
+// walk. The cached path reads the tx's body first (checkStoredTxAtHeight), and
+// that read is left alone, so the fault reaches the batch.
 type faultyGetStore struct {
 	utxo.Store
 	fail chainhash.Hash
 }
 
 func (f *faultyGetStore) Get(ctx context.Context, hash *chainhash.Hash, fs ...fields.FieldName) (*meta.Data, error) {
-	if hash.Equal(f.fail) && slices.Contains(fs, fields.TxInpoints) {
+	if hash.Equal(f.fail) && !slices.Contains(fs, fields.Tx) {
 		return nil, errors.NewStorageError("store down")
 	}
 
 	return f.Store.Get(ctx, hash, fs...)
+}
+
+// buildCone stores a chain of n spenders below root, each spending output 0 of
+// the one before, and returns it top first. The first is created with firstOpts.
+func buildCone(t *testing.T, ctx context.Context, store utxo.Store, root *bt.Tx, n int, firstOpts ...utxo.CreateOption) []chainhash.Hash {
+	t.Helper()
+
+	cone := make([]chainhash.Hash, 0, n)
+
+	prev := root
+	for i := 0; i < n; i++ {
+		child := spendingChild(t, prev, 0)
+
+		if i == 0 {
+			spendAndCreate(t, ctx, store, child, firstOpts...)
+		} else {
+			spendAndCreate(t, ctx, store, child)
+		}
+
+		cone = append(cone, *child.TxIDChainHash())
+		prev = child
+	}
+
+	return cone
+}
+
+// A walk that stops on its budget still has the counter cone it reached
+// mined-checked: every member of it descends from a counter-spender, so a mined
+// one is proof, whichever of the walk's two passes ran out. The walk runs the
+// counter-spenders' cone first and the conflicting txs' own cone second, on one
+// budget.
+func Test_checkCounterConflictingOnCurrentChainBatch_overBudgetWalkChecksTheCounterConeItReached(t *testing.T) {
+	ctx := context.Background()
+	minedInfo := utxo.MinedBlockInfo{BlockID: 77, BlockHeight: 100}
+	blockIds := map[uint32]bool{77: true}
+
+	// requireProven checks the walk's premise, then that the batch names the
+	// mined counter-cone member.
+	requireProven := func(t *testing.T, store utxo.Store, tSettings *settings.Settings, counter *bt.Tx, txs []chainhash.Hash, cone []chainhash.Hash, minedMember chainhash.Hash, counterConeComplete bool) {
+		t.Helper()
+
+		cones, _, walkErr := utxo.GetConflictingChildrenFromRoots(ctx, store, [][]chainhash.Hash{{*counter.TxIDChainHash()}, txs}, tSettings.UtxoStore.ConflictingChildrenMaxNodes)
+		require.ErrorIs(t, walkErr, errors.ErrUtxoWalkLimitExceeded)
+		require.Contains(t, cones[0], minedMember, "the walk reached the mined member")
+
+		if counterConeComplete {
+			require.ElementsMatch(t, cone, cones[0], "the counter cone was walked in full")
+		} else {
+			require.Less(t, len(cones[0]), len(cone), "the counter cone was cut short")
+		}
+
+		s := &Server{logger: ulogger.NewErrorTestLogger(t), settings: tSettings, utxoStore: store}
+
+		_, err := s.checkCounterConflictingOnCurrentChainBatch(ctx, txs, blockIds, failOnMissingRecords)
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.ErrorContains(t, err, minedMember.String(), "the mined counter-cone member is named")
+	}
+
+	t.Run("own cone overflows after a complete counter cone", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.UtxoStore.SpendBatcherDurationMillis = 1
+		// two roots (tx1 and its counter-spender): a budget of 8. The counter
+		// cone, the counter-spender and 3 below it, fits; tx1's own cone of 12
+		// does not.
+		tSettings.UtxoStore.ConflictingChildrenMaxNodes = 4
+
+		store := newSQLUtxoStore(t, ctx, tSettings)
+		counter, chain := buildConflictingChain(t, ctx, store, 12, false)
+		cone := buildCone(t, ctx, store, counter, 3)
+
+		// the third member: neither a root nor a direct counter-spender
+		_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{&cone[2]}, minedInfo)
+		require.NoError(t, err)
+
+		requireProven(t, store, tSettings, counter, chain[:1], cone, cone[2], true)
+	})
+
+	t.Run("counter cone overflows after reaching a mined member", func(t *testing.T) {
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.UtxoStore.SpendBatcherDurationMillis = 1
+		// two roots: a budget of 4, against a counter cone of 10
+		tSettings.UtxoStore.ConflictingChildrenMaxNodes = 2
+
+		store := newSQLUtxoStore(t, ctx, tSettings)
+		counter, chain := buildConflictingChain(t, ctx, store, 1, false)
+		cone := buildCone(t, ctx, store, counter, 10)
+
+		_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{&cone[1]}, minedInfo)
+		require.NoError(t, err)
+
+		requireProven(t, store, tSettings, counter, chain, cone, cone[1], false)
+	})
 }
 
 // A tx-invalid verdict proven from records that were read is final: the block
@@ -132,32 +224,21 @@ func Test_checkCounterConflictingOnCurrentChainBatch_provenTxInvalidWins(t *test
 		requireRejected(t, store, tSettings, []chainhash.Hash{chain[0], minedConflict})
 	})
 
-	t.Run("a mined member the walk reached before its budget ran out is proof", func(t *testing.T) {
+	t.Run("a mined member the walk reached before a store fault stopped it is proof", func(t *testing.T) {
 		const coneLength = 10
 
 		tSettings := test.CreateBaseTestSettings(t)
 		tSettings.UtxoStore.SpendBatcherDurationMillis = 1
-		// two roots (tx1 and its counter-spender): a budget of 4, against a
-		// counter-spender cone of 10 whose first member is mined
-		tSettings.UtxoStore.ConflictingChildrenMaxNodes = 2
 
 		store := newSQLUtxoStore(t, ctx, tSettings)
 		counter, chain := buildConflictingChain(t, ctx, store, 1, false)
 
-		prev := counter
-		for i := 0; i < coneLength; i++ {
-			child := spendingChild(t, prev, 0)
+		// a counter-spender cone whose first member is mined, and whose fourth
+		// cannot be read: the walk stops there
+		cone := buildCone(t, ctx, store, counter, coneLength, mined)
+		faulty := &faultyGetStore{Store: store, fail: cone[3]}
 
-			if i == 0 {
-				spendAndCreate(t, ctx, store, child, mined)
-			} else {
-				spendAndCreate(t, ctx, store, child)
-			}
-
-			prev = child
-		}
-
-		requireRejected(t, store, tSettings, chain)
+		requireRejected(t, faulty, tSettings, chain)
 	})
 
 	t.Run("a frozen counter-spender does not hide a mined counter-spender", func(t *testing.T) {
@@ -218,7 +299,7 @@ func Test_processTxMetaUsingStore_passedConflictCheckKeepsEntries(t *testing.T) 
 
 	_, err := s.processTxMetaUsingStore(ctx, txHashes, txMetaSlice, map[uint32]bool{77: true}, true, true, true)
 	require.ErrorIs(t, err, errors.ErrThresholdExceeded)
-	require.ErrorIs(t, err, errors.ErrContextCanceled, "the threshold stays retryable")
+	require.NotErrorIs(t, err, errors.ErrContextCanceled, "ValidateSubtreeInternal retries the threshold by its own code")
 	require.NotErrorIs(t, err, errors.ErrTxInvalid)
 
 	require.True(t, txMetaSlice[0].isSet, "the conflicting tx passed the check, so the retry need not decorate and check it again")
@@ -408,13 +489,12 @@ func Test_blessMissingTransaction_provenTxInvalidWins(t *testing.T) {
 	require.ErrorContains(t, err, counter.TxIDChainHash().String(), "the mined counter-spender is named")
 }
 
-// processTxMetaUsingStore wraps every failure in CONTEXT_CANCELED, and block
-// validation retries what carries that code. A proven conflict is the one
-// exception: it is the block's verdict and leaves with TX_INVALID on top and no
-// CONTEXT_CANCELED in its chain, from both the batched and the unbatched branch.
-// Every other failure keeps the wrap, and a proven conflict keeps it too once ctx
-// is done. TestValidateBlock_ProvenConflictIsNotACancellation in blockvalidation
-// checks how the callers classify the result.
+// A proven conflict is the block's verdict: processTxMetaUsingStore returns it
+// with TX_INVALID on top and no CONTEXT_CANCELED in its chain, from both the
+// batched and the unbatched branch. A missing record keeps the CONTEXT_CANCELED
+// wrap block validation needs to retry it as this node's own failure (see
+// keepsCancellation). TestValidateBlock_ProvenConflictIsNotACancellation in
+// blockvalidation checks how the callers classify every failure.
 func Test_processTxMetaUsingStore_provenConflictIsNotACancellation(t *testing.T) {
 	ctx := context.Background()
 	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 77, BlockHeight: 100})
@@ -458,14 +538,124 @@ func Test_processTxMetaUsingStore_provenConflictIsNotACancellation(t *testing.T)
 		})
 	}
 
-	t.Run("once ctx is done a proven conflict keeps the wrap", func(t *testing.T) {
-		done, cancel := context.WithCancel(ctx)
-		cancel()
-
-		err := settledError(done, "[processTxMetaUsingStore]", errors.NewTxInvalidError("proven"))
-		require.ErrorIs(t, err, errors.ErrContextCanceled)
-
-		err = settledError(ctx, "[processTxMetaUsingStore]", errors.NewProcessingError("not proven", errors.NewTxInvalidError("deeper in the chain")))
+	t.Run("a TX_INVALID under another code is not a proven conflict", func(t *testing.T) {
+		err := settledError(ctx, errProcessTxMetaSettle, errors.NewProcessingError("not proven", errors.NewTxInvalidError("deeper in the chain")))
 		require.ErrorIs(t, err, errors.ErrContextCanceled, "only TX_INVALID on top is a proven conflict")
+	})
+
+	t.Run("a store fault whose text names a deadline is not a cancellation while ctx is live", func(t *testing.T) {
+		err := settledError(ctx, errProcessTxMetaSettle, errors.NewStorageError("store read", context.DeadlineExceeded))
+		require.NotErrorIs(t, err, errors.ErrContextCanceled)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+	})
+
+	// ValidateSubtreeInternal returns the error as it is, so a failure that is not
+	// wrapped as a cancellation still carries the prefix, under its own code.
+	t.Run("a failure that is not wrapped keeps the prefix and its code", func(t *testing.T) {
+		for _, failure := range []*errors.Error{
+			errors.NewTxInvalidError("proven"),
+			errors.NewStorageError("store down"),
+			errors.NewProcessingError("walk", errors.NewUtxoWalkLimitExceededError("over budget")),
+			errors.NewThresholdExceededError("threshold"),
+		} {
+			err := settledError(ctx, errProcessTxMetaSettle, failure)
+
+			var top *errors.Error
+			require.True(t, errors.As(err, &top))
+			require.Equal(t, failure.Code(), top.Code(), "%v", err)
+			require.Equal(t, errProcessTxMetaSettle, top.Message())
+			require.ErrorIs(t, err, failure)
+			require.NotErrorIs(t, err, errors.ErrContextCanceled)
+		}
+	})
+}
+
+// cancelOnCheckStore cancels the caller's ctx when the conflict check makes its
+// first read (phase 1 asks for the tx's inpoints), and serves that read and every
+// later one anyway: a store whose reads had already completed when the
+// cancellation arrived.
+type cancelOnCheckStore struct {
+	utxo.Store
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnCheckStore) Get(_ context.Context, hash *chainhash.Hash, fs ...fields.FieldName) (*meta.Data, error) {
+	if slices.Contains(fs, fields.TxInpoints) {
+		c.cancel()
+	}
+
+	return c.Store.Get(context.Background(), hash, fs...)
+}
+
+func (c *cancelOnCheckStore) GetMeta(_ context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	return c.Store.GetMeta(context.Background(), hash, data)
+}
+
+// A proven conflict is proven by records that were read, so it is TX_INVALID on
+// every path even when ctx is cancelled while the check runs. The fresh path
+// used to return it wrapped as a cancellation in that case, while the cached path
+// and blessMissingTransaction rejected: the same block was retried or rejected
+// depending on which path reached its tx.
+func Test_provenConflictWithCancelledCtxIsTxInvalidOnEveryPath(t *testing.T) {
+	mined := utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 77, BlockHeight: 100})
+	blockIds := map[uint32]bool{77: true}
+
+	// newStore returns a store holding tx1, conflicting, whose counter-spender is
+	// mined on the candidate chain, and a ctx the store cancels once the check
+	// starts reading.
+	newStore := func(t *testing.T) (context.Context, *settings.Settings, *cancelOnCheckStore) {
+		t.Helper()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.UtxoStore.SpendBatcherDurationMillis = 1
+
+		store := newSQLUtxoStore(t, context.Background(), tSettings)
+		buildConflictingChain(t, context.Background(), store, 1, false, mined)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+
+		return ctx, tSettings, &cancelOnCheckStore{Store: store, cancel: cancel}
+	}
+
+	requireProvenAfterCancel := func(t *testing.T, ctx context.Context, err error) {
+		t.Helper()
+
+		require.Error(t, ctx.Err(), "ctx was cancelled during the check")
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.NotErrorIs(t, err, errors.ErrContextCanceled)
+	}
+
+	for _, batched := range []bool{true, false} {
+		t.Run(fmt.Sprintf("fresh path, batched=%t", batched), func(t *testing.T) {
+			ctx, tSettings, store := newStore(t)
+			s := &Server{logger: ulogger.NewErrorTestLogger(t), settings: tSettings, utxoStore: store}
+
+			txHashes := []chainhash.Hash{*tx1.TxIDChainHash()}
+			_, err := s.processTxMetaUsingStore(ctx, txHashes, make([]metaSliceItem, len(txHashes)), blockIds, batched, false, true)
+
+			requireProvenAfterCancel(t, ctx, err)
+			require.True(t, provenConflict(err), "TX_INVALID on top: %v", err)
+		})
+	}
+
+	t.Run("cached path", func(t *testing.T) {
+		ctx, tSettings, store := newStore(t)
+		s, block, cachedSubtrees := newCachedCheckServer(t, store, tSettings, []chainhash.Hash{*tx1.TxIDChainHash()}, []uint32{77})
+
+		requireProvenAfterCancel(t, ctx, s.checkCachedSubtreesAgainstCandidateChain(ctx, block, cachedSubtrees))
+	})
+
+	t.Run("bless", func(t *testing.T) {
+		ctx, tSettings, store := newStore(t)
+		s := &Server{
+			logger:          ulogger.NewErrorTestLogger(t),
+			settings:        tSettings,
+			utxoStore:       store,
+			validatorClient: conflictingValidator{},
+		}
+
+		_, err := s.blessMissingTransaction(ctx, chainhash.Hash{}, chainhash.Hash{}, tx1, 123, blockIds, validator.ProcessOptions())
+		requireProvenAfterCancel(t, ctx, err)
 	})
 }

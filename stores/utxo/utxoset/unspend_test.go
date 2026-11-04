@@ -1,0 +1,353 @@
+package utxoset
+
+import (
+	"context"
+	"testing"
+
+	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/spend"
+	"github.com/stretchr/testify/require"
+)
+
+// TestUnspendRestoresAUTXOWithItsParentsBlockFactsFromMembership: the journal carries no
+// block facts (they are mutable, and the journal payload is not); the restore reads them
+// from tx_mined, where the parent's row is present for as long as any of its spends can be
+// undone.
+func TestUnspendRestoresAUTXOWithItsParentsBlockFactsFromMembership(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 700_100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 42, BlockHeight: 700_100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	child := spendOneOutput(t, s, ctx, parent, 0, 700_150)
+
+	spends, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+	require.NoError(t, s.Unspend(ctx, spends))
+
+	h, b := utxoFacts(t, s, ctx, parent)
+	require.Equal(t, int32(700_100), h)
+	require.Equal(t, int32(42), b)
+}
+
+// TestUnspendOfAnAlreadyRestoredUTXOIsANoOp pins the fix for the idempotent-replay gap: a
+// second Unspend on an outpoint the first call already restored must succeed without
+// creating a duplicate UTXO, even when the replayed request names a different spender than
+// whatever actually did the restoring. This is exactly the shape BlockAssembler's
+// conflict-intent WAL replay can produce -- a crash between a successful Unspend and its
+// intent's completion record means replay calls Unspend again, and it may not remember (or
+// may misremember) which spending transaction the original call used. Ownership only gates
+// consuming the journal row; once the UTXO is live, the UTXO being unspent is the fact that
+// matters, not who put it there.
+func TestUnspendOfAnAlreadyRestoredUTXOIsANoOp(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 700_100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 42, BlockHeight: 700_100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	child := spendOneOutput(t, s, ctx, parent, 0, 700_150)
+
+	realSpends, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+	require.NoError(t, s.Unspend(ctx, realSpends))
+	require.Equal(t, 1, utxoCount(t, s, ctx, parent), "the UTXO must be restored exactly once")
+
+	// A replayed Unspend naming a spender that never actually spent this outpoint.
+	fakeSpender := chainhash.HashH([]byte("not-the-real-spender"))
+	fakeSpends := []*utxo.Spend{{
+		TxID:         parent.TxIDChainHash(),
+		Vout:         0,
+		SpendingData: spend.NewSpendingData(&fakeSpender, 0),
+	}}
+
+	require.NoError(t, s.Unspend(ctx, fakeSpends),
+		"re-unspending an already-restored UTXO must be a no-op even under a different claimed spender")
+	require.Equal(t, 1, utxoCount(t, s, ctx, parent), "a replayed restore must not create a second UTXO")
+}
+
+// utxoFlagsOf reads the flag byte off one live UTXO, located exactly.
+func utxoFlagsOf(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx, vout uint32) int16 {
+	t.Helper()
+
+	h := tx.TxIDChainHash()
+
+	var flags int16
+	require.NoError(t, s.pool.QueryRow(ctx,
+		`SELECT flags FROM utxo WHERE leaf = $1 AND ukey = $2 AND txid = $3`,
+		LeafFor(h[:]), Pack(h[:], vout), h[:]).Scan(&flags))
+
+	return flags
+}
+
+// TestUnspendLocksAUTXOItFoundAlreadyLive is the hold half of the restore, and it was missing
+// for exactly the UTXOs conflict resolution needs it for.
+//
+// Unspend(spends, true) means "put these UTXOs back AND hold them", and the hold is what stops
+// anyone else spending a contested parent while the resolution decides which child gets it. The
+// flag was ORed only into rows the restore INSERTED, so a parent whose UTXO was already live --
+// which is what a crash between the unspend and the lock leaves, and exactly the case
+// SetConflicting now reports -- came back from step 2 unheld, stayed spendable for the whole of
+// steps 2 to 5, and then had step 5's SetLocked(false) applied to it anyway. If it had been
+// locked for some unrelated reason, that step dropped the unrelated lock too.
+//
+// The sql reference locks the transaction row unconditionally, which is why it has never had
+// this gap.
+func TestUnspendLocksAUTXOItFoundAlreadyLive(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	// A block-path parent: its UTXO is live and nothing has ever spent it, so there is no
+	// journal row for the restore to consume.
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 700_100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 42, BlockHeight: 700_100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	// The child that contests it, marked conflicting. SetConflicting names the parent because
+	// its UTXO is live, which is the record ProcessConflicting hands to Unspend at step 2.
+	child := spendOutput(t, parent, 0, 1)
+	_, err = s.Create(ctx, child, 700_101)
+	require.NoError(t, err)
+
+	affected, _, err := s.SetConflicting(ctx, []chainhash.Hash{*child.TxIDChainHash()}, true)
+	require.NoError(t, err)
+	require.Len(t, affected, 1, "the live parent must be named, or there is nothing to hold")
+
+	require.NoError(t, s.Unspend(ctx, affected, true))
+
+	require.Equal(t, 1, utxoCount(t, s, ctx, parent), "nothing was restored, and nothing duplicated")
+	require.NotZero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagLocked,
+		"a UTXO the restore found already live must still be held")
+
+	// And the driver's step 5 releases it, which is the whole point of naming it.
+	require.NoError(t, s.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, false))
+	require.Zero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagLocked)
+}
+
+// TestUnspendWithoutTheHoldLeavesALiveUTXOAlone is the other half: Unspend(spends) with no hold
+// asked for must not invent one. A reorg restore has no business locking anything.
+func TestUnspendWithoutTheHoldLeavesALiveUTXOAlone(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 700_100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 42, BlockHeight: 700_100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	child := spendOutput(t, parent, 0, 1)
+	_, err = s.Create(ctx, child, 700_101)
+	require.NoError(t, err)
+
+	affected, _, err := s.SetConflicting(ctx, []chainhash.Hash{*child.TxIDChainHash()}, true)
+	require.NoError(t, err)
+	require.Len(t, affected, 1)
+
+	require.NoError(t, s.Unspend(ctx, affected, false))
+	require.Zero(t, utxoFlagsOf(t, s, ctx, parent, 0)&FlagLocked)
+}
+
+// TestUnspendGatesTheJournalsBlockFactsOnASingleSharedCondition pins the fact that
+// mined_height and block_id are read off the journal's own copy as ONE pair, gated on the
+// same condition, rather than as two independently-gated columns that happen to usually
+// agree.
+//
+// mined_height falling back through NULLIF(t.mined_height, 0) and block_id falling back
+// through CASE WHEN t.mined_height > 0 are two different mechanisms for what must be the
+// same fact: nothing in the schema stops mined_height from going negative (it is a plain
+// INTEGER, no CHECK), and NULLIF only tests "not exactly zero" while the CASE tests
+// "greater than zero" -- they diverge on a negative value. A journal row that got there
+// some other way than the paired write the comments assume -- mined_height negative,
+// block_id still carrying whatever it last held -- must restore the UTXO as fully
+// unconfirmed, not as a height with no matching block.
+func TestUnspendGatesTheJournalsBlockFactsOnASingleSharedCondition(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, parent, 700_100)
+	require.NoError(t, err)
+
+	ph := parent.TxIDChainHash()
+	spender := chainhash.HashH([]byte("spender"))
+
+	// The UTXO is spent by hand, outside the normal spend path, so the journal row below is
+	// the only fact the restore has to work from -- there is no tx_mined row to prefer it
+	// over either.
+	_, err = s.pool.Exec(ctx, `DELETE FROM utxo WHERE leaf = $1 AND ukey = $2 AND txid = $3`,
+		LeafFor(ph[:]), Pack(ph[:], 0), ph[:])
+	require.NoError(t, err)
+
+	require.NoError(t, s.ensureSpendJournalPartition(ctx, 700_150))
+
+	_, err = s.pool.Exec(ctx, `
+        INSERT INTO spend_journal (spent_height, satoshis, created_height, spendable_from,
+                                   flags, mined_height, block_id, ukey, txid, spending_txid,
+                                   script)
+        VALUES (700150, $1, 700100, 0, 0, -7, 55, $2, $3, $4, '\x00')`,
+		parent.Outputs[0].Satoshis, Pack(ph[:], 0), ph[:], spender[:])
+	require.NoError(t, err)
+
+	require.NoError(t, s.Unspend(ctx, []*utxo.Spend{{
+		TxID:         ph,
+		Vout:         0,
+		SpendingData: spend.NewSpendingData(&spender, 0),
+	}}))
+
+	h, b := utxoFacts(t, s, ctx, parent)
+	require.Zero(t, h, "a negative journal height must never surface as this UTXO's mined height")
+	require.Zero(t, b, "and its paired block id must be zeroed with it, not restored on its own")
+}
+
+// TestUnspendGivesTheRestoredUTXOItsTransactionsLockAsItIsNow is a coin spent through
+// IgnoreLocked while its transaction was locked, as block validation spends a parent mined in
+// the same block, and restored after the transaction was unlocked. The journal recorded the
+// lock, and copying it back left a coin no plain spend could take, with nothing left to clear
+// it. In aerospike the lock is the transaction's, so the restored coin is spendable.
+func TestUnspendGivesTheRestoredUTXOItsTransactionsLockAsItIsNow(t *testing.T) {
+	s, ctx := newTestStore(t)
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	loser := spendParentTx(t, parent, nil, 1_000, 0)
+	_, err = s.Create(ctx, loser, 101)
+	require.NoError(t, err)
+
+	spends, err := spendOnly(ctx, s, loser, 101, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	require.NoError(t, s.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, false))
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+
+	other := spendParentTx(t, parent, nil, 2_000, 0)
+	_, err = s.Create(ctx, other, 102)
+	require.NoError(t, err)
+
+	_, err = spendOnly(ctx, s, other, 102)
+	require.NoError(t, err, "the restored UTXO of an unlocked transaction must be spendable")
+}
+
+// TestUnspendKeepsTheLockOfATransactionStillLocked is the other half: a coin restored while
+// its transaction is still locked comes back locked, so a plain spend is still refused.
+func TestUnspendKeepsTheLockOfATransactionStillLocked(t *testing.T) {
+	s, ctx := newTestStore(t)
+	require.NoError(t, s.SetBlockHeight(100))
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	loser := spendParentTx(t, parent, nil, 1_000, 0)
+	spends, err := spendOnly(ctx, s, loser, 101, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+
+	require.NoError(t, s.Unspend(ctx, spends))
+
+	spends, err = spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), 102)
+	require.Error(t, err)
+	require.True(t, errors.Is(spends[0].Err, errors.ErrTxLocked), "got %v", spends[0].Err)
+}
+
+// lockedStampedParentSpent is the fixture for the stamped-lock tests: a parent mined in block 7
+// at height 100, stamped so its identity row is gone and only its containment row in tx_mined
+// records it, then locked through SetLocked, which reaches that containment row, and spent
+// through IgnoreLocked by an unmined loser. It returns the parent, the loser's spends and the
+// store's height after the spend.
+func lockedStampedParentSpent(t *testing.T, s *Store, ctx context.Context) (*bt.Tx, []*utxo.Spend, uint32) {
+	t.Helper()
+
+	parent := mkTx(t, 2, 10_000)
+	_, err := s.Create(ctx, parent, 100, utxo.WithMinedBlockInfo(
+		utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	tip := stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+
+	require.False(t, identExists(t, s, ctx, parent), "fixture: the stamp deleted the identity row")
+	require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the containment row is the only record")
+	require.Zero(t, s.lookupFloor(), "fixture: the containment row at 100 is above the lookup floor")
+
+	require.NoError(t, s.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+
+	var minedFlags int16
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT flags FROM tx_mined WHERE txid = $1`,
+		hashBytes(parent)).Scan(&minedFlags))
+	require.NotZero(t, minedFlags&FlagLocked, "fixture: SetLocked locked the containment row")
+
+	spendAt := tip + 1
+	require.NoError(t, s.SetBlockHeight(spendAt))
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 1_000, 0), spendAt, utxo.WithIgnoreLocked(true))
+	require.NoError(t, err)
+	require.Len(t, spends, 1)
+
+	return parent, spends, spendAt
+}
+
+// TestUnspendGivesAStampedTransactionsRestoredUTXOItsLockAsItIsNow is
+// TestUnspendGivesTheRestoredUTXOItsTransactionsLockAsItIsNow for a mined transaction the stamp
+// has moved out of tx_ident: the lock the restore reads is the one on its containment row, and
+// that row was unlocked after the spend, so the restored coin is spendable.
+func TestUnspendGivesAStampedTransactionsRestoredUTXOItsLockAsItIsNow(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends, spendAt := lockedStampedParentSpent(t, s, ctx)
+
+	require.NoError(t, s.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, false))
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+
+	_, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), spendAt+1)
+	require.NoError(t, err, "the restored UTXO of an unlocked stamped transaction must be spendable")
+}
+
+// TestUnspendKeepsTheLockOfAStampedTransactionStillLocked is the other half: the containment
+// row is still locked when the coin is restored, so the coin comes back locked and a plain spend
+// is refused. The lock is on tx_mined alone here, so a restore that read only tx_ident would
+// hand back a spendable coin.
+func TestUnspendKeepsTheLockOfAStampedTransactionStillLocked(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends, spendAt := lockedStampedParentSpent(t, s, ctx)
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+
+	spends, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), spendAt+1)
+	require.Error(t, err)
+	require.True(t, errors.Is(spends[0].Err, errors.ErrTxLocked), "got %v", spends[0].Err)
+}
+
+// TestUnspendIgnoresALockOnAContainmentRowBelowTheLookupFloor: the restore reads a containment
+// row's lock only at or above the lookup floor, the same bound SetLocked writes and the reads
+// look within. Here the containment row at height 100 is still locked but the tip has moved so
+// the floor is 288, so the restore does not see that lock and the coin comes back spendable.
+func TestUnspendIgnoresALockOnAContainmentRowBelowTheLookupFloor(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	parent, spends, _ := lockedStampedParentSpent(t, s, ctx)
+
+	// 864 is the lowest height whose floor is one partition: 864 - (stamp depth 288 + 288) = 288.
+	const tipAboveFloor = 864
+
+	require.NoError(t, s.SetBlockHeight(tipAboveFloor))
+	require.Equal(t, int32(TxMinedPartitionBlocks), s.lookupFloor(), "fixture: the floor is above the row at 100")
+	require.Equal(t, 1, minedRows(t, s, ctx, parent), "fixture: the locked containment row is still there")
+
+	require.NoError(t, s.Unspend(ctx, spends))
+	require.Nil(t, spenderOf(t, s, ctx, parent, 0))
+
+	_, err := spendOnly(ctx, s, spendParentTx(t, parent, nil, 2_000, 0), tipAboveFloor+1)
+	require.NoError(t, err, "a lock below the lookup floor must not be copied onto the restored UTXO")
+}

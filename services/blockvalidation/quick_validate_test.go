@@ -339,8 +339,7 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
 			Return(nil, []*utxo.Spend{}, nil).Maybe()
 
-		// Mock the spend phase. The mined-info stamp now runs after both waves rather than
-		// between them, so the spend happens before the error under test is reached.
+		// The existing transaction's inputs are spent again, as the spend phase always did
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
 			Return(nil, []*utxo.Spend{}, nil).Maybe()
 

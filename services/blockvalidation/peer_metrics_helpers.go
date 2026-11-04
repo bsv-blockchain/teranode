@@ -329,32 +329,10 @@ func markCatchupFailureReported(err error) error {
 }
 
 // catchupFailureAlreadyReported reports whether err carries the
-// markCatchupFailureReported marker anywhere in its wrapped chain. The walk is
-// depth-bounded defensively, mirroring the errors package's own chain walks.
+// markCatchupFailureReported marker in its wrapped chain, within hasErrorMarker's
+// depth bound.
 func catchupFailureAlreadyReported(err error) bool {
-	var e *errors.Error
-	if !errors.As(err, &e) {
-		return false
-	}
-
-	for depth := 0; e != nil && depth < 32; depth++ {
-		if v, ok := e.GetData(catchupFailureReportedKey).(bool); ok && v {
-			return true
-		}
-
-		next := e.WrappedErr()
-		if next == nil {
-			return false
-		}
-
-		var nextErr *errors.Error
-		if !errors.As(next, &nextErr) {
-			return false
-		}
-		e = nextErr
-	}
-
-	return false
+	return hasErrorMarker(err, catchupFailureReportedKey)
 }
 
 func (u *Server) reportCatchupFailureWithKind(ctx context.Context, peerID, failureKind, blockHash string) {

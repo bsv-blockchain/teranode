@@ -1148,6 +1148,12 @@ func Test_SmokeTests(t *testing.T) {
 		tests.SpendAndCreateCreateOnly(t, db)
 	})
 
+	t.Run("create returns written state", func(t *testing.T) {
+		db, _ := setup(ctx, t)
+
+		tests.CreateReturnsWrittenState(t, db)
+	})
+
 	t.Run("spend and create spend only", func(t *testing.T) {
 		db, _ := setup(ctx, t)
 

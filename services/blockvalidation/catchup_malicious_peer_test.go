@@ -216,10 +216,13 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		// Mock UTXO store block height
 		mockUTXOStore.On("GetBlockHeight").Return(uint32(1000))
 
-		// The common ancestor is a real mainnet header. That is all the mainnet fixtures are needed for
-		// here: it is already in our chain, so it is never re-validated.
-		mainnetHeaders := testhelpers.GetMainnetHeadersRange(t, 0, 21)
-		bestBlockHeader := mainnetHeaders[0]
+		// The common ancestor is the real regtest genesis header, followed by a synthetic run on the
+		// same 207fffff target. It is already in our chain, so it is never re-validated, but catch-up's
+		// header precheck does read its bits: the fixture chain never adjusts difficulty, so the honest
+		// chain must repeat them, which a mainnet ancestor's 1d00ffff would rule out.
+		anchorGenesis := regtestGenesisHeader(t)
+		anchorChain := append([]*model.BlockHeader{anchorGenesis}, testhelpers.CreateSyntheticChainFromAtHeight(anchorGenesis, 20, 1)...)
+		bestBlockHeader := anchorChain[0]
 
 		// The honest chain is SYNTHETIC rather than a replay of mainnet headers. The honest peer serves
 		// coinbase-only bodies for these headers, and a body that declares no subtrees must carry the
@@ -236,7 +239,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		// Create fake headers that branch from the common ancestor
 		// These are synthetic headers with valid PoW that will fail other validation
 		// CreateAdversarialFork returns headers including the fork point at index 0
-		adversarialFork, err := testhelpers.CreateAdversarialFork(mainnetHeaders, 0, 21)
+		adversarialFork, err := testhelpers.CreateAdversarialFork(anchorChain, 0, 21)
 		require.NoError(t, err, "Failed to create adversarial fork")
 
 		// Remove the common ancestor from adversarial fork since it's already at index 0
@@ -257,7 +260,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, targetHash).
 			Return(targetBlock.Header, &model.BlockHeaderMeta{Height: targetBlock.Height}, nil).Maybe()
 
-		// bestBlockHeader is already set from mainnetHeaders[0] above
+		// bestBlockHeader is already set from anchorChain[0] above
 		mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).
 			Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1000}, nil)
 
@@ -268,7 +271,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 		// CheckHeaderContextual requires GetBlockHeaders(parent) to actually return the
 		// parent's chain (issue 1467). Registered before the catch-all below so testify
 		// matches these first.
-		registerParentChainHeaders(mockBlockchainClient, mainnetHeaders, 1000)
+		registerParentChainHeaders(mockBlockchainClient, anchorChain, 1000)
 
 		// Mock GetBlockHeaders for common ancestor finding
 		mockBlockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).
@@ -388,7 +391,7 @@ func TestCatchup_SybilAttack(t *testing.T) {
 			)
 		}
 
-		// 1 honest peer - returns the mainnet chain including common ancestor
+		// 1 honest peer - returns the honest chain including common ancestor
 		// The peer returns from common ancestor to target
 		honestChainWithAncestor := append([]*model.BlockHeader{bestBlockHeader}, honestHeaders...)
 		honestHeaderBytes := testhelpers.HeadersToBytes(honestChainWithAncestor)
