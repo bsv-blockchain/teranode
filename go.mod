@@ -2,6 +2,11 @@ module github.com/bsv-blockchain/teranode
 
 go 1.27.0
 
+// Keep Multipath TCP off on listen sockets (default-on since Go 1.24) as interim
+// hardening for CVE-2026-98432. Operators can override at runtime with
+// GODEBUG=multipathtcp=<value>. See https://go.dev/issue/82717.
+godebug multipathtcp=0
+
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
 
 require (
