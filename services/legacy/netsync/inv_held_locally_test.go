@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/legacy/bsvutil"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/stretchr/testify/require"
 )
 
@@ -204,6 +205,76 @@ func TestDrainRequestQueue_SkipsABlockABusyOwnerStillOwes(t *testing.T) {
 	require.Equal(t, control, gd.InvList[0].Hash)
 	require.Zero(t, state.requestQueue.Length(), "the owed item is consumed, not left to block the queue")
 	require.False(t, sm.blockDownloads.RequestedWithin(owed, blockRequestRetryInterval), "nothing asked for the owed block again")
+	require.True(t, sm.blockDownloads.RequestedWithin(control, time.Minute))
+}
+
+// wireRecentlyFailed gives sm the recentlyFailedBlocks map New() wires, which
+// newInvPathManager leaves nil.
+func wireRecentlyFailed(t *testing.T, sm *SyncManager) {
+	t.Helper()
+
+	sm.recentlyFailedBlocks = expiringmap.New[chainhash.Hash, struct{}](recentlyFailedBlocksTTL)
+	t.Cleanup(sm.recentlyFailedBlocks.Stop)
+}
+
+// A block marked in recentlyFailedBlocks is not asked for again while the mark
+// stands; the wanted-range pass has skipped it since #1333. Above the final
+// checkpoint the inv is the only discovery path, and it asked every announcer for
+// the block for the mark's whole TTL, each copy meeting the same failure again.
+func TestHandleInvMsg_ARecentlyFailedBlockIsNotAskedFor(t *testing.T) {
+	failed := chainhash.Hash{0x7a}
+	control := chainhash.Hash{0x7b}
+
+	sm, announcer, _, rec, _ := newInvPathManager(t)
+	wireRecentlyFailed(t, sm)
+	sm.recentlyFailedBlocks.Set(failed, struct{}{})
+
+	sm.handleInvMsg(&invMsg{inv: blockInv(failed, control), peer: announcer})
+
+	requireOnlyControlAsked(t, sm, rec, failed, control)
+}
+
+// The end-to-end test above passes on the drain's check alone, so this pins
+// processInvMsg's own: a marked block is never queued, which spares every
+// announcement the chain round trip and the disk read before the queue. The
+// control is queued.
+func TestProcessInvMsg_ARecentlyFailedBlockIsNotQueued(t *testing.T) {
+	failed := chainhash.Hash{0x7e}
+	control := chainhash.Hash{0x7f}
+
+	sm, announcer, state, _, _ := newInvPathManager(t)
+	wireRecentlyFailed(t, sm)
+	sm.recentlyFailedBlocks.Set(failed, struct{}{})
+
+	sm.processInvMsg(0, wire.NewInvVect(wire.InvTypeBlock, &failed), true, announcer, false, state, -1)
+	require.Zero(t, state.requestQueue.Length(), "a marked block is not queued")
+
+	sm.processInvMsg(0, wire.NewInvVect(wire.InvTypeBlock, &control), true, announcer, false, state, -1)
+	require.Equal(t, 1, state.requestQueue.Length(), "positive control: an unknown block is queued")
+}
+
+// The mark can land between the Append and the drain: the copy that fails is
+// converting while another peer's inv for the same block waits in its queue. The
+// marked item is consumed, not held: holding it would stall everything queued
+// behind it, transactions included, for the mark's TTL.
+func TestDrainRequestQueue_SkipsARecentlyFailedBlock(t *testing.T) {
+	failed := chainhash.Hash{0x7c}
+	control := chainhash.Hash{0x7d}
+
+	sm, announcer, state, _, _ := newInvPathManager(t)
+	wireRecentlyFailed(t, sm)
+
+	state.requestQueue.Append(wire.NewInvVect(wire.InvTypeBlock, &failed))
+	state.requestQueue.Append(wire.NewInvVect(wire.InvTypeBlock, &control))
+
+	sm.recentlyFailedBlocks.Set(failed, struct{}{})
+
+	gd := sm.drainRequestQueue(announcer, state)
+
+	require.Len(t, gd.InvList, 1)
+	require.Equal(t, control, gd.InvList[0].Hash)
+	require.Zero(t, state.requestQueue.Length(), "the marked item is consumed, not left to block the queue")
+	require.False(t, sm.blockDownloads.RequestedWithin(failed, time.Minute))
 	require.True(t, sm.blockDownloads.RequestedWithin(control, time.Minute))
 }
 
