@@ -93,6 +93,8 @@ func newAncestryGuardHarness(t *testing.T, loserBlockIDs []uint32, loserIsOnAnce
 		Return(&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 10}, nil)
 
 	// The winner is conflicting and its counter-spender is the loser.
+	// The winner comes back with a body: promotion spends its inputs, and a winner with no
+	// body is refused (TestProcessConflicting_WinnerWithNoBodyIsRefusedBeforeAnythingChanges).
 	h.mockUtxoStore.On("Get", mock.Anything, mock.Anything, mock.Anything).
 		Return(&meta.Data{Conflicting: true, Tx: bt.NewTx()}, nil)
 	h.mockUtxoStore.On("GetCounterConflicting", mock.Anything, mock.Anything).

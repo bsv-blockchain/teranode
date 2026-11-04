@@ -67,6 +67,8 @@ func (m *MockStore) GetBlockState() utxo.BlockState {
 	}
 }
 
+func (m *MockStore) Stamper() pruner.Stamper { return pruner.NoStamp }
+
 func (m *MockStore) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	args := m.Called(ctx, checkLiveness)
 	return args.Int(0), args.String(1), args.Error(2)
@@ -1111,6 +1113,11 @@ func TestInterfaceCompliance(t *testing.T) {
 	require.NotNil(t, loggerStore)
 }
 
+// SpendsMadeBy returns nothing: no test here drives the conflict-undo path.
+func (m *MockStore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*utxo.Spend, error) {
+	return nil, nil
+}
+
 // newLoggedSQLiteStore wraps a sqlitememory UTXO store in the logger store.
 func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
 	t.Helper()
@@ -1125,6 +1132,15 @@ func newLoggedSQLiteStore(t *testing.T) (utxo.Store, utxo.Store) {
 	require.NoError(t, err)
 
 	return New(ctx, ulogger.TestLogger{}, base), base
+}
+
+// The logger store forwards Stamper to the inner store. A sql store has nothing to stamp, so
+// what comes back is pruner.NoStamp, and the wrapper does not invent a stamp of its own.
+func TestStamper_Forwards(t *testing.T) {
+	s, base := newLoggedSQLiteStore(t)
+
+	require.Equal(t, base.Stamper(), s.Stamper())
+	require.Equal(t, pruner.NoStamp, s.Stamper())
 }
 
 // The logger store forwards a list to the inner store's SpendAndCreateMulti,

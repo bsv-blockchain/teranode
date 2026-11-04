@@ -1641,7 +1641,7 @@ func ConflictRecoveryBlockKeyedIntent(t *testing.T, db utxo.Store) {
 // acknowledgement and the next operation that applies W2.
 func ConflictRecoverySupersetWinners(t *testing.T, db utxo.Store) {
 	ctx := t.Context()
-	var parents, losers, winnerTxs []*bt.Tx
+	parents, losers, winnerTxs := make([]*bt.Tx, 0, 2), make([]*bt.Tx, 0, 2), make([]*bt.Tx, 0, 2)
 	for _, seed := range []byte{0x1c, 0x1d} {
 		parent := crashParentTx(seed)
 		_, _, err := db.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
@@ -2128,7 +2128,8 @@ func ConflictRecoveryReplanThenHeal(t *testing.T, db utxo.Store) {
 // parallel, and cascade both.
 func ConflictRecoveryRollbackRetryTwoWinners(t *testing.T, db utxo.Store) {
 	ctx := t.Context()
-	var parents, losers, winnerTxs, children []*bt.Tx
+	parents, losers, winnerTxs := make([]*bt.Tx, 0, 2), make([]*bt.Tx, 0, 2), make([]*bt.Tx, 0, 2)
+	children := make([]*bt.Tx, 0, 2)
 	for i := 0; i < 2; i++ {
 		parent := crashParentTx(0x9a + byte(i))
 		_, _, err := db.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
