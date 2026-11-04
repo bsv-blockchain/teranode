@@ -43,7 +43,8 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   build finishes, and can abort it, after which it is retried. On PostgreSQL, keep
   previous-release processes from starting until the first upgraded process has
   built the index, for example by stopping them before the upgrade. The SQLite
-  store creates it at startup. External `utxo.Store` implementations must
+  store creates it at startup. The `utxoset` store has no index for the flag and
+  keeps the per-transaction read. External `utxo.Store` implementations must
   implement `ConflictingTxHashes`. (#2110)
 
 - **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
