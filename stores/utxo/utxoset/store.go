@@ -512,12 +512,19 @@ func (s *Store) Health(ctx context.Context, _ bool) (int, string, error) {
 }
 
 // spendJournalRetention resolves utxostore_spendJournalRetentionBlocks: zero is the default,
-// and anything above MaxSpendJournalRetentionBlocks is clamped to it, with a warning, because
-// the create claims' probe must reach past every undo copy.
+// anything above MaxSpendJournalRetentionBlocks is clamped to it, with a warning, because the
+// create claims' probe must reach past every undo copy, and anything below
+// MinSpendJournalRetentionBlocks is raised to it, with a warning, because a reorg the node
+// accepts must find every undo row it needs.
 func spendJournalRetention(logger ulogger.Logger, configured uint32) uint32 {
 	switch {
 	case configured == 0:
 		return DefaultSpendJournalRetentionBlocks
+	case configured < MinSpendJournalRetentionBlocks:
+		logger.Warnf("[utxoset] utxostore_spendJournalRetentionBlocks=%d is below the %d-block reorg depth the node accepts; using %d",
+			configured, MinSpendJournalRetentionBlocks, MinSpendJournalRetentionBlocks)
+
+		return MinSpendJournalRetentionBlocks
 	case configured > MaxSpendJournalRetentionBlocks:
 		logger.Warnf("[utxoset] utxostore_spendJournalRetentionBlocks=%d is above the %d the create probe can cover; using %d",
 			configured, MaxSpendJournalRetentionBlocks, MaxSpendJournalRetentionBlocks)

@@ -46,6 +46,12 @@ const DefaultSpendJournalRetentionBlocks = 288
 // one partition (see undoMaxLife), so retention plus one partition must stay under claimReach.
 const MaxSpendJournalRetentionBlocks = 1440
 
+// MinSpendJournalRetentionBlocks is the floor of the setting. A reorg rewinds spends from the
+// journal, and the node accepts a chain switch as deep as coinbase maturity, 100 blocks on
+// mainnet. Below that, a reorg the node accepted would find part of its undo rows dropped and
+// stop with the UTXO set half rewound.
+const MinSpendJournalRetentionBlocks = 100
+
 // spendJournalSQL deletes the UTXO row AND captures its payload in one statement.
 //
 // One statement, not merely one transaction. A data-modifying CTE guarantees the delete
