@@ -35,12 +35,13 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   logs a warning on each block. The PostgreSQL store builds the partial index
   `px_transactions_conflicting` with `CREATE INDEX CONCURRENTLY` in the background
   after startup, so writes to `transactions` are not blocked, and retries a failed
-  build; until the index is valid the lookup answers correctly but scans the
-  table. A PostgreSQL UTXO store that starts while another process is building
-  the index waits for the build to finish before it touches the schema. A store
-  running the previous release does not wait, so avoid restarting those while the
-  first upgraded process builds the index. The SQLite store creates it at startup. External `utxo.Store`
-  implementations must implement `ConflictingTxHashes`. (#2110)
+  build; until the index is valid, block validation reads every transaction, as
+  it does on an older Aerospike server. A PostgreSQL UTXO store that starts while
+  another process is building the index waits for the build to finish before it
+  touches the schema. A store running the previous release does not wait, so avoid
+  restarting those while the first upgraded process builds the index. The SQLite
+  store creates it at startup. External `utxo.Store` implementations must
+  implement `ConflictingTxHashes`. (#2110)
 
 - **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
   recovery if a transaction affected by rollback or reverse processing is still

@@ -7,7 +7,6 @@ import (
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
 // conflictingIndexLockID serializes the px_transactions_conflicting build across
@@ -17,23 +16,17 @@ import (
 // would wait for the build, so a blocking wait would hang both.
 const conflictingIndexLockID int64 = 7_265_726_118
 
-// holdConflictingIndexBuildLock takes the build lock for schema startup and
-// returns its release. Schema startup runs ALTER TABLE on transactions, which
-// takes ACCESS EXCLUSIVE even when there is nothing to change: queued behind a
-// running concurrent build, it would block every later read and write of the
-// table for the rest of the build. So startup waits for the build instead,
-// polling with pg_try_advisory_lock for the reason given on
+// holdConflictingIndexBuildLock takes the build lock on conn for schema startup
+// and returns its release. Schema startup runs ALTER TABLE on transactions,
+// which takes ACCESS EXCLUSIVE even when there is nothing to change: queued
+// behind a running concurrent build, it would block every later read and write
+// of the table for the rest of the build. So startup waits for the build
+// instead, polling with pg_try_advisory_lock for the reason given on
 // conflictingIndexLockID.
-func holdConflictingIndexBuildLock(ctx context.Context, logger ulogger.Logger, db *usql.DB) (release func(), err error) {
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, errors.NewStorageError("could not get a connection for the index build lock", err)
-	}
-
+func holdConflictingIndexBuildLock(ctx context.Context, logger ulogger.Logger, conn *sql.Conn) (release func(), err error) {
 	for waiting := false; ; waiting = true {
 		var locked bool
 		if err = conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, conflictingIndexLockID).Scan(&locked); err != nil {
-			_ = conn.Close()
 			return nil, errors.NewStorageError("could not take the index build lock", err)
 		}
 
@@ -47,7 +40,6 @@ func holdConflictingIndexBuildLock(ctx context.Context, logger ulogger.Logger, d
 
 		select {
 		case <-ctx.Done():
-			_ = conn.Close()
 			return nil, ctx.Err()
 		case <-time.After(time.Second):
 		}
@@ -58,7 +50,6 @@ func holdConflictingIndexBuildLock(ctx context.Context, logger ulogger.Logger, d
 		defer cancel()
 
 		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, conflictingIndexLockID)
-		_ = conn.Close()
 	}, nil
 }
 

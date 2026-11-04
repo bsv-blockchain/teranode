@@ -188,7 +188,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	switch storeURL.Scheme {
 	case "postgres":
-		if err = createPostgresSchema(logger, db); err != nil {
+		if err = createPostgresSchema(ctx, logger, db); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
 		}
 
@@ -5407,18 +5407,66 @@ type DBExecutor interface {
 // Advisory lock ID for UTXO schema creation serialization across pods.
 const utxoSchemaLockID int64 = 7_265_726_117 // "tera" + "ux" in ASCII-ish
 
-func createPostgresSchema(logger ulogger.Logger, db *usql.DB) error {
-	release, err := holdConflictingIndexBuildLock(context.Background(), logger, db)
+// createPostgresSchema creates the schema holding the index build lock and the
+// schema lock, both on one connection that also runs the schema statements, so
+// startup needs a single connection from the pool. The database is closed if it
+// fails.
+func createPostgresSchema(ctx context.Context, logger ulogger.Logger, db *usql.DB) error {
+	if err := createPostgresSchemaOnOneConn(ctx, logger, db); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	return nil
+}
+
+func createPostgresSchemaOnOneConn(ctx context.Context, logger ulogger.Logger, db *usql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return errors.NewStorageError("could not get a connection for schema creation", err)
+	}
+
+	defer func() {
+		_ = conn.Close()
+	}()
+
+	release, err := holdConflictingIndexBuildLock(ctx, logger, conn)
 	if err != nil {
 		return err
 	}
 
 	defer release()
 
-	return usql.WithAdvisoryLock(context.Background(), db, utxoSchemaLockID, func() error {
-		return createPostgresSchemaImpl(db)
-	})
+	// Serializes with processes running a release that does not take the
+	// build lock.
+	if _, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, utxoSchemaLockID); err != nil {
+		return errors.NewStorageError("could not take the schema lock", err)
+	}
+
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, utxoSchemaLockID)
+	}()
+
+	return createPostgresSchemaImpl(connExecutor{ctx: ctx, conn: conn})
 }
+
+// connExecutor runs the schema statements on the connection that holds the
+// schema locks. Close does nothing: closing the connection would hand it back to
+// the pool still holding the locks; createPostgresSchema closes the database on
+// failure instead.
+type connExecutor struct {
+	ctx  context.Context
+	conn *sql.Conn
+}
+
+func (c connExecutor) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return c.conn.ExecContext(c.ctx, query, args...)
+}
+
+func (c connExecutor) Close() error { return nil }
 
 // createPostgresSchemaImpl contains the actual implementation, now testable
 func createPostgresSchemaImpl(db DBExecutor) error {

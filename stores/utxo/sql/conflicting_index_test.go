@@ -34,6 +34,12 @@ func conflictingIndexSettings(t *testing.T) *settings.Settings {
 func openConflictingIndexStore(t *testing.T, dbURL *url.URL, timeout time.Duration) *Store {
 	t.Helper()
 
+	return openConflictingIndexStoreWith(t, dbURL, timeout, conflictingIndexSettings(t))
+}
+
+func openConflictingIndexStoreWith(t *testing.T, dbURL *url.URL, timeout time.Duration, tSettings *settings.Settings) *Store {
+	t.Helper()
+
 	type result struct {
 		store *Store
 		err   error
@@ -42,7 +48,7 @@ func openConflictingIndexStore(t *testing.T, dbURL *url.URL, timeout time.Durati
 	done := make(chan result, 1)
 
 	go func() {
-		store, err := New(context.Background(), ulogger.TestLogger{}, conflictingIndexSettings(t), dbURL)
+		store, err := New(context.Background(), ulogger.TestLogger{}, tSettings, dbURL)
 		done <- result{store, err}
 	}()
 
@@ -409,7 +415,10 @@ func TestHoldConflictingIndexBuildLock_Errors(t *testing.T) {
 		store, mock := CreateMockStore(ulogger.TestLogger{})
 		mock.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(errors.New("connection reset"))
 
-		release, err := holdConflictingIndexBuildLock(context.Background(), ulogger.TestLogger{}, store.db)
+		conn, err := store.db.Conn(context.Background())
+		require.NoError(t, err)
+
+		release, err := holdConflictingIndexBuildLock(context.Background(), ulogger.TestLogger{}, conn)
 		require.ErrorContains(t, err, "could not take the index build lock")
 		require.Nil(t, release)
 		require.NoError(t, mock.ExpectationsWereMet())
@@ -422,9 +431,34 @@ func TestHoldConflictingIndexBuildLock_Errors(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
-		release, err := holdConflictingIndexBuildLock(ctx, ulogger.TestLogger{}, store.db)
+		conn, err := store.db.Conn(context.Background())
+		require.NoError(t, err)
+
+		release, err := holdConflictingIndexBuildLock(ctx, ulogger.TestLogger{}, conn)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
 		require.Nil(t, release)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
+}
+
+// TestPostgresConflictingIndex_StartsWithTwoConnections pins that schema startup
+// fits in a pool of two connections: it holds the index build lock and the
+// schema lock and runs the schema statements on one connection, so it never
+// waits for a connection it is itself holding.
+func TestPostgresConflictingIndex_StartsWithTwoConnections(t *testing.T) {
+	dbURL := startPostgres(t)
+
+	tSettings := conflictingIndexSettings(t)
+	tSettings.Postgres.MaxOpenConns = 2
+	tSettings.Postgres.MaxIdleConns = 2
+
+	if tSettings.UtxoStore.PostgresPool != nil {
+		tSettings.UtxoStore.PostgresPool.MaxOpenConns = 2
+		tSettings.UtxoStore.PostgresPool.MaxIdleConns = 2
+	}
+
+	store := openConflictingIndexStoreWith(t, dbURL, 30*time.Second, tSettings)
+	require.Equal(t, 2, store.db.Stats().MaxOpenConnections)
+
+	awaitValidConflictingIndex(t, openAdminDB(t, dbURL))
 }
