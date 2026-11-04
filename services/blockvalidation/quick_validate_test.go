@@ -2117,6 +2117,42 @@ func TestQuickValidateDeclinesARecordedIDACommittedBlockHolds(t *testing.T) {
 	require.Equal(t, xMeta.ID, id)
 }
 
+// TestQuickValidateRecordedIDPastACommittedHolder: Y's first transaction is
+// mined in committed block X too, and Y's earlier attempt stamped its own id
+// after X's, so the transaction's ids read [X, Y]. The retry must find Y's id
+// past X's and reuse it; reserving a fresh one would leave the records locked
+// under Y's id unrecognised as Y's leftovers.
+func TestQuickValidateRecordedIDPastACommittedHolder(t *testing.T) {
+	bv, store, cleanup := newBlockValidationWithRealStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	f := newPrunedChainFixture(t, store)
+
+	tip, _, err := bv.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	x := testhelpers.CreateTestBlocksWithPrev(t, 1, tip.Hash())[0]
+	require.NoError(t, bv.blockchainClient.AddBlock(ctx, x, "test-peer"))
+
+	_, xMeta, err := bv.blockchainClient.GetBlockHeader(ctx, x.Hash())
+	require.NoError(t, err)
+
+	_, _, err = store.SpendAndCreate(ctx, f.child, 1400, utxo.WithCreateOnly(),
+		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: xMeta.ID, BlockHeight: 1400}))
+	require.NoError(t, err)
+
+	y, _ := assignedReplayBatch(t, bv, f.child, f.sibling)
+
+	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{f.child.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: y.ID, BlockHeight: 1400})
+	require.NoError(t, err)
+
+	id, reuse, err := bv.recordedBlockID(ctx, y, f.child.TxIDChainHash())
+	require.NoError(t, err)
+	require.True(t, reuse, "Y must find its own id past the one committed block X holds")
+	require.Equal(t, y.ID, id)
+}
+
 // failingUtxoGetStore fails Get with a storage error. Everything else goes to the
 // real store.
 type failingUtxoGetStore struct {

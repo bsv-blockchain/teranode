@@ -16,16 +16,17 @@ import (
 // PrunedReplayGhosts returns the records a failed spend phase leaves behind
 // when the store rejected transactions of a block as pruned replays.
 //
-// Both below-checkpoint block paths create every transaction in the block first
-// and spend the inputs afterwards (services/blockvalidation/quick_validate.go
-// and services/legacy/netsync/handle_block.go). Create does not consult the
+// The below-checkpoint block path creates every transaction in the block first
+// and spends the inputs afterwards (services/blockvalidation/quick_validate.go,
+// which legacy blocks reach too, through ProcessBlock). Create does not consult the
 // pruner's replay markers - putting a parent-record read on the hottest write
 // path in the node is the cost that ordering exists to avoid - so a block that
 // replays pruned transactions gets through the create phase and is rejected in
 // the spend phase, with the records it wrote still in the store. Each is stored
 // mined with no delete_at_height, so neither the unmined reaper nor the DAH
-// scan ever reclaims it, and on the legacy path it is unlocked and spendable
-// even though a mined descendant already consumed those outputs.
+// scan ever reclaims it, and with blockvalidation_quick_validate_skip_utxo_lock
+// on it is unlocked and spendable even though a mined descendant already
+// consumed those outputs.
 //
 // Two kinds of record qualify, and both only when this attempt created them.
 //
@@ -167,13 +168,13 @@ func PrunedReplayGhosts(txs []*bt.Tx, rejected []*chainhash.Hash, createdHere fu
 // wrote: their presence proves nothing about prior validation, and if the
 // spend phase rejects them they are ghosts to delete.
 //
-// The durable mark is the lock together with this block's id. Both
-// below-checkpoint block paths create every transaction of a block locked, with
-// that block's id, and clear the lock only once the block is committed, so a
+// The durable mark is the lock together with this block's id. The
+// below-checkpoint block path creates every transaction of a block locked, with
+// that block's id, and clears the lock only once the block is committed, so a
 // record that already exists, is locked AND already carries blockID is a
 // two-phase write of this very block that never completed: its own earlier
 // attempt, or a sibling validation of the same block, which comes to the same
-// thing. A retry of the same block gets the same id: both paths reuse the id
+// thing. A retry of the same block gets the same id: the path reuses an id
 // recorded on the block's first non-coinbase record, and AssignBlockID is
 // idempotent per block hash while the blockchain service holds the reservation.
 // The reuse can also pick up another block's id from a shared transaction, so
@@ -184,12 +185,12 @@ func PrunedReplayGhosts(txs []*bt.Tx, rejected []*chainhash.Hash, createdHere fu
 // create wrote it locked with ITS id), a post-commit unlock pass that failed,
 // conflict resolution locking a conflicting transaction's parents, or a mempool
 // two-phase create. None of those carries this block's id, so each is filed as
-// pre-existing. That keeps it in the caller's SetMinedMulti, so it gains this
-// block's id instead of failing a descendant block with "has no block IDs", and
-// it keeps it out of the compensation, so it is never deleted as a ghost. Read BEFORE the caller's SetMinedMulti for existing transactions, which
-// clears the lock; the caller then leaves leftovers out of that call, which is
-// safe because AssignBlockID is idempotent per block hash, so a leftover already
-// carries this block's id.
+// pre-existing, which keeps it out of the compensation, so it is never deleted
+// as a ghost.
+//
+// The only caller is removePrunedReplayGhosts in quick_validate.go, which reads
+// this on a failed list that saw a replay answer, before any retry clears the
+// lock. A block that applies cleanly never reads it.
 //
 // A store read that fails for any one record fails the whole call. BatchDecorate
 // reports a per-record failure (a timeout, DEVICE_OVERLOAD, a replica read

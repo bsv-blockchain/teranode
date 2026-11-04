@@ -96,11 +96,12 @@ func encodeNativeOpPayload(subOp uint8, args []any) ([]byte, error) {
 //
 // The sub-ops that carry the pruner's replay protection are fenced separately,
 // on the outcome of probeNativeReplayProtection rather than for everyone:
-// spendMulti (and the single-output spend) must consult the replay marker and
-// report idempotent matches, and addDeletedChildren writes that marker. A fork
-// build that passes the first-seen probe but predates those semantics keeps the
-// native path for every other sub-op and runs these three through the UDF,
-// instead of losing the native path wholesale.
+// spendMulti and the single-output spend must consult the replay marker and
+// report idempotent matches. addDeletedChildren, which nothing in production
+// calls since the pruner writes markers with a plain map write, stays fenced
+// with them. A fork build that passes the first-seen probe but predates those
+// semantics keeps the native path for every other sub-op and runs these three
+// through the UDF, instead of losing the native path wholesale.
 func (s *Store) useNativeForSubOp(subOp uint8) bool {
 	if !s.useNativeTeranodeOps.Load() || subOp == subOpUnspend {
 		return false
@@ -756,10 +757,9 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 
 	prunedChild := &chainhash.Hash{0x03}
 
-	// Planted through the native addDeletedChildren sub-op, the one the pruner
-	// uses to write the marker, so the probe proves the write and the read agree
-	// on the dispatcher rather than assuming the write's key format.
-	if !s.nativeProbeAddDeletedChildren(ctx, policy, markerKey, prunedChild) {
+	// Planted with the pruner's own write, so the probe proves the native spend
+	// reads the marker in the key format the pruner writes.
+	if !s.probePlantMarker(ctx, policy, markerKey, prunedChild) {
 		return false
 	}
 
@@ -821,34 +821,20 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 	return true
 }
 
-// nativeProbeAddDeletedChildren records child as pruned on a probe record through
-// the native addDeletedChildren sub-op and requires an OK response.
-func (s *Store) nativeProbeAddDeletedChildren(ctx context.Context, policy *aerospike.WritePolicy, key *aerospike.Key, child *chainhash.Hash) bool {
+// probePlantMarker records child as pruned on a probe record with the write the
+// pruner makes (buildVerifiedMarkerRecords): a plain MapPutItems of
+// {child.String(): true} into the deletedChildren bin. The probe then proves the
+// native spend honours the marker in the format the pruner actually writes.
+func (s *Store) probePlantMarker(ctx context.Context, policy *aerospike.WritePolicy, key *aerospike.Key, child *chainhash.Hash) bool {
 	if ctx.Err() != nil {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe aborted by context: %v", ctx.Err())
 		return false
 	}
 
-	payload, encErr := encodeNativeOpPayload(subOpAddDeletedChildren, []any{[]any{child.String()}})
-	if encErr != nil {
-		s.logger.Warnf("[teranode-native-op] replay-marker probe payload encode failed: %v", encErr)
-		return false
-	}
+	items := map[interface{}]interface{}{child.String(): true}
 
-	rec, opErr := s.client.Operate(policy, key, aerospike.TeranodeModifyOp(nativeOpResultBin, payload))
-	if opErr != nil {
-		s.logger.Warnf("[teranode-native-op] replay-marker probe could not write %q natively: %v", fields.DeletedChildren.String(), opErr)
-		return false
-	}
-
-	if rec == nil || rec.Bins == nil || rec.Bins[nativeOpResultBin] == nil {
-		s.logger.Warnf("[teranode-native-op] replay-marker probe write returned no %q bin; %s", nativeOpResultBin, describeAerospikeRecord(rec))
-		return false
-	}
-
-	res, parseErr := s.ParseLuaMapResponse(rec.Bins[nativeOpResultBin])
-	if parseErr != nil || res.Status != LuaStatusOK {
-		s.logger.Warnf("[teranode-native-op] replay-marker probe write not accepted (response %s, parse error %v)", describeAerospikeValue(rec.Bins[nativeOpResultBin]), parseErr)
+	if _, opErr := s.client.Operate(policy, key, aerospike.MapPutItemsOp(aerospike.DefaultMapPolicy(), fields.DeletedChildren.String(), items)); opErr != nil {
+		s.logger.Warnf("[teranode-native-op] replay-marker probe could not write %q: %v", fields.DeletedChildren.String(), opErr)
 		return false
 	}
 

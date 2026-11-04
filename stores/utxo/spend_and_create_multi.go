@@ -54,8 +54,9 @@ type SpendAndCreateMultiResult struct {
 	// MultiTxCreated, and kept when a WithBelowCheckpoint list then answers
 	// MultiTxFailed or MultiTxParentFailed for a record its first wave wrote,
 	// so a caller can tell a record it must clean up from one that was already
-	// there (MultiTxExisted). Zero when the record was found, never written, or
-	// the call stopped before it could say.
+	// there (MultiTxExisted). It is kept too when a cancelled call stops before
+	// the spends of a record its first wave wrote and answers MultiTxNotAttempted.
+	// Zero when the record was found or never written.
 	Created bool
 }
 
@@ -407,10 +408,12 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 	})
 
 	if notStarted {
-		// A create-only record whose spends never ran is not a written transaction.
+		// A create-only record whose spends never ran is not a written
+		// transaction, but it is still this call's write: Created stays, so a
+		// caller cleaning up after a pruned replay can find it.
 		for i := range txs {
 			if len(parentsInList[i]) > 0 && results[i].Status != MultiTxFailed {
-				results[i] = SpendAndCreateMultiResult{}
+				results[i] = SpendAndCreateMultiResult{Created: results[i].Created}
 			}
 		}
 
@@ -445,7 +448,7 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 
 	if err := ctx.Err(); err != nil {
 		for _, i := range toSpend {
-			results[i] = SpendAndCreateMultiResult{}
+			results[i] = SpendAndCreateMultiResult{Created: results[i].Created}
 		}
 
 		return results, err
@@ -483,10 +486,11 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 	})
 
 	if notStarted {
-		// A record whose spends never ran is not a written transaction.
+		// A record whose spends never ran is not a written transaction; Created
+		// stays, as above.
 		for _, i := range toSpend {
 			if !spent[i] {
-				results[i] = SpendAndCreateMultiResult{}
+				results[i] = SpendAndCreateMultiResult{Created: results[i].Created}
 			}
 		}
 
