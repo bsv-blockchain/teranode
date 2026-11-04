@@ -476,6 +476,14 @@ func TestCentralizedPeerRegistry_RecordCatchupError_Sanitizes(t *testing.T) {
 		require.Contains(t, got.LastCatchupError, "connection refused", "the diagnostic must survive")
 	})
 
+	t.Run("ssrf refusal naming an address that ends in ::", func(t *testing.T) {
+		r.RecordCatchupError("p", `SSRF dial check: resolved address fd00:: for host "kafka" is a private address`)
+
+		got, _ := r.Get("p")
+		require.NotContains(t, got.LastCatchupError, "fd00")
+		require.Contains(t, got.LastCatchupError, "<redacted-ip>")
+	})
+
 	t.Run("length cap", func(t *testing.T) {
 		r.RecordCatchupError("p", strings.Repeat("é", maxCatchupErrorLength))
 

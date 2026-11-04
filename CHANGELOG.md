@@ -303,7 +303,7 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `processed_at` was misread. `GetBlockHeader` was not affected. (#2074)
 
 - **Peer HTTP errors no longer carry the response body, and stored catch-up errors no
-  longer carry IP addresses** (bitcoin-sv/teranode#4855). A peer chooses the URL that
+  longer carry IP addresses** (bitcoin-sv/teranode#4855, #2109). A peer chooses the URL that
   catch-up fetches from, so a failed fetch could be a response from, or a dial to, a
   service inside the node's network. The error reached the peer registry's
   `LastCatchupError` and the unauthenticated Asset `/peers` endpoint.
@@ -313,8 +313,8 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       `SERVICE_RATE_LIMITED`, `SERVICE_ERROR`) is unchanged.
     - `last_catchup_error` in `/peers` and `/api/p2p/peers`, and `error_message` in
       `/catchup/status`, show every IP address (with its port) as `<redacted-ip>`.
-      `last_catchup_error` is cut at 512 bytes. A registry blob saved by an older
-      binary is cleaned the same way on load.
+      Both are cut at 512 bytes, plus a trailing `…` when cut. A registry blob saved
+      by an older binary is cleaned the same way on load.
     - `last_catchup_error` in `/peers` now follows `asset_publicErrorDetail`, like
       `/catchup/status` `error_message`: with the setting `false` it is empty.
       `last_catchup_error_time` is still served. The default (`true`) keeps the field.

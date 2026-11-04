@@ -58,6 +58,26 @@ func TestRedactIPLiterals(t *testing.T) {
 			want: "connect to <redacted-ip> failed",
 		},
 		{
+			name: "IPv6 ending in :: as the SSRF guard prints it",
+			in:   `SSRF dial check: resolved address fd00:: for host "kafka" is a private address`,
+			want: `SSRF dial check: resolved address <redacted-ip> for host "kafka" is a private address`,
+		},
+		{
+			name: "IPv6 ending in :: followed by a sentence colon",
+			in:   "dial tcp fd00::: connect: refused",
+			want: "dial tcp <redacted-ip>: connect: refused",
+		},
+		{
+			name: "unspecified IPv6",
+			in:   "listen on :: failed",
+			want: "listen on <redacted-ip> failed",
+		},
+		{
+			name: "bracketed IPv6 ending in :: with port",
+			in:   "dial tcp [fd00::]:8080: i/o timeout",
+			want: "dial tcp <redacted-ip>: i/o timeout",
+		},
+		{
 			name: "several addresses",
 			in:   "10.0.0.1 then 10.0.0.2:1",
 			want: "<redacted-ip> then <redacted-ip>",

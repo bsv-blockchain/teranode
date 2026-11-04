@@ -64,12 +64,13 @@ func sanitizeClientName(name string) string {
 // dashboard, not a log: the full error is logged where it happens.
 const maxCatchupErrorLength = 512
 
-// sanitizeCatchupError makes a catchup error safe to store and serve. The error comes
-// from fetches at peer-chosen URLs and is served by the Asset /peers endpoint, so IP
+// SanitizeCatchupError makes a catchup error safe to store and serve. The error comes
+// from fetches at peer-chosen URLs and is served by the Asset /peers and
+// /catchup/status endpoints, so IP
 // literals are redacted - a dial error otherwise tells the peer which private address
 // a hostname resolved to (bitcoin-sv/teranode#4855) - and the length is capped, cutting
 // on a rune boundary.
-func sanitizeCatchupError(errMsg string) string {
+func SanitizeCatchupError(errMsg string) string {
 	errMsg = urlutil.RedactIPLiterals(errMsg)
 
 	if len(errMsg) <= maxCatchupErrorLength {
@@ -344,7 +345,7 @@ func (r *CentralizedPeerRegistry) Register(info *PeerInfo) {
 		// Strip dangerous characters out of the peer-supplied client name so
 		// it can't break logs / dashboards / JSON consumers.
 		entry.ClientName = sanitizeClientName(entry.ClientName)
-		entry.LastCatchupError = sanitizeCatchupError(entry.LastCatchupError)
+		entry.LastCatchupError = SanitizeCatchupError(entry.LastCatchupError)
 		if storagePromotionBlocked(entry.Storage, entry.FullStoragePenaltyUntil, now) {
 			entry.Storage = ""
 		}
@@ -1389,9 +1390,9 @@ func (r *CentralizedPeerRegistry) RecordCatchupFailure(peerID string) {
 }
 
 // RecordCatchupError stores the most recent catchup error reported against the peer,
-// sanitized by sanitizeCatchupError.
+// sanitized by SanitizeCatchupError.
 func (r *CentralizedPeerRegistry) RecordCatchupError(peerID string, errMsg string) {
-	errMsg = sanitizeCatchupError(errMsg)
+	errMsg = SanitizeCatchupError(errMsg)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

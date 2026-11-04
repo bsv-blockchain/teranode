@@ -32,18 +32,25 @@ var ipCandidate = regexp.MustCompile(
 // fetch at a hostname learns, from the failure, which private address that name has
 // inside this node's network (bitcoin-sv/teranode#4855). Hostnames are left as they
 // are: in a peer-steered fetch the peer chose them, so they tell it nothing new.
+//
+// This hides the address, not the outcome. The words around it still tell the peer
+// whether a name resolved inside the network, to which address class, and whether
+// the port answered. Closing that needs a stable error kind in place of free text.
 func RedactIPLiterals(s string) string {
 	return ipCandidate.ReplaceAllStringFunc(s, func(token string) string {
-		// A trailing colon belongs to the sentence ("dial tcp 10.0.0.4:3000: connect"),
-		// not to the address; the IPv6 shape swallows it greedily.
-		core := strings.TrimRight(token, ":")
-		suffix := token[len(core):]
+		// The IPv6 shape greedily swallows a colon that belongs to the sentence
+		// ("dial tcp fe80::1: connect"), but "::" can also end a valid address
+		// ("fd00::"). Drop trailing colons one at a time and keep the longest
+		// candidate that parses.
+		for core := token; ; core = core[:len(core)-1] {
+			if net.ParseIP(ipHost(core)) != nil {
+				return redactedIP + token[len(core):]
+			}
 
-		if net.ParseIP(ipHost(core)) == nil {
-			return token
+			if !strings.HasSuffix(core, ":") {
+				return token
+			}
 		}
-
-		return redactedIP + suffix
 	})
 }
 
