@@ -404,6 +404,7 @@ func TestStampAnchorHintCountsOnlyWhatIsNotOnTheBestChain(t *testing.T) {
 func TestStampTimerDrainRechecksTheStartConditions(t *testing.T) {
 	running := blockchain.FSMStateRUNNING
 	catching := blockchain.FSMStateCATCHINGBLOCKS
+	idle := blockchain.FSMStateIDLE
 
 	tests := []struct {
 		name       string
@@ -415,6 +416,10 @@ func TestStampTimerDrainRechecksTheStartConditions(t *testing.T) {
 		{"catching up", func(s *Server, c *faultClient) {
 			s.settings.Pruner.SkipDuringCatchup = true
 			c.fsmState = &catching
+		}, "catchup_mode", true},
+		{"idle, which a stopped catch-up reads as", func(s *Server, c *faultClient) {
+			s.settings.Pruner.SkipDuringCatchup = true
+			c.fsmState = &idle
 		}, "catchup_mode", true},
 		{"fsm unreadable", func(s *Server, c *faultClient) {
 			s.settings.Pruner.SkipDuringCatchup = true

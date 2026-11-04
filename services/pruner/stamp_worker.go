@@ -418,7 +418,10 @@ func (s *Server) stampStartConditions(ctx context.Context, height uint32) string
 			return "fsm_error"
 		}
 
-		if fsmState != nil && *fsmState == blockchain.FSMStateCATCHINGBLOCKS {
+		// The same test shouldPrune makes for a notified drain: only RUNNING proves no catch-up
+		// is in flight, because an operator STOP parks a catching-up node in IDLE while its batch
+		// still runs.
+		if fsmState == nil || *fsmState != blockchain.FSMStateRUNNING {
 			return "catchup_mode"
 		}
 	}
