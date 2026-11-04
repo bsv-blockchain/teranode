@@ -438,8 +438,9 @@ func TestPrunerReapClearsTheDeleteHeightOfAParentItUnspends(t *testing.T) {
 }
 
 // The reap locks conflict_intents before it counts them, so an intent begun during the reap waits for it to
-// end instead of landing after the count and restoring a parent spend of a record the reap then deletes.
-func TestReapLockBlocksConflictIntentCreation_Postgres(t *testing.T) {
+// end instead of landing after the count and restoring a parent spend of a record the reap then deletes. The
+// reap is parked on a parent output row after it took the table lock, so the test exercises the production lock.
+func TestReapConflictingHoldsTheIntentLockUntilCommit_Postgres(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
 	}
@@ -447,46 +448,180 @@ func TestReapLockBlocksConflictIntentCreation_Postgres(t *testing.T) {
 	store, ctx := setupPostgresStore(t)
 	require.Equal(t, "postgres", store.engine)
 
-	txn, err := store.db.BeginTx(ctx, nil)
+	parent := newExtendedTxWithOutputs(t, 1)
+	loser := newExtendedSpendingTx(t, parent, 0)
+	require.NoError(t, loser.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5_000))
+
+	_, err := store.Create(ctx, parent, 0)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, loser, 0)
+	require.NoError(t, err)
+
+	_, err = store.Spend(ctx, loser, store.GetBlockHeight()+1)
+	require.NoError(t, err)
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*loser.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	blocker, err := store.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 
 	defer func() {
-		_ = txn.Rollback()
+		_ = blocker.Rollback()
 	}()
 
-	_, err = txn.ExecContext(ctx, `LOCK TABLE conflict_intents IN SHARE ROW EXCLUSIVE MODE`)
+	_, err = blocker.ExecContext(ctx, `
+		SELECT 1 FROM outputs
+		WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1) AND idx = 0
+		FOR UPDATE`, parent.TxIDChainHash()[:])
 	require.NoError(t, err)
+
+	type reapResult struct {
+		reaped bool
+		err    error
+	}
+
+	reapDone := make(chan reapResult, 1)
+
+	go func() {
+		reaped, reapErr := store.reapConflicting(ctx, *loser.TxIDChainHash(), store.GetBlockHeight()+1000, store.settings.GlobalBlockHeightRetention)
+		reapDone <- reapResult{reaped, reapErr}
+	}()
+
+	require.Eventually(t, func() bool {
+		var waiting int
+
+		require.NoError(t, store.db.QueryRowContext(ctx, `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE outputs%' AND query NOT LIKE '%pg_stat_activity%'`).Scan(&waiting))
+
+		return waiting == 1
+	}, 10*time.Second, 50*time.Millisecond, "the reap must park on the parent output row after it took the table lock")
 
 	intent := utxo.ConflictIntent{
 		Kind:        utxo.ConflictIntentReverse,
 		BlockHeight: 1,
 		BlockHash:   chainhash.Hash{2},
-		TxHashes:    []chainhash.Hash{{3}},
+		TxHashes:    []chainhash.Hash{*loser.TxIDChainHash()},
 		StartedAt:   1,
 	}
 
-	done := make(chan error, 1)
+	intentDone := make(chan error, 1)
 
 	go func() {
-		done <- store.BeginConflictIntent(ctx, intent)
+		intentDone <- store.BeginConflictIntent(ctx, intent)
 	}()
 
 	select {
-	case err = <-done:
+	case err = <-intentDone:
 		require.FailNow(t, "intent creation must wait for the reap lock", "returned early: %v", err)
 	case <-time.After(1500 * time.Millisecond):
 	}
 
-	require.NoError(t, txn.Commit())
+	require.NoError(t, blocker.Commit())
 
 	select {
-	case err = <-done:
+	case res := <-reapDone:
+		require.NoError(t, res.err)
+		require.True(t, res.reaped)
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "the reap did not finish after the output lock was released")
+	}
+
+	select {
+	case err = <-intentDone:
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
-		require.FailNow(t, "intent creation did not finish after the reap lock was released")
+		require.FailNow(t, "intent creation did not finish after the reap committed")
 	}
 
 	pending, err := store.PendingConflictIntents(ctx)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
+
+	_, err = store.Get(ctx, loser.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+// A reap that fails part-way rolls back as one transaction, so the loser and the parent spend it holds
+// stay in place for the next pruning cycle.
+func TestReapConflictingFailureKeepsTheLoserAndItsParentSpend(t *testing.T) {
+	cases := []struct {
+		name      string
+		statement string
+	}{
+		{name: "conflict intents cannot be counted", statement: "DROP TABLE conflict_intents"},
+		{name: "parent spends cannot be cleared", statement: "DROP TABLE inputs"},
+		{name: "parent delete height cannot be updated", statement: `CREATE TRIGGER fail_parent_dah BEFORE UPDATE OF delete_at_height ON transactions BEGIN SELECT RAISE(ABORT, 'delete height update refused'); END`},
+		{name: "conflicting children cannot be deleted", statement: "DROP TABLE conflicting_children"},
+		{name: "the record cannot be locked", statement: "DROP TABLE block_ids"},
+		{name: "the commit is refused", statement: `CREATE TABLE deferred_refs (transaction_id INTEGER REFERENCES transactions(id) DEFERRABLE INITIALLY DEFERRED);
+			CREATE TRIGGER refuse_commit AFTER DELETE ON transactions BEGIN INSERT INTO deferred_refs VALUES (-1); END`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+
+			store, parent := setup(ctx, t)
+			store.settings.GlobalBlockHeightRetention = 5
+
+			loser := bt.NewTx()
+			require.NoError(t, loser.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+			require.NoError(t, loser.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", parent.Outputs[0].Satoshis-1000))
+			loser.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+			_, err := store.Create(ctx, parent, 0)
+			require.NoError(t, err)
+
+			_, err = store.Create(ctx, loser, 0)
+			require.NoError(t, err)
+
+			_, err = store.Spend(ctx, loser, store.GetBlockHeight()+1)
+			require.NoError(t, err)
+
+			_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*loser.TxIDChainHash()}, true)
+			require.NoError(t, err)
+
+			_, err = store.db.ExecContext(ctx, `UPDATE transactions SET delete_at_height = 999999 WHERE hash = $1`, parent.TxIDChainHash()[:])
+			require.NoError(t, err)
+
+			_, err = store.db.ExecContext(ctx, tc.statement)
+			require.NoError(t, err)
+
+			reaped, err := store.reapConflicting(ctx, *loser.TxIDChainHash(), store.GetBlockHeight()+1000, store.settings.GlobalBlockHeightRetention)
+			require.Error(t, err)
+			require.False(t, reaped)
+
+			var count int
+
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM transactions WHERE hash = $1`, loser.TxIDChainHash()[:]).Scan(&count))
+			require.Equal(t, 1, count, "a failed reap must not delete the loser")
+
+			var spendingData []byte
+
+			require.NoError(t, store.db.QueryRowContext(ctx, `
+				SELECT spending_data FROM outputs
+				WHERE transaction_id = (SELECT id FROM transactions WHERE hash = $1) AND idx = 0`, parent.TxIDChainHash()[:]).Scan(&spendingData))
+			require.NotNil(t, spendingData, "a failed reap must not clear the parent spend")
+			require.Equal(t, loser.TxIDChainHash()[:], spendingData[:32])
+		})
+	}
+
+	t.Run("a cancelled context cannot begin the transaction", func(t *testing.T) {
+		ctx := t.Context()
+
+		store, parent := setup(ctx, t)
+
+		_, err := store.Create(ctx, parent, 0)
+		require.NoError(t, err)
+
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+
+		reaped, err := store.reapConflicting(cancelled, *parent.TxIDChainHash(), 1000, 5)
+		require.Error(t, err)
+		require.False(t, reaped)
+	})
 }

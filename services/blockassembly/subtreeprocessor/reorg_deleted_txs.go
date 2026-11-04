@@ -148,12 +148,17 @@ func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash 
 // after a restore.
 //
 // A tx that is already in the store, because an earlier attempt recreated it, is judged by its live
-// record, not by the saved block IDs: block validation may have mined it since. The retry never writes
-// the chain status of an existing record. The earlier attempt wrote it when it created the record, and
-// later reorgs and block validation own it from then on. The live read decides only whether the tx is
-// returned for block assembly: a tx mined on the current chain is left alone, any other is returned. A
-// tx that block validation mines between the read and the requeue is removed from block assembly when
-// that block is processed, like any tx the validator hands over while the block is being validated.
+// record, not by the saved block IDs: block validation may have mined it since. A tx whose live
+// blocks are on the current chain is left alone and not returned. A tx without the unmined marker
+// whose live blocks are not on the current chain is wrong: the earlier attempt created it with block
+// IDs and failed before it marked it as not on the longest chain. The retry marks it at once, before
+// the saved file is deleted, then reads the live blocks again. This converges without a lock: a
+// setMined that lands after the mark clears the marker itself, a setMined that lands between the mark
+// and the second read is seen by that read and the tx is marked back on the longest chain, and only a
+// setMined between the first read and the mark needed the repair. A tx that already carries the
+// marker is only returned. A tx that block validation mines after it was returned is removed from
+// block assembly when that block is processed, like any tx the validator hands over while the block
+// is being validated.
 //
 // It returns the txs it recreated, or found already recreated and not mined on the current chain, that
 // are not on the longest chain, so the caller can put them back in block assembly. A tx that was skipped
@@ -233,7 +238,7 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 		}
 
 		if errors.Is(createErr, errors.ErrTxExists) {
-			liveOnChain, liveErr := stp.existingTxChainState(ctx, txHash)
+			requeue, liveErr := stp.repairExistingTx(ctx, txHash)
 			if liveErr != nil {
 				if errors.Is(liveErr, errors.ErrTxNotFound) {
 					stp.logger.Errorf("[restoreReorgDeletedTxs][%s] tx %s was not recreated, its record disappeared while it was restored: %v", block.String(), txHash.String(), liveErr)
@@ -246,7 +251,7 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 				return nil, errors.NewStorageError("[restoreReorgDeletedTxs][%s] error reading the existing record of tx %s", block.String(), txHash.String(), liveErr)
 			}
 
-			if liveOnChain {
+			if !requeue {
 				stp.logger.Infof("[restoreReorgDeletedTxs][%s] tx %s already exists and is mined on the current chain, it was left alone", block.String(), txHash.String())
 
 				continue
@@ -283,21 +288,57 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 	return unmined, nil
 }
 
-// existingTxChainState reads the record that is already in the store for a tx and reports whether
-// any of its block IDs is on the current chain. The caller uses it only to decide whether to requeue
-// the tx. It never writes the chain status of the record, so a block that validation mines after the
-// read cannot be overwritten.
-func (stp *SubtreeProcessor) existingTxChainState(ctx context.Context, txHash chainhash.Hash) (onCurrentChain bool, err error) {
-	txMeta, err := stp.utxoStore.Get(ctx, &txHash, fields.BlockIDs)
+// repairExistingTx settles the chain status of a record that is already in the store and reports
+// whether the tx belongs in block assembly. See restoreReorgDeletedTxs for why the repair converges.
+func (stp *SubtreeProcessor) repairExistingTx(ctx context.Context, txHash chainhash.Hash) (requeue bool, err error) {
+	txMeta, err := stp.utxoStore.Get(ctx, &txHash, fields.BlockIDs, fields.UnminedSince)
 	if err != nil {
 		return false, err
 	}
 
-	if len(txMeta.BlockIDs) == 0 {
+	onCurrentChain, err := stp.blocksOnCurrentChain(ctx, txHash, txMeta.BlockIDs)
+	if err != nil {
+		return false, err
+	}
+
+	if onCurrentChain {
 		return false, nil
 	}
 
-	onCurrentChain, err = stp.blockchainClient.CheckBlockIsInCurrentChain(ctx, txMeta.BlockIDs)
+	if txMeta.UnminedSince != 0 {
+		return true, nil
+	}
+
+	if err = stp.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txHash}, false); err != nil {
+		return false, errors.NewStorageError("error marking tx %s as not on the longest chain", txHash.String(), err)
+	}
+
+	txMeta, err = stp.utxoStore.Get(ctx, &txHash, fields.BlockIDs)
+	if err != nil {
+		return false, err
+	}
+
+	if onCurrentChain, err = stp.blocksOnCurrentChain(ctx, txHash, txMeta.BlockIDs); err != nil {
+		return false, err
+	}
+
+	if onCurrentChain {
+		if err = stp.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txHash}, true); err != nil {
+			return false, errors.NewStorageError("error marking tx %s as on the longest chain", txHash.String(), err)
+		}
+
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (stp *SubtreeProcessor) blocksOnCurrentChain(ctx context.Context, txHash chainhash.Hash, blockIDs []uint32) (bool, error) {
+	if len(blockIDs) == 0 {
+		return false, nil
+	}
+
+	onCurrentChain, err := stp.blockchainClient.CheckBlockIsInCurrentChain(ctx, blockIDs)
 	if err != nil {
 		return false, errors.NewProcessingError("error checking whether the blocks of tx %s are on the current chain", txHash.String(), err)
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -891,13 +892,9 @@ func TestRestoreReorgDeletedTxsRequeuesAnExistingTxWhoseLiveBlocksLeftTheChain(t
 
 	recreateWithFailedSavedFileDelete(t, ctx, stp, block, first, 42)
 
-	_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: 99, BlockHeight: 1300, SubtreeIdx: 0, OnLongestChain: true})
-	require.NoError(t, err)
-
 	live, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
 	require.NoError(t, err)
-
-	stp.blockchainClient.(*blockchain.Mock).On("CheckBlockIsInCurrentChain", mock.Anything, live.BlockIDs).Return(false, nil)
+	require.NotZero(t, live.UnminedSince, "precondition: the live record already carries the unmined marker")
 
 	unmined, err := stp.restoreReorgDeletedTxs(ctx, block)
 	require.NoError(t, err)
@@ -911,6 +908,276 @@ func TestRestoreReorgDeletedTxsRequeuesAnExistingTxWhoseLiveBlocksLeftTheChain(t
 	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
 	require.NoError(t, err)
 	require.False(t, exists, "the saved file is deleted by the retry")
+}
+
+func clearUnminedMarker(t *testing.T, ctx context.Context, stp *SubtreeProcessor, tx *bt.Tx) {
+	t.Helper()
+
+	require.NoError(t, stp.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, true))
+
+	live, err := stp.utxoStore.Get(ctx, tx.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Zero(t, live.UnminedSince, "precondition: the record looks mined")
+	require.NotEmpty(t, live.BlockIDs, "precondition: the record carries block IDs")
+}
+
+// An earlier attempt creates the tx with block IDs and fails before it marks the tx as not on the
+// longest chain. The retry finds a record that looks mined and must repair it before the saved file
+// is deleted, whether or not the caller requeues.
+func TestRestoreReorgDeletedTxsRepairsAnExistingTxLeftMinedByAFailedAttempt(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+	recreateWithFailedSavedFileDelete(t, ctx, stp, block, first, 42)
+	clearUnminedMarker(t, ctx, stp, first)
+
+	unmined, err := stp.restoreReorgDeletedTxs(ctx, block)
+	require.NoError(t, err)
+	require.True(t, containsTx(unmined, first), "the repaired tx goes back in block assembly")
+
+	after, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, after.UnminedSince, "the retry marks the tx as not on the longest chain")
+	require.Equal(t, []uint32{42}, after.BlockIDs)
+
+	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.False(t, exists, "the saved file is deleted by the retry")
+}
+
+// Block validation mines the tx on the current chain after the first read and before the mark. The
+// first check answers for the saved block IDs, the second for the first read, and the third for the
+// re-read, which sees it, and the retry marks the tx back on the longest chain.
+func TestRestoreReorgDeletedTxsKeepsAnExistingTxMinedBetweenTheReadAndTheMark(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+	recreateWithFailedSavedFileDelete(t, ctx, stp, block, first, 42)
+	clearUnminedMarker(t, ctx, stp, first)
+
+	chainMock := stp.blockchainClient.(*blockchain.Mock)
+	chainMock.ExpectedCalls = nil
+	chainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).Return(false, nil).Twice()
+	chainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).Return(true, nil)
+
+	unmined, err := stp.restoreReorgDeletedTxs(ctx, block)
+	require.NoError(t, err)
+	require.False(t, containsTx(unmined, first), "a tx mined on the current chain is not put back in block assembly")
+
+	after, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Zero(t, after.UnminedSince, "the tx is marked back on the longest chain")
+
+	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.False(t, exists, "the saved file is deleted by the retry")
+}
+
+type faultyUtxoStore struct {
+	utxostore.Store
+	getErr  func(call int) error
+	markErr func(onLongestChain bool) error
+	gets    int
+}
+
+func (s *faultyUtxoStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	s.gets++
+
+	if s.getErr != nil {
+		if err := s.getErr(s.gets); err != nil {
+			return nil, err
+		}
+	}
+
+	return s.Store.Get(ctx, hash, f...)
+}
+
+func (s *faultyUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
+	if s.markErr != nil {
+		if err := s.markErr(onLongestChain); err != nil {
+			return err
+		}
+	}
+
+	return s.Store.MarkTransactionsOnLongestChain(ctx, hashes, onLongestChain)
+}
+
+type chainAnswer struct {
+	onChain bool
+	err     error
+}
+
+func answerChainChecks(stp *SubtreeProcessor, blockIDs []uint32, answers ...chainAnswer) {
+	chainMock := stp.blockchainClient.(*blockchain.Mock)
+	chainMock.ExpectedCalls = nil
+
+	for _, a := range answers {
+		chainMock.On("CheckBlockIsInCurrentChain", mock.Anything, blockIDs).Return(a.onChain, a.err).Once()
+	}
+}
+
+func TestRestoreReorgDeletedTxsFailsWhenTheRepairOfAnExistingTxFails(t *testing.T) {
+	injected := errors.NewStorageError("injected")
+
+	tests := []struct {
+		name        string
+		answers     []chainAnswer
+		getErr      func(call int) error
+		markErr     func(onLongestChain bool) error
+		skipped     bool
+		wantErr     bool
+		wantMessage string
+	}{
+		{
+			name:        "the first read fails",
+			answers:     []chainAnswer{{}},
+			getErr:      func(call int) error { return injected },
+			wantErr:     true,
+			wantMessage: "error reading the existing record",
+		},
+		{
+			name:    "the record is gone when it is read",
+			answers: []chainAnswer{{}},
+			getErr:  func(call int) error { return errors.NewTxNotFoundError("gone") },
+			skipped: true,
+		},
+		{
+			name:        "the first chain check fails",
+			answers:     []chainAnswer{{}, {err: injected}},
+			wantErr:     true,
+			wantMessage: "error reading the existing record",
+		},
+		{
+			name:        "the mark fails",
+			answers:     []chainAnswer{{}, {}},
+			markErr:     func(onLongestChain bool) error { return injected },
+			wantErr:     true,
+			wantMessage: "error marking tx",
+		},
+		{
+			name:    "the re-read fails",
+			answers: []chainAnswer{{}, {}},
+			getErr: func(call int) error {
+				if call == 2 {
+					return injected
+				}
+
+				return nil
+			},
+			wantErr:     true,
+			wantMessage: "error reading the existing record",
+		},
+		{
+			name:        "the second chain check fails",
+			answers:     []chainAnswer{{}, {}, {err: injected}},
+			wantErr:     true,
+			wantMessage: "error reading the existing record",
+		},
+		{
+			name:    "the mark back on the longest chain fails",
+			answers: []chainAnswer{{}, {}, {onChain: true}},
+			markErr: func(onLongestChain bool) error {
+				if onLongestChain {
+					return injected
+				}
+
+				return nil
+			},
+			wantErr:     true,
+			wantMessage: "error marking tx",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			stp, block := newMoveForwardCommitBoundaryProcessor(t)
+			blockHash := block.Header.Hash()
+
+			first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+			recreateWithFailedSavedFileDelete(t, ctx, stp, block, first, 42)
+			clearUnminedMarker(t, ctx, stp, first)
+
+			answerChainChecks(stp, []uint32{42}, tc.answers...)
+
+			stp.utxoStore = &faultyUtxoStore{Store: stp.utxoStore, getErr: tc.getErr, markErr: tc.markErr}
+
+			unmined, err := stp.restoreReorgDeletedTxs(ctx, block)
+
+			exists, existsErr := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+			require.NoError(t, existsErr)
+
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantMessage)
+				require.True(t, exists, "a failed restore keeps the saved file for the next retry")
+
+				return
+			}
+
+			require.NoError(t, err)
+			require.False(t, containsTx(unmined, first))
+			require.True(t, tc.skipped)
+			require.False(t, exists, "a skipped tx does not keep the saved file")
+		})
+	}
+}
+
+func prepareFreshRestoreOfAMinedTx(t *testing.T, ctx context.Context, stp *SubtreeProcessor, block *model.Block, first *bt.Tx) {
+	t.Helper()
+
+	_, err := stp.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{first.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: 42, BlockHeight: 1234, SubtreeIdx: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+	require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+}
+
+func TestRestoreReorgDeletedTxsFailsWhenTheChainCheckOfASavedTxFails(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+	prepareFreshRestoreOfAMinedTx(t, ctx, stp, block, first)
+	answerChainChecks(stp, []uint32{42}, chainAnswer{err: errors.NewStorageError("injected")})
+
+	_, err := stp.restoreReorgDeletedTxs(ctx, block)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error checking whether the blocks of tx")
+
+	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.True(t, exists, "a failed restore keeps the saved file for the next retry")
+}
+
+func TestRestoreReorgDeletedTxsFailsWhenTheBatchedMarkFails(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+	prepareFreshRestoreOfAMinedTx(t, ctx, stp, block, first)
+	answerChainChecks(stp, []uint32{42}, chainAnswer{})
+
+	stp.utxoStore = &faultyUtxoStore{Store: stp.utxoStore, markErr: func(bool) error { return errors.NewStorageError("injected") }}
+
+	_, err := stp.restoreReorgDeletedTxs(ctx, block)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error marking 1 recreated txs")
+
+	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.True(t, exists, "a failed restore keeps the saved file for the next retry")
 }
 
 type setLockedHonoursCtx struct {
@@ -962,5 +1229,52 @@ func TestRemoveCoinbaseUtxosUnlocksTheTxsWhenTheSaveFailsOnACancelledContext(t *
 		txMeta, err := realStore.Get(ctx, tx.TxIDChainHash(), fields.Locked)
 		require.NoError(t, err, "%s was not deleted", name)
 		require.False(t, txMeta.Locked, "%s must not stay locked", name)
+	}
+}
+
+type setLockedFailsOnUnlock struct {
+	utxostore.Store
+}
+
+func (s *setLockedFailsOnUnlock) SetLocked(ctx context.Context, hashes []chainhash.Hash, locked bool) error {
+	if !locked {
+		return errors.NewStorageError("injected")
+	}
+
+	return s.Store.SetLocked(ctx, hashes, locked)
+}
+
+func TestRemoveCoinbaseUtxosReturnsTheSaveErrorWhenTheUnlockAlsoFails(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	createCoinbaseChain(t, ctx, stp, block)
+
+	require.NoError(t, stp.subtreeStore.Set(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs, []byte{0, 9, 9}, options.WithAllowOverwrite(true)))
+
+	stp.utxoStore = &setLockedFailsOnUnlock{Store: stp.utxoStore}
+
+	err := stp.removeCoinbaseUtxos(ctx, block)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error saving child spends")
+}
+
+func TestRemoveCoinbaseUtxosFailsWhenTheCoinbaseCannotBeDeleted(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	realStore := stp.utxoStore
+	stp.utxoStore = &deleteFailsOnce{Store: realStore, target: *block.CoinbaseTx.TxIDChainHash()}
+
+	err := stp.removeCoinbaseUtxos(ctx, block)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error deleting utxos for tx")
+
+	for _, tx := range []*bt.Tx{first, second} {
+		_, getErr := realStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)
+		require.ErrorIs(t, getErr, errors.ErrTxNotFound, "the children were deleted before the coinbase failed")
 	}
 }

@@ -308,8 +308,9 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   transaction that is not on the longest chain goes back into block assembly when a
   reorg moves the block forward. If saving the transactions fails, block assembly
   unlocks them. A retry after a partial delete deletes every transaction in the saved
-  file. A retry never changes the chain status of a transaction that already
-  exists. It puts that transaction back in block assembly only when its live record is
+  file. A retry repairs the chain status of a transaction that an earlier
+  attempt left looking mined, and otherwise leaves the status of an existing record
+  alone. It puts that transaction back in block assembly only when its live record is
   not mined on the current chain. The saved file expires at the same height as kept-aside subtree transactions.
   If the block returns after that, block assembly recreates nothing and does not log a
   warning. No action is needed. Parent spends that were left dangling before the
