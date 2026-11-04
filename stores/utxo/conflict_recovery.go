@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -83,6 +84,23 @@ func (r *ConflictRecovery) Validate() error {
 	return nil
 }
 
+// conflictSnapshotSpends is the UTXOs a checklist transaction took. A body in extended form
+// carries the amount and locking script of every output it spends, so the records come off the
+// body. A store that keeps the plain form, or drops bodies after a retention window (utxoset),
+// cannot be read that way, so the store says what the transaction took (Store.SpendsMadeBy).
+func conflictSnapshotSpends(ctx context.Context, s Store, h chainhash.Hash, tx *bt.Tx) ([]*Spend, error) {
+	if tx != nil && tx.IsExtended() {
+		return GetSpends(tx)
+	}
+
+	spends, err := s.SpendsMadeBy(ctx, h)
+	if err != nil {
+		return nil, errors.NewProcessingError("cannot snapshot conflict transaction %s", h.String(), err)
+	}
+
+	return spends, nil
+}
+
 // prepareConflictRecovery snapshots the whole cascade before SetConflicting or
 // Unspend can erase any edge. Parents already locked by another holder stay out of
 // this operation's lock and unlock list. The reads run concurrently, bounded by
@@ -103,11 +121,11 @@ func prepareConflictRecovery(ctx context.Context, s Store, hashes []chainhash.Ha
 			return err
 		}
 
-		if m == nil || m.Tx == nil {
+		if m == nil {
 			return errors.NewProcessingError("cannot snapshot conflict transaction %s", hashes[i].String())
 		}
 
-		spends, err := GetSpends(m.Tx)
+		spends, err := conflictSnapshotSpends(ctx, s, hashes[i], m.Tx)
 		if err != nil {
 			return err
 		}

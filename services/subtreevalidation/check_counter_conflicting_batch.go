@@ -125,7 +125,9 @@ const counterConflictingBatchFanOut = 128
 //   - Phase 1 fails per input. An input whose parent record cannot be read, which
 //     is out of range, or whose spender is the frozen sentinel is recorded, and
 //     the spenders of the transaction's other inputs are still collected. Only a
-//     transaction whose own record cannot be read is dropped from phases 2 and 3.
+//     transaction whose own record cannot be read, or whose inputs cannot be
+//     resolved from that record (no stored inpoints and a body that cannot be read
+//     or is not there), is dropped from phases 2 and 3.
 //   - Phase 2 is one walk shared by every transaction, so a walk that stops (on
 //     the budget, or on a store fault in any cone) stops for all of them. What it
 //     reached before stopping is still mined-checked; what it did not reach is
@@ -255,7 +257,8 @@ func (u *Server) checkCounterConflictingOnCurrentChainBatch(ctx context.Context,
 // counter-spender of.
 //
 // txErr is the first other failure in txHashes order: a store fault on a
-// transaction's own record, which drops the transaction, or one of
+// transaction's own record, or a failure to resolve its inputs from that record
+// (both drop the transaction), or one of
 // counterSpendersOf's per-input failures, which does not. The other results are
 // complete either way: one transaction's or input's failure does not stop the
 // rest.
@@ -276,16 +279,58 @@ func (u *Server) counterSpendersBatch(ctx context.Context, txHashes []chainhash.
 
 	parentIdx := make(map[chainhash.Hash]int)
 	parents := make([]chainhash.Hash, 0, len(unique))
+	inpoints := make([][]subtreepkg.Inpoint, len(unique))
+	inpointErrs := make([]error, len(unique))
 
-	for _, txMeta := range txMetas {
-		if txMeta == nil {
+	// A record that stores no inpoints is read from its body, and one carrying
+	// neither fails, as in GetCounterConflictingTxHashes: reading it as spending
+	// nothing would find no counter-spender. The bodies are read in one concurrent
+	// pass rather than one serial read per record: the utxoset store's mined create
+	// path stores no inpoints, so a block can hold many such records.
+	var (
+		bodyIdx    []int
+		bodyHashes []chainhash.Hash
+	)
+
+	for i, txMeta := range txMetas {
+		if utxo.CounterConflictingNeedsBody(txMeta) {
+			bodyIdx = append(bodyIdx, i)
+			bodyHashes = append(bodyHashes, unique[i])
+		}
+	}
+
+	if len(bodyHashes) > 0 {
+		bodyMetas, bodyReadErrs := u.getBatch(ctx, bodyHashes, fields.Tx)
+
+		for j, i := range bodyIdx {
+			switch {
+			case bodyReadErrs[j] != nil:
+				inpointErrs[i] = bodyReadErrs[j]
+			case bodyMetas[j] == nil:
+				// The record went between the two reads. Reported as not found, as the
+				// store's own Get would report it.
+				inpointErrs[i] = errors.NewTxNotFoundError("[checkCounterConflictingOnCurrentChainBatch][%s] transaction body not found", unique[i].String())
+			default:
+				txMetas[i].Tx = bodyMetas[j].Tx
+			}
+		}
+	}
+
+	for i, txMeta := range txMetas {
+		if txMeta == nil || inpointErrs[i] != nil {
 			continue
 		}
 
-		for _, parentHash := range txMeta.TxInpoints.GetParentTxHashes() {
-			if _, ok := parentIdx[parentHash]; !ok {
-				parentIdx[parentHash] = len(parents)
-				parents = append(parents, parentHash)
+		// A failure here drops the transaction like a failed read of its record.
+		inpoints[i], inpointErrs[i] = utxo.CounterConflictingInpointsOf(unique[i], txMeta)
+		if inpointErrs[i] != nil {
+			continue
+		}
+
+		for _, inpoint := range inpoints[i] {
+			if _, ok := parentIdx[inpoint.Hash]; !ok {
+				parentIdx[inpoint.Hash] = len(parents)
+				parents = append(parents, inpoint.Hash)
 			}
 		}
 	}
@@ -309,9 +354,17 @@ func (u *Server) counterSpendersBatch(ctx context.Context, txHashes []chainhash.
 			continue
 		}
 
+		if inpointErrs[i] != nil {
+			if txErr == nil {
+				txErr = errors.NewProcessingError("[checkCounterConflictingOnCurrentChainBatch][%s] failed to read what the transaction spends", txHash.String(), inpointErrs[i])
+			}
+
+			continue
+		}
+
 		// A failed input is recorded, not fatal: a spender on another input is
 		// still evidence, and the verdict rule decides between them.
-		txCounterSpenders, missingParent, err := counterSpendersOf(txHash, txMeta, parentIdx, parentMetas, parentReadErrs)
+		txCounterSpenders, missingParent, err := counterSpendersOf(txHash, inpoints[i], parentIdx, parentMetas, parentReadErrs)
 		if err != nil && txErr == nil {
 			txErr = err
 		}
@@ -341,14 +394,14 @@ func (u *Server) counterSpendersBatch(ctx context.Context, txHashes []chainhash.
 // it can, whatever happens to the others. missingParent reports a parent the store
 // does not hold; err, the first other input that could not be checked: a parent
 // that could not be read, an input out of range, or a frozen output.
-func counterSpendersOf(txHash chainhash.Hash, txMeta *meta.Data, parentIdx map[chainhash.Hash]int, parentMetas []*meta.Data, parentReadErrs []error) (counterSpenders []chainhash.Hash, missingParent bool, err error) {
+func counterSpendersOf(txHash chainhash.Hash, inpoints []subtreepkg.Inpoint, parentIdx map[chainhash.Hash]int, parentMetas []*meta.Data, parentReadErrs []error) (counterSpenders []chainhash.Hash, missingParent bool, err error) {
 	fail := func(inputErr error) {
 		if err == nil {
 			err = inputErr
 		}
 	}
 
-	for _, inpoint := range txMeta.TxInpoints.GetTxInpoints() {
+	for _, inpoint := range inpoints {
 		idx := parentIdx[inpoint.Hash]
 
 		if readErr := parentReadErrs[idx]; readErr != nil {
