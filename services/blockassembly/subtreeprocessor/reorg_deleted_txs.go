@@ -149,9 +149,10 @@ func (stp *SubtreeProcessor) readReorgDeletedTxs(ctx context.Context, blockHash 
 //
 // A tx that is already in the store, because an earlier attempt recreated it, is judged by its live
 // record, not by the saved block IDs: block validation may have mined it since. A tx whose live
-// blocks are on the current chain is left alone and not returned. A tx without the unmined marker
-// whose live blocks are not on the current chain is wrong: the earlier attempt created it with block
-// IDs and failed before it marked it as not on the longest chain. The retry marks it at once, before
+// blocks are on the current chain is not returned, and a marker an earlier interrupted repair left on
+// it is cleared first, so the saved file is deleted only after that succeeded. A tx without the
+// unmined marker whose live blocks are not on the current chain is wrong: the earlier attempt created
+// it with block IDs and failed before it marked it as not on the longest chain. The retry marks it at once, before
 // the saved file is deleted, then reads the live blocks again. This converges without a lock: a
 // setMined that lands after the mark clears the marker itself, a setMined that lands between the mark
 // and the second read is seen by that read and the tx is marked back on the longest chain, and only a
@@ -289,7 +290,8 @@ func (stp *SubtreeProcessor) restoreReorgDeletedTxs(ctx context.Context, block *
 }
 
 // repairExistingTx settles the chain status of a record that is already in the store and reports
-// whether the tx belongs in block assembly. See restoreReorgDeletedTxs for why the repair converges.
+// whether the tx belongs in block assembly. A marker left by an earlier interrupted repair is cleared
+// when the live blocks are on the current chain. See restoreReorgDeletedTxs for why the repair converges.
 func (stp *SubtreeProcessor) repairExistingTx(ctx context.Context, txHash chainhash.Hash) (requeue bool, err error) {
 	txMeta, err := stp.utxoStore.Get(ctx, &txHash, fields.BlockIDs, fields.UnminedSince)
 	if err != nil {
@@ -302,6 +304,12 @@ func (stp *SubtreeProcessor) repairExistingTx(ctx context.Context, txHash chainh
 	}
 
 	if onCurrentChain {
+		if txMeta.UnminedSince != 0 {
+			if err = stp.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txHash}, true); err != nil {
+				return false, errors.NewStorageError("error clearing the unmined marker of tx %s", txHash.String(), err)
+			}
+		}
+
 		return false, nil
 	}
 

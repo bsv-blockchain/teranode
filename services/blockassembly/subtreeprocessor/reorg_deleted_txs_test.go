@@ -948,9 +948,39 @@ func TestRestoreReorgDeletedTxsRepairsAnExistingTxLeftMinedByAFailedAttempt(t *t
 	require.False(t, exists, "the saved file is deleted by the retry")
 }
 
+func answerChainChecksByBlockID(stp *SubtreeProcessor, currentChainBlockID uint32) {
+	chainMock := stp.blockchainClient.(*blockchain.Mock)
+	chainMock.ExpectedCalls = nil
+
+	chainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.MatchedBy(func(blockIDs []uint32) bool {
+		for _, id := range blockIDs {
+			if id == currentChainBlockID {
+				return true
+			}
+		}
+
+		return false
+	})).Return(true, nil)
+	chainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil)
+}
+
+func mineOnCurrentChainBeforeTheMark(t *testing.T, ctx context.Context, store utxostore.Store, tx *bt.Tx, blockID uint32) func(onLongestChain bool) {
+	t.Helper()
+
+	return func(onLongestChain bool) {
+		if onLongestChain {
+			return
+		}
+
+		_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{tx.TxIDChainHash()}, utxostore.MinedBlockInfo{BlockID: blockID, BlockHeight: 1300, SubtreeIdx: 0, OnLongestChain: true})
+		require.NoError(t, err)
+	}
+}
+
 // Block validation mines the tx on the current chain after the first read and before the mark. The
-// first check answers for the saved block IDs, the second for the first read, and the third for the
-// re-read, which sees it, and the retry marks the tx back on the longest chain.
+// store holds block 42 at the first read and blocks 42 and 99 at the re-read. The blockchain client
+// answers by block ID, so only a second check that uses the re-read block IDs sees block 99 and marks
+// the tx back on the longest chain.
 func TestRestoreReorgDeletedTxsKeepsAnExistingTxMinedBetweenTheReadAndTheMark(t *testing.T) {
 	ctx := context.Background()
 	stp, block := newMoveForwardCommitBoundaryProcessor(t)
@@ -961,17 +991,18 @@ func TestRestoreReorgDeletedTxsKeepsAnExistingTxMinedBetweenTheReadAndTheMark(t 
 	recreateWithFailedSavedFileDelete(t, ctx, stp, block, first, 42)
 	clearUnminedMarker(t, ctx, stp, first)
 
-	chainMock := stp.blockchainClient.(*blockchain.Mock)
-	chainMock.ExpectedCalls = nil
-	chainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).Return(false, nil).Twice()
-	chainMock.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{42}).Return(true, nil)
+	answerChainChecksByBlockID(stp, 99)
+
+	realStore := stp.utxoStore
+	stp.utxoStore = &faultyUtxoStore{Store: realStore, beforeMark: mineOnCurrentChainBeforeTheMark(t, ctx, realStore, first, 99)}
 
 	unmined, err := stp.restoreReorgDeletedTxs(ctx, block)
 	require.NoError(t, err)
 	require.False(t, containsTx(unmined, first), "a tx mined on the current chain is not put back in block assembly")
 
-	after, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	after, err := realStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
 	require.NoError(t, err)
+	require.Contains(t, after.BlockIDs, uint32(99), "precondition: the tx was mined in block 99 between the read and the mark")
 	require.Zero(t, after.UnminedSince, "the tx is marked back on the longest chain")
 
 	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
@@ -979,11 +1010,67 @@ func TestRestoreReorgDeletedTxsKeepsAnExistingTxMinedBetweenTheReadAndTheMark(t 
 	require.False(t, exists, "the saved file is deleted by the retry")
 }
 
+// An attempt marks the tx as not on the longest chain, finds it mined on the current chain, and fails
+// on the re-read, so the marker stays on a tx that is mined on the current chain. The saved file must
+// stay, and the next attempt must clear the marker before it deletes the file.
+func TestRestoreReorgDeletedTxsClearsAMarkerLeftByAnInterruptedRepair(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	blockHash := block.Header.Hash()
+
+	first, _ := createCoinbaseChain(t, ctx, stp, block)
+
+	recreateWithFailedSavedFileDelete(t, ctx, stp, block, first, 42)
+	clearUnminedMarker(t, ctx, stp, first)
+
+	answerChainChecksByBlockID(stp, 99)
+
+	realStore := stp.utxoStore
+	stp.utxoStore = &faultyUtxoStore{
+		Store:      realStore,
+		beforeMark: mineOnCurrentChainBeforeTheMark(t, ctx, realStore, first, 99),
+		getErr: func(call int) error {
+			if call == 2 {
+				return errors.NewStorageError("injected")
+			}
+
+			return nil
+		},
+	}
+
+	_, err := stp.restoreReorgDeletedTxs(ctx, block)
+	require.Error(t, err, "the first attempt fails on the re-read")
+
+	exists, err := stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.True(t, exists, "a failed restore keeps the saved file")
+
+	interrupted, err := realStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Contains(t, interrupted.BlockIDs, uint32(99), "precondition: the live record is mined on the current chain")
+	require.NotZero(t, interrupted.UnminedSince, "precondition: the interrupted repair left the marker")
+
+	stp.utxoStore = realStore
+
+	unmined, err := stp.restoreReorgDeletedTxs(ctx, block)
+	require.NoError(t, err)
+	require.False(t, containsTx(unmined, first), "a tx mined on the current chain is not put back in block assembly")
+
+	after, err := realStore.Get(ctx, first.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Zero(t, after.UnminedSince, "the retry clears the marker")
+
+	exists, err = stp.subtreeStore.Exists(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err)
+	require.False(t, exists, "the saved file is deleted only once the status is right")
+}
+
 type faultyUtxoStore struct {
 	utxostore.Store
-	getErr  func(call int) error
-	markErr func(onLongestChain bool) error
-	gets    int
+	getErr     func(call int) error
+	markErr    func(onLongestChain bool) error
+	beforeMark func(onLongestChain bool)
+	gets       int
 }
 
 func (s *faultyUtxoStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
@@ -999,6 +1086,10 @@ func (s *faultyUtxoStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fi
 }
 
 func (s *faultyUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
+	if s.beforeMark != nil {
+		s.beforeMark(onLongestChain)
+	}
+
 	if s.markErr != nil {
 		if err := s.markErr(onLongestChain); err != nil {
 			return err
