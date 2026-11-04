@@ -2,6 +2,7 @@ package blockassembly
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobopts "github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -1114,6 +1117,21 @@ func (c *noBestTipOrderClient) GetBlockHeaders(ctx context.Context, hash *chainh
 	return headers, stale, nil
 }
 
+// unreachableSubtreeStore is a subtree store that cannot be reached for a file it does not have:
+// it reports a storage error, not that the file is missing, as a store that is down does.
+type unreachableSubtreeStore struct {
+	blob.Store
+}
+
+func (s *unreachableSubtreeStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...blobopts.FileOption) (io.ReadCloser, error) {
+	r, err := s.Store.GetIoReader(ctx, key, fileType, opts...)
+	if errors.Is(err, errors.ErrNotFound) {
+		return nil, errors.NewStorageError("subtree store unreachable")
+	}
+
+	return r, err
+}
+
 // failingUtxoStore is a UTXO store whose BatchDecorate or MarkTransactionsOnLongestChain fails
 // while fail names it.
 type failingUtxoStore struct {
@@ -1130,7 +1148,7 @@ func (s *failingUtxoStore) BatchDecorate(ctx context.Context, items []*utxo.Unre
 }
 
 func (s *failingUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
-	if s.fail == "MarkTransactionsOnLongestChain" || (onLongestChain && s.fail == "MarkTransactionsOnLongestChain(true)") {
+	if s.fail == "MarkTransactionsOnLongestChain" {
 		return errors.NewStorageError("MarkTransactionsOnLongestChain failed")
 	}
 
@@ -1236,11 +1254,14 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 		name string
 		// positionKnown sets a replay position, which the replay then fails to move on from.
 		positionKnown bool
-		// unreadableFork adds a fork block whose subtree the subtree store cannot read until
-		// after the first restart, which therefore fails.
+		// unreadableFork adds a fork block whose subtree the subtree store cannot be reached
+		// for, and which is gone at the first restart, which therefore fails.
 		unreadableFork bool
-		// subtreeLate writes B's subtree only after the fallback, and the next pass replays.
+		// subtreeLate makes B's subtree unreachable until after the fallback, and the next pass
+		// replays. The restart sees it missing until then.
 		subtreeLate bool
+		// subtreeGone leaves B's subtree missing while block assembly runs.
+		subtreeGone bool
 		// restartFirst restarts block assembly before that next pass.
 		restartFirst bool
 		// startUnreadable makes that restart happen while B still cannot be read; it fails.
@@ -1275,6 +1296,7 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 		{name: "B skipped by a reset without the best-tip order", resetFirst: true},
 		{name: "B skipped by a reset, then the replay given up", positionKnown: true, resetFirst: true},
 		{name: "history not given up while the pending mark cannot be saved", positionKnown: true, resetFirst: true, failSave: true},
+		{name: "B's subtree gone while block assembly runs", subtreeGone: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			initPrometheusMetrics()
@@ -1332,8 +1354,12 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 			treeBytes, err := tree.Serialize()
 			require.NoError(t, err)
 
-			if !tc.subtreeLate {
+			if !tc.subtreeLate && !tc.subtreeGone {
 				require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
+			}
+
+			if tc.subtreeLate || tc.unreadableFork {
+				ba.subtreeStore = &unreachableSubtreeStore{Store: items.blobStore}
 			}
 
 			b := buildChain(a1, 1, 61000)[0]
@@ -1450,6 +1476,22 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 			requireBlockAssemblyTip(t, items, cTip)
 			require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*x.TxIDChainHash()), "X is still in block assembly")
 
+			if tc.subtreeGone {
+				// Block validation finished B, so its subtree should be there: block assembly
+				// stops rather than leave X and Y marked mined.
+				select {
+				case err := <-ba.Fatal():
+					require.ErrorContains(t, err, "lost its subtree")
+				default:
+					require.Fail(t, "block assembly did not stop on the lost subtree")
+				}
+
+				require.Zero(t, unminedSince(t, items, y), "nothing can mark Y")
+				require.True(t, ba.skippedForkMarkPending, "the mark stays owed, so a restart fails too")
+
+				return
+			}
+
 			if tc.bestMovesOntoB {
 				// B is on the best chain now, so X and Y are mined on it; moving there is a reorg.
 				require.Zero(t, unminedSince(t, items, x), "X, mined in B on the best chain, stays marked mined")
@@ -1474,6 +1516,7 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 
 				// The subtree store recovers, and so does the replay.
 				require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
+				ba.subtreeStore = items.blobStore
 
 				if !tc.restartFirst {
 					ba.blockchainClient = items.blockchainClient

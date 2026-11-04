@@ -169,9 +169,13 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       replay's restamp of a stale branch runs. A fork block that never was the best tip,
       or a transaction that lost a double spend, does not cause one.
     - **Retries.** A run that cannot finish, for example on a fork block whose subtree
-      it cannot read or that block validation has not finished, stays pending. Every later block pass on the best tip runs it
+      store cannot be reached or that block validation has not finished, stays pending. Every later block pass on the best tip runs it
       again, and the reconcile timer wakes it after a back-off that starts at 5s and
       doubles up to 5 minutes, even with `blockassembly_reconcileInterval=0`.
+    - **A lost subtree stops block assembly.** Block validation finished a fork block
+      the mark reads and its subtree files are within their retention, so a missing one
+      is an infrastructure failure: the block assembly service stops with `has lost its
+      subtree` rather than leave the block's transactions marked mined.
     - **Start fails while it is unfinished.** A restart finishes a pending run before it
       loads the unmined transactions. If it cannot, for example because a fork block's
       subtree is unreadable or gone, block assembly fails to start rather than load a

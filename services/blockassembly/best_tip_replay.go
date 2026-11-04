@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -262,7 +263,8 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 			return
 		}
 
-		if !atStart {
+		// A lost subtree stops block assembly (runSkippedForkMark), so it is not retried.
+		if _, gone := err.(*skippedForkSubtreeGoneError); !atStart && !gone {
 			b.noteSkippedForkMarkFailure(time.Now())
 			b.logger.Errorf("[BlockAssembler] mark of skipped fork transactions unfinished, retrying at %s: %v", b.skippedForkMarkRetryAt.Format(time.RFC3339), err)
 		}
@@ -371,6 +373,12 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 
 		hashes, err := b.blockTxHashes(ctx, fb.header)
 		if err != nil {
+			// Block validation finished the block, and the floor keeps its subtree files
+			// retained, so a missing one is lost data, not something a later run can read.
+			if errors.Is(err, errors.ErrNotFound) {
+				return &skippedForkSubtreeGoneError{block: hash, err: err}
+			}
+
 			b.logger.Errorf("[BlockAssembler] error reading fork block %s to mark skipped fork transactions: %v", hash, err)
 			unfinished++
 
@@ -438,6 +446,44 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, atStart bool) (
 	}
 
 	return nil
+}
+
+// skippedForkSubtreeGoneError reports a fork block, owed a mark of skipped fork transactions,
+// whose subtree the subtree store reports not found. Block validation finished the block and its
+// subtree files are within their retention, so they should be there: nothing can mark the block's
+// transactions, and block assembly stops rather than carry on without them.
+type skippedForkSubtreeGoneError struct {
+	block chainhash.Hash
+	err   error
+}
+
+func (e *skippedForkSubtreeGoneError) Error() string {
+	return fmt.Sprintf("fork block %s, owed a mark of skipped fork transactions, has lost its subtree: %v", e.block, e.err)
+}
+
+func (e *skippedForkSubtreeGoneError) Unwrap() error {
+	return e.err
+}
+
+// runSkippedForkMark runs markSkippedForkTxs outside start-up. A run that does not finish stays
+// pending and is retried, except when a fork block lost its subtree: that stops block assembly.
+func (b *BlockAssembler) runSkippedForkMark(ctx context.Context) {
+	// markSkippedForkTxs returns it unwrapped. errors.As stops at the first *errors.Error in a
+	// chain, which this error wraps, so it would not find it.
+	if err, gone := b.markSkippedForkTxs(ctx, false).(*skippedForkSubtreeGoneError); gone {
+		b.logger.Errorf("[BlockAssembler] stopping block assembly: %v", err)
+
+		select {
+		case b.fatalCh <- err:
+		default:
+		}
+	}
+}
+
+// Fatal returns a channel that receives an error block assembly cannot continue after. The
+// service stops when one arrives.
+func (b *BlockAssembler) Fatal() <-chan error {
+	return b.fatalCh
 }
 
 // markOffLongestChain marks the transactions as not on the longest chain, then marks again as on

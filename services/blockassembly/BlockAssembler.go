@@ -268,6 +268,10 @@ type BlockAssembler struct {
 	skippedForkMarkFailures     uint
 	skippedForkMarkRetryAt      time.Time
 
+	// fatalCh carries an error block assembly cannot continue after, such as a fork block that
+	// lost its subtree; the service stops on it (Fatal).
+	fatalCh chan error
+
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
 
@@ -394,6 +398,7 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		currentChainMapIDs:  make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		defaultMiningNBits:  defaultMiningBits,
 		resetCh:             make(chan resetRequest, 2),
+		fatalCh:             make(chan error, 1),
 		reconcileCh:         make(chan struct{}, 1),
 		currentRunningState: atomic.Value{},
 		heartbeatInterval:   defaultHeartbeatInterval,
@@ -774,7 +779,7 @@ drain:
 			b.triggerReconcile()
 		}
 	} else if err == nil && b.skippedForkMarkPending {
-		_ = b.markSkippedForkTxs(ctx, false)
+		b.runSkippedForkMark(ctx)
 	}
 
 	// The Reset path replays moveForward blocks through the same
@@ -1441,7 +1446,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		// to drop it. It does not run off the best tip. Its back-off paces only the idle wake
 		// (reconcileDue), not a pass.
 		if b.skippedForkMarkPending {
-			_ = b.markSkippedForkTxs(ctx, false)
+			b.runSkippedForkMark(ctx)
 		}
 
 		return
@@ -1483,7 +1488,7 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	}
 
 	if b.skippedForkMarkPending {
-		_ = b.markSkippedForkTxs(ctx, false)
+		b.runSkippedForkMark(ctx)
 	}
 }
 

@@ -1191,6 +1191,16 @@ func (ba *BlockAssembly) Start(ctx context.Context, readyCh chan<- struct{}) (er
 		return errors.NewServiceError("failed to start block assembler", err)
 	}
 
+	// An error block assembly cannot continue after stops the service.
+	g.Go(func() error {
+		select {
+		case fatalErr := <-ba.blockAssembler.Fatal():
+			return errors.NewServiceError("block assembler stopped", fatalErr)
+		case <-gCtx.Done():
+			return nil
+		}
+	})
+
 	// Signal that the service is ready to accept requests
 	closeOnce.Do(func() { close(readyCh) }) // Start the block assembler component which handles the core block creation logic
 
