@@ -16,15 +16,18 @@ import (
 // PrunedReplayGhosts returns the records a failed spend phase leaves behind
 // when the store rejected transactions of a block as pruned replays.
 //
-// Both below-checkpoint block paths create every transaction in the block first
-// and spend the inputs afterwards (services/blockvalidation/quick_validate.go
-// and services/legacy/netsync/handle_block.go). Create does not consult the
-// pruner's replay markers - putting a parent-record read on the hottest write
-// path in the node is the cost that ordering exists to avoid - so a block that
-// replays pruned transactions gets through the create phase and is rejected in
-// the spend phase, with the records it wrote still in the store. Each is stored
-// mined with no delete_at_height, so neither the unmined reaper nor the DAH
-// scan ever reclaims it, and on the legacy path it is unlocked and spendable
+// Quick validation's below-checkpoint list (services/blockvalidation/
+// quick_validate.go, removePrunedReplayGhosts) creates a transaction with a
+// parent in the list before it spends that transaction's inputs. It is the only
+// caller; the legacy route reaches it through blockValidation.ProcessBlock when
+// it takes the unified quick route, and otherwise goes to the validator, which
+// spends before it creates. Create does not consult the pruner's replay markers
+// - putting a parent-record read on the hottest write path in the node is the
+// cost that ordering exists to avoid - so a block that replays pruned
+// transactions gets through the create phase and is rejected in the spend
+// phase, with the records it wrote still in the store. Each is stored mined
+// with no delete_at_height, so neither the unmined reaper nor the DAH scan ever
+// reclaims it, and with the catch-up lock skipped it is unlocked and spendable
 // even though a mined descendant already consumed those outputs.
 //
 // Two kinds of record qualify, and both only when this attempt created them.
@@ -77,8 +80,9 @@ import (
 // txs need not be in dependency order. The walk indexes each transaction under
 // the parents its inputs name, once, and follows that index breadth first, so
 // it costs O(transactions + inputs) whatever the depth of the ghost chain.
-// Every hash in rejected must name a transaction in txs, which holds at both
-// call sites because the rejections came from spending exactly that list.
+// Every hash in rejected must name a transaction in txs, which holds at the
+// quick-validation caller because the rejections came from spending exactly
+// that list.
 func PrunedReplayGhosts(txs []*bt.Tx, rejected []*chainhash.Hash, createdHere func(*chainhash.Hash) bool) []*bt.Tx {
 	if len(rejected) == 0 || createdHere == nil {
 		// Without a createdHere answer nothing can be shown to be this attempt's
@@ -167,13 +171,13 @@ func PrunedReplayGhosts(txs []*bt.Tx, rejected []*chainhash.Hash, createdHere fu
 // wrote: their presence proves nothing about prior validation, and if the
 // spend phase rejects them they are ghosts to delete.
 //
-// The durable mark is the lock together with this block's id. Both
-// below-checkpoint block paths create every transaction of a block locked, with
-// that block's id, and clear the lock only once the block is committed, so a
+// The durable mark is the lock together with this block's id. Quick validation
+// creates every transaction of a block locked, with that block's id, and clears
+// the lock only once the block is committed, so a
 // record that already exists, is locked AND already carries blockID is a
 // two-phase write of this very block that never completed: its own earlier
 // attempt, or a sibling validation of the same block, which comes to the same
-// thing. A retry of the same block gets the same id: both paths reuse the id
+// thing. A retry of the same block gets the same id: quick validation reuses the id
 // recorded on the block's first non-coinbase record, and AssignBlockID is
 // idempotent per block hash while the blockchain service holds the reservation.
 // The reuse can also pick up another block's id from a shared transaction, so
@@ -184,12 +188,10 @@ func PrunedReplayGhosts(txs []*bt.Tx, rejected []*chainhash.Hash, createdHere fu
 // create wrote it locked with ITS id), a post-commit unlock pass that failed,
 // conflict resolution locking a conflicting transaction's parents, or a mempool
 // two-phase create. None of those carries this block's id, so each is filed as
-// pre-existing. That keeps it in the caller's SetMinedMulti, so it gains this
-// block's id instead of failing a descendant block with "has no block IDs", and
-// it keeps it out of the compensation, so it is never deleted as a ghost. Read BEFORE the caller's SetMinedMulti for existing transactions, which
-// clears the lock; the caller then leaves leftovers out of that call, which is
-// safe because AssignBlockID is idempotent per block hash, so a leftover already
-// carries this block's id.
+// pre-existing, which keeps it out of the compensation, so it is never deleted
+// as a ghost. The caller reads leftovers only after a list that failed on a
+// pruned-replay answer, so the records are still locked: SetMinedMulti, which
+// clears the lock, runs only when the batch succeeds.
 //
 // A store read that fails for any one record fails the whole call. BatchDecorate
 // reports a per-record failure (a timeout, DEVICE_OVERLOAD, a replica read
@@ -266,14 +268,14 @@ type CommittedBlockHashFunc func(ctx context.Context, id uint64) (*chainhash.Has
 // set.
 //
 // LeftoversAmong's whole argument is that no other writer carries THIS block's
-// id. Both block paths may take that id from the mined-in ids already recorded
+// id. Quick validation may take that id from the mined-in ids already recorded
 // on the block's first non-coinbase transaction, and a transaction shared with
 // another block carries the OTHER block's id. When that other block is
 // committed and its post-commit unlock failed, its records are still locked
 // under its id, so adopting the id made them look like this block's own
 // leftovers: dropped from this block's SetMinedMulti and eligible for this
 // block's compensating delete. A committed block naming a different hash under
-// the id settles that the records are its. Both callers then fail the attempt
+// the id settles that the records are its. The caller then fails the attempt
 // rather than go on under that id: AdoptableBlockID keeps a committed block's
 // id out at adoption, so a mismatch here means the other block committed while
 // this attempt was running, and the retry takes an id of its own.
@@ -318,7 +320,7 @@ func ConfirmLeftovers(ctx context.Context, committedHash CommittedBlockHashFunc,
 // AdoptableBlockID reports whether a block may take id as its own, where id was
 // read back from the mined-in ids recorded on one of its transactions.
 //
-// Both below-checkpoint block paths do that on a retry, so that the block keeps
+// Quick validation does that on a retry, so that the block keeps
 // the id its earlier attempt stamped on its records. The record may instead be
 // a transaction the block shares with another block, and then the id is that
 // other block's. When a different block is committed under the id, adopting
@@ -354,23 +356,14 @@ func carriesBlockID(blockIDs []uint32, blockID uint32) bool {
 	return false
 }
 
-// IsPrunedReplayRejection reports whether a spend-phase error identifies the
-// spending transaction as a replay of one the pruner removed.
-//
-// Two answers qualify. The marker rejection, ErrUtxoSpendingTxPruned, names the
-// replay directly. A missing parent, ErrTxNotFound, does so only for a
-// transaction this attempt created: below the checkpoint a parent record is
-// absent only because it was fully spent and buried, so a transaction that had
-// to be created in order to spend it is a replay of a chain the pruner removed
-// end to end, marker and all. A pre-existing transaction with a missing parent
-// is the case the stores' "already blessed" fallback exists for and is not a
-// replay.
-func IsPrunedReplayRejection(err error, createdHere bool) bool {
-	if errors.Is(err, errors.ErrUtxoSpendingTxPruned) {
-		return true
-	}
-
-	return createdHere && errors.Is(err, errors.ErrTxNotFound)
+// IsPrunedReplayRejection reports whether a spend-phase error carries the
+// pruner's marker rejection, ErrUtxoSpendingTxPruned, which names the spending
+// transaction as a replay of one the pruner removed. The validator uses it: it
+// never wrote the spender's record, so a missing parent says nothing there. The
+// block list, which does write records, also counts a missing parent for a
+// record it created (IsReplayAnswer together with the list's Created answer).
+func IsPrunedReplayRejection(err error) bool {
+	return errors.Is(err, errors.ErrUtxoSpendingTxPruned)
 }
 
 // deleteCreatedAttempts and deleteCreatedBackoff bound the retry of one
@@ -547,7 +540,7 @@ func AnyPrunedReplay(spends []*Spend) bool {
 //
 // A missing parent counts only when spenderCreatedByCaller is set, for the
 // create-first block paths. It is the other pruned-replay answer
-// (IsPrunedReplayRejection). Without it a ghost with one parent pruned and
+// (IsReplayAnswer). Without it a ghost with one parent pruned and
 // another surviving kept its fresh spend of the survivor, and DeleteCreated then
 // removed the ghost with that spend still in place: an output spent by a
 // transaction the store no longer holds. Any other caller keeps the behaviour
@@ -579,8 +572,8 @@ func NeedsSpendRollback(spends []*Spend, spenderCreatedByCaller bool) bool {
 // answers a replay of a pruned transaction gets: the marker rejection, or a
 // parent record that is gone. The stores use it to decide that an idempotent
 // match in the same call is historical and must not be reversed (RollbackSet).
-// Whether the call really was a replay is the block paths' question, answered
-// with IsPrunedReplayRejection.
+// Whether the call really was a replay is the caller's question: the block list
+// answers it with the Created flag, the validator with IsPrunedReplayRejection.
 func IsReplayAnswer(err error) bool {
 	return err != nil && (errors.Is(err, errors.ErrUtxoSpendingTxPruned) || errors.Is(err, errors.ErrTxNotFound))
 }

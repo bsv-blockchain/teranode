@@ -3153,7 +3153,13 @@ func (u *BlockValidation) removePrunedReplayGhosts(ctx context.Context, block *m
 	deleteErr := utxo.DeleteCreated(cleanupCtx, u.logger, u.utxoStore, ghosts, u.settings.UtxoStore.StoreBatcherSize*8)
 
 	if idMismatch {
-		return errors.NewServiceError("[removePrunedReplayGhosts][%s] block id %d is held by another committed block; failing the attempt so the retry takes an id of its own", block.Hash().String(), block.ID, deleteErr)
+		const msg = "[removePrunedReplayGhosts][%s] block id %d is held by another committed block; failing the attempt so the retry takes an id of its own"
+
+		if deleteErr != nil {
+			return errors.NewServiceError(msg, block.Hash().String(), block.ID, deleteErr)
+		}
+
+		return errors.NewServiceError(msg, block.Hash().String(), block.ID)
 	}
 
 	if readErr != nil && deleteErr != nil {

@@ -1162,7 +1162,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// The validator never wrote the spender's record itself, so
 					// only the marker identifies a replay here
 					// (utxo.IsPrunedReplayRejection).
-					if utxo.IsPrunedReplayRejection(spend.Err, false) {
+					if utxo.IsPrunedReplayRejection(spend.Err) {
 						prunedReplay = true
 					}
 

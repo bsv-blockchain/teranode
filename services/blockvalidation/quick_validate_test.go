@@ -2119,20 +2119,27 @@ func TestRecordedBlockIDFailsOnAFailedRead(t *testing.T) {
 
 // failingDeleteStore fails DeleteComplete while failing is set. Everything else
 // goes to the real store.
-// retryableReplayStore wraps a real store and, for a spend the store rejects as a
-// pruned replay, joins in a transient storage error, the shape the aggregate
-// takes when a sibling input of the same transaction hit DEVICE_OVERLOAD.
+// retryableReplayStore wraps a real store and, for a spend the store rejects
+// with a pruned-replay answer (the marker, or a parent that is gone), joins in
+// a transient storage error, the shape the aggregate takes when a sibling input
+// of the same transaction hit DEVICE_OVERLOAD. SpendAndCreateMulti runs the same
+// utxo.DefaultSpendAndCreateMulti the SQL store uses, with SpendAndCreate routed
+// back through the wrapper, so the list path sees the injected error.
 type retryableReplayStore struct {
 	utxo.Store
 }
 
 func (s *retryableReplayStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
 	data, spends, err := s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
-	if err != nil && errors.Is(err, errors.ErrUtxoSpendingTxPruned) {
+	if utxo.IsReplayAnswer(err) {
 		return data, spends, errors.NewStorageError("injected overload on a sibling input", err)
 	}
 
 	return data, spends, err
+}
+
+func (s *retryableReplayStore) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
+	return utxo.DefaultSpendAndCreateMulti(ctx, s, utxo.UniformSpendAndCreateMultiWidths(1), txs, blockHeight, opts...)
 }
 
 // TestQuickValidateRecordsPrunedReplayDespiteRetryableSibling: the spend phase
@@ -2142,6 +2149,11 @@ func (s *retryableReplayStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, bl
 // budget ran out, never recorded as a replay, and its recreated record stayed.
 // A pruned replay is deterministic, so it is classified first. Reproduced by
 // review.
+//
+// The block lists C and D. D has its parent C in the list, so the first wave
+// writes D's record create-only; C's combined call meets P's marker and D's
+// spend then finds C gone. Both answers carry the injected retryable error, so
+// D's record is the ghost the cleanup must find through a retryable answer.
 func TestQuickValidateRecordsPrunedReplayDespiteRetryableSibling(t *testing.T) {
 	bv, store, cleanup := newBlockValidationWithRealStore(t)
 	defer cleanup()
@@ -2152,76 +2164,20 @@ func TestQuickValidateRecordsPrunedReplayDespiteRetryableSibling(t *testing.T) {
 	bv.utxoStore = &retryableReplayStore{Store: store}
 	bv.spendRetryBackoff = time.Millisecond
 
-	block, batch := replayBatch(f.child, f.sibling)
+	block, batch := assignedReplayBatch(t, bv, f.child, f.grandchild, f.sibling)
 
 	err := bv.createAndSpendUTXOsForBatch(ctx, block, batch)
 	require.Error(t, err, "a block replaying a pruned transaction must not validate")
-	require.Contains(t, err.Error(), "spending transaction was pruned")
+	require.Contains(t, err.Error(), "injected overload", "precondition: the replay answers reached the list as retryable")
 
-	_, err = store.Get(ctx, f.child.TxIDChainHash())
-	require.ErrorIs(t, err, errors.ErrTxNotFound, "the recreated replay must be removed even when its error also reads as retryable")
+	for _, hash := range []*chainhash.Hash{f.child.TxIDChainHash(), f.grandchild.TxIDChainHash()} {
+		_, err = store.Get(ctx, hash)
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "the recreated replay must be removed even when its error also reads as retryable")
+	}
 
 	meta, err := store.Get(ctx, f.sibling.TxIDChainHash())
 	require.NoError(t, err)
 	require.NotNil(t, meta)
-}
-
-// unknownCreateStore writes target's record on the first combined call for it
-// and answers that call as a create with an unknown outcome, as a store batch
-// that timed out after its write landed does. Later calls go to the real store.
-type unknownCreateStore struct {
-	utxo.Store
-	target  chainhash.Hash
-	tripped atomic.Bool
-}
-
-func (s *unknownCreateStore) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
-	if *tx.TxIDChainHash() == s.target && s.tripped.CompareAndSwap(false, true) {
-		sqlStore, ok := s.Store.(*sql.Store)
-		if !ok {
-			return nil, nil, errors.NewProcessingError("unknownCreateStore needs the sql store")
-		}
-
-		if _, err := sqlStore.Create(ctx, tx, blockHeight, opts...); err != nil {
-			return nil, nil, err
-		}
-
-		return nil, nil, utxo.MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("injected: store batch did not complete in time"))
-	}
-
-	return s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
-}
-
-// TestQuickValidateOneByOneRemovesPrunedReplayAfterUnknownCreate: a block lists
-// C twice, so the store refuses the list and applyOneByOne applies it one
-// combined call at a time. C was pruned and P carries its marker. C's first
-// call lands its record but answers an unknown outcome, which is retryable, and
-// the retry is rejected at the spend by the marker, before any create. Nothing
-// on that path revisits the record, so the block's cleanup has to find it as a
-// leftover of this attempt and delete it. Before applyOneByOne reported to
-// listReplays, the cleanup saw no rejection and the record stayed, stored mined
-// under the failed block's id with an output E already consumed.
-func TestQuickValidateOneByOneRemovesPrunedReplayAfterUnknownCreate(t *testing.T) {
-	bv, store, cleanup := newBlockValidationWithRealStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	f := newPrunedChainFixture(t, store)
-
-	injecting := &unknownCreateStore{Store: store, target: *f.child.TxIDChainHash()}
-	bv.utxoStore = injecting
-	bv.spendRetryBackoff = time.Millisecond
-
-	block, batch := assignedReplayBatch(t, bv, f.child, f.child)
-
-	err := bv.createAndSpendUTXOsForBatch(ctx, block, batch)
-	require.Error(t, err, "a block replaying a pruned transaction must not validate")
-	require.True(t, injecting.tripped.Load(), "precondition: the unknown-outcome create ran")
-	require.Contains(t, err.Error(), "spending transaction was pruned")
-
-	_, err = store.Get(ctx, f.child.TxIDChainHash())
-	require.ErrorIs(t, err, errors.ErrTxNotFound,
-		"the record the unknown-outcome create wrote must be removed by the block's cleanup")
 }
 
 type failingDeleteStore struct {

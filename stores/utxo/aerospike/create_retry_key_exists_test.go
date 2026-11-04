@@ -193,7 +193,8 @@ func testCreateRetryKeyExists(t *testing.T, resend bool) {
 
 	if spendErr != nil {
 		var rejected []*chainhash.Hash
-		if utxo.IsPrunedReplayRejection(spendErr, createdHere) {
+		// As the block list's listReplays.observe classifies it.
+		if utxo.IsReplayAnswer(spendErr) {
 			rejected = append(rejected, c.TxIDChainHash())
 		}
 

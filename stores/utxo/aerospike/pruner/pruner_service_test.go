@@ -658,3 +658,79 @@ func TestAddParentUpdatesForInput(t *testing.T) {
 		}
 	})
 }
+
+// TestPartitionWorker_CancelledWorkerStillDrainsTheCarry: each chunk's deletes
+// ride the next chunk's batch, so when the worker stops the carry still holds
+// children whose markers have landed. The worker's deferred drain runs detached
+// from ctx. Here ctx is cancelled straight after the first batch, which writes
+// the first chunk's marker. A drain that ran on ctx would send nothing, and the
+// child would stay present behind its own marker, so its next re-spend would be
+// refused as a pruned replay. The end state required: no child is both marked
+// and still present, and at least one marker landed.
+func TestPartitionWorker_CancelledWorkerStillDrainsTheCarry(t *testing.T) {
+	s, client := newFlushTestService(t)
+
+	s.chunkSize = 1
+	s.chunkGroupLimit = 1
+
+	require.NoError(t, s.indexWaiter.WaitForIndexReady(context.Background(), IndexName))
+
+	type pair struct {
+		child               chainhash.Hash
+		parentKey, childKey *aerospike.Key
+	}
+
+	pairs := make([]pair, 0, 2)
+
+	for n := byte(1); n <= 2; n++ {
+		parent := chainhash.HashH([]byte{0xD0, n, 1})
+		child := chainhash.HashH([]byte{0xD0, n, 2})
+
+		input := &bt.Input{PreviousTxOutIndex: 0, PreviousTxSatoshis: 100}
+		require.NoError(t, input.PreviousTxIDAdd(&parent))
+
+		parentKey := putRecord(t, client, &parent, spentBy(&child))
+		childKey := putRecord(t, client, &child, aerospike.BinMap{
+			fields.TxID.String():           child.CloneBytes(),
+			fields.Inputs.String():         []interface{}{input.Bytes(true)},
+			fields.DeleteAtHeight.String(): 5,
+		})
+
+		pairs = append(pairs, pair{child: child, parentKey: parentKey, childKey: childKey})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	calls := 0
+	s.batchOperateFn = func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) error {
+		err := client.BatchOperate(policy, records)
+
+		calls++
+		if calls == 1 {
+			cancel()
+		}
+
+		return err
+	}
+
+	_, _, _ = s.partitionWorker(ctx, 10, 0, 4096)
+
+	require.NotZero(t, calls, "precondition: the first chunk's marker batch was sent")
+
+	marked := 0
+
+	for _, p := range pairs {
+		if !hasMarker(t, client, p.parentKey, &p.child) {
+			continue
+		}
+
+		marked++
+
+		exists, err := client.Exists(nil, p.childKey)
+		require.NoError(t, err)
+		require.False(t, exists, "child %s carries a marker and must have been deleted by the detached drain", p.child.String())
+	}
+
+	require.NotZero(t, marked, "precondition: a marker landed before the cancel")
+}
