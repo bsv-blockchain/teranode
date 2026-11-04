@@ -134,18 +134,22 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		if !options.Conflicting {
 			done := make(chan createResult, 1)
 
-			s.createBatcher.PutCtx(ctx, &createItem{
-				tx:          tx,
-				blockHeight: blockHeight,
-				options:     options,
-				done:        done,
-			})
-
-			select {
-			case res := <-done:
-				return res.data, res.err
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			// A store that is closing takes the direct path, so the answer is the pool's closed
+			// error and not a panic on the batcher's closed channel.
+			if s.enqueue(func() {
+				s.createBatcher.PutCtx(ctx, &createItem{
+					tx:          tx,
+					blockHeight: blockHeight,
+					options:     options,
+					done:        done,
+				})
+			}) {
+				select {
+				case res := <-done:
+					return res.data, res.err
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
 			}
 		}
 	}

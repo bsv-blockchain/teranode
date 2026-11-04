@@ -66,7 +66,7 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 	// transaction rather than only to the transaction itself, so two items in one batch can
 	// touch the same row, which is exactly the overlap the batched path assumes away. A store
 	// that is closing takes it too, so the answer is the pool's closed error and not a panic on
-	// the batcher's closed channel.
+	// the batcher's closed channel; enqueue makes that hold when Close lands mid-call.
 	if s.spendAndCreateBatcher != nil && !options.Conflicting && !s.closed.Load() {
 		// A caller that has already given up gets its answer before anything is queued.
 		// Once queued the item is applied whether or not anyone is waiting.
@@ -76,7 +76,9 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 
 		item := newSpendAndCreateItem(tx, blockHeight, options, opts)
 
-		s.spendAndCreateBatcher.PutCtx(ctx, item)
+		if !s.enqueue(func() { s.spendAndCreateBatcher.PutCtx(ctx, item) }) {
+			return s.spendAndCreateOne(ctx, tx, blockHeight, options, opts...)
+		}
 
 		// Waited for unconditionally, and that is deliberate. The batch runs under its own
 		// context and is bounded by the database exactly as the single path's COMMIT is, so

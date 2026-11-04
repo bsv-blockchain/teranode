@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/stretchr/testify/require"
 )
@@ -68,4 +69,43 @@ func TestCloseDrainsAQueuedLockBeforeClosingThePool(t *testing.T) {
 	default:
 		t.Fatal("Close returned before the queued lock change was drained and answered")
 	}
+}
+
+// TestACallAfterCloseIsRefusedNotPanicked covers the four entry points that hand an item to a
+// batcher: Create, Get, SetLocked and SpendAndCreate. Close closes each batcher's channel, and a
+// send on a closed channel panics, so a caller still running when the daemon stops the store
+// would take the process down part-way through Close. Each must instead take its direct path
+// and get the closed pool's error.
+func TestACallAfterCloseIsRefusedNotPanicked(t *testing.T) {
+	s, ctx := newTestStoreWith(t, func(st *settings.Settings) {
+		st.UtxoStore.StoreBatcherSize = 8
+		st.UtxoStore.GetBatcherSize = 8
+		st.UtxoStore.LockedBatcherSize = 8
+	})
+	require.NotNil(t, s.createBatcher, "test setup: the create batcher must be built")
+	require.NotNil(t, s.spendAndCreateBatcher, "test setup: the spend-and-create batcher must be built")
+	require.NotNil(t, s.getBatcher, "test setup: the get batcher must be built")
+	require.NotNil(t, s.lockBatcher, "test setup: the lock batcher must be built")
+
+	held := mkTx(t, 2, 5000)
+	_, err := s.Create(ctx, held, 100)
+	require.NoError(t, err)
+
+	require.NoError(t, s.Close(context.Background()))
+
+	require.NotPanics(t, func() {
+		_, err := s.Create(ctx, mkTx(t, 2, 6000), 100)
+		require.Error(t, err, "Create after Close")
+	})
+	require.NotPanics(t, func() {
+		_, err := s.Get(ctx, held.TxIDChainHash())
+		require.Error(t, err, "Get after Close")
+	})
+	require.NotPanics(t, func() {
+		require.Error(t, s.SetLocked(ctx, []chainhash.Hash{*held.TxIDChainHash()}, true), "SetLocked after Close")
+	})
+	require.NotPanics(t, func() {
+		_, _, err := s.SpendAndCreate(ctx, mkTx(t, 2, 7000), 100)
+		require.Error(t, err, "SpendAndCreate after Close")
+	})
 }

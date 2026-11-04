@@ -253,7 +253,13 @@ func (s *Store) getBatched(ctx context.Context, hash *chainhash.Hash,
 	wantChildren, wantBody bool) (*meta.Data, error) {
 	done := make(chan getResult, 1)
 
-	s.getBatcher.PutCtx(ctx, &getItem{hash: *hash, wantChildren: wantChildren, wantBody: wantBody, done: done})
+	// A store that is closing reads directly, so the answer is the pool's closed error and not
+	// a panic on the batcher's closed channel.
+	if !s.enqueue(func() {
+		s.getBatcher.PutCtx(ctx, &getItem{hash: *hash, wantChildren: wantChildren, wantBody: wantBody, done: done})
+	}) {
+		return s.getDirect(ctx, hash, wantChildren, wantBody)
+	}
 
 	select {
 	case res := <-done:

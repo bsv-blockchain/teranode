@@ -184,13 +184,15 @@ func (s *Store) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value 
 	if s.lockBatcher != nil && len(txHashes) == 1 {
 		errCh := make(chan error, 1)
 
-		s.lockBatcher.PutCtx(ctx, &lockItem{hash: txHashes[0], value: value, errCh: errCh})
-
-		select {
-		case err := <-errCh:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
+		// A store that is closing takes the direct path below, so the answer is the pool's
+		// closed error and not a panic on the batcher's closed channel.
+		if s.enqueue(func() { s.lockBatcher.PutCtx(ctx, &lockItem{hash: txHashes[0], value: value, errCh: errCh}) }) {
+			select {
+			case err := <-errCh:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 

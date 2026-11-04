@@ -201,9 +201,13 @@ type Store struct {
 	spendAndCreateBatcher  *batcher.Batcher[spendAndCreateItem]
 	spendAndCreateInFlight sync.WaitGroup
 
-	// closed is set at the top of Close, so a SpendAndCreate arriving after it takes the
-	// single path and gets the pool's error rather than a send on the batcher's closed channel.
-	closed atomic.Bool
+	// closed is set at the top of Close, under closeMu's write lock, so a call arriving after
+	// it takes the direct path and gets the pool's error rather than a send on a batcher's
+	// closed channel. closeMu is what makes that hold: enqueue keeps the read lock from its
+	// check of closed until the item is on the channel, so Close cannot close a batcher between
+	// the two.
+	closed  atomic.Bool
+	closeMu sync.RWMutex
 
 	// getBatcher funnels single reads into one BatchDecorate call. Reads take no locks, so
 	// batches may run concurrently.
@@ -440,8 +444,27 @@ func (s *Store) SetBlockHeight(height uint32) error {
 
 func (s *Store) PoolMaxConns() int { return int(s.pool.Config().MaxConns) }
 
+// enqueue runs put, which hands one item to a batcher, unless the store is closing. It reports
+// whether put ran; a caller told false takes its direct path instead. The read lock is held
+// across put so Close, which takes the write lock before it closes any batcher, cannot close
+// the channel between the check and the send.
+func (s *Store) enqueue(put func()) bool {
+	s.closeMu.RLock()
+	defer s.closeMu.RUnlock()
+
+	if s.closed.Load() {
+		return false
+	}
+
+	put()
+
+	return true
+}
+
 func (s *Store) Close(_ context.Context) error {
+	s.closeMu.Lock()
 	s.closed.Store(true)
+	s.closeMu.Unlock()
 
 	// Stop the batcher BEFORE the pool, and stop it at all.
 	//
