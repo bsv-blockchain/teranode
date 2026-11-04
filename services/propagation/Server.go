@@ -21,6 +21,7 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -422,6 +423,37 @@ func isIPAllowed(ip net.IP, allowedNets []*net.IPNet) bool {
 	return false
 }
 
+// parseDatagram decodes the one wire message a UDP datagram carries. A panic in
+// go-wire's decoding is logged and returned as an error, so a malformed datagram
+// costs only itself.
+//
+// go-wire's buffered read allocates the payload length the header declares before
+// it reads a byte of it, capped only by the message type's limit, and the legacy
+// service raises that limit to 4 GB for the whole process (wire.SetLimits). The
+// datagram is already in memory, so a header declaring more than the datagram
+// carries is refused here and go-wire never sees it. The extended-format length
+// marker (0xffffffff) is refused the same way: no extended message fits in a
+// datagram.
+func (ps *PropagationServer) parseDatagram(datagram []byte) (msg wire.Message, b []byte, err error) {
+	if len(datagram) < wire.MessageHeaderSize {
+		return nil, nil, errors.NewInvalidArgumentError("datagram of %d bytes is shorter than a %d-byte wire header", len(datagram), wire.MessageHeaderSize)
+	}
+
+	// The length field sits after the 4-byte magic and the 12-byte command.
+	if declared, carried := binary.LittleEndian.Uint32(datagram[16:20]), len(datagram)-wire.MessageHeaderSize; uint64(declared) > uint64(carried) {
+		return nil, nil, errors.NewInvalidArgumentError("datagram header declares a %d-byte payload but carries %d bytes", declared, carried)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			err = errors.NewProcessingError("wire message parsing panic: %v", r)
+			ps.logger.Errorf("Recovered from panic in wire.ReadMessage: %v", r)
+		}
+	}()
+
+	return wire.ReadMessage(bytes.NewReader(datagram), wire.ProtocolVersion, wire.MainNet)
+}
+
 // StartUDP6Listeners initializes IPv6 multicast listeners for transaction propagation.
 // It creates UDP listeners on specified interfaces and addresses, processing incoming
 // transactions in separate goroutines.
@@ -513,22 +545,9 @@ func (ps *PropagationServer) StartUDP6Listeners(ctx context.Context, ipv6Address
 				}
 				// ps.logger.Infof("read %d bytes from %s, out of bounds data len %d", len(buffer), src.String(), len(oobB))
 
-				reader := bytes.NewReader(buffer[:n])
-
-				func() {
-					defer func() {
-						if r := recover(); r != nil {
-							err = errors.NewProcessingError("wire message parsing panic: %v", r)
-							ps.logger.Errorf("Recovered from panic in wire.ReadMessage: %v", r)
-						}
-					}()
-					// reset err before parsing to avoid stale errors
-					err = nil
-					msg, b, err = wire.ReadMessage(reader, wire.ProtocolVersion, wire.MainNet)
-				}()
-
+				msg, b, err = ps.parseDatagram(buffer[:n])
 				if err != nil {
-					ps.logger.Warnf("wire.ReadMessage failed: %v", err)
+					ps.logger.Warnf("Dropping UDP packet from %s: %v", src.String(), err)
 					continue
 				}
 

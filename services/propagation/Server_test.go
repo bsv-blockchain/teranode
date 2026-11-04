@@ -3,6 +3,7 @@ package propagation
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -16,7 +17,9 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
+	"github.com/bsv-blockchain/go-wire"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -1987,4 +1990,66 @@ func TestPropagationServer_Start_FSMContextCancellation(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.IsContextError(err), "expected context error, got %v", err)
 	mockBlockchainClient.AssertExpectations(t)
+}
+
+// datagramParser is the least PropagationServer parseDatagram runs on.
+func datagramParser() *PropagationServer {
+	return &PropagationServer{logger: ulogger.TestLogger{}}
+}
+
+// datagramHeader is a 24-byte wire header for command cmd declaring a payload of
+// length bytes, with no payload after it.
+func datagramHeader(cmd string, length uint32) []byte {
+	hdr := make([]byte, wire.MessageHeaderSize)
+	binary.LittleEndian.PutUint32(hdr[0:4], uint32(wire.MainNet))
+	copy(hdr[4:16], cmd)
+	binary.LittleEndian.PutUint32(hdr[16:20], length)
+
+	return hdr
+}
+
+// go-wire's buffered read allocates the length a header declares before it reads
+// a byte of payload, capped only by the message type's limit, which the legacy
+// service raises to 4 GB in an all-in-one process. A datagram is at most
+// maxDatagramSize bytes and is already in memory, so a declared length above what
+// it carries is refused before go-wire sees it. The error is the pre-check's, not
+// go-wire's, which proves the allocating read never ran.
+func TestParseDatagram_ADeclaredLengthAboveTheDatagramIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		length uint32
+	}{
+		{name: "30 MB in a 24-byte datagram", length: 30_000_000},
+		{name: "one byte more than carried", length: 1},
+		{name: "the extended-format marker", length: 0xffffffff},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := datagramParser().parseDatagram(datagramHeader(wire.CmdExtendedTx, tc.length))
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrInvalidArgument), "want the pre-check's error, got %v", err)
+		})
+	}
+}
+
+func TestParseDatagram_AShortDatagramIsRefused(t *testing.T) {
+	_, _, err := datagramParser().parseDatagram(make([]byte, wire.MessageHeaderSize-1))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrInvalidArgument), "want the pre-check's error, got %v", err)
+}
+
+func TestParseDatagram_AnExtendedTransactionDecodes(t *testing.T) {
+	tx := wire.NewMsgExtendedTx(1)
+	tx.AddTxIn(wire.NewExtendedTxIn(wire.NewOutPoint(&chainhash.Hash{0x01}, 0), []byte{0x51}, 1000, []byte{0x51}))
+	tx.AddTxOut(wire.NewTxOut(900, []byte{0x51}))
+
+	var buf bytes.Buffer
+	require.NoError(t, wire.WriteMessage(&buf, tx, wire.ProtocolVersion, wire.MainNet))
+	require.LessOrEqual(t, buf.Len(), maxDatagramSize)
+
+	msg, _, err := datagramParser().parseDatagram(buf.Bytes())
+	require.NoError(t, err)
+
+	got, ok := msg.(*wire.MsgExtendedTx)
+	require.True(t, ok, "want *wire.MsgExtendedTx, got %T", msg)
+	require.Equal(t, tx.TxHash(), got.TxHash())
 }
