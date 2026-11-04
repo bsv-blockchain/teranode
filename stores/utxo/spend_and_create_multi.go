@@ -56,7 +56,10 @@ type SpendAndCreateMultiResult struct {
 	// so a caller can tell a record it must clean up from one that was already
 	// there (MultiTxExisted). It is kept too when a cancelled call stops before
 	// the spends of a record its first wave wrote and answers MultiTxNotAttempted.
-	// Zero when the record was found or never written.
+	// Zero when the record was found or never written, and also for a
+	// MultiTxFailed whose create wrote the record but whose recheck could not
+	// answer, or whose create's outcome is unknown: those records are found only
+	// as locked leftovers (LeftoversAmong).
 	Created bool
 }
 

@@ -2151,6 +2151,18 @@ func TestQuickValidateRecordedIDPastACommittedHolder(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, reuse, "Y must find its own id past the one committed block X holds")
 	require.Equal(t, y.ID, id)
+
+	// Block W shares the transaction too and holds its own reservation. Y's id
+	// past X's belongs to Y, not to W, so W must not adopt it.
+	w := &model.Block{Height: 1400, Header: &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{0x57}, Nonce: 0x57}}
+	wID, err := bv.blockchainClient.AssignBlockID(ctx, w.Hash())
+	require.NoError(t, err)
+	w.ID = uint32(wID)
+	require.NotEqual(t, y.ID, w.ID, "fixture: W holds a reservation of its own")
+
+	_, reuse, err = bv.recordedBlockID(ctx, w, f.child.TxIDChainHash())
+	require.NoError(t, err)
+	require.False(t, reuse, "another block's uncommitted id past the first must not be adopted")
 }
 
 // failingUtxoGetStore fails Get with a storage error. Everything else goes to the

@@ -803,10 +803,8 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 			// Phase 4: Check for retry and get block ID (only on first batch)
 			// This is specific to quick validation to handle retries gracefully.
 			// batchTxs[0] is the first non-coinbase tx; its recorded mined-in id is
-			// this block's. The legacy quick path (netsync reuseBlockIDFromUTXO) keys
-			// the same recovery on its first non-coinbase tx — keep them in sync.
-			// Unless the tx is shared with another block: recordedBlockID declines
-			// an id a different committed block holds.
+			// this block's, unless the tx is shared with another block:
+			// recordedBlockID declines an id a different committed block holds.
 			if !blockIDSet && len(batch.batchTxs) > 0 {
 				recordedID, reuse, err := u.recordedBlockID(ctx, block, batch.batchTxs[0].TxIDChainHash())
 				if err != nil {
@@ -1239,10 +1237,16 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 // Adopting that id made every retry of this block fail at AddBlock and treated
 // the other block's locked records as this block's leftovers.
 //
-// Every recorded id is tried in order, not only the first. When firstTx is
-// mined in committed block A as well, its ids read [A, Y], where Y is the id
-// this block's earlier attempt stamped; stopping at A would reserve a fresh id
-// and leave the records locked under Y unrecognised as this block's leftovers.
+// The first recorded id is adopted when no other committed block holds it, as
+// before. When firstTx is mined in committed block A as well, its ids read
+// [A, Y], where Y may be the id this block's earlier attempt stamped; stopping
+// at A would reserve a fresh id and leave the records locked under Y
+// unrecognised as this block's leftovers. A later id is adopted only when the
+// blockchain service's reservation for this block is that same id
+// (AssignBlockID is idempotent per block hash while it holds the reservation),
+// because an uncommitted id past the first can also be a third block's
+// reservation, still in flight, whose locked records must not be taken for
+// this block's.
 func (u *BlockValidation) recordedBlockID(ctx context.Context, block *model.Block, firstTx *chainhash.Hash) (uint32, bool, error) {
 	existingMeta, err := u.utxoStore.Get(ctx, firstTx, fields.BlockIDs)
 	if err != nil && !errors.Is(err, errors.ErrTxNotFound) && !errors.Is(err, errors.ErrNotFound) {
@@ -1258,17 +1262,40 @@ func (u *BlockValidation) recordedBlockID(ctx context.Context, block *model.Bloc
 
 	lookup := blockchain.CommittedBlockHashLookup(u.blockchainClient)
 
-	for _, recordedID := range existingMeta.BlockIDs {
-		adoptable, err := utxo.AdoptableBlockID(ctx, lookup, block.Hash(), recordedID)
-		if err != nil {
+	firstID := existingMeta.BlockIDs[0]
+
+	adoptable, err := utxo.AdoptableBlockID(ctx, lookup, block.Hash(), firstID)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if adoptable {
+		return firstID, true, nil
+	}
+
+	u.logger.Warnf("[recordedBlockID][%s] block id %d recorded on transaction %s is held by another committed block; not reusing it", block.Hash().String(), firstID, firstTx.String())
+
+	if len(existingMeta.BlockIDs) == 1 {
+		return 0, false, nil
+	}
+
+	reserved, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
+	if err != nil {
+		return 0, false, err
+	}
+
+	for _, recordedID := range existingMeta.BlockIDs[1:] {
+		if uint64(recordedID) != reserved {
+			continue
+		}
+
+		if adoptable, err = utxo.AdoptableBlockID(ctx, lookup, block.Hash(), recordedID); err != nil {
 			return 0, false, err
 		}
 
 		if adoptable {
 			return recordedID, true, nil
 		}
-
-		u.logger.Warnf("[recordedBlockID][%s] block id %d recorded on transaction %s is held by another committed block; not reusing it", block.Hash().String(), recordedID, firstTx.String())
 	}
 
 	return 0, false, nil
@@ -3115,7 +3142,10 @@ func (r *listReplays) observeOne(txid chainhash.Hash, err error) {
 // on a failed list that saw a replay answer, so a block that applies cleanly
 // never pays for the read. A transaction with no parent in the list gets one
 // combined call, which spends before it creates, so a replay of it is rejected
-// before its record exists and leaves nothing behind.
+// before its record exists and leaves nothing behind, with two exceptions: a
+// create whose outcome is unknown can still land, and a recheck that cannot
+// answer keeps the record its create wrote. Either record is found here only
+// as a locked leftover of this block.
 //
 // The limit, stated: that combined call keeps the stores' "already blessed"
 // fallback (see utxo.DefaultSpendAndCreateMulti), so a record of such a
@@ -3270,7 +3300,9 @@ func withParentsInList(txs []*bt.Tx, txids []chainhash.Hash, failed []int) []int
 // transaction gets the same cleanup (removePrunedReplayGhosts). The combined call can leave a
 // record behind for a replay: a create whose outcome is unknown can still land, and the store
 // keeps a record whose recheck could not answer. The retry's spend then meets the marker, and
-// the cleanup finds that record as this block's leftover.
+// the cleanup finds that record as this block's leftover while it is locked. It stands in two
+// cases: with blockvalidation_quick_validate_skip_utxo_lock set, nothing locks it; and when
+// every parent of the replay was pruned too, no marker survives to reject the retry.
 func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, subtreeIdxs []int,
 	lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx), replays *listReplays) error {
 	const maxRetries = 10

@@ -319,7 +319,8 @@ func ConfirmLeftovers(ctx context.Context, committedHash CommittedBlockHashFunc,
 // AdoptableBlockID reports whether a block may take id as its own, where id was
 // read back from the mined-in ids recorded on one of its transactions.
 //
-// Both below-checkpoint block paths do that on a retry, so that the block keeps
+// The below-checkpoint block path (recordedBlockID in quick_validate.go) does
+// that on a retry, so that the block keeps
 // the id its earlier attempt stamped on its records. The record may instead be
 // a transaction the block shares with another block, and then the id is that
 // other block's. When a different block is committed under the id, adopting

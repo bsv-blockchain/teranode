@@ -217,7 +217,9 @@ func TestSpendAndCreateRecheckAfterAnUnknownCreate(t *testing.T) {
 				}
 			}
 
-			_, spends, err := utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, wrapped, child, 1000)
+			// Locked, as the validator creates a record it still has to hand to
+			// block assembly.
+			_, spends, err := utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, wrapped, child, 1000, utxo.WithLocked(true))
 			require.True(t, utxo.IsCreateOutcomeUnknown(err), "the outcome stays unknown, so the spends are kept")
 			require.NotEmpty(t, spends)
 
@@ -245,19 +247,24 @@ func TestSpendAndCreateRecheckAfterAnUnknownCreate(t *testing.T) {
 // block-assembly reload offers it for mining.
 //
 // The rows:
-//   - unmined record: the kept recreation. It is removed.
+//   - unmined record: the kept recreation, locked because it never reached
+//     block assembly. It is removed.
 //   - mined record: the original, which the pruner held back after writing the
 //     marker. It is kept.
+//   - unlocked unmined record: an original whose block was invalidated after
+//     the pruner marked it, a live unmined transaction. It is kept.
 //   - no record: nothing to remove, and the replay is still rejected.
 func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		record   bool
 		mined    bool
+		unlocked bool
 		wantGone bool
 	}{
 		{name: "unmined record", record: true, wantGone: true},
 		{name: "mined record", record: true, mined: true},
+		{name: "unlocked unmined record", record: true, unlocked: true},
 		{name: "no record", wantGone: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -281,6 +288,10 @@ func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 
 			if tc.record {
 				opts := []utxo.CreateOption{utxo.WithLocked(true)}
+				if tc.unlocked {
+					opts = nil
+				}
+
 				if tc.mined {
 					opts = []utxo.CreateOption{utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 1000})}
 				}
@@ -301,7 +312,7 @@ func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 			if tc.wantGone {
 				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "no record of the pruned transaction may remain")
 			} else {
-				require.NoError(t, getErr, "a mined record is never removed on this path")
+				require.NoError(t, getErr, "a mined or unlocked record is never removed on this path")
 			}
 
 			require.Equal(t, spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, parent, 0),

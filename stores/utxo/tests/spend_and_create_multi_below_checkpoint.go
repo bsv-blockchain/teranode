@@ -410,7 +410,7 @@ func SpendAndCreateMultiBelowCheckpointCancelMidCall(t *testing.T, db utxostore.
 func SpendAndCreateMultiBelowCheckpointCancelKeepsCreated(t *testing.T, db utxostore.Store) {
 	const height = 855
 
-	w := BuildMultiWorkload(t, 0xa7, 0, 1)
+	w := BuildMultiWorkload(t, 0xc1, 0, 1)
 	w.StoreRoots(t, db, height-1)
 
 	parent := multiSpend(t, 1, []*bt.Tx{w.Roots[0]}, []uint32{0}, 1)
