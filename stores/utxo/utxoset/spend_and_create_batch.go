@@ -435,6 +435,13 @@ func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCre
 		}
 	}
 
+	// Also on the way out, for a panic. sendSpendAndCreateBatch recovers it and the process
+	// carries on, so a transaction left open here would keep its pooled connection, its advisory
+	// locks and the row locks on every UTXO it deleted for good, and the next writer of the same
+	// transactions would wait on them with no timeout. After a commit dbTx is nil and this is a
+	// no-op.
+	defer rollback()
+
 	for round := 0; len(active) > 0; round++ {
 		if round > 0 {
 			for _, i := range active {
@@ -555,6 +562,8 @@ func (s *Store) runSpendAndCreateBatch(ctx context.Context, batch []*spendAndCre
 			rollback()
 			return results, rejected, errors.NewStorageError("[utxoset][SpendAndCreate] commit batch", err)
 		}
+
+		dbTx = nil
 	}
 
 	// Durable. Everything is final now except the items still waiting on a sibling's fate.
