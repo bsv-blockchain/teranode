@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -58,7 +59,13 @@ func streamTx(t *testing.T, i int) (*bt.Tx, *chainhash.Hash) {
 func coinbaseTx(t *testing.T) *bt.Tx {
 	t.Helper()
 
+	// A real coinbase input, not an input-less transaction: the block stream refuses a transaction
+	// with no inputs (issue 4945), so a fixture without one cannot be read off the wire.
+	in := &bt.Input{PreviousTxOutIndex: 0xffffffff, SequenceNumber: 0xffffffff, UnlockingScript: bscript.NewFromBytes([]byte{0x01, 0x01})}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{}))
+
 	tx := bt.NewTx()
+	tx.Inputs = append(tx.Inputs, in)
 	require.NoError(t, tx.PayToAddress("1BitcoinEaterAddressDontSendf59kuE", 5000000000))
 
 	return tx

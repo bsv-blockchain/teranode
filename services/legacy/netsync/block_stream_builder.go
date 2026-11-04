@@ -96,7 +96,7 @@ type blockStreamBuilder struct {
 	// c753d2e46 had to add it back (model/check_duplicate_txs.go), so a
 	// constructor that lets an integrator silently skip it reintroduces the same
 	// fault by a different door.
-	dedup txmap.TxMap
+	dedup dedupPutter
 
 	// recentOutputs maps a transaction seen earlier in THIS block to its
 	// outputs, so a child spending one can be extended without a store lookup.
@@ -123,15 +123,22 @@ type blockStreamBuilder struct {
 // re-extending, which it does for out-of-block parents anyway.
 const streamExtendWindow = 4096
 
+// dedupPutter is the one call the builder makes on its duplicate-transaction map. Any txmap.TxMap
+// satisfies it, and so does the pipeline sink's pipelineDedupMap, which is deliberately not a
+// txmap.TxMap (see its doc comment).
+type dedupPutter interface {
+	Put(hash chainhash.Hash, value uint64) error
+}
+
 // newBlockStreamBuilder prepares a builder for a block declaring txCount
 // transactions, including its coinbase, partitioned into subtrees of at most
 // maxItems leaves. dedup rejects a block carrying the same transaction twice; it
-// may be an in-memory map or the disk-backed one, both of which satisfy
-// txmap.TxMap, and the pipeline does not care which is in use. dedup must not be
+// may be an in-memory map, the disk-backed one or the pipeline sink's map that
+// moves from one to the other, and the builder does not care which is in use. dedup must not be
 // nil: a nil map would silently disable the CVE-2012-2459 duplicate-transaction
 // check, so the constructor refuses it outright instead of letting a hurried
 // caller reach for nil.
-func newBlockStreamBuilder(txCount, maxItems int, coinbase *bt.Tx, emit subtreeEmitFunc, dedup txmap.TxMap, opts ...builderOption) (*blockStreamBuilder, error) {
+func newBlockStreamBuilder(txCount, maxItems int, coinbase *bt.Tx, emit subtreeEmitFunc, dedup dedupPutter, opts ...builderOption) (*blockStreamBuilder, error) {
 	if coinbase == nil {
 		return nil, errors.NewProcessingError("[blockStreamBuilder] no coinbase transaction")
 	}

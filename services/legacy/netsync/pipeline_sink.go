@@ -3,6 +3,10 @@ package netsync
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"syscall"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	txmap "github.com/bsv-blockchain/go-tx-map"
@@ -10,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/settings"
 )
 
 // pipelineBlockSink converts a block as it streams off the socket.
@@ -200,7 +205,22 @@ func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.Block
 		// See newPipelineDedupMap's doc comment for why: that count is the peer's
 		// own declared transaction count, and sizing a map from it without a cap is
 		// what let a peer make this node allocate roughly 19 GB by declaring a number.
-		dedup := newPipelineDedupMap(stream.TxCount())
+		// Past legacy_streamDedupMaxInMemoryEntries it moves to disk, so the
+		// transactions a peer actually sends cannot grow it on the heap either.
+		dedup := newPipelineDedupMap(stream.TxCount(), sm.settings, func(entries int) {
+			sm.logger.Infof("[pipelineBlockSink][%s] block of %d declared transactions passed %d in its duplicate map; the map moved to disk", hash, stream.TxCount(), entries)
+		})
+
+		// Released before a drain as well as on return: draining a duplicate or the rest of a body
+		// that yielded reads up to 4 GB, and the map, perhaps gigabytes of disk table, has no use
+		// by then.
+		releaseDedup := func() {
+			if closeErr := dedup.Close(); closeErr != nil {
+				sm.logger.Warnf("[pipelineBlockSink][%s] failed to close the disk-backed duplicate map: %v", hash, closeErr)
+			}
+		}
+
+		defer releaseDedup()
 
 		builder, buildErr := newBlockStreamBuilder(int(stream.TxCount()), sm.settings.BlockAssembly.MaximumMerkleItemsPerSubtree, coinbase, writer.Emit(sm.ctx), dedup,
 			withSubtreeDataSink(writer.OpenData(sm.ctx)))
@@ -224,11 +244,20 @@ func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.Block
 			sm.deleteWrittenOnFailure(hash, writer)
 			sm.streams.setStreamPath(r, admitRawDuplicate)
 			sm.logger.Infof("[pipelineBlockSink][%s] another copy is converting this block; draining this one", hash)
+			releaseDedup()
 
 			return sm.drainDuplicate(hash, r)
 		}
 
 		yr.ctl = ctl
+
+		// yield hands the block to a faster copy (conversion_race.go), which drains the rest of
+		// this body, so the map goes first.
+		yield := func() (bool, error) {
+			releaseDedup()
+
+			return sm.yieldToFasterCopy(hash, writer, stream.r, ctl, r)
+		}
 
 		defer sm.endConversion(hash, ctl)
 		// Every failure path below has removed this copy's files before it returns, so a copy that
@@ -238,7 +267,7 @@ func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.Block
 
 		for {
 			if ctl.yielding() {
-				return sm.yieldToFasterCopy(hash, writer, stream.r, ctl, r)
+				return yield()
 			}
 
 			tx, txHash, size, streamErr := stream.NextStreamed(builder.BeginTx)
@@ -255,7 +284,7 @@ func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.Block
 				// delivery that converted nothing deletes nothing (pipelineBlockDelete). The test
 				// is the wire layer's own (peer/wire_streaming.go readBlockMessage).
 				if ctl.yielding() && !errors.Is(streamErr, errors.ErrBlockInvalid) && !errors.IsBlockCorrupt(streamErr) {
-					return sm.yieldToFasterCopy(hash, writer, stream.r, ctl, r)
+					return yield()
 				}
 
 				sm.deleteWrittenOnFailure(hash, writer)
@@ -271,7 +300,7 @@ func (sm *SyncManager) pipelineBlockSink(hash chainhash.Hash, header *wire.Block
 		}
 
 		if !ctl.finish() {
-			return sm.yieldToFasterCopy(hash, writer, stream.r, ctl, r)
+			return yield()
 		}
 
 		var finishErr error
@@ -644,7 +673,7 @@ const dedupInitialCapacity uint32 = 1 << 20
 
 // newPipelineDedupMap returns a fresh duplicate-transaction map for the
 // pipeline sink, pre-sized for the block's declared transaction count but never
-// past dedupInitialCapacity.
+// past dedupInitialCapacity or the in-memory cap.
 //
 // Sizing for the declared count is what keeps an ordinary block cheap. Every
 // block used to get the full dedupInitialCapacity map, about 48 MB: on mainnet
@@ -655,16 +684,231 @@ const dedupInitialCapacity uint32 = 1 << 20
 //
 // The declared count is never trusted beyond the cap because it is checked only
 // against the wire payload ceiling (services/legacy/config.go
-// maxWireBlockPayload, 4,000,000,000 bytes) against a 10-byte minimum
-// transaction size — so a peer may declare up to 400,000,000 transactions in
-// a body it then never sends. txmap.NewSplitSwissMapUint64 pre-sizes all 1024
-// buckets eagerly from whatever length it is given (go-tx-map tx_map.go
-// NewSplitSwissMapUint64), so sizing this map from that declared count would
-// allocate roughly 19 GB before a single transaction byte arrives — gated by
-// nothing but a hash and a proof-of-work check that any sync peer already
-// passes.
-func newPipelineDedupMap(declared uint64) txmap.TxMap {
-	return txmap.NewSplitSwissMapUint64(uint32(min(declared, uint64(dedupInitialCapacity)))) //nolint:gosec // capped at dedupInitialCapacity, which fits uint32
+// maxWireBlockPayload, 4,000,000,000 bytes) against minSerializedTxSize — so a
+// peer may declare tens of millions of transactions in a body it then never
+// sends. txmap.NewSplitSwissMapUint64 pre-sizes all 1024 buckets eagerly from
+// whatever length it is given (go-tx-map tx_map.go NewSplitSwissMapUint64), so
+// sizing this map from that declared count would allocate gigabytes before a
+// single transaction byte arrives — gated by nothing but a hash and a
+// proof-of-work check that any sync peer already passes.
+//
+// The cap on the initial size does not bound what the map grows to, and the
+// transactions the peer does send all go into it before the merkle root can be
+// checked, which needs the whole body. A 4 GB body of 10-byte transactions grew
+// it to about 19 GB (issue 4945). So past maxInMemory entries
+// (legacy_streamDedupMaxInMemoryEntries, see pipelineDedupMap) the map moves to
+// a disk-backed table under <dataFolder>/legacy-dedup. tSettings may be nil, as
+// on struct-literal managers in tests; the map then keeps the default cap and
+// spills under os.TempDir. onSpill, when set, is called once, with the entry
+// count, as the map moves.
+func newPipelineDedupMap(declared uint64, tSettings *settings.Settings, onSpill func(entries int)) *pipelineDedupMap {
+	m := &pipelineDedupMap{
+		maxInMemory: int(dedupInitialCapacity),
+		onSpill:     onSpill,
+	}
+
+	if tSettings != nil {
+		if tSettings.Legacy.StreamDedupMaxInMemoryEntries > 0 {
+			m.maxInMemory = tSettings.Legacy.StreamDedupMaxInMemoryEntries
+		}
+
+		m.dir = filepath.Join(tSettings.DataFolder, "legacy-dedup")
+	}
+
+	m.mem = txmap.NewSplitSwissMapUint64(uint32(min(declared, uint64(dedupInitialCapacity), uint64(m.maxInMemory)))) //nolint:gosec // capped at dedupInitialCapacity, which fits uint32
+
+	return m
+}
+
+const (
+	// dedupSpillGrowAt is the load at which a spilled table grows. The mmaphash default is to grow
+	// only when a segment is full, which suits block validation's tables, sized from the real
+	// transaction count; a spilled table starts at the cap and grows with the body, and probing a
+	// nearly full segment cost about a microsecond a Put on the peer's read loop.
+	dedupSpillGrowAt = 0.75
+
+	// dedupDiskCheckEvery is how many Puts a spilled map makes between checks of the free disk.
+	// Each Put writes at most one 4 KiB page, so 16,384 of them write at most 64 MiB.
+	dedupDiskCheckEvery = 1 << 14
+
+	// dedupDiskSpare is the disk a spilled map leaves free beyond what every spilled map has
+	// claimed: room for the pages written between checks, and for everything else on that disk.
+	dedupDiskSpare = 1 << 30
+)
+
+// dedupDiskClaimed is the disk claimed by the spilled duplicate maps of every block converting
+// at once: twice each map's backing files, the size of its next grow. A map refuses to go on when
+// the free disk does not cover all of it, because a write to a sparse mmap file on a full disk is
+// a SIGBUS, which kills the process (stores/mmaphash mapRegion), and the bytes driving the table
+// come from a peer whose body has not yet been checked against its header.
+var dedupDiskClaimed atomic.Int64
+
+// dedupDiskFree reports the bytes of dir's filesystem available to this process. A variable so a
+// test can stand in for a full disk.
+var dedupDiskFree = func(dir string) (uint64, error) {
+	if dir == "" {
+		dir = os.TempDir()
+	}
+
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(dir, &stat); err != nil {
+		return 0, err
+	}
+
+	return uint64(stat.Bavail) * uint64(stat.Bsize), nil //nolint:gosec,unconvert // field types differ by platform; neither is negative
+}
+
+// pipelineDedupMap is the pipeline sink's duplicate-transaction map: in memory up to maxInMemory
+// entries, then a memory-mapped table on disk (model.DiskTxMapUint64) for the rest of the block.
+//
+// Put is its only write, and is also the duplicate check: the in-memory map refuses a repeat with
+// txmap.ErrHashAlreadyExists and the disk table with errors.ErrTxExists, and the builder reads both
+// as a duplicate. It is deliberately not a txmap.TxMap: a write that bypassed Put would bypass the
+// cap, and the disk table does not implement Keys, Iter or Clear.
+//
+// Not safe for concurrent use: one block's builder is its only caller.
+type pipelineDedupMap struct {
+	mem  txmap.TxMap
+	disk *model.DiskTxMapUint64
+
+	// puts is the entries put so far. Counted here rather than read from Length, which on the split
+	// map sums 1,025 bucket counts and would run once per transaction.
+	puts        int
+	maxInMemory int
+	dir         string
+	onSpill     func(entries int)
+
+	// claimed is this map's share of dedupDiskClaimed.
+	claimed int64
+	closed  bool
+}
+
+// Put records hash, moving the map to disk first when it already holds maxInMemory entries. A
+// repeat returns the map's duplicate error. Any other error is this node's fault.
+func (m *pipelineDedupMap) Put(hash chainhash.Hash, value uint64) error {
+	if m.closed {
+		return errors.NewProcessingError("[pipelineDedupMap] Put after Close")
+	}
+
+	if m.disk == nil && m.puts >= m.maxInMemory {
+		if err := m.spill(); err != nil {
+			return err
+		}
+	}
+
+	var err error
+	if m.disk == nil {
+		err = m.mem.Put(hash, value)
+	} else {
+		err = m.disk.Put(hash, value)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	m.puts++
+
+	if m.disk != nil && m.puts%dedupDiskCheckEvery == 0 {
+		return m.claimDisk()
+	}
+
+	return nil
+}
+
+// spill copies every entry to a new disk table and makes it the map in use, letting the in-memory
+// one go. A failure is this node's (ERR_STORAGE_ERROR), never the peer's: the block is drained and
+// asked for again, and the peer is kept.
+func (m *pipelineDedupMap) spill() error {
+	disk, err := model.NewDiskTxMapUint64(model.DiskTxMapUint64Options{
+		BasePaths: []string{m.dir},
+		Prefix:    "legacy-dedup",
+		// Sized for what moves, and grown from there by the entries that arrive; never from the
+		// declared count, which is the peer's to choose.
+		FilterCapacity: uint(m.maxInMemory), //nolint:gosec // maxInMemory is positive
+		GrowAt:         dedupSpillGrowAt,
+	})
+	if err != nil {
+		return errors.NewStorageError("[pipelineDedupMap] failed creating the disk-backed duplicate map in %q", m.dir, err)
+	}
+
+	m.disk = disk
+
+	// On a failure below the table is released here, and a release that fails leaves m.disk set
+	// for the sink's deferred Close to retry and log.
+	if err = m.claimDisk(); err != nil {
+		_ = m.releaseDisk()
+
+		return err
+	}
+
+	var putErr error
+
+	m.mem.Iter(func(hash chainhash.Hash, value uint64) bool {
+		putErr = disk.Put(hash, value)
+
+		return putErr != nil
+	})
+
+	if putErr != nil {
+		_ = m.releaseDisk()
+
+		return errors.NewStorageError("[pipelineDedupMap] failed moving the duplicate map to disk", putErr)
+	}
+
+	m.mem = nil
+
+	if m.onSpill != nil {
+		m.onSpill(m.puts)
+	}
+
+	return nil
+}
+
+// claimDisk updates this map's claim on the disk, twice its backing files, and fails with a
+// storage error when the free disk does not cover every spilled map's claim plus dedupDiskSpare.
+func (m *pipelineDedupMap) claimDisk() error {
+	want := 2 * m.disk.FileBytes()
+	total := dedupDiskClaimed.Add(want - m.claimed)
+	m.claimed = want
+
+	free, err := dedupDiskFree(m.dir)
+	if err != nil {
+		return errors.NewStorageError("[pipelineDedupMap] failed reading the free disk in %q", m.dir, err)
+	}
+
+	if free < uint64(total)+dedupDiskSpare { //nolint:gosec // total is a sum of positive claims
+		return errors.NewStorageError("[pipelineDedupMap] %d bytes free in %q, short of the %d the disk-backed duplicate maps claim plus %d spare", free, m.dir, total, dedupDiskSpare)
+	}
+
+	return nil
+}
+
+// Close releases both maps and this map's disk claim. Safe to call more than once; a failed
+// release of the disk table can be retried.
+func (m *pipelineDedupMap) Close() error {
+	m.closed = true
+	m.mem = nil
+
+	return m.releaseDisk()
+}
+
+// releaseDisk closes the disk table, if there is one, and gives up this map's disk claim. The
+// in-memory map, if still held, stays in use.
+func (m *pipelineDedupMap) releaseDisk() error {
+	if m.disk == nil {
+		return nil
+	}
+
+	if err := m.disk.Close(); err != nil {
+		return errors.NewStorageError("[pipelineDedupMap] failed closing the disk-backed duplicate map", err)
+	}
+
+	m.disk = nil
+	dedupDiskClaimed.Add(-m.claimed)
+	m.claimed = 0
+
+	return nil
 }
 
 // deleteWrittenOnFailure calls writer.DeleteAll and, if the delete itself
