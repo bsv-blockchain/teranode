@@ -89,7 +89,7 @@ read every section between yours and the target.
   cap), which fails the peer's catch-up. Align batch sizes or raise the cap. (#1788, #1797)
 - **Asset no longer sends credentials to cross-origin callers by default.** Credentialed browser
   callers on other origins, the Vite dev dashboard included, must be listed in
-  `asset_corsAllowOrigins`. (#1793)
+  `asset_corsAllowOrigins`. An invalid entry (`*`, `null`, a path) stops Asset at startup. (#1793)
 - **`asset_trustedProxyCIDRs`, when set, no longer trusts private proxies implicitly.** List
   internal ingress ranges, or every client shares the proxy's rate-limit and ban key. (#1793)
 - **`asset_concurrency_get_legacy_block_reader` caps whole block streams.** An explicit value now
