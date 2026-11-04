@@ -118,6 +118,17 @@ func (s *Store) buildPostgresConflictingIndex(ctx context.Context) (built bool, 
 		_ = conn.Close()
 	}()
 
+	// A valid index needs no lock: checking first keeps this process off the
+	// fallback while another process holds the lock for its schema startup.
+	valid, err := conflictingIndexValidity(ctx, conn)
+	if err != nil {
+		return false, err
+	}
+
+	if valid.Valid && valid.Bool {
+		return true, nil
+	}
+
 	var locked bool
 	if err = conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, conflictingIndexLockID).Scan(&locked); err != nil {
 		return false, errors.NewStorageError("could not take the build lock", err)
@@ -134,15 +145,16 @@ func (s *Store) buildPostgresConflictingIndex(ctx context.Context) (built bool, 
 		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, conflictingIndexLockID)
 	}()
 
-	// CREATE INDEX takes its table lock before it checks IF NOT EXISTS, so a
-	// valid index is left alone rather than queued behind, say, a vacuum.
+	// Checked again under the lock: another process may have finished a build
+	// meanwhile. CREATE INDEX takes its table lock before it checks IF NOT
+	// EXISTS, so a valid index is left alone rather than queued behind, say, a
+	// vacuum.
 	//
 	// A cancelled or failed concurrent build leaves an INVALID index that
 	// CREATE INDEX IF NOT EXISTS would keep forever. Only the holder of the
 	// build lock builds, so an invalid index seen here is such a leftover.
-	var valid sql.NullBool
-	if err = conn.QueryRowContext(ctx, `SELECT (SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass('px_transactions_conflicting'))`).Scan(&valid); err != nil {
-		return false, errors.NewStorageError("could not read the state of px_transactions_conflicting", err)
+	if valid, err = conflictingIndexValidity(ctx, conn); err != nil {
+		return false, err
 	}
 
 	if valid.Valid && valid.Bool {
@@ -162,4 +174,15 @@ func (s *Store) buildPostgresConflictingIndex(ctx context.Context) (built bool, 
 	}
 
 	return true, nil
+}
+
+// conflictingIndexValidity reads whether px_transactions_conflicting is valid;
+// it is NULL when the index does not exist.
+func conflictingIndexValidity(ctx context.Context, conn *sql.Conn) (sql.NullBool, error) {
+	var valid sql.NullBool
+	if err := conn.QueryRowContext(ctx, `SELECT (SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass('px_transactions_conflicting'))`).Scan(&valid); err != nil {
+		return valid, errors.NewStorageError("could not read the state of px_transactions_conflicting", err)
+	}
+
+	return valid, nil
 }

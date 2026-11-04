@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/require"
 )
@@ -35,4 +36,29 @@ func TestConflictingIndex_WithoutAClient(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, indexed)
 	require.Nil(t, hashes)
+}
+
+// TestRecordConflictingIndexProbe pins that a probe the index fails is retried
+// before the index is given up for the process: a miss can be transient, for
+// example while partitions migrate, and giving up is permanent.
+func TestRecordConflictingIndexProbe(t *testing.T) {
+	t.Run("misses until the limit give up", func(t *testing.T) {
+		s := &Store{logger: ulogger.TestLogger{}}
+
+		for i := 1; i < conflictingIndexProbeMissLimit; i++ {
+			require.False(t, s.recordConflictingIndexProbe(false), "gave up after %d misses", i)
+			require.Equal(t, conflictingIndexUnchecked, s.conflictingIndexState.Load())
+		}
+
+		require.True(t, s.recordConflictingIndexProbe(false))
+		require.Equal(t, conflictingIndexUnusable, s.conflictingIndexState.Load())
+	})
+
+	t.Run("a pass after a miss trusts the index", func(t *testing.T) {
+		s := &Store{logger: ulogger.TestLogger{}}
+
+		require.False(t, s.recordConflictingIndexProbe(false))
+		require.True(t, s.recordConflictingIndexProbe(true))
+		require.Equal(t, conflictingIndexUsable, s.conflictingIndexState.Load())
+	})
 }

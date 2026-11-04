@@ -258,6 +258,9 @@ type Store struct {
 	conflictingIndexState  atomic.Int32
 	conflictingIndexCancel context.CancelFunc
 	conflictingIndexDone   chan struct{}
+	// conflictingIndexProbeMisses counts probes in a row the index failed;
+	// only the self-test goroutine touches it.
+	conflictingIndexProbeMisses int
 
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six

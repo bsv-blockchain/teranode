@@ -170,9 +170,7 @@ func TestPostgresConflictingIndex_BuiltConcurrentlyAfterStartup(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		_, indexed, err := store.ConflictingTxHashes(context.Background())
-		require.NoError(t, err)
-
-		return indexed
+		return err == nil && indexed
 	}, 30*time.Second, 50*time.Millisecond, "the store never answered from the built index")
 }
 
@@ -291,6 +289,10 @@ var (
 	createIndexExec   = regexp.QuoteMeta(`CREATE INDEX CONCURRENTLY IF NOT EXISTS px_transactions_conflicting ON transactions (hash) WHERE conflicting = true`)
 )
 
+func expectIndexState(m sqlmock.Sqlmock, valid any) {
+	m.ExpectQuery(indexStateQuery).WillReturnRows(sqlmock.NewRows([]string{"indisvalid"}).AddRow(valid))
+}
+
 func expectBuildLock(m sqlmock.Sqlmock, locked bool) {
 	m.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(locked))
 }
@@ -310,27 +312,52 @@ func TestBuildPostgresConflictingIndex_Steps(t *testing.T) {
 		wantBuilt bool
 		wantErr   string
 	}{
+		"index already valid, lock never taken": {
+			expect:    func(m sqlmock.Sqlmock) { expectIndexState(m, true) },
+			wantBuilt: true,
+		},
+		"index state unreadable before the lock": {
+			expect: func(m sqlmock.Sqlmock) {
+				m.ExpectQuery(indexStateQuery).WillReturnError(failure)
+			},
+			wantErr: "could not read the state",
+		},
 		"lock query fails": {
 			expect: func(m sqlmock.Sqlmock) {
+				expectIndexState(m, nil)
 				m.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(failure)
 			},
 			wantErr: "could not take the build lock",
 		},
 		"another process holds the lock": {
-			expect: func(m sqlmock.Sqlmock) { expectBuildLock(m, false) },
-		},
-		"index state unreadable": {
 			expect: func(m sqlmock.Sqlmock) {
+				expectIndexState(m, nil)
+				expectBuildLock(m, false)
+			},
+		},
+		"index state unreadable under the lock": {
+			expect: func(m sqlmock.Sqlmock) {
+				expectIndexState(m, nil)
 				expectBuildLock(m, true)
 				m.ExpectQuery(indexStateQuery).WillReturnError(failure)
 				expectBuildUnlock(m)
 			},
 			wantErr: "could not read the state",
 		},
+		"built by another process meanwhile": {
+			expect: func(m sqlmock.Sqlmock) {
+				expectIndexState(m, nil)
+				expectBuildLock(m, true)
+				expectIndexState(m, true)
+				expectBuildUnlock(m)
+			},
+			wantBuilt: true,
+		},
 		"invalid leftover cannot be dropped": {
 			expect: func(m sqlmock.Sqlmock) {
+				expectIndexState(m, false)
 				expectBuildLock(m, true)
-				m.ExpectQuery(indexStateQuery).WillReturnRows(sqlmock.NewRows([]string{"indisvalid"}).AddRow(false))
+				expectIndexState(m, false)
 				m.ExpectExec(dropIndexExec).WillReturnError(failure)
 				expectBuildUnlock(m)
 			},
@@ -338,8 +365,9 @@ func TestBuildPostgresConflictingIndex_Steps(t *testing.T) {
 		},
 		"build fails": {
 			expect: func(m sqlmock.Sqlmock) {
+				expectIndexState(m, nil)
 				expectBuildLock(m, true)
-				m.ExpectQuery(indexStateQuery).WillReturnRows(sqlmock.NewRows([]string{"indisvalid"}).AddRow(nil))
+				expectIndexState(m, nil)
 				m.ExpectExec(createIndexExec).WillReturnError(failure)
 				expectBuildUnlock(m)
 			},
@@ -347,8 +375,9 @@ func TestBuildPostgresConflictingIndex_Steps(t *testing.T) {
 		},
 		"invalid leftover is rebuilt": {
 			expect: func(m sqlmock.Sqlmock) {
+				expectIndexState(m, false)
 				expectBuildLock(m, true)
-				m.ExpectQuery(indexStateQuery).WillReturnRows(sqlmock.NewRows([]string{"indisvalid"}).AddRow(false))
+				expectIndexState(m, false)
 				m.ExpectExec(dropIndexExec).WillReturnResult(sqlmock.NewResult(0, 0))
 				m.ExpectExec(createIndexExec).WillReturnResult(sqlmock.NewResult(0, 0))
 				expectBuildUnlock(m)
@@ -380,6 +409,7 @@ func TestBuildPostgresConflictingIndex_Steps(t *testing.T) {
 // to retry, and that stopping the build does not wait out the retry delay.
 func TestPostgresConflictingIndexBuild_FailedBuildLeavesTheStoreNotIndexed(t *testing.T) {
 	store, mock := CreateMockStore(ulogger.TestLogger{})
+	expectIndexState(mock, nil)
 	mock.ExpectQuery(tryBuildLockQuery).WithArgs(conflictingIndexLockID).WillReturnError(errors.New("connection reset"))
 
 	store.startPostgresConflictingIndexBuild(context.Background())
@@ -461,4 +491,65 @@ func TestPostgresConflictingIndex_StartsWithTwoConnections(t *testing.T) {
 	require.Equal(t, 2, store.db.Stats().MaxOpenConnections)
 
 	awaitValidConflictingIndex(t, openAdminDB(t, dbURL))
+}
+
+// TestPostgresConflictingIndex_CloseCancelsTheBuildOnTheServer pins that closing
+// a store mid-build stops CREATE INDEX CONCURRENTLY on the server and frees the
+// build lock. A backend left building would hold the lock, and every process
+// starting afterwards would wait in New for it. pgx sends a CancelRequest when a
+// context interrupts a statement; this keeps that true.
+func TestPostgresConflictingIndex_CloseCancelsTheBuildOnTheServer(t *testing.T) {
+	dbURL := startPostgres(t)
+	admin := openAdminDB(t, dbURL)
+
+	openConflictingIndexStore(t, dbURL, 60*time.Second)
+	awaitValidConflictingIndex(t, admin)
+
+	_, err := admin.Exec(`DROP INDEX px_transactions_conflicting`)
+	require.NoError(t, err)
+
+	// An older snapshot the build has to wait for keeps it running.
+	holder, err := admin.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	require.NoError(t, err)
+
+	defer func() { _ = holder.Rollback() }()
+
+	var one int
+	require.NoError(t, holder.QueryRow(`SELECT 1`).Scan(&one))
+
+	store, err := New(context.Background(), ulogger.TestLogger{}, conflictingIndexSettings(t), dbURL)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		exists, _, _ := postgresConflictingIndex(t, admin)
+		return exists
+	}, 30*time.Second, 50*time.Millisecond, "the index build never started")
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	require.NoError(t, store.Close(closeCtx))
+
+	require.Eventually(t, func() bool {
+		var building int
+		err := admin.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE 'CREATE INDEX CONCURRENTLY%'`).Scan(&building)
+
+		return err == nil && building == 0
+	}, 10*time.Second, 100*time.Millisecond, "the index build kept running on the server after Close")
+
+	conn, err := admin.Conn(context.Background())
+	require.NoError(t, err)
+
+	defer func() { _ = conn.Close() }()
+
+	// The backend takes a moment to notice the dropped connection and exit.
+	require.Eventually(t, func() bool {
+		var locked bool
+		err := conn.QueryRowContext(context.Background(), `SELECT pg_try_advisory_lock($1)`, conflictingIndexLockID).Scan(&locked)
+
+		return err == nil && locked
+	}, 10*time.Second, 100*time.Millisecond, "the build lock is still held after Close")
+
+	_, err = conn.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, conflictingIndexLockID)
+	require.NoError(t, err)
 }

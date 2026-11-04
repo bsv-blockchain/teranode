@@ -38,8 +38,11 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   build; until the index is valid, block validation reads every transaction, as
   it does on an older Aerospike server. A PostgreSQL UTXO store that starts while
   another process is building the index waits for the build to finish before it
-  touches the schema. A store running the previous release does not wait, so avoid
-  restarting those while the first upgraded process builds the index. The SQLite
+  touches the schema. A store running the previous release does not wait: one that
+  starts during the build blocks every read and write of `transactions` until the
+  build finishes, and can abort it, after which it is retried. On PostgreSQL, keep
+  previous-release processes from starting until the first upgraded process has
+  built the index, for example by stopping them before the upgrade. The SQLite
   store creates it at startup. External `utxo.Store` implementations must
   implement `ConflictingTxHashes`. (#2110)
 

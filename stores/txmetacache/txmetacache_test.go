@@ -1299,13 +1299,39 @@ type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
 
-// TestTxMetaCache_ConflictingTxHashesAsksTheStore pins that the cache forwards
-// ConflictingTxHashes to its store: it holds no conflicting set of its own.
-func TestTxMetaCache_ConflictingTxHashesAsksTheStore(t *testing.T) {
-	c := newPerHashCache(t, Unallocated)
+// conflictingAnswerStore answers ConflictingTxHashes with a fixed answer the
+// cache could not make up itself.
+type conflictingAnswerStore struct {
+	*nullstore.NullStore
+	hashes  []chainhash.Hash
+	indexed bool
+	err     error
+}
 
-	hashes, indexed, err := c.ConflictingTxHashes(t.Context())
+func (s *conflictingAnswerStore) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return s.hashes, s.indexed, s.err
+}
+
+// TestTxMetaCache_ConflictingTxHashesAsksTheStore pins that the cache forwards
+// ConflictingTxHashes to its store unchanged: it holds no conflicting set of
+// its own, and must neither invent an indexed answer nor hide an error.
+func TestTxMetaCache_ConflictingTxHashesAsksTheStore(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
 	require.NoError(t, err)
-	require.True(t, indexed, "the null store behind the cache answers indexed")
-	require.Empty(t, hashes)
+
+	answers := []*conflictingAnswerStore{
+		{NullStore: ns, hashes: []chainhash.Hash{{1}, {2}}, indexed: true},
+		{NullStore: ns, indexed: false},
+		{NullStore: ns, err: errors.NewStorageError("index query failed")},
+	}
+
+	for _, store := range answers {
+		c, err := NewTxMetaCache(context.Background(), settings.NewSettings(), ulogger.TestLogger{}, store, Unallocated)
+		require.NoError(t, err)
+
+		hashes, indexed, err := c.(*TxMetaCache).ConflictingTxHashes(t.Context())
+		require.Equal(t, store.hashes, hashes)
+		require.Equal(t, store.indexed, indexed)
+		require.Equal(t, store.err, err)
+	}
 }

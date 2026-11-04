@@ -157,6 +157,34 @@ func TestConflictingTxHashes_TracksTheFlag(t *testing.T) {
 	_, err = store.Create(ctx, created, 100, utxo.WithConflicting(true))
 	require.NoError(t, err)
 	require.Equal(t, map[chainhash.Hash]struct{}{*created.TxIDChainHash(): {}}, conflictingSet(t, ctx, store))
+
+	// An index that goes away after the self-test trusted it is answered as not
+	// indexed, never as an error that stalls block validation, nor as an
+	// indexed empty set that reads as "nothing is conflicting".
+	require.NoError(t, client.DropIndex(aerospike.NewWritePolicy(0, 0), aerospikeNamespace, aerospikeSet, "conflictingIndex"))
+
+	var (
+		readErr      error
+		indexedEmpty bool
+	)
+
+	require.Eventually(t, func() bool {
+		hashes, indexed, err := store.ConflictingTxHashes(ctx)
+		if err != nil {
+			readErr = err
+			return true
+		}
+
+		if indexed && len(hashes) == 0 {
+			indexedEmpty = true
+			return true
+		}
+
+		return !indexed
+	}, 10*time.Second, 50*time.Millisecond, "the store kept answering from a dropped index")
+
+	require.NoError(t, readErr)
+	require.False(t, indexedEmpty, "an indexed answer while the index was dropped listed nothing conflicting")
 }
 
 // TestConflictingTxHashes_MatchesTheFlagOnEveryRecord is the contract the

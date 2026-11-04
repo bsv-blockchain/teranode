@@ -34,6 +34,12 @@ const (
 	conflictingIndexUnusable
 )
 
+// conflictingIndexProbeMissLimit is how many probes the index has to fail,
+// without passing one in between, before this process stops trusting it. A
+// probe that errors counts neither way. A miss can be transient, for example
+// while partitions migrate, and giving up is permanent.
+const conflictingIndexProbeMissLimit = 3
+
 // The startup self-test first checks whether the index is built after
 // conflictingIndexSelfTestInterval, doubling the wait each time up to
 // conflictingIndexSelfTestMaxDelay, which is also its wait after a failed probe.
@@ -161,9 +167,24 @@ func (s *Store) conflictingIndexRecords(ctx context.Context, binNames []string, 
 		_ = recordset.Close()
 	}()
 
-	for res := range recordset.Results() {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return false, false, ctxErr
+	results := recordset.Results()
+
+	for {
+		var (
+			res  *aerospike.Result
+			more bool
+		)
+
+		// A stalled node would otherwise hold the caller until the query
+		// policy's socket timeouts and retries run out.
+		select {
+		case <-ctx.Done():
+			return false, false, ctx.Err()
+		case res, more = <-results:
+		}
+
+		if !more {
+			return found, true, nil
 		}
 
 		if res.Err != nil {
@@ -178,8 +199,6 @@ func (s *Store) conflictingIndexRecords(ctx context.Context, binNames []string, 
 			found = true
 		}
 	}
-
-	return found, true, nil
 }
 
 // conflictingIndexBuiltOnAllNodes reports whether every node of the cluster
@@ -298,17 +317,33 @@ func (s *Store) verifyConflictingIndex(ctx context.Context) (done, probeErr bool
 		return false, true
 	}
 
-	if !followsTheFlag {
-		s.conflictingIndexState.Store(conflictingIndexUnusable)
-		s.logger.Errorf("[ConflictingTxHashes] the conflicting index did not follow a conflicting flag change on this server; block validation reads every transaction of an already-validated subtree for the rest of this process")
+	return s.recordConflictingIndexProbe(followsTheFlag), false
+}
 
-		return true, false
+// recordConflictingIndexProbe records one probe result and reports whether it
+// settles the verdict: a pass trusts the index, and conflictingIndexProbeMissLimit
+// misses give it up for the rest of the process. Only the self-test goroutine
+// calls it.
+func (s *Store) recordConflictingIndexProbe(followsTheFlag bool) bool {
+	if followsTheFlag {
+		s.conflictingIndexState.Store(conflictingIndexUsable)
+		s.logger.Infof("[ConflictingTxHashes] conflicting index verified, block validation reads it instead of every transaction of an already-validated subtree")
+
+		return true
 	}
 
-	s.conflictingIndexState.Store(conflictingIndexUsable)
-	s.logger.Infof("[ConflictingTxHashes] conflicting index verified, block validation reads it instead of every transaction of an already-validated subtree")
+	s.conflictingIndexProbeMisses++
 
-	return true, false
+	if s.conflictingIndexProbeMisses < conflictingIndexProbeMissLimit {
+		s.logger.Warnf("[ConflictingTxHashes] the conflicting index did not follow a conflicting flag change (%d of %d), probing again", s.conflictingIndexProbeMisses, conflictingIndexProbeMissLimit)
+
+		return false
+	}
+
+	s.conflictingIndexState.Store(conflictingIndexUnusable)
+	s.logger.Errorf("[ConflictingTxHashes] the conflicting index did not follow a conflicting flag change on this server in %d probes; block validation reads every transaction of an already-validated subtree for the rest of this process", conflictingIndexProbeMissLimit)
+
+	return true
 }
 
 // probeConflictingIndex flips the conflicting flag on a throwaway record through
