@@ -43,9 +43,11 @@ function staleMessage(cfg) {
   );
 }
 
-function closeMessage(cfg) {
+// idleDays is the PR's actual idle time, which is longer than
+// staleDays + closeDays for a PR that was already idle when the job started.
+function closeMessage(cfg, idleDays = cfg.staleDays + cfg.closeDays) {
   return (
-    `Closed after ${cfg.staleDays + cfg.closeDays} days without activity. ` +
+    `Closed after ${idleDays} days without activity. ` +
     'Reopen it when you pick this back up. If the branch was force-pushed since, open a new PR instead.' +
     `\n\n${cfg.marker}`
   );
@@ -216,10 +218,12 @@ function decide(pr, now, cfgIn) {
       ...withIdle,
       action: 'stale',
       reason: `no human activity for ${idleDays} days`,
-      // A dry run never labels, so it reports what the close would be: a PR
-      // idle for staleDays + closeDays today is closed closeDays after
-      // labelling if nothing happens in between.
-      closeAfterLabel: now - last >= (cfg.staleDays + cfg.closeDays) * DAY_MS,
+      // Labelled now, it closes closeDays from now if nothing happens. A dry
+      // run never labels, so it reports that date instead of a close.
+      closesOn: iso(now + cfg.closeDays * DAY_MS),
+      // Already idle for staleDays + closeDays: had the job been running, this
+      // PR would be closed by now.
+      pastCloseThreshold: now - last >= (cfg.staleDays + cfg.closeDays) * DAY_MS,
     };
   }
   return { ...withIdle, action: 'active', reason: `human activity ${idleDays} days ago` };
@@ -290,8 +294,15 @@ function renderSummary(result, opts) {
   out.push(`### ${live ? 'Labelled' : 'Would label'} \`${cfg.staleLabel}\` now (${stale.length})\n`);
   out.push(
     table(
-      ['PR', 'Author', 'Last human activity', 'Idle days', `Would close ${cfg.closeDays} days after labelling, if nothing happens`],
-      stale.map((d) => [prRef(d, repo), who(d), date(d.lastActivity), d.idleDays, d.closeAfterLabel ? 'yes' : `no (idle < ${cfg.staleDays + cfg.closeDays} days)`]),
+      [
+        'PR',
+        'Author',
+        'Last human activity',
+        'Idle days',
+        `Closes on, if labelled now and nothing happens`,
+        `Idle ${cfg.staleDays + cfg.closeDays}+ days already`,
+      ],
+      stale.map((d) => [prRef(d, repo), who(d), date(d.lastActivity), d.idleDays, date(d.closesOn), d.pastCloseThreshold ? 'yes' : 'no']),
     ),
   );
 
@@ -488,7 +499,7 @@ async function apply(github, owner, repo, d, cfg) {
     return `labelled ${ref}`;
   }
   if (d.action === 'close') {
-    await github.rest.issues.createComment({ owner, repo, issue_number, body: closeMessage(cfg) });
+    await github.rest.issues.createComment({ owner, repo, issue_number, body: closeMessage(cfg, d.idleDays) });
     await github.rest.pulls.update({ owner, repo, pull_number: d.number, state: 'closed' });
     return `closed ${ref}`;
   }

@@ -47,17 +47,18 @@ test('member PR idle 90 days is labelled stale', () => {
   const d = decide(pr({ createdAt: ago(95), headCommitDate: ago(90) }), NOW);
   assert.equal(d.action, 'stale');
   assert.equal(d.idleDays, 90);
-  assert.equal(d.closeAfterLabel, false);
+  assert.equal(d.pastCloseThreshold, false);
+  assert.equal(d.closesOn, ago(-14));
 });
 
 test('member PR idle 89 days is active', () => {
   assert.equal(decide(pr({ createdAt: ago(95), headCommitDate: ago(89) }), NOW).action, 'active');
 });
 
-test('member PR idle 104 days is reported as closing 14 days after labelling', () => {
+test('member PR idle 104 days is reported as past the close threshold', () => {
   const d = decide(pr({ createdAt: ago(104), headCommitDate: ago(104) }), NOW);
   assert.equal(d.action, 'stale');
-  assert.equal(d.closeAfterLabel, true);
+  assert.equal(d.pastCloseThreshold, true);
 });
 
 test('drafts are in scope', () => {
@@ -372,7 +373,7 @@ test('a live close comments then closes, and never touches the branch', async ()
   await run({ github, context, core: null, live: true, now: NOW, log: () => {} });
   const tail = github.writes.slice(-2);
   assert.equal(tail[0].name, 'createComment');
-  assert.match(tail[0].args.body, /Closed after 104 days without activity/);
+  assert.match(tail[0].args.body, /Closed after 200 days without activity/);
   assert.equal(tail[1].name, 'update');
   assert.deepEqual(tail[1].args, { owner: 'o', repo: 'r', pull_number: 7, state: 'closed' });
 });
