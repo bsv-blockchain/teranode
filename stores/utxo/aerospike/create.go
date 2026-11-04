@@ -1136,7 +1136,7 @@ func classifyCreateBatchResults(batchRecords []aerospike.BatchRecordIfc) (master
 // RECOVERY SCENARIOS:
 // - Retry attempts complete Phase 2 via the "master already exists" recovery path below
 // - Auto-recovery triggers when transaction is re-encountered (processTxMetaUsingStore.go:112-122)
-// - Mining operation clears flags via setMined
+// - The setMined pre-flight and the pruner sweep roll a creating record forward (re-spend, then finalize)
 func (s *Store) storeExternallyWithLock(
 	ctx context.Context,
 	bItem *BatchStoreItem,
