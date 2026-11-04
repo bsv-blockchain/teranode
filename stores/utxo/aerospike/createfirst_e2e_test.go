@@ -3,6 +3,7 @@ package aerospike_test
 import (
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -124,6 +125,71 @@ func TestSpendAndCreate_CreateFirst_DoubleSpendLeavesNoRecord(t *testing.T) {
 	require.NoError(t, err, "a free input the loser took must be unspent again")
 }
 
+// TestSpendAndCreate_CreateFirst_MissingParentLeavesNoRecord pins that the fresh create-first
+// spend requires its parent outputs: the tentative record the spend would find is the tx's own,
+// and must not bless a missing parent. The call fails with ErrTxNotFound, the tx is not left
+// finalized with an input it never spent, and the record is rolled back.
+func TestSpendAndCreate_CreateFirst_MissingParentLeavesNoRecord(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	absentParent := spendableChildTx(t, tests.ParentTx, 0)
+	absentParent.Version = 99
+
+	orphan := spendableChildTx(t, absentParent, 0)
+
+	_, _, err := store.SpendAndCreate(ctx, orphan, 106)
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "a missing parent must fail the fresh create-first spend")
+
+	require.ErrorIs(t, store.GetMeta(ctx, orphan.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
+		"the rolled back record must be gone, not finalized with an input it never spent")
+}
+
+// TestSpendAndCreateMulti_CreateFirst_RollsForwardTentativeDuplicate is the quick-validation
+// shape: a below-checkpoint list whose first transaction already has a tentative record. Its
+// combined call must roll that record forward (spend, finalize) and report MultiTxExisted, so
+// the second transaction, which spends its output, is created and spent rather than failing
+// with ErrTxCreating on every retry.
+func TestSpendAndCreateMulti_CreateFirst_RollsForwardTentativeDuplicate(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	_, err = store.Create(ctx, tx, 101, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	child := spendableChildTx(t, tx, 0)
+
+	results, err := store.SpendAndCreateMulti(ctx, []*bt.Tx{tx, child}, 102, utxo.WithBelowCheckpoint())
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	require.Equal(t, utxo.MultiTxExisted, results[0].Status, "the tentative duplicate is rolled forward: %v", results[0].Err)
+	require.Equal(t, utxo.MultiTxCreated, results[1].Status, "its child is created: %v", results[1].Err)
+	require.NoError(t, results[1].Err)
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+	require.False(t, got.Creating, "the tentative record must be finalized")
+
+	competitor := tx.Clone()
+	competitor.Version = 42
+
+	_, err = store.Spend(ctx, competitor, 103, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+	require.ErrorIs(t, err, errors.ErrSpent, "the roll-forward must have spent the duplicate's inputs")
+}
+
 // TestSetMined_CreatingRecord_RollsForwardWithFlagOff verifies the setMined pre-flight runs
 // whatever UseCreateFirstOrder says: a creating record left on disk by a flag rollback must
 // be rolled forward (inputs spent, creating cleared) when it is mined, not stranded or made
@@ -179,7 +245,7 @@ func TestSetMined_CreatingRecord_RollsForwardWithFlagOff(t *testing.T) {
 // TestCreateFirstLifecycle exercises the full create-first store contract against a
 // real Aerospike container: the happy path (create→spend→finalize gates child
 // spendability), crash recovery (roll forward an un-finalized creating tx — the
-// re-spend MUST be idempotent), and double-spend resolution (conflicting terminal state).
+// re-spend MUST be idempotent), and double-spend resolution (the loser is rolled back and deleted).
 func TestCreateFirstLifecycle(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -248,7 +314,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.NoError(t, err, "child must be spendable once the parent is rolled forward")
 	})
 
-	t.Run("a creating child whose parent is missing is blessed", func(t *testing.T) {
+	t.Run("roll-forward contract: a direct re-spend of a creating record whose parent is missing is blessed", func(t *testing.T) {
 		// absentGrandparent is a valid tx that is NEVER stored (distinct txid via Version),
 		// so the child's input UTXO record does not exist → the spend hits ErrTxNotFound.
 		absentGrandparent := spendableChildTx(t, tests.ParentTx, 0)
@@ -281,12 +347,19 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.False(t, got.Creating, "the roll-forward converges to finalized")
 	})
 
-	t.Run("double-spend: creating loser lands in conflicting terminal state", func(t *testing.T) {
-		// parent3 and a competitor both spend grandparent output 1.
-		parent3 := spendableChildTx(t, tests.ParentTx, 1)
+	t.Run("double-spend: creating loser is rolled back and deleted", func(t *testing.T) {
+		// parent3 and a competitor both spend output 1 of the finalized parent from the
+		// happy path; parent3 also spends its output 2, which is free, so the rollback has a
+		// taken input to reverse.
+		parent3 := spendableChildTx(t, tx, 1)
+		require.NoError(t, parent3.From(
+			tx.TxIDChainHash().String(), 2,
+			tx.Outputs[2].LockingScript.String(),
+			tx.Outputs[2].Satoshis,
+		))
 
-		competitor := parent3.Clone()
-		competitor.Version = 7 // distinct txid, same input
+		competitor := spendableChildTx(t, tx, 1)
+		competitor.Version = 7 // distinct txid, same contested input
 
 		// The competitor wins the slot first.
 		_, err := store.Spend(ctx, competitor, 105, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
@@ -307,15 +380,22 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		}
 		require.True(t, sawSpent, "the loser must fail with ErrSpent (top-level or per-spend), got: %v", err)
 
-		// Resolve to the conflicting terminal state (what the validator/sweeper do).
-		_, _, err = utxo.MarkConflictingRecursively(ctx, store, []chainhash.Hash{*parent3.TxIDChainHash()})
-		require.NoError(t, err)
-		require.NoError(t, store.FinalizeTransaction(ctx, parent3))
+		// Roll back as the submit path and the sweep do: mark, unspend what was taken, delete.
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, parent3, spends))
 
 		got := &meta.Data{}
-		require.NoError(t, store.GetMeta(ctx, parent3.TxIDChainHash(), got))
-		require.True(t, got.Conflicting, "the loser must be marked conflicting")
-		require.False(t, got.Creating, "the loser must be finalized out of the creating state")
+		err = store.GetMeta(ctx, parent3.TxIDChainHash(), got)
+		require.True(t, errors.Is(err, errors.ErrTxNotFound), "the loser must leave no record, got: %v", err)
+
+		// The free input is spendable again, and the winner keeps the contested one.
+		freeSpender := spendableChildTx(t, tx, 2)
+		freeSpender.Version = 8
+		_, err = store.Spend(ctx, freeSpender, 106, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+		require.NoError(t, err, "the input the loser took must be unspent again")
+
+		_, err = store.Spend(ctx, parent3, 106)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrSpent) || errors.Is(err, errors.ErrTxNotFound), "the winner's spend must survive, got: %v", err)
 	})
 }
 

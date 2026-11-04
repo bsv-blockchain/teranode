@@ -22,11 +22,8 @@ func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore ui
 	return nil, nil
 }
 
-// DeleteCompleteIfCreating deletes unconditionally, because the store has no tentative state.
-func (s *Store) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	if err := s.DeleteComplete(ctx, hash); err != nil {
-		return false, err
-	}
-
-	return true, nil
+// BeginCreateFirstRollback reports false and writes nothing. The store has no tentative
+// state, so every record is final and there is nothing to roll back.
+func (s *Store) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	return false, nil
 }

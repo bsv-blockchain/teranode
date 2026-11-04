@@ -169,8 +169,8 @@ func (m *MockUtxostore) DeleteComplete(ctx context.Context, hash *chainhash.Hash
 	return args.Error(0)
 }
 
-// DeleteCompleteIfCreating mocks the conditional complete deletion of a tentative record.
-func (m *MockUtxostore) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+// BeginCreateFirstRollback mocks marking a tentative record as rolling back.
+func (m *MockUtxostore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	args := m.Called(ctx, hash)
 	return args.Bool(0), args.Error(1)
 }

@@ -3,6 +3,7 @@ package pruner
 import (
 	"context"
 
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -15,19 +16,23 @@ import (
 // burst; any remainder is swept on the next block.
 const defaultCreatingSweepMaxPerPass = 1000
 
-// sweepCreatingTxs rolls forward transactions abandoned in the create-first
-// "creating" state: it re-runs their input spends from the stored tx bytes and
-// finalizes them. Spends are idempotent for the same spender, so re-spending
-// inputs an earlier attempt already spent is safe. Double-spent txs land in the
-// conflicting terminal state (marked recursively, then finalized: exists,
-// conflicting, unspendable, DAH-pruned). Records it cannot roll forward (e.g. a
-// permanently locked or missing parent) are left creating — gated (unspendable) and
-// retried on a later pass. After finalizing, the sweep hands the tx to block assembly
-// and only then unlocks it, the order loadUnminedTransactions uses. When the announce
-// fails, or no block assembly client is configured, the record stays finalized and
-// locked so the next unmined reload restores it. Runs whatever the value of
-// utxostore_useCreateFirstOrder, so records stranded before the flag was turned off
-// still heal.
+// sweepCreatingTxs heals transactions abandoned in the create-first "creating" state. A
+// record still creating is rolled forward: the sweep re-runs the input spends from the
+// stored tx bytes and finalizes it. Spends are idempotent for the same spender, so
+// re-spending inputs an earlier attempt already spent is safe. The roll-forward does not
+// ignore locks: a locked parent is the hand-off barrier, so ErrTxLocked leaves the record
+// creating and it is retried on a later pass. A tx that lost a double-spend (ErrSpent,
+// ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch) is rolled back by
+// utxo.RollBackCreating: the record is marked rolling back, the inputs it did take are
+// unspent and the record is deleted. A record already marked rolling back was abandoned by
+// a crashed rollback owner; the sweep finishes it by unspending every input and deleting
+// the record. Records it cannot roll forward for another reason (e.g. a missing parent) are
+// left creating, gated (unspendable), and retried on a later pass. After finalizing, the
+// sweep hands the tx to block assembly and only then unlocks it, the order
+// loadUnminedTransactions uses. When the announce fails, or no block assembly client is
+// configured, the record stays finalized and locked so the next unmined reload restores it.
+// Runs whatever the value of utxostore_useCreateFirstOrder, so records stranded before the
+// flag was turned off still heal.
 func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	minAge := s.settings.Pruner.CreatingTxSweepMinAgeBlocks
 	if minAge == 0 || blockHeight <= minAge {
@@ -55,7 +60,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		s.logger.Infof("[pruner][creating-sweep][%d] hit per-pass cap of %d; remaining stale creating txs will be swept next block", blockHeight, maxPerPass)
 	}
 
-	s.logger.Infof("[pruner][creating-sweep][%d] rolling forward %d stale creating txs", blockHeight, len(hashes))
+	s.logger.Infof("[pruner][creating-sweep][%d] healing %d stale creating txs", blockHeight, len(hashes))
 
 	// Track progress so a page that is stuck for a persistent reason (e.g. ≥cap records
 	// with a permanently locked/missing parent) is distinguishable from "more remain,
@@ -71,7 +76,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			return
 		}
 
-		md, err := s.utxoStore.Get(ctx, &hash, fields.Tx, fields.Creating, fields.Fee, fields.SizeInBytes, fields.TxInpoints)
+		md, err := s.utxoStore.Get(ctx, &hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Fee, fields.SizeInBytes, fields.TxInpoints)
 		if err != nil {
 			s.logger.Warnf("[pruner][creating-sweep][%d] get %s failed: %v", blockHeight, hash, err)
 			continue
@@ -82,32 +87,37 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			continue
 		}
 
+		if md.RollingBack {
+			if err = s.finishRollback(ctx, md.Tx); err != nil {
+				s.logger.Errorf("[pruner][creating-sweep][%d] finishing rollback of %s failed, will retry next block: %v", blockHeight, hash, err)
+				prunerCreatingSweepFailures.Inc()
+
+				continue
+			}
+
+			progressed++
+
+			s.logger.Infof("[pruner][creating-sweep][%d] finished abandoned rollback of %s", blockHeight, hash)
+
+			continue
+		}
+
 		// Re-spend the inputs only (the record already exists in the creating state).
 		// #1326 removed Store.Spend; the spend-only phase of SpendAndCreate is the
 		// equivalent. Idempotent for the same spender, which makes roll-forward safe.
-		// WithIgnoreLocked: a roll-forward completes a spend the node already committed
-		// to, so a locked parent (e.g. the tentative create locked its own record, or a
-		// ProcessConflicting run locked parents) must not turn recovery into a hard stop.
-		// A genuine double-spend still surfaces as ErrSpent/ErrTxConflicting below —
-		// IgnoreLocked does not suppress those.
-		_, spends, spendErr := s.utxoStore.SpendAndCreate(ctx, md.Tx, blockHeight, utxo.WithSpendOnly(), utxo.WithIgnoreLocked(true))
+		// Locks are not ignored: a locked parent is the hand-off barrier, so ErrTxLocked
+		// is retried on a later pass rather than bypassed.
+		_, spends, spendErr := s.utxoStore.SpendAndCreate(ctx, md.Tx, blockHeight, utxo.WithSpendOnly())
 		if spendErr != nil {
-			if errors.Is(spendErr, errors.ErrSpent) || errors.Is(spendErr, errors.ErrTxConflicting) {
-				if _, _, setErr := utxo.MarkConflictingRecursively(ctx, s.utxoStore, []chainhash.Hash{hash}); setErr != nil {
-					s.logger.Errorf("[pruner][creating-sweep][%d] mark conflicting %s failed: %v", blockHeight, hash, setErr)
+			if isUnwinnableSpendError(spendErr) {
+				if rbErr := utxo.RollBackCreating(ctx, s.logger, s.utxoStore, md.Tx, spends); rbErr != nil {
+					s.logger.Errorf("[pruner][creating-sweep][%d] rollback of %s failed, will retry next block: %v", blockHeight, hash, rbErr)
 					prunerCreatingSweepFailures.Inc()
 
 					continue
 				}
 
-				if finErr := s.utxoStore.FinalizeTransaction(ctx, md.Tx); finErr != nil {
-					s.logger.Errorf("[pruner][creating-sweep][%d] finalize conflicting %s failed: %v", blockHeight, hash, finErr)
-					prunerCreatingSweepFailures.Inc()
-
-					continue
-				}
-
-				progressed++ // resolved to the conflicting terminal state
+				progressed++ // loser unspent and deleted
 
 				continue
 			}
@@ -176,4 +186,29 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 	if progressed == 0 {
 		s.logger.Warnf("[pruner][creating-sweep][%d] rolled forward 0 of %d stale creating txs; the page may be stuck (e.g. a permanently locked or missing parent)", blockHeight, len(hashes))
 	}
+}
+
+// isUnwinnableSpendError reports whether a spend error means the tx can never be
+// completed: an input is spent by another tx, conflicting, frozen or does not match.
+func isUnwinnableSpendError(err error) bool {
+	return errors.Is(err, errors.ErrSpent) ||
+		errors.Is(err, errors.ErrTxConflicting) ||
+		errors.Is(err, errors.ErrFrozen) ||
+		errors.Is(err, errors.ErrUtxoHashMismatch)
+}
+
+// finishRollback completes a rollback a crashed owner left marked: it unspends every input of
+// tx, tolerating parents that are already gone, then deletes the record. Both steps are
+// idempotent. The record is rolling back, so nothing can finalize it meanwhile.
+func (s *Server) finishRollback(ctx context.Context, tx *bt.Tx) error {
+	spends, err := utxo.GetSpends(tx)
+	if err != nil {
+		return err
+	}
+
+	if err = utxo.UnspendTolerantOfMissingParents(ctx, s.utxoStore, spends); err != nil {
+		return err
+	}
+
+	return s.utxoStore.DeleteComplete(ctx, tx.TxIDChainHash())
 }

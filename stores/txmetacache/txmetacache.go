@@ -1184,15 +1184,16 @@ func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) 
 	return err
 }
 
-// DeleteCompleteIfCreating removes a record that is still tentative and evicts the
-// cache entry whatever the outcome, for the same reason DeleteComplete does.
-func (t *TxMetaCache) DeleteCompleteIfCreating(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	deleted, err := t.utxoStore.DeleteCompleteIfCreating(ctx, hash)
+// BeginCreateFirstRollback marks a creating record as rolling back in the underlying store
+// and evicts the cache entry whatever the outcome, for the same reason DeleteComplete does:
+// a cached entry would keep reporting the record as an ordinary creating one.
+func (t *TxMetaCache) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	began, err := t.utxoStore.BeginCreateFirstRollback(ctx, hash)
 
 	t.cache.Del(hash[:])
 	t.metrics.evictions.Add(1)
 
-	return deleted, err
+	return began, err
 }
 
 // GetCacheStats retrieves current operational statistics from the underlying cache.

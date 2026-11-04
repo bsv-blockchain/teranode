@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
@@ -44,7 +45,9 @@ func (b *batchFinalize) complete(err error) {
 // FinalizeTransaction clears the tentative creating state set by
 // Create(..., WithCreating(true)), making the transaction's outputs spendable.
 // Idempotent: finalizing an already-final tx (creating bin already absent) is a
-// no-op success. Returns ErrTxNotFound if the record has vanished.
+// no-op success. Returns ErrTxNotFound if the record has vanished or is rolling back
+// (BeginCreateFirstRollback): both mean the record will not be completed, and the caller's
+// spends of its inputs are its own to remove.
 func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
 	if tx == nil {
 		return errors.NewProcessingError("[FinalizeTransaction] nil tx")
@@ -143,7 +146,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		})
 	}()
 
-	filterExp := aerospike.ExpBinExists(fields.Creating.String())
+	filterExp := finalizeFilter()
 
 	var (
 		singleRecords []aerospike.BatchRecordIfc
@@ -171,7 +174,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 
 		writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 		writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-		writePolicy.FilterExpression = filterExp // only touch records that still carry the creating bin
+		writePolicy.FilterExpression = filterExp // only touch records that still carry the creating bin and are not rolling back
 
 		// Clear by writing nil (bin absence == not creating).
 		clearOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
@@ -204,8 +207,9 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		aErr, ok := recErr.(*aerospike.AerospikeError)
 		switch {
 		case ok && aErr.ResultCode == types.FILTERED_OUT:
-			// Creating bin already absent → already finalized. Idempotent success.
-			batch[idx].complete(nil)
+			// Creating bin already absent → already finalized, idempotent success. A rolling
+			// back record is refused, so the roll-forward removes its own spends.
+			batch[idx].complete(s.finalizeFilteredOutResult(batch[idx].tx.TxIDChainHash()))
 		case ok && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR:
 			// The record vanished between create and finalize — surface it so the
 			// caller (validator roll-forward / sweeper) knows the state is broken.
@@ -214,4 +218,39 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 			batch[idx].complete(errors.NewProcessingError("[sendFinalizeBatch] failed to finalize tx %s", batch[idx].tx.TxIDChainHash().String(), recErr))
 		}
 	}
+}
+
+// finalizeFilter selects a master record a finalize may clear: still creating and not
+// rolling back.
+func finalizeFilter() *aerospike.Expression {
+	return aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.Creating.String()),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.RollingBack.String())),
+	)
+}
+
+// finalizeFilteredOutResult reads the master record after a finalize write was filtered out
+// and returns the finalize result: nil when the creating bin is gone (already final), and
+// ErrTxNotFound when the record is rolling back or has vanished.
+func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash) error {
+	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if err != nil {
+		return errors.NewProcessingError("[finalizeFilteredOutResult] failed to create key for %s", txHash.String(), err)
+	}
+
+	state, getErr := s.readCreatingState(key)
+	if getErr != nil {
+		return errors.NewProcessingError("[sendFinalizeBatch] failed to read tx %s after the finalize was filtered out", txHash.String(), getErr)
+	}
+
+	switch {
+	case state.absent:
+		return errors.NewTxNotFoundError("[sendFinalizeBatch] record not found for tx %s", txHash.String())
+	case state.rollingBack:
+		return errors.NewTxNotFoundError("[sendFinalizeBatch] tx %s is rolling back", txHash.String())
+	case !state.creating:
+		return nil
+	}
+
+	return errors.NewProcessingError("[sendFinalizeBatch] finalize of tx %s was filtered out but the record is still creating", txHash.String())
 }

@@ -30,6 +30,13 @@ type fakeSweepStore struct {
 	getResp         map[chainhash.Hash]*meta.Data
 	spendErr        error
 	spendIncomplete bool
+	spendSpends     []*utxo.Spend
+
+	spendOpts []utxo.CreateOption
+	events    []string
+	began     []chainhash.Hash
+	unspent   [][]*utxo.Spend
+	deleted   []chainhash.Hash
 
 	spends         []chainhash.Hash
 	finalized      []chainhash.Hash
@@ -67,11 +74,12 @@ func (f *fakeSweepStore) Get(_ context.Context, hash *chainhash.Hash, _ ...field
 // SpendAndCreate is how the sweeper re-spends (WithSpendOnly) after #1326 removed
 // Store.Spend; record the call and return the injected spend error. On success it
 // returns one no-error spend per input so the sweep's completeness guard is satisfied.
-func (f *fakeSweepStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, _ ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
+func (f *fakeSweepStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
 	f.spends = append(f.spends, *tx.TxIDChainHash())
+	f.spendOpts = opts
 
 	if f.spendErr != nil {
-		return nil, nil, f.spendErr
+		return nil, f.spendSpends, f.spendErr
 	}
 
 	if f.spendIncomplete {
@@ -90,6 +98,27 @@ func (f *fakeSweepStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, 
 
 func (f *fakeSweepStore) FinalizeTransaction(_ context.Context, tx *bt.Tx) error {
 	f.finalized = append(f.finalized, *tx.TxIDChainHash())
+	return nil
+}
+
+func (f *fakeSweepStore) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash) (bool, error) {
+	f.events = append(f.events, "begin")
+	f.began = append(f.began, *hash)
+
+	return true, nil
+}
+
+func (f *fakeSweepStore) Unspend(_ context.Context, spends []*utxo.Spend, _ ...bool) error {
+	f.events = append(f.events, "unspend")
+	f.unspent = append(f.unspent, spends)
+
+	return nil
+}
+
+func (f *fakeSweepStore) DeleteComplete(_ context.Context, hash *chainhash.Hash) error {
+	f.events = append(f.events, "delete")
+	f.deleted = append(f.deleted, *hash)
+
 	return nil
 }
 
@@ -324,7 +353,56 @@ func TestSweepCreatingTxsHonorsCancellation(t *testing.T) {
 	require.Empty(t, store.finalized)
 }
 
-func TestSweepCreatingTxsConflictingTerminal(t *testing.T) {
+func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+	taken := &utxo.Spend{Vout: 7}
+	failed := &utxo.Spend{Vout: 8, Err: errors.ErrSpent}
+
+	store := &fakeSweepStore{
+		NullStore:   ns,
+		stale:       []chainhash.Hash{hashA},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		spendErr:    errors.ErrSpent,
+		spendSpends: []*utxo.Spend{taken, failed},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"begin", "unspend", "delete"}, store.events, "a loser is marked rolling back, unspent, then deleted")
+	require.Equal(t, []chainhash.Hash{hashA}, store.began)
+	require.Equal(t, [][]*utxo.Spend{{taken}}, store.unspent, "only the inputs this attempt took are unspent")
+	require.Equal(t, []chainhash.Hash{hashA}, store.deleted)
+	require.Empty(t, store.setConflicting, "a loser is deleted, not marked conflicting")
+	require.Empty(t, store.finalized, "a loser must never be finalized")
+}
+
+func TestSweepCreatingTxsEveryUnwinnableErrorRollsBack(t *testing.T) {
+	for _, spendErr := range []error{errors.ErrSpent, errors.ErrTxConflicting, errors.ErrFrozen, errors.ErrUtxoHashMismatch} {
+		ns, err := nullstore.NewNullStore()
+		require.NoError(t, err)
+
+		txA := oneOutputTx(1)
+		hashA := *txA.TxIDChainHash()
+
+		store := &fakeSweepStore{
+			NullStore: ns,
+			stale:     []chainhash.Hash{hashA},
+			getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+			spendErr:  spendErr,
+		}
+
+		newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+		require.Equal(t, []chainhash.Hash{hashA}, store.deleted, "%v must roll the record back", spendErr)
+		require.Empty(t, store.finalized)
+	}
+}
+
+func TestSweepCreatingTxsLockedParentRetriesNextBlock(t *testing.T) {
 	ns, err := nullstore.NewNullStore()
 	require.NoError(t, err)
 
@@ -335,13 +413,65 @@ func TestSweepCreatingTxsConflictingTerminal(t *testing.T) {
 		NullStore: ns,
 		stale:     []chainhash.Hash{hashA},
 		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
-		spendErr:  errors.ErrSpent,
+		spendErr:  errors.ErrTxLocked,
 	}
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
 
-	require.Equal(t, []chainhash.Hash{hashA}, store.setConflicting, "a double-spent creating tx must be marked conflicting")
-	require.Equal(t, []chainhash.Hash{hashA}, store.finalized, "the conflicting tx must be finalized to its terminal state")
+	require.Equal(t, []chainhash.Hash{hashA}, store.spends, "the spend is attempted")
+	require.Empty(t, store.finalized, "a locked parent must not finalize")
+	require.Empty(t, store.events, "a locked parent is transient: no rollback")
+	require.Empty(t, store.unlocked)
+}
+
+func TestSweepCreatingTxsRollForwardDoesNotIgnoreLocks(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	var o utxo.CreateOptions
+
+	for _, opt := range store.spendOpts {
+		opt(&o)
+	}
+
+	require.True(t, o.SpendOnly)
+	require.False(t, o.IgnoreFlags.IgnoreLocked, "the sweep must not bypass the locked-parent hand-off barrier")
+}
+
+func TestSweepCreatingTxsFinishesAbandonedRollback(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	txA.Inputs[0].PreviousTxScript = bscript.NewFromBytes([]byte{0x51})
+	txA.Inputs[0].PreviousTxSatoshis = 2000
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"unspend", "delete"}, store.events, "an abandoned rollback is finished by unspend then delete")
+	require.Len(t, store.unspent, 1)
+	require.Len(t, store.unspent[0], len(txA.Inputs), "every input is unspent")
+	require.Equal(t, []chainhash.Hash{hashA}, store.deleted)
+	require.Empty(t, store.spends, "a rolling-back record must never be re-spent")
+	require.Empty(t, store.finalized)
 }
 
 func TestSweepCreatingTxsSkipsAlreadyFinalized(t *testing.T) {
