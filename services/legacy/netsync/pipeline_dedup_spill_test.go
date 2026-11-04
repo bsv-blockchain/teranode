@@ -25,6 +25,20 @@ func spillTestHash(i uint64) chainhash.Hash {
 	return h
 }
 
+// plentyOfDisk stands in for a disk with room for any test's tables.
+func plentyOfDisk(string) (uint64, error) { return 1 << 50, nil }
+
+// stubDiskFree replaces the free-disk check for the rest of the test, so no test depends on the
+// free space of the machine it runs on.
+func stubDiskFree(t *testing.T, free func(dir string) (uint64, error)) {
+	t.Helper()
+
+	saved := dedupDiskFree
+	t.Cleanup(func() { dedupDiskFree = saved })
+
+	dedupDiskFree = free
+}
+
 // newSpillTestMap returns a pipeline dedup map that moves to a disk table under a test directory
 // once it holds maxInMemory entries, and a counter of the times it reported moving.
 func newSpillTestMap(t *testing.T, maxInMemory int) (*pipelineDedupMap, *[]int) {
@@ -48,6 +62,8 @@ func newSpillTestMap(t *testing.T, maxInMemory int) (*pipelineDedupMap, *[]int) 
 // moves once, with everything it held, and keeps catching a duplicate on both sides of the move.
 func TestPipelineDedupMap_MovesToDiskPastTheCap(t *testing.T) {
 	const maxInMemory = 8
+
+	stubDiskFree(t, plentyOfDisk)
 
 	m, spills := newSpillTestMap(t, maxInMemory)
 
@@ -101,6 +117,8 @@ func TestPipelineDedupMap_StaysInMemoryBelowTheCap(t *testing.T) {
 // A duplicate after the move is still the CVE-2012-2459 refusal, the peer's fault and one of the
 // three that may ban, not a local failure.
 func TestPipelineDedupMap_ABuilderStillRefusesADuplicateAfterTheMove(t *testing.T) {
+	stubDiskFree(t, plentyOfDisk)
+
 	m, spills := newSpillTestMap(t, 2)
 
 	b, err := newBlockStreamBuilder(8, 8, coinbaseTx(t), noopEmit, m)
@@ -200,10 +218,7 @@ func TestNewPipelineDedupMap_TheCapBoundsTheFirstAllocation(t *testing.T) {
 // free disk does not cover what every spilled map claims: a write to a sparse mmap file on a full
 // disk kills the process, and a peer drives these writes before the merkle root is checked.
 func TestPipelineDedupMap_RefusesToSpillOntoAFullDisk(t *testing.T) {
-	saved := dedupDiskFree
-	t.Cleanup(func() { dedupDiskFree = saved })
-
-	dedupDiskFree = func(string) (uint64, error) { return dedupDiskSpare, nil }
+	stubDiskFree(t, func(string) (uint64, error) { return dedupDiskSpare, nil })
 
 	claimedBefore := dedupDiskClaimed.Load()
 
@@ -228,11 +243,8 @@ func TestPipelineDedupMap_RefusesToSpillOntoAFullDisk(t *testing.T) {
 
 // The check repeats as a spilled map grows, and the disk the maps claim is given back on Close.
 func TestPipelineDedupMap_ChecksTheDiskAsItGrowsAndGivesItBackOnClose(t *testing.T) {
-	saved := dedupDiskFree
-	t.Cleanup(func() { dedupDiskFree = saved })
-
 	free := uint64(1 << 50)
-	dedupDiskFree = func(string) (uint64, error) { return free, nil }
+	stubDiskFree(t, func(string) (uint64, error) { return free, nil })
 
 	claimedBefore := dedupDiskClaimed.Load()
 
@@ -278,10 +290,7 @@ func TestPipelineSink_ABlockPastTheDedupCapStillConverts(t *testing.T) {
 	pipelineHeaderFixture(t, sm, blk)
 	body := blockBodyBytes(t, blk)
 
-	saved := dedupDiskFree
-	t.Cleanup(func() { dedupDiskFree = saved })
-
-	dedupDiskFree = func(string) (uint64, error) { return 0, nil }
+	stubDiskFree(t, func(string) (uint64, error) { return 0, nil })
 
 	converted, err := sm.pipelineBlockSink(*blk.Hash(), &blk.MsgBlock().Header, bytes.NewReader(body), sinkPayloadLen(body))
 	require.Error(t, err, "the block passes the cap, so the map must move")
@@ -289,7 +298,7 @@ func TestPipelineSink_ABlockPastTheDedupCapStillConverts(t *testing.T) {
 	require.True(t, isLocalSinkFault(err), "and failing to is this node's fault: %v", err)
 	require.False(t, converted)
 
-	dedupDiskFree = saved
+	dedupDiskFree = plentyOfDisk
 
 	converted, err = sm.pipelineBlockSink(*blk.Hash(), &blk.MsgBlock().Header, bytes.NewReader(body), sinkPayloadLen(body))
 	require.NoError(t, err)
