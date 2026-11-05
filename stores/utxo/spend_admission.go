@@ -44,3 +44,10 @@ func (a *SpendAdmission) Start(ctx context.Context) error {
 func (a *SpendAdmission) Abandon() bool {
 	return a.state.CompareAndSwap(spendQueued, spendAbandoned)
 }
+
+// Started reports whether Start won the handoff for this item. Only then does
+// the dispatching goroutine own the item's per-request state; an abandoned item
+// belongs to whichever party won its Abandon.
+func (a *SpendAdmission) Started() bool {
+	return a.state.Load() == spendStarted
+}
