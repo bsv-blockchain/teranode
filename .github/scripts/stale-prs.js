@@ -39,7 +39,7 @@ function staleMessage(cfg) {
   return (
     `No activity on this PR for ${cfg.staleDays} days. It will be closed in ${cfg.closeDays} days ` +
     'unless there is a new commit, comment or review. ' +
-    `Add the \`${cfg.keepOpenLabel}\` label to exempt it.\n\n${cfg.marker}`
+    `To exempt it, add the \`${cfg.keepOpenLabel}\` label or ask a maintainer to.\n\n${cfg.marker}`
   );
 }
 

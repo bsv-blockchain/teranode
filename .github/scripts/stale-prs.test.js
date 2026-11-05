@@ -359,7 +359,11 @@ test('a live run labels and comments, and creates missing labels', async () => {
   const out = await run({ github, context, core: null, live: true, now: NOW, log: () => {} });
   const names = github.writes.map((w) => w.name);
   assert.deepEqual(names, ['getLabel', 'createLabel', 'getLabel', 'createLabel', 'addLabels', 'createComment']);
-  assert.match(github.writes[5].args.body, /No activity on this PR for 90 days/);
+  assert.equal(
+    github.writes[5].args.body,
+    'No activity on this PR for 90 days. It will be closed in 14 days unless there is a new commit, comment or review. ' +
+      `To exempt it, add the \`keep-open\` label or ask a maintainer to.\n\n${DEFAULTS.marker}`,
+  );
   assert.deepEqual(out.writes, ['labelled o/r#7']);
 });
 
