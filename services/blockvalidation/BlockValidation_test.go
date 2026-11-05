@@ -1628,6 +1628,7 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 	tests := []struct {
 		name        string
 		coinbaseTx  *bt.Tx
+		subtrees    []*chainhash.Hash
 		expectError string
 	}{
 		{
@@ -1650,6 +1651,16 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 			// to it, so it is missing data from the peer, not a miner's invalid coinbase.
 			name:        "Output-only coinbase the header does not commit to returns ErrBlockIncomplete",
 			coinbaseTx:  &bt.Tx{Outputs: []*bt.Output{{Satoshis: 50 * 100_000_000, LockingScript: &bscript.Script{0x51}}}},
+			expectError: "coinbase tx is nil or empty",
+		},
+		{
+			// A body that carries subtrees cannot be bound to the header at the precheck, so a
+			// zero-input coinbase on it is missing data. Letting it through would send a stand-in
+			// coinbase on to subtree binding, where it fails the merkle check as corrupt and the
+			// serving peer takes a strike.
+			name:        "Output-only coinbase on a body with subtrees returns ErrBlockIncomplete",
+			coinbaseTx:  &bt.Tx{Outputs: []*bt.Output{{Satoshis: 50 * 100_000_000, LockingScript: &bscript.Script{0x51}}}},
+			subtrees:    []*chainhash.Hash{{0x01}},
 			expectError: "coinbase tx is nil or empty",
 		},
 	}
@@ -1702,11 +1713,17 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 				Subtrees:         []*chainhash.Hash{},
 			}
 
+			if tt.subtrees != nil {
+				block.Subtrees = tt.subtrees
+			}
+
 			err = blockValidator.ValidateBlock(ctx, block, "test")
 			require.Error(t, err)
 			require.True(t, errors.Is(err, errors.ErrBlockIncomplete), "expected ErrBlockIncomplete, got: %v", err)
 			require.False(t, errors.Is(err, errors.ErrBlockInvalid), "should NOT be ErrBlockInvalid")
+			require.False(t, errors.Is(err, errors.ErrBlockCorrupt), "should NOT be ErrBlockCorrupt")
 			require.Contains(t, err.Error(), tt.expectError)
+			requireNothingPersisted(ctx, t, blockchainClient, block.Hash())
 		})
 	}
 }
