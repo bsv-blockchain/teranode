@@ -611,3 +611,34 @@ func (v *Server) startKafkaBackpressure(ctx context.Context) {
 	controller := newKafkaBackpressureController(v.logger, cfg, v.settings.BlockAssembly.DoubleSpendWindow, v.blockAssemblyClient, v.consumerClient)
 	go controller.run(controllerCtx)
 }
+
+// warnBackpressureOffWithLimit logs once per process that Kafka backpressure is off while block
+// assembly enforces an in-memory transaction limit. It runs on the first Kafka transaction
+// refused by that limit, reads the reported limit once to confirm it, and is a no-op when
+// backpressure is enabled, the client is nil or no limit is reported. A failed read releases the
+// latch so a later refusal tries again.
+func (v *Server) warnBackpressureOffWithLimit(ctx context.Context) {
+	if v.settings.Validator.KafkaBackpressure.Enabled || v.blockAssemblyClient == nil {
+		return
+	}
+
+	if !v.backpressureOffWarned.CompareAndSwap(false, true) {
+		return
+	}
+
+	readCtx, cancel := context.WithTimeout(ctx, defaultKafkaBackpressureReadTimeout)
+	stats, err := v.blockAssemblyClient.GetBlockAssemblyQueueStats(readCtx)
+
+	cancel()
+
+	if err != nil {
+		v.backpressureOffWarned.Store(false)
+		return
+	}
+
+	if stats.MaxHeld <= 0 {
+		return
+	}
+
+	v.logger.Warnf("[Validator] kafka backpressure is off while block assembly limits transactions in memory (blockassembly_maxTransactionsInMemory=%d): every Kafka transaction refused by that limit, including all of them during an unmined load or reset, is validated, refused, unwound and dropped; set validator_kafkaBackpressureEnabled=true so the backlog waits in Kafka instead", stats.MaxHeld)
+}

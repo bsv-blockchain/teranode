@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	inmemorykafka "github.com/bsv-blockchain/teranode/util/kafka/in_memory_kafka"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1509,4 +1510,66 @@ func TestBackpressure_HeldThresholdsDoNotOverflowAtAnUnlimitedLimit(t *testing.T
 	require.Greater(t, pause, int64(8_000_000_000_000_000_000), "90 percent of the saturated limit, not the 2 an overflowed product floors to")
 	require.Less(t, pause, int64(math.MaxInt64))
 	require.Equal(t, pause-1, resume)
+}
+
+func TestBackpressure_WarnsOnceWhenOffWithInMemoryLimit(t *testing.T) {
+	ctx := context.Background()
+
+	newServer := func(enabled bool, maxHeld int64) (*Server, *capturingLogger, *blockassembly.Mock) {
+		tSettings := settings.NewSettings()
+		tSettings.Validator.KafkaBackpressure.Enabled = enabled
+
+		logger := &capturingLogger{}
+		baMock := blockassembly.NewMock()
+		baMock.On("GetBlockAssemblyQueueStats", mock.Anything).Return(blockassembly.QueueStats{MaxHeld: maxHeld}, nil)
+
+		return &Server{logger: logger, settings: tSettings, blockAssemblyClient: baMock}, logger, baMock
+	}
+
+	t.Run("off with a limit warns once", func(t *testing.T) {
+		v, logger, baMock := newServer(false, 1000)
+
+		v.warnBackpressureOffWithLimit(ctx)
+		v.warnBackpressureOffWithLimit(ctx)
+
+		require.Len(t, logger.lines, 1)
+		require.Contains(t, logger.lines[0], "validator_kafkaBackpressureEnabled=true")
+		require.Contains(t, logger.lines[0], "blockassembly_maxTransactionsInMemory=1000")
+		require.Len(t, baMock.Calls, 1, "the limit is read once")
+	})
+
+	t.Run("off without a limit stays quiet", func(t *testing.T) {
+		v, logger, _ := newServer(false, 0)
+
+		v.warnBackpressureOffWithLimit(ctx)
+
+		require.Empty(t, logger.lines)
+	})
+
+	t.Run("enabled stays quiet and reads nothing", func(t *testing.T) {
+		v, logger, baMock := newServer(true, 1000)
+
+		v.warnBackpressureOffWithLimit(ctx)
+
+		require.Empty(t, logger.lines)
+		require.Empty(t, baMock.Calls)
+	})
+
+	t.Run("a failed read retries on the next call", func(t *testing.T) {
+		tSettings := settings.NewSettings()
+		tSettings.Validator.KafkaBackpressure.Enabled = false
+
+		logger := &capturingLogger{}
+		baMock := blockassembly.NewMock()
+		baMock.On("GetBlockAssemblyQueueStats", mock.Anything).Return(blockassembly.QueueStats{}, errors.NewProcessingError("down")).Once()
+		baMock.On("GetBlockAssemblyQueueStats", mock.Anything).Return(blockassembly.QueueStats{MaxHeld: 5}, nil)
+
+		v := &Server{logger: logger, settings: tSettings, blockAssemblyClient: baMock}
+
+		v.warnBackpressureOffWithLimit(ctx)
+		require.Empty(t, logger.lines)
+
+		v.warnBackpressureOffWithLimit(ctx)
+		require.Len(t, logger.lines, 1)
+	})
 }
