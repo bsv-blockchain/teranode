@@ -2574,10 +2574,16 @@ func TestHandleResetRequests_RunsOwedWorkOncePerPass(t *testing.T) {
 // in chunks and may fail after writing some, so a failed write is checked against the best chain
 // again too. Here D, extending the best tip, mines Y between the selection and the write, the
 // write marks Y unmined and fails, and block assembly then moves onto D by a plain move forward.
+// Y is in the pool, so no reload is owed: the load of the unmined transactions a reload runs
+// would mark Y mined as well. The next run reads F again, but Y, mined on the best chain by then,
+// is no longer among F's transactions it marks, so only the recheck marks Y mined again.
 func TestMarkSkippedForkTxs_RechecksAfterAPartialWrite(t *testing.T) {
 	items, client, _, y := skippedForkSetup(t, true, true)
 	ba := items.blockAssembler
 	ctx := t.Context()
+
+	ba.subtreeProcessor.AddBatch([]subtree.Node{{Hash: *y.TxIDChainHash(), Fee: 1, SizeInBytes: uint64(len(y.Bytes()))}}, []*subtree.TxInpoints{{}})
+	require.Eventually(t, func() bool { return ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()) }, 5*time.Second, 10*time.Millisecond, "Y is in block assembly")
 
 	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
@@ -2595,13 +2601,16 @@ func TestMarkSkippedForkTxs_RechecksAfterAPartialWrite(t *testing.T) {
 
 	require.Error(t, ba.markSkippedForkTxs(ctx, false))
 	require.NotZero(t, unminedSince(t, items, y), "precondition: the partial write marked Y, mined in D, unmined")
-	require.True(t, ba.skippedForkWorkOwed())
+	require.False(t, ba.skippedForkReloadPending, "precondition: Y is in the pool, so no reload is owed")
+	require.Equal(t, []chainhash.Hash{*y.TxIDChainHash()}, ba.skippedForkRecheck, "Y is left to be checked again")
 
 	store.beforeWrite = nil
 	ba.blockchainClient = client
+	client.headerIDsCalls = 0
 	ba.processNewBlockAnnouncement(ctx)
 
 	requireBlockAssemblyTip(t, items, d)
+	require.Zero(t, client.headerIDsCalls, "no reload ran")
 	require.Zero(t, unminedSince(t, items, y), "Y, mined in D on the best chain, is marked mined again")
 	require.False(t, ba.skippedForkWorkOwed())
 }
@@ -2755,8 +2764,12 @@ func TestMarkSkippedForkTxs_BestChainReads(t *testing.T) {
 	t.Run("headers without their metadata", func(t *testing.T) {
 		items, client, _, _ := skippedForkSetup(t, true, true)
 
+		best, _, err := items.blockchainClient.GetBestBlockHeader(t.Context())
+		require.NoError(t, err)
+
+		// The first page, read from the best tip, is the one refused.
 		client.mismatchMetas = true
-		require.Error(t, items.blockAssembler.markSkippedForkTxs(t.Context(), false))
+		require.ErrorContains(t, items.blockAssembler.markSkippedForkTxs(t.Context(), false), "metas from "+best.Hash().String())
 	})
 
 	t.Run("each fork block beats", func(t *testing.T) {
@@ -2771,5 +2784,34 @@ func TestMarkSkippedForkTxs_BestChainReads(t *testing.T) {
 
 		require.NoError(t, ba.markSkippedForkTxs(t.Context(), false))
 		require.Less(t, ba.heartbeat.Age(), time.Minute, "the mark beat after the listing")
+	})
+
+	t.Run("a fork block block validation has not finished beats", func(t *testing.T) {
+		items, client, f, _ := skippedForkSetup(t, true, false)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+		require.NoError(t, err)
+
+		parent, _, err := items.blockchainClient.GetBlockHeader(ctx, f.HashPrevBlock)
+		require.NoError(t, err)
+
+		g := buildChain(parent, 1, 103000)[0]
+		require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: g, CoinbaseTx: coinbase, TransactionCount: 1}, "", blockchainoptions.WithSubtreesSet(true), blockchainoptions.WithMinedSet(false)))
+
+		// Of F and G, both only asked whether block validation finished them, the second is
+		// asked after the first made the heartbeat old.
+		ba.heartbeat.Beat()
+
+		client.onIsMined = func() {
+			client.onIsMined = nil
+			ba.heartbeat.SetLastBeatForTest(time.Now().Add(-time.Hour))
+		}
+
+		var unprocessed *skippedForkUnprocessedError
+		require.ErrorAs(t, ba.markSkippedForkTxs(ctx, false), &unprocessed)
+		require.Equal(t, 2, unprocessed.count)
+		require.Less(t, ba.heartbeat.Age(), time.Minute, "the mark beat for the second block")
 	})
 }
