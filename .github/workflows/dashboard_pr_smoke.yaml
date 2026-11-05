@@ -23,12 +23,15 @@ jobs:
       run:
         working-directory: ui/dashboard
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.0.0
         with:
-          node-version: '20'
+          node-version: '22.23.4'
           cache: 'npm'
           cache-dependency-path: ui/dashboard/package-lock.json
+      - name: Verify patched Node and native primitives
+        run: |
+          node -e 'const a=require("node:assert/strict"),z=require("node:zlib"),c=require("node:crypto");a.equal(process.versions.node,"22.23.4");const b=Buffer.from("dashboard runtime");a.deepEqual(z.brotliDecompressSync(z.brotliCompressSync(b)),b);a.equal(c.randomBytes(32).length,32)'
       # --ignore-scripts: skip arbitrary postinstall scripts from deps. We
       # don't run any install hooks ourselves (no postinstall in package.json)
       # and Playwright fetches browsers via its own CLI below, not via install
