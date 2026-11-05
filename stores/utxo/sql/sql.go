@@ -4042,6 +4042,62 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	return s.Delete(ctx, hash)
 }
 
+// DeleteCompleteIfLockedUnmined is DeleteComplete, except that the transaction
+// is deleted only while it is still locked and has no block id, checked in the
+// same database transaction as the delete. deleted is false when the row was
+// absent or no longer in that state, and then nothing was touched.
+//
+// The replay cleanup in utxo.SequentialSpendAndCreate uses it: it reads a record
+// in that state and then reads its parents, and a reorg's move-back that fails in
+// between unlocks the record. The condition stops the delete from landing on a
+// record that is now a live unmined transaction.
+func (s *Store) DeleteCompleteIfLockedUnmined(ctx context.Context, hash *chainhash.Hash) (deleted bool, err error) {
+	txn, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+
+	defer func() {
+		_ = txn.Rollback()
+	}()
+
+	var id int64
+
+	err = txn.QueryRowContext(ctx, `
+		DELETE FROM transactions
+		WHERE hash = $1
+		  AND locked = true
+		  AND NOT EXISTS (SELECT 1 FROM block_ids WHERE block_ids.transaction_id = transactions.id)
+		RETURNING id
+	`, hash[:]).Scan(&id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	// The foreign keys cascade on delete; these remove the rows explicitly as
+	// Delete does, in case a schema predates the cascade.
+	for _, q := range []string{
+		`DELETE FROM outputs WHERE transaction_id = $1`,
+		`DELETE FROM inputs WHERE transaction_id = $1`,
+	} {
+		if _, err = txn.ExecContext(ctx, q, id); err != nil {
+			return false, err
+		}
+	}
+
+	if err = txn.Commit(); err != nil {
+		return false, err
+	}
+
+	prometheusUtxoDelete.Inc()
+
+	return true, nil
+}
+
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
 	if len(hashes) == 0 {
 		return make(map[chainhash.Hash][]uint32), nil

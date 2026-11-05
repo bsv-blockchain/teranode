@@ -335,13 +335,31 @@ type unknownCreateStore struct {
 	record    meta.Data
 	readErr   error
 	readCalls int
+	// parents answers GetMeta for a parent's hash; any other hash reads record.
+	parents map[chainhash.Hash]meta.Data
+	// changed makes the conditional delete find the record no longer locked
+	// and unmined.
+	changed bool
 }
 
-func (u *unknownCreateStore) GetMeta(_ context.Context, _ *chainhash.Hash, data *meta.Data) error {
+func (u *unknownCreateStore) GetMeta(_ context.Context, hash *chainhash.Hash, data *meta.Data) error {
 	u.readCalls++
+
+	if parent, ok := u.parents[*hash]; ok {
+		*data = parent
+
+		return nil
+	}
+
 	*data = u.record
 
 	return u.readErr
+}
+
+func (u *unknownCreateStore) DeleteCompleteIfLockedUnmined(context.Context, *chainhash.Hash) (bool, error) {
+	u.deleteCalls++
+
+	return !u.changed, u.deleteErr
 }
 
 // deletingRecheckStore can remove the record it created.
@@ -427,15 +445,29 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 	t.Run("after an unknown create, only a marker over an unmined, locked record removes it", func(t *testing.T) {
 		unknown := MarkCreateOutcomeUnknown(errors.NewServiceUnavailableError("batch wait ran out"))
 
+		parentHash := chainhash.HashH([]byte("parent"))
+		child := bt.NewTx()
+		child.Inputs = append(child.Inputs, &bt.Input{PreviousTxOutIndex: 0})
+		require.NoError(t, child.Inputs[0].PreviousTxIDAdd(&parentHash))
+
 		for _, tc := range []struct {
-			name       string
-			spend      Spend
-			recheck    error
-			record     meta.Data
-			readErr    error
-			wantDelete bool
+			name        string
+			spend       Spend
+			recheck     error
+			record      meta.Data
+			readErr     error
+			parent      *meta.Data
+			changed     bool
+			wantAttempt bool
+			wantDelete  bool
 		}{
-			{name: "marker, unmined, locked", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, wantDelete: true},
+			{name: "marker, unmined, locked", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, wantAttempt: true, wantDelete: true},
+			{name: "marker, unmined, locked, parent unlocked", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, parent: &meta.Data{BlockIDs: []uint32{3}}, wantAttempt: true, wantDelete: true},
+			// A reorg's move-back locks the parent before the child and saves
+			// the child for restoration; removing it would drop it from that file.
+			{name: "marker, unmined, locked, parent locked by a move-back", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, parent: &meta.Data{Locked: true, BlockIDs: []uint32{3}}},
+			// The record was unlocked after it was read, as a failed move-back does.
+			{name: "marker, unmined, locked, changed before the delete", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, changed: true, wantAttempt: true},
 			// An original whose block was invalidated after the pruner marked it
 			// is unmined and unlocked too; it is a live transaction and stays.
 			{name: "marker, unmined, unlocked", spend: Spend{Idempotent: true}, recheck: pruned},
@@ -453,18 +485,29 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 					}},
 					record:  tc.record,
 					readErr: tc.readErr,
+					changed: tc.changed,
 				}
 
-				_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100)
+				spent := tx
+				if tc.parent != nil {
+					spent = child
+					f.parents = map[chainhash.Hash]meta.Data{parentHash: *tc.parent}
+				}
+
+				_, spends, err := SequentialSpendAndCreate(ctx, logger, f, spent, 100)
 				require.True(t, IsCreateOutcomeUnknown(err))
 				require.Len(t, spends, 1, "the spends are kept")
 				require.Equal(t, 0, f.unspendCalls)
 
-				if tc.wantDelete {
+				if tc.wantAttempt {
 					require.Equal(t, 1, f.deleteCalls)
-					require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
 				} else {
 					require.Equal(t, 0, f.deleteCalls)
+				}
+
+				if tc.wantDelete {
+					require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+				} else {
 					require.Same(t, unknown, err, "the create's own error is returned")
 				}
 			})

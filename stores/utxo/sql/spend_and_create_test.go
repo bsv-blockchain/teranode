@@ -6,6 +6,7 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -254,15 +255,19 @@ func TestSpendAndCreateRecheckAfterAnUnknownCreate(t *testing.T) {
 //   - unlocked unmined record: an original whose block was invalidated after
 //     the pruner marked it, a live unmined transaction. It is kept.
 //   - no record: nothing to remove, and the replay is still rejected.
+//   - parent locked: an original a reorg's move-back has locked, parent
+//     first, and is saving for restoration. It is kept.
 func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		record   bool
-		mined    bool
-		unlocked bool
-		wantGone bool
+		name         string
+		record       bool
+		mined        bool
+		unlocked     bool
+		parentLocked bool
+		wantGone     bool
 	}{
 		{name: "unmined record", record: true, wantGone: true},
+		{name: "parent locked", record: true, parentLocked: true},
 		{name: "mined record", record: true, mined: true},
 		{name: "unlocked unmined record", record: true, unlocked: true},
 		{name: "no record", wantGone: true},
@@ -300,6 +305,10 @@ func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 				require.NoError(t, err)
 			}
 
+			if tc.parentLocked {
+				require.NoError(t, store.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+			}
+
 			_, err = store.db.ExecContext(ctx,
 				`INSERT INTO deleted_children (parent_id, child_hash) SELECT id, $2 FROM transactions WHERE hash = $1`,
 				parent.TxIDChainHash()[:], child.TxIDChainHash()[:])
@@ -312,7 +321,7 @@ func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 			if tc.wantGone {
 				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "no record of the pruned transaction may remain")
 			} else {
-				require.NoError(t, getErr, "a mined or unlocked record is never removed on this path")
+				require.NoError(t, getErr, "a mined, unlocked or move-back-locked record is never removed on this path")
 			}
 
 			require.Equal(t, spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, parent, 0),

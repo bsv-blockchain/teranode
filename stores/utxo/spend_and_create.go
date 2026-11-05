@@ -143,7 +143,7 @@ func SequentialSpendAndCreate(ctx context.Context, logger ulogger.Logger, s Sequ
 		spends, err = s.Spend(ctx, tx, blockHeight, options.IgnoreFlags)
 		if err != nil {
 			if errors.Is(err, errors.ErrUtxoSpendingTxPruned) {
-				_, _ = removeMarkedRecreation(ctx, logger, s, tx.TxIDChainHash())
+				_, _ = removeMarkedRecreation(ctx, logger, s, tx)
 			}
 
 			return nil, spends, err
@@ -211,6 +211,14 @@ type completeDeleter interface {
 
 type metaReader interface {
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
+}
+
+// conditionalDeleter removes a record only while it is still locked and has no
+// block id, checked by the store in the same write. removeMarkedRecreation uses
+// it so that a record unlocked after its reads is not removed. Both in-tree
+// stores implement it.
+type conditionalDeleter interface {
+	DeleteCompleteIfLockedUnmined(ctx context.Context, hash *chainhash.Hash) (deleted bool, err error)
 }
 
 // recheckRecreated closes the window between the spend and the create of a
@@ -318,7 +326,7 @@ func recheckUnknownCreate(ctx context.Context, logger ulogger.Logger, s Sequenti
 		return createErr
 	}
 
-	gone, removed := removeMarkedRecreation(ctx, logger, s, hash)
+	gone, removed := removeMarkedRecreation(ctx, logger, s, tx)
 	if !gone {
 		return createErr
 	}
@@ -351,8 +359,22 @@ func recheckUnknownCreate(ctx context.Context, logger ulogger.Logger, s Sequenti
 // the cost is that a recreation written unlocked (block assembly disabled)
 // stands. No record at all is the normal case and costs one read. A read or
 // delete that fails is logged and leaves the record.
-func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s SequentialStore, hash *chainhash.Hash) (gone, removed bool) {
-	deleter, canDelete := s.(completeDeleter)
+//
+// Locked is not proof on its own. A reorg's move-back locks the coinbase
+// descendants of the block it removes (GetAndLockChildren) and saves them for
+// restoration before deleting them, so an original that lost its block can be
+// locked with no block id while that move-back runs. Removing it there would
+// drop it from the restoration file. The walk locks each parent before its
+// children, so such a record always has a locked parent while it is locked,
+// and a record with any locked parent is left alone. The parents are read only
+// on this path, once a spend has met a marker. The delete then runs only while
+// the record is still locked with no block id, checked by the store in the same
+// write, so a move-back that fails and unlocks everything after these reads
+// does not lose the record either. The cost is that a recreation whose parent
+// is itself locked, a parent still mid-create or under a move-back, stands.
+func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s SequentialStore, tx *bt.Tx) (gone, removed bool) {
+	hash := tx.TxIDChainHash()
+	deleter, canDelete := s.(conditionalDeleter)
 	reader, canRead := s.(metaReader)
 
 	if !canDelete || !canRead {
@@ -392,8 +414,35 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 		return false, false
 	}
 
-	if err := removeRecreated(ctx, s, deleter, hash); err != nil {
+	if parent, locked, err := lockedParent(readCtx, reader, tx); err != nil {
+		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and a parent of the locked record could not be read, leaving it: %v", hash.String(), err)
+
+		return false, false
+	} else if locked {
+		logger.Warnf("[SpendAndCreate] %s: spend met a pruned transaction's marker; the locked, unmined record is left because its parent %s is locked, as a reorg's move-back leaves it", hash.String(), parent.String())
+
+		return false, false
+	}
+
+	var deleted bool
+
+	delCtx, delCancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackBound(s))
+	defer delCancel()
+
+	if err := retryStoreCall(delCtx, func() error {
+		var err error
+
+		deleted, err = deleter.DeleteCompleteIfLockedUnmined(delCtx, hash)
+
+		return err
+	}); err != nil {
 		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and the recreated record could not be removed: %v", hash.String(), err)
+
+		return false, false
+	}
+
+	if !deleted {
+		logger.Warnf("[SpendAndCreate] %s: spend met a pruned transaction's marker; the record changed after it was read and is left", hash.String())
 
 		return false, false
 	}
@@ -401,6 +450,45 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 	logger.Warnf("[SpendAndCreate] %s: removed a locked, unmined record of a pruned transaction whose spend met the pruner's marker", hash.String())
 
 	return true, true
+}
+
+// lockedParent reports the first parent of tx whose record is locked. A parent
+// with no record is skipped: a pruned parent is the case this path exists for.
+func lockedParent(ctx context.Context, reader metaReader, tx *bt.Tx) (*chainhash.Hash, bool, error) {
+	seen := make(map[chainhash.Hash]struct{}, len(tx.Inputs))
+
+	for _, input := range tx.Inputs {
+		parent := input.PreviousTxIDChainHash()
+		if _, ok := seen[*parent]; ok {
+			continue
+		}
+
+		seen[*parent] = struct{}{}
+
+		var (
+			record meta.Data
+			absent bool
+		)
+
+		if err := retryStoreCall(ctx, func() error {
+			err := reader.GetMeta(ctx, parent, &record)
+			if err != nil && (errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound)) {
+				absent = true
+
+				return nil
+			}
+
+			return err
+		}); err != nil {
+			return parent, false, err
+		}
+
+		if !absent && record.Locked {
+			return parent, true, nil
+		}
+	}
+
+	return nil, false, nil
 }
 
 // recheckSpend spends tx again with RequireParentOutputs, detached from ctx and

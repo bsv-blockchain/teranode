@@ -247,6 +247,83 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 		return err
 	}
 
+	return s.deleteCompleteRest(ctx, hash, childCount)
+}
+
+// DeleteCompleteIfLockedUnmined is DeleteComplete, except that the master is
+// deleted only while it is still locked and carries no block id, checked on the
+// server in the same write. deleted is false when the record was absent or no
+// longer in that state, and then nothing was touched.
+//
+// The replay cleanup in utxo.SequentialSpendAndCreate uses it: it reads a record
+// in that state and then reads its parents, and a reorg's move-back that fails in
+// between unlocks the record. The condition stops the delete from landing on a
+// record that is now a live unmined transaction.
+func (s *Store) DeleteCompleteIfLockedUnmined(ctx context.Context, hash *chainhash.Hash) (deleted bool, err error) {
+	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
+	if err != nil {
+		return false, errors.NewProcessingError("error in aerospike NewKey", err)
+	}
+
+	masterRecord, aErr := s.client.Get(util.GetAerospikeReadPolicy(s.settings), key, fields.TotalExtraRecs.String())
+	if aErr != nil {
+		if errors.Is(aErr, aerospike.ErrKeyNotFound) {
+			return false, nil
+		}
+
+		return false, errors.NewStorageError("error reading master record for conditional complete delete", aErr)
+	}
+
+	childCount := 0
+	if masterRecord != nil && masterRecord.Bins != nil {
+		if v, ok := masterRecord.Bins[fields.TotalExtraRecs.String()].(int); ok {
+			childCount = v
+		}
+	}
+
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.FilterExpression = lockedUnminedFilter()
+
+	if _, err = s.client.Delete(policy, key); err != nil {
+		if errors.Is(err, aerospike.ErrKeyNotFound) || isFilteredOut(err) {
+			return false, nil
+		}
+
+		if e, ok := err.(*aerospike.AerospikeError); ok {
+			prometheusUtxoMapErrors.WithLabelValues("Delete", e.ResultCode.String()).Inc()
+		} else {
+			prometheusUtxoMapErrors.WithLabelValues("Delete", "unknown").Inc()
+		}
+
+		return false, errors.NewStorageError("error in aerospike conditional delete key", err)
+	}
+
+	prometheusUtxoMapDelete.Inc()
+
+	return true, s.deleteCompleteRest(ctx, hash, childCount)
+}
+
+// lockedUnminedFilter matches a record whose locked bin is true and whose block
+// id list is absent or empty. Each bin is read only once it is known to exist.
+func lockedUnminedFilter() *aerospike.Expression {
+	locked := fields.Locked.String()
+	blockIDs := fields.BlockIDs.String()
+
+	return aerospike.ExpAnd(
+		aerospike.ExpCond(
+			aerospike.ExpBinExists(locked), aerospike.ExpBoolBin(locked),
+			aerospike.ExpBoolVal(false),
+		),
+		aerospike.ExpCond(
+			aerospike.ExpBinExists(blockIDs), aerospike.ExpEq(aerospike.ExpListSize(aerospike.ExpListBin(blockIDs)), aerospike.ExpIntVal(0)),
+			aerospike.ExpBoolVal(true),
+		),
+	)
+}
+
+// deleteCompleteRest runs steps 2 and 3 of DeleteComplete, after the master is gone.
+func (s *Store) deleteCompleteRest(ctx context.Context, hash *chainhash.Hash, childCount int) error {
+
 	// 2. Delete pagination children (records 1..childCount).
 	if childCount > 0 {
 		if err := s.deleteChildRecordsWithRetry(ctx, hash, childCount); err != nil {
