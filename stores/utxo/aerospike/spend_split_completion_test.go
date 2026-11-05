@@ -166,6 +166,7 @@ func TestSpendLuaBreakerRecordsInOrder(t *testing.T) {
 	s.spendCircuitBreaker.state = cbStateHalfOpen
 	first, second := chainhash.Hash{1}, chainhash.Hash{9}
 	batch, group := competingSpendBatch(&first, &second)
+	markProbes(s.spendCircuitBreaker, batch)
 
 	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 		require.Len(t, records, 2)
@@ -218,7 +219,7 @@ func TestSpendSplitPanicKeepsEarlierBreakerFailures(t *testing.T) {
 // A Lua success after the split resets the breaker failure count once.
 func TestSpendLuaBreakerRecordsSuccessForSplitBatch(t *testing.T) {
 	s := newSpendBreakerTestStore(t, false)
-	s.spendCircuitBreaker.RecordFailure()
+	s.spendCircuitBreaker.RecordFailure(currentProbe(s.spendCircuitBreaker))
 	parent := chainhash.Hash{1}
 	batch, group := competingSpendBatch(&parent, &parent)
 
@@ -240,6 +241,12 @@ func TestSpendLuaBreakerRecordsSuccessForSplitBatch(t *testing.T) {
 	require.NoError(t, batch[0].spend.Err)
 	require.ErrorIs(t, batch[1].spend.Err, errors.ErrSpent)
 	require.Equal(t, 0, s.spendCircuitBreaker.consecutiveFailures)
+}
+
+func markProbes(cb *circuitBreaker, batch []*batchSpend) {
+	for _, item := range batch {
+		item.breakerSlot = currentProbe(cb)
+	}
 }
 
 func newSpendBreakerTestStore(t *testing.T, expressions bool) *Store {
@@ -334,6 +341,9 @@ func TestSpendExpressionBreakerBeforeLuaRetry(t *testing.T) {
 						parents = append(parents, &first)
 					}
 					batch, group := competingSpendBatch(parents...)
+					if state == cbStateHalfOpen {
+						markProbes(s.spendCircuitBreaker, batch)
+					}
 					if split {
 						batch[2].blockHeight++
 					}
@@ -416,6 +426,9 @@ func TestSpendExpressionSuccessBeforeLuaFailure(t *testing.T) {
 			s.spendCircuitBreaker.consecutiveFailures = 1
 			first, second := chainhash.Hash{1}, chainhash.Hash{9}
 			batch, group := competingSpendBatch(&first, &second)
+			if state == cbStateHalfOpen {
+				markProbes(s.spendCircuitBreaker, batch)
+			}
 			calls := 0
 			s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 				calls++
