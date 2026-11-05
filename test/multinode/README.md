@@ -55,7 +55,7 @@ doesn't matter.
 | File | Operates on | Sudo | What it proves |
 |---|---|---|---|
 | `scenario_01_split_brain_test.go` | all 5 nodes | yes | A partitioned node forks off, heals, and reorgs onto the majority chain. |
-| `scenario_02_crash_recovery_test.go` | nodes 1-3 | no | A killed node rejoins and catches up to tip. |
+| `scenario_02_crash_recovery_test.go` | nodes 1-3 | no | A killed node rejoins and catches up to tip, and its UTXO and blob stores match its best chain (chain oracle). |
 | `scenario_03_blast_under_latency_test.go` | nodes 1-3 | yes | Added latency on one node does not stall propagation or create persistent forks. |
 
 All three scenarios currently mine via `generate` RPC rather than the
@@ -82,6 +82,16 @@ stack once these baselines are stable.
   they need it.
 - State bleeds between scenarios: chaos state is reset but chain state
   is cumulative. Use relative heights.
+
+## Store reconciliation (chain oracle)
+
+A matching tip hash does not prove matching state. `Stack.RequireStoresMatchChain`
+opens a node's blockchain store (Postgres), UTXO store (Aerospike) and blob
+stores (`data/multinode/teranodeN/`) from the host and runs
+`test/utils/chainoracle`, which replays the node's best chain and fails with a
+per-coin, per-file diff if either store disagrees with it. It waits for the
+node's block persister to reach the tip first, so a persister that is merely
+behind is not reported as drift.
 
 ## Debugging a failure
 

@@ -79,4 +79,10 @@ func TestCrashRecovery(t *testing.T) {
 	converged := harness.WaitForConverged(t, participants, 3*time.Minute)
 	require.Equal(t, divergedTip, converged, "all 3 nodes should converge on the survivors' tip")
 	t.Logf("node 3 caught up, all 3 converged at %s", short(converged))
+
+	// A matching tip hash does not mean matching state: the restarted node's
+	// UTXO and blob stores must hold exactly what its best chain implies. The
+	// survivor runs the same check as a control on a node that never crashed.
+	s.RequireStoresMatchChain(t, 3, converged)
+	s.RequireStoresMatchChain(t, 1, converged)
 }
