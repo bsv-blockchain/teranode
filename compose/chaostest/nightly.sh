@@ -160,6 +160,14 @@ if $build; then
   fi
 fi
 
+# The broadcaster runs from a floating tag; without a pull a runner keeps whatever it cached
+# first. merkle-service and the wallet are pinned by digest or version.
+broadcaster_image="${ARCADE_IMAGE:-ghcr.io/bsv-blockchain/broadcaster:latest}"
+note "pulling $broadcaster_image"
+if ! docker pull -q "$broadcaster_image" >"$OUT/pull.log" 2>&1; then
+  echo "warning: pull of $broadcaster_image failed, using the cached image; see $OUT/pull.log" >&2
+fi
+
 note "bringing up Stack A on a new chain"
 $CTL stack down a >"$OUT/stack-up.log" 2>&1 || true
 if ! $CTL stack up a >>"$OUT/stack-up.log" 2>&1; then
@@ -167,7 +175,7 @@ if ! $CTL stack up a >>"$OUT/stack-up.log" 2>&1; then
   python3 -I "$SCRIPT_DIR/nightly_report.py" "$OUT" "$SUITES/known-failures.txt" "$previous" --error "stack up failed" || true
   exit 1
 fi
-for img in ghcr.io/bsv-blockchain/broadcaster:latest teranode:latest chaos-orchestrator:multinode; do
+for img in "$broadcaster_image" teranode:latest chaos-orchestrator:multinode; do
   echo "$img $(docker image inspect -f '{{.Id}}' "$img" 2>/dev/null)"
 done >"$OUT/images.txt"
 docker inspect -f '{{.Config.Image}} {{.Image}}' merkle-service-multinode >>"$OUT/images.txt" 2>/dev/null || true
