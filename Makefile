@@ -185,12 +185,13 @@ test:
 test-heavy:
 	SETTINGS_CONTEXT=test TERANODE_HEAVY_TESTS=1 go test -tags "testtxmetacache" -count=1 -timeout=10m -run '^(TestSortedHashSet_|Test_queueLarge$$|TestDiskTxMap_(ExistenceLayerThroughput|ThroughputTarget|MultiDiskThroughput)$$|TestSubtreeProcessorSizePerformance$$|TestDirectSubtreeCreationPerformance$$|TestOverheadBreakdownDetailed$$)' ./services/blockassembly/subtreeprocessor
 
-# run the Block Validation gap-proof tests (services/blockvalidation/spec.md, Conformance Gaps).
-# Each asserts spec-correct behaviour and is expected to FAIL until its gap is fixed, so this
-# target is not part of `make test`. When a gap is fixed, drop the bvgaps tag from its test file.
+# run the Block Validation known-defect proofs (services/blockvalidation/spec.md, Conformance Gaps).
+# Each is a TestKnownDefect_* test behind the bvgaps build tag that asserts spec-correct behaviour
+# and FAILS until its defect is fixed, so this target is not part of `make test`. When a defect is
+# fixed, drop the bvgaps tag and the TestKnownDefect_ prefix so the test becomes a regression test.
 .PHONY: test-bvgaps
 test-bvgaps:
-	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestGapBV' ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
+	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestKnownDefect_' ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
 
 # compile and vet the gap-proof tests without running them, so a rename in the code they exercise
 # breaks the build here (and in CI) instead of silently when a gap is fixed.
