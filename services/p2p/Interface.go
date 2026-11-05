@@ -9,6 +9,48 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+// PeerHealthCause says why IsPeerUnhealthy judged a peer as it did. Callers
+// branch on it, never on PeerHealth.Reason, which is free text for logs and can
+// be reworded without notice.
+type PeerHealthCause int
+
+const (
+	// PeerHealthCauseUnspecified is a healthy peer, or a verdict from a p2p
+	// service that predates causes. Treat an unhealthy verdict with this cause
+	// as one that permits no exception.
+	PeerHealthCauseUnspecified PeerHealthCause = iota
+	// PeerHealthCauseLowReputation is a reputation below the usable cut-off.
+	PeerHealthCauseLowReputation
+	// PeerHealthCauseLowSuccessRate is more than 10 interactions with fewer
+	// than half of them successful.
+	PeerHealthCauseLowSuccessRate
+	// PeerHealthCauseMalicious is malicious behaviour recorded against the peer.
+	PeerHealthCauseMalicious
+	// PeerHealthCauseBanned is a banned peer.
+	PeerHealthCauseBanned
+	// PeerHealthCauseUnknownPeer is a peer absent from the registry.
+	PeerHealthCauseUnknownPeer
+	// PeerHealthCauseNotAssessable is an empty or invalid peer ID, or no
+	// registry to ask.
+	PeerHealthCauseNotAssessable
+)
+
+// PeerHealth is the verdict of IsPeerUnhealthy.
+type PeerHealth struct {
+	// Unhealthy is true when the peer should not be used as a data source.
+	Unhealthy bool
+	// Reason describes the verdict for logs. Do not branch on it; use Cause.
+	Reason string
+	// Cause says why the peer was judged unhealthy.
+	Cause PeerHealthCause
+	// ReputationScore is the peer's current reputation score.
+	ReputationScore float32
+	// Unknown is true when the peer is absent from the registry: an absence
+	// of information, not a verdict. Callers must not treat it the same as a
+	// positive unhealthy finding.
+	Unknown bool
+}
+
 // PeerInfo holds all information about a peer in the P2P network.
 // This struct represents the public API contract for peer data, decoupled from
 // any transport-specific representations (like protobuf).
@@ -223,12 +265,10 @@ type ClientI interface {
 	// against it (e.g. via RecordCatchupMalicious).
 	IsPeerMalicious(ctx context.Context, peerID string) (bool, string, error)
 
-	// IsPeerUnhealthy checks if a peer is considered unhealthy based on their performance.
-	// A peer is considered unhealthy if they have poor performance metrics or low reputation.
-	// The unknown return value is true when the peer is absent from the registry: this is an
-	// absence of information, not a verdict, and callers must not treat it the same as a
-	// positive unhealthy finding.
-	IsPeerUnhealthy(ctx context.Context, peerID string) (isUnhealthy bool, reason string, reputationScore float32, unknown bool, err error)
+	// IsPeerUnhealthy checks if a peer is considered unhealthy: banned, malicious,
+	// below the usable reputation cut-off, or with a low success rate. Branch on
+	// the returned Cause, not on Reason. See PeerHealth for the Unknown flag.
+	IsPeerUnhealthy(ctx context.Context, peerID string) (PeerHealth, error)
 
 	// GetPeerRegistry retrieves the comprehensive peer registry data.
 	// Returns all peers in the registry with the subset of PeerInfo carried by

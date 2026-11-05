@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/jellydator/ttlcache/v3"
 )
 
@@ -610,22 +611,22 @@ func (u *Server) isPeerMalicious(ctx context.Context, peerID string) bool {
 //
 // Returns:
 //   - bool: True if peer has bad reputation
-//   - string: The reason the peer was judged bad, empty when it was not
-func (u *Server) isPeerBad(peerID string) (bool, string) {
+//   - p2p.PeerHealthCause: Why the peer was judged bad, PeerHealthCauseUnspecified when it was not
+func (u *Server) isPeerBad(peerID string) (bool, p2p.PeerHealthCause) {
 	if peerID == "" {
-		return false, ""
+		return false, p2p.PeerHealthCauseUnspecified
 	}
 
 	// Query P2P service for peer health status
 	if u.p2pClient != nil {
 		// Use context.Background() since the old method didn't require context
-		isUnhealthy, reason, reputationScore, unknown, err := u.p2pClient.IsPeerUnhealthy(context.Background(), peerID)
+		health, err := u.p2pClient.IsPeerUnhealthy(context.Background(), peerID)
 		if err != nil {
 			u.logger.Warnf("[isPeerBad] Failed to check if peer %s is unhealthy: %v", peerID, err)
 			// On error, assume peer is not bad to avoid false positives
-			return false, ""
+			return false, p2p.PeerHealthCauseUnspecified
 		}
-		if unknown {
+		if health.Unknown {
 			// Absence of information, not a verdict: a peer absent from the registry (e.g. its
 			// first announcement, raced against the peer-registry batcher flush) must not be
 			// refused as a catchup source. Fail open, matching the empty-ID and error branches
@@ -633,35 +634,56 @@ func (u *Server) isPeerBad(peerID string) (bool, string) {
 			// it isn't; the counter makes a sustained rate visible without grepping logs.
 			u.logger.Warnf("[isPeerBad] Peer %s is unknown to the registry; treating as healthy", peerID)
 			prometheusCatchupPeerHealthGate.WithLabelValues("unknown").Inc()
-			return false, ""
+			return false, p2p.PeerHealthCauseUnspecified
 		}
-		if isUnhealthy {
-			u.logger.Debugf("[isPeerBad] Peer %s is unhealthy (reputation: %.2f): %s", peerID, reputationScore, reason)
+		if health.Unhealthy {
+			u.logger.Debugf("[isPeerBad] Peer %s is unhealthy (reputation: %.2f): %s", peerID, health.ReputationScore, health.Reason)
+			return true, health.Cause
 		}
-		return isUnhealthy, reason
 	}
 
-	return false, ""
+	return false, p2p.PeerHealthCauseUnspecified
+}
+
+// isMaliciousHealthCause reports whether the registry's own health verdict
+// already names the peer malicious or banned. The catchup gate refuses on this
+// directly, so a stale not-malicious entry in peerMaliciousCache cannot turn a
+// malicious peer into a low-reputation one that the fallback would accept.
+func isMaliciousHealthCause(cause p2p.PeerHealthCause) bool {
+	return cause == p2p.PeerHealthCauseMalicious || cause == p2p.PeerHealthCauseBanned
 }
 
 // classifyPeerRefusalReason maps a catchup-source refusal to one of a fixed set of metric label
-// values. The label set is closed deliberately: reason comes from badReason (a message built from
-// interpolated numeric scores, e.g. "low reputation score: 12.34") or from the malicious flag,
-// neither of which is safe to use as a Prometheus label directly (unbounded cardinality from a
-// value that is effectively caller-influenced, since it moves with the peer's own behaviour).
-func classifyPeerRefusalReason(badReason string, malicious bool) string {
-	if malicious {
+// values. The label set is closed deliberately: the free-text reason carries interpolated numeric
+// scores, so it is not safe to use as a Prometheus label directly (unbounded cardinality from a
+// value that moves with the peer's own behaviour). The mapping is on the typed cause, so rewording
+// the reason text in the p2p service cannot change the label.
+func classifyPeerRefusalReason(cause p2p.PeerHealthCause, malicious bool) string {
+	if malicious || isMaliciousHealthCause(cause) {
 		return "malicious"
 	}
 
-	switch {
-	case strings.HasPrefix(badReason, "low reputation score"):
+	switch cause {
+	case p2p.PeerHealthCauseLowReputation:
 		return "low_reputation"
-	case strings.HasPrefix(badReason, "low success rate"):
+	case p2p.PeerHealthCauseLowSuccessRate:
 		return "low_success_rate"
 	default:
 		return "other"
 	}
+}
+
+// refusalAllowsFallback reports whether a refused catchup primary may still be
+// used when no alternative can serve the block: only when the refusal rests on
+// its health record alone (low reputation or low success rate) and nothing marks
+// it malicious or banned. Every other cause, including PeerHealthCauseUnspecified
+// from a p2p service that predates causes, keeps the refusal.
+func refusalAllowsFallback(cause p2p.PeerHealthCause, malicious bool) bool {
+	if malicious || isMaliciousHealthCause(cause) {
+		return false
+	}
+
+	return cause == p2p.PeerHealthCauseLowReputation || cause == p2p.PeerHealthCauseLowSuccessRate
 }
 
 // reportValidBlockForPeers reports a successfully validated block to the P2P service

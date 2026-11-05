@@ -190,7 +190,7 @@ const (
 // downgrades after failed catchup, and banning — not by a height-delta
 // tolerance here.
 func isViableSyncCandidate(p *blockchain.PeerInfo) bool {
-	return !p.IsBanned && p.DataHubURL != "" && p.ReputationScore >= 20
+	return !p.IsBanned && p.DataHubURL != "" && p.ReputationScore >= blockchain.MinUsablePeerReputation
 }
 
 // isViableSyncCandidate layers the operator blacklist on top of the
@@ -1334,7 +1334,7 @@ func (sc *SyncCoordinator) evaluateSyncPeer() {
 	}
 
 	// Check if peer has low reputation
-	if peerInfo.ReputationScore < 20.0 {
+	if peerInfo.ReputationScore < blockchain.MinUsablePeerReputation {
 		sc.logger.Warnf("[SyncCoordinator] Sync peer %s has low reputation (%.2f)", currentPeer, peerInfo.ReputationScore)
 		sc.clearSyncPeerIfCurrent("")
 		_ = sc.triggerSyncLocked()

@@ -659,13 +659,115 @@ func TestIsPeerMalicious_EmptyID(t *testing.T) {
 func TestIsPeerUnhealthy_LowReputation(t *testing.T) {
 	s, reg, pid := freshTestServer(t)
 	reg.Register(&blockchain.PeerInfo{ID: pid.String()})
-	// Drive reputation below 40 by recording a malicious event.
-	reg.UpdateMetrics(pid.String(), 0, 0, 0, false, false, true, 0)
+	// Drive reputation below the usable cut-off with one failure and no success (score 5).
+	reg.UpdateMetrics(pid.String(), 0, 0, 0, false, true, false, 0)
 
 	resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
 	require.NoError(t, err)
 	require.True(t, resp.IsUnhealthy)
 	require.False(t, resp.Unknown, "a registered peer with low reputation is a real verdict, not an absence of information")
+	require.Equal(t, p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_REPUTATION, resp.Cause)
+}
+
+// TestIsPeerUnhealthy_MaliciousOrBannedPeerIsNotReportedAsLowReputation pins
+// the order of the checks. A malicious peer is pinned at reputation 5, below
+// the usable cut-off, and block validation falls back to a peer refused only
+// for low reputation when no alternative can serve a block. If the reputation
+// check ran first, a malicious peer would be reported as low reputation, and
+// only block validation's separately cached IsPeerMalicious verdict (which can
+// be a stale false) would stand between it and that fallback.
+func TestIsPeerUnhealthy_MaliciousOrBannedPeerIsNotReportedAsLowReputation(t *testing.T) {
+	t.Run("malicious", func(t *testing.T) {
+		s, reg, pid := freshTestServer(t)
+		reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+		reg.UpdateMetrics(pid.String(), 0, 0, 0, false, false, true, 0)
+
+		info, ok := reg.Get(pid.String())
+		require.True(t, ok)
+		require.Less(t, info.ReputationScore, blockchain.MinUsablePeerReputation, "precondition: the malicious pin is below the usable cut-off")
+
+		resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
+		require.NoError(t, err)
+		require.True(t, resp.IsUnhealthy)
+		require.Equal(t, p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_MALICIOUS, resp.Cause)
+	})
+
+	t.Run("banned", func(t *testing.T) {
+		s, reg, pid := freshTestServer(t)
+		reg.Register(&blockchain.PeerInfo{ID: pid.String()})
+		// One failure puts the score below the cut-off too, so only the order decides the cause.
+		reg.UpdateMetrics(pid.String(), 0, 0, 0, false, true, false, 0)
+		_, newlyBanned := reg.AddBanScore(pid.String(), "test", blockchain.DefaultBanConfig().Threshold)
+		require.True(t, newlyBanned, "precondition: the peer is banned and still registered")
+
+		resp, err := s.IsPeerUnhealthy(context.Background(), &p2p_api.IsPeerUnhealthyRequest{PeerId: pid.String()})
+		require.NoError(t, err)
+		require.True(t, resp.IsUnhealthy)
+		require.Equal(t, p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_BANNED, resp.Cause)
+	})
+}
+
+// TestIsPeerUnhealthy_EveryVerdictCarriesItsCause pins the typed cause on each
+// branch. Block validation decides its last-resort fallback on this cause, not
+// on the reason text, so rewording a reason cannot change which peers catchup
+// may fall back to; dropping or swapping a cause here would.
+func TestIsPeerUnhealthy_EveryVerdictCarriesItsCause(t *testing.T) {
+	ctx := context.Background()
+
+	cases := map[string]struct {
+		setup func(reg *blockchain.CentralizedPeerRegistry, id string)
+		id    func(id string) string
+		want  p2p_api.PeerHealthCause
+	}{
+		"empty peer ID":   {id: func(string) string { return "" }, want: p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_NOT_ASSESSABLE},
+		"invalid peer ID": {id: func(string) string { return "not-a-peer" }, want: p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_NOT_ASSESSABLE},
+		"unknown peer":    {want: p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_UNKNOWN_PEER},
+		"low reputation": {
+			setup: func(reg *blockchain.CentralizedPeerRegistry, id string) {
+				reg.Register(&blockchain.PeerInfo{ID: id})
+				reg.UpdateMetrics(id, 0, 0, 0, false, true, false, 0)
+			},
+			want: p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_REPUTATION,
+		},
+		"low success rate": {
+			setup: func(reg *blockchain.CentralizedPeerRegistry, id string) {
+				reg.Register(&blockchain.PeerInfo{ID: id})
+				for i := 0; i < 4; i++ {
+					reg.UpdateMetrics(id, 0, 0, 0, true, false, false, 100)
+				}
+				for i := 0; i < 8; i++ {
+					reg.UpdateMetrics(id, 0, 0, 0, false, true, false, 0)
+				}
+				info, _ := reg.Get(id)
+				require.GreaterOrEqual(t, info.ReputationScore, blockchain.MinUsablePeerReputation, "precondition: only the success rate is low")
+			},
+			want: p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_SUCCESS_RATE,
+		},
+		"healthy": {
+			setup: func(reg *blockchain.CentralizedPeerRegistry, id string) {
+				reg.Register(&blockchain.PeerInfo{ID: id})
+			},
+			want: p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_UNSPECIFIED,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s, reg, pid := freshTestServer(t)
+			id := pid.String()
+			if tc.setup != nil {
+				tc.setup(reg, id)
+			}
+			if tc.id != nil {
+				id = tc.id(id)
+			}
+
+			resp, err := s.IsPeerUnhealthy(ctx, &p2p_api.IsPeerUnhealthyRequest{PeerId: id})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, resp.Cause, "reason %q", resp.Reason)
+			require.Equal(t, tc.want != p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_UNSPECIFIED, resp.IsUnhealthy)
+		})
+	}
 }
 
 func TestIsPeerUnhealthy_UnknownPeer(t *testing.T) {

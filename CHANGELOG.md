@@ -170,6 +170,26 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
+- **Block-validation catchup accepts a peer from reputation 20, down from 40.** The
+  catchup health gate (`IsPeerUnhealthy`) now uses the same cut-off as sync-peer
+  eligibility, peer selection and reputation recovery. Before, a peer with one old
+  failed catchup and no success since settled at 20.0 and was refused as a catchup
+  source for good, because recovery only reaches peers below 20. When no alternative
+  can serve a block, catchup now also tries a primary peer that the gate refused only
+  for low reputation or a low success rate. It still refuses a malicious or banned
+  peer. So a node whose only peer ahead has a poor record keeps syncing and no longer
+  stalls. `IsPeerUnhealthy` now reports a banned or malicious peer as such, ahead of its
+  reputation, and its response carries a typed `cause` that block validation decides
+  on, instead of matching the reason text. Upgrade p2p and block validation together:
+  against an older p2p service, which sends no cause, block validation keeps the old
+  refusal and does not fall back. In
+  `teranode_blockvalidation_catchup_peer_health_gate_total`, `low_reputation` and
+  `low_success_rate` now also count peers that catchup went on to use as the fallback,
+  so dashboards that read them as refusals overcount. The counter records `malicious`
+  for a peer that is both malicious and low on reputation; it used to record
+  `low_reputation`. A cause from an older p2p service is recorded as `other`. No
+  action is required. (#2020)
+
 - **Listeners no longer offer Multipath TCP.** Binaries built from this module now
   default to `GODEBUG=multipathtcp=0` (`godebug` directive in `go.mod`), so on Linux
   every TCP listener (gRPC, HTTP, legacy P2P, libp2p) opens a plain TCP socket instead

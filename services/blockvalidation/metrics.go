@@ -391,7 +391,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "catchup_peer_health_gate_total",
-			Help:      "Total number of times the pre-catchup peer health gate produced a signal, by reason. malicious/low_reputation/low_success_rate/other refuse the peer as a catchup source; unknown means the peer is absent from the registry and is NOT refused (fail open) — a rising unknown rate points at registry-population lag (e.g. after a blockchain-service restart), not at bad peers.",
+			Help:      "Total number of times the pre-catchup peer health gate produced a signal, by reason. Each signal sends catchup to alternative peers first. malicious and other refuse the peer outright. low_reputation and low_success_rate count peers that are still used as the catchup source when no alternative can serve the block, so they are not a count of refusals. unknown means the peer is absent from the registry and is NOT refused (fail open) — a rising unknown rate points at registry-population lag (e.g. after a blockchain-service restart), not at bad peers.",
 		},
 		[]string{"reason"},
 	)

@@ -949,15 +949,16 @@ func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
 	t.Run("ok", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
 			IsPeerUnhealthyFunc: func(ctx context.Context, in *p2p_api.IsPeerUnhealthyRequest, opts ...grpc.CallOption) (*p2p_api.IsPeerUnhealthyResponse, error) {
-				return &p2p_api.IsPeerUnhealthyResponse{IsUnhealthy: true, Reason: "low rep", ReputationScore: 12.5}, nil
+				return &p2p_api.IsPeerUnhealthyResponse{IsUnhealthy: true, Reason: "low rep", ReputationScore: 12.5, Cause: p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_REPUTATION}, nil
 			},
 		})
-		unhealthy, reason, score, unknown, err := client.IsPeerUnhealthy(context.Background(), "peer1")
+		health, err := client.IsPeerUnhealthy(context.Background(), "peer1")
 		require.NoError(t, err)
-		require.True(t, unhealthy)
-		require.Equal(t, "low rep", reason)
-		require.InDelta(t, 12.5, score, 0.001)
-		require.False(t, unknown)
+		require.True(t, health.Unhealthy)
+		require.Equal(t, "low rep", health.Reason)
+		require.Equal(t, PeerHealthCauseLowReputation, health.Cause)
+		require.InDelta(t, 12.5, health.ReputationScore, 0.001)
+		require.False(t, health.Unknown)
 	})
 	t.Run("grpc_error", func(t *testing.T) {
 		client := newClientWithMock(&MockPeerServiceClient{
@@ -965,9 +966,32 @@ func TestSimpleClientIsPeerUnhealthy(t *testing.T) {
 				return nil, assert.AnError
 			},
 		})
-		_, _, _, _, err := client.IsPeerUnhealthy(context.Background(), "peer1")
+		_, err := client.IsPeerUnhealthy(context.Background(), "peer1")
 		require.Error(t, err)
 	})
+}
+
+// TestPeerHealthCauseFromAPI_MapsEveryWireCause pins the wire-to-native cause
+// mapping. Block validation decides its last-resort fallback on the native
+// cause, so a wire cause that maps to the wrong native one (or silently to
+// Unspecified) changes which peers catchup may fall back to.
+func TestPeerHealthCauseFromAPI_MapsEveryWireCause(t *testing.T) {
+	want := map[p2p_api.PeerHealthCause]PeerHealthCause{
+		p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_UNSPECIFIED:      PeerHealthCauseUnspecified,
+		p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_REPUTATION:   PeerHealthCauseLowReputation,
+		p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_SUCCESS_RATE: PeerHealthCauseLowSuccessRate,
+		p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_MALICIOUS:        PeerHealthCauseMalicious,
+		p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_BANNED:           PeerHealthCauseBanned,
+		p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_UNKNOWN_PEER:     PeerHealthCauseUnknownPeer,
+		p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_NOT_ASSESSABLE:   PeerHealthCauseNotAssessable,
+	}
+	require.Len(t, want, len(p2p_api.PeerHealthCause_name), "every wire cause needs a native mapping")
+
+	for wire, native := range want {
+		require.Equal(t, native, peerHealthCauseFromAPI(wire), "wire cause %s", wire)
+	}
+
+	require.Equal(t, PeerHealthCauseUnspecified, peerHealthCauseFromAPI(p2p_api.PeerHealthCause(99)), "a cause from a newer server must permit no exception")
 }
 
 func TestSimpleClientGetPeerRegistry(t *testing.T) {

@@ -30,6 +30,29 @@ const maxPeerNameLength = 128
 // (maxReportedChainWorkBytes) aliases this value.
 const MaxValidatedChainWorkBytes = 128
 
+// MinUsablePeerReputation is the reputation cut-off for using a peer as a data
+// source. A peer scoring below it is not picked as the sync peer or by peer
+// selection, the p2p service ignores its node-status, subtree and rejected-tx
+// gossip, and the p2p IsPeerUnhealthy check reports it as low reputation.
+// Block-validation catchup then tries other peers first, but still falls back
+// to it when none of them can serve the block and it is neither malicious nor
+// banned. Catchup alternatives (GetPeersForCatchup) are listed regardless of
+// reputation. ReconsiderBadPeers only considers peers below this value, and
+// recovers one only once it has a recorded failure older than the cooldown,
+// with the cooldown tripled for each earlier recovery.
+//
+// Every check that compares a reputation against a usable cut-off must use this
+// value. When the catchup check sat at 40 and recovery only reached peers below
+// 20, a peer with one old failure and no success since settled at 20.0 (see
+// calculateAndUpdateReputation). That peer was out of recovery's reach and stayed
+// refused as a catchup source, stalling a node whose only peer ahead it was.
+const MinUsablePeerReputation = 20.0
+
+// reconsideredPeerReputation is the score ReconsiderBadPeers gives a recovered
+// peer. It must be at or above MinUsablePeerReputation, or recovery hands back a
+// peer that every reputation check still refuses.
+const reconsideredPeerReputation = 30.0
+
 // sanitizeClientName scrubs an untrusted peer-supplied client name string.
 // Control characters and high-Unicode are dropped; XSS-flavoured ASCII
 // (`<>&"'\`) is dropped; the result is trimmed and capped to maxPeerNameLength.
@@ -486,10 +509,10 @@ func (r *CentralizedPeerRegistry) UpdateMetrics(
 		// Setting LastInteractionFailure here and the 5.0 reputation pin in
 		// calculateAndUpdateReputation are both load-bearing for recovery:
 		// ReconsiderBadPeers only clears MaliciousCount for peers with
-		// ReputationScore < 20 and a non-zero last failure, and that sweep is
-		// the sole automatic path that stops IsPeerMalicious excluding the
-		// peer. Removing either turns a malicious record into a permanent
-		// exclusion.
+		// ReputationScore < MinUsablePeerReputation and a non-zero last
+		// failure, and that sweep is the sole automatic path that stops
+		// IsPeerMalicious excluding the peer. Removing either turns a
+		// malicious record into a permanent exclusion.
 		info.MaliciousCount++
 		info.InteractionAttempts++
 		info.InteractionFailures++
@@ -1084,10 +1107,11 @@ func (r *CentralizedPeerRegistry) decayBanScores() {
 
 // ReconsiderBadPeers resets reputation for peers that have been bad for a while.
 // Returns the number of peers that had their reputation recovered. Mirrors the
-// semantics of the original P2P registry: only peers with reputation < 20 are
-// candidates, the configured cooldown applies after the most recent failure,
-// and previously-reset peers must wait an exponentially longer cooldown
-// (3× per prior reset) before being eligible again.
+// semantics of the original P2P registry: only peers with reputation below
+// MinUsablePeerReputation are candidates, the configured cooldown applies after
+// the most recent failure, and previously-reset peers must wait an
+// exponentially longer cooldown (3× per prior reset) before being eligible
+// again.
 func (r *CentralizedPeerRegistry) ReconsiderBadPeers(cooldown time.Duration) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1096,7 +1120,7 @@ func (r *CentralizedPeerRegistry) ReconsiderBadPeers(cooldown time.Duration) int
 	now := time.Now()
 
 	for _, info := range r.peers {
-		if info.ReputationScore >= 20 {
+		if info.ReputationScore >= MinUsablePeerReputation {
 			continue
 		}
 		if info.LastInteractionFailure.IsZero() || now.Sub(info.LastInteractionFailure) < cooldown {
@@ -1113,7 +1137,7 @@ func (r *CentralizedPeerRegistry) ReconsiderBadPeers(cooldown time.Duration) int
 			}
 		}
 
-		info.ReputationScore = 30
+		info.ReputationScore = reconsideredPeerReputation
 		info.MaliciousCount = 0
 		info.LastReputationReset = now
 		info.ReputationResetCount++

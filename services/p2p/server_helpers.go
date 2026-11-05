@@ -1286,7 +1286,7 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 	if v, ok := s.reputationCache.Load(idStr); ok {
 		entry := v.(reputationCacheEntry)
 		if now.Before(entry.expiresAt) {
-			if entry.score < 20.0 {
+			if entry.score < blockchain.MinUsablePeerReputation {
 				s.logger.Debugf("[%s] ignoring notification from low reputation peer %s (cached score: %.2f)", messageType, from, entry.score)
 				return true
 			}
@@ -1309,7 +1309,7 @@ func (s *Server) shouldSkipUnhealthyPeer(from string, messageType string) bool {
 		expiresAt: now.Add(reputationCacheTTL),
 	})
 
-	if peerInfo.ReputationScore < 20.0 {
+	if peerInfo.ReputationScore < blockchain.MinUsablePeerReputation {
 		s.logger.Debugf("[%s] ignoring notification from low reputation peer %s (score: %.2f)", messageType, from, peerInfo.ReputationScore)
 		return true
 	}

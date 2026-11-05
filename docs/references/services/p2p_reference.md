@@ -415,13 +415,13 @@ Checks if a peer has been marked as malicious.
 func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealthyRequest) (*p2p_api.IsPeerUnhealthyResponse, error)
 ```
 
-Checks if a peer is considered unhealthy based on reputation score and recent failures.
+Checks if a peer is considered unhealthy, in this order: it is banned, it has malicious behaviour recorded against it, its reputation score is below `blockchain.MinUsablePeerReputation` (20, the same cut-off sync-peer eligibility and peer selection use), or it has more than 10 recorded interactions and under half of them succeeded. Block validation uses the answer to decide whether to use the peer as a catchup source. A peer refused only for low reputation or a low success rate is still tried when no alternative peer can serve the block; a banned or malicious one is not.
 
 **Parameters**:
 
 - `peer_id` (string): The peer identifier
 
-**Returns**: `is_unhealthy` (bool), optional `reason` (string), and `reputation_score` (float)
+**Returns**: `is_unhealthy` (bool), optional `reason` (string, for logs only), `reputation_score` (float), `unknown` (bool, the peer is absent from the registry) and `cause` (`PeerHealthCause`: `LOW_REPUTATION`, `LOW_SUCCESS_RATE`, `MALICIOUS`, `BANNED`, `UNKNOWN_PEER`, `NOT_ASSESSABLE`, or `UNSPECIFIED` for a healthy peer). Callers branch on `cause`, never on `reason`.
 
 ```go
 func (s *Server) GetPeerRegistry(ctx context.Context, _ *emptypb.Empty) (*p2p_api.GetPeerRegistryResponse, error)

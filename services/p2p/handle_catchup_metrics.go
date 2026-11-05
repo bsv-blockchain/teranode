@@ -586,14 +586,25 @@ func (s *Server) IsPeerMalicious(ctx context.Context, req *p2p_api.IsPeerMalicio
 	}, nil
 }
 
-// IsPeerUnhealthy returns whether a peer is currently considered unhealthy
-// based on reputation and success-rate signals from the centralized registry.
+// IsPeerUnhealthy returns whether a peer is currently considered unhealthy,
+// with a cause callers branch on (the reason string is for logs only).
+//
+// Banned and malicious are checked first, from the registry entry this call
+// already holds, so a malicious peer at its pinned score is reported as
+// malicious, not as low reputation. A caller that lets a low-reputation peer
+// through as a last resort can then rely on this answer alone, without a
+// separately cached IsPeerMalicious verdict that may be stale.
+//
+// The reputation cut-off is blockchain.MinUsablePeerReputation, shared with
+// sync-peer eligibility and peer selection, so a peer picked as the sync peer
+// is not then refused as its catchup source.
 func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealthyRequest) (*p2p_api.IsPeerUnhealthyResponse, error) {
 	if req.PeerId == "" {
 		return &p2p_api.IsPeerUnhealthyResponse{
 			IsUnhealthy:     true,
 			Reason:          "empty peer ID",
 			ReputationScore: 0,
+			Cause:           p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_NOT_ASSESSABLE,
 		}, nil
 	}
 
@@ -602,6 +613,7 @@ func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealt
 			IsUnhealthy:     true,
 			Reason:          "unable to determine peer health",
 			ReputationScore: 0,
+			Cause:           p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_NOT_ASSESSABLE,
 		}, nil
 	}
 
@@ -610,6 +622,7 @@ func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealt
 			IsUnhealthy:     true,
 			Reason:          errInvalidPeerID,
 			ReputationScore: 0,
+			Cause:           p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_NOT_ASSESSABLE,
 		}, nil
 	}
 
@@ -623,14 +636,36 @@ func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealt
 			Reason:          "unknown peer",
 			ReputationScore: 0,
 			Unknown:         true,
+			Cause:           p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_UNKNOWN_PEER,
 		}, nil
 	}
 
-	if peerInfo.ReputationScore < 40 {
+	score := float32(peerInfo.ReputationScore)
+
+	if peerInfo.IsBanned {
+		return &p2p_api.IsPeerUnhealthyResponse{
+			IsUnhealthy:     true,
+			Reason:          "peer is banned",
+			ReputationScore: score,
+			Cause:           p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_BANNED,
+		}, nil
+	}
+
+	if peerInfo.MaliciousCount > 0 {
+		return &p2p_api.IsPeerUnhealthyResponse{
+			IsUnhealthy:     true,
+			Reason:          fmt.Sprintf("malicious behavior recorded %d time(s)", peerInfo.MaliciousCount),
+			ReputationScore: score,
+			Cause:           p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_MALICIOUS,
+		}, nil
+	}
+
+	if peerInfo.ReputationScore < blockchain.MinUsablePeerReputation {
 		return &p2p_api.IsPeerUnhealthyResponse{
 			IsUnhealthy:     true,
 			Reason:          fmt.Sprintf("low reputation score: %.2f", peerInfo.ReputationScore),
-			ReputationScore: float32(peerInfo.ReputationScore),
+			ReputationScore: score,
+			Cause:           p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_REPUTATION,
 		}, nil
 	}
 
@@ -640,13 +675,14 @@ func (s *Server) IsPeerUnhealthy(ctx context.Context, req *p2p_api.IsPeerUnhealt
 		return &p2p_api.IsPeerUnhealthyResponse{
 			IsUnhealthy:     true,
 			Reason:          fmt.Sprintf("low success rate: %.2f%%", successRate*100),
-			ReputationScore: float32(peerInfo.ReputationScore),
+			ReputationScore: score,
+			Cause:           p2p_api.PeerHealthCause_PEER_HEALTH_CAUSE_LOW_SUCCESS_RATE,
 		}, nil
 	}
 
 	return &p2p_api.IsPeerUnhealthyResponse{
 		IsUnhealthy:     false,
 		Reason:          "",
-		ReputationScore: float32(peerInfo.ReputationScore),
+		ReputationScore: score,
 	}, nil
 }
