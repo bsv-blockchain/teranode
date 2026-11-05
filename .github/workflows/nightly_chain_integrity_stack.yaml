@@ -122,7 +122,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Raises Docker Hub's pull rate limit; skipped where the org's account is not configured.
       - name: Log in to Docker Hub
+        if: vars.DOCKER_ORG != ''
         uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef # v3
         with:
           username: ${{ vars.DOCKER_ORG }}
