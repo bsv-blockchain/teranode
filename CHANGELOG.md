@@ -194,7 +194,8 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   state key, `BlockAssemblerSkippedForkMark`, before block assembly follows the best
   header, resets without a replay position, or gives the replay's history up; if that
   write fails, block assembly stays on its tip, refuses the reset or keeps the history,
-  and tries again. An older binary ignores the key. A reset still marks every
+  and tries again; a refused reset is retried once the write can succeed, after the
+  back-off below or, for a storage-triggered one, on its usual interval. An older binary ignores the key. A reset still marks every
   transaction in block assembly. Each failure path counts in
   `teranode_blockassembly_processing_stuck_total` under `skipped_fork_mark_unfinished`,
   `skipped_fork_mark_record` or `skipped_fork_subtree_lost`. (#2065)

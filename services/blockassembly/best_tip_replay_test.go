@@ -3551,3 +3551,58 @@ func TestMarkSkippedForkTxs_LeavesAnUnfinishedForkBlockWithoutSubtree(t *testing
 	require.ErrorAs(t, ba.markSkippedForkTxs(t.Context(), false), &unprocessed)
 	require.NotContains(t, ba.skippedForkBlocksMarked, *f.Hash(), "F is read again once block validation finished it")
 }
+
+// TestHandleResetRequests_RefusedResetIsRetried: a reset refused because the mark it would owe
+// cannot be recorded is not dropped. The heartbeat took the request that raised it, so nothing
+// would ask again: a storage-triggered reset is owed as one that failed before the rotation,
+// and any other, after a failed queue drain or a manual one, is queued again by the heartbeat
+// once the back-off allows.
+func TestHandleResetRequests_RefusedResetIsRetried(t *testing.T) {
+	t.Run("storage-triggered", func(t *testing.T) {
+		items, client, _, _ := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+		client.failMarkSave = true
+
+		answer := make(chan error, 1)
+		ba.handleResetRequests(t.Context(), resetRequest{ErrCh: answer, StorageTriggered: true})
+		require.Error(t, <-answer)
+		require.True(t, ba.diskTxMapResetPending, "the heartbeat retries the storage-triggered reset")
+	})
+
+	t.Run("after a failed drain or a manual one", func(t *testing.T) {
+		items, client, _, y := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+		ctx := t.Context()
+		client.failMarkSave = true
+
+		answer := make(chan error, 1)
+		ba.handleResetRequests(ctx, resetRequest{ErrCh: answer, FullReset: true})
+		require.Error(t, <-answer)
+
+		// Not queued again before the back-off is over.
+		require.NotNil(t, ba.resetOwed)
+		ba.requeueRefusedReset()
+		require.NotNil(t, ba.resetOwed, "not retried at once")
+
+		client.failMarkSave = false
+		ba.skippedForkMarkRetryAt = time.Now().Add(-time.Millisecond)
+		ba.requeueRefusedReset()
+
+		var req resetRequest
+		require.Eventually(t, func() bool {
+			select {
+			case req = <-ba.resetCh:
+				return true
+			default:
+				return false
+			}
+		}, 5*time.Second, 10*time.Millisecond, "the refused reset is queued again")
+		require.True(t, req.FullReset, "with the options it was asked with")
+
+		// The requeue's sender waits for the answer on req.ErrCh.
+		ba.handleResetRequests(ctx, req)
+		require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the reset ran")
+
+		require.Nil(t, ba.resetOwed, "nothing is owed any more")
+	})
+}

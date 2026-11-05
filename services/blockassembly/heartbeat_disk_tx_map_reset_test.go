@@ -1,6 +1,7 @@
 package blockassembly
 
 import (
+	"context"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -415,4 +416,44 @@ func TestBlockAssembler_UnrotatedStorageFaultLeavesPoolInService(t *testing.T) {
 	require.Equal(t, int32(2), resets.Load())
 	require.False(t, ba.bestTipResetReplayPending.Load())
 	require.Zero(t, degradedGauge())
+}
+
+// markSaveFailingClient refuses writes of the skipped-fork mark record while fail is set, and,
+// as noBestTipOrderClient, serves no best-tip order, so block assembly has no replay position.
+type markSaveFailingClient struct {
+	*noBestTipOrderClient
+	fail atomic.Bool
+}
+
+func (c *markSaveFailingClient) SetState(ctx context.Context, key string, data []byte) error {
+	if key == SkippedForkMarkStateKey && c.fail.Load() {
+		return errors.NewStorageError("state write refused")
+	}
+
+	return c.noBestTipOrderClient.SetState(ctx, key, data)
+}
+
+// A drain-failure reset refused because the skipped-fork mark it would owe cannot be recorded
+// is not lost: the heartbeat took its request, and queues the reset again once the mark's
+// back-off is over.
+func TestBlockAssembler_HeartbeatRetriesARefusedDrainReset(t *testing.T) {
+	m, resets := resetTestMock(nil)
+
+	var client *markSaveFailingClient
+
+	items := startWithMock(t, m, func(items *baTestItems) {
+		client = &markSaveFailingClient{noBestTipOrderClient: &noBestTipOrderClient{ClientI: items.blockchainClient}}
+		client.fail.Store(true)
+		items.blockAssembler.blockchainClient = client
+	})
+	require.False(t, items.blockAssembler.bestTipPosKnown.Load(), "precondition: no replay position")
+
+	m.DrainResetRequested.Store(true)
+
+	require.Never(t, func() bool { return resets.Load() > 0 }, time.Second, 10*time.Millisecond, "refused while the record cannot be written")
+
+	client.fail.Store(false)
+
+	require.Eventually(t, func() bool { return resets.Load() == 1 }, skippedForkMarkRetryBase+5*time.Second, 10*time.Millisecond,
+		"the heartbeat retries the refused reset after the back-off")
 }
