@@ -1348,12 +1348,13 @@ func (s *Service) readMasters(keys []*aerospike.Key) ([]masterRead, error) {
 // dropUnminedRecords removes from the chunk every record that is currently unmined (unminedSince set)
 // and not conflicting, and returns the remaining records plus the number dropped.
 //
-// This is defence in depth, not a guarantee. A transaction marked unmined by
-// MarkTransactionsOnLongestChain(false) keeps its deleteAtHeight, so the DAH query can return it.
-// Deleting it would lose a transaction that may be mined again. Conflicting transactions get a DAH
-// while unmined and must stay prunable. The state is read from the query stream and the deletes are
-// unconditional, so a transaction that becomes unmined between the query and the delete can still be
-// deleted. TTL-based deletion (utxoSetTTL) is likewise not covered once a record has been touched.
+// A transaction marked unmined by MarkTransactionsOnLongestChain(false) keeps its deleteAtHeight, so
+// the DAH query can return it. Deleting it would lose a transaction that may be mined again.
+// Conflicting transactions get a DAH while unmined and must stay prunable. The state here is read
+// from the query stream, and a master's delete rides the batch after its markers, so a transaction
+// can become unmined, or be locked by a reorg's move-back, in between. carriedMasterGuard applies the
+// same rule on the server when the delete (or, with utxoSetTTL, the touch) is sent, and a record that
+// fails it is held back. A TTL touch that has already landed is not undone.
 //
 // A record protected on positive evidence (not on an uncertain read) is returned in clears so that
 // its deleteAtHeight, and that of its pagination records, can be cleared with clearUnminedDAH. That
@@ -2592,7 +2593,7 @@ func (s *Service) buildCarriedDeletes(prev *deleteCarry) ([]aerospike.BatchRecor
 		slots[string(key.Digest())] = i
 	}
 
-	return buildDeletionBatchRecords(keys, s.utxoSetTTL, s.removalCommitLevel), masters, slots
+	return buildDeletionBatchRecords(keys, masters, s.utxoSetTTL, s.removalCommitLevel), masters, slots
 }
 
 // splitTiedUpdates separates the queued marker writes on records the same
@@ -3492,9 +3493,19 @@ func classifyDeletionResults(batchRecords []aerospike.BatchRecordIfc, masters ma
 			continue
 		}
 
+		txHash, isMaster := masters[i]
+
+		// A master that failed carriedMasterGuard left the chain after the
+		// pruner selected it. Sparing it is the designed outcome, not a failed
+		// delete, so it is held back without failing the cycle.
+		if isMaster && deleteFilteredOut(batchRec) {
+			results.survivors[*txHash] = struct{}{}
+
+			continue
+		}
+
 		results.failedRecords = append(results.failedRecords, batchRec)
 
-		txHash, isMaster := masters[i]
 		if !isMaster {
 			continue
 		}
@@ -3517,6 +3528,16 @@ func deleteDone(rec *aerospike.BatchRecord) bool {
 	}
 
 	return rec.ResultCode == types.OK || rec.ResultCode == types.KEY_NOT_FOUND_ERROR
+}
+
+// deleteFilteredOut reports whether the server definitely refused the record
+// because it failed the write's filter expression.
+func deleteFilteredOut(rec *aerospike.BatchRecord) bool {
+	if rec.Err == nil {
+		return rec.ResultCode == types.FILTERED_OUT && !rec.InDoubt
+	}
+
+	return rec.Err.Matches(types.FILTERED_OUT) && !rec.InDoubt && !rec.Err.IsInDoubt()
 }
 
 // deleteRefused reports whether the server definitely did not remove the

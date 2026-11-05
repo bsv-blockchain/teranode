@@ -897,3 +897,80 @@ func TestMarkerWritesKeepTheRecordsLifetime(t *testing.T) {
 	require.False(t, hasMarker(t, client, parentKey, &child))
 	expiresSoon("the withdrawal kept the lifetime")
 }
+
+// TestFlushChunk_CarriedDeleteSparesAChildThatLeftTheChain covers a child C
+// cleared by one batch whose record changes before the next batch carries its
+// delete. A block invalidation in between strips C's block ids and stamps
+// unmined_since, and a reorg's move-back can lock C while it saves C for
+// restoration. Either way C is no longer the mined, fully spent record the
+// pruner selected, so the carried delete is refused on the server, C stays,
+// and the marker naming C on its parent P is withdrawn. The refusal is the
+// designed outcome, so it is counted as held back and does not fail the flush.
+// An unmined conflicting child is still deleted, as dropUnminedRecords lets it
+// through at selection. The last row is the control: a child that did not
+// change is deleted.
+func TestFlushChunk_CarriedDeleteSparesAChildThatLeftTheChain(t *testing.T) {
+	s, client := newFlushTestService(t)
+	ctx := context.Background()
+
+	for i, tc := range []struct {
+		name      string
+		ttl       bool
+		change    aerospike.BinMap
+		wantSpare bool
+	}{
+		{name: "locked and unmined", change: aerospike.BinMap{fields.Locked.String(): true, fields.UnminedSince.String(): 100}, wantSpare: true},
+		{name: "locked only", change: aerospike.BinMap{fields.Locked.String(): true}, wantSpare: true},
+		{name: "unmined only", change: aerospike.BinMap{fields.UnminedSince.String(): 100}, wantSpare: true},
+		{name: "locked and unmined, TTL mode", ttl: true, change: aerospike.BinMap{fields.Locked.String(): true, fields.UnminedSince.String(): 100}, wantSpare: true},
+		{name: "unmined and conflicting is deleted", change: aerospike.BinMap{fields.UnminedSince.String(): 100, fields.Conflicting.String(): true}},
+		{name: "unchanged child is deleted", change: aerospike.BinMap{fields.Locked.String(): false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s.utxoSetTTL = tc.ttl
+			t.Cleanup(func() { s.utxoSetTTL = false })
+
+			parent := chainhash.HashH([]byte{0xD7, byte(i), 1})
+			child := chainhash.HashH([]byte{0xD7, byte(i), 2})
+
+			parentKey := putRecord(t, client, &parent, spentBy(&child))
+			childKey := putRecord(t, client, &child, aerospike.BinMap{fields.TxID.String(): child.CloneBytes()})
+
+			updates := make(map[string]*parentUpdateInfo)
+			require.NoError(t, s.addParentUpdatesForInput(updates, &parent, 0, &child))
+
+			carry := &deleteCarry{}
+
+			_, heldBack, err := s.flushChunk(ctx, carry, updates, []*pendingDeletion{{txHash: &child, keys: []*aerospike.Key{childKey}}}, nil)
+			require.NoError(t, err)
+			require.Zero(t, heldBack)
+			require.True(t, hasMarker(t, client, parentKey, &child), "the first batch marks the parent")
+
+			require.NoError(t, client.Put(nil, childKey, tc.change))
+
+			deleted, heldBack, err := s.drainCarry(ctx, carry)
+			require.NoError(t, err, "a refused delete of a changed child is not a failure")
+
+			record, err := client.Get(nil, childKey)
+			if !tc.wantSpare {
+				require.Equal(t, 1, deleted)
+				require.Zero(t, heldBack)
+				var aeroErr *aerospike.AerospikeError
+				require.ErrorAs(t, err, &aeroErr)
+				require.True(t, aeroErr.Matches(types.KEY_NOT_FOUND_ERROR), "the unchanged child is deleted")
+				require.True(t, hasMarker(t, client, parentKey, &child), "a deleted child keeps its marker")
+
+				return
+			}
+
+			require.NoError(t, err, "the changed child is still present")
+			require.Zero(t, deleted)
+			require.Equal(t, 1, heldBack)
+			require.False(t, hasMarker(t, client, parentKey, &child), "the marker of a spared child is withdrawn")
+
+			if tc.ttl {
+				require.NotEqual(t, uint32(1), record.Expiration, "the TTL touch is refused too")
+			}
+		})
+	}
+}

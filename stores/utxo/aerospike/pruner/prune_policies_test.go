@@ -60,7 +60,7 @@ func TestBuildDeletionBatchRecordsHardDelete(t *testing.T) {
 	for _, commitLevel := range []aerospike.CommitLevel{aerospike.COMMIT_MASTER, aerospike.COMMIT_ALL} {
 		keys := testKeys(t, 3)
 
-		records := buildDeletionBatchRecords(keys, false, commitLevel)
+		records := buildDeletionBatchRecords(keys, nil, false, commitLevel)
 
 		require.Len(t, records, 3)
 
@@ -77,7 +77,7 @@ func TestBuildDeletionBatchRecordsTTLTouch(t *testing.T) {
 	for _, commitLevel := range []aerospike.CommitLevel{aerospike.COMMIT_MASTER, aerospike.COMMIT_ALL} {
 		keys := testKeys(t, 3)
 
-		records := buildDeletionBatchRecords(keys, true, commitLevel)
+		records := buildDeletionBatchRecords(keys, nil, true, commitLevel)
 
 		require.Len(t, records, 3)
 
@@ -94,8 +94,8 @@ func TestBuildDeletionBatchRecordsTTLTouch(t *testing.T) {
 }
 
 func TestBuildDeletionBatchRecordsEmpty(t *testing.T) {
-	require.Empty(t, buildDeletionBatchRecords(nil, false, aerospike.COMMIT_MASTER))
-	require.Empty(t, buildDeletionBatchRecords(nil, true, aerospike.COMMIT_MASTER))
+	require.Empty(t, buildDeletionBatchRecords(nil, nil, false, aerospike.COMMIT_MASTER))
+	require.Empty(t, buildDeletionBatchRecords(nil, nil, true, aerospike.COMMIT_MASTER))
 }
 
 func testParentUpdates(t *testing.T, n int) map[string]*parentUpdateInfo {
@@ -139,7 +139,7 @@ func TestBuildVerifiedMarkerRecordsKeepCommitAll(t *testing.T) {
 		require.Equal(t, aerospike.UPDATE_ONLY, batchWrite.Policy.RecordExistsAction)
 	}
 
-	for i, record := range buildDeletionBatchRecords(keys, s.utxoSetTTL, s.removalCommitLevel) {
+	for i, record := range buildDeletionBatchRecords(keys, nil, s.utxoSetTTL, s.removalCommitLevel) {
 		batchDelete, ok := record.(*aerospike.BatchDelete)
 		require.True(t, ok, "child record %d should be a BatchDelete", i)
 		require.Equal(t, aerospike.COMMIT_MASTER, batchDelete.Policy.CommitLevel)
