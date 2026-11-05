@@ -71,9 +71,9 @@ jobs:
           case "$arch" in
             x86_64|amd64) ;;
             arm64|aarch64)
-              docker run --rm --platform linux/amd64 alpine:3.20 true ||
-                { echo "::error::arm64 runner cannot run amd64 images (SV node, merkle-service, wallet-infra)"; exit 1; }
-              echo "::notice::arm64 runner: amd64 images run under emulation, expect it to be slower" ;;
+              # Not tested here: that would need a registry pull. Without emulation the SV nodes
+              # fail to start and stack-up reports it.
+              echo "::warning::arm64 runner: the SV node, merkle-service and wallet-infra images are amd64 and need emulation (Docker Desktop on Apple silicon); expect it to be slower" ;;
             *) echo "::error::unsupported architecture $arch"; exit 1 ;;
           esac
           if command -v ss >/dev/null; then
