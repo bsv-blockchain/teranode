@@ -200,20 +200,46 @@ func (cb *circuitBreaker) Allow() bool {
 		return true
 	case cbStateOpen:
 		if now.After(cb.nextAttempt) {
-			cb.state = cbStateHalfOpen
-			cb.halfOpenAttempts = 1
-			cb.consecutiveSuccess = 0
+			cb.enterHalfOpen(now)
 			return true
 		}
 		return false
 	case cbStateHalfOpen:
 		if cb.halfOpenAttempts >= cb.halfOpenMax {
+			// Backstop: a probe that never reports must not hold half-open
+			// shut for ever. One cooldown after entry, probe again.
+			if now.After(cb.nextAttempt.Add(cb.cooldown)) {
+				cb.enterHalfOpen(now)
+				return true
+			}
 			return false
 		}
 		cb.halfOpenAttempts++
 		return true
 	default:
 		return true
+	}
+}
+
+func (cb *circuitBreaker) enterHalfOpen(now time.Time) {
+	cb.state = cbStateHalfOpen
+	cb.halfOpenAttempts = 1
+	cb.consecutiveSuccess = 0
+	cb.nextAttempt = now
+}
+
+// Release gives back a half-open probe slot taken by Allow for a request that
+// will never report an outcome. It does nothing in any other state.
+func (cb *circuitBreaker) Release() {
+	if cb == nil {
+		return
+	}
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if cb.state == cbStateHalfOpen && cb.halfOpenAttempts > 0 {
+		cb.halfOpenAttempts--
 	}
 }
 

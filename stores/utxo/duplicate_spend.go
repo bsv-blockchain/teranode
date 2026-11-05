@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"bytes"
+	"context"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
@@ -50,23 +51,32 @@ type spendOwner[T any] struct {
 //
 // A batch without different claims on one outpoint sends its admitted items
 // to Process in one call. An entirely abandoned batch makes no backend call.
-// Otherwise a part ends before the first claim that competes with a pending claim
-// whose result is unknown. After each part, the answers tell the stored owner:
+// Otherwise a claim that competes with a pending claim on its outpoint is
+// carried over to the next part, and the current part keeps filling with the
+// claims that do not compete. Once a claim on an outpoint is carried, every
+// later claim on that outpoint is carried too, so the earlier claim on an
+// outpoint is always dispatched in an earlier part. The number of parts is the
+// largest number of claims on one outpoint, not the number of competitions.
+// After each part, the answers tell the stored owner:
 //   - success names the claim itself;
 //   - UTXO_SPENT names the owner in its data, unless that data is the claim's own;
+//   - INVALID_SPEND proves the owner is the claim itself;
 //   - any other error leaves the owner unknown.
 //
-// A later claim with different data than a known owner is rejected locally with
-// UTXO_SPENT naming that owner, but only when SameChecks holds against the claim
-// that showed the owner. That claim passed every check before the spent check,
-// so the backend would answer the later claim with the same UTXO_SPENT. A claim
-// with other checks, or one that matches the owner, still goes to the backend.
-// Non-UTXO_SPENT backend failures are also reused for later claims with the
-// same checks. This keeps an outage from turning N competing claims into N
-// serial backend calls. Different checks still require a backend decision;
-// unknown-owner UTXO_SPENT errors are never copied to another spending claim.
-// Start is checked at dispatch, including for items queued before a previous
-// part blocked. Admission failures belong to one caller and are never reused.
+// Carried claims are checked again against what the part showed, in their
+// original order, before the next part is built. A later claim with different
+// data than a known owner is rejected locally with UTXO_SPENT naming that
+// owner, but only when SameChecks holds against the claim that showed the owner.
+// That claim passed every check before the spent check, so the backend would
+// answer the later claim with the same UTXO_SPENT. A claim with other checks,
+// or one that matches the owner, still goes to the backend.
+// Backend failures that do not depend on the claimant (see reusableFailure) are
+// also reused for later claims with the same checks. This keeps an outage from
+// turning N competing claims into N serial backend calls. Different checks
+// still require a backend decision; unknown-owner UTXO_SPENT errors are never
+// copied to another spending claim.
+// Start is checked at dispatch, including for items carried over from a previous
+// part. Admission failures belong to one caller and are never reused.
 //
 // The local answer reflects the stored state when its part finished. It is an
 // answer the backend could also give, because the claim was waiting the whole
@@ -113,10 +123,8 @@ func ProcessSpendBatch[T any](items []T, h SpendBatchHandler[T]) {
 
 	owners := make(map[spendOutpointKey]spendOwner[T])
 	failures := make(map[spendOutpointKey][]spendFailure[T])
-	pending := make(map[spendOutpointKey]*spendpkg.SpendingData)
-	var part []T
 
-	flush := func() {
+	record := func(part []T) {
 		if len(part) == 0 {
 			return
 		}
@@ -127,14 +135,11 @@ func ProcessSpendBatch[T any](items []T, h SpendBatchHandler[T]) {
 			if spend == nil || spend.TxID == nil || spend.SpendingData == nil || spend.SpendingData.TxID == nil {
 				continue
 			}
-			if err, answered := h.Result(item); answered && err != nil && !errors.Is(err, errors.ErrSpent) {
+			if err, answered := h.Result(item); answered && reusableFailure(err) {
 				key := spendOutpointKey{txID: *spend.TxID, vout: spend.Vout}
 				failures[key] = append(failures[key], spendFailure[T]{err: err, decider: item})
 			}
 		}
-
-		part = nil
-		clear(pending)
 	}
 
 	rejectedByResult := func(item T, spend *Spend, key spendOutpointKey) bool {
@@ -156,31 +161,72 @@ func ProcessSpendBatch[T any](items []T, h SpendBatchHandler[T]) {
 		return true
 	}
 
-	for _, item := range items {
-		spend := h.Spend(item)
-		if spend == nil || spend.TxID == nil {
-			part = append(part, item)
-			continue
-		}
+	queue := items
 
-		key := spendOutpointKey{txID: *spend.TxID, vout: spend.Vout}
-		if rejectedByResult(item, spend, key) {
-			continue
-		}
+	for len(queue) > 0 {
+		var part, carried []T
 
-		if claim, found := pending[key]; found && !sameSpendingData(claim, spend.SpendingData) {
-			flush()
+		pending := make(map[spendOutpointKey]*spendpkg.SpendingData)
+		blocked := make(map[spendOutpointKey]struct{})
 
+		for _, item := range queue {
+			spend := h.Spend(item)
+			if spend == nil || spend.TxID == nil {
+				part = append(part, item)
+				continue
+			}
+
+			key := spendOutpointKey{txID: *spend.TxID, vout: spend.Vout}
 			if rejectedByResult(item, spend, key) {
 				continue
 			}
+
+			if _, found := blocked[key]; found {
+				carried = append(carried, item)
+				continue
+			}
+
+			if claim, found := pending[key]; found && !sameSpendingData(claim, spend.SpendingData) {
+				blocked[key] = struct{}{}
+				carried = append(carried, item)
+
+				continue
+			}
+
+			pending[key] = spend.SpendingData
+			part = append(part, item)
 		}
 
-		pending[key] = spend.SpendingData
-		part = append(part, item)
+		record(part)
+
+		queue = carried
+	}
+}
+
+// reusableFailure reports whether a backend failure may be copied to a later
+// claim on the same outpoint with the same checks. Only failures that do not
+// depend on who claims the outpoint qualify: storage, availability and context
+// failures, and the parent or UTXO state errors the backend raises before it
+// looks at the stored owner. Anything else, including the generic UTXO error,
+// can depend on the claimant, for example a replay of the stored owner that a
+// competing claim would not share, so each claim needs its own backend answer.
+func reusableFailure(err error) bool {
+	if err == nil {
+		return false
 	}
 
-	flush()
+	return errors.Is(err, errors.ErrStorageError) ||
+		errors.Is(err, errors.ErrServiceUnavailable) ||
+		errors.Is(err, errors.ErrContextCanceled) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, errors.ErrTxNotFound) ||
+		errors.Is(err, errors.ErrTxLocked) ||
+		errors.Is(err, errors.ErrTxCreating) ||
+		errors.Is(err, errors.ErrTxConflicting) ||
+		errors.Is(err, errors.ErrUtxoHashMismatch) ||
+		errors.Is(err, errors.ErrFrozen) ||
+		errors.Is(err, errors.ErrTxCoinbaseImmature)
 }
 
 func hasCompetingClaims[T any](items []T, spendForItem func(T) *Spend) bool {
@@ -225,6 +271,13 @@ func learnOwner[T any](owners map[spendOutpointKey]spendOwner[T], item T, h Spen
 	if errors.Is(err, errors.ErrSpent) && errors.AsData(err, &spentData) &&
 		spentData.SpendingData != nil && !sameSpendingData(spentData.SpendingData, spend.SpendingData) {
 		owners[key] = spendOwner[T]{data: spentData.SpendingData, decider: item}
+
+		return
+	}
+
+	var invalidData *errors.UtxoInvalidSpendErrData
+	if errors.AsData(err, &invalidData) && invalidData.SpendingData != nil {
+		owners[key] = spendOwner[T]{data: spend.SpendingData, decider: item}
 	}
 }
 
