@@ -381,7 +381,7 @@ type Interface interface {
 
 	// QueueLength returns the number of transactions currently queued, not
 	// the number of batches. This indicates the processor's current workload.
-	// For items added through the bounded AddBatchIfRoom path it counts
+	// For items added through the bounded AddBatchBounded path it counts
 	// reserved-or-published items and never reads below the published-outstanding
 	// count; the unbounded AddBatch path now reserves before publishing too, so it
 	// upholds that same guarantee and additionally does not participate in the cap.

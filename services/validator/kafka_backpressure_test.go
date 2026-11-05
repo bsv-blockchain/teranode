@@ -1407,3 +1407,23 @@ func TestBackpressure_HeldPauseLogsTheHeldNumbers(t *testing.T) {
 	require.Contains(t, logger.joined(), "held 950/1000 >= 900 transactions", "a pause caused by the held count names the held numbers")
 	require.NotContains(t, logger.joined(), "queue fill 0/0 >= ", "and not queue-fill numbers that did not fire")
 }
+
+func TestBackpressure_HeldAndAgeBothHotNamesTheAge(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	logger := &capturingLogger{}
+
+	initPrometheusMetrics()
+
+	cfg := testBackpressureConfig()
+	cfg.PauseQueueFillPercent = 90
+	c := newKafkaBackpressureController(logger, cfg, 0, reader, consumer)
+
+	reader.setHeld(950, 1000, 600)
+	c.tick(ctx)
+
+	require.Equal(t, 1, consumer.pauseCount())
+	require.Contains(t, logger.joined(), "queue-head age 600ms >= pause watermark 500ms", "age fired, so the log names the age")
+	require.NotContains(t, logger.joined(), "still below pause watermark", "and does not claim the age is below its watermark")
+}

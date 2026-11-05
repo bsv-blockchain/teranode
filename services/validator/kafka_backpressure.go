@@ -481,7 +481,7 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 			// Age takes the log line when both fired: the fill wording exists to name
 			// the regime age cannot see, and claiming it while age is also hot would
 			// be false.
-			c.pause(effectiveAge, hotByFill && !hotByAge, hotByHeld && !hotByQueue, fillPause, heldPause)
+			c.pause(effectiveAge, hotByFill && !hotByAge, hotByHeld && !hotByQueue && !hotByAge, fillPause, heldPause)
 		}
 
 		return

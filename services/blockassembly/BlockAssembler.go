@@ -2337,35 +2337,6 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return info.Header, info.Height
 }
 
-// AddTxBatchIfRoom adds a batch of transactions to the block assembler only if
-// the configured queue bound would not be exceeded, reporting whether it did.
-// When no bound is configured it never refuses, so it is the only batch entry
-// point this type offers: an unbounded variant alongside it is a cap bypass
-// waiting for the next caller to reach for the shorter name.
-//
-// Parameters:
-//   - nodes: Transaction nodes to add
-//   - txInpoints: Parent transaction references for each node
-//
-// Returns:
-//   - bool: true if the batch was enqueued, false if it was refused for room
-func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, false) == subtreeprocessor.Admitted
-}
-
-// AddTxBatchInBlockIfRoom is AddTxBatchIfRoom for transactions that arrived inside a block. The
-// in-memory transaction limit does not refuse them; the ingest queue bound still does.
-//
-// Parameters:
-//   - nodes: Transaction nodes to add
-//   - txInpoints: Parent transaction references for each node
-//
-// Returns:
-//   - bool: true if the batch was enqueued, false if it was refused for room
-func (b *BlockAssembler) AddTxBatchInBlockIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, true) == subtreeprocessor.Admitted
-}
-
 // AddTxBatchBounded offers a batch under the configured bounds and reports which bound refused
 // it, if one did. inBlock marks transactions that arrived inside a block, which the in-memory
 // transaction limit does not refuse.

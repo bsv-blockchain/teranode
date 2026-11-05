@@ -338,10 +338,24 @@ func TestIngest_HeldLimitRefusesAtOnceAndMarksTheShed(t *testing.T) {
 	s := newHeldLimitedRealServer(t, 65, 5*time.Second)
 	require.Equal(t, int64(65), s.blockAssembler.MaxTransactionsInMemory(), "precondition: the enforced limit is what was asked for")
 
-	// The placeholder already holds one, so 64 fills the limit exactly.
+	dispatchCtx, stopDispatch := context.WithCancel(context.Background())
+	t.Cleanup(stopDispatch)
+	s.blockAssembler.subtreeProcessor.Start(dispatchCtx)
+
+	queueEmpty := func() bool { return s.blockAssembler.subtreeProcessor.QueueLength() == 0 }
+
 	_, err := s.AddTxBatch(context.Background(), batchReq(64))
 	require.NoError(t, err)
-	require.Equal(t, int64(65), s.blockAssembler.HeldCount())
+	require.Eventually(t, func() bool { return queueEmpty() && s.blockAssembler.HeldCount() == 64 }, 5*time.Second, 5*time.Millisecond,
+		"the dispatcher places the queued transactions in subtrees, which is what makes the limit's refusal certain")
+
+	topUp := batchReq(1)
+	topUp.TxRequests[0].Txid[0] = 200
+
+	_, err = s.AddTxBatch(context.Background(), topUp)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return queueEmpty() && s.blockAssembler.HeldCount() == 65 }, 5*time.Second, 5*time.Millisecond,
+		"the node holds exactly the limit, all of it placed in subtrees")
 
 	heldShedBefore := promtestutil.ToFloat64(prometheusBlockAssemblyHeldShed)
 	queueShedBefore := promtestutil.ToFloat64(prometheusBlockAssemblyQueueShed)
@@ -531,12 +545,38 @@ func TestIngest_PollingBatchStopsWaitingOnceTheNodeIsAtTheHeldLimit(t *testing.T
 		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
 	}, stp)
 
+	before := queueWaitSamples(t)
 	start := time.Now()
 	_, err := ba.AddTxBatch(context.Background(), batchReq(1))
 
 	require.Error(t, err)
 	require.Less(t, time.Since(start), time.Second, "a held refusal clears only on a block, so waiting out the timeout is pointless")
 	require.True(t, IsHeldLimitShed(errors.UnwrapGRPC(err)))
+	require.Equal(t, before+1, queueWaitSamples(t), "the batch did wait for the queue before the limit refused it, and that wait is recorded")
+}
+
+func TestIngest_PollingBatchKeepsWaitingThroughQueueRefusalsAndIsAdmitted(t *testing.T) {
+	initPrometheusMetrics()
+
+	stp := &subtreeprocessor.MockSubtreeProcessor{}
+	stp.On("AddBatchBounded", mock.Anything, mock.Anything, false).Return(subtreeprocessor.RefusedQueue).Twice()
+	stp.On("AddBatchBounded", mock.Anything, mock.Anything, false).Return(subtreeprocessor.Admitted)
+
+	ba := baWithProcessor(t, func(s *settings.Settings) {
+		s.BlockAssembly.MaxTransactionsInMemory = 1000
+		s.BlockAssembly.MaxQueueItems = 100
+		s.BlockAssembly.QueueFullWaitTimeout = 2 * time.Second
+		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+	}, stp)
+
+	before := queueWaitSamples(t)
+
+	resp, err := ba.AddTxBatch(context.Background(), batchReq(1))
+	require.NoError(t, err, "a queue refusal is retried until the other producers' reservations roll back")
+	require.True(t, resp.Ok)
+
+	stp.AssertNumberOfCalls(t, "AddBatchBounded", 3)
+	require.Equal(t, before+1, queueWaitSamples(t))
 }
 
 func TestIngest_InBlockBatchIsOfferedAsInBlock(t *testing.T) {
