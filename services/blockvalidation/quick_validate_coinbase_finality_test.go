@@ -2,8 +2,10 @@ package blockvalidation
 
 import (
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/stretchr/testify/require"
@@ -65,6 +67,91 @@ func TestQuickValidateBlock_CoinbaseFinality(t *testing.T) {
 	t.Run("final coinbase commits", func(t *testing.T) {
 		h := newPreBindHarness(t, nil)
 		block := h.coinbaseFinalityBlock(true)
+
+		require.NoError(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
+		h.requireBlockStored(block, true)
+	})
+}
+
+// coinbaseLockTimeBlock builds a coinbase-only block at preBindHeight that chains from genesis,
+// whose coinbase has the given nLockTime and input sequence 0, so finality turns on nLockTime alone.
+// headerTime sets the header timestamp (the nonce is re-ground for it); 0 keeps newPreBindBlock's.
+func (h *preBindHarness) coinbaseLockTimeBlock(lockTime, headerTime uint32) *model.Block {
+	h.t.Helper()
+
+	coinbase := preBindCoinbase(h.t, 0x42)
+	coinbase.LockTime = lockTime
+	coinbase.Inputs[0].SequenceNumber = 0
+
+	block := h.newPreBindBlock(coinbase, nil, coinbase.TxIDChainHash(), 1)
+	if headerTime == 0 {
+		return block
+	}
+
+	header := *block.Header
+	header.Timestamp = headerTime
+	header.Nonce = 0
+
+	for {
+		if ok, _, _ := header.HasMetTargetDifficulty(); ok {
+			break
+		}
+
+		header.Nonce++
+	}
+
+	return &model.Block{
+		Header:           &header,
+		CoinbaseTx:       coinbase,
+		Height:           preBindHeight,
+		Subtrees:         []*chainhash.Hash(nil),
+		TransactionCount: 1,
+	}
+}
+
+// TestQuickValidateBlock_CoinbaseFinalityBoundaries is BV-BODY-019 on the quick route, whose
+// harness is regtest (no checkpoints, so above the highest hardcoded checkpoint, where BV-QUICK-031
+// says quick validation SHOULD still enforce coinbase finality) at preBindHeight = 1, below regtest's
+// CSVHeight. The height threshold is the block's height H: with sequence 0, nLockTime = H-1 is
+// final and commits, nLockTime = H+1 is non-final, rejected ERR_BLOCK_INVALID and never stored. At
+// the harness height H-1 is 0, which is also final by the nLockTime = 0 clause; the H-1 boundary at a
+// height where the two differ is covered on the full route by TestValidateBlock_CoinbaseFinality_Service.
+// Before CSV the time threshold is the block's own header time (BV-BODY-015): nLockTime equal to
+// it is non-final, one below it is final.
+func TestQuickValidateBlock_CoinbaseFinalityBoundaries(t *testing.T) {
+	t.Run("nLockTime == H-1 with sequence 0 commits", func(t *testing.T) {
+		h := newPreBindHarness(t, nil)
+		block := h.coinbaseLockTimeBlock(preBindHeight-1, 0)
+
+		require.NoError(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
+		h.requireBlockStored(block, true)
+	})
+
+	t.Run("nLockTime == H+1 with sequence 0 is rejected and never stored", func(t *testing.T) {
+		h := newPreBindHarness(t, nil)
+		block := h.coinbaseLockTimeBlock(preBindHeight+1, 0)
+
+		requireNonFinalCoinbaseVerdict(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
+		h.requireBlockStored(block, false)
+	})
+
+	headerTime := uint32(time.Now().Unix()) //nolint:gosec
+
+	t.Run("pre-CSV: nLockTime equal to the header time is rejected and never stored", func(t *testing.T) {
+		h := newPreBindHarness(t, nil)
+		require.Less(t, preBindHeight, h.bv.settings.ChainCfgParams.CSVHeight, "fixture precondition: the harness height is pre-CSV")
+
+		block := h.coinbaseLockTimeBlock(headerTime, headerTime)
+
+		requireNonFinalCoinbaseVerdict(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
+		h.requireBlockStored(block, false)
+	})
+
+	t.Run("pre-CSV: nLockTime one below the header time commits", func(t *testing.T) {
+		h := newPreBindHarness(t, nil)
+		require.Less(t, preBindHeight, h.bv.settings.ChainCfgParams.CSVHeight, "fixture precondition: the harness height is pre-CSV")
+
+		block := h.coinbaseLockTimeBlock(headerTime-1, headerTime)
 
 		require.NoError(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
 		h.requireBlockStored(block, true)
