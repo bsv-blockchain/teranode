@@ -698,9 +698,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 				// runs outside StateReconciling, so a mining candidate asked
 				// for meanwhile is not an empty one, and a replay starts only
 				// when the tip moved.
-				if b.reconcileDue(time.Now()) && b.idleReconcileNeeded(ctx) {
-					b.triggerReconcile()
-				}
+				b.wakeIdleReconcile(ctx)
 
 			case resetReq := <-b.resetCh:
 				b.setCurrentRunningState(StateResetting)

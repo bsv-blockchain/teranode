@@ -217,7 +217,11 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       the transactions it mined that block assembly still holds are marked off the
       longest chain, so a restart loads them; until that write finishes their hashes
       follow the pending byte in `BlockAssemblerSkippedForkMark`, and a restart marks
-      them before it loads the pool. Its other skipped transactions stay marked mined.
+      them before it loads the pool. Its other skipped transactions stay marked mined. A
+      restart after block validation marked a held transaction mined in such a block and
+      before a run of the mark recorded it, for example while block assembly is not on
+      the best tip yet or cannot list the fork blocks, still loses it, as a restart before
+      the reorg's whole-pool mark did.
     - **Start fails while it is unfinished.** A restart finishes a pending run before it
       loads the unmined transactions, waiting once for a fork block block validation is
       still finishing. If it cannot, for example because the subtree store cannot be

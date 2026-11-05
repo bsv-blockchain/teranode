@@ -1229,6 +1229,16 @@ func (s *unreachableSubtreeStore) GetIoReader(ctx context.Context, key []byte, f
 	return r, err
 }
 
+// Exists cannot say a file is not there either.
+func (s *unreachableSubtreeStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...blobopts.FileOption) (bool, error) {
+	exists, err := s.Store.Exists(ctx, key, fileType, opts...)
+	if err == nil && !exists {
+		return false, errors.NewStorageError("subtree store unreachable")
+	}
+
+	return exists, err
+}
+
 // failingUtxoStore is a UTXO store whose BatchDecorate or MarkTransactionsOnLongestChain fails
 // while fail names it.
 type failingUtxoStore struct {
@@ -2664,6 +2674,8 @@ type partialWriteUtxoStore struct {
 	utxo.Store
 	beforeWrite func()
 	failRemark  bool
+	// succeed makes the write after beforeWrite succeed.
+	succeed bool
 }
 
 func (s *partialWriteUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
@@ -2681,7 +2693,7 @@ func (s *partialWriteUtxoStore) MarkTransactionsOnLongestChain(ctx context.Conte
 		return err
 	}
 
-	if s.failRemark {
+	if s.failRemark || s.succeed {
 		return nil
 	}
 
@@ -3199,8 +3211,128 @@ func TestMarkSkippedForkTxs_HeldRepairOfAGoneForkBlock(t *testing.T) {
 		store.markedOff = nil
 		ba.skippedForkHeldRepair = []chainhash.Hash{*y.TxIDChainHash(), *z.TxIDChainHash()}
 
-		require.NoError(t, ba.applyHeldRepair(ctx, c3))
+		_, err = ba.applyHeldRepair(ctx, c3)
+		require.NoError(t, err)
 		require.Equal(t, [][]chainhash.Hash{{*y.TxIDChainHash()}}, store.markedOff, "only Y is written")
+	})
+
+	// A step of the run that fails before the fork blocks are read does not keep Y from being
+	// repaired first: a restart before the next run finds Y unmined. Here an owed recheck fails.
+	for _, stale := range []bool{false, true} {
+		t.Run(map[bool]string{false: "an earlier failure in the run", true: "an earlier failure behind a stale header cache"}[stale], func(t *testing.T) {
+			items, client, f2, _, y := heldTxReorgSetup(t)
+			ba := items.blockAssembler
+			ctx := t.Context()
+
+			// The header reads say mined_set is not set, so F2 is asked whether it is finished.
+			client.staleMinedSet = stale
+
+			ba.skippedForkRecheck = map[chainhash.Hash]struct{}{chainhash.HashH([]byte("owed recheck")): {}}
+			client.onBestCall = func(n int) {
+				if calledFrom("recheckSkippedForkMarks") {
+					client.failBestCall = n
+				}
+			}
+
+			ba.processNewBlockAnnouncement(ctx)
+			require.True(t, ba.skippedForkMarkPending, "precondition: the run did not finish")
+			require.NotZero(t, unminedSince(t, items, y), "Y is repaired before the step that fails")
+			require.Contains(t, ba.skippedForkBlocksMarked, *f2.Hash(), "and F2 given up")
+
+			ba.subtreeProcessor.Stop(context.Background())
+
+			restarted, err := startBlockAssembler(t, items, ba.settings, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
+
+			require.True(t, restarted.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the restarted pool holds Y")
+		})
+	}
+
+	// D, extending C3, mines Y between the repair's selection and its write, and the check after
+	// the write marks it mined again: F2 is checked again on a later run.
+	t.Run("a held tx joins the best chain during the repair", func(t *testing.T) {
+		items, _, f2, c3, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		d := buildChain(c3, 1, 136000)[0]
+		ba.utxoStore = &partialWriteUtxoStore{Store: items.utxoStore, succeed: true, beforeWrite: func() {
+			addBlockWithMinedSet(ctx, t, items, d)
+			_, dMeta, err := items.blockchainClient.GetBlockHeader(ctx, d.Hash())
+			require.NoError(t, err)
+			_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{y.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: dMeta.ID, BlockHeight: dMeta.Height, OnLongestChain: true})
+			require.NoError(t, err)
+		}}
+
+		ba.processNewBlockAnnouncement(ctx)
+
+		require.Zero(t, unminedSince(t, items, y), "Y, mined in D on the best chain, is mined")
+		require.NotContains(t, ba.skippedForkBlocksMarked, *f2.Hash(), "F2 is checked again on a later run")
+	})
+
+	// A list an earlier run left joins the one this run finds: V, which block assembly no longer
+	// holds, and Y are both repaired.
+	t.Run("an earlier list is kept", func(t *testing.T) {
+		items, _, f2, c3, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		v := replayPoolTx(y.TxIDChainHash(), 60)
+		_, err := items.utxoStore.(*utxosql.Store).Create(ctx, v, 1)
+		require.NoError(t, err)
+
+		_, f2Meta, err := items.blockchainClient.GetBlockHeader(ctx, f2.Hash())
+		require.NoError(t, err)
+		_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{v.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: f2Meta.ID, BlockHeight: 2, OnLongestChain: true})
+		require.NoError(t, err)
+
+		ba.skippedForkHeldRepair = []chainhash.Hash{*v.TxIDChainHash()}
+		ba.utxoStore = &failingUtxoStore{Store: items.utxoStore, fail: "MarkTransactionsOnLongestChain"}
+		ba.processNewBlockAnnouncement(ctx)
+
+		record, err := items.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
+		require.NoError(t, err)
+		require.Equal(t, append(append([]byte{1}, v.TxIDChainHash()[:]...), y.TxIDChainHash()[:]...), record, "the record carries V and Y")
+
+		ba.utxoStore = items.utxoStore
+		ba.skippedForkMarkRetryAt = time.Time{}
+		ba.processNewBlockAnnouncement(ctx)
+
+		requireBlockAssemblyTip(t, items, c3)
+		require.NotZero(t, unminedSince(t, items, v))
+		require.NotZero(t, unminedSince(t, items, y))
+	})
+
+	// F2's files are still reported there when the run starts and gone when it reads the block.
+	t.Run("files gone during the run", func(t *testing.T) {
+		items, _, f2, _, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+
+		ba.subtreeStore = &vanishingSubtreeStore{Store: items.blobStore, existsFor: 1}
+		ba.processNewBlockAnnouncement(t.Context())
+
+		require.NotZero(t, unminedSince(t, items, y))
+		require.Contains(t, ba.skippedForkBlocksMarked, *f2.Hash())
+	})
+
+	// With no fork block left to read, a recorded list that cannot be written keeps the run
+	// pending and stays in the record.
+	t.Run("a recorded list with no fork block left", func(t *testing.T) {
+		items, _, f2, _, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		ba.skippedForkBlocksMarked = map[chainhash.Hash]uint32{*f2.Hash(): 2}
+		ba.skippedForkHeldRepair = []chainhash.Hash{*y.TxIDChainHash()}
+		ba.utxoStore = &failingUtxoStore{Store: items.utxoStore, fail: "MarkTransactionsOnLongestChain"}
+
+		require.Error(t, ba.markSkippedForkTxs(ctx, true))
+		require.True(t, ba.skippedForkMarkPending)
+
+		record, err := items.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
+		require.NoError(t, err)
+		require.Equal(t, append([]byte{1}, y.TxIDChainHash()[:]...), record, "the record keeps Y")
 	})
 
 	// The repair's write fails: F2 is not given up, and the next pass repairs Y.
@@ -3243,9 +3375,15 @@ func TestMarkSkippedForkTxs_HeldRepairOfAGoneForkBlock(t *testing.T) {
 
 		ba.subtreeProcessor.Stop(context.Background())
 
-		restarted, err := startBlockAssembler(t, items, ba.settings, nil)
+		// The start must not wait on a pool that is not running yet.
+		startCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+
+		restarted, err := NewBlockAssembler(startCtx, ulogger.TestLogger{}, ba.settings, gocore.NewStat("test"), items.utxoStore, items.blobStore, items.blockchainClient, make(chan subtreeprocessor.NewSubtreeRequest, 10))
 		require.NoError(t, err)
+		restarted.SetSkipWaitForPendingBlocks(true)
 		t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
+		require.NoError(t, restarted.Start(startCtx), "the start finishes")
 
 		require.NotZero(t, unminedSince(t, items, y))
 		require.True(t, restarted.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the restarted pool holds Y")
@@ -3322,9 +3460,7 @@ func TestSkippedForkReloadOnly_IdleRetryAfterFailedReset(t *testing.T) {
 	require.True(t, ba.idleReconcileNeeded(ctx), "the idle tick wakes a pass for it")
 
 	// The idle tick's dispatch, and the pass it wakes.
-	if ba.reconcileDue(time.Now()) && ba.idleReconcileNeeded(ctx) {
-		ba.triggerReconcile()
-	}
+	ba.wakeIdleReconcile(ctx)
 
 	select {
 	case <-ba.reconcileCh:
@@ -3369,4 +3505,20 @@ func (s *recordingUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context,
 	}
 
 	return s.Store.MarkTransactionsOnLongestChain(ctx, hashes, onLongestChain)
+}
+
+// vanishingSubtreeStore says every file exists for its first existsFor existence checks, and
+// answers the store's truth after that.
+type vanishingSubtreeStore struct {
+	blob.Store
+	existsFor int
+}
+
+func (s *vanishingSubtreeStore) Exists(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...blobopts.FileOption) (bool, error) {
+	if s.existsFor > 0 {
+		s.existsFor--
+		return true, nil
+	}
+
+	return s.Store.Exists(ctx, key, fileType, opts...)
 }
