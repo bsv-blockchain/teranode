@@ -198,7 +198,7 @@ func (q *LockFreeQueue) length() int64 {
 
 // publish links a batch into the queue in a thread-safe manner, WITHOUT
 // mutating queueLength. It is the shared tail-swap-and-link core of both
-// enqueueBatch and enqueueBatchIfRoom, each of which reserves the batch's items
+// enqueueBatch and enqueueBatchBounded, each of which reserves the batch's items
 // in queueLength before calling it. The entire batch receives a single timestamp
 // when published.
 //
@@ -268,7 +268,7 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 
 // enqueueBatch adds a batch of transactions to the queue unconditionally,
 // accounting for its items in queueLength BEFORE publishing. It is the unbounded
-// path; it ignores maxItems but otherwise mirrors enqueueBatchIfRoom's
+// path; it ignores maxItems but otherwise mirrors enqueueBatchBounded's
 // reserve-first ordering.
 //
 // Reserving before publishing upholds the queueLength >= published-outstanding
@@ -279,7 +279,7 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 // an empty oracle — headAgeMillis clamps to 0 when it reads 0 — so it must never
 // read 0 while a batch is linked. Every other consumer (the state-transition
 // drain snapshot, the diagnostic gauges and RPCs) already tolerates a transient
-// one-batch over-count. Callers that need the bound must use enqueueBatchIfRoom.
+// one-batch over-count. Callers that need the bound must use enqueueBatchBounded.
 //
 // Parameters:
 //   - nodes: The transaction nodes to add
@@ -287,66 +287,6 @@ func (q *LockFreeQueue) publish(nodes []subtree.Node, txInpoints []*subtree.TxIn
 func (q *LockFreeQueue) enqueueBatch(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) {
 	q.queueLength.Add(int64(len(nodes))) // gosec:nolint  reserve before publishing
 	q.publish(nodes, txInpoints)
-}
-
-// enqueueBatchIfRoom adds a batch only if doing so would not push the number of
-// published-or-reserved items past maxItems, and reports whether it did.
-//
-// The bound is enforced by an atomic reservation, not a load-then-compare: the
-// batch's items are added to queueLength first, and only published if the
-// post-add value is within the limit; otherwise the reservation is rolled back
-// and nothing is published. Because reservations are totally ordered by the
-// atomic and the counter decreases only by dequeue of published items or by
-// rollback of a failed reservation, the published-but-not-yet-dequeued item
-// count can never exceed maxItems even with many concurrent producers. A
-// load-then-compare would not be a bound under the multi-producer contract,
-// because two producers could both observe room and both publish.
-//
-// This reservation-first ordering is also what upholds the
-// queueLength >= published-outstanding invariant: the counter is incremented
-// before the batch is linked, so it never reads below the published count. The
-// unbounded enqueueBatch path now shares that ordering (see its comment).
-//
-// When maxItems <= 0 the queue is unbounded and this degrades to enqueueBatch.
-//
-// # A batch larger than the whole cap is admitted alone onto an empty queue
-//
-// Such a batch can never satisfy a reservation, on any queue state, so refusing it
-// is permanent rather than transient: that producer never makes progress and its
-// bounded wait plus the hard shed simply run forever. The batch size is chosen by
-// the client from its own settings context, so this is reachable by cross-process
-// configuration skew and not only by a local mistake. Admitting it when the
-// reservation found the queue otherwise empty trades a transient one-batch overshoot
-// of the ceiling for liveness, which is the same trade enqueueBatch already makes.
-//
-// The overshoot is bounded to ONE batch: the emptiness test reads after-n from the
-// same atomic Add that made the reservation, not from a separate load, so of any
-// number of concurrent over-size producers exactly one can observe 0.
-//
-// The n > maxItems guard keeps this from becoming a general "an empty queue admits
-// anything" carve-out: an ordinary over-cap batch is still refused and still relies
-// on the bounded wait and the shed.
-//
-// Parameters:
-//   - nodes: The transaction nodes to add
-//   - txInpoints: Parent transaction references for each node
-//
-// Returns:
-//   - bool: true if the batch was enqueued, false if it was refused for room
-func (q *LockFreeQueue) enqueueBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	return q.enqueueBatchBounded(nodes, txInpoints, false) == Admitted
-}
-
-// enqueueBatchInBlockIfRoom is enqueueBatchIfRoom for transactions that arrived inside a block.
-// The in-memory limit does not refuse them, and the ingest queue bound still does.
-//
-// A block is the authority on what is valid, and a refused block transaction that stays
-// outside the template can leave a descendant, validated at a later level of the same block or
-// after a side-chain block unlocked its parent, entering the template without that parent. That
-// template is an invalid block. Admitting them is bounded: the block is already in memory while
-// it validates, and they count toward the total, so mempool ingest sees the node as full.
-func (q *LockFreeQueue) enqueueBatchInBlockIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	return q.enqueueBatchBounded(nodes, txInpoints, true) == Admitted
 }
 
 // Admission is the outcome of offering a batch to the bounded queue. A refusal says which bound
@@ -387,11 +327,63 @@ func (a Admission) String() string {
 	}
 }
 
-// enqueueBatchBounded is the shared body of enqueueBatchIfRoom and enqueueBatchInBlockIfRoom.
-// exemptHeld lifts the in-memory limit for this batch and leaves the ingest queue bound.
+// enqueueBatchBounded adds a batch only if doing so would not push the number of
+// published-or-reserved items past maxItems, and reports whether it did.
+//
+// The bound is enforced by an atomic reservation, not a load-then-compare: the
+// batch's items are added to queueLength first, and only published if the
+// post-add value is within the limit; otherwise the reservation is rolled back
+// and nothing is published. Because reservations are totally ordered by the
+// atomic and the counter decreases only by dequeue of published items or by
+// rollback of a failed reservation, the published-but-not-yet-dequeued item
+// count can never exceed maxItems even with many concurrent producers. A
+// load-then-compare would not be a bound under the multi-producer contract,
+// because two producers could both observe room and both publish.
+//
+// This reservation-first ordering is also what upholds the
+// queueLength >= published-outstanding invariant: the counter is incremented
+// before the batch is linked, so it never reads below the published count. The
+// unbounded enqueueBatch path now shares that ordering (see its comment).
+//
+// When maxItems <= 0 and the in-memory limit is off the queue is unbounded and this degrades to enqueueBatch.
+//
+// # A batch larger than the whole cap is admitted alone onto an empty queue
+//
+// Such a batch can never satisfy a reservation, on any queue state, so refusing it
+// is permanent rather than transient: that producer never makes progress and its
+// bounded wait plus the hard shed simply run forever. The batch size is chosen by
+// the client from its own settings context, so this is reachable by cross-process
+// configuration skew and not only by a local mistake. Admitting it when the
+// reservation found the queue otherwise empty trades a transient one-batch overshoot
+// of the ceiling for liveness, which is the same trade enqueueBatch already makes.
+//
+// The overshoot is bounded to ONE batch: the emptiness test reads after-n from the
+// same atomic Add that made the reservation, not from a separate load, so of any
+// number of concurrent over-size producers exactly one can observe 0.
+//
+// The n > maxItems guard keeps this from becoming a general "an empty queue admits
+// anything" carve-out: an ordinary over-cap batch is still refused and still relies
+// on the bounded wait and the shed.
+//
+// The in-memory limit is checked in the same reservation. exemptHeld lifts it for this batch
+// and leaves the ingest queue bound, which is how transactions that arrived inside a block are
+// admitted. A block is the authority on what is valid, and a refused block transaction that
+// stays outside the template can leave a descendant, validated at a later level of the same
+// block or after a side-chain block unlocked its parent, entering the template without that
+// parent. That template is an invalid block. Admitting them is bounded: the block is already in
+// memory while it validates, and they count toward the total, so mempool ingest sees the node as
+// full.
 //
 // A refusal is classified from the same observations that made the decision, never from a later
 // read, which another producer or a drain could have changed.
+//
+// Parameters:
+//   - nodes: The transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//   - exemptHeld: Whether the in-memory limit is lifted for this batch
+//
+// Returns:
+//   - Admission: Admitted, or the bound that refused the batch
 func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, exemptHeld bool) Admission {
 	n := int64(len(nodes)) // gosec:nolint
 
@@ -433,8 +425,14 @@ func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*
 
 	q.queueLength.Add(-n) // roll back
 
+	// The total the reservation read counts every queued item, including reservations that
+	// other producers are about to roll back, so it can overstate what the node holds. The held
+	// bound is claimed only when this batch breaks it on top of what is already placed in
+	// subtrees or dequeued, which is the one cause that outlasts the queue. A refusal whose
+	// excess comes from queued items is the queue's and is classified again on a later attempt,
+	// when the dispatcher has placed the real ones.
 	switch {
-	case !heldRoom && !heldOversize, heldAtLimit:
+	case heldAtLimit, !heldRoom && !heldOversize && q.heldTotal(n) > q.maxHeld:
 		return RefusedHeld
 	case queueOversize || heldOversize:
 		return RefusedOversize

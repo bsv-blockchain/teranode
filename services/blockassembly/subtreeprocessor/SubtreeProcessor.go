@@ -2409,7 +2409,7 @@ func (stp *SubtreeProcessor) TxCount() uint64 {
 // number of batches - see LockFreeQueue.length for why that distinction
 // matters.
 //
-// For items added through the bounded reservation path (AddBatchIfRoom), this
+// For items added through the bounded reservation path (AddBatchBounded), this
 // counts reserved-or-published items: while a failed reservation is being rolled
 // back the value can transiently read slightly higher than the number of
 // dequeuable items, but it never reads lower than the published-outstanding
@@ -3124,12 +3124,12 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 
 // AddBatch adds a batch of transaction nodes to the processor queue
 // unconditionally. This path bypasses the capacity bound but, like
-// AddBatchIfRoom, reserves its items before publishing so it upholds the
+// AddBatchBounded, reserves its items before publishing so it upholds the
 // queueLength >= published-outstanding invariant; callers needing the bound must
-// use AddBatchIfRoom.
+// use AddBatchBounded.
 //
 // Its only non-test caller is the teranodecli subtree benchmark, which drives the
-// processor directly and wants no cap. The ingest handlers must use AddBatchIfRoom:
+// processor directly and wants no cap. The ingest handlers must use AddBatchBounded:
 // this method is what the queue bound exists to keep them away from.
 //
 // Parameters:
@@ -3137,20 +3137,6 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 //   - txInpoints: Parent transaction references for each node
 func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) {
 	stp.queue.enqueueBatch(nodes, txInpoints)
-}
-
-// AddBatchIfRoom adds a batch of transaction nodes to the processor queue only
-// if the configured capacity bound would not be exceeded, reporting whether it
-// did. When no bound is configured it never refuses, behaving as AddBatch.
-//
-// Parameters:
-//   - nodes: Transaction nodes to add
-//   - txInpoints: Parent transaction references for each node
-//
-// Returns:
-//   - bool: true if the batch was enqueued, false if it was refused for room
-func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
-	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints)
 }
 
 // AddBatchBounded offers a batch to the queue under the configured bounds and reports which
@@ -3166,20 +3152,6 @@ func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints 
 //   - Admission: Admitted, or the bound that refused the batch
 func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission {
 	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock)
-}
-
-// AddBatchInBlockIfRoom is AddBatchIfRoom for transactions that arrived inside a block. The
-// in-memory transaction limit does not refuse them; the ingest queue bound still does. See
-// LockFreeQueue.enqueueBatchInBlockIfRoom for why.
-//
-// Parameters:
-//   - nodes: Transaction nodes to add
-//   - txInpoints: Parent transaction references for each node
-//
-// Returns:
-//   - bool: true if the batch was enqueued, false if it was refused for room
-func (stp *SubtreeProcessor) AddBatchInBlockIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
-	return stp.queue.enqueueBatchInBlockIfRoom(nodes, txInpoints)
 }
 
 // HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
@@ -7193,7 +7165,7 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	//     enqueue timestamp is >= this value, so we only drain batches
 	//     that existed before this moment. Batches arriving during the
 	//     drain stay queued and roll forward to the next state-transition
-	//     cycle. The gRPC ingest handlers admit through AddBatchIfRoom,
+	//     cycle. The gRPC ingest handlers admit through AddBatchBounded,
 	//     which only refuses when blockassembly_maxQueueItems is positive;
 	//     with the default of 0 ingest is not backpressured, and even when
 	//     it is, the queue keeps filling up to its cap during the drain.

@@ -1357,11 +1357,12 @@ const queueFullPollInterval = 5 * time.Millisecond
 // mapped error; the validator then unwinds its UTXO-store work for the shed
 // transactions (see unwindShed) so a resubmit is an ordinary first submission.
 //
-// When the in-memory transaction limit is what refuses the batch there is no wait.
-// That bound clears when a block connects, not when the dispatcher drains a pass, so
-// polling for it for QueueFullWaitTimeout only adds latency to every refusal. The shed
-// carries a marker the validator uses to skip its own retry for the same reason; see
-// shedHeld.
+// When the batch breaks the in-memory transaction limit on top of what is already placed in
+// subtrees, there is no wait. That bound clears when a block connects, not when the dispatcher
+// drains a pass, so polling for it for QueueFullWaitTimeout only adds latency to every refusal.
+// The shed carries a marker the validator uses to skip its own retry for the same reason; see
+// shedHeld. A refusal whose excess comes from queued transactions waits for the queue like a
+// queue refusal, and is classified again on each poll.
 //
 // A batch larger than a whole bound can be admitted only onto an empty queue, so it takes the
 // polling wait for the queue to empty, not the immediate held shed, unless the node is already
@@ -1409,6 +1410,8 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 				case subtreeprocessor.RefusedHeld:
 					// The node reached the in-memory limit while this batch waited for the
 					// queue. That clears only on a block, so stop waiting.
+					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+
 					return ba.shedHeld()
 				}
 			}
@@ -1456,7 +1459,8 @@ func IsHeldLimitShed(err error) bool {
 // until a block connects. The error deliberately does not wrap ErrServiceUnavailable, which
 // IsRetryableError and the HTTP client retry as a transient fault.
 //
-// No queue wait is observed: a held refusal never waits for room.
+// It observes no queue wait. The entry check never waits, and the poll loop records its own wait
+// before it calls this.
 func (ba *BlockAssembly) shedHeld() error {
 	prometheusBlockAssemblyQueueShed.Inc()
 	prometheusBlockAssemblyHeldShed.Inc()
