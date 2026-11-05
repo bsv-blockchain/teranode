@@ -7,9 +7,12 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	utxoStore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -372,4 +375,51 @@ func TestCheckUnminedTxInputs_FailedBodyReadIsNotPermanent(t *testing.T) {
 
 	require.Error(t, items.blockAssembler.loadUnminedTransactions(ctx, true, true), "the load fails rather than leave the transaction out")
 	require.Equal(t, excluded, testutil.ToFloat64(prometheusBlockAssemblerUnminedUndecidedExcluded))
+}
+
+func TestReset_FailedReloadKeepsTheHeldCountFullUntilTheRetrySucceeds(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items := setupBlockAssemblyTestWithUtxoStore(t, withCoinbaseMaturity(testCoinbaseMaturity), func(s *settings.Settings) {
+		s.BlockAssembly.MaxTransactionsInMemory = 1
+	})
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
+
+	_, child := seedParentAndChild(ctx, t, items)
+
+	stp := items.blockAssembler.subtreeProcessor
+	limit := stp.MaxTransactionsInMemory()
+	require.Positive(t, limit)
+
+	flaky := &flakyUtxoStore{Store: items.utxoStore}
+	flaky.down.Store(true)
+	items.blockAssembler.utxoStore = flaky
+	items.blockAssembler.unminedReloadRetryInterval = time.Millisecond
+
+	mockGenesisChainForReset(items)
+
+	require.Error(t, items.blockAssembler.reset(ctx, true))
+	require.True(t, items.blockAssembler.unminedReloadPending.Load(), "precondition: the failed reload left a retry")
+
+	require.GreaterOrEqual(t, stp.HeldCount(), limit, "the subtrees are empty and the retry is pending, which must not read as room")
+	require.True(t, items.blockAssembler.HeldByUnminedLoad())
+	require.Equal(t, subtreeprocessor.RefusedHeld, stp.AddBatchBounded(
+		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("while-retry-pending"))}}, []*subtreepkg.TxInpoints{{}}, false),
+		"mempool ingest is refused until the retry has reloaded the mempool")
+
+	flaky.down.Store(false)
+	time.Sleep(5 * time.Millisecond)
+
+	require.True(t, items.blockAssembler.retryFailedUnminedReload())
+
+	req := <-items.blockAssembler.resetCh
+	_, err := items.blockAssembler.resetWithResponse(ctx, req.ValidateInputs)
+	req.ErrCh <- err
+	require.NoError(t, err)
+
+	require.True(t, containsHash(stp.GetTransactionHashes(ctx), *child.TxIDChainHash()))
+	require.False(t, items.blockAssembler.unminedReloadPending.Load())
+	require.False(t, items.blockAssembler.HeldByUnminedLoad(), "the hold ends when the retry's reload completes")
+	require.Less(t, stp.HeldCount(), limit)
 }

@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -1426,4 +1427,86 @@ func TestBackpressure_HeldAndAgeBothHotNamesTheAge(t *testing.T) {
 	require.Equal(t, 1, consumer.pauseCount())
 	require.Contains(t, logger.joined(), "queue-head age 600ms >= pause watermark 500ms", "age fired, so the log names the age")
 	require.NotContains(t, logger.joined(), "still below pause watermark", "and does not claim the age is below its watermark")
+}
+
+func TestBackpressure_HeldPauseIsExemptFromMaxPause(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(1000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "the held count clears only on a block, so resuming at the cap only drops every transaction")
+	require.True(t, c.paused.Load())
+
+	now = base.Add(10 * time.Minute)
+	c.tick(ctx)
+	require.True(t, c.paused.Load(), "and it holds for as long as the held count does")
+
+	reader.setHeld(100, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "a block connected and the held count fell")
+}
+
+func TestBackpressure_HeldAndAgeHotStillFailsOpenAtMaxPause(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(1000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setHeld(950, 1000, 600)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "an age-hot pause keeps the cap even while the held count is also hot")
+	require.False(t, c.paused.Load())
+}
+
+func TestBackpressure_HeldAndQueueFillHotStillFailsOpenAtMaxPause(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(1000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setFill(950, 1000, 10)
+	reader.mu.Lock()
+	reader.heldCount = 950
+	reader.maxHeld = 1000
+	reader.mu.Unlock()
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "a queue-fill-hot pause keeps the cap even while the held count is also hot")
+}
+
+func TestBackpressure_HeldThresholdsDoNotOverflowAtAnUnlimitedLimit(t *testing.T) {
+	c := newFillController(&fakeReader{}, &fakeConsumer{}, 90)
+	c.maxHeld = math.MaxInt64
+
+	pause, resume := c.heldThresholds()
+
+	require.Greater(t, pause, int64(8_000_000_000_000_000_000), "90 percent of the saturated limit, not the 2 an overflowed product floors to")
+	require.Less(t, pause, int64(math.MaxInt64))
+	require.Equal(t, pause-1, resume)
 }

@@ -201,6 +201,7 @@ func (m *heldProbeTxMap) SetIfNotExists(hash chainhash.Hash, inpoints *subtreepk
 
 func TestReorgBlocks_CatchUp_DrainKeepsTheHeldTotalAtEveryChunkBoundary(t *testing.T) {
 	f := newCatchUpQueueFixture(t, true)
+	f.stp.queue.maxHeld = 1 << 20
 
 	for i := 0; i < 4; i++ {
 		nodes, inpoints := distinctNodes(3, "catchup-held-"+string(rune('a'+i)))

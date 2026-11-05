@@ -320,6 +320,8 @@ func newHeldLimitedRealServer(t *testing.T, limit uint64, wait time.Duration) *B
 	s.SetSkipWaitForPendingBlocks(true)
 	require.NoError(t, s.Init(ctx))
 
+	s.blockAssembler.endStartupLoad()
+
 	t.Cleanup(func() {
 		cancel()
 		_ = s.Stop(context.Background())
@@ -381,6 +383,25 @@ func TestIngest_HeldLimitRefusesAtOnceAndMarksTheShed(t *testing.T) {
 
 	_, err = s.AddTxBatchColumnar(context.Background(), columnarReq(1))
 	require.Error(t, err, "so does the columnar handler")
+}
+
+func TestIngest_HeldShedDuringAnUnminedLoadSaysTheNodeIsLoading(t *testing.T) {
+	initPrometheusMetrics()
+
+	s := newHeldLimitedRealServer(t, 65, 5*time.Second)
+
+	s.blockAssembler.subtreeProcessor.SetUnminedLoading(true)
+
+	_, err := s.AddTxBatch(context.Background(), batchReq(1))
+	require.Error(t, err)
+	require.True(t, IsHeldLimitShed(errors.UnwrapGRPC(err)))
+	require.Contains(t, err.Error(), "loading its unmined transactions", "the node holds almost nothing, so it must not claim it holds the limit")
+	require.NotContains(t, err.Error(), "holds")
+
+	s.blockAssembler.subtreeProcessor.SetUnminedLoading(false)
+
+	_, err = s.AddTxBatch(context.Background(), batchReq(1))
+	require.NoError(t, err, "ingest is admitted once the load ends")
 }
 
 func TestIngest_HeldLimitDoesNotRefuseBlockTransactions(t *testing.T) {

@@ -122,6 +122,7 @@ type BlockAssembler struct {
 	// the failure or the last retry, until a reload succeeds (see retryFailedUnminedReload). Atomics, because the reload runs on the subtree
 	// processor's goroutine and the tick on the assembler's.
 	unminedReloadPending  atomic.Bool
+	pendingReloadHeld     atomic.Bool
 	unminedReloadValidate atomic.Bool
 	unminedReloadFailedAt atomic.Int64
 
@@ -292,6 +293,11 @@ type BlockAssembler struct {
 	// unminedTransactionsLoading indicates if unmined transactions are currently being loaded
 	unminedTransactionsLoading atomic.Bool
 
+	// startupLoadHeld is set from construction until Start's load phase ends. It holds the
+	// subtree processor in its loading state, so the held count reads full while gRPC ingest is
+	// already up and the unmined load has not yet run or finished.
+	startupLoadHeld atomic.Bool
+
 	// unminedDropHashes accumulates hashes that should be dropped from the
 	// input queue at the end of loadUnminedTransactions. Populated by
 	// markAsConflicting via the cascade returned from MarkConflictingRecursively.
@@ -410,6 +416,9 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	b.setCurrentRunningState(StateStarting)
 
+	b.startupLoadHeld.Store(true)
+	subtreeProcessor.SetUnminedLoading(true)
+
 	// MoveForwardBlock and Reorg block the main loop for the whole call, so the
 	// processor beats on the loop's behalf at each step that proves the work is
 	// advancing. BeatIfStarted, not Beat: WaitForPendingBlocks also runs from
@@ -417,6 +426,20 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 	subtreeProcessor.SetProgressHook(b.heartbeat.BeatIfStarted)
 
 	return b, nil
+}
+
+// endStartupLoad ends the loading state NewBlockAssembler set, once. Start calls it when its load
+// phase ends and again on return, so the state clears on success and on every error path.
+func (b *BlockAssembler) endStartupLoad() {
+	if b.startupLoadHeld.CompareAndSwap(true, false) {
+		b.subtreeProcessor.SetUnminedLoading(false)
+	}
+}
+
+// HeldByUnminedLoad reports whether the held count reads full because the assembler is loading its
+// unmined transactions, at startup, inside a reset, or while a failed reload waits for its retry.
+func (b *BlockAssembler) HeldByUnminedLoad() bool {
+	return b.subtreeProcessor.UnminedLoading()
 }
 
 // TxCount returns the total number of transactions in the assembler.
@@ -1667,6 +1690,8 @@ func (b *BlockAssembler) GetCurrentRunningState() State {
 // Returns:
 //   - error: Any error encountered during startup
 func (b *BlockAssembler) Start(ctx context.Context) (err error) {
+	defer b.endStartupLoad()
+
 	if err = b.initState(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
@@ -1727,6 +1752,8 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			return err
 		}
 	}
+
+	b.endStartupLoad()
 
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
 	b.subtreeProcessor.Start(ctx)
@@ -3921,7 +3948,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	// Set flag to indicate unmined transactions are being loaded
 	b.unminedTransactionsLoading.Store(true)
+	b.subtreeProcessor.SetUnminedLoading(true)
 	defer func() {
+		b.subtreeProcessor.SetUnminedLoading(false)
+
 		// Clear flag when loading is complete
 		b.unminedTransactionsLoading.Store(false)
 		b.logger.Infof("[loadUnminedTransactions] unmined transaction loading completed")

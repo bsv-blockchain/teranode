@@ -71,6 +71,22 @@ type Interface interface {
 	//   - int64: Transactions held in memory
 	HeldCount() int64
 
+	// SetUnminedLoading marks the start (true) or end (false) of a load or reload of the unmined
+	// transactions. While any is in progress the held count reads at least the in-memory limit,
+	// because the transactions being loaded raise the subtree count one at a time and a partial
+	// count would admit mempool ingest that the load then adds to. Calls nest.
+	//
+	// Parameters:
+	//   - loading: true when a load starts, false when it ends
+	SetUnminedLoading(loading bool)
+
+	// UnminedLoading reports whether a load or reload of the unmined transactions holds the held
+	// count full, see SetUnminedLoading.
+	//
+	// Returns:
+	//   - bool: true while the hold is active
+	UnminedLoading() bool
+
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.
 	// Uses sync.Once internally, so multiple calls are safe (only starts once).

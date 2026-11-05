@@ -314,6 +314,10 @@ type SubtreeProcessor struct {
 	// txCount tracks the total number of transactions processed
 	txCount atomic.Uint64
 
+	// unminedLoading counts the loads and reloads of the unmined transactions in progress. While it
+	// is positive the held count reads at least the in-memory limit; see SetUnminedLoading.
+	unminedLoading atomic.Int32
+
 	// queue manages the transaction processing queue
 	queue *LockFreeQueue
 
@@ -792,7 +796,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	}
 
 	// The in-memory limit counts what the queue holds plus what has reached a subtree.
-	queue.setHeldLimit(maxTransactionsInMemory, func() int64 { return int64(stp.txCount.Load()) }) // nolint:gosec
+	queue.setHeldLimit(maxTransactionsInMemory, stp.heldBase)
 
 	// Goroutine does not start automatically - Start(ctx) must be called explicitly
 	// This ensures proper initialization order and avoids race conditions during loadUnminedTransactions
@@ -1616,6 +1620,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	)
 
 	defer deferFn()
+
+	stp.SetUnminedLoading(true)
+	defer stp.SetUnminedLoading(false)
 
 	// reset has no rollback: it commits to a new state (clearing currentTxMap
 	// below, then reloading) unconditionally, unlike moveForwardBlock/
@@ -3149,6 +3156,53 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 //   - Admission: Admitted, or the bound that refused the batch
 func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission {
 	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock)
+}
+
+// heldBase is the count of transactions the subtrees hold, which the queue's in-memory limit
+// adds the queued and dequeued items to. During a load of the unmined transactions it reports at
+// least the limit. The load raises txCount one transaction at a time, so a producer reading it
+// early in the load would see almost nothing held, fill the queue up to the limit, and the load
+// would then add the rest on top. Reading full instead refuses mempool ingest as held until the
+// load completes and makes Kafka backpressure pause rather than drop. Block transactions stay
+// exempt from the limit.
+func (stp *SubtreeProcessor) heldBase() int64 {
+	count := int64(stp.txCount.Load()) // nolint:gosec
+
+	if stp.unminedLoading.Load() > 0 {
+		return max(count, stp.queue.maxHeld)
+	}
+
+	return count
+}
+
+// SetUnminedLoading marks the start (true) or end (false) of a load or reload of the unmined
+// transactions. Calls nest, because a reset runs a reload inside itself. An end without a start
+// leaves the count at zero.
+func (stp *SubtreeProcessor) SetUnminedLoading(loading bool) {
+	if loading {
+		stp.unminedLoading.Add(1)
+
+		return
+	}
+
+	for {
+		current := stp.unminedLoading.Load()
+		if current <= 0 {
+			stp.logger.Warnf("[SubtreeProcessor] SetUnminedLoading(false) with no load in progress; a caller ended a hold it did not start, which would otherwise end another caller's hold")
+
+			return
+		}
+
+		if stp.unminedLoading.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
+}
+
+// UnminedLoading reports whether a load or reload of the unmined transactions holds the held
+// count full.
+func (stp *SubtreeProcessor) UnminedLoading() bool {
+	return stp.unminedLoading.Load() > 0
 }
 
 // HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
@@ -7209,11 +7263,16 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 // chunk. The count comes first: addNode does not add to txCount, so settling before it would
 // leave the placed transactions in none of the queue length, the unsettled count or the
 // subtrees count, and the held total would read low until the drain's final recount. The
+// recount walks every chained subtree, so it runs only when the in-memory limit is on and the
+// count feeds the limit; without a limit the callers' own recount after the drain is enough. The
 // settle is deferred so a panic in fn, which runHandlerWithRecover absorbs, cannot leave the
 // chunk counted as unsettled for good.
 func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn func(batches []*TxBatch) error) error {
 	defer func() {
-		stp.setTxCountFromSubtrees()
+		if stp.queue.maxHeld > 0 {
+			stp.setTxCountFromSubtrees()
+		}
+
 		stp.queue.settle(int64(chunkItems))
 	}()
 
