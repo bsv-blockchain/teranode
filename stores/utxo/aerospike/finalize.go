@@ -47,7 +47,9 @@ func (b *batchFinalize) complete(err error) {
 // Idempotent: finalizing an already-final tx (creating bin already absent) is a
 // no-op success. Returns ErrTxNotFound if the record has vanished or is rolling back
 // (BeginCreateFirstRollback): both mean the record will not be completed, and the caller's
-// spends of its inputs are its own to remove.
+// spends of its inputs are its own to remove. A batch that completed cleanly returns nil even if
+// ctx was cancelled afterwards, because the record is finalized. Otherwise a cancelled ctx returns
+// its context error, then a recorded batch error, then a timeout error.
 func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
 	if tx == nil {
 		return errors.NewProcessingError("[FinalizeTransaction] nil tx")
@@ -82,24 +84,24 @@ func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
 
 	waitErr := group.Wait(waitCtx, s.batcherWait)
 
-	// Parent-context cancellation takes precedence: surface the raw context error.
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return ctxErr
-	}
-
 	mu.Lock()
 	fe := firstErr
 	mu.Unlock()
+
+	if waitErr == nil && fe == nil {
+		return nil
+	}
+
+	// Parent-context cancellation takes precedence over a recorded error: surface the raw context error.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
 
 	if fe != nil {
 		return fe
 	}
 
-	if waitErr != nil {
-		return errors.NewServiceUnavailableError("finalize transaction did not complete within %s", s.batcherWait)
-	}
-
-	return nil
+	return errors.NewServiceUnavailableError("finalize transaction did not complete within %s", s.batcherWait)
 }
 
 // finalizeRecordCount returns the number of Aerospike records a tx spans, mirroring
