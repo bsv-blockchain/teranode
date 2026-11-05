@@ -270,18 +270,8 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 			}
 		}
 
-		switch res.Signal {
-		case LuaSignalDAHSet:
-			if dah, ok := s.childDeleteAtHeightFor(res, s.GetBlockHeight()); ok {
-				if err := s.SetDAHForChildRecords(spend.TxID, res.ChildCount, dah); err != nil {
-					return err
-				}
-			}
-
-		case LuaSignalDAHUnset:
-			if err := s.SetDAHForChildRecords(spend.TxID, res.ChildCount, 0); err != nil {
-				return err
-			}
+		if err := s.reconcileChildDAH(spend.TxID, res, s.GetBlockHeight()); err != nil {
+			return err
 		}
 	} else if res.Status == LuaStatusError {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()

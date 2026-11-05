@@ -768,6 +768,26 @@ func (s *Store) childDeleteAtHeightFor(res *LuaMapResponse, blockHeight uint32) 
 	return dah, true
 }
 
+// reconcileChildDAH stamps or clears the child pages of a paginated master from the master's
+// current delete-at-height as the response reports it, whether or not a signal fired. An absent
+// stamp clears the pages. A package that reports no stamp is honoured only on a DAHSET signal.
+func (s *Store) reconcileChildDAH(txID *chainhash.Hash, res *LuaMapResponse, blockHeight uint32) error {
+	if res.ChildCount <= 0 {
+		return nil
+	}
+
+	dah, enabled := s.childDeleteAtHeightFor(res, blockHeight)
+	if !enabled {
+		return nil
+	}
+
+	if res.Signal != LuaSignalDAHSet && !res.HasDeleteAtHeight {
+		dah = 0
+	}
+
+	return s.SetDAHForChildRecords(txID, res.ChildCount, dah)
+}
+
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
 

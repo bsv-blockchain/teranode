@@ -155,8 +155,9 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 	return affectedParentSpends, spendingTxHashes, nil
 }
 
-// propagateConflictingDAHSignals applies the DAHSET and DAHUNSET signals of the setConflicting
-// responses to the child pages of each record, so pages follow the master's stamp.
+// propagateConflictingDAHSignals brings the child pages of each record in line with the master's
+// stamp reported by its setConflicting response. It reconciles from that state, not from a change
+// signal, so a retry repairs pages whose write failed after the master already committed.
 func (s *Store) propagateConflictingDAHSignals(batchRecords []aerospike.BatchRecordIfc, txHashes []*chainhash.Hash, blockHeight uint32) error {
 	var aggErr error
 
@@ -176,18 +177,8 @@ func (s *Store) propagateConflictingDAHSignals(batchRecords []aerospike.BatchRec
 			continue
 		}
 
-		switch res.Signal {
-		case LuaSignalDAHSet:
-			if dah, ok := s.childDeleteAtHeightFor(res, blockHeight); ok {
-				if err := s.SetDAHForChildRecords(txHashes[i], res.ChildCount, dah); err != nil {
-					aggErr = errors.Join(aggErr, err)
-				}
-			}
-
-		case LuaSignalDAHUnset:
-			if err := s.SetDAHForChildRecords(txHashes[i], res.ChildCount, 0); err != nil {
-				aggErr = errors.Join(aggErr, err)
-			}
+		if err := s.reconcileChildDAH(txHashes[i], res, blockHeight); err != nil {
+			aggErr = errors.Join(aggErr, err)
 		}
 	}
 

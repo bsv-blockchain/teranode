@@ -473,6 +473,18 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     return response
 end
 
+-- Reports a paginated master's page state so the caller can bring its pages in line with
+-- the master even when no signal fired, such as on the retry of a call whose page write failed.
+local function reportPageState(response, rec)
+    local totalExtraRecs = rec[BIN_TOTAL_EXTRA_RECS]
+    if totalExtraRecs and totalExtraRecs > 0 then
+        response[FIELD_CHILD_COUNT] = totalExtraRecs
+        if rec[BIN_DELETE_AT_HEIGHT] then
+            response[FIELD_DELETE_AT_HEIGHT] = rec[BIN_DELETE_AT_HEIGHT]
+        end
+    end
+end
+
 -- The first argument is the record to update. This is passed to the UDF by aerospike based on the Key that the UDF is getting executed on
 -- offset number - the offset in the utxos list (vout % utxoBatchSize)
 -- utxoHash []byte - 32 byte little-endian hash of the UTXO
@@ -564,6 +576,8 @@ function unspend(rec, offset, utxoHash, expectedSpendingData, currentBlockHeight
             response[FIELD_CHILD_COUNT] = childCount
         end
     end
+
+    reportPageState(response, rec)
 
     return response
 end
@@ -1150,6 +1164,8 @@ function setConflicting(rec, setValue, currentBlockHeight, blockHeightRetention)
             response[FIELD_CHILD_COUNT] = childCount
         end
     end
+
+    reportPageState(response, rec)
 
     return response
 end

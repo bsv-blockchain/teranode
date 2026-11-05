@@ -3015,10 +3015,10 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	// spends of different outputs of the same parent: each statement only sees
 	// its own snapshot, so both observe unspent_before > spent_in_batch, skip
 	// dah_upd, and leave DAH NULL even though the parent is fully drained
-	// after both commits. Calling setDAH afterwards runs a fresh statement
-	// under READ COMMITTED that sees (a) the latest committed writes of any
-	// concurrent spend plus (b) this transaction's own pending writes — so
-	// whoever commits last correctly deterministically sets DAH.
+	// after both commits. Calling setDAH afterwards locks the row and then reads
+	// in a fresh statement under READ COMMITTED, which sees (a) the latest
+	// committed writes of any concurrent spend plus (b) this transaction's own
+	// pending writes — so whoever commits last correctly deterministically sets DAH.
 	//
 	// setDAH is idempotent w.r.t. the CTE: if the CTE already set DAH to
 	// newDAH, setDAH sees conditions met + existingDAH >= newDAH and skips the
@@ -3354,9 +3354,23 @@ func flooredDAHSQL(txIDExpr, newDAHExpr string, retention uint32) string {
 	return fmt.Sprintf("CASE WHEN %[1]s > %[2]s THEN %[1]s ELSE %[2]s END", floor, newDAHExpr)
 }
 
+// setDAHBeforeWrite runs between the eligibility read and the write in setDAH. It is nil
+// outside tests, which use it to interleave a competing writer.
+var setDAHBeforeWrite func()
+
 func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) error {
 	if s.settings.GetUtxoStoreBlockHeightRetention() == 0 {
 		return nil
+	}
+
+	// Postgres: lock the row in its own statement before the read below, so the read
+	// sees every committed writer and none can change eligibility until this
+	// transaction ends. SQLite takes no lock: its single writer and the caller's open
+	// write transaction already serialise these writers.
+	if s.engine == "postgres" {
+		if _, err := txn.ExecContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR UPDATE", transactionID); err != nil {
+			return errors.NewStorageError("[setDAH] error locking transaction %d", transactionID, err)
+		}
 	}
 
 	// Check transaction state: unspent outputs, conflicting, mined status, longest chain.
@@ -3438,10 +3452,7 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	// else: conditions not met and no existing DAH, leave as NULL
 
 	// Write only to raise or clear. A decision at or below the stored stamp, or a NULL
-	// over a NULL, writes nothing: the read above is unlocked, so rewriting a kept stamp
-	// could resurrect one that a concurrent SetConflicting(false) or PreserveTransactions
-	// just cleared. A stale CLEAR over a stamp that concurrent mining just raised fails
-	// safe: the record is kept longer, never pruned early.
+	// over a NULL, writes nothing, which saves a needless write on the bulk path.
 	if !deleteAtHeightOrNull.Valid && !existingDAH.Valid {
 		return nil
 	}
@@ -3450,13 +3461,17 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 		return nil
 	}
 
+	if setDAHBeforeWrite != nil {
+		setDAHBeforeWrite()
+	}
+
 	return s.writeDAH(ctx, txn, transactionID, deleteAtHeightOrNull, retention)
 }
 
-// writeDAH stores a delete_at_height decision taken from an unlocked read. A value is
-// raised to the row's mined floor and never lowers a stamp a concurrent writer has
-// raised since, so a stale read cannot undo mining. A NULL clears the stamp. A row
-// that PreserveTransactions protected since the read is left untouched.
+// writeDAH stores a delete_at_height decision taken under the row lock (Postgres). A
+// value is raised to the row's mined floor and never lowers a stamp already stored, as
+// a second guard. A NULL clears the stamp. A row that PreserveTransactions protects is
+// left untouched.
 func (s *Store) writeDAH(ctx context.Context, txn *sql.Tx, transactionID int, value sql.NullInt64, retention uint32) error {
 	qUpdate := fmt.Sprintf(`
 		UPDATE transactions
