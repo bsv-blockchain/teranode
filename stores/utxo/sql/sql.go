@@ -114,6 +114,14 @@ type Store struct {
 	createBatcher *batcher.Batcher[batchCreateItem]
 	unlockBatcher *batcher.Batcher[batchUnlockItem]
 
+	// conflictingIndexCancel and conflictingIndexDone stop and await the
+	// background px_transactions_conflicting build (Postgres only).
+	conflictingIndexCancel context.CancelFunc
+	conflictingIndexDone   chan struct{}
+	// conflictingIndexReady is whether px_transactions_conflicting is known to
+	// be valid; ConflictingTxHashes answers not indexed until it is.
+	conflictingIndexReady atomic.Bool
+
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
 	// block-state methods. SetBlockHeight, SetMedianBlockTime and SetBlockState
@@ -181,7 +189,7 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	switch storeURL.Scheme {
 	case "postgres":
-		if err = createPostgresSchema(db); err != nil {
+		if err = createPostgresSchema(ctx, logger, db); err != nil {
 			return nil, errors.NewStorageError("failed to create postgres schema", err)
 		}
 
@@ -275,6 +283,13 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		}
 	}
 
+	if storeURL.Scheme == "postgres" {
+		s.startPostgresConflictingIndexBuild(ctx)
+	} else {
+		// SQLite creates the index with the schema.
+		s.conflictingIndexReady.Store(true)
+	}
+
 	return s, nil
 }
 
@@ -334,6 +349,10 @@ func (s *Store) Close(ctx context.Context) error {
 
 	go func() {
 		defer close(done)
+
+		// The index build uses the pool, so it stops before the DB closes.
+		s.stopPostgresConflictingIndexBuild()
+
 		// Drain in dependency order: state-mutating writers last so they
 		// have the best chance of committing before the deadline.
 		if s.unlockBatcher != nil {
@@ -5431,11 +5450,66 @@ type DBExecutor interface {
 // Advisory lock ID for UTXO schema creation serialization across pods.
 const utxoSchemaLockID int64 = 7_265_726_117 // "tera" + "ux" in ASCII-ish
 
-func createPostgresSchema(db *usql.DB) error {
-	return usql.WithAdvisoryLock(context.Background(), db, utxoSchemaLockID, func() error {
-		return createPostgresSchemaImpl(db)
-	})
+// createPostgresSchema creates the schema holding the index build lock and the
+// schema lock, both on one connection that also runs the schema statements, so
+// startup needs a single connection from the pool. The database is closed if it
+// fails.
+func createPostgresSchema(ctx context.Context, logger ulogger.Logger, db *usql.DB) error {
+	if err := createPostgresSchemaOnOneConn(ctx, logger, db); err != nil {
+		_ = db.Close()
+		return err
+	}
+
+	return nil
 }
+
+func createPostgresSchemaOnOneConn(ctx context.Context, logger ulogger.Logger, db *usql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return errors.NewStorageError("could not get a connection for schema creation", err)
+	}
+
+	defer func() {
+		_ = conn.Close()
+	}()
+
+	release, err := holdConflictingIndexBuildLock(ctx, logger, conn)
+	if err != nil {
+		return err
+	}
+
+	defer release()
+
+	// Serializes with processes running a release that does not take the
+	// build lock.
+	if _, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, utxoSchemaLockID); err != nil {
+		return errors.NewStorageError("could not take the schema lock", err)
+	}
+
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_, _ = conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock($1)`, utxoSchemaLockID)
+	}()
+
+	return createPostgresSchemaImpl(connExecutor{ctx: ctx, conn: conn})
+}
+
+// connExecutor runs the schema statements on the connection that holds the
+// schema locks. Close does nothing: closing the connection would hand it back to
+// the pool still holding the locks; createPostgresSchema closes the database on
+// failure instead.
+type connExecutor struct {
+	ctx  context.Context
+	conn *sql.Conn
+}
+
+func (c connExecutor) Exec(query string, args ...interface{}) (sql.Result, error) {
+	return c.conn.ExecContext(c.ctx, query, args...)
+}
+
+func (c connExecutor) Close() error { return nil }
 
 // createPostgresSchemaImpl contains the actual implementation, now testable
 func createPostgresSchemaImpl(db DBExecutor) error {
@@ -5689,6 +5763,10 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 	if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN IF NOT EXISTS recovery BYTEA`); err != nil {
 		return errors.NewStorageError("could not add conflict recovery column", err)
 	}
+
+	// px_transactions_conflicting is not created here: New builds it in the
+	// background with CREATE INDEX CONCURRENTLY, outside the schema lock (see
+	// conflicting_index.go).
 
 	return nil
 }
@@ -6054,6 +6132,13 @@ func createSqliteSchema(db *usql.DB) error {
 		if _, err := db.Exec(`ALTER TABLE conflict_intents ADD COLUMN recovery BLOB`); err != nil {
 			return errors.NewStorageError("could not add conflict recovery column", err)
 		}
+	}
+
+	// Serves ConflictingTxHashes: block validation reads the conflicting set once
+	// per block instead of one row per transaction of an already-validated subtree.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS px_transactions_conflicting ON transactions (hash) WHERE conflicting = true;`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create px_transactions_conflicting index - [%+v]", err)
 	}
 
 	return nil

@@ -29,6 +29,12 @@ type flakyBatchDecorateStore struct {
 	onCall   func(attempt int)
 }
 
+// ConflictingTxHashes reports no conflicting index, so the cached-subtree check
+// takes the per-transaction path this store exercises.
+func (s *flakyBatchDecorateStore) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, false, nil
+}
+
 func (s *flakyBatchDecorateStore) BatchDecorate(_ context.Context, items []*utxo.UnresolvedMetaData, _ ...fields.FieldName) error {
 	s.mu.Lock()
 	s.calls++

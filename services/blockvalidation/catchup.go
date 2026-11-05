@@ -805,7 +805,7 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			PeerURL:           ctx.baseURL,
 			TargetBlockHash:   ctx.blockUpTo.Hash().String(),
 			TargetBlockHeight: ctx.blockUpTo.Height,
-			ErrorMessage:      errorMsg,
+			ErrorMessage:      blockchain.SanitizeCatchupError(errorMsg), // served by Asset /catchup/status (bitcoin-sv/teranode#4855)
 			ErrorType:         errorType,
 			AttemptTime:       time.Now().UnixMilli(),
 			DurationMs:        time.Since(ctx.startTime).Milliseconds(),

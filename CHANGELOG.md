@@ -18,6 +18,35 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — action required before upgrading
 
+- **Block validation reads conflicting transactions from an index, and the
+  Aerospike UTXO store builds a new secondary index for it.** For subtrees the node
+  has already validated, `CheckBlockSubtrees` now asks the UTXO store once per block
+  which transactions are conflicting. Before, it read the `conflicting` flag of every
+  transaction in those subtrees, which on a block of a billion transactions took
+  minutes. The Aerospike store creates an expression index named `conflictingIndex`
+  on the UTXO set at startup. It holds only records whose `conflicting` bin is true,
+  so it stays small. Aerospike builds it in the background, and a large namespace
+  pays one full scan while it builds. Expression indexes need Aerospike 8.1 or later.
+  Once the index is built, every process runs a self-test in the background: it
+  writes one record without a TTL, flips its `conflicting` flag both ways, checks
+  that the index follows, and deletes the record. On an older server, until the
+  self-test passes, and for the life of a process whose self-test saw the index
+  miss a change, block validation keeps reading every transaction, as before, and
+  logs a warning on each block. The PostgreSQL store builds the partial index
+  `px_transactions_conflicting` with `CREATE INDEX CONCURRENTLY` in the background
+  after startup, so writes to `transactions` are not blocked, and retries a failed
+  build; until the index is valid, block validation reads every transaction, as
+  it does on an older Aerospike server. A PostgreSQL UTXO store that starts while
+  another process is building the index waits for the build to finish before it
+  touches the schema. A store running the previous release does not wait: one that
+  starts during the build blocks every read and write of `transactions` until the
+  build finishes, and can abort it, after which it is retried. On PostgreSQL, keep
+  previous-release processes from starting until the first upgraded process has
+  built the index, for example by stopping them before the upgrade. The SQLite
+  store creates it at startup. The `utxoset` store has no index for the flag and
+  keeps the per-transaction read. External `utxo.Store` implementations must
+  implement `ConflictingTxHashes`. (#2110)
+
 - **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
   recovery if a transaction affected by rollback or reverse processing is still
   confirmed in any current-chain block, or if that check fails. The WAL remains
@@ -140,6 +169,15 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   first start, with a warning; there is no need to delete `alert.db`. (#1955)
 
 ### Breaking — behaviour changes on upgrade
+
+- **Listeners no longer offer Multipath TCP.** Binaries built from this module now
+  default to `GODEBUG=multipathtcp=0` (`godebug` directive in `go.mod`), so on Linux
+  every TCP listener (gRPC, HTTP, legacy P2P, libp2p) opens a plain TCP socket instead
+  of the MPTCP socket Go has opened by default since 1.24. MPTCP clients fall back to
+  TCP. This is interim hardening for CVE-2026-98432; a patched kernel is the real fix.
+  An operator who needs MPTCP listeners can restore the previous behaviour by setting
+  `GODEBUG=multipathtcp=2` (MPTCP on listeners only) in the service's environment.
+  (#2112)
 
 - **Block assembly keeps valid unmined transactions when it reloads them with input
   checks, and retries a reload the UTXO store did not answer.** This affects every
@@ -293,6 +331,26 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `processed_at` of such a block. Before, the peer id came back empty and
   `processed_at` was misread. `GetBlockHeader` was not affected. (#2074)
 
+- **Peer HTTP errors no longer carry the response body, and stored catch-up errors no
+  longer carry IP addresses** (bitcoin-sv/teranode#4855, #2109). A peer chooses the URL that
+  catch-up fetches from, so a failed fetch could be a response from, or a dial to, a
+  service inside the node's network. The error reached the peer registry's
+  `LastCatchupError` and the unauthenticated Asset `/peers` endpoint.
+    - A non-2xx response to a peer fetch is now reported as
+      `http request [<url>] returned status code [N]`. The `with body "..."` part is
+      gone, from logs as well. The error type (`NOT_FOUND`, `SERVICE_UNAVAILABLE`,
+      `SERVICE_RATE_LIMITED`, `SERVICE_ERROR`) is unchanged.
+    - `last_catchup_error` in `/peers` and `/api/p2p/peers`, and `error_message` in
+      `/catchup/status`, show every IP address (with its port) as `<redacted-ip>`.
+      Both are cut at 512 bytes, plus a trailing `…` when cut. A registry blob saved
+      by an older binary is cleaned the same way on load.
+    - `last_catchup_error` in `/peers` now follows `asset_publicErrorDetail`, like
+      `/catchup/status` `error_message`: with the setting `false` it is empty.
+      `last_catchup_error_time` is still served. The default (`true`) keeps the field.
+    - Who is affected: operators who read peer error bodies or addresses from logs or
+      the dashboard. The full address still appears in this node's own logs where the
+      fetch failed, apart from the response body, which is no longer recorded anywhere.
+
 - **A failed `on_main_chain` write in the SQL blockchain store is now repaired in the
   background, and block storage can wait for the repair.** `InvalidateBlock`,
   `RevalidateBlock`, the startup rebuild and two `StoreBlock` paths used to log a
@@ -331,6 +389,40 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `teranode_blockchain_sql_on_main_chain_repair_pending` (above 0 while a repair is
   owed) and `teranode_blockchain_sql_on_main_chain_write_failures{path}`. No action is
   needed. (#2049)
+
+- **Deleting a transaction record now clears the references parents hold to it.**
+  A reorg that removes a coinbase also removes the transactions spending it. Block
+  assembly now unspends each removed transaction's inputs, and removes it from its
+  parents' conflicting-children lists, before it deletes the record. Before, a
+  surviving parent could keep naming the deleted record as its spender. With
+  `pruner_utxoDefensiveEnabled` set, the SQL pruner reaps each expired conflicting
+  record and the references its parents hold to it in one database transaction. It
+  keeps the record, and its parents' references, while a conflict intent is pending
+  and when a promotion cleared its conflicting flag. On PostgreSQL, creating a
+  conflict intent waits for a reap in progress to finish. It also keeps a record it cannot
+  reap until the next block. With the setting off, pruner behaviour does not change.
+  Before it deletes those transactions, block assembly now saves them to the subtree
+  store under the hash of the block that was moved back (new file type
+  `reorgDeletedTxs`, expiry as for kept-aside subtree transactions). If saving fails,
+  the move back fails and nothing is deleted. When a reorg or a block assembly reset
+  moves that block forward again, block assembly recreates the saved transactions
+  after the coinbase, then deletes the saved file. Block assembly does not recreate a
+  saved transaction when another transaction now spends one of its inputs or when one
+  of its parents is missing, nor the saved transactions that spend it, and it logs an
+  error for each. Any other failure still fails the move. Each recreated transaction
+  gets back the block IDs it had when it was deleted, and gets its chain state from
+  the current chain: it is on the longest chain only if its blocks are. A recreated
+  transaction that is not on the longest chain goes back into block assembly when a
+  reorg moves the block forward. If saving the transactions fails, block assembly
+  unlocks them. A retry after a partial delete deletes every transaction in the saved
+  file. A retry repairs the chain status of a transaction that an earlier
+  attempt left looking mined, clears an unmined marker that an interrupted repair left
+  on a transaction mined on the current chain, keeps the saved file until the status is
+  right, and otherwise leaves the status of an existing record alone. It puts that transaction back in block assembly only when its live record is
+  not mined on the current chain. The saved file expires at the same height as kept-aside subtree transactions.
+  If the block returns after that, block assembly recreates nothing and does not log a
+  warning. No action is needed. Parent spends that were left dangling before the
+  upgrade are not repaired. (#1214)
 
 - **A short catch-up from `RUNNING` hands its blocks' unseen transactions to block
   assembly, and catch-up no longer fetches a chain with less work than the best tip.**

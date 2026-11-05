@@ -1877,7 +1877,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 			})
 		}
 
-		if err := g.Wait(); err != nil {
+		unwindCoinbases := func() {
 			coinbaseTxsAdded.Range(func(key, value interface{}) bool {
 				// remove all the coinbase transactions we added
 				block := value.(*model.Block)
@@ -1890,8 +1890,23 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 				return true
 			})
+		}
+
+		if err := g.Wait(); err != nil {
+			unwindCoinbases()
 
 			return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
+		}
+
+		// The coinbases exist now, so the txs deleted when these blocks were moved back can be
+		// recreated. They go in block order, after every coinbase: the goroutines above ran
+		// concurrently and a tx of one block may spend another block's coinbase.
+		for _, block := range moveForwardBlocks {
+			if _, err := stp.restoreReorgDeletedTxs(context.Background(), block); err != nil {
+				unwindCoinbases()
+
+				return errors.NewProcessingError("[SubtreeProcessor][Reset] error restoring txs deleted when the block was moved back", err)
+			}
 		}
 
 		// Mark processed_at for all blocks. For intermediate blocks use a lightweight
@@ -1977,7 +1992,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 				}
 			}
 
-			if err = stp.processCoinbaseUtxos(context.Background(), block); err != nil {
+			if err = stp.applyCoinbaseUtxos(context.Background(), block, false, true); err != nil {
 				return errors.NewProcessingError("[SubtreeProcessor][Reset] error processing coinbase utxos", err)
 			}
 		}
@@ -5736,6 +5751,48 @@ func (stp *SubtreeProcessor) dropPrunedHashes(ctx context.Context, hashes []chai
 	return kept, nil
 }
 
+// applyCoinbaseUtxos creates the block's coinbase, then recreates the txs deleted when the block was
+// moved back: they spend the coinbase, so they come after it.
+//
+// With requeue set, a recreated tx that is not on the longest chain goes back into block assembly and
+// leaves the remove map, where removeCoinbaseUtxos put it. A caller that reloads the unmined txs
+// afterwards, as a reset does, passes false, or the tx would be in block assembly twice.
+func (stp *SubtreeProcessor) applyCoinbaseUtxos(ctx context.Context, block *model.Block, requeue bool, skipNotification bool) error {
+	if err := stp.processCoinbaseUtxos(ctx, block); err != nil {
+		return err
+	}
+
+	restored, err := stp.restoreReorgDeletedTxs(ctx, block)
+	if err != nil {
+		return err
+	}
+
+	if !requeue {
+		return nil
+	}
+
+	for _, tx := range restored {
+		hash := *tx.TxIDChainHash()
+
+		_ = stp.removeMap.Delete(hash)
+
+		inpoints, inpointsErr := subtreepkg.NewTxInpointsFromTx(tx)
+		if inpointsErr != nil {
+			return errors.NewProcessingError("[applyCoinbaseUtxos][%s] error reading the inputs of restored tx %s", block.String(), hash.String(), inpointsErr)
+		}
+
+		node := subtreepkg.Node{Hash: hash, Fee: tx.TotalInputSatoshis() - tx.TotalOutputSatoshis(), SizeInBytes: uint64(tx.Size())} //nolint:gosec // size is non-negative
+
+		if err = stp.addNode(node, &inpoints, skipNotification); err != nil {
+			return errors.NewProcessingError("[applyCoinbaseUtxos][%s] error adding restored tx %s to block assembly", block.String(), hash.String(), err)
+		}
+	}
+
+	return nil
+}
+
+const unlockTimeout = 30 * time.Second
+
 // removeCoinbaseUtxos removes the coinbase UTXO and its child spends from the UTXO store.
 //
 // The nil block / nil CoinbaseTx guard exists for the rollback paths that call
@@ -5769,27 +5826,48 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error getting child spends for coinbase tx %s", block.String(), block.CoinbaseTx.String(), err)
 	}
 
-	if len(childSpendHashes) > 0 {
-		stp.logger.Warnf("[removeCoinbaseUtxos][%s] removing %d child spends of coinbase tx %s", block.String(), len(childSpendHashes), block.CoinbaseTx.String())
+	// save the txs first: if a reorg returns to this block, they are recreated from this copy. The
+	// saved file also lists the txs an earlier attempt already cleared from their parents, which the
+	// walk above no longer finds, so it decides what is deleted.
+	savedHashes, err := stp.keepReorgDeletedTxs(ctx, block, childSpendHashes)
+	if err != nil {
+		unlockHashes := make([]chainhash.Hash, 0, len(childSpendHashes)+1)
+		unlockHashes = append(unlockHashes, childSpendHashes...)
+		unlockHashes = append(unlockHashes, *block.CoinbaseTx.TxIDChainHash())
 
-		// remove all the child spends from the utxo store
-		for _, childSpendHash := range childSpendHashes {
-			if err = stp.utxoStore.Delete(ctx, &childSpendHash); err != nil {
-				return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error deleting child spend utxo for tx %s", block.String(), childSpendHash.String(), err)
-			}
+		unlockCtx, cancelUnlock := context.WithTimeout(context.WithoutCancel(ctx), unlockTimeout)
+		unlockErr := stp.utxoStore.SetLocked(unlockCtx, unlockHashes, false)
 
-			// add to txRemoveMap to make sure queued transactions are not processed
-			if !stp.removeMap.Exists(childSpendHash) {
-				if err = stp.removeMap.Put(childSpendHash, 1); err != nil {
-					return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error adding child spend to remove map for tx %s", block.String(), childSpendHash.String(), err)
-				}
-			}
+		cancelUnlock()
+
+		if unlockErr != nil {
+			stp.logger.Errorf("[removeCoinbaseUtxos][%s] error unlocking the txs of coinbase tx %s: %v", block.String(), block.CoinbaseTx.String(), unlockErr)
 		}
 
-		// remove from the subtree processor as well
-		if err = stp.removeTxsFromSubtrees(ctx, childSpendHashes); err != nil {
-			return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error removing child spends from subtrees", block.String(), err)
+		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error saving child spends of coinbase tx %s", block.String(), block.CoinbaseTx.String(), err)
+	}
+
+	if len(savedHashes) > 0 {
+		stp.logger.Warnf("[removeCoinbaseUtxos][%s] removing %d child spends of coinbase tx %s", block.String(), len(savedHashes), block.CoinbaseTx.String())
+	}
+
+	// remove all the saved txs from the utxo store
+	for _, childSpendHash := range savedHashes {
+		if err = utxostore.DeleteWithParents(ctx, stp.utxoStore, &childSpendHash); err != nil {
+			return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error deleting child spend utxo for tx %s", block.String(), childSpendHash.String(), err)
 		}
+
+		// add to txRemoveMap to make sure queued transactions are not processed
+		if !stp.removeMap.Exists(childSpendHash) {
+			if err = stp.removeMap.Put(childSpendHash, 1); err != nil {
+				return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error adding child spend to remove map for tx %s", block.String(), childSpendHash.String(), err)
+			}
+		}
+	}
+
+	// remove from the subtree processor as well
+	if err = stp.removeTxsFromSubtrees(ctx, savedHashes); err != nil {
+		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error removing child spends from subtrees", block.String(), err)
 	}
 
 	if err = stp.utxoStore.Delete(ctx, block.CoinbaseTx.TxIDChainHash()); err != nil {
@@ -6610,7 +6688,7 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 		stp.logger.Infof("[moveForwardBlock][%s] block has no subtrees, skipping processing", block.String())
 
 		// create the coinbase after processing all other transaction operations
-		if err = stp.processCoinbaseUtxos(ctx, block); err != nil {
+		if err = stp.applyCoinbaseUtxos(ctx, block, true, skipNotification); err != nil {
 			return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
 		}
 
@@ -6674,7 +6752,7 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	}
 
 	// create the coinbase after processing all other transaction operations
-	if err = stp.processCoinbaseUtxos(ctx, block); err != nil {
+	if err = stp.applyCoinbaseUtxos(ctx, block, true, skipNotification); err != nil {
 		return nil, nil, nil, errors.NewProcessingError("[moveForwardBlock][%s] error processing coinbase utxos", block.String(), err)
 	}
 
