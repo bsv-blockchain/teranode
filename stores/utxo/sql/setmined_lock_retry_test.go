@@ -135,10 +135,12 @@ func TestSetMinedMultiRetriesLockErrorFromChunk(t *testing.T) {
 	setMinedLockRefusals.Store(setMinedMultiRetries - 1)
 
 	hash := tx.TxIDChainHash()
+	start := time.Now()
 
 	blockIDs, err := db.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 1, OnLongestChain: true})
 	require.NoError(t, err)
 	require.Equal(t, []uint32{7}, blockIDs[*hash])
+	require.GreaterOrEqual(t, time.Since(start), 700*time.Millisecond, "the retries waited Create's 100ms, 200ms and 400ms")
 	require.Equal(t, int32(-1), setMinedLockRefusals.Load(), "every insert but the last was refused and the last ran")
 }
 

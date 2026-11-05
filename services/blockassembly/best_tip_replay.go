@@ -16,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/util/retry"
 )
 
 // BestTipPositionStateKey is the key under which block assembly persists its replay position, the
@@ -261,6 +262,7 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 	}
 
 	b.skippedForkMarkPending = true
+	b.skippedForkMarkRan = true
 
 	defer func() {
 		if err == nil {
@@ -286,6 +288,10 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 
 	if bestErr != nil {
 		return errors.NewProcessingError("[markSkippedForkTxs] error getting the best block header", bestErr)
+	}
+
+	if err = b.recheckSkippedForkMarks(ctx); err != nil {
+		return err
 	}
 
 	floor := b.skippedForkMarkFloor(bestMeta.Height)
@@ -335,13 +341,22 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 			}
 		}
 
-		hashes, err := b.blockTxHashes(ctx, fb.header)
+		hashes, err := b.blockTxHashes(ctx, fb.header, nil)
 		if err != nil {
 			// A subtree file the store does not have is not read by a later run either. It can
 			// be gone lawfully: a raised retention, block assembly's own subtrees stored with
 			// the global retention, or a reused subtree that kept an earlier delete height.
-			// The block's transactions are given up rather than block assembly stopped.
+			// The block's transactions are given up rather than block assembly stopped. The
+			// subtree read reports any failure of its fallback read as not found too, so the
+			// store is asked directly; a failure to answer is retried like any other.
+			gone := false
 			if errors.Is(err, errors.ErrNotFound) {
+				if gone, err = b.subtreeFilesGone(ctx, fb.header); err != nil {
+					b.logger.Errorf("[BlockAssembler] error checking the subtree files of fork block %s: %v", hash, err)
+				}
+			}
+
+			if gone {
 				prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost").Inc()
 				b.logger.Errorf("[BlockAssembler] fork block %s has no subtree in the subtree store, giving up the mark of its skipped transactions: %v", hash, err)
 				b.skippedForkBlocksMarked[hash] = fb.meta.Height
@@ -414,8 +429,13 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 		b.skippedForkBlocksMarked[hash] = fb.meta.Height
 	}
 
-	if err = b.reloadAfterSkippedForkMark(ctx, beforeReload); err != nil {
-		return err
+	// A reload is a reset, which waits for every block block validation has not finished; with
+	// such a fork block in the run it would hold block assembly until that block is done. The
+	// reload waits for the run that finds none.
+	if unprocessed == 0 {
+		if err = b.reloadAfterSkippedForkMark(ctx, beforeReload); err != nil {
+			return err
+		}
 	}
 
 	if unread > 0 {
@@ -442,11 +462,12 @@ func (e *skippedForkUnprocessedError) Error() string {
 	return fmt.Sprintf("[markSkippedForkTxs] %d fork blocks are not processed by block validation yet", e.count)
 }
 
-// skippedForkWorkOwed reports whether a mark of skipped fork transactions is unfinished or the
-// pool reload one needs has not run. Every pass and wake that finishes that work reads this, so
+// skippedForkWorkOwed reports whether a mark of skipped fork transactions is unfinished, the pool
+// reload one needs has not run, or transactions it wrote off the longest chain still need their
+// check against the best chain (skippedForkRecheck). Every pass and wake that finishes that work reads this, so
 // neither can be left owed with nothing to retry it.
 func (b *BlockAssembler) skippedForkWorkOwed() bool {
-	return b.skippedForkMarkPending || b.skippedForkReloadPending
+	return b.skippedForkMarkPending || b.skippedForkReloadPending || len(b.skippedForkRecheck) > 0
 }
 
 // markOffLongestChain marks the transactions as not on the longest chain, then marks again as on
@@ -454,14 +475,31 @@ func (b *BlockAssembler) skippedForkWorkOwed() bool {
 // on a read of the best chain: a block that became the best tip since, and whose setTxMined
 // cleared unmined_since before the write, would otherwise be left with it set while it is mined
 // on the best chain, and moving forward onto that block does not mark it again.
+//
+// A failure after the write leaves the hashes in skippedForkRecheck, so the next run of
+// markSkippedForkTxs checks them again: the block that holds one may be on the best chain now,
+// and no fork block it reads would show it. A restart's load of the unmined transactions marks
+// such a transaction mined as well.
 func (b *BlockAssembler) markOffLongestChain(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
 	if err := b.utxoStore.MarkTransactionsOnLongestChain(ctx, hashes, false); err != nil {
 		return nil, err
 	}
 
+	onBest, err := b.remarkOnBestChain(ctx, hashes)
+	if err != nil {
+		b.skippedForkRecheck = append(b.skippedForkRecheck, hashes...)
+		return nil, err
+	}
+
+	return onBest, nil
+}
+
+// remarkOnBestChain marks as on the longest chain each of the transactions a block of the best
+// chain, read now, contains, and returns them.
+func (b *BlockAssembler) remarkOnBestChain(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
 	best, _, err := b.blockchainClient.GetBestBlockHeader(ctx)
 	if err != nil {
-		return nil, errors.NewProcessingError("[markOffLongestChain] error getting the best block header", err)
+		return nil, errors.NewProcessingError("[remarkOnBestChain] error getting the best block header", err)
 	}
 
 	_, onBest, err := b.branchOnlyMeta(ctx, hashes, nil, best)
@@ -471,11 +509,27 @@ func (b *BlockAssembler) markOffLongestChain(ctx context.Context, hashes []chain
 
 	if len(onBest) > 0 {
 		if err = b.utxoStore.MarkTransactionsOnLongestChain(ctx, onBest, true); err != nil {
-			return nil, err
+			return nil, errors.NewProcessingError("[remarkOnBestChain] error marking %d transactions of the best chain as mined", len(onBest), err)
 		}
 	}
 
 	return onBest, nil
+}
+
+// recheckSkippedForkMarks finishes the check against the best chain of transactions an earlier
+// mark wrote off it without finishing (skippedForkRecheck).
+func (b *BlockAssembler) recheckSkippedForkMarks(ctx context.Context) error {
+	if len(b.skippedForkRecheck) == 0 {
+		return nil
+	}
+
+	if _, err := b.remarkOnBestChain(ctx, b.skippedForkRecheck); err != nil {
+		return errors.NewProcessingError("[recheckSkippedForkMarks] error checking %d transactions written off the longest chain", len(b.skippedForkRecheck), err)
+	}
+
+	b.skippedForkRecheck = nil
+
+	return nil
 }
 
 // skippedForkMarkFloor is the lowest height of a fork block markSkippedForkTxs reads: the replay
@@ -585,16 +639,15 @@ func (b *BlockAssembler) skippedForkBlocks(ctx context.Context, best *model.Bloc
 // until a reset succeeds (onResetDone), since a later run finds those transactions unmined
 // already. Before a load of the unmined transactions (beforeReload) that load does it.
 //
-// A reset whose reload did not finish leaves the pool partial. With a replay position, the
-// replay retries that reset (retryIncompleteReset) and its reload covers this one, so the run
-// waits for it rather than run a second reset in the same pass. Without one nothing else retries
-// it, and this reload is the retry.
+// A reset whose reload did not finish leaves the pool partial. Such a reset happens only with a
+// replay position, and the replay retries it (retryIncompleteReset); its reload covers this one,
+// so the run waits for it rather than run a second reset in the same pass.
 func (b *BlockAssembler) reloadAfterSkippedForkMark(ctx context.Context, beforeReload bool) error {
 	if beforeReload || !b.skippedForkReloadPending {
 		return nil
 	}
 
-	if b.bestTipResetIncomplete.Load() && b.bestTipPosKnown.Load() {
+	if b.bestTipResetIncomplete.Load() {
 		return errors.NewProcessingError("[reloadAfterSkippedForkMark] the pool reload waits for the retry of a reset that did not finish")
 	}
 
@@ -677,19 +730,32 @@ func (b *BlockAssembler) finishSkippedForkMarkAtStart(ctx context.Context) error
 // otherwise be repeated on every idle tick, each one in StateReconciling, where mining
 // candidates are empty.
 func (b *BlockAssembler) noteSkippedForkMarkFailure(now time.Time) {
-	wait := skippedForkMarkRetryMax
-	if b.skippedForkMarkFailures < 16 {
-		wait = min(skippedForkMarkRetryBase<<b.skippedForkMarkFailures, skippedForkMarkRetryMax)
+	if b.skippedForkMarkWait == 0 {
+		b.skippedForkMarkWait = skippedForkMarkRetryBase
+	} else {
+		b.skippedForkMarkWait = retry.CappedExponentialBackoff(b.skippedForkMarkWait, 2, skippedForkMarkRetryMax)
 	}
 
-	b.skippedForkMarkFailures++
-	b.skippedForkMarkRetryAt = now.Add(wait)
+	b.skippedForkMarkRetryAt = now.Add(b.skippedForkMarkWait)
 }
 
 // noteSkippedForkMarkSuccess clears the back-off once a run finishes.
 func (b *BlockAssembler) noteSkippedForkMarkSuccess() {
-	b.skippedForkMarkFailures = 0
+	b.skippedForkMarkWait = 0
 	b.skippedForkMarkRetryAt = time.Time{}
+}
+
+// runOwedSkippedForkWork runs the work skippedForkWorkOwed reports. Every pass ends with it
+// (processNewBlockAnnouncement, handleResetRequests), whatever path the pass took, so owed work
+// never waits for one path in particular. A pass that ran the mark already, before a reset, does
+// not run it a second time: a run that did not finish waits for the next pass, or for the idle
+// wake after its back-off, and is counted once.
+func (b *BlockAssembler) runOwedSkippedForkWork(ctx context.Context) {
+	if b.skippedForkMarkRan || !b.skippedForkWorkOwed() {
+		return
+	}
+
+	_ = b.markSkippedForkTxs(ctx, false)
 }
 
 // skippedForkMarkDue reports whether the work of a mark of skipped fork transactions
@@ -698,16 +764,17 @@ func (b *BlockAssembler) skippedForkMarkDue(now time.Time) bool {
 	return b.skippedForkWorkOwed() && !now.Before(b.skippedForkMarkRetryAt)
 }
 
-// blockTxHashes returns the hashes of the transactions in a stored block, without its coinbase.
-func (b *BlockAssembler) blockTxHashes(ctx context.Context, header *model.BlockHeader) ([]chainhash.Hash, error) {
+// blockTxHashes appends to dst the hashes of the transactions in a stored block, without its
+// coinbase, growing dst at most once.
+func (b *BlockAssembler) blockTxHashes(ctx context.Context, header *model.BlockHeader, dst []chainhash.Hash) ([]chainhash.Hash, error) {
 	block, err := b.blockchainClient.GetBlock(ctx, header.Hash())
 	if err != nil {
-		return nil, errors.NewProcessingError("error getting block %s", header.Hash(), err)
+		return dst, errors.NewProcessingError("[blockTxHashes] error getting block %s", header.Hash(), err)
 	}
 
 	subtrees, err := block.GetSubtrees(ctx, b.logger, b.subtreeStore, b.settings.Block.GetAndValidateSubtreesConcurrency)
 	if err != nil {
-		return nil, errors.NewProcessingError("error getting subtrees of block %s", header.Hash(), err)
+		return dst, errors.NewProcessingError("[blockTxHashes] error getting subtrees of block %s", header.Hash(), err)
 	}
 
 	count := 0
@@ -715,17 +782,50 @@ func (b *BlockAssembler) blockTxHashes(ctx context.Context, header *model.BlockH
 		count += len(st.Nodes)
 	}
 
-	hashes := make([]chainhash.Hash, 0, count)
+	if cap(dst)-len(dst) < count {
+		grown := make([]chainhash.Hash, len(dst), len(dst)+count)
+		copy(grown, dst)
+		dst = grown
+	}
 
 	for _, st := range subtrees {
 		for _, node := range st.Nodes {
 			if !node.Hash.IsEqual(subtree.CoinbasePlaceholderHash) {
-				hashes = append(hashes, node.Hash)
+				dst = append(dst, node.Hash)
 			}
 		}
 	}
 
-	return hashes, nil
+	return dst, nil
+}
+
+// subtreeFilesGone reports whether the subtree store has neither the subtree file nor the one
+// still to be checked for some subtree of a stored block. An error means the store did not
+// answer.
+func (b *BlockAssembler) subtreeFilesGone(ctx context.Context, header *model.BlockHeader) (bool, error) {
+	block, err := b.blockchainClient.GetBlock(ctx, header.Hash())
+	if err != nil {
+		return false, errors.NewProcessingError("[subtreeFilesGone] error getting block %s", header.Hash(), err)
+	}
+
+	for _, subtreeHash := range block.Subtrees {
+		for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeToCheck} {
+			exists, err := b.subtreeStore.Exists(ctx, subtreeHash[:], fileType)
+			if err != nil {
+				return false, errors.NewProcessingError("[subtreeFilesGone] error checking subtree %s of block %s", subtreeHash, header.Hash(), err)
+			}
+
+			if exists {
+				break
+			}
+
+			if fileType == fileformat.FileTypeSubtreeToCheck {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
 }
 
 // giveUpBestTipHistory moves the replay position to the best tip after the replay kept failing,
@@ -1324,12 +1424,10 @@ func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockH
 
 		staleIDs[hm.meta.ID] = struct{}{}
 
-		blockHashes, err := b.blockTxHashes(ctx, hm.header)
-		if err != nil {
+		var err error
+		if hashes, err = b.blockTxHashes(ctx, hm.header, hashes); err != nil {
 			return errors.NewProcessingError("[restampStaleBranch] error reading block %s", hm.header.Hash(), err)
 		}
-
-		hashes = append(hashes, blockHashes...)
 	}
 
 	branchOnly, err := b.branchOnlyTxs(ctx, hashes, staleIDs, best)

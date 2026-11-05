@@ -280,14 +280,19 @@ type BlockAssembler struct {
 	// skippedForkBlocksMarked holds the fork blocks, by hash with their height, whose
 	// transactions markSkippedForkTxs has already marked or given up. skippedForkMarkPending is
 	// set while a run of it is unfinished, and skippedForkReloadPending while the pool reload a
-	// run needs has not run (skippedForkWorkOwed reads both). skippedForkMarkFailures counts the
-	// runs in a row that did not finish, and the next one is not due before
-	// skippedForkMarkRetryAt. All are owned by the block-processing loop, and by Start before it.
+	// run needs has not run (skippedForkWorkOwed reads both). skippedForkMarkWait is the back-off
+	// after the last run that did not finish, and the next one is not due before
+	// skippedForkMarkRetryAt. skippedForkMarkRan is set once a run started in the current pass
+	// (runOwedSkippedForkWork). skippedForkRecheck holds transactions a mark wrote off the
+	// longest chain without finishing its check against the best chain (markOffLongestChain). All
+	// are owned by the block-processing loop, and by Start before it.
 	skippedForkBlocksMarked  map[chainhash.Hash]uint32
 	skippedForkMarkPending   bool
 	skippedForkReloadPending bool
-	skippedForkMarkFailures  uint
+	skippedForkMarkWait      time.Duration
 	skippedForkMarkRetryAt   time.Time
+	skippedForkMarkRan       bool
+	skippedForkRecheck       []chainhash.Hash
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -762,6 +767,8 @@ drain:
 		}
 	}
 
+	b.skippedForkMarkRan = false
+
 	// A reset traverses only its endpoint lineages. Keep the replay position so any
 	// briefly winning branch outside those lineages is still replayed afterwards. Without a
 	// replay position nothing replays them, so the reset owes the mark of skipped fork
@@ -817,9 +824,11 @@ drain:
 			b.logger.Errorf("[BlockAssembler] reset completed but pending tip changes need retrying: %v", replayErr)
 			b.triggerReconcile()
 		}
-	} else if err == nil && b.skippedForkWorkOwed() {
-		_ = b.markSkippedForkTxs(ctx, false)
 	}
+
+	// The pass ends with the work a mark of skipped fork transactions owes, whether or not
+	// there is a replay position, unless it ran the mark before the reset.
+	b.runOwedSkippedForkWork(ctx)
 
 	// The Reset path replays moveForward blocks through the same
 	// conflict resolution, so it can queue refusals too. Unlike the
@@ -1482,17 +1491,14 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	// acquisition), and it must run AFTER movement, never during it.
 	defer b.drainPendingInvalidations(ctx)
 
+	// Whatever path this pass takes, it ends with the work a mark of skipped fork transactions
+	// owes (deferred after the drain, so it runs before it).
+	b.skippedForkMarkRan = false
+	defer b.runOwedSkippedForkWork(ctx)
+
 	b.lastBestTipReplay.Store(time.Now().UnixNano())
 
 	if !b.followBestTipChanges(ctx) {
-		// A mark that could not finish after an earlier fallback is finished here: on the best
-		// tip it holds however the tip was reached, and the replay working again is no reason
-		// to drop it. It does not run off the best tip. Its back-off paces only the idle wake
-		// (reconcileDue), not a pass.
-		if b.skippedForkWorkOwed() {
-			_ = b.markSkippedForkTxs(ctx, false)
-		}
-
 		return
 	}
 
@@ -1507,13 +1513,13 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 
 	before, _ := b.CurrentBlock()
 
-	// Following the best header owes a mark of the fork blocks it skips when it moves the tip,
-	// and when the replay gave up its history, which a reset may already have skipped
-	// (followBestTipChanges sets it pending then). The move persists block assembly's new tip,
-	// so the mark is recorded first: a crash right after the move still finishes it at the next
-	// start. Without that record block assembly does not move, and the pending run wakes the
-	// next pass after a back-off.
-	if before == nil || !bestBlockchainBlockHeader.Hash().IsEqual(before.Hash()) || b.skippedForkMarkPending {
+	// Following the best header owes a mark of the fork blocks it skips when it moves the tip.
+	// The move persists block assembly's new tip, so the mark is recorded first: a crash right
+	// after the move still finishes it at the next start. Without that record block assembly
+	// does not move, and the pending run wakes the next pass after a back-off. With no move the
+	// mark a replay give-up owes is recorded already (followBestTipChanges), and the pass ends
+	// with it (runOwedSkippedForkWork).
+	if before == nil || !bestBlockchainBlockHeader.Hash().IsEqual(before.Hash()) {
 		if err = b.saveSkippedForkMark(ctx, true); err != nil {
 			b.skippedForkMarkPending = true
 			b.noteSkippedForkMarkFailure(time.Now())
@@ -1531,11 +1537,6 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil && !errors.Is(err, errors.ErrBlockAssemblyReset) {
 		// The pending mark keeps the idle wake retrying the move, after a back-off.
 		b.noteSkippedForkMarkFailure(time.Now())
-		return
-	}
-
-	if b.skippedForkWorkOwed() {
-		_ = b.markSkippedForkTxs(ctx, false)
 	}
 }
 

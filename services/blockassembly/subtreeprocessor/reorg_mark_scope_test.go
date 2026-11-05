@@ -393,11 +393,16 @@ func TestReorgBlocks_InvalidMoveBackChecksOnlyItsOwnTxs(t *testing.T) {
 	require.False(t, store.markedFalse(m1), "a pure mempool tx must not be re-marked")
 }
 
-// existsSet is a tx map that holds the given hashes.
-type existsSet map[chainhash.Hash]struct{}
+// existsSet is a tx map that holds the given hashes and counts the probes.
+type existsSet struct {
+	hashes map[chainhash.Hash]struct{}
+	probes *int
+}
 
 func (s existsSet) Exists(hash chainhash.Hash) bool {
-	_, ok := s[hash]
+	*s.probes++
+	_, ok := s.hashes[hash]
+
 	return ok
 }
 
@@ -411,7 +416,9 @@ func TestMovedBackStillInAssembly(t *testing.T) {
 
 	movedBack := map[chainhash.Hash]struct{}{kept: {}, won: {}, evicted: {}}
 	winning := map[chainhash.Hash]struct{}{won: {}}
-	inAssembly := existsSet{kept: {}, won: {}}
+	probes := 0
+	inAssembly := existsSet{hashes: map[chainhash.Hash]struct{}{kept: {}, won: {}}, probes: &probes}
 
 	require.Equal(t, []chainhash.Hash{kept}, movedBackStillInAssembly(movedBack, winning, inAssembly))
+	require.Equal(t, 2, probes, "one probe per moved-back transaction no moveForward block mines")
 }

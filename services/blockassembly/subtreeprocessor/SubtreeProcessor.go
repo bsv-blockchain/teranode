@@ -5250,8 +5250,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// On the sql and aerospike stores MarkTransactionsOnLongestChain(false) keeps an existing
 	// unmined_since and stamps only an absent one; the utxoset store restarts the clock on
 	// purpose (see its MarkTransactionsOnLongestChain). Before that guard (issue 1768) every
-	// reorg rewrote
-	// unmined_since = currentBlockHeight, which restarted the pruner's parent-preservation
+	// reorg rewrote unmined_since = currentBlockHeight, which restarted the pruner's parent-preservation
 	// clock for every unmined child while each parent's deleteAtHeight kept counting from
 	// the original spend — a one-block fork opened a
 	// blockHeightRetention-unminedTxRetention window in which parents were pruned from

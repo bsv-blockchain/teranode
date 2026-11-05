@@ -23,6 +23,7 @@ import (
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/ordishs/gocore"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -798,6 +799,9 @@ func TestIdleReconcileNeeded(t *testing.T) {
 
 	ba.skippedForkMarkPending = true
 	require.True(t, ba.idleReconcileNeeded(t.Context()), "an unfinished mark of skipped fork transactions must not wait for a new block")
+
+	ba.skippedForkMarkRetryAt = time.Now().Add(time.Hour)
+	require.False(t, ba.idleReconcileNeeded(t.Context()), "a mark inside its back-off does not wake the idle reconcile")
 }
 
 func TestReconcileDue(t *testing.T) {
@@ -1079,6 +1083,17 @@ type noBestTipOrderClient struct {
 	staleMinedSet  bool
 	headerIDsCalls int
 	onIsMined      func()
+	// maxHeaders rejects a GetBlockHeadersFromHeight of more heights, as the blockchain service
+	// does above blockchain_maxBlockHeadersPerRequest; only the mark reads it, and its best-chain
+	// read shares the page size. emptyHeaders makes GetBlockHeaders return
+	// none. blockHeaderCalls counts GetBlockHeader calls. onBestCall runs before each
+	// GetBestBlockHeader with its number, counting from 1, and failBestCall fails that call.
+	maxHeaders       int
+	emptyHeaders     bool
+	blockHeaderCalls int
+	bestCalls        int
+	onBestCall       func(n int)
+	failBestCall     int
 }
 
 func (c *noBestTipOrderClient) failing(method string) error {
@@ -1090,6 +1105,16 @@ func (c *noBestTipOrderClient) failing(method string) error {
 }
 
 func (c *noBestTipOrderClient) GetBestBlockHeader(ctx context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	c.bestCalls++
+
+	if c.onBestCall != nil {
+		c.onBestCall(c.bestCalls)
+	}
+
+	if c.failBestCall == c.bestCalls {
+		return nil, nil, errors.NewServiceError("GetBestBlockHeader failed")
+	}
+
 	if err := c.failing("GetBestBlockHeader"); err != nil {
 		return nil, nil, err
 	}
@@ -1100,6 +1125,10 @@ func (c *noBestTipOrderClient) GetBestBlockHeader(ctx context.Context) (*model.B
 func (c *noBestTipOrderClient) GetBlockHeaders(ctx context.Context, hash *chainhash.Hash, n uint64) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	if err := c.failing("GetBlockHeaders"); err != nil {
 		return nil, nil, err
+	}
+
+	if c.emptyHeaders {
+		return nil, nil, nil
 	}
 
 	headers, metas, err := c.ClientI.GetBlockHeaders(ctx, hash, n)
@@ -1118,6 +1147,8 @@ func (c *noBestTipOrderClient) GetBlockHeaders(ctx context.Context, hash *chainh
 }
 
 func (c *noBestTipOrderClient) GetBlockHeader(ctx context.Context, hash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	c.blockHeaderCalls++
+
 	if err := c.failing("GetBlockHeader"); err != nil {
 		return nil, nil, err
 	}
@@ -1136,6 +1167,10 @@ func (c *noBestTipOrderClient) GetBlockHeader(ctx context.Context, hash *chainha
 func (c *noBestTipOrderClient) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, error) {
 	if err := c.failing("GetBlockHeadersFromHeight"); err != nil {
 		return nil, nil, err
+	}
+
+	if c.maxHeaders > 0 && limit > uint32(c.maxHeaders) { //nolint:gosec // a small test limit
+		return nil, nil, errors.NewInvalidArgumentError("invalid count %d, maximum is %d", limit, c.maxHeaders)
 	}
 
 	headers, metas, err := c.ClientI.GetBlockHeadersFromHeight(ctx, height, limit)
@@ -1190,7 +1225,7 @@ func (s *failingUtxoStore) BatchDecorate(ctx context.Context, items []*utxo.Unre
 }
 
 func (s *failingUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
-	if s.fail == "MarkTransactionsOnLongestChain" {
+	if s.fail == "MarkTransactionsOnLongestChain" || (onLongestChain && s.fail == "MarkTransactionsOnLongestChain(true)") {
 		return errors.NewStorageError("MarkTransactionsOnLongestChain failed")
 	}
 
@@ -1452,7 +1487,7 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, cTip.Hash().String(), best.Hash().String())
 
-			client := &noBestTipOrderClient{ClientI: items.blockchainClient, failMarkSave: tc.failSave || tc.refusedReset}
+			client := &noBestTipOrderClient{ClientI: items.blockchainClient, failMarkSave: tc.failSave || tc.refusedReset, maxHeaders: tc.headerLimit}
 			ba.blockchainClient = client
 
 			if tc.bestMovesOntoB {
@@ -1657,7 +1692,7 @@ func pendingMarkWaitsForTheBestTip(t *testing.T, invalidChild bool) {
 
 	requireBlockAssemblyTip(t, items, a1)
 	require.True(t, items.blockAssembler.skippedForkMarkPending, "the mark did not run off the best tip and stays pending")
-	require.Zero(t, items.blockAssembler.skippedForkMarkFailures, "waiting for the best tip is no failure")
+	require.Zero(t, items.blockAssembler.skippedForkMarkWait, "waiting for the best tip is no failure")
 }
 
 // TestFollowBestHeader_ReloadsOnlyForTxsItUnmarks: the mark reloads the pool, a full reset, only
@@ -1933,7 +1968,7 @@ func TestMarkSkippedForkTxs_FailuresKeepItPending(t *testing.T) {
 			require.False(t, ba.skippedForkReloadPending, "the pool reload ran")
 			require.NotZero(t, unminedSince(t, items, y), "Y is marked not on the longest chain")
 			require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the pool holds Y")
-			require.Zero(t, ba.skippedForkMarkFailures, "a run that finished clears the back-off")
+			require.Zero(t, ba.skippedForkMarkWait, "a run that finished clears the back-off")
 
 			record, err := items.blockchainClient.GetState(t.Context(), SkippedForkMarkStateKey)
 			require.NoError(t, err)
@@ -1967,16 +2002,21 @@ func TestMarkSkippedForkTxs_WaitsForMinedSet(t *testing.T) {
 // at height 2 with no subtree; with the best tip at 3 and a subtree retention of 2 the mark reads
 // from height 3.
 func TestMarkSkippedForkTxs_ReadsOnlyForksWithRetainedSubtrees(t *testing.T) {
-	items, _, _, y := skippedForkSetup(t, false, true, func(s *settings.Settings) {
+	items, _, f, y := skippedForkSetup(t, false, true, func(s *settings.Settings) {
 		s.GlobalBlockHeightRetention = 10
 		s.SubtreeValidation.BlockHeightRetentionAdjustment = -8
 	})
 	ba := items.blockAssembler
 
+	stale := chainhash.HashH([]byte("recorded below the floor"))
+	ba.skippedForkBlocksMarked = map[chainhash.Hash]uint32{stale: 1}
+
 	require.Equal(t, uint32(3), ba.skippedForkMarkFloor(3))
 	require.NoError(t, ba.markSkippedForkTxs(t.Context(), false))
 	require.False(t, ba.skippedForkMarkPending)
 	require.Zero(t, unminedSince(t, items, y), "F is below the floor and not read")
+	require.NotContains(t, ba.skippedForkBlocksMarked, *f.Hash(), "F was not read, so not given up either")
+	require.NotContains(t, ba.skippedForkBlocksMarked, stale, "a record below the floor is dropped")
 }
 
 // TestFollowBestHeader_FailedMoveBacksOff: a fallback move that fails leaves the mark it owes
@@ -2031,7 +2071,7 @@ func TestFollowBestHeader_MoveThatResetsIsNoFailure(t *testing.T) {
 	items.blockAssembler.blockchainClient = &noBestTipOrderClient{ClientI: items.blockchainClient}
 	items.blockAssembler.processNewBlockAnnouncement(ctx)
 
-	require.Zero(t, items.blockAssembler.skippedForkMarkFailures, "a move that reset is no failure")
+	require.Zero(t, items.blockAssembler.skippedForkMarkWait, "a move that reset is no failure")
 	require.True(t, items.blockAssembler.reconcileDue(time.Now()), "the owed mark is not backed off")
 }
 
@@ -2194,11 +2234,288 @@ func TestMarkSkippedForkTxs_GivesUpABlockWhoseSubtreeIsGone(t *testing.T) {
 
 	require.LessOrEqual(t, ba.skippedForkMarkFloor(3), uint32(2), "precondition: F is within the floor")
 
+	before := testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost"))
+
 	require.NoError(t, ba.markSkippedForkTxs(ctx, false))
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost")))
 	require.Contains(t, ba.skippedForkBlocksMarked, *f.Hash(), "F is given up")
 	require.Zero(t, unminedSince(t, items, y))
 
 	ba.skippedForkBlocksMarked = nil
 	require.NoError(t, items.blockchainClient.SetState(ctx, SkippedForkMarkStateKey, []byte{1}))
 	require.NoError(t, ba.finishSkippedForkMarkAtStart(ctx), "a start does not fail on it")
+}
+
+// fallbackFailingSubtreeStore has no subtree file, and fails to answer for the one still to be
+// checked, as a store that is down does.
+type fallbackFailingSubtreeStore struct {
+	blob.Store
+}
+
+func (s *fallbackFailingSubtreeStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...blobopts.FileOption) (io.ReadCloser, error) {
+	if fileType == fileformat.FileTypeSubtree {
+		return nil, errors.ErrNotFound
+	}
+
+	return nil, errors.NewStorageError("subtree store unreachable")
+}
+
+func (s *fallbackFailingSubtreeStore) Exists(context.Context, []byte, fileformat.FileType, ...blobopts.FileOption) (bool, error) {
+	return false, errors.NewStorageError("subtree store unreachable")
+}
+
+// TestMarkSkippedForkTxs_GivesUpOnlyWhenTheStoreSaysTheFilesAreGone: the subtree read reports a
+// failure of its fallback read as not found, so a block is given up only once the store answers
+// that neither file exists. A store that does not answer leaves the block for a later run.
+func TestMarkSkippedForkTxs_GivesUpOnlyWhenTheStoreSaysTheFilesAreGone(t *testing.T) {
+	items, _, f, y := skippedForkSetup(t, true, true)
+	ba := items.blockAssembler
+	ba.subtreeStore = &fallbackFailingSubtreeStore{Store: items.blobStore}
+
+	before := testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost"))
+
+	require.Error(t, ba.markSkippedForkTxs(t.Context(), false))
+	require.NotContains(t, ba.skippedForkBlocksMarked, *f.Hash(), "F is not given up")
+	require.True(t, ba.skippedForkMarkPending)
+	require.Equal(t, before, testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost")))
+
+	ba.subtreeStore = items.blobStore
+	require.NoError(t, ba.markSkippedForkTxs(t.Context(), false))
+	require.NotZero(t, unminedSince(t, items, y), "the store answers again and Y is marked")
+}
+
+// TestMarkSkippedForkTxs_NoReloadWhileABlockIsUnprocessed: a reload is a reset, which waits for
+// every block block validation has not finished, so a run with such a fork block keeps the reload
+// owed instead of holding block assembly on it.
+func TestMarkSkippedForkTxs_NoReloadWhileABlockIsUnprocessed(t *testing.T) {
+	items, client, f, y := skippedForkSetup(t, true, true)
+	ba := items.blockAssembler
+	ctx := t.Context()
+
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+
+	_, fMeta, err := items.blockchainClient.GetBlockHeader(ctx, f.Hash())
+	require.NoError(t, err)
+
+	parent, _, err := items.blockchainClient.GetBlockHeader(ctx, f.HashPrevBlock)
+	require.NoError(t, err)
+
+	g := buildChain(parent, 1, 103000)[0]
+	missing := chainhash.HashH([]byte("G's subtree"))
+	require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: g, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{&missing}}, "", blockchainoptions.WithSubtreesSet(true), blockchainoptions.WithMinedSet(false)))
+	require.Equal(t, fMeta.Height, uint32(2))
+
+	client.headerIDsCalls = 0
+	require.Error(t, ba.markSkippedForkTxs(ctx, false), "G is not processed yet")
+	require.NotZero(t, unminedSince(t, items, y), "F is marked")
+	require.Zero(t, client.headerIDsCalls, "no reload while G waits for block validation")
+	require.True(t, ba.skippedForkReloadPending, "the reload stays owed")
+
+	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, g.Hash()))
+	require.NoError(t, ba.markSkippedForkTxs(ctx, false), "G, whose subtree is gone, is given up")
+	require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the reload ran")
+}
+
+// TestMarkSkippedForkTxs_RechecksAfterAnUnfinishedRemark: when the check against the best chain
+// after a write fails, the transactions it wrote are checked again on the next run, here after
+// F joined the best chain during the write.
+func TestMarkSkippedForkTxs_RechecksAfterAnUnfinishedRemark(t *testing.T) {
+	for _, failure := range []string{"re-mark", "best read"} {
+		t.Run(failure, func(t *testing.T) {
+			items, client, f, y := skippedForkSetup(t, true, true)
+			ba := items.blockAssembler
+			ctx := t.Context()
+
+			store := &failingUtxoStore{Store: items.utxoStore}
+			ba.utxoStore = store
+
+			var top *model.BlockHeader
+
+			// The second best read is the check after the write: F's chain is best by then.
+			client.onBestCall = func(n int) {
+				if n == 2 {
+					for _, h := range buildChain(f, 2, 104000) {
+						addBlockWithMinedSet(ctx, t, items, h)
+						top = h
+					}
+				}
+			}
+
+			if failure == "re-mark" {
+				store.fail = "MarkTransactionsOnLongestChain(true)"
+			} else {
+				client.failBestCall = 2
+			}
+
+			require.Error(t, ba.markSkippedForkTxs(ctx, false))
+			require.NotZero(t, unminedSince(t, items, y), "precondition: Y was written off the longest chain")
+			require.NotEmpty(t, ba.skippedForkRecheck)
+			require.True(t, ba.skippedForkWorkOwed())
+
+			store.fail, client.onBestCall, client.failBestCall = "", nil, 0
+			ba.processNewBlockAnnouncement(ctx)
+
+			requireBlockAssemblyTip(t, items, top)
+			require.Empty(t, ba.skippedForkRecheck)
+			require.Zero(t, unminedSince(t, items, y), "Y, mined in F on the best chain, is marked mined again")
+		})
+	}
+}
+
+// TestRestampStaleBranch_RemarksWhatTheBestChainTakes: the replay's restamp checks its write
+// against the best chain read after it, as the mark does.
+func TestRestampStaleBranch_RemarksWhatTheBestChainTakes(t *testing.T) {
+	items, client, f, y := skippedForkSetup(t, true, true)
+	ba := items.blockAssembler
+	ctx := t.Context()
+
+	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	header, meta, err := items.blockchainClient.GetBlockHeader(ctx, f.Hash())
+	require.NoError(t, err)
+
+	client.onBestCall = func(n int) {
+		if n == 1 {
+			for _, h := range buildChain(f, 2, 105000) {
+				addBlockWithMinedSet(ctx, t, items, h)
+			}
+		}
+	}
+
+	require.NoError(t, ba.restampStaleBranch(ctx, []blockHeaderWithMeta{{header: header, meta: meta}}, best))
+	require.Zero(t, unminedSince(t, items, y), "Y, mined in F on the best chain by then, stays mined")
+}
+
+// TestMarkSkippedForkTxs_ReadsNothingTwice: a fork block recorded as marked is not read again.
+func TestMarkSkippedForkTxs_ReadsNothingTwice(t *testing.T) {
+	items, client, f, _ := skippedForkSetup(t, true, true)
+	ba := items.blockAssembler
+
+	require.NoError(t, ba.markSkippedForkTxs(t.Context(), false))
+	require.Contains(t, ba.skippedForkBlocksMarked, *f.Hash())
+
+	client.blockHeaderCalls = 0
+	ba.skippedForkMarkPending = true
+	require.NoError(t, ba.markSkippedForkTxs(t.Context(), false))
+	require.Zero(t, client.blockHeaderCalls, "F is not read again")
+}
+
+// TestMarkSkippedForkTxs_LeavesABlockWithoutSubtreesSet: a block block validation has not set
+// subtrees for marked nothing mined, even when a subtree file for it exists.
+func TestMarkSkippedForkTxs_LeavesABlockWithoutSubtreesSet(t *testing.T) {
+	items, _, f, _ := skippedForkSetup(t, true, true)
+	ba := items.blockAssembler
+	ctx := t.Context()
+
+	z := replayPoolTx(&chainhash.Hash{1}, 50)
+	_, err := items.utxoStore.(*utxosql.Store).Create(ctx, z, 1)
+	require.NoError(t, err)
+
+	tree, err := subtree.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, tree.AddCoinbaseNode())
+	require.NoError(t, tree.AddNode(*z.TxIDChainHash(), 1, uint64(len(z.Bytes()))))
+	treeBytes, err := tree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
+
+	parent, _, err := items.blockchainClient.GetBlockHeader(ctx, f.HashPrevBlock)
+	require.NoError(t, err)
+
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+
+	g := buildChain(parent, 1, 106000)[0]
+	require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: g, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, "", blockchainoptions.WithSubtreesSet(false), blockchainoptions.WithMinedSet(true)))
+
+	_, gMeta, err := items.blockchainClient.GetBlockHeader(ctx, g.Hash())
+	require.NoError(t, err)
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{z.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: gMeta.ID, BlockHeight: 2, OnLongestChain: true})
+	require.NoError(t, err)
+
+	require.NoError(t, ba.markSkippedForkTxs(ctx, false))
+	require.Zero(t, unminedSince(t, items, z), "G is not read")
+	require.NotContains(t, ba.skippedForkBlocksMarked, *g.Hash())
+}
+
+// TestMarkSkippedForkTxs_ReadErrors: a best-chain read that comes back empty is an error, not a
+// panic, and the listing beats the liveness heartbeat.
+func TestMarkSkippedForkTxs_ReadErrors(t *testing.T) {
+	t.Run("empty best-chain read", func(t *testing.T) {
+		items, client, _, _ := skippedForkSetup(t, true, true)
+
+		client.emptyHeaders = true
+		require.Error(t, items.blockAssembler.markSkippedForkTxs(t.Context(), false))
+		require.True(t, items.blockAssembler.skippedForkMarkPending)
+	})
+
+	t.Run("listing beats", func(t *testing.T) {
+		items, _, _, _ := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+
+		best, bestMeta, err := items.blockchainClient.GetBestBlockHeader(t.Context())
+		require.NoError(t, err)
+
+		ba.heartbeat.Beat()
+		ba.heartbeat.SetLastBeatForTest(time.Now().Add(-time.Hour))
+
+		_, err = ba.skippedForkBlocks(t.Context(), best, bestMeta.Height, 0)
+		require.NoError(t, err)
+		require.Less(t, ba.heartbeat.Age(), time.Minute)
+	})
+}
+
+// TestHandleResetRequests_RunsOwedWorkOncePerPass: a reset pass ends with the work a mark of
+// skipped fork transactions owes, also with a replay position, and a mark that failed before the
+// reset is not run, and counted, a second time in the same pass.
+func TestHandleResetRequests_RunsOwedWorkOncePerPass(t *testing.T) {
+	t.Run("with a replay position", func(t *testing.T) {
+		items, _, _, y := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		tip, _ := ba.CurrentBlock()
+		ba.setBestTipPos(bestTipKeyOf(t, items, tip))
+		ba.bestTipPosKnown.Store(true)
+		ba.skippedForkMarkPending = true
+		ba.skippedForkMarkRetryAt = time.Now().Add(time.Hour)
+
+		answer := make(chan error, 1)
+		ba.handleResetRequests(ctx, resetRequest{ErrCh: answer})
+		require.NoError(t, <-answer)
+		require.NotZero(t, unminedSince(t, items, y), "the owed mark ran in the reset's pass")
+		require.False(t, ba.skippedForkWorkOwed())
+	})
+
+	t.Run("mark fails before the reset", func(t *testing.T) {
+		items, _, _, _ := skippedForkSetup(t, false, true)
+		ba := items.blockAssembler
+		ba.subtreeStore = &unreachableSubtreeStore{Store: items.blobStore}
+
+		before := testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_unfinished"))
+
+		answer := make(chan error, 1)
+		ba.handleResetRequests(t.Context(), resetRequest{ErrCh: answer})
+		require.NoError(t, <-answer, "an unfinished mark does not hold the reset")
+		require.True(t, ba.skippedForkMarkPending)
+		require.Equal(t, skippedForkMarkRetryBase, ba.skippedForkMarkWait, "one failure in the pass")
+		require.Equal(t, before+1, testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_unfinished")))
+	})
+
+	t.Run("refused reset answers every request", func(t *testing.T) {
+		items, client, _, _ := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+		client.failMarkSave = true
+
+		before := testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record"))
+
+		first, queued := make(chan error, 1), make(chan error, 1)
+		ba.resetCh <- resetRequest{ErrCh: queued}
+		ba.handleResetRequests(t.Context(), resetRequest{ErrCh: first, FullReset: true})
+		require.Error(t, <-first)
+		require.Error(t, <-queued)
+		require.Equal(t, before+1, testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record")))
+	})
 }
