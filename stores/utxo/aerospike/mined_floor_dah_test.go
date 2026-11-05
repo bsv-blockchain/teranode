@@ -2,6 +2,9 @@ package aerospike_test
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -643,6 +646,71 @@ func floorPrunerService(ctx context.Context, t *testing.T, store *teranode_aeros
 	return prunerSvc
 }
 
+// floorFailPageWrites makes every write to a pagination record of hash fail, as a network error does,
+// until the returned function is called. Writes to any other record go through.
+func floorFailPageWrites(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash) (heal func()) {
+	t.Helper()
+
+	pageDigests := make(map[string]struct{}, floorPaginatedOut-1)
+	for page := uint32(1); page < floorPaginatedOut; page++ {
+		pageDigests[string(floorKey(t, store, hash, page).Digest())] = struct{}{}
+	}
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, r := range records {
+			if _, isPage := pageDigests[string(r.BatchRec().Key.Digest())]; isPage {
+				return aerospike.ErrNetwork
+			}
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+
+	healed := false
+	heal = func() {
+		if !healed {
+			healed = true
+
+			store.SetBatchOperateFn(nil)
+		}
+	}
+
+	t.Cleanup(heal)
+
+	return heal
+}
+
+// floorRequirePagesAt requires every pagination record of hash to carry want, or no stamp when want is 0.
+func floorRequirePagesAt(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash, want int) {
+	t.Helper()
+
+	for page := uint32(1); page < floorPaginatedOut; page++ {
+		dah, stamped := readRecordDAH(t, client, store, hash, page)
+		if want == 0 {
+			require.False(t, stamped, "page %d must carry no stamp, has %d", page, dah)
+
+			continue
+		}
+
+		require.True(t, stamped, "page %d must carry a stamp", page)
+		require.Equal(t, want, dah, "page %d stamp", page)
+	}
+}
+
+func floorSpendFirstOutput(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, parent *bt.Tx) []*utxo.Spend {
+	t.Helper()
+
+	spender := bt.NewTx()
+	require.NoError(t, spender.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	spender.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x6a})
+	require.NoError(t, spender.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+
+	spends, err := store.Spend(ctx, spender, floorCachedTip)
+	require.NoError(t, err)
+
+	return spends
+}
+
 // A SetConflicting whose page write failed after the master batch committed returns an
 // error and is retried. The retry finds the master already holding the value, so no signal
 // fires, and the pages must still be brought in line with the master.
@@ -668,11 +736,21 @@ func TestSetConflictingRetryRepairsPagesAfterFailedPageWrite(t *testing.T) {
 		parent := floorCreateThreePageParent(ctx, t, store, 4)
 		hash := parent.TxIDChainHash()
 
-		floorForceStaleStamps(t, client, store, hash, stale, true)
-		require.NoError(t, client.PutBins(nil, floorKey(t, store, hash, 0),
-			aerospike.NewBin(fields.DeleteAtHeight.String(), int(floorMinedHeight+retention))))
+		floorForceStaleStamps(t, client, store, hash, stale, false)
+
+		heal := floorFailPageWrites(t, client, store, hash)
 
 		_, _, err := store.SetConflicting(ctx, []chainhash.Hash{*hash}, true)
+		require.Error(t, err, "the failed page write must be reported")
+
+		masterDAH, ok := readRecordDAH(t, client, store, hash, 0)
+		require.True(t, ok)
+		require.Equal(t, int(floorMinedHeight+retention), masterDAH, "the master committed the raise")
+		floorRequirePagesAt(t, client, store, hash, int(stale))
+
+		heal()
+
+		_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*hash}, true)
 		require.NoError(t, err)
 
 		floorRequireAllRecordsAt(t, client, store, hash, int(floorMinedHeight+retention))
@@ -692,23 +770,23 @@ func TestSetConflictingRetryRepairsPagesAfterFailedPageWrite(t *testing.T) {
 		parent := floorCreateThreePageParent(ctx, t, store, 5)
 		hash := parent.TxIDChainHash()
 
-		floorForceStaleStamps(t, client, store, hash, stale, false)
-		require.NoError(t, client.PutBins(nil, floorKey(t, store, hash, 0),
-			aerospike.NewBin(fields.DeleteAtHeight.String(), nil)))
+		floorForceStaleStamps(t, client, store, hash, stale, true)
+
+		heal := floorFailPageWrites(t, client, store, hash)
 
 		_, _, err := store.SetConflicting(ctx, []chainhash.Hash{*hash}, false)
-		require.NoError(t, err)
+		require.Error(t, err, "the failed page write must be reported")
 
 		_, masterStamped := readRecordDAH(t, client, store, hash, 0)
-		require.False(t, masterStamped)
+		require.False(t, masterStamped, "the master committed the clear")
+		floorRequirePagesAt(t, client, store, hash, int(stale))
 
-		for page := uint32(1); page < floorPaginatedOut; page++ {
-			require.Eventually(t, func() bool {
-				_, stamped := readRecordDAH(t, client, store, hash, page)
+		heal()
 
-				return !stamped
-			}, 5*time.Second, 50*time.Millisecond, "page %d must be cleared", page)
-		}
+		_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*hash}, false)
+		require.NoError(t, err)
+
+		floorRequirePagesAt(t, client, store, hash, 0)
 	})
 }
 
@@ -732,31 +810,641 @@ func TestUnspendRetryClearsPagesAfterFailedPageWrite(t *testing.T) {
 	parent := floorCreateThreePageParent(ctx, t, store, 6)
 	hash := parent.TxIDChainHash()
 
+	spends := floorSpendFirstOutput(ctx, t, store, parent)
+
+	floorForceStaleStamps(t, client, store, hash, floorCachedTip+retention, false)
+
+	heal := floorFailPageWrites(t, client, store, hash)
+
+	require.Error(t, store.Unspend(ctx, spends), "the failed page write must be reported")
+
+	_, masterStamped := readRecordDAH(t, client, store, hash, 0)
+	require.False(t, masterStamped, "the master committed the clear")
+	floorRequirePagesAt(t, client, store, hash, int(floorCachedTip+retention))
+
+	heal()
+
+	require.NoError(t, store.Unspend(ctx, spends))
+
+	floorRequirePagesAt(t, client, store, hash, 0)
+}
+
+// An Unspend that changes nothing on a paginated master writes none of its pages. The control
+// then stamps the master and unspends again: the DAHUNSET signal makes the pages get written.
+func TestUnspendWithoutASignalWritesNoPages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings, retention := floorSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	parent := floorCreateThreePageParent(ctx, t, store, 7)
+	hash := parent.TxIDChainHash()
+
+	spends := floorSpendFirstOutput(ctx, t, store, parent)
+
+	pageDigests := make(map[string]struct{}, floorPaginatedOut-1)
+	for page := uint32(1); page < floorPaginatedOut; page++ {
+		pageDigests[string(floorKey(t, store, hash, page).Digest())] = struct{}{}
+	}
+
+	var pageWrites atomic.Int64
+
+	store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+		for _, r := range records {
+			if _, isPage := pageDigests[string(r.BatchRec().Key.Digest())]; isPage {
+				pageWrites.Add(1)
+			}
+		}
+
+		return client.BatchOperate(policy, records)
+	})
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	require.NoError(t, store.Unspend(ctx, spends))
+	require.Zero(t, pageWrites.Load(), "an unspend that fires no signal must write no page")
+
+	floorSpendFirstOutput(ctx, t, store, parent)
+	floorForceStaleStamps(t, client, store, hash, floorCachedTip+retention, false)
+
+	require.NoError(t, store.Unspend(ctx, spends))
+	require.Equal(t, int64(floorPaginatedOut-1), pageWrites.Load(), "a DAHUNSET signal must write every page once")
+	floorRequirePagesAt(t, client, store, hash, 0)
+}
+
+// pauseNextPageWrite holds the first page write back before it is enqueued. entered closes when that
+// write is waiting. release lets it go.
+func pauseNextPageWrite(t *testing.T) (entered <-chan struct{}, release func()) {
+	t.Helper()
+
+	enteredCh := make(chan struct{})
+	gate := make(chan struct{})
+
+	var (
+		first atomic.Bool
+		once  sync.Once
+	)
+
+	teranode_aerospike.SetChildDAHBeforeWrite(func() {
+		if first.CompareAndSwap(false, true) {
+			close(enteredCh)
+			<-gate
+		}
+	})
+
+	release = func() { once.Do(func() { close(gate) }) }
+
+	t.Cleanup(func() {
+		release()
+		teranode_aerospike.SetChildDAHBeforeWrite(nil)
+	})
+
+	return enteredCh, release
+}
+
+// An Unspend reports the master's state, then writes the pages from it. SetConflicting(false) can commit
+// and clear master and pages in between. The held-back page write then carries an older master version
+// than the pages hold, so it must be refused, or the pruner deletes the pages of a live master.
+func TestUnspendStalePageWriteCannotOverwriteAClearedMaster(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings, retention := floorSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	prunerSvc := floorPrunerService(ctx, t, store)
+	stamp := int(floorMinedHeight + retention)
+
+	run := func(t *testing.T, vout uint32, prepare func(hash *chainhash.Hash)) {
+		parent := floorCreateThreePageParent(ctx, t, store, vout)
+		hash := parent.TxIDChainHash()
+		spends := floorSpendFirstOutput(ctx, t, store, parent)
+
+		prepare(hash)
+
+		entered, release := pauseNextPageWrite(t)
+
+		unspendErr := make(chan error, 1)
+
+		go func() { unspendErr <- store.Unspend(ctx, spends) }()
+
+		select {
+		case <-entered:
+		case <-time.After(20 * time.Second):
+			release()
+			require.FailNow(t, "the unspend never reached its page write")
+		}
+
+		_, _, err := store.SetConflicting(ctx, []chainhash.Hash{*hash}, false)
+		require.NoError(t, err)
+
+		_, masterStamped := readRecordDAH(t, client, store, hash, 0)
+		require.False(t, masterStamped, "setup: SetConflicting(false) cleared the master")
+		floorRequirePagesAt(t, client, store, hash, 0)
+
+		release()
+		require.NoError(t, <-unspendErr)
+
+		_, masterStamped = readRecordDAH(t, client, store, hash, 0)
+		require.False(t, masterStamped, "the master must stay unstamped")
+		floorRequirePagesAt(t, client, store, hash, 0)
+
+		n, err := prunerSvc.PruneWithPartitions(ctx, uint32(stamp), fmt.Sprintf("stale-page-%d", vout), 1)
+		require.NoError(t, err)
+		require.Zero(t, n, "the pruner must find nothing to delete")
+
+		for page := uint32(0); page < floorPaginatedOut; page++ {
+			rec, getErr := client.Get(nil, floorKey(t, store, hash, page))
+			require.NoError(t, getErr)
+			require.NotNil(t, rec, "record %d must survive the pruner pass", page)
+		}
+	}
+
+	t.Run("the unspend response carried a DAHSET signal", func(t *testing.T) {
+		run(t, 8, func(hash *chainhash.Hash) {
+			floorForceStaleStamps(t, client, store, hash, floorCachedTip+retention, true)
+		})
+	})
+
+	t.Run("the unspend rewrites pages because an earlier page write failed", func(t *testing.T) {
+		run(t, 9, func(hash *chainhash.Hash) {
+			floorForceStaleStamps(t, client, store, hash, uint32(stamp), true)
+
+			heal := floorFailPageWrites(t, client, store, hash)
+			require.Error(t, store.SetDAHForChildRecords(hash, int(floorPaginatedOut-1), uint32(stamp)), "setup: a page write must fail")
+			heal()
+		})
+	})
+}
+
+func floorDAHVersion(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash, recordIdx uint32) int {
+	t.Helper()
+
+	rec, err := client.Get(nil, floorKey(t, store, hash, recordIdx))
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+
+	v, ok := rec.Bins[fields.DAHVersion.String()]
+	if !ok || v == nil {
+		return 0
+	}
+
+	return v.(int)
+}
+
+func floorKeyDAHVersion(t *testing.T, client *uaerospike.Client, key *aerospike.Key) int {
+	t.Helper()
+
+	rec, err := client.Get(nil, key)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+
+	v, ok := rec.Bins[fields.DAHVersion.String()]
+	if !ok || v == nil {
+		return 0
+	}
+
+	return v.(int)
+}
+
+// Every writer of a master's delete-at-height must bump its dahVer in the same operation, or a
+// stale page write could pass the version filter. Each case performs one writer's real write and
+// requires the master's version to have grown. The restore cases fail the page writes, so the
+// writer bumps once and its restore bumps again.
+func TestGoMasterDAHWritersBumpTheVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	tSettings, _ := floorSettings(t)
+	tSettings.Aerospike.EnablePreserveFilterExpressions = true
+	tSettings.Aerospike.EnableSetMinedFilterExpressions = true
+	tSettings.Aerospike.EnableSpendFilterExpressions = true
+
+	client, store, _, cleanup := initAerospike(t, tSettings, ulogger.NewErrorTestLogger(t))
+	defer cleanup()
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	t.Run("setConflicting through the Lua package", func(t *testing.T) {
+		hash := floorCreateThreePageParent(ctx, t, store, 20).TxIDChainHash()
+		before := floorDAHVersion(t, client, store, hash, 0)
+
+		_, _, err := store.SetConflicting(ctx, []chainhash.Hash{*hash}, true)
+		require.NoError(t, err)
+
+		require.Greater(t, floorDAHVersion(t, client, store, hash, 0), before)
+	})
+
+	t.Run("preserve with expressions", func(t *testing.T) {
+		hash := floorCreateThreePageParent(ctx, t, store, 21).TxIDChainHash()
+		require.NoError(t, client.PutBins(nil, floorKey(t, store, hash, 0), aerospike.NewBin(fields.DeleteAtHeight.String(), 5000)))
+
+		before := floorDAHVersion(t, client, store, hash, 0)
+
+		require.NoError(t, store.PreserveTransactions(ctx, []chainhash.Hash{*hash}, 9000))
+
+		_, stamped := readRecordDAH(t, client, store, hash, 0)
+		require.False(t, stamped, "setup: the preserve cleared the stamp")
+		require.Greater(t, floorDAHVersion(t, client, store, hash, 0), before)
+	})
+
+	t.Run("set mined with expressions", func(t *testing.T) {
+		hash := floorCreateThreePageParent(ctx, t, store, 22).TxIDChainHash()
+		before := floorDAHVersion(t, client, store, hash, 0)
+
+		_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: floorMinedBlockID, BlockHeight: floorMinedHeight, OnLongestChain: true})
+		require.NoError(t, err)
+
+		require.Greater(t, floorDAHVersion(t, client, store, hash, 0), before)
+	})
+
+	t.Run("spend with expressions", func(t *testing.T) {
+		parent := floorCreateThreePageParent(ctx, t, store, 23)
+		hash := parent.TxIDChainHash()
+		before := floorDAHVersion(t, client, store, hash, 0)
+
+		floorSpendFirstOutput(ctx, t, store, parent)
+
+		require.Greater(t, floorDAHVersion(t, client, store, hash, 0), before)
+	})
+
+	t.Run("spend with expressions leaves the version of a page alone", func(t *testing.T) {
+		parent := floorCreateThreePageParent(ctx, t, store, 25)
+		hash := parent.TxIDChainHash()
+
+		floorSpendOutput(ctx, t, store, parent, 1)
+
+		floorRequirePageUntouched(t, client, store, hash, 1)
+	})
+
+	t.Run("setDAH batcher master write after counter drift", func(t *testing.T) {
+		hash := floorCreateThreePageParent(ctx, t, store, 24).TxIDChainHash()
+		require.NoError(t, client.PutBins(nil, floorKey(t, store, hash, 0),
+			aerospike.NewBin(fields.SpentUtxos.String(), 1),
+			aerospike.NewBin(fields.BlockIDs.String(), []int{int(floorMinedBlockID)}),
+			aerospike.NewBin(fields.UnminedSince.String(), nil),
+			aerospike.NewBin(fields.SpentExtraRecs.String(), 1),
+		))
+
+		before := floorDAHVersion(t, client, store, hash, 0)
+
+		require.NoError(t, store.IncrementSpentRecordsMulti(ctx, []*chainhash.Hash{hash}, 1, floorCachedTip))
+
+		_, stamped := readRecordDAH(t, client, store, hash, 0)
+		require.False(t, stamped, "setup: the drifted stamp was cleared by the batcher")
+		require.Equal(t, before+2, floorDAHVersion(t, client, store, hash, 0), "the Lua stamp and the batcher clear each bump once")
+	})
+
+	t.Run("longest chain", func(t *testing.T) {
+		require.NoError(t, store.SetBlockHeight(1000))
+		t.Cleanup(func() { require.NoError(t, store.SetBlockHeight(floorCachedTip)) })
+
+		h := &childDAHHarness{t: t, client: client, store: store, dahBin: fields.DeleteAtHeight.String()}
+		txID, masterKey, _ := h.seed("bump-longest-chain", 1002, 0)
+
+		before := floorKeyDAHVersion(t, client, masterKey)
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+
+		require.Equal(t, before+1, floorKeyDAHVersion(t, client, masterKey))
+	})
+
+	t.Run("longest chain restore", func(t *testing.T) {
+		require.NoError(t, store.SetBlockHeight(1000))
+		t.Cleanup(func() { require.NoError(t, store.SetBlockHeight(floorCachedTip)) })
+
+		h := &childDAHHarness{t: t, client: client, store: store, dahBin: fields.DeleteAtHeight.String()}
+		txID, masterKey, pageKey := h.seed("bump-longest-chain-restore", 1002, 0)
+
+		before := floorKeyDAHVersion(t, client, masterKey)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			for _, r := range records {
+				if string(r.BatchRec().Key.Digest()) == string(pageKey.Digest()) {
+					return aerospike.ErrNetwork
+				}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+		t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+		require.Error(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+		require.Equal(t, 1002, h.dah(masterKey), "setup: the master was restored")
+		require.Equal(t, before+2, floorKeyDAHVersion(t, client, masterKey), "the write and its restore each bump once")
+	})
+
+	h := newExpiredFailureHarness(t)
+
+	t.Run("expired preservation", func(t *testing.T) {
+		h.setup(t, 30, false)
+
+		before := floorKeyDAHVersion(t, h.client, h.k0)
+
+		require.NoError(t, h.run(t))
+
+		master, _ := h.bins(t)
+		require.Nil(t, master[fields.DeleteAtHeight.String()], "setup: the expiry cleared the stale stamp")
+		require.Equal(t, before+1, floorKeyDAHVersion(t, h.client, h.k0))
+	})
+
+	t.Run("expired preservation restore", func(t *testing.T) {
+		h.setup(t, 31, false)
+		h.failFirst(t, 2, nil)
+
+		before := floorKeyDAHVersion(t, h.client, h.k0)
+
+		require.Error(t, h.run(t))
+
+		master, _ := h.bins(t)
+		require.Equal(t, 5, master[fields.DeleteAtHeight.String()], "setup: the master was restored")
+		require.Equal(t, before+2, floorKeyDAHVersion(t, h.client, h.k0), "the write and its restore each bump once")
+	})
+}
+
+// floorCreateConflictingThreePageParent stores a conflicting tx of five outputs, which a batch size of two
+// splits into a master and two pages. A spend of one of the two outputs of page 1 leaves the page's
+// spent state as it was, so the master is not involved.
+func floorCreateConflictingThreePageParent(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, vout uint32) *bt.Tx {
+	t.Helper()
+
+	parent := bt.NewTx()
+	require.NoError(t, parent.From(
+		"1111111111111111111111111111111111111111111111111111111111111111",
+		vout,
+		"76a914000000000000000000000000000000000000000088ac",
+		100000,
+	))
+	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x6a})
+
+	for range 5 {
+		require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	}
+
+	_, err := store.Create(ctx, parent, floorCachedTip, utxo.WithConflicting(true))
+	require.NoError(t, err)
+
+	return parent
+}
+
+func floorSpendAndUnspendOutput(ctx context.Context, t *testing.T, store *teranode_aerospike.Store, parent *bt.Tx, vout uint32) {
+	t.Helper()
+
 	spender := bt.NewTx()
-	require.NoError(t, spender.From(parent.TxID(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, spender.From(parent.TxID(), vout, parent.Outputs[vout].LockingScript.String(), parent.Outputs[vout].Satoshis))
 	spender.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x6a})
 	require.NoError(t, spender.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
 
-	spends, err := store.Spend(ctx, spender, floorCachedTip)
+	spends, err := store.Spend(ctx, spender, floorCachedTip, utxo.IgnoreFlags{IgnoreConflicting: true})
+	require.NoError(t, err)
+	require.NoError(t, store.Unspend(ctx, spends))
+}
+
+func floorRequirePageUntouched(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash, page uint32) {
+	t.Helper()
+
+	dah, stamped := readRecordDAH(t, client, store, hash, page)
+	require.False(t, stamped, "page %d must carry no stamp, has %d", page, dah)
+	require.Zero(t, floorDAHVersion(t, client, store, hash, page), "page %d must carry no version", page)
+}
+
+func floorRequireRecordsExist(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash) {
+	t.Helper()
+
+	for page := uint32(0); page < floorPaginatedOut; page++ {
+		rec, err := client.Get(nil, floorKey(t, store, hash, page))
+		require.NoError(t, err)
+		require.NotNil(t, rec, "record %d must survive the pruner pass", page)
+	}
+}
+
+// A page created with the conflicting flag of a conflicting transaction keeps that flag after
+// SetConflicting(false), which writes only the master. A spend or unspend on the page runs the Lua
+// setDeleteAtHeight on it. The page must neither stamp itself nor count its own version, or the
+// DAHUNSET page write of the master is refused and the pruner deletes the page of a live master.
+func TestPageOfAConflictingTxNeverStampsOrVersionsItself(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings, retention := floorSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 2
+
+	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	prunerSvc := floorPrunerService(ctx, t, store)
+	pruneAt := floorMinedHeight + retention + 1000
+
+	parent := floorCreateConflictingThreePageParent(ctx, t, store, 40)
+	hash := parent.TxIDChainHash()
+
+	require.NoError(t, client.PutBins(nil, floorKey(t, store, hash, 0),
+		aerospike.NewBin(fields.BlockIDs.String(), []int{int(floorMinedBlockID)}),
+		aerospike.NewBin(fields.BlockHeights.String(), []int{int(floorMinedHeight)}),
+		aerospike.NewBin(fields.SubtreeIdxs.String(), []int{0}),
+	))
+
+	pageRec, getErr := client.Get(nil, floorKey(t, store, hash, 1))
+	require.NoError(t, getErr)
+	require.Equal(t, true, pageRec.Bins[fields.Conflicting.String()], "setup: the page carries the conflicting flag")
+
+	floorSpendAndUnspendOutput(ctx, t, store, parent, 2)
+
+	floorRequirePageUntouched(t, client, store, hash, 1)
+
+	_, _, err := store.SetConflicting(ctx, []chainhash.Hash{*hash}, false)
 	require.NoError(t, err)
 
-	require.NoError(t, store.Unspend(ctx, spends))
+	floorRequirePagesAt(t, client, store, hash, 0)
 
-	_, masterStamped := readRecordDAH(t, client, store, hash, 0)
-	require.False(t, masterStamped, "setup: the master carries no stamp after the unspend")
+	n, err := prunerSvc.PruneWithPartitions(ctx, pruneAt, "conflicting-page-self", 1)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	floorRequireRecordsExist(t, client, store, hash)
 
-	for page := uint32(1); page < floorPaginatedOut; page++ {
-		require.NoError(t, client.PutBins(nil, floorKey(t, store, hash, page),
-			aerospike.NewBin(fields.DeleteAtHeight.String(), int(floorCachedTip+retention))))
+	require.NoError(t, client.PutBins(nil, floorKey(t, store, hash, 1),
+		aerospike.NewBin(fields.DeleteAtHeight.String(), nil),
+		aerospike.NewBin(fields.DAHVersion.String(), nil),
+	))
+
+	floorSpendAndUnspendOutput(ctx, t, store, parent, 2)
+
+	floorRequirePageUntouched(t, client, store, hash, 1)
+
+	n, err = prunerSvc.PruneWithPartitions(ctx, pruneAt, "conflicting-page-self-2", 1)
+	require.NoError(t, err)
+	require.Zero(t, n)
+	floorRequireRecordsExist(t, client, store, hash)
+}
+
+// startPausedUnspendRaise starts an Unspend of a conflicting master whose stale stamp it raises to the
+// mined floor. The unspend response carries a DAHSET signal, and its page write is held back. finish
+// releases it and waits for the unspend.
+func startPausedUnspendRaise(ctx context.Context, t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, retention, vout uint32) (hash *chainhash.Hash, finish func()) {
+	t.Helper()
+
+	parent := floorCreateThreePageParent(ctx, t, store, vout)
+	hash = parent.TxIDChainHash()
+	spends := floorSpendFirstOutput(ctx, t, store, parent)
+
+	floorForceStaleStamps(t, client, store, hash, floorCachedTip+retention, true)
+
+	entered, release := pauseNextPageWrite(t)
+
+	unspendErr := make(chan error, 1)
+
+	go func() { unspendErr <- store.Unspend(ctx, spends) }()
+
+	select {
+	case <-entered:
+	case <-time.After(20 * time.Second):
+		release()
+		require.FailNow(t, "the unspend never reached its page write")
 	}
 
-	require.NoError(t, store.Unspend(ctx, spends))
-
-	for page := uint32(1); page < floorPaginatedOut; page++ {
-		require.Eventually(t, func() bool {
-			_, stamped := readRecordDAH(t, client, store, hash, page)
-
-			return !stamped
-		}, 5*time.Second, 50*time.Millisecond, "page %d must be cleared by the retry", page)
+	return hash, func() {
+		release()
+		require.NoError(t, <-unspendErr)
 	}
+}
+
+// An Unspend raised a conflicting master to the floor at one block height and its page write is
+// delayed. A reorg then mines the transaction at a higher block, which raises the master again and
+// stamps the pages. The delayed write carries the older master version and must not lower the pages.
+func TestDelayedDAHSetWriteCannotUndoALaterSetMined(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings, retention := floorSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	hash, finish := startPausedUnspendRaise(ctx, t, client, store, retention, 41)
+
+	const reorgDelta = 50
+
+	_, err := store.SetMinedMulti(ctx, []*chainhash.Hash{hash}, utxo.MinedBlockInfo{BlockID: floorMinedBlockID + 1, BlockHeight: floorMinedHeight + reorgDelta, OnLongestChain: true})
+	require.NoError(t, err)
+
+	want := int(floorMinedHeight + reorgDelta + retention)
+
+	masterDAH, ok := readRecordDAH(t, client, store, hash, 0)
+	require.True(t, ok, "setup: the later setMined raised the master")
+	require.Equal(t, want, masterDAH)
+	floorRequirePagesAt(t, client, store, hash, want)
+
+	finish()
+
+	floorRequirePagesAt(t, client, store, hash, want)
+}
+
+// The same delayed DAHSET write meets a preserve that cleared the master and its pages. The pages
+// must stay clear.
+func TestDelayedDAHSetWriteCannotUndoAPreserveClear(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings, retention := floorSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	for _, expressions := range []bool{false, true} {
+		store.GetSettings().Aerospike.EnablePreserveFilterExpressions = expressions
+
+		hash, finish := startPausedUnspendRaise(ctx, t, client, store, retention, 42+boolToVout(expressions))
+
+		require.NoError(t, store.PreserveTransactions(ctx, []chainhash.Hash{*hash}, floorMinedHeight+10_000))
+
+		_, stamped := readRecordDAH(t, client, store, hash, 0)
+		require.False(t, stamped, "setup: the preserve cleared the master (expressions=%v)", expressions)
+		floorRequirePagesAt(t, client, store, hash, 0)
+
+		finish()
+
+		floorRequirePagesAt(t, client, store, hash, 0)
+	}
+}
+
+func boolToVout(b bool) uint32 {
+	if b {
+		return 1
+	}
+
+	return 0
+}
+
+// Locking a tx clears its master's stamp, and the setLocked of each page clears the page's own. A page
+// write for the earlier stamp that is still in flight must not restamp the pages of the locked master.
+func TestDelayedDAHSetWriteCannotUndoALock(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping Aerospike integration test in short mode")
+	}
+
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings, retention := floorSettings(t)
+
+	client, store, _, cleanup := initAerospike(t, tSettings, logger)
+	defer cleanup()
+	cleanDB(t, client)
+
+	require.NoError(t, store.SetBlockHeight(floorCachedTip))
+
+	prunerSvc := floorPrunerService(ctx, t, store)
+
+	hash, finish := startPausedUnspendRaise(ctx, t, client, store, retention, 44)
+
+	require.NoError(t, store.SetLocked(ctx, []chainhash.Hash{*hash}, true))
+
+	_, stamped := readRecordDAH(t, client, store, hash, 0)
+	require.False(t, stamped, "setup: the lock cleared the master")
+	floorRequirePagesAt(t, client, store, hash, 0)
+
+	finish()
+
+	floorRequirePagesAt(t, client, store, hash, 0)
+
+	n, err := prunerSvc.PruneWithPartitions(ctx, floorMinedHeight+retention, "locked-stale-page", 1)
+	require.NoError(t, err)
+	require.Zero(t, n, "the pruner must find nothing to delete")
+	floorRequireRecordsExist(t, client, store, hash)
 }

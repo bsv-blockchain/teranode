@@ -156,8 +156,9 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 }
 
 // propagateConflictingDAHSignals brings the child pages of each record in line with the master's
-// stamp reported by its setConflicting response. It reconciles from that state, not from a change
-// signal, so a retry repairs pages whose write failed after the master already committed.
+// stamp reported by its setConflicting response. It writes pages on a DAHSET or DAHUNSET signal,
+// and for a master whose earlier page write failed in this process, so a retry repairs pages
+// whose write failed after the master already committed. See reconcileChildDAH.
 func (s *Store) propagateConflictingDAHSignals(batchRecords []aerospike.BatchRecordIfc, txHashes []*chainhash.Hash, blockHeight uint32) error {
 	var aggErr error
 

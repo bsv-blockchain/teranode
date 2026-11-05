@@ -32,11 +32,13 @@ type SpendState struct {
 	RecordUtxos int
 	// SpentExtraRecs is the number of spent extra records
 	SpentExtraRecs *int
+	// DAHVersion is the master's deleteAtHeight version after the write
+	DAHVersion dahVersion
 }
 
 // parseSpendState extracts the SpendState from Aerospike bins.
 func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
-	state := SpendState{}
+	state := SpendState{DAHVersion: parseDAHVersion(bins)}
 
 	// Parse blockIDs
 	if blockIDs, ok := bins[fields.BlockIDs.String()]; ok && blockIDs != nil {
@@ -469,6 +471,7 @@ func (s *Store) processSpendBatchResultsExpressions(
 				TotalExtraRecs:    state.TotalExtraRecs,
 				OldDeleteAtHeight: state.OldDeleteAtHeight,
 				NewDeleteAtHeight: state.NewDeleteAtHeight,
+				DAHVersion:        state.DAHVersion,
 			})
 		}
 

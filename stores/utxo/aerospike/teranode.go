@@ -74,7 +74,7 @@ import (
 var teranodeLUA []byte
 
 var (
-	LuaPackage      = "teranode_v64" // N.B. Do not have any "." in this string
+	LuaPackage      = "teranode_v65" // N.B. Do not have any "." in this string
 	LuaPackageMined = LuaPackage + "_mined"
 )
 
@@ -278,6 +278,9 @@ type LuaMapResponse struct {
 	// DeleteAtHeight is the master record's stamped delete-at-height, present only with a DAHSET signal from a Lua package that reports it.
 	DeleteAtHeight    int  `json:"deleteAtHeight,omitempty"`
 	HasDeleteAtHeight bool `json:"-"`
+	// DAHVersion is the master's deleteAtHeight version after the update, present with a DAHSET or DAHUNSET signal and with a paginated master's page state.
+	DAHVersion    int64 `json:"dahVer,omitempty"`
+	HasDAHVersion bool  `json:"-"`
 	// Conflicting is true when a DAHSET signal comes from a conflicting master, which is prunable whatever its spent state.
 	Conflicting bool `json:"conflicting,omitempty"`
 	// Debug      string               `json:"debug,omitempty"`
@@ -314,6 +317,8 @@ func (r *LuaMapResponse) Reset() {
 	r.ChildCount = 0
 	r.DeleteAtHeight = 0
 	r.HasDeleteAtHeight = false
+	r.DAHVersion = 0
+	r.HasDAHVersion = false
 	r.Conflicting = false
 }
 
@@ -458,6 +463,13 @@ func (s *Store) parseLuaMapResponseInto(response interface{}, result *LuaMapResp
 		if height, ok := luaResponseInt(dah); ok {
 			result.DeleteAtHeight = height
 			result.HasDeleteAtHeight = true
+		}
+	}
+
+	if ver, ok := respMap["dahVer"]; ok {
+		if version, ok := luaResponseInt(ver); ok {
+			result.DAHVersion = int64(version)
+			result.HasDAHVersion = true
 		}
 	}
 

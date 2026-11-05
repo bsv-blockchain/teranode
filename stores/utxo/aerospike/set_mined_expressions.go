@@ -18,10 +18,12 @@ import (
 
 // childDAHItem is one master record whose pagination records need their deleteAtHeight set
 // (DeleteAtHeight > 0) or cleared (DeleteAtHeight == 0) by SetDAHForChildRecordsMulti.
+// Version is the master's deleteAtHeight version the write reported, which orders the page writes.
 type childDAHItem = struct {
 	TxID           *chainhash.Hash
 	ChildCount     int
 	DeleteAtHeight uint32
+	Version        dahVersion
 }
 
 // childDAHFollowUps accumulates, per txid, the pagination-record DAH follow-up a batch needs.
@@ -52,13 +54,13 @@ func (f *childDAHFollowUps) put(item childDAHItem) {
 }
 
 // addSet queues "children get this DAH" (the Lua DAHSET signal).
-func (f *childDAHFollowUps) addSet(hash *chainhash.Hash, childCount int, dah uint32) {
-	f.put(childDAHItem{TxID: hash, ChildCount: childCount, DeleteAtHeight: dah})
+func (f *childDAHFollowUps) addSet(hash *chainhash.Hash, childCount int, dah uint32, version dahVersion) {
+	f.put(childDAHItem{TxID: hash, ChildCount: childCount, DeleteAtHeight: dah, Version: version})
 }
 
 // addUnset queues "children lose their DAH" (the Lua DAHUNSET signal).
-func (f *childDAHFollowUps) addUnset(hash *chainhash.Hash, childCount int) {
-	f.put(childDAHItem{TxID: hash, ChildCount: childCount})
+func (f *childDAHFollowUps) addUnset(hash *chainhash.Hash, childCount int, version dahVersion) {
+	f.put(childDAHItem{TxID: hash, ChildCount: childCount, Version: version})
 }
 
 // collect compares the master's DAH before and after the write and, for an external master with
@@ -72,9 +74,9 @@ func (f *childDAHFollowUps) collect(hash *chainhash.Hash, state SetMinedState) {
 
 	switch {
 	case state.NewDeleteAtHeight != nil && (state.OldDeleteAtHeight == nil || *state.OldDeleteAtHeight != *state.NewDeleteAtHeight):
-		f.addSet(hash, *state.TotalExtraRecs, *state.NewDeleteAtHeight)
+		f.addSet(hash, *state.TotalExtraRecs, *state.NewDeleteAtHeight, state.DAHVersion)
 	case state.NewDeleteAtHeight == nil && state.OldDeleteAtHeight != nil:
-		f.addUnset(hash, *state.TotalExtraRecs)
+		f.addUnset(hash, *state.TotalExtraRecs, state.DAHVersion)
 	}
 }
 
@@ -88,7 +90,7 @@ func (f *childDAHFollowUps) collect(hash *chainhash.Hash, state SetMinedState) {
 // external master per cycle.
 func (f *childDAHFollowUps) collectPreserved(hash *chainhash.Hash, state SetMinedState) {
 	if state.External && state.TotalExtraRecs != nil && *state.TotalExtraRecs > 0 {
-		f.addUnset(hash, *state.TotalExtraRecs)
+		f.addUnset(hash, *state.TotalExtraRecs, state.DAHVersion)
 	}
 }
 
@@ -182,13 +184,13 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 
 // writeChildDAHChunk writes one chunk, retrying once after a short backoff that honours ctx.
 func (s *Store) writeChildDAHChunk(ctx context.Context, chunk []childDAHItem) error {
-	err := s.SetDAHForChildRecordsMulti(chunk)
+	err := s.setDAHForChildRecordsMultiAt(chunk)
 	if err != nil {
 		if sleepErr := sleepCtx(ctx, childDAHRetryBackoff); sleepErr != nil {
 			return errors.JoinCapped(10, err, sleepErr)
 		}
 
-		err = s.SetDAHForChildRecordsMulti(chunk)
+		err = s.setDAHForChildRecordsMultiAt(chunk)
 	}
 
 	return err
@@ -257,7 +259,8 @@ func dahUnchangedExpression(newDAH *uint32) *aerospike.Expression {
 // revisits it.
 //
 // Shared by every caller whose master write is not retry-safe: expired preservation, and the
-// longest-chain path (MarkTransactionsOnLongestChain). Each passes its own failure counter.
+// longest-chain path (MarkTransactionsOnLongestChain). Each passes its own failure counter. A
+// restore also bumps the master's dahVer.
 func (s *Store) restoreDAHBatch(ctx context.Context, items []dahRestore, failedCounter prometheus.Counter) error {
 	pending := items
 
@@ -275,10 +278,12 @@ func (s *Store) restoreDAHBatch(ctx context.Context, items []dahRestore, failedC
 			policy.RecordExistsAction = aerospike.UPDATE_ONLY
 			policy.FilterExpression = it.Filter
 
-			ops := make([]*aerospike.Operation, 0, len(it.Bins))
+			ops := make([]*aerospike.Operation, 0, len(it.Bins)+1)
 			for _, b := range it.Bins {
 				ops = append(ops, aerospike.PutOp(b))
 			}
+
+			ops = append(ops, aerospike.AddOp(aerospike.NewBin(fields.DAHVersion.String(), 1)))
 
 			records[i] = aerospike.NewBatchWrite(policy, it.Key, ops...)
 		}
@@ -340,12 +345,42 @@ type SetMinedState struct {
 	OldDeleteAtHeight *uint32
 	// NewDeleteAtHeight is the block height after modifications, nil if not set
 	NewDeleteAtHeight *uint32
+	// DAHVersion is the master's deleteAtHeight version after the write, when the write read it back
+	DAHVersion dahVersion
+}
+
+// parseDAHVersion reads the master's dahVer bin from an operate result. A bin read once is an int,
+// and a bin read more than once is a list whose last element is the final read.
+func parseDAHVersion(bins aerospike.BinMap) dahVersion {
+	raw, ok := bins[fields.DAHVersion.String()]
+	if !ok || raw == nil {
+		return dahVersion{}
+	}
+
+	var list []interface{}
+
+	switch v := raw.(type) {
+	case int:
+		return dahVersion{value: int64(v), known: true}
+	case aerospike.OpResults:
+		list = []interface{}(v)
+	case []interface{}:
+		list = v
+	}
+
+	if len(list) > 0 {
+		if last, isInt := list[len(list)-1].(int); isInt {
+			return dahVersion{value: int64(last), known: true}
+		}
+	}
+
+	return dahVersion{}
 }
 
 // parseSetMinedState extracts the SetMinedState from Aerospike bins.
 // Only parses fields needed for external transaction follow-up.
 func (s *Store) parseSetMinedState(bins aerospike.BinMap) (SetMinedState, error) {
-	state := SetMinedState{}
+	state := SetMinedState{DAHVersion: parseDAHVersion(bins)}
 
 	// Parse blockIDs
 	// Note: When using BatchWrite with ListAppendWithPolicyOp followed by GetBinOp on the same bin,
@@ -454,7 +489,9 @@ func (s *Store) parseBlockIDsFromSlice(v []interface{}) []uint32 {
 
 // buildDeleteAtHeightOps returns the two ExpWriteOps that give a record the same
 // deleteAtHeight as the Lua setDeleteAtHeight function (teranode.lua), branch by branch.
-// They read the CURRENT deleteAtHeight bin, so callers must not null the bin first.
+// They read the CURRENT deleteAtHeight bin, so callers must not null the bin first. A third op
+// bumps the master's dahVer, unconditionally for a master and not at all for a pagination record,
+// and reads it back so the page follow-up can carry it.
 //
 // Visibility: an ExpWriteOp sees the in-flight record, i.e. writes made by EARLIER ops in the
 // same operate call (a Put-nil, a ListAppend) are visible to it; it does not read the
@@ -519,7 +556,24 @@ func (s *Store) buildDeleteAtHeightOpsFor(newDAH *aerospike.Expression, blockHei
 		aerospike.ExpWriteOp(fields.DeleteAtHeight.String(), setExp, flags),
 		// A stale DAH on a no-longer-eligible master is deleted by a second expression (see above).
 		aerospike.ExpWriteOp(fields.DeleteAtHeight.String(), clearExp, flags),
+		aerospike.ExpWriteOp(fields.DAHVersion.String(), s.buildDAHVersionBumpExpression(), flags),
+		aerospike.GetBinOp(fields.DAHVersion.String()),
 	}
+}
+
+// buildDAHVersionBumpExpression increments the master's dahVer, and is unknown (no write, under
+// EvalNoFail) on a pagination record, which carries the version its master reported and never counts
+// its own. A missing bin counts as 0.
+func (s *Store) buildDAHVersionBumpExpression() *aerospike.Expression {
+	versionBin := fields.DAHVersion.String()
+
+	return aerospike.ExpCond(
+		aerospike.ExpBinExists(fields.TotalExtraRecs.String()), aerospike.ExpNumAdd(
+			aerospike.ExpCond(aerospike.ExpBinExists(versionBin), aerospike.ExpIntBin(versionBin), aerospike.ExpIntVal(0)),
+			aerospike.ExpIntVal(1),
+		),
+		aerospike.ExpUnknown(),
+	)
 }
 
 // buildDeleteAtHeightExpressionsFor builds the set/raise expression and the clear expression from
@@ -621,15 +675,15 @@ func (s *Store) buildDeleteAtHeightExpressionsFor(newDAH *aerospike.Expression, 
 		// If preserveUntil is set, no change
 		aerospike.ExpNot(preserveUntilNotSet), aerospike.ExpUnknown(),
 
+		// Pagination record: no DAH change, whatever conflicting flag it was created with
+		aerospike.ExpNot(isMasterRecord), aerospike.ExpUnknown(),
+
 		// Conflicting: set DAH if absent, or raise it to the mined floor.
 		isConflicting, aerospike.ExpCond(
 			dahNotExists, newDAH,
 			hasHeights, aerospike.ExpCond(aerospike.ExpLess(existingDAH, minedFloor), minedFloor, aerospike.ExpUnknown()),
 			aerospike.ExpUnknown(),
 		),
-
-		// Pagination record: no DAH change
-		aerospike.ExpNot(isMasterRecord), aerospike.ExpUnknown(),
 
 		// Master record, eligible: set if none, raise if lower, never lower
 		shouldSetDAHMaster, aerospike.ExpCond(

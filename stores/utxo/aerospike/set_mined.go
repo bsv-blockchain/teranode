@@ -411,11 +411,11 @@ func (s *Store) processBatchResultsForSetMined(ctx context.Context, batchRecords
 						childDAHHeight = reported
 					}
 
-					childDAH.addSet(hashes[idx], res.ChildCount, childDAHHeight)
+					childDAH.addSet(hashes[idx], res.ChildCount, childDAHHeight, reportedDAHVersion(res))
 					// External store DAH is disabled - lifecycle managed by pruner service
 				}
 			case LuaSignalDAHUnset:
-				childDAH.addUnset(hashes[idx], res.ChildCount)
+				childDAH.addUnset(hashes[idx], res.ChildCount, reportedDAHVersion(res))
 				// External store DAH is disabled - lifecycle managed by pruner service
 			}
 		}

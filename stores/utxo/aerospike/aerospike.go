@@ -218,9 +218,16 @@ type Store struct {
 	outpointBatcher     batcherIfc[batchOutpoint]
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
-	lockedBatcher       batcherIfc[batchLocked]
-	externalStore       blob.Store
-	utxoBatchSize       int
+
+	// pendingPages holds the masters whose child pages failed to take the master's delete-at-height after the
+	// master committed it, with the master version of the failed write. A later unspend or conflicting call on
+	// such a master rewrites its pages even when no DAHSET or DAHUNSET signal fires. The marks live in process
+	// memory: a restart forgets them.
+	pendingPagesMu sync.Mutex
+	pendingPages   map[chainhash.Hash]dahVersion
+	lockedBatcher  batcherIfc[batchLocked]
+	externalStore  blob.Store
+	utxoBatchSize  int
 
 	// externalTxCache caches whatever GetTxFromExternalStore returned for a txid:
 	// the full externally-stored transaction when a .tx blob exists, otherwise the
@@ -768,12 +775,79 @@ func (s *Store) childDeleteAtHeightFor(res *LuaMapResponse, blockHeight uint32) 
 	return dah, true
 }
 
+// reportedDAHVersion returns the master's delete-at-height version as the response reports it. A Lua
+// package that does not report it yields an unversioned, unconditional page write.
+func reportedDAHVersion(res *LuaMapResponse) dahVersion {
+	if res == nil || !res.HasDAHVersion {
+		return dahVersion{}
+	}
+
+	return dahVersion{value: res.DAHVersion, known: true}
+}
+
+// pagesPending reports whether an earlier page write for the master failed in this process and has not been repaired.
+func (s *Store) pagesPending(txID *chainhash.Hash) bool {
+	s.pendingPagesMu.Lock()
+	defer s.pendingPagesMu.Unlock()
+
+	_, pending := s.pendingPages[*txID]
+
+	return pending
+}
+
+// markPagesPending records a failed page write at the given master version. A known version already
+// recorded is kept when this one is unknown or lower, so the mark always names the newest write that
+// still has to land.
+func (s *Store) markPagesPending(txID *chainhash.Hash, version dahVersion) {
+	s.pendingPagesMu.Lock()
+	defer s.pendingPagesMu.Unlock()
+
+	if s.pendingPages == nil {
+		s.pendingPages = make(map[chainhash.Hash]dahVersion)
+	}
+
+	if existing, ok := s.pendingPages[*txID]; ok && existing.known && (!version.known || version.value < existing.value) {
+		return
+	}
+
+	s.pendingPages[*txID] = version
+}
+
+// clearPagesPending drops the mark after a complete page write at the given master version. A write
+// older than the marked failure leaves the mark, since the pages may still lack the newer state, and
+// so does a write of unknown version when the mark has a known one.
+func (s *Store) clearPagesPending(txID *chainhash.Hash, version dahVersion) {
+	s.pendingPagesMu.Lock()
+	defer s.pendingPagesMu.Unlock()
+
+	marked, ok := s.pendingPages[*txID]
+	if !ok {
+		return
+	}
+
+	if !marked.known || (version.known && marked.value <= version.value) {
+		delete(s.pendingPages, *txID)
+	}
+}
+
 // reconcileChildDAH stamps or clears the child pages of a paginated master from the master's
-// current delete-at-height as the response reports it, whether or not a signal fired. An absent
-// stamp clears the pages. A package that reports no stamp is honoured only on a DAHSET signal.
+// delete-at-height as the response reports it. It writes the pages on a DAHSET or DAHUNSET signal,
+// and when an earlier page write for this master failed in this process (the pendingPages mark,
+// which a restart forgets). Without either, the pages already match the master and nothing is
+// written. A crash between the master write and the page write therefore leaves the pages stale
+// until the next transition of that master, because the failure mark is not persisted. An absent
+// stamp clears the pages. A package that reports no stamp is honoured only on a DAHSET signal. The
+// write carries the version the response reported, so a response that is older than a later
+// transition of the master cannot overwrite the pages that transition wrote.
 func (s *Store) reconcileChildDAH(txID *chainhash.Hash, res *LuaMapResponse, blockHeight uint32) error {
 	if res.ChildCount <= 0 {
 		return nil
+	}
+
+	if res.Signal != LuaSignalDAHSet && res.Signal != LuaSignalDAHUnset {
+		if !s.pagesPending(txID) {
+			return nil
+		}
 	}
 
 	dah, enabled := s.childDeleteAtHeightFor(res, blockHeight)
@@ -785,7 +859,7 @@ func (s *Store) reconcileChildDAH(txID *chainhash.Hash, res *LuaMapResponse, blo
 		dah = 0
 	}
 
-	return s.SetDAHForChildRecords(txID, res.ChildCount, dah)
+	return s.setDAHForChildRecordsAt(txID, res.ChildCount, dah, reportedDAHVersion(res))
 }
 
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
@@ -1293,7 +1367,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	var skippedCount int
 
 	// external masters that were preserved: their pagination records need their DAH cleared too
-	var preservedExternal []chainhash.Hash
+	var preservedExternal []preservedMaster
 
 	for i, record := range batchRecords {
 		if record == nil {
@@ -1349,7 +1423,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 				// Not gated on LuaSignalPreserve: the follow-up reads External itself, so this does
 				// not depend on the native op emitting the same signal as the UDF.
-				preservedExternal = append(preservedExternal, recordTxIDs[i])
+				preservedExternal = append(preservedExternal, preservedMaster{txID: recordTxIDs[i], version: reportedDAHVersion(res)})
 			case LuaStatusError:
 				if res.ErrorCode != LuaErrorCodeTxNotFound {
 					luaErrors++
@@ -1377,31 +1451,43 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	return nil
 }
 
+// preservedMaster is a master PreserveTransactions preserved on the Lua path, with the dahVer its
+// preserveUntil response reported (unknown from a native op, which does not report it).
+type preservedMaster struct {
+	txID    chainhash.Hash
+	version dahVersion
+}
+
 // clearPreservedPagesDAH clears the deleteAtHeight of the pagination records of external masters
 // that PreserveTransactions just preserved, on the Lua path. txIDs are all the masters preserved;
 // the read of External and TotalExtraRecs picks the external ones.
 //
 // preserveUntil (teranode.lua, and the native op) clears only the master's DAH and signals PRESERVE
 // without a child count, so the count is read here, in one batch, and only for the external masters.
-// Doing it from Go leaves the Lua module untouched (no LuaPackage bump is needed) and behaves the
-// same under the UDF and native paths. The expressions path reads the count in the preserve write
-// itself. Both then use the shared child follow-up (unset, chunked, retried once).
+// The Lua package reports the master's dahVer in the same response, so the page clear carries the
+// version of the write it follows; a native op reports none and its page clear is unversioned. The
+// expressions path reads the count and the version in the preserve write itself. Both then use the
+// shared child follow-up (unset, chunked, retried once).
 //
 // Failures are returned. The pruner skips its deletion phase when preservation fails, and it
 // selects pages by their own DAH, so a page left with its DAH would otherwise be deleted in the
-// same cycle that preserved its master. The follow-up is unconditional, so the next run heals it.
-func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Hash) error {
-	if len(txIDs) == 0 {
+// same cycle that preserved its master. The follow-up is versioned and each preserve bumps the master's
+// version, so the next run still heals it.
+func (s *Store) clearPreservedPagesDAH(ctx context.Context, preserved []preservedMaster) error {
+	if len(preserved) == 0 {
 		return nil
 	}
 
 	var readErr error
 
 	readPolicy := aerospike.NewBatchReadPolicy()
-	records := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
-	ids := make([]chainhash.Hash, 0, len(txIDs))
+	records := make([]aerospike.BatchRecordIfc, 0, len(preserved))
+	ids := make([]chainhash.Hash, 0, len(preserved))
+	versions := make([]dahVersion, 0, len(preserved))
 
-	for _, txID := range txIDs {
+	for _, p := range preserved {
+		txID := p.txID
+
 		key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
 		if err != nil {
 			readErr = errors.JoinCapped(10, readErr, errors.NewProcessingError("[PreserveTransactions][%s] failed to create key", txID.String(), err))
@@ -1410,6 +1496,7 @@ func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Ha
 
 		records = append(records, aerospike.NewBatchRead(readPolicy, key, []string{fields.External.String(), fields.TotalExtraRecs.String()}))
 		ids = append(ids, txID)
+		versions = append(versions, p.version)
 	}
 
 	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
@@ -1435,6 +1522,7 @@ func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Ha
 			continue
 		}
 
+		state.DAHVersion = versions[i]
 		childDAH.collectPreserved(&ids[i], state)
 	}
 

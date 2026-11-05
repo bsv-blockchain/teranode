@@ -147,14 +147,15 @@ func dahParityCases() []dahParityCase {
 		{name: "non-external, not all spent, stale DAH -> master cleared, child untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, notExternal: true, dah: dahParityFixed(5),
 			wantDAH: dahParityAbsent, wantChildDAH: dahParityFixed(5)},
 		// A master without totalExtraRecs is handled by Lua as a pagination record: DAH never changes
-		// (conflicting is evaluated first, so it still sets there). The all-spent variant is not
+		// (a pagination record never stamps itself, conflicting or not, so a conflicting one stays
+		// absent too: its deleteAtHeight only comes from its master). The all-spent variant is not
 		// tested: Lua then signals ALLSPENT and the client's follow-up fails on the missing bin.
 		{name: "no totalExtraRecs, not all spent, no DAH -> stays absent", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true,
 			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
 		{name: "no totalExtraRecs, not all spent, stale DAH -> untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, dah: dahParityFixed(5),
 			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
-		{name: "no totalExtraRecs, conflicting, no DAH -> set", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, conflicting: true,
-			wantDAH: dahParityFresh, wantChildDAH: dahParityAbsent},
+		{name: "no totalExtraRecs, conflicting, no DAH -> stays absent", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, conflicting: true,
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
 		// Missing counter bins: Lua compares nil values (nil == nil is true, nil == 4 is false); an
 		// unguarded expression read of a missing bin is a silent no-op, so it must be guarded.
 		{name: "spentUtxos bin missing, recordUtxos present, stale DAH -> cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, noSpentUtxos: true, dah: dahParityFixed(5),

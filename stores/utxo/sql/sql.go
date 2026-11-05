@@ -2413,7 +2413,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 // table is locked: database is deadlocked". This used to match the BUSY message
 // alone, so a spend batch that collided with a create's transaction was aborted
 // instead of retried (see is_deadlock_sqlite_test.go). The message check stays
-// as the fallback for a driver error that is not a *sqlite.Error.
+// as the fallback for a driver error that is not a *sqlite.Error. The message check also
+// matches a PostgreSQL deadlock by its SQLSTATE, because a teranode error wrap keeps only
+// the driver error's text, so errors.As cannot find the driver error behind it.
 func isDeadlock(err error) bool {
 	if err == nil {
 		return false
@@ -2434,7 +2436,8 @@ func isDeadlock(err error) bool {
 		return true
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
+	return strings.Contains(msg, "SQLSTATE "+usql.PgErrDeadlockDetected) ||
+		strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
 }
 
 // sendSpendBatch is the batcher callback that processes a batch of spend operations
@@ -3358,6 +3361,11 @@ func flooredDAHSQL(txIDExpr, newDAHExpr string, retention uint32) string {
 // outside tests, which use it to interleave a competing writer.
 var setDAHBeforeWrite func()
 
+// setDAHAfterLock runs in setDAH right after the Postgres row lock is taken and before
+// the eligibility read. It is nil outside tests, which use it to observe lock order and
+// to complete a lock cycle.
+var setDAHAfterLock func(transactionID int)
+
 func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) error {
 	if s.settings.GetUtxoStoreBlockHeightRetention() == 0 {
 		return nil
@@ -3370,6 +3378,10 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 	if s.engine == "postgres" {
 		if _, err := txn.ExecContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR UPDATE", transactionID); err != nil {
 			return errors.NewStorageError("[setDAH] error locking transaction %d", transactionID, err)
+		}
+
+		if setDAHAfterLock != nil {
+			setDAHAfterLock(transactionID)
 		}
 	}
 
@@ -3494,8 +3506,35 @@ func (s *Store) writeDAH(ctx context.Context, txn *sql.Tx, transactionID int, va
 // Unspend reverses a previous spend operation, marking UTXOs as unspent.
 // This removes the spending transaction ID and any expiration timestamp.
 // Commonly used during blockchain reorganizations.
+//
+// The parents' locked flag and deletion date are written once per parent in
+// ascending id order, the order the spend batches lock them in, and the whole
+// transaction retries a PostgreSQL deadlock with the spend batch's budget.
 func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
+	const maxRetries = 3
 
+	for attempt := 0; ; attempt++ {
+		err := s.unspendOnce(ctx, spends, flagAsLocked...)
+		if !isDeadlock(err) {
+			return err
+		}
+
+		if attempt >= maxRetries {
+			return errors.NewStorageError("[Unspend] deadlock persisted after %d retries", maxRetries)
+		}
+
+		backoff := time.Duration(100<<attempt) * time.Millisecond
+		s.logger.Warnf("[Unspend] deadlock detected (attempt %d/%d), retrying %d spends in %v", attempt+1, maxRetries+1, len(spends), backoff)
+
+		select {
+		case <-ctx.Done():
+			return errors.NewStorageError("[Unspend] deadlock retry cancelled", ctx.Err())
+		case <-time.After(backoff):
+		}
+	}
+}
+
+func (s *Store) unspendOnce(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
 	txn, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -3557,6 +3596,8 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		WHERE id = $1
 	`
 
+	parentIDs := make(map[int]struct{}, len(spends))
+
 	for _, spend := range spends {
 		select {
 		case <-ctx.Done():
@@ -3591,22 +3632,37 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 				}
 			}
 
-			if flagLockedProvided {
-				if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
-					return errors.NewStorageError("[Unspend] error removing tombstone for %s:%d", spend.TxID, spend.Vout, err)
-				}
-			}
+			parentIDs[transactionID] = struct{}{}
+		}
+	}
 
-			if err = s.setDAH(ctx, txn, transactionID); err != nil {
-				return err
-			}
+	sortedIDs := make([]int, 0, len(parentIDs))
+	for id := range parentIDs {
+		sortedIDs = append(sortedIDs, id)
+	}
 
-			prometheusUtxoReset.Inc()
+	sort.Ints(sortedIDs)
+
+	for _, transactionID := range sortedIDs {
+		if flagLockedProvided {
+			if _, err = txn.ExecContext(ctx, q2, transactionID, locked); err != nil {
+				return errors.NewStorageError("[Unspend] error removing tombstone for transaction %d", transactionID, err)
+			}
+		}
+
+		if err = s.setDAH(ctx, txn, transactionID); err != nil {
+			return err
 		}
 	}
 
 	if err = txn.Commit(); err != nil {
 		return err
+	}
+
+	for _, spend := range spends {
+		if spend != nil {
+			prometheusUtxoReset.Inc()
+		}
 	}
 
 	return nil
