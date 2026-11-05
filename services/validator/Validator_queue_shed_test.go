@@ -2418,7 +2418,7 @@ func TestIsRetryableShed(t *testing.T) {
 // created record.
 func TestValidate_KafkaIngestDoesNotRetryTheInMemoryLimit(t *testing.T) {
 	ctx := context.Background()
-	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "queue_shed_kafka_held_limit")
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_kafka_held_limit", 1)
 
 	baStore.err = heldLimitShed()
 
@@ -2441,6 +2441,29 @@ func TestValidate_KafkaIngestDoesNotRetryTheInMemoryLimit(t *testing.T) {
 	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
 	require.False(t, parentOutpointSpent(t, realStore, parentTx), "it unwinds like any other shed")
 	require.Equal(t, 0, spy.unlockCalls)
+
+	logged := strings.Join(logger.lines, "\n")
+	require.Contains(t, logged, "holds its in-memory transaction limit", "the drop is worded for the limit")
+	require.NotContains(t, logged, "after the bounded block-assembly handoff retry", "no retry ran, so the log must not say one did")
+}
+
+func TestWarnHeldShedDroppedIsRateLimited(t *testing.T) {
+	logger := &capturingLogger{}
+	v := &Validator{logger: logger}
+
+	for i := 0; i < 5; i++ {
+		v.warnHeldShedDropped("tx-" + string(rune('a'+i)))
+	}
+
+	require.Len(t, logger.lines, 1, "a sustained held shed logs once, not once per transaction")
+	require.Contains(t, logger.lines[0], "(0 more")
+
+	v.heldShedWarnedAt.Store(time.Now().Add(-2 * inBlockShedWarnInterval).UnixNano())
+
+	v.warnHeldShedDropped("tx-z")
+
+	require.Len(t, logger.lines, 2)
+	require.Contains(t, logger.lines[1], "(4 more", "it says how many were held back")
 }
 
 func TestValidate_BlockContextHandoffIsMarkedInBlock(t *testing.T) {

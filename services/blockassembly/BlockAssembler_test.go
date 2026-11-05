@@ -2104,6 +2104,102 @@ func TestBlockAssembly_LoadUnminedTransactions_ReseedsMinedTx_WhenUnminedSinceNo
 		"mined tx with incorrect unmined_since should have been reloaded into assembler")
 }
 
+type unminedLoadingSpy struct {
+	subtreeprocessor.Interface
+
+	calls []bool
+}
+
+func (s *unminedLoadingSpy) SetUnminedLoading(loading bool) {
+	s.calls = append(s.calls, loading)
+	s.Interface.SetUnminedLoading(loading)
+}
+
+func TestBlockAssembly_LoadUnminedTransactions_MarksTheProcessorLoadingForTheWholeLoad(t *testing.T) {
+	initPrometheusMetrics()
+
+	items := setupBlockAssemblyTest(t)
+	require.NotNil(t, items)
+
+	spy := &unminedLoadingSpy{Interface: items.blockAssembler.subtreeProcessor}
+	items.blockAssembler.subtreeProcessor = spy
+
+	require.NoError(t, items.blockAssembler.loadUnminedTransactions(t.Context(), false))
+
+	require.Equal(t, []bool{true, false}, spy.calls,
+		"the held count reads full from the start of the load to its end, or ingest is admitted against a partial count")
+}
+
+type heldReadingSpy struct {
+	subtreeprocessor.Interface
+
+	limit int64
+	calls []bool
+	full  []bool
+
+	fullWhenProcessorStarted bool
+}
+
+func (s *heldReadingSpy) Start(ctx context.Context) {
+	s.fullWhenProcessorStarted = s.Interface.HeldCount() >= s.limit
+	s.Interface.Start(ctx)
+}
+
+func (s *heldReadingSpy) SetUnminedLoading(loading bool) {
+	s.Interface.SetUnminedLoading(loading)
+	s.calls = append(s.calls, loading)
+	s.full = append(s.full, s.Interface.HeldCount() >= s.limit)
+}
+
+func TestBlockAssembly_Start_HoldsTheHeldCountFullFromConstructionToTheEndOfTheLoadPhase(t *testing.T) {
+	initPrometheusMetrics()
+
+	tSettings := createTestSettings(t)
+	tSettings.BlockAssembly.MaxTransactionsInMemory = 1
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///test")
+	require.NoError(t, err)
+
+	utxoStore, err := utxostoresql.New(t.Context(), ulogger.TestLogger{}, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("GetState", mock.Anything, mock.Anything).Return([]byte{}, sql.ErrNoRows)
+	blockchainClient.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(model.GenesisBlockHeader, &model.BlockHeaderMeta{Height: 0}, nil)
+	blockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{model.GenesisBlockHeader}, []*model.BlockHeaderMeta{{Height: 0}}, nil)
+	blockchainClient.On("GetBlockHeaderIDs", mock.Anything, mock.Anything, mock.Anything).Return([]uint32{0}, nil)
+	blockchainClient.On("GetBlocksMinedNotSet", mock.Anything).Return([]*model.Block{}, nil)
+	blockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.ErrNotFound)
+
+	runningState := blockchain.FSMStateRUNNING
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&runningState, nil)
+
+	subChan := make(chan *blockchain_api.Notification, 1)
+	subChan <- &blockchain_api.Notification{Type: model.NotificationType_Block, Hash: (&chainhash.Hash{}).CloneBytes()}
+	blockchainClient.On("Subscribe", mock.Anything, mock.Anything).Return(subChan, nil)
+
+	ba, err := NewBlockAssembler(t.Context(), ulogger.TestLogger{}, tSettings, gocore.NewStat("test"), utxoStore, nil, blockchainClient, nil)
+	require.NoError(t, err)
+
+	limit := ba.subtreeProcessor.MaxTransactionsInMemory()
+	require.Positive(t, limit)
+
+	require.GreaterOrEqual(t, ba.subtreeProcessor.HeldCount(), limit, "ingest can be served before Start runs, and it must read full from construction")
+	require.Equal(t, subtreeprocessor.RefusedHeld, ba.subtreeProcessor.AddBatchBounded(
+		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("before-start"))}}, []*subtreepkg.TxInpoints{{}}, false))
+
+	spy := &heldReadingSpy{Interface: ba.subtreeProcessor, limit: limit}
+	ba.subtreeProcessor = spy
+
+	require.NoError(t, ba.Start(t.Context()))
+
+	require.Equal(t, []bool{true, false, false}, spy.calls, "the load marks itself, then the startup hold ends once, after the load phase")
+	require.Equal(t, []bool{true, true, false}, spy.full,
+		"still full when the load starts and when it ends, and open only once the startup hold ends")
+	require.False(t, spy.fullWhenProcessorStarted, "the startup hold ends with the load phase, before the processor starts")
+}
+
 // Test reproduces reorg corner-case: wrong status flip causes mined tx to be re-added
 func TestBlockAssembly_LoadUnminedTransactions_ReorgCornerCase_MisUnsetMinedStatus(t *testing.T) {
 	initPrometheusMetrics()

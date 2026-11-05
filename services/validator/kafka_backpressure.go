@@ -62,7 +62,8 @@ type pausableConsumer interface {
 // kafkaBackpressureController pauses and resumes the validator's transaction
 // Kafka consumer based on the block-assembly ingest queue-head age, with
 // hysteresis (distinct pause/resume watermarks), a hard per-pause cap, and
-// fail-open resume when the signal is unavailable. It complements — and never
+// fail-open resume when the signal is unavailable. The per-pause cap does not apply to a pause
+// caused only by the held count, which clears when a block connects. It complements — and never
 // replaces — the block-assembly hard shed and queue cap: pausing lets bursts
 // ride on Kafka's durable log so fewer transactions hit the shed path.
 //
@@ -418,7 +419,8 @@ func (c *kafkaBackpressureController) heldThresholds() (pause, resume int64) {
 		return 0, 0
 	}
 
-	pause = max(c.maxHeld*int64(c.cfg.PauseQueueFillPercent)/100, 2)
+	pct := int64(c.cfg.PauseQueueFillPercent)
+	pause = max(c.maxHeld/100*pct+c.maxHeld%100*pct/100, 2)
 
 	return pause, pause - 1
 }
@@ -495,6 +497,15 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	}
 
 	if pausedFor := c.now().Sub(c.pauseStart); pausedFor >= c.cfg.MaxPause {
+		// The held pause is exempt from the cap while the queue and age predicates are cool. The
+		// held count clears only when a block connects, so resuming earlier does not relieve it:
+		// the consumer would pull at line rate and every transaction would be refused, unwound and
+		// dropped until then. Waiting in Kafka is the better outcome. A queue or age pause, or a
+		// stale signal, still fails open.
+		if hotByHeld && !hotByQueue && effectiveAge < c.cfg.PauseQueueAge {
+			return
+		}
+
 		// The queue is still hot, so this resume is a fail-open: arm a bounded,
 		// proportional cooldown rather than suppressing backpressure for a whole
 		// MaxPause window.

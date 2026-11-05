@@ -248,6 +248,12 @@ func (m *MockSubtreeProcessor) HeldCount() int64 {
 	return 0
 }
 
+// SetUnminedLoading implements Interface.SetUnminedLoading. It records nothing, like HeldCount.
+func (m *MockSubtreeProcessor) SetUnminedLoading(_ bool) {}
+
+// UnminedLoading implements Interface.UnminedLoading. It reports no hold, like HeldCount.
+func (m *MockSubtreeProcessor) UnminedLoading() bool { return false }
+
 func (m *MockSubtreeProcessor) AddDirectly(node *subtree.Node, txInpoints *subtree.TxInpoints, skipNotification bool) error {
 	args := m.Called(node, txInpoints, skipNotification)
 

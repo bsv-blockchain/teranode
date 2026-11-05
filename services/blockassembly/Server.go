@@ -1465,9 +1465,17 @@ func (ba *BlockAssembly) shedHeld() error {
 	prometheusBlockAssemblyQueueShed.Inc()
 	prometheusBlockAssemblyHeldShed.Inc()
 
-	shedErr := errors.NewThresholdExceededError(
-		"block assembly holds %d transactions in memory, limit %d",
-		ba.blockAssembler.HeldCount(), ba.blockAssembler.MaxTransactionsInMemory())
+	var shedErr *errors.Error
+
+	if ba.blockAssembler.HeldByUnminedLoad() {
+		shedErr = errors.NewThresholdExceededError(
+			"block assembly is loading its unmined transactions and refuses ingest until that completes, in-memory limit %d",
+			ba.blockAssembler.MaxTransactionsInMemory())
+	} else {
+		shedErr = errors.NewThresholdExceededError(
+			"block assembly holds %d transactions in memory, limit %d",
+			ba.blockAssembler.HeldCount(), ba.blockAssembler.MaxTransactionsInMemory())
+	}
 	shedErr.SetData(heldShedMarker, true)
 
 	return errors.WrapGRPC(shedErr)

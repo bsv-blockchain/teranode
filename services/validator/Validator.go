@@ -329,6 +329,12 @@ type Validator struct {
 	// keep a sustained shed to one warning per inBlockShedWarnInterval.
 	inBlockShedWarnedAt   atomic.Int64
 	inBlockShedSuppressed atomic.Int64
+
+	// heldShedWarnedAt and heldShedSuppressed do the same for ingest transactions dropped because
+	// block assembly holds its in-memory limit. That state lasts until a block connects and every
+	// transaction reaches it, so a warning per transaction would flood the log at ingest rate.
+	heldShedWarnedAt   atomic.Int64
+	heldShedSuppressed atomic.Int64
 }
 
 // mtpLoadWindow is a half-open height range [From, To) that an in-flight
@@ -1552,7 +1558,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// status to its caller.
 					if validationOptions.WaitForBlockAssembly {
 						prometheusValidatorShedDroppedTotal.Inc()
-						v.logger.Warnf("[Validate][%s] dropping transaction after the bounded block-assembly handoff retry (%s); the submitter was already told it was accepted", txID, v.shedRetryTimeout())
+
+						if blockassembly.IsHeldLimitShed(err) {
+							v.warnHeldShedDropped(txID)
+						} else {
+							v.logger.Warnf("[Validate][%s] dropping transaction after the bounded block-assembly handoff retry (%s); the submitter was already told it was accepted", txID, v.shedRetryTimeout())
+						}
 					}
 				}
 			} else {
@@ -1637,17 +1648,35 @@ func isRetryableShed(err error) bool {
 // queue stays full this fires for every transaction, so only the first in each
 // inBlockShedWarnInterval is logged, with the number held back since the last one.
 func (v *Validator) warnInBlockShed(txID string) {
+	if suppressed, ok := warnDue(&v.inBlockShedWarnedAt, &v.inBlockShedSuppressed); ok {
+		v.logger.Warnf("[Validate][%s] block-assembly queue full on a block-context handoff; accepted locked without a template entry, not unwound (%d more since the last warning)",
+			txID, suppressed)
+	}
+}
+
+// warnHeldShedDropped warns that an ingest transaction was dropped, without a retry, because block
+// assembly holds its in-memory limit, which clears only when a block connects. It is logged at
+// most once per inBlockShedWarnInterval, with the number dropped since the last warning.
+func (v *Validator) warnHeldShedDropped(txID string) {
+	if suppressed, ok := warnDue(&v.heldShedWarnedAt, &v.heldShedSuppressed); ok {
+		v.logger.Warnf("[Validate][%s] dropping transaction because block assembly holds its in-memory transaction limit, which clears when a block connects or the unmined load ends, so no retry ran; the submitter was already told it was accepted (%d more since the last warning)",
+			txID, suppressed)
+	}
+}
+
+// warnDue reports whether a warning guarded by warnedAt is due, and how many calls were held back
+// since the last one. When it is not due the call is counted in suppressed.
+func warnDue(warnedAt, suppressed *atomic.Int64) (int64, bool) {
 	now := time.Now().UnixNano()
 
-	last := v.inBlockShedWarnedAt.Load()
-	if now-last < int64(inBlockShedWarnInterval) || !v.inBlockShedWarnedAt.CompareAndSwap(last, now) {
-		v.inBlockShedSuppressed.Add(1)
+	last := warnedAt.Load()
+	if now-last < int64(inBlockShedWarnInterval) || !warnedAt.CompareAndSwap(last, now) {
+		suppressed.Add(1)
 
-		return
+		return 0, false
 	}
 
-	v.logger.Warnf("[Validate][%s] block-assembly queue full on a block-context handoff; accepted locked without a template entry, not unwound (%d more since the last warning)",
-		txID, v.inBlockShedSuppressed.Swap(0))
+	return suppressed.Swap(0), true
 }
 
 // precheckTransaction runs the checks validateInternal makes before it reads any

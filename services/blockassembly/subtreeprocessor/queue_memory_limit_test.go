@@ -402,6 +402,7 @@ func enqueueDistinctBatches(t *testing.T, stp *SubtreeProcessor, batches, perBat
 
 func TestSubtreeProcessor_DrainKeepsTheHeldTotalAtEveryChunkBoundary(t *testing.T) {
 	stp := newTestProcessorNoStart(t)
+	stp.queue.maxHeld = 1 << 20
 
 	const (
 		batches  = 5
@@ -452,6 +453,7 @@ func TestSubtreeProcessor_DrainSettlesWhenTheChunkCallbackPanics(t *testing.T) {
 
 func TestSubtreeProcessor_DequeueDuringBlockMovementCountsWhatItPlaced(t *testing.T) {
 	stp := newTestProcessorNoStart(t)
+	stp.queue.maxHeld = 1 << 20
 
 	enqueueDistinctBatches(t, stp, 3, 5)
 
@@ -615,4 +617,79 @@ func TestEnqueueBatchBounded_ClassifiesEachRefusal(t *testing.T) {
 		require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(11), mkInpoints(11), false),
 			"a node already at the limit clears only when a block connects, so there is nothing to wait for")
 	})
+}
+
+func TestSubtreeProcessor_UnminedLoadReadsFullUntilItCompletes(t *testing.T) {
+	stp := newLimitedSubtreeProcessor(t, context.Background(), 1)
+	limit := stp.MaxTransactionsInMemory()
+
+	require.Equal(t, Admitted, stp.AddBatchBounded(mkNodes(2), mkInpoints(2), false), "ingest before the load is admitted against the real count")
+
+	stp.SetUnminedLoading(true)
+
+	nodes, inpoints := distinctNodes(10, "unmined-load")
+
+	for i := range nodes {
+		require.NoError(t, stp.AddDirectly(&nodes[i], inpoints[i], true))
+		require.GreaterOrEqual(t, stp.HeldCount(), limit, "the load raises the subtree count one transaction at a time, which must not read as room")
+	}
+
+	require.Equal(t, RefusedHeld, stp.AddBatchBounded(mkNodes(1), mkInpoints(1), false), "mempool ingest is refused as held while the load runs")
+	require.Equal(t, Admitted, stp.AddBatchBounded(mkNodes(1), mkInpoints(1), true), "a block transaction is exempt")
+
+	stp.SetUnminedLoading(false)
+
+	require.Less(t, stp.HeldCount(), limit, "the held count returns to the real total once the load completes")
+	require.Equal(t, Admitted, stp.AddBatchBounded(mkNodes(1), mkInpoints(1), false), "and ingest is admitted again")
+}
+
+func TestSubtreeProcessor_UnminedLoadingNests(t *testing.T) {
+	stp := newLimitedSubtreeProcessor(t, context.Background(), 1)
+	limit := stp.MaxTransactionsInMemory()
+
+	stp.SetUnminedLoading(true)
+	stp.SetUnminedLoading(true)
+	stp.SetUnminedLoading(false)
+
+	require.GreaterOrEqual(t, stp.HeldCount(), limit, "a reload inside a reset must not end the reset's own hold")
+
+	stp.SetUnminedLoading(false)
+
+	require.Less(t, stp.HeldCount(), limit)
+}
+
+func TestSubtreeProcessor_DrainDoesNotRecountPerChunkWithoutALimit(t *testing.T) {
+	stp := newTestProcessorNoStart(t)
+
+	require.Equal(t, int64(0), stp.MaxTransactionsInMemory(), "precondition: no in-memory limit")
+
+	enqueueDistinctBatches(t, stp, 3, 4)
+
+	before := stp.txCount.Load()
+
+	err := stp.forEachDrainChunk(4, func(chunk []*TxBatch) error {
+		for _, batch := range chunk {
+			for i, node := range batch.nodes {
+				require.NoError(t, stp.addNode(node, batch.txInpoints[i], true))
+			}
+		}
+
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, before, stp.txCount.Load(), "no limit reads the count, so the drain must not walk every chained subtree per chunk")
+	require.Equal(t, int64(0), stp.queue.unsettled.Load(), "the chunks are still settled")
+}
+
+func TestSubtreeProcessor_UnminedLoadingEndWithoutStartLeavesTheCountAtZero(t *testing.T) {
+	stp := newLimitedSubtreeProcessor(t, context.Background(), 1)
+
+	stp.SetUnminedLoading(false)
+
+	require.False(t, stp.UnminedLoading(), "an unmatched end must not go negative and cancel a later start")
+
+	stp.SetUnminedLoading(true)
+
+	require.True(t, stp.UnminedLoading())
 }
