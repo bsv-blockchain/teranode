@@ -1,6 +1,7 @@
 package aerospike_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -48,6 +49,60 @@ func TestFinalizeTransaction(t *testing.T) {
 
 	// Finalizing a tx that was never created in the creating state is also a no-op.
 	require.NoError(t, store.FinalizeTransaction(ctx, tests.ParentTx))
+}
+
+// cancelledAfterStartContext reports itself cancelled through Err but never closes Done, so a
+// FinalizeTransaction wait runs to batch completion and only then observes the cancellation.
+type cancelledAfterStartContext struct {
+	context.Context
+}
+
+func (cancelledAfterStartContext) Done() <-chan struct{} { return nil }
+
+func (cancelledAfterStartContext) Err() error { return context.Canceled }
+
+// TestFinalizeTransaction_ContextCancellation pins the return value when the caller's context is
+// cancelled: before the call the finalize reports the context error; once the batch completed the
+// finalize reports success because the record is finalized. The batch still runs for an item that
+// was already enqueued, so the record state after a cancelled call is not asserted.
+func TestFinalizeTransaction_ContextCancellation(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	t.Run("cancelled before the call", func(t *testing.T) {
+		_, err := store.Create(ctx, tests.ParentTx, 100)
+		require.NoError(t, err)
+
+		_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		cancelledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+
+		err = store.FinalizeTransaction(cancelledCtx, tx)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("cancelled after the batch completed", func(t *testing.T) {
+		cleanDB(t, client)
+
+		_, err := store.Create(ctx, tests.ParentTx, 100)
+		require.NoError(t, err)
+
+		_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		err = store.FinalizeTransaction(cancelledAfterStartContext{Context: ctx}, tx)
+		require.NoError(t, err, "a finalize that landed must not be reported as failed")
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
+		require.False(t, got.Creating, "the batch must have finalized the record")
+	})
 }
 
 // TestFinalizeTransaction_MultiRecord finalizes a paginated (multi-record) tx.
