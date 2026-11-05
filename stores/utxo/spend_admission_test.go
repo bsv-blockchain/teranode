@@ -47,3 +47,14 @@ func TestSpendAdmission(t *testing.T) {
 		}
 	})
 }
+
+func TestSpendAdmissionStarted(t *testing.T) {
+	var queued, started, abandoned SpendAdmission
+
+	require.NoError(t, started.Start(context.Background()))
+	require.True(t, abandoned.Abandon())
+
+	require.False(t, queued.Started())
+	require.True(t, started.Started())
+	require.False(t, abandoned.Started())
+}

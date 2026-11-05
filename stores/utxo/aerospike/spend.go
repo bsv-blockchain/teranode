@@ -114,7 +114,9 @@ type batchSpend struct {
 	ignoreConflicting bool
 	ignoreLocked      bool
 	// breakerSlot is the half-open probe slot Admit gave the item, if any, so a
-	// release only returns a slot the item took in the epoch it took it.
+	// release only returns a slot the item took in the epoch it took it. It has
+	// one owner at a time: the batcher once Start won, otherwise whoever won
+	// the Abandon. No other goroutine may read or write it.
 	breakerSlot breakerSlot
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
@@ -125,7 +127,9 @@ type batchSpend struct {
 }
 
 // releaseBreakerSlot returns the half-open probe slot of an item that will never
-// reach the backend. The caller must have won the abandonment of the item.
+// reach the backend. The caller must have won the abandonment of the item, which
+// makes it the only owner of the slot. An item the batcher started, or one whose
+// abandonment another party won, must not be passed here.
 func (s *Store) releaseBreakerSlot(item *batchSpend) {
 	if item.breakerSlot.taken {
 		slot := item.breakerSlot
@@ -1105,10 +1109,15 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			if item == nil {
 				return nil
 			}
-			if item.requestCtx != nil && item.requestCtx.Err() != nil && item.admission.Abandon() {
-				s.releaseBreakerSlot(item)
+			if item.requestCtx != nil && item.requestCtx.Err() != nil {
+				if item.admission.Abandon() {
+					s.releaseBreakerSlot(item)
+				}
+
+				return item.admission.Start(item.requestCtx)
 			}
-			return item.admission.Start(item.requestCtx)
+
+			return item.admission.Start(nil)
 		},
 		Spend: func(item *batchSpend) *utxo.Spend {
 			if item == nil {
@@ -1411,9 +1420,11 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 }
 
 // takeSlot hands over the half-open probe slot of an item and clears it, so a
-// slot is recorded or released exactly once.
+// slot is recorded or released exactly once. Only the batcher that won Start owns
+// the slot of a dispatched item, so an item that is not started yields no slot:
+// its caller or the batcher that won its Abandon already settled it.
 func takeSlot(item *batchSpend) breakerSlot {
-	if item == nil {
+	if item == nil || !item.admission.Started() {
 		return breakerSlot{}
 	}
 
@@ -1447,9 +1458,16 @@ func (s *Store) releaseProbeSlots(batchByKey []aerospike.MapValue, batch []*batc
 // releaseUnsettledSlots gives back every probe slot in batch that no outcome has
 // consumed: items completed before reaching the backend, responses with an
 // unknown status, a non-infrastructure whole-batch error, or a panic part way
-// through the results.
+// through the results. A started item is released by the batcher that started it.
+// An item still queued at this point will never be dispatched, so the sweep
+// claims it by winning its Abandon. An item whose caller won the Abandon is
+// skipped, because the caller releases its slot.
 func (s *Store) releaseUnsettledSlots(batch []*batchSpend) {
 	for _, item := range batch {
+		if item != nil && !item.admission.Started() && item.admission.Abandon() {
+			s.releaseBreakerSlot(item)
+		}
+
 		if slot := takeSlot(item); slot.taken {
 			s.spendCircuitBreaker.Release(slot)
 		}

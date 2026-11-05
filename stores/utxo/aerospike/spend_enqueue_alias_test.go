@@ -319,3 +319,60 @@ func TestSpend_DispatchRejectReleasesHalfOpenSlot(t *testing.T) {
 	require.True(t, admitted(cb), "an item rejected at dispatch must give its slot back")
 	require.False(t, admitted(cb), "and only once")
 }
+
+func probeItem(slot breakerSlot, ctx context.Context) *batchSpend {
+	parent, utxoHash, spender := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
+
+	return &batchSpend{
+		spend:       &utxo.Spend{TxID: &parent, UTXOHash: &utxoHash, SpendingData: spendpkg.NewSpendingData(&spender, 0)},
+		group:       completion.NewGroup(1),
+		requestCtx:  ctx,
+		breakerSlot: slot,
+	}
+}
+
+func TestSpend_DispatchSweepLeavesTheSlotOfAnItemItsCallerAbandoned(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	cb := halfOpenBreaker(t)
+	s.spendCircuitBreaker = cb
+
+	allowed, slot := cb.Admit()
+	require.True(t, allowed)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	item := probeItem(slot, ctx)
+
+	require.True(t, item.admission.Abandon(), "the caller wins the abandonment and now owns the slot")
+	cancel()
+
+	s.sendSpendBatchLua([]*batchSpend{item})
+
+	require.True(t, item.completed.Load())
+	require.True(t, item.breakerSlot.taken, "the batcher must not touch the slot its caller owns")
+	require.False(t, admitted(cb), "the slot stays held until its owner releases it")
+
+	s.releaseBreakerSlot(item)
+
+	require.True(t, admitted(cb), "the owner's release frees the slot")
+	require.False(t, admitted(cb), "and it is freed exactly once")
+}
+
+func TestSpend_DispatchSweepReleasesTheSlotOfAnItemItNeverStarted(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	cb := halfOpenBreaker(t)
+	s.spendCircuitBreaker = cb
+
+	allowed, slot := cb.Admit()
+	require.True(t, allowed)
+
+	item := probeItem(slot, context.Background())
+
+	s.releaseUnsettledSlots([]*batchSpend{item})
+	s.releaseUnsettledSlots([]*batchSpend{item})
+
+	require.False(t, item.breakerSlot.taken)
+	require.True(t, admitted(cb), "the sweep owns an item that was never started")
+	require.False(t, admitted(cb), "and releases it exactly once")
+}
