@@ -183,10 +183,11 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   reset while the blockchain service does not serve it, block assembly marks as not on
   the longest chain the transactions of recent fork blocks that no block of the best
   chain contains and that a block marked mined. A transaction a best-chain block mines by
-  the time the mark is written is marked as mined again. It lists the valid blocks above
-  its floor that the best chain does not hold, in pages, without computing chain tips'
-  branch lengths, and reads, once, each one block validation has finished whose subtree
-  files the subtree retention still keeps. It runs with block assembly on the best tip,
+  the time the mark is written is marked as mined again. It lists the blocks above its
+  floor that the best chain does not hold, a window of heights at a time
+  (`GetBlockHeadersFromHeight`, bounded by `blockchain_maxBlockHeadersPerRequest`),
+  without computing chain tips' branch lengths, and reads, once, each valid one block
+  validation has finished whose subtree files the subtree retention still keeps. It runs with block assembly on the best tip,
   or before the reset it follows. The run is recorded as pending under a new blockchain
   state key, `BlockAssemblerSkippedForkMark`, before block assembly follows the best
   header, resets without a replay position, or gives the replay's history up; if that
@@ -205,20 +206,16 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       Every later block pass on the best tip runs it again, and the reconcile timer wakes
       it after a back-off that starts at 5s and doubles up to 5 minutes, even with
       `blockassembly_reconcileInterval=0`.
-    - **A lost subtree stops block assembly.** Block validation finished a fork block
-      the mark reads and its subtree files are within their retention, so a missing one
-      is an infrastructure failure: the block assembly service stops with `has lost its
-      subtree` rather than leave the block's transactions marked mined.
+    - **A missing subtree gives a block up.** A fork block whose subtree the subtree
+      store does not have, for example because the retention was raised after it was
+      deleted, is logged, counted under `skipped_fork_subtree_lost` and skipped; its
+      skipped transactions stay marked mined.
     - **Start fails while it is unfinished.** A restart finishes a pending run before it
       loads the unmined transactions, waiting once for a fork block block validation is
-      still finishing. If it cannot, for example because a fork block's
-      subtree is unreadable or gone, block assembly fails to start rather than load a
-      pool without those transactions, and starts once the subtree can be read. In a
-      single-process node a failed start stops block validation too, so the chain does
-      not advance past the block and the start keeps failing until the subtree is
-      restored or the `BlockAssemblerSkippedForkMark` row is deleted from the
-      blockchain store's `state` table, which gives the block's transactions up. Watch
-      for `could not finish, not loading the unmined transactions` in the logs.
+      still finishing. If it cannot, for example because the subtree store cannot be
+      reached, block assembly fails to start rather than load a pool without those
+      transactions, and starts once the store answers. Watch for `could not finish, not
+      loading the unmined transactions` in the logs.
 
 - **`GetLastNBlocks` honours `fromHeight` when orphans are included.** The SQL
   blockchain store ignored `fromHeight` with `includeOrphans=true` and always returned

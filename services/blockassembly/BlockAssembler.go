@@ -278,23 +278,16 @@ type BlockAssembler struct {
 	bestTipUnsupportedLogged atomic.Bool
 
 	// skippedForkBlocksMarked holds the fork blocks, by hash with their height, whose
-	// transactions markSkippedForkTxs has already marked. skippedForkMarkPending is set while a
-	// run of it is unfinished, and skippedForkReloadPending while the pool reload a run needs has
-	// not succeeded. skippedForkMarkSaved is set once SkippedForkMarkStateKey is known to hold
-	// skippedForkMarkSavedPending. skippedForkMarkFailures counts the runs in a row that did not
-	// finish, and the next one is not due before skippedForkMarkRetryAt. All are owned by the
-	// block-processing loop, and by Start before it.
-	skippedForkBlocksMarked     map[chainhash.Hash]uint32
-	skippedForkMarkPending      bool
-	skippedForkReloadPending    bool
-	skippedForkMarkSaved        bool
-	skippedForkMarkSavedPending bool
-	skippedForkMarkFailures     uint
-	skippedForkMarkRetryAt      time.Time
-
-	// fatalCh carries an error block assembly cannot continue after, such as a fork block that
-	// lost its subtree; the service stops on it (Fatal).
-	fatalCh chan error
+	// transactions markSkippedForkTxs has already marked or given up. skippedForkMarkPending is
+	// set while a run of it is unfinished, and skippedForkReloadPending while the pool reload a
+	// run needs has not run (skippedForkWorkOwed reads both). skippedForkMarkFailures counts the
+	// runs in a row that did not finish, and the next one is not due before
+	// skippedForkMarkRetryAt. All are owned by the block-processing loop, and by Start before it.
+	skippedForkBlocksMarked  map[chainhash.Hash]uint32
+	skippedForkMarkPending   bool
+	skippedForkReloadPending bool
+	skippedForkMarkFailures  uint
+	skippedForkMarkRetryAt   time.Time
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -422,7 +415,6 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		currentChainMapIDs:  make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		defaultMiningNBits:  defaultMiningBits,
 		resetCh:             make(chan resetRequest, 2),
-		fatalCh:             make(chan error, 1),
 		reconcileCh:         make(chan struct{}, 1),
 		currentRunningState: atomic.Value{},
 		heartbeatInterval:   defaultHeartbeatInterval,
@@ -776,8 +768,7 @@ drain:
 	// transactions a move to the best header owes. As for that move, it is recorded first,
 	// since the reset persists its new tip, and without the record the reset does not run.
 	// The mark then runs before the reset, whose reload takes in what it unmarks; a mark
-	// that does not finish is run again after the reset, with a reload of its own. A fork
-	// block that lost its subtree stops block assembly, and the reset does not run either.
+	// that does not finish is run again after the reset, with a reload of its own.
 	wasPending := b.bestTipResetReplayPending.Load()
 	if !b.bestTipPosKnown.Load() {
 		if err := b.saveSkippedForkMark(ctx, true); err != nil {
@@ -794,13 +785,7 @@ drain:
 		}
 
 		b.skippedForkMarkPending = true
-
-		if err := b.runSkippedForkMark(ctx, true); err != nil {
-			b.drainPendingInvalidations(ctx)
-			answer(err)
-
-			return
-		}
+		_ = b.markSkippedForkTxs(ctx, true)
 	}
 
 	// If FullReset requested, run lightweight consistency scan first
@@ -832,8 +817,8 @@ drain:
 			b.logger.Errorf("[BlockAssembler] reset completed but pending tip changes need retrying: %v", replayErr)
 			b.triggerReconcile()
 		}
-	} else if err == nil && b.skippedForkMarkPending {
-		_ = b.runSkippedForkMark(ctx, false)
+	} else if err == nil && b.skippedForkWorkOwed() {
+		_ = b.markSkippedForkTxs(ctx, false)
 	}
 
 	// The Reset path replays moveForward blocks through the same
@@ -1504,8 +1489,8 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		// tip it holds however the tip was reached, and the replay working again is no reason
 		// to drop it. It does not run off the best tip. Its back-off paces only the idle wake
 		// (reconcileDue), not a pass.
-		if b.skippedForkMarkPending {
-			_ = b.runSkippedForkMark(ctx, false)
+		if b.skippedForkWorkOwed() {
+			_ = b.markSkippedForkTxs(ctx, false)
 		}
 
 		return
@@ -1549,8 +1534,8 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		return
 	}
 
-	if b.skippedForkMarkPending {
-		_ = b.runSkippedForkMark(ctx, false)
+	if b.skippedForkWorkOwed() {
+		_ = b.markSkippedForkTxs(ctx, false)
 	}
 }
 
