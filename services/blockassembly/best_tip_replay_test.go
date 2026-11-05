@@ -1597,8 +1597,14 @@ func TestFollowBestHeader_MarksTxsOfSkippedTip(t *testing.T) {
 
 				ba.subtreeProcessor.Stop(context.Background())
 
+				// A start that owes the mark gives B up too.
+				require.NoError(t, items.blockchainClient.SetState(ctx, SkippedForkMarkStateKey, []byte{1}))
 				_, err = startBlockAssembler(t, items, ba.settings, nil)
 				require.NoError(t, err, "a start does not fail on it")
+
+				record, err := items.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
+				require.NoError(t, err)
+				require.Equal(t, []byte{0}, record, "the start finished the mark")
 
 				return
 			}
@@ -2054,31 +2060,55 @@ func TestMarkSkippedForkTxs_ReadsOnlyForksWithRetainedSubtrees(t *testing.T) {
 
 // TestFollowBestHeader_FailedMoveBacksOff: a fallback move that fails leaves the mark it owes
 // pending, and the idle wake retries it after a back-off, not on every tick.
+//
+// A move can fail after it put block assembly on the best tip, as a reset that fails after it set
+// the tip does. The failure is the pass's one attempt then too: the owed mark, whose reload is a
+// reset as well, waits for the back-off.
 func TestFollowBestHeader_FailedMoveBacksOff(t *testing.T) {
-	initPrometheusMetrics()
-	ctx := t.Context()
+	for _, reachesTip := range []bool{false, true} {
+		t.Run(map[bool]string{false: "off the tip", true: "on the tip"}[reachesTip], func(t *testing.T) {
+			initPrometheusMetrics()
+			ctx := t.Context()
 
-	items := setupBlockAssemblyTest(t, withCoinbaseMaturity(testCoinbaseMaturity))
-	genesis := genesisHeader(t, items)
+			items := setupBlockAssemblyTest(t, withCoinbaseMaturity(testCoinbaseMaturity))
+			genesis := genesisHeader(t, items)
 
-	a1 := buildChain(genesis, 1, 110000)[0]
-	addChain(t, items, []*model.BlockHeader{a1})
-	items.blockAssembler.setBestBlockHeader(a1, 1)
-	addChain(t, items, buildChain(a1, 2, 111000))
+			a1 := buildChain(genesis, 1, 110000)[0]
+			addChain(t, items, []*model.BlockHeader{a1})
+			items.blockAssembler.setBestBlockHeader(a1, 1)
+			c := buildChain(a1, 2, 111000)
+			addChain(t, items, c)
 
-	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
-	mockStp.On("Reorg", mock.Anything, mock.Anything).Return(errors.NewProcessingError("move failed"))
-	mockStp.On("MoveForwardBlock", mock.Anything).Return(errors.NewProcessingError("move failed"))
-	injectMockStp(t, items, mockStp)
+			fail := func(mock.Arguments) {
+				if reachesTip {
+					items.blockAssembler.setBestBlockHeader(c[1], 3)
+				}
+			}
 
-	items.blockAssembler.settings.BlockAssembly.ReconcileInterval = 0
-	items.blockAssembler.blockchainClient = &noBestTipOrderClient{ClientI: items.blockchainClient}
-	items.blockAssembler.processNewBlockAnnouncement(ctx)
+			mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+			mockStp.On("Reorg", mock.Anything, mock.Anything).Run(fail).Return(errors.NewProcessingError("move failed"))
+			mockStp.On("MoveForwardBlock", mock.Anything).Run(fail).Return(errors.NewProcessingError("move failed"))
+			injectMockStp(t, items, mockStp)
 
-	requireBlockAssemblyTip(t, items, a1)
-	require.True(t, items.blockAssembler.skippedForkMarkPending, "the move owes a mark")
-	require.False(t, items.blockAssembler.reconcileDue(time.Now()), "not retried at once")
-	require.True(t, items.blockAssembler.reconcileDue(time.Now().Add(skippedForkMarkRetryMax)), "retried after the back-off")
+			client := &noBestTipOrderClient{ClientI: items.blockchainClient}
+			listed := false
+			client.afterList = func() { listed = true }
+
+			items.blockAssembler.settings.BlockAssembly.ReconcileInterval = 0
+			items.blockAssembler.blockchainClient = client
+			items.blockAssembler.processNewBlockAnnouncement(ctx)
+
+			if !reachesTip {
+				requireBlockAssemblyTip(t, items, a1)
+			}
+
+			require.False(t, listed, "the mark does not run in the pass")
+			require.True(t, items.blockAssembler.skippedForkMarkPending, "the move owes a mark")
+			require.Equal(t, skippedForkMarkRetryBase, items.blockAssembler.skippedForkMarkWait, "the failed move is the pass's one failure")
+			require.False(t, items.blockAssembler.reconcileDue(time.Now()), "not retried at once")
+			require.True(t, items.blockAssembler.reconcileDue(time.Now().Add(skippedForkMarkRetryMax)), "retried after the back-off")
+		})
+	}
 }
 
 // TestFollowBestHeader_MoveThatResetsIsNoFailure: a fallback move that ran a reset ends on the
@@ -2227,8 +2257,11 @@ func TestHandleResetRequests_SkippedForkMarkBeforeTheReset(t *testing.T) {
 		answer := make(chan error, 1)
 
 		client.fail = "GetBlockHeaderIDs"
+		client.headerIDsCalls = 0
 		ba.handleResetRequests(ctx, resetRequest{ErrCh: answer})
 		require.Error(t, <-answer, "the reset's reload fails after the tx map rotation")
+		require.Equal(t, 1, client.headerIDsCalls, "the failed reset is not followed by a second in the pass")
+		require.False(t, ba.reconcileDue(time.Now()), "the owed reload is backed off")
 		require.NotZero(t, unminedSince(t, items, y), "the mark before the reset marked Y")
 		require.True(t, ba.skippedForkReloadPending, "the reload the failed reset did not do is owed")
 		require.True(t, ba.skippedForkWorkOwed())
@@ -2572,57 +2605,68 @@ func TestHandleResetRequests_RunsOwedWorkOncePerPass(t *testing.T) {
 
 // TestMarkSkippedForkTxs_RechecksAfterAPartialWrite: the stores write a mark off the longest chain
 // in chunks and may fail after writing some, so a failed write is checked against the best chain
-// again too. Here D, extending the best tip, mines Y between the selection and the write, the
-// write marks Y unmined and fails, and block assembly then moves onto D by a plain move forward.
-// Y is in the pool, so no reload is owed: the load of the unmined transactions a reload runs
-// would mark Y mined as well. The next run reads F again, but Y, mined on the best chain by then,
-// is no longer among F's transactions it marks, so only the recheck marks Y mined again.
+// again, as a failed check after a full write is. Here D, extending the best tip, mines Y between
+// the selection and the write, the write marks Y unmined, the write or the check after it fails,
+// and block assembly then moves onto D by a plain move forward. Y is in the pool, so no reload is
+// owed: the load of the unmined transactions a reload runs would mark Y mined as well. The next
+// run reads F again, but Y, mined on the best chain by then, is no longer among F's transactions
+// it marks, so only the recheck marks Y mined again.
 func TestMarkSkippedForkTxs_RechecksAfterAPartialWrite(t *testing.T) {
-	items, client, _, y := skippedForkSetup(t, true, true)
-	ba := items.blockAssembler
-	ctx := t.Context()
+	for _, failure := range []string{"write fails part way", "re-mark fails"} {
+		t.Run(failure, func(t *testing.T) {
+			items, client, _, y := skippedForkSetup(t, true, true)
+			ba := items.blockAssembler
+			ctx := t.Context()
 
-	ba.subtreeProcessor.AddBatch([]subtree.Node{{Hash: *y.TxIDChainHash(), Fee: 1, SizeInBytes: uint64(len(y.Bytes()))}}, []*subtree.TxInpoints{{}})
-	require.Eventually(t, func() bool { return ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()) }, 5*time.Second, 10*time.Millisecond, "Y is in block assembly")
+			ba.subtreeProcessor.AddBatch([]subtree.Node{{Hash: *y.TxIDChainHash(), Fee: 1, SizeInBytes: uint64(len(y.Bytes()))}}, []*subtree.TxInpoints{{}})
+			require.Eventually(t, func() bool { return ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()) }, 5*time.Second, 10*time.Millisecond, "Y is in block assembly")
 
-	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
+			best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
+			require.NoError(t, err)
 
-	d := buildChain(best, 1, 107000)[0]
+			d := buildChain(best, 1, 107000)[0]
 
-	store := &partialWriteUtxoStore{Store: items.utxoStore, beforeWrite: func() {
-		addBlockWithMinedSet(ctx, t, items, d)
-		_, dMeta, err := items.blockchainClient.GetBlockHeader(ctx, d.Hash())
-		require.NoError(t, err)
-		_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{y.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: dMeta.ID, BlockHeight: dMeta.Height, OnLongestChain: true})
-		require.NoError(t, err)
-	}}
-	ba.utxoStore = store
+			store := &partialWriteUtxoStore{Store: items.utxoStore, failRemark: failure == "re-mark fails", beforeWrite: func() {
+				addBlockWithMinedSet(ctx, t, items, d)
+				_, dMeta, err := items.blockchainClient.GetBlockHeader(ctx, d.Hash())
+				require.NoError(t, err)
+				_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{y.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: dMeta.ID, BlockHeight: dMeta.Height, OnLongestChain: true})
+				require.NoError(t, err)
+			}}
+			ba.utxoStore = store
 
-	require.Error(t, ba.markSkippedForkTxs(ctx, false))
-	require.NotZero(t, unminedSince(t, items, y), "precondition: the partial write marked Y, mined in D, unmined")
-	require.False(t, ba.skippedForkReloadPending, "precondition: Y is in the pool, so no reload is owed")
-	require.Equal(t, []chainhash.Hash{*y.TxIDChainHash()}, ba.skippedForkRecheck, "Y is left to be checked again")
+			require.Error(t, ba.markSkippedForkTxs(ctx, false))
+			require.NotZero(t, unminedSince(t, items, y), "precondition: the write marked Y, mined in D, unmined")
+			require.False(t, ba.skippedForkReloadPending, "precondition: Y is in the pool, so no reload is owed")
+			require.Len(t, ba.skippedForkRecheck, 1, "Y is left to be checked again")
 
-	store.beforeWrite = nil
-	ba.blockchainClient = client
-	client.headerIDsCalls = 0
-	ba.processNewBlockAnnouncement(ctx)
+			store.beforeWrite, store.failRemark = nil, false
+			ba.blockchainClient = client
+			client.headerIDsCalls = 0
+			ba.processNewBlockAnnouncement(ctx)
 
-	requireBlockAssemblyTip(t, items, d)
-	require.Zero(t, client.headerIDsCalls, "no reload ran")
-	require.Zero(t, unminedSince(t, items, y), "Y, mined in D on the best chain, is marked mined again")
-	require.False(t, ba.skippedForkWorkOwed())
+			requireBlockAssemblyTip(t, items, d)
+			require.Zero(t, client.headerIDsCalls, "no reload ran")
+			require.Zero(t, unminedSince(t, items, y), "Y, mined in D on the best chain, is marked mined again")
+			require.False(t, ba.skippedForkWorkOwed())
+		})
+	}
 }
 
-// partialWriteUtxoStore writes the first false mark it is asked for and then reports an error, as
-// a store that writes in chunks does when a later chunk fails; beforeWrite runs first.
+// partialWriteUtxoStore writes the first false mark it is asked for, after running beforeWrite,
+// and then reports an error, as a store that writes in chunks does when a later chunk fails.
+// With failRemark the write succeeds and the mark as on the longest chain after it fails.
 type partialWriteUtxoStore struct {
 	utxo.Store
 	beforeWrite func()
+	failRemark  bool
 }
 
 func (s *partialWriteUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
+	if onLongestChain && s.failRemark {
+		return errors.NewStorageError("re-mark failed")
+	}
+
 	if onLongestChain || s.beforeWrite == nil {
 		return s.Store.MarkTransactionsOnLongestChain(ctx, hashes, onLongestChain)
 	}
@@ -2631,6 +2675,10 @@ func (s *partialWriteUtxoStore) MarkTransactionsOnLongestChain(ctx context.Conte
 
 	if err := s.Store.MarkTransactionsOnLongestChain(ctx, hashes, false); err != nil {
 		return err
+	}
+
+	if s.failRemark {
+		return nil
 	}
 
 	return errors.NewStorageError("a later chunk failed")
@@ -2724,12 +2772,12 @@ func TestMarkSkippedForkTxs_RecheckFailureKeepsItPending(t *testing.T) {
 	items, client, f, y := skippedForkSetup(t, true, true)
 	ba := items.blockAssembler
 
-	ba.skippedForkRecheck = []chainhash.Hash{*y.TxIDChainHash()}
+	ba.skippedForkRecheck = map[chainhash.Hash]struct{}{*y.TxIDChainHash(): {}}
 	client.failBestCall = 2
 
 	require.Error(t, ba.markSkippedForkTxs(t.Context(), false))
 	require.True(t, ba.skippedForkMarkPending)
-	require.Equal(t, []chainhash.Hash{*y.TxIDChainHash()}, ba.skippedForkRecheck)
+	require.Equal(t, map[chainhash.Hash]struct{}{*y.TxIDChainHash(): {}}, ba.skippedForkRecheck)
 	require.NotContains(t, ba.skippedForkBlocksMarked, *f.Hash())
 	require.Equal(t, skippedForkMarkRetryBase, ba.skippedForkMarkWait)
 }
@@ -2737,15 +2785,43 @@ func TestMarkSkippedForkTxs_RecheckFailureKeepsItPending(t *testing.T) {
 // TestRunOwedSkippedForkWork_RunsARecheckAlone: transactions the replay's restamp wrote off the
 // longest chain without finishing their check are owed work on their own.
 func TestRunOwedSkippedForkWork_RunsARecheckAlone(t *testing.T) {
-	items, _, _, y := skippedForkSetup(t, true, true)
+	items, client, _, y := skippedForkSetup(t, true, true)
 	ba := items.blockAssembler
 
-	ba.skippedForkRecheck = []chainhash.Hash{*y.TxIDChainHash()}
+	ba.utxoStore = &failingUtxoStore{Store: items.utxoStore, fail: "MarkTransactionsOnLongestChain"}
+	_, err := ba.markOffLongestChain(t.Context(), []chainhash.Hash{*y.TxIDChainHash()})
+	require.Error(t, err)
+	_, err = ba.markOffLongestChain(t.Context(), []chainhash.Hash{*y.TxIDChainHash()})
+	require.Error(t, err)
+	require.Len(t, ba.skippedForkRecheck, 1, "a transaction is held once, however often its write fails")
+
+	ba.utxoStore = items.utxoStore
 	require.False(t, ba.skippedForkMarkPending)
 	require.False(t, ba.skippedForkReloadPending)
 
+	listed := false
+	client.afterList = func() { listed = true }
+
+	// An earlier failure left a back-off, which a recheck that finishes clears.
+	ba.noteSkippedForkMarkFailure(time.Now())
+
 	ba.runOwedSkippedForkWork(t.Context())
 	require.Empty(t, ba.skippedForkRecheck, "the recheck ran")
+	require.False(t, listed, "no mark is owed, so no fork block is listed")
+	require.Zero(t, ba.skippedForkMarkWait, "nothing is backed off")
+
+	// A recheck that fails is the pass's one attempt, counted and backed off.
+	ba.settings.BlockAssembly.ReconcileInterval = 0
+	ba.skippedForkRecheck = map[chainhash.Hash]struct{}{*y.TxIDChainHash(): {}}
+	ba.skippedForkMarkRan = false
+	before := testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_unfinished"))
+	client.bestCalls, client.failBestCall = 0, 1
+
+	ba.runOwedSkippedForkWork(t.Context())
+	require.Len(t, ba.skippedForkRecheck, 1, "the recheck stays owed")
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_unfinished")))
+	require.Equal(t, skippedForkMarkRetryBase, ba.skippedForkMarkWait)
+	require.False(t, ba.reconcileDue(time.Now()), "the idle wake waits for the back-off")
 }
 
 // TestMarkSkippedForkTxs_BestChainReads: the best-chain read stays within the header request
@@ -2814,4 +2890,27 @@ func TestMarkSkippedForkTxs_BestChainReads(t *testing.T) {
 		require.Equal(t, 2, unprocessed.count)
 		require.Less(t, ba.heartbeat.Age(), time.Minute, "the mark beat for the second block")
 	})
+}
+
+// TestRunOwedSkippedForkWork_RunsARecheckOffTheTip: a recheck alone does not wait for block
+// assembly to reach the best tip, so it does not keep the idle wake due while block assembly is
+// off it. An owed mark or reload does wait, and keeps the wake due to carry block assembly there.
+func TestRunOwedSkippedForkWork_RunsARecheckOffTheTip(t *testing.T) {
+	items, _, _, y := skippedForkSetup(t, true, true)
+	ba := items.blockAssembler
+	ba.settings.BlockAssembly.ReconcileInterval = 0
+	ctx := t.Context()
+
+	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	parent, parentMeta, err := items.blockchainClient.GetBlockHeader(ctx, best.HashPrevBlock)
+	require.NoError(t, err)
+
+	ba.setBestBlockHeader(parent, parentMeta.Height)
+	ba.skippedForkRecheck = map[chainhash.Hash]struct{}{*y.TxIDChainHash(): {}}
+
+	ba.runOwedSkippedForkWork(ctx)
+	require.Empty(t, ba.skippedForkRecheck, "the recheck ran off the tip")
+	require.False(t, ba.reconcileDue(time.Now()), "nothing is owed, so the idle wake is not due")
 }

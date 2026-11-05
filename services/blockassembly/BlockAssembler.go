@@ -284,15 +284,15 @@ type BlockAssembler struct {
 	// after the last run that did not finish, and the next one is not due before
 	// skippedForkMarkRetryAt. skippedForkMarkRan is set once a run started in the current pass
 	// (runOwedSkippedForkWork). skippedForkRecheck holds transactions a mark wrote off the
-	// longest chain without finishing its check against the best chain (markOffLongestChain). All
-	// are owned by the block-processing loop, and by Start before it.
+	// longest chain without finishing its check against the best chain (markOffLongestChain).
+	// All are owned by the block-processing loop, and by Start before it.
 	skippedForkBlocksMarked  map[chainhash.Hash]uint32
 	skippedForkMarkPending   bool
 	skippedForkReloadPending bool
 	skippedForkMarkWait      time.Duration
 	skippedForkMarkRetryAt   time.Time
 	skippedForkMarkRan       bool
-	skippedForkRecheck       []chainhash.Hash
+	skippedForkRecheck       map[chainhash.Hash]struct{}
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -828,6 +828,17 @@ drain:
 		// Nothing was discarded: block assembly is still on its old tip with its old pool,
 		// and the ordinary replay from the unchanged position carries it forward.
 		b.bestTipResetReplayPending.Store(wasPending)
+	}
+
+	if err != nil {
+		// The failed reset is the pass's one attempt: the owed work, which may need a reload
+		// that is a reset too, waits for the next pass or for the idle wake after a back-off,
+		// counted once in the pass.
+		if b.skippedForkWorkOwed() && !time.Now().Before(b.skippedForkMarkRetryAt) {
+			b.noteSkippedForkMarkFailure(time.Now())
+		}
+
+		b.skippedForkMarkRan = true
 	}
 	// Judge the storage outcome of this reset before replay can return an
 	// unrelated history error. A clean rotation still cured its disk fault.

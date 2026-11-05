@@ -435,7 +435,10 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 
 	// A reload is a reset, which waits for every block block validation has not finished; with
 	// such a fork block in the run it would hold block assembly until that block is done. The
-	// reload waits for the run that finds none.
+	// reload waits for the run that finds none: until block validation sets mined_set on each
+	// such fork block above the floor, or the floor passes it. Until then the transactions the
+	// run marked are unmined and not in the pool, so this node does not mine them; a restart
+	// loads them.
 	if unprocessed == 0 {
 		if err = b.reloadAfterSkippedForkMark(ctx, beforeReload); err != nil {
 			return err
@@ -487,13 +490,13 @@ func (b *BlockAssembler) skippedForkWorkOwed() bool {
 // well.
 func (b *BlockAssembler) markOffLongestChain(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
 	if err := b.utxoStore.MarkTransactionsOnLongestChain(ctx, hashes, false); err != nil {
-		b.skippedForkRecheck = append(b.skippedForkRecheck, hashes...)
+		b.addSkippedForkRecheck(hashes)
 		return nil, err
 	}
 
 	onBest, err := b.remarkOnBestChain(ctx, hashes)
 	if err != nil {
-		b.skippedForkRecheck = append(b.skippedForkRecheck, hashes...)
+		b.addSkippedForkRecheck(hashes)
 		return nil, err
 	}
 
@@ -529,13 +532,30 @@ func (b *BlockAssembler) recheckSkippedForkMarks(ctx context.Context) error {
 		return nil
 	}
 
-	if _, err := b.remarkOnBestChain(ctx, b.skippedForkRecheck); err != nil {
-		return errors.NewProcessingError("[recheckSkippedForkMarks] error checking %d transactions written off the longest chain", len(b.skippedForkRecheck), err)
+	hashes := make([]chainhash.Hash, 0, len(b.skippedForkRecheck))
+	for hash := range b.skippedForkRecheck {
+		hashes = append(hashes, hash)
+	}
+
+	if _, err := b.remarkOnBestChain(ctx, hashes); err != nil {
+		return errors.NewProcessingError("[recheckSkippedForkMarks] error checking %d transactions written off the longest chain", len(hashes), err)
 	}
 
 	b.skippedForkRecheck = nil
 
 	return nil
+}
+
+// addSkippedForkRecheck adds transactions to skippedForkRecheck, each once however often a
+// write of it fails.
+func (b *BlockAssembler) addSkippedForkRecheck(hashes []chainhash.Hash) {
+	if b.skippedForkRecheck == nil {
+		b.skippedForkRecheck = make(map[chainhash.Hash]struct{}, len(hashes))
+	}
+
+	for _, hash := range hashes {
+		b.skippedForkRecheck[hash] = struct{}{}
+	}
 }
 
 // skippedForkMarkFloor is the lowest height of a fork block markSkippedForkTxs reads: the replay
@@ -757,7 +777,22 @@ func (b *BlockAssembler) runOwedSkippedForkWork(ctx context.Context) {
 		return
 	}
 
-	_ = b.markSkippedForkTxs(ctx, false)
+	if b.skippedForkMarkPending || b.skippedForkReloadPending {
+		_ = b.markSkippedForkTxs(ctx, false)
+		return
+	}
+
+	// Only a recheck is owed, for example after the replay's restamp failed: it needs no run of
+	// the mark, and not block assembly on the best tip.
+	if err := b.recheckSkippedForkMarks(ctx); err != nil {
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_unfinished").Inc()
+		b.noteSkippedForkMarkFailure(time.Now())
+		b.logger.Errorf("[BlockAssembler] recheck of skipped fork transactions unfinished, retrying at %s: %v", b.skippedForkMarkRetryAt.Format(time.RFC3339), err)
+
+		return
+	}
+
+	b.noteSkippedForkMarkSuccess()
 }
 
 // skippedForkMarkDue reports whether the work of a mark of skipped fork transactions

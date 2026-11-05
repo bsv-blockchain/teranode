@@ -187,8 +187,10 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   floor that the best chain does not hold, a window of heights at a time
   (`GetBlockHeadersFromHeight`, bounded by `blockchain_maxBlockHeadersPerRequest`),
   without computing chain tips' branch lengths, and reads each valid one block validation
-  has finished whose subtree files the subtree retention still keeps, once per process. It runs with block assembly on the best tip,
-  or before the reset it follows. The run is recorded as pending under a new blockchain
+  has finished whose subtree files the subtree retention still keeps. A block it has
+  marked or given up is not read again in this process; one that joined the best chain
+  during the run, could not be read or is not finished yet is read again on a later run.
+  It runs with block assembly on the best tip, or before the reset it follows. The run is recorded as pending under a new blockchain
   state key, `BlockAssemblerSkippedForkMark`, before block assembly follows the best
   header, resets without a replay position, or gives the replay's history up; if that
   write fails, block assembly stays on its tip, refuses the reset or keeps the history,
@@ -200,7 +202,10 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       pool does not hold and could (one only the skipped block had, not a conflicting
       one), block assembly reloads the pool on its own tip. That is a full reset, as the
       replay's restamp of a stale branch runs. A fork block that never was the best tip,
-      or a transaction that lost a double spend, does not cause one.
+      or a transaction that lost a double spend, does not cause one. The reload waits
+      until block validation has finished every fork block above the floor, or the floor
+      passes the one it has not; until then this node does not mine the transactions the
+      mark took off the longest chain, and a restart loads them.
     - **Retries.** A run that cannot finish, for example on a fork block whose subtree
       store cannot be reached or that block validation has not finished, stays pending.
       Every later block pass on the best tip runs it again, and the reconcile timer wakes
