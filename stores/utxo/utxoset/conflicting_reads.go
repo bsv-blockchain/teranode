@@ -39,3 +39,14 @@ func (s *Store) GetCounterConflicting(ctx context.Context, txHash chainhash.Hash
 func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash) ([]chainhash.Hash, error) {
 	return utxo.GetConflictingChildren(ctx, s, hash, s.settings.UtxoStore.ConflictingChildrenMaxNodes)
 }
+
+// ConflictingTxHashes answers not indexed, so block validation keeps reading the conflicting
+// flag of each transaction of an already-validated subtree, as it always has on this store.
+//
+// No index serves the conflicting flag here (see conflictingSQL), and the set is wanted once per
+// block: answering it would be a sequential scan of every partition on every block, which is
+// worse than the per-transaction read it was meant to replace. Not indexed is always a correct
+// answer; an indexed empty set would read as "nothing is conflicting".
+func (s *Store) ConflictingTxHashes(context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, false, nil
+}

@@ -276,6 +276,11 @@ func (m *NullStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, nil
 }
 
+// ConflictingTxHashes reports no conflicting transactions: the null store holds none.
+func (m *NullStore) ConflictingTxHashes(_ context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, true, nil
+}
+
 func (m *NullStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	return nil
 }

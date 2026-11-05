@@ -127,6 +127,9 @@ func (m *MockUTXOStore) GetPrunableUnminedTxIterator(cutoffBlockHeight uint32) (
 func (m *MockUTXOStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return nil, nil
 }
+func (m *MockUTXOStore) ConflictingTxHashes(_ context.Context) ([]chainhash.Hash, bool, error) {
+	return nil, true, nil
+}
 
 func (m *MockUTXOStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
 	return nil

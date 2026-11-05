@@ -821,19 +821,23 @@ func (u *Server) CheckBlockSubtrees(ctx context.Context, request *subtreevalidat
 //
 // # COST
 //
-// Every transaction of every cached subtree is read from the UTXO store, for the
-// single field fields.Conflicting. On a path that previously did no UTXO round
-// trips at all this is the dominant new cost, and it is paid per block in the
-// steady state, where a node has already validated every subtree before the block
-// arrives.
+// The store is asked once per block for the transactions it currently flags
+// Conflicting, from its conflicting index, and the block's cached subtrees are
+// matched against that set. Normally the set is empty and nothing else is read.
+// No transaction of a cached subtree is read from the UTXO store: on a big block
+// that was a read per transaction, over a billion per block, for an answer that
+// was almost always "none".
 //
-// That is deliberate and is not configurable. The cheaper predecessor read only
-// each subtree's ConflictingNodes trailer, but the trailer records what was true
+// The stored ConflictingNodes trailer is still not used. It records what was true
 // at blessing time and is never rewritten for a loser that was never mined, so it
-// answered a strictly weaker question than the fresh path's and left identical
-// block bytes to be judged by whether a node still held the blob (issue #1742). A
-// setting to skip the read would reintroduce exactly that divergence between
-// nodes, so the cost is taken unconditionally.
+// answers a strictly weaker question than the fresh path's and leaves identical
+// block bytes to be judged by whether a node still held the blob (issue #1742).
+// The conflicting index answers the same question as the per-transaction read
+// did, from the store's current state.
+//
+// Until the store can answer from its index (the index is still building, or
+// the server cannot hold one) the check falls back to reading every transaction's
+// Conflicting flag, which is correct but slow.
 //
 // The ancestry fetch and the counter-spend walk still happen only when a
 // conflicting transaction is actually present — effectively never.
@@ -962,15 +966,24 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 // and rejected by one that had pruned it. The store holds the current fact, so
 // this asks the store.
 //
-// Fails closed on faults: the caller has just established that each file exists,
-// so a read or parse failure is a transient fault or a corrupt file, never
-// evidence that a subtree has no conflicting transactions. Treating it as "none"
-// would turn a storage hiccup into a bypass of the check above. The one exception
-// is a transaction absent from the store: both backends report that through
-// item.Err, and it is skipped rather than failed — the same fail-open the caller
-// applies to a pruned counter-conflicting record. Failing would reject any block
-// whose subtree blob outlived its transaction records, against peers that cannot
-// supply a record missing from this node's store.
+// It asks once, for the set of transactions the store flags Conflicting, which
+// the store answers from its conflicting index; it never reads the transactions
+// of an already-validated subtree one by one. An empty set, the normal case, ends
+// the check without opening a subtree file. Otherwise each subtree's node hashes
+// are matched against the set. Only a store that cannot answer from its index
+// yet (index still building, server too old) sends the check down the
+// per-transaction fallback, cachedSubtreeConflictingNodesFor.
+//
+// Fails closed on faults: a failed index read, and a subtree file that cannot be
+// read or parsed (the caller has just established that each file exists), are
+// faults, never evidence that a subtree has no conflicting transactions. Treating
+// either as "none" would turn a storage hiccup into a bypass of the check above.
+// The one exception is a transaction absent from the store. It is not in the
+// index, and the fallback skips it rather than failing (both backends report it
+// through item.Err) — the same fail-open the caller applies to a pruned
+// counter-conflicting record. Failing would reject any block whose subtree blob
+// outlived its transaction records, against peers that cannot supply a record
+// missing from this node's store.
 //
 // The skip is NOT proof the transaction was never conflicting. A record that aged
 // out may have been. It is only as safe as the retention ordering: a conflicting
@@ -982,9 +995,64 @@ func (u *Server) checkCachedSubtreesAgainstCandidateChain(ctx context.Context, b
 // subtree DAH to 0 (keep forever). In those cases this path can bless what the
 // fresh path would reject.
 //
-// Only fields.Conflicting is requested: the narrowest question that settles the
-// verdict.
+// The fallback requests only fields.Conflicting: the narrowest question that
+// settles the verdict.
 func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtrees []chainhash.Hash) ([]chainhash.Hash, error) {
+	store, _ := u.decorateReadPath(true)
+
+	var (
+		conflicting []chainhash.Hash
+		indexed     bool
+	)
+
+	if err := u.withStoreRetry(ctx, "conflicting index read", func() error {
+		var readErr error
+
+		conflicting, indexed, readErr = store.ConflictingTxHashes(ctx)
+
+		return readErr
+	}); err != nil {
+		return nil, errors.NewProcessingError("[cachedSubtreeConflictingNodes] failed to read the store's conflicting transactions", err)
+	}
+
+	if !indexed {
+		u.logger.Warnf("[cachedSubtreeConflictingNodes] the UTXO store cannot answer from its conflicting index yet, reading every transaction of %d cached subtree(s)", len(cachedSubtrees))
+
+		return u.forEachCachedSubtree(ctx, cachedSubtrees, u.cachedSubtreeConflictingNodesFor)
+	}
+
+	if len(conflicting) == 0 {
+		return nil, nil
+	}
+
+	conflictingSet := make(map[chainhash.Hash]struct{}, len(conflicting))
+	for _, hash := range conflicting {
+		conflictingSet[hash] = struct{}{}
+	}
+
+	return u.forEachCachedSubtree(ctx, cachedSubtrees, func(ctx context.Context, subtreeHash chainhash.Hash) ([]chainhash.Hash, error) {
+		nodeBytes, err := u.readCachedSubtreeNodes(ctx, subtreeHash)
+		if err != nil {
+			return nil, err
+		}
+
+		var inSubtree []chainhash.Hash
+
+		for offset := 0; offset+chainhash.HashSize <= len(nodeBytes); offset += chainhash.HashSize {
+			hash := chainhash.Hash(nodeBytes[offset : offset+chainhash.HashSize])
+			if _, ok := conflictingSet[hash]; ok {
+				inSubtree = append(inSubtree, hash)
+			}
+		}
+
+		return inSubtree, nil
+	})
+}
+
+// forEachCachedSubtree runs find on every cached subtree in parallel and returns
+// the hashes it found, in subtree order.
+func (u *Server) forEachCachedSubtree(ctx context.Context, cachedSubtrees []chainhash.Hash,
+	find func(ctx context.Context, subtreeHash chainhash.Hash) ([]chainhash.Hash, error)) ([]chainhash.Hash, error) {
 	perSubtree := make([][]chainhash.Hash, len(cachedSubtrees))
 
 	g, gCtx := errgroup.WithContext(ctx)
@@ -995,12 +1063,12 @@ func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtre
 		subtreeHash := cachedSubtrees[idx]
 
 		g.Go(func() error {
-			conflicting, err := u.cachedSubtreeConflictingNodesFor(gCtx, subtreeHash)
+			found, err := find(gCtx, subtreeHash)
 			if err != nil {
 				return err
 			}
 
-			perSubtree[idx] = conflicting
+			perSubtree[idx] = found
 
 			return nil
 		})
@@ -1011,16 +1079,18 @@ func (u *Server) cachedSubtreeConflictingNodes(ctx context.Context, cachedSubtre
 	}
 
 	var all []chainhash.Hash
-	for _, conflictingNodes := range perSubtree {
-		all = append(all, conflictingNodes...)
+	for _, found := range perSubtree {
+		all = append(all, found...)
 	}
 
 	return all, nil
 }
 
-// cachedSubtreeConflictingNodesFor reads one cached subtree's transaction hashes
-// and returns those the store currently flags Conflicting.
-func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHash chainhash.Hash) ([]chainhash.Hash, error) {
+// readCachedSubtreeNodes reads a cached subtree's node hashes, 32 bytes each.
+// Stopping before the trailer keeps this immune to what the trailer says (or
+// whether it is there at all) and skips building Node structs for leaves that are
+// only ever used as lookup keys.
+func (u *Server) readCachedSubtreeNodes(ctx context.Context, subtreeHash chainhash.Hash) ([]byte, error) {
 	reader, err := u.subtreeStore.GetIoReader(ctx, subtreeHash[:], fileformat.FileTypeSubtree)
 	if err != nil {
 		return nil, errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read cached subtree", subtreeHash.String(), err)
@@ -1030,12 +1100,22 @@ func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHa
 		_ = reader.Close()
 	}()
 
-	// Node hashes only. Stopping before the trailer keeps this immune to what the
-	// trailer says (or whether it is there at all) and skips building Node structs
-	// for leaves that are only ever used as lookup keys.
 	nodeBytes, err := subtreepkg.DeserializeNodesFromReader(reader)
 	if err != nil {
 		return nil, errors.NewProcessingError("[cachedSubtreeConflictingNodes][%s] failed to read nodes from cached subtree", subtreeHash.String(), err)
+	}
+
+	return nodeBytes, nil
+}
+
+// cachedSubtreeConflictingNodesFor reads one cached subtree's transaction hashes
+// and returns those the store currently flags Conflicting, reading each
+// transaction's record. It is the fallback for a store that cannot answer from
+// its conflicting index.
+func (u *Server) cachedSubtreeConflictingNodesFor(ctx context.Context, subtreeHash chainhash.Hash) ([]chainhash.Hash, error) {
+	nodeBytes, err := u.readCachedSubtreeNodes(ctx, subtreeHash)
+	if err != nil {
+		return nil, err
 	}
 
 	numNodes := len(nodeBytes) / chainhash.HashSize
