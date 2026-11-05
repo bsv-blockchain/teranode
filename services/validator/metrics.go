@@ -239,10 +239,12 @@ var (
 	prometheusValidatorHandoffDeadlineTotal prometheus.Counter
 
 	// prometheusValidatorExistingTxLockedUnmined counts resubmits that found an
-	// existing record locked, unmined and not conflicting — the residual stranded
-	// state. Field data from this counter is what should decide whether that state
-	// ever needs a behavioural answer, since the store cannot distinguish its
-	// causes.
+	// existing record locked, unmined and not conflicting. The causes are a conflict
+	// resolution in flight, a submission interrupted before its hand-off, and a
+	// block-context transaction shed from the ingest queue, which is left Locked
+	// outside the template on purpose. The store cannot distinguish them, so a
+	// rising value is not by itself a fault; compare it with
+	// shed_inblock_dropped_total.
 	prometheusValidatorExistingTxLockedUnmined prometheus.Counter
 )
 
@@ -614,7 +616,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "validator",
 			Name:      "existing_tx_locked_unmined_total",
-			Help:      "Number of resubmits that found an existing transaction record locked, unmined and not conflicting",
+			Help:      "Number of resubmits that found an existing transaction record locked, unmined and not conflicting. Causes include a conflict resolution in flight, an interrupted submission and a block-context transaction left outside the template by a queue shed",
 		},
 	)
 }

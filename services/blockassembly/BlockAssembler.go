@@ -2350,7 +2350,7 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
 func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints)
+	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, false) == subtreeprocessor.Admitted
 }
 
 // AddTxBatchInBlockIfRoom is AddTxBatchIfRoom for transactions that arrived inside a block. The
@@ -2363,7 +2363,22 @@ func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*su
 // Returns:
 //   - bool: true if the batch was enqueued, false if it was refused for room
 func (b *BlockAssembler) AddTxBatchInBlockIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	return b.subtreeProcessor.AddBatchInBlockIfRoom(nodes, txInpoints)
+	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, true) == subtreeprocessor.Admitted
+}
+
+// AddTxBatchBounded offers a batch under the configured bounds and reports which bound refused
+// it, if one did. inBlock marks transactions that arrived inside a block, which the in-memory
+// transaction limit does not refuse.
+//
+// Parameters:
+//   - nodes: Transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//   - inBlock: Whether the transactions arrived inside a block
+//
+// Returns:
+//   - subtreeprocessor.Admission: Admitted, or the bound that refused the batch
+func (b *BlockAssembler) AddTxBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool) subtreeprocessor.Admission {
+	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock)
 }
 
 // HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
@@ -2373,18 +2388,6 @@ func (b *BlockAssembler) AddTxBatchInBlockIfRoom(nodes []subtree.Node, txInpoint
 //   - int64: Transactions held in memory
 func (b *BlockAssembler) HeldCount() int64 {
 	return b.subtreeProcessor.HeldCount()
-}
-
-// HeldLimitExceededBy reports whether admitting n more transactions would put the transactions
-// held in memory over the limit. It is false when there is no limit.
-//
-// Parameters:
-//   - n: Number of transactions that would be added
-//
-// Returns:
-//   - bool: true if the in-memory limit is the bound that would refuse them
-func (b *BlockAssembler) HeldLimitExceededBy(n int) bool {
-	return b.subtreeProcessor.HeldLimitExceededBy(n)
 }
 
 // RemoveTx removes a transaction from the block assembler.

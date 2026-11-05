@@ -574,7 +574,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "blockassembly",
 			Name:      "held_limit_shed_total",
-			Help:      "Total transactions shed because block assembly held its configured maximum of transactions in memory. A subset of queue_shed_total. Sustained growth means no block is being produced or the limit is too tight.",
+			Help:      "Total batches shed because block assembly held its configured maximum of transactions in memory. A subset of queue_shed_total. Sustained growth means no block is being produced or the limit is too tight.",
 		},
 	)
 

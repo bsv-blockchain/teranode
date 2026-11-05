@@ -2399,8 +2399,10 @@ func TestValidate_ShedUnwindSecondVerifyReadFailureIsNotAReappearance(t *testing
 }
 
 func heldLimitShed() error {
-	return errors.NewThresholdExceededError("block assembly holds 65 transactions in memory, limit 65",
-		errors.NewServiceUnavailableError("in-memory transaction limit reached"))
+	shedErr := errors.NewThresholdExceededError("block assembly holds 65 transactions in memory, limit 65")
+	shedErr.SetData("heldLimit", true)
+
+	return shedErr
 }
 
 func TestIsRetryableShed(t *testing.T) {

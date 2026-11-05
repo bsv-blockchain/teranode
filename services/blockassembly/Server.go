@@ -1363,6 +1363,10 @@ const queueFullPollInterval = 5 * time.Millisecond
 // carries a marker the validator uses to skip its own retry for the same reason; see
 // shedHeld.
 //
+// A batch larger than a whole bound can be admitted only onto an empty queue, so it takes the
+// polling wait for the queue to empty, not the immediate held shed, unless the node is already
+// at the in-memory limit.
+//
 // inBlock marks a batch whose transactions arrived inside a block. The in-memory limit does
 // not refuse it, so a block transaction is never left outside the template by that limit.
 //
@@ -1373,19 +1377,15 @@ const queueFullPollInterval = 5 * time.Millisecond
 // The wait is strictly bounded so it can never wedge the validator, whose
 // block-assembly client honours the caller's context (group.Wait(ctx, 0)).
 func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) error {
-	addIfRoom := ba.blockAssembler.AddTxBatchIfRoom
-	if inBlock {
-		addIfRoom = ba.blockAssembler.AddTxBatchInBlockIfRoom
-	}
-
-	if addIfRoom(nodes, txInpoints) {
+	verdict := ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock)
+	if verdict == subtreeprocessor.Admitted {
 		return nil
 	}
 
 	start := time.Now()
 
-	if !inBlock && ba.blockAssembler.HeldLimitExceededBy(len(nodes)) {
-		return ba.shedHeld(start)
+	if verdict == subtreeprocessor.RefusedHeld {
+		return ba.shedHeld()
 	}
 
 	if ba.settings.BlockAssembly.QueueFullWaitTimeout > 0 {
@@ -1402,9 +1402,14 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 			case <-timeout:
 				return ba.shed(start)
 			case <-ticker.C:
-				if addIfRoom(nodes, txInpoints) {
+				switch ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock) {
+				case subtreeprocessor.Admitted:
 					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
 					return nil
+				case subtreeprocessor.RefusedHeld:
+					// The node reached the in-memory limit while this batch waited for the
+					// queue. That clears only on a block, so stop waiting.
+					return ba.shedHeld()
 				}
 			}
 		}
@@ -1419,20 +1424,49 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 	return ba.shed(start)
 }
 
+// heldShedMarker is the data key that marks a shed as the in-memory transaction limit. The
+// marker travels in the error data, so it survives the gRPC hop, and it is not an error class,
+// so a retry layer that retries by class does not take the shed for a transient fault.
+const heldShedMarker = "heldLimit"
+
+// IsHeldLimitShed reports whether err is the shed for the in-memory transaction limit. That
+// shed clears when a block connects, not within milliseconds, so a caller must not retry it in
+// place. It is false for the queue-full shed, which clears as the dispatcher drains.
+func IsHeldLimitShed(err error) bool {
+	for current := err; current != nil; {
+		var tErr *errors.Error
+		if !errors.As(current, &tErr) {
+			return false
+		}
+
+		if marked, ok := tErr.GetData(heldShedMarker).(bool); ok && marked {
+			return true
+		}
+
+		current = tErr.Unwrap()
+	}
+
+	return false
+}
+
 // shedHeld records and returns the shed for a batch the in-memory transaction limit refused. It
 // is the same resource-exhausted class as shed, so every existing consumer handles it, with one
-// extra marker: the error wraps ErrServiceUnavailable. The validator reads that marker to skip
-// the in-place retry that only suits a queue that clears in milliseconds, since this bound holds
-// until a block connects.
-func (ba *BlockAssembly) shedHeld(start time.Time) error {
-	prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+// extra marker in its data, read by IsHeldLimitShed. The validator reads that marker to skip the
+// in-place retry that only suits a queue that clears in milliseconds, since this bound holds
+// until a block connects. The error deliberately does not wrap ErrServiceUnavailable, which
+// IsRetryableError and the HTTP client retry as a transient fault.
+//
+// No queue wait is observed: a held refusal never waits for room.
+func (ba *BlockAssembly) shedHeld() error {
 	prometheusBlockAssemblyQueueShed.Inc()
 	prometheusBlockAssemblyHeldShed.Inc()
 
-	return errors.WrapGRPC(errors.NewThresholdExceededError(
+	shedErr := errors.NewThresholdExceededError(
 		"block assembly holds %d transactions in memory, limit %d",
-		ba.blockAssembler.HeldCount(), ba.blockAssembler.MaxTransactionsInMemory(),
-		errors.NewServiceUnavailableError("in-memory transaction limit reached")))
+		ba.blockAssembler.HeldCount(), ba.blockAssembler.MaxTransactionsInMemory())
+	shedErr.SetData(heldShedMarker, true)
+
+	return errors.WrapGRPC(shedErr)
 }
 
 // shed records and returns the queue-full shed outcome: a ResourceExhausted-

@@ -259,7 +259,7 @@ func TestHeldTotal_CountsDequeuedItemsUntilSettled(t *testing.T) {
 	require.Equal(t, int64(0), q.length(), "the queue is empty")
 	require.Equal(t, int64(100), q.heldCount(), "dequeued items stay counted until the subtree count includes them, so the total does not dip")
 	require.False(t, q.enqueueBatchIfRoom(mkNodes(1), mkInpoints(1)), "a producer landing in that window is refused")
-	require.True(t, q.heldWouldExceed(1))
+	require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false))
 
 	held.Add(10) // the dispatcher adds the batch to the subtree count
 	q.settle(10)
@@ -273,14 +273,14 @@ func TestHeldTotal_CountsDequeuedItemsUntilSettled(t *testing.T) {
 	require.True(t, q.enqueueBatchIfRoom(mkNodes(1), mkInpoints(1)), "room returns once a block clears the subtrees")
 }
 
-func TestHeldWouldExceed_FalseWithoutLimit(t *testing.T) {
+func TestEnqueueBatchBounded_NeverRefusesByHeldWithoutLimit(t *testing.T) {
 	var held atomic.Int64
 
 	held.Store(1 << 40)
 
 	q := heldQueue(0, 0, &held)
 
-	require.False(t, q.heldWouldExceed(1<<20))
+	require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(1<<10), mkInpoints(1<<10), false))
 }
 
 func Test_normalizeMaxTransactionsInMemory_FloorIsAtLeastTwo(t *testing.T) {
@@ -303,8 +303,6 @@ func TestSubtreeProcessor_ZeroSendBatchSizeStillAdmitsABatch(t *testing.T) {
 
 func TestSubtreeProcessor_HeldAccessors(t *testing.T) {
 	stp := newLimitedSubtreeProcessor(t, context.Background(), 0)
-
-	require.False(t, stp.HeldLimitExceededBy(1<<30), "no limit, nothing exceeds it")
 
 	stp.txCount.Store(7)
 
@@ -387,4 +385,171 @@ func TestSubtreeProcessor_DispatcherSettlesWhatItDequeued(t *testing.T) {
 		"the dispatcher must release what it dequeued once the subtree count includes it")
 
 	require.Equal(t, int64(stp.txCount.Load()), stp.HeldCount(), "with nothing queued or unsettled the held total is the subtree count") // nolint:gosec
+}
+
+func enqueueDistinctBatches(t *testing.T, stp *SubtreeProcessor, batches, perBatch int) {
+	t.Helper()
+
+	enqueueAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.queue.clock = fixedClock{t: enqueueAt}
+	stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
+
+	for i := 0; i < batches; i++ {
+		nodes, inpoints := distinctNodes(perBatch, "drain-chunk-"+string(rune('a'+i)))
+		stp.queue.enqueueBatch(nodes, inpoints)
+	}
+}
+
+func TestSubtreeProcessor_DrainKeepsTheHeldTotalAtEveryChunkBoundary(t *testing.T) {
+	stp := newTestProcessorNoStart(t)
+
+	const (
+		batches  = 5
+		perBatch = 4
+	)
+
+	enqueueDistinctBatches(t, stp, batches, perBatch)
+
+	startHeld := stp.HeldCount()
+	chunks := 0
+
+	err := stp.forEachDrainChunk(perBatch, func(chunk []*TxBatch) error {
+		require.GreaterOrEqual(t, stp.HeldCount(), startHeld,
+			"the transactions an earlier chunk placed must still count, or producers are admitted past the limit")
+
+		for _, batch := range chunk {
+			for i, node := range batch.nodes {
+				require.NoError(t, stp.addNode(node, batch.txInpoints[i], true))
+			}
+		}
+
+		chunks++
+
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, batches, chunks, "precondition: the drain crossed chunk boundaries")
+	require.Equal(t, int64(0), stp.queue.length())
+	require.Equal(t, int64(0), stp.queue.unsettled.Load())
+	require.Equal(t, int64(len(collectSubtreeHashes(stp))), int64(stp.txCount.Load()), "the count includes everything the drain placed") // nolint:gosec
+	require.GreaterOrEqual(t, stp.HeldCount(), startHeld)
+}
+
+func TestSubtreeProcessor_DrainSettlesWhenTheChunkCallbackPanics(t *testing.T) {
+	stp := newTestProcessorNoStart(t)
+
+	enqueueDistinctBatches(t, stp, 3, 4)
+
+	require.Panics(t, func() {
+		_ = stp.forEachDrainChunk(1, func(_ []*TxBatch) error {
+			panic("chunk callback failed")
+		})
+	})
+
+	require.Equal(t, int64(0), stp.queue.unsettled.Load(), "a panic recovered above the drain must not leave the chunk counted as unsettled for good")
+}
+
+func TestSubtreeProcessor_DequeueDuringBlockMovementCountsWhatItPlaced(t *testing.T) {
+	stp := newTestProcessorNoStart(t)
+
+	enqueueDistinctBatches(t, stp, 3, 5)
+
+	require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true))
+
+	require.Equal(t, int64(len(collectSubtreeHashes(stp))), int64(stp.txCount.Load()), "the drain counts what it placed before it settles") // nolint:gosec
+	require.GreaterOrEqual(t, stp.txCount.Load(), uint64(15))
+	require.Equal(t, int64(stp.txCount.Load()), stp.HeldCount()) // nolint:gosec
+}
+
+func TestEnqueueBatchBounded_ClassifiesEachRefusal(t *testing.T) {
+	t.Run("queue bound", func(t *testing.T) {
+		var held atomic.Int64
+
+		q := heldQueue(10, 0, &held)
+
+		require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(10), mkInpoints(10), false))
+		require.Equal(t, RefusedQueue, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false))
+		require.Equal(t, int64(10), q.length(), "a refusal leaves no reservation behind")
+	})
+
+	t.Run("held bound", func(t *testing.T) {
+		var held atomic.Int64
+
+		held.Store(95)
+
+		q := heldQueue(0, 100, &held)
+
+		require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(6), mkInpoints(6), false))
+		require.Equal(t, int64(0), q.length())
+		require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(5), mkInpoints(5), false))
+		require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false))
+	})
+
+	t.Run("held bound wins when both bounds refuse", func(t *testing.T) {
+		var held atomic.Int64
+
+		held.Store(100)
+
+		q := heldQueue(5, 100, &held)
+
+		require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(6), mkInpoints(6), false), "an over-the-limit node is the cause that outlasts the queue")
+	})
+
+	t.Run("a block batch is refused by the queue bound only", func(t *testing.T) {
+		var held atomic.Int64
+
+		held.Store(100)
+
+		q := heldQueue(5, 100, &held)
+
+		require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(5), mkInpoints(5), true), "past the in-memory limit")
+		require.Equal(t, RefusedQueue, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), true))
+	})
+
+	t.Run("oversize for the queue waits for an empty queue", func(t *testing.T) {
+		var held atomic.Int64
+
+		q := heldQueue(10, 0, &held)
+
+		require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(2), mkInpoints(2), false))
+		require.Equal(t, RefusedOversize, q.enqueueBatchBounded(mkNodes(11), mkInpoints(11), false))
+
+		batch, found := q.dequeueBatch(0)
+		require.True(t, found)
+		require.Len(t, batch.nodes, 2)
+		q.settle(2)
+
+		require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(11), mkInpoints(11), false), "admitted once the queue is empty")
+	})
+
+	t.Run("oversize for the in-memory limit waits for an empty queue", func(t *testing.T) {
+		var held atomic.Int64
+
+		held.Store(1)
+
+		q := heldQueue(0, 10, &held)
+
+		require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(2), mkInpoints(2), false))
+		require.Equal(t, RefusedOversize, q.enqueueBatchBounded(mkNodes(11), mkInpoints(11), false),
+			"the batch can never fit, so it waits for the empty queue its admission relies on")
+
+		batch, found := q.dequeueBatch(0)
+		require.True(t, found)
+		require.Len(t, batch.nodes, 2)
+		q.settle(2)
+
+		require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(11), mkInpoints(11), false), "admitted once the queue is empty")
+	})
+
+	t.Run("oversize at the in-memory limit is refused by the limit", func(t *testing.T) {
+		var held atomic.Int64
+
+		held.Store(10)
+
+		q := heldQueue(0, 10, &held)
+
+		require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(11), mkInpoints(11), false),
+			"a node already at the limit clears only when a block connects, so there is nothing to wait for")
+	})
 }
