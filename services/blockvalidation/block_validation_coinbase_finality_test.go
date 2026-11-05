@@ -16,21 +16,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests drive BV-BODY-019 (coinbase finality) through the full validation route of the
-// service, BlockValidation.ValidateBlock with optimistic mining off, over a real sqlitememory
-// blockchain store holding a real ancestor chain. The model tests in
-// model/block_coinbase_finality_test.go pin the rule on Block.Valid with a chain the test hands in;
-// here the service fetches the ancestor headers itself, so the time-lock cases also prove that the
-// chain the service passes is what sets the lock-time cutoff (BV-BODY-015: the parent's
-// median-time-past from CSVHeight, else the block's own timestamp).
+// These tests drive coinbase finality through the full validation route of the service,
+// BlockValidation.ValidateBlock with optimistic mining off, over a real sqlitememory blockchain
+// store holding a real ancestor chain. The model tests in model/block_coinbase_finality_test.go pin
+// the rule on Block.Valid with a chain the test hands in; here the service fetches the ancestor
+// headers itself, so the time-lock cases also prove that the chain the service passes is what sets
+// the lock-time cutoff (the parent's median time past from CSVHeight, else the block's own
+// timestamp).
 
-// finalityAncestorCount is how many coinbase-only blocks the fixture stores on top of genesis
-// before the candidate. The candidate is at height finalityAncestorCount+1.
-const finalityAncestorCount = 5
+const (
+	// coinbaseFinalityAncestorCount is how many coinbase-only blocks the fixture stores on top of
+	// genesis before the candidate. The candidate is at height coinbaseFinalityAncestorCount+1.
+	coinbaseFinalityAncestorCount = 5
 
-// serviceFinalityChain is a blockchain store holding genesis plus finalityAncestorCount blocks
-// with chosen timestamps, and the service validating against it.
-type serviceFinalityChain struct {
+	// coinbaseFinalityChainStartOffset is how many seconds before now the ancestor timestamps are
+	// counted from.
+	coinbaseFinalityChainStartOffset = uint32(7200)
+
+	// coinbaseFinalityAncestorSpacing is the number of seconds between consecutive ancestors.
+	coinbaseFinalityAncestorSpacing = uint32(600)
+
+	// coinbaseFinalityCandidateTimeOffset is the candidate's header time in seconds after the chain
+	// start: well after the last ancestor, so the parent's median time past is below it.
+	coinbaseFinalityCandidateTimeOffset = uint32(6000)
+
+	// coinbaseFinalityMedianTimeSpan is how many blocks bitcoin-sv's GetMedianTimePast looks at.
+	coinbaseFinalityMedianTimeSpan = 11
+
+	// coinbaseFinalityRegtestBits is the regtest proof-of-work limit every fixture header is mined to.
+	coinbaseFinalityRegtestBits = "207fffff"
+
+	// coinbaseFinalityPeerURL is the base URL the service is told the block came from.
+	coinbaseFinalityPeerURL = "http://localhost"
+)
+
+// coinbaseFinalityChain is a blockchain store holding genesis plus coinbaseFinalityAncestorCount
+// blocks with chosen timestamps, and the service validating against it.
+type coinbaseFinalityChain struct {
 	t          *testing.T
 	ctx        context.Context
 	bv         *BlockValidation
@@ -41,13 +63,13 @@ type serviceFinalityChain struct {
 	parentMTP  uint32 // median time past of the 11 blocks ending at the candidate's parent
 }
 
-// newServiceFinalityChain stores the ancestor chain and builds the service. csvHeight is copied
+// newCoinbaseFinalityChain stores the ancestor chain and builds the service. csvHeight is copied
 // into a private regtest parameter set, so the candidate is pre-CSV when csvHeight > height.
 //
-// The ancestors are spaced 600s apart, ending well before the candidate's header time, so the
-// parent's median time past is strictly below the header time and a time-based nLockTime between
-// the two is final before CSV and non-final from it.
-func newServiceFinalityChain(t *testing.T, csvHeight uint32) *serviceFinalityChain {
+// The ancestors are spaced coinbaseFinalityAncestorSpacing apart, ending well before the
+// candidate's header time, so the parent's median time past is strictly below the header time and
+// a time-based nLockTime between the two is final before CSV and non-final from it.
+func newCoinbaseFinalityChain(t *testing.T, csvHeight uint32) *coinbaseFinalityChain {
 	t.Helper()
 
 	initPrometheusMetrics()
@@ -69,52 +91,52 @@ func newServiceFinalityChain(t *testing.T, csvHeight uint32) *serviceFinalityCha
 	require.Equal(t, tSettings.ChainCfgParams.GenesisHash.String(), genesis.Hash().String(), "fixture precondition: the store starts at genesis")
 
 	now := uint32(time.Now().Unix()) //nolint:gosec
-	base := now - 7200
+	chainStart := now - coinbaseFinalityChainStartOffset
 
 	timestamps := []uint32{genesis.Timestamp}
 	tip := genesis
 
-	for i := uint32(1); i <= finalityAncestorCount; i++ {
-		ts := base + i*600
-		cb := coinbaseAtHeight(t, i)
-		hdr := minedHeaderWithBits(t, tip.Hash(), cb.TxIDChainHash(), nBitsFrom(t, "207fffff"), ts)
+	for ancestorHeight := uint32(1); ancestorHeight <= coinbaseFinalityAncestorCount; ancestorHeight++ {
+		ancestorTime := chainStart + ancestorHeight*coinbaseFinalityAncestorSpacing
+		coinbase := coinbaseAtHeight(t, ancestorHeight)
+		header := minedHeaderWithBits(t, tip.Hash(), coinbase.TxIDChainHash(), nBitsFrom(t, coinbaseFinalityRegtestBits), ancestorTime)
 
-		block, err := model.NewBlock(hdr, cb, []*chainhash.Hash{}, 1, uint64(cb.Size()), i, 0) //nolint:gosec
+		block, err := model.NewBlock(header, coinbase, []*chainhash.Hash{}, 1, uint64(coinbase.Size()), ancestorHeight, 0) //nolint:gosec
 		require.NoError(t, err)
 		// The ancestors stand in for blocks this node already validated: mined and subtrees set,
 		// so the candidate does not wait on its parent's processing.
 		require.NoError(t, client.AddBlock(ctx, block, "test",
 			blockchainoptions.WithMinedSet(true), blockchainoptions.WithSubtreesSet(true)))
 
-		timestamps = append(timestamps, ts)
-		tip = hdr
+		timestamps = append(timestamps, ancestorTime)
+		tip = header
 	}
 
 	best, _, err := client.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Equal(t, tip.Hash().String(), best.Hash().String(), "fixture precondition: the ancestor chain is the best chain")
 
-	h := &serviceFinalityChain{
+	chain := &coinbaseFinalityChain{
 		t:          t,
 		ctx:        ctx,
 		bv:         bv,
 		client:     client,
 		tip:        tip,
-		height:     finalityAncestorCount + 1,
-		headerTime: base + 6000,
-		parentMTP:  medianTimePast(timestamps),
+		height:     coinbaseFinalityAncestorCount + 1,
+		headerTime: chainStart + coinbaseFinalityCandidateTimeOffset,
+		parentMTP:  coinbaseFinalityMedianTimePast(timestamps),
 	}
 
-	require.Less(t, h.parentMTP, h.headerTime, "fixture precondition: the parent MTP must be below the header time")
+	require.Less(t, chain.parentMTP, chain.headerTime, "fixture precondition: the parent MTP must be below the header time")
 
-	return h
+	return chain
 }
 
-// medianTimePast is bitcoin-sv's GetMedianTimePast over the last (up to) 11 timestamps, oldest
-// first: sort them and take the element at index n/2.
-func medianTimePast(timestamps []uint32) uint32 {
-	if len(timestamps) > 11 {
-		timestamps = timestamps[len(timestamps)-11:]
+// coinbaseFinalityMedianTimePast is bitcoin-sv's GetMedianTimePast over the last (up to) 11
+// timestamps, oldest first: sort them and take the element at index n/2.
+func coinbaseFinalityMedianTimePast(timestamps []uint32) uint32 {
+	if len(timestamps) > coinbaseFinalityMedianTimeSpan {
+		timestamps = timestamps[len(timestamps)-coinbaseFinalityMedianTimeSpan:]
 	}
 
 	sorted := append([]uint32(nil), timestamps...)
@@ -123,142 +145,218 @@ func medianTimePast(timestamps []uint32) uint32 {
 	return sorted[len(sorted)/2]
 }
 
-// candidate builds a coinbase-only block on the tip at h.height, stamped h.headerTime, whose
-// coinbase carries the given nLockTime and input sequence. A coinbase-only body is bound by its
-// header (the merkle root is the coinbase txid), so a finality violation is INVALID (BV-BODY-011).
-func (h *serviceFinalityChain) candidate(lockTime, sequence uint32) *model.Block {
-	h.t.Helper()
+// timeBetweenParentMTPAndHeaderTime is a time-based nLockTime halfway between the parent's median
+// time past and the candidate's header time: final before CSV, non-final from it.
+func (chain *coinbaseFinalityChain) timeBetweenParentMTPAndHeaderTime() uint32 {
+	return chain.parentMTP + (chain.headerTime-chain.parentMTP)/2
+}
 
-	cb := coinbaseAtHeight(h.t, h.height)
-	cb.LockTime = lockTime
-	cb.Inputs[0].SequenceNumber = sequence
+// candidateWithCoinbaseLock builds a coinbase-only block on the tip at chain.height, stamped
+// chain.headerTime, whose coinbase carries the given nLockTime and input sequence. A coinbase-only
+// body is bound by its header (the merkle root is the coinbase txid), so a finality violation is
+// INVALID rather than corrupt.
+func (chain *coinbaseFinalityChain) candidateWithCoinbaseLock(lockTime, sequence uint32) *model.Block {
+	chain.t.Helper()
 
-	hdr := minedHeaderWithBits(h.t, h.tip.Hash(), cb.TxIDChainHash(), nBitsFrom(h.t, "207fffff"), h.headerTime)
+	coinbase := coinbaseAtHeight(chain.t, chain.height)
+	coinbase.LockTime = lockTime
+	coinbase.Inputs[0].SequenceNumber = sequence
 
-	block, err := model.NewBlock(hdr, cb, []*chainhash.Hash{}, 1, uint64(cb.Size()), h.height, 0) //nolint:gosec
-	require.NoError(h.t, err)
+	header := minedHeaderWithBits(chain.t, chain.tip.Hash(), coinbase.TxIDChainHash(), nBitsFrom(chain.t, coinbaseFinalityRegtestBits), chain.headerTime)
+
+	block, err := model.NewBlock(header, coinbase, []*chainhash.Hash{}, 1, uint64(coinbase.Size()), chain.height, 0) //nolint:gosec
+	require.NoError(chain.t, err)
 
 	return block
 }
 
-// requireRejectedNonFinal asserts the AC-BV-BODY-019.1 outcome (ERR_BLOCK_INVALID, bitcoin-sv's
-// bad-txns-nonfinal), that the verdict is persisted as an invalid record (BV-VERDICT-004), and that
-// the block did not become the tip.
-func (h *serviceFinalityChain) requireRejectedNonFinal(block *model.Block, err error) {
-	h.t.Helper()
+// validateThroughService runs the block through the service's full validation route.
+func (chain *coinbaseFinalityChain) validateThroughService(block *model.Block) error {
+	chain.t.Helper()
 
-	require.Error(h.t, err, "a non-final coinbase must be rejected (BV-BODY-019)")
-	require.True(h.t, errors.Is(err, errors.ErrBlockInvalid), "must be ERR_BLOCK_INVALID on a bound body, got: %v", err)
-	require.False(h.t, errors.IsBlockCorrupt(err), "a bound body must not be classified corrupt")
-	require.Contains(h.t, err.Error(), "bad-txns-nonfinal")
-
-	_, meta, metaErr := h.client.GetBlockHeader(h.ctx, block.Hash())
-	require.NoError(h.t, metaErr, "an INVALID verdict on a bound body is persisted (BV-VERDICT-004)")
-	require.True(h.t, meta.Invalid, "the stored record must carry the invalid flag")
-
-	best, _, bestErr := h.client.GetBestBlockHeader(h.ctx)
-	require.NoError(h.t, bestErr)
-	require.Equal(h.t, h.tip.Hash().String(), best.Hash().String(), "a rejected block must not become the tip")
+	return chain.bv.ValidateBlock(chain.ctx, block, coinbaseFinalityPeerURL)
 }
 
-// requireAccepted asserts the block was validated, stored valid and became the tip.
-func (h *serviceFinalityChain) requireAccepted(block *model.Block, err error) {
-	h.t.Helper()
+// requireRejectedAsNonFinal asserts the block was rejected ERR_BLOCK_INVALID with bitcoin-sv's
+// bad-txns-nonfinal, that the verdict is persisted as an invalid record, and that the block did not
+// become the tip.
+func (chain *coinbaseFinalityChain) requireRejectedAsNonFinal(block *model.Block, err error) {
+	chain.t.Helper()
 
-	require.NoError(h.t, err, "a final coinbase must not be rejected on BV-BODY-019")
+	require.Error(chain.t, err, "a non-final coinbase must be rejected")
+	require.True(chain.t, errors.Is(err, errors.ErrBlockInvalid), "must be ERR_BLOCK_INVALID on a bound body, got: %v", err)
+	require.False(chain.t, errors.IsBlockCorrupt(err), "a bound body must not be classified corrupt")
+	require.Contains(chain.t, err.Error(), "bad-txns-nonfinal")
 
-	_, meta, metaErr := h.client.GetBlockHeader(h.ctx, block.Hash())
-	require.NoError(h.t, metaErr)
-	require.False(h.t, meta.Invalid, "an accepted block must not be stored invalid")
+	_, meta, metaErr := chain.client.GetBlockHeader(chain.ctx, block.Hash())
+	require.NoError(chain.t, metaErr, "an INVALID verdict on a bound body is persisted")
+	require.True(chain.t, meta.Invalid, "the stored record must carry the invalid flag")
 
-	best, _, bestErr := h.client.GetBestBlockHeader(h.ctx)
-	require.NoError(h.t, bestErr)
-	require.Equal(h.t, block.Hash().String(), best.Hash().String(), "an accepted block extends the chain")
+	best, _, bestErr := chain.client.GetBestBlockHeader(chain.ctx)
+	require.NoError(chain.t, bestErr)
+	require.Equal(chain.t, chain.tip.Hash().String(), best.Hash().String(), "a rejected block must not become the tip")
 }
 
-func (h *serviceFinalityChain) validate(block *model.Block) error {
-	h.t.Helper()
+// requireAcceptedAsNewTip asserts the block was validated, stored valid and became the tip.
+func (chain *coinbaseFinalityChain) requireAcceptedAsNewTip(block *model.Block, err error) {
+	chain.t.Helper()
 
-	return h.bv.ValidateBlock(h.ctx, block, "http://localhost")
+	require.NoError(chain.t, err, "a final coinbase must not be rejected for finality")
+
+	_, meta, metaErr := chain.client.GetBlockHeader(chain.ctx, block.Hash())
+	require.NoError(chain.t, metaErr)
+	require.False(chain.t, meta.Invalid, "an accepted block must not be stored invalid")
+
+	best, _, bestErr := chain.client.GetBestBlockHeader(chain.ctx)
+	require.NoError(chain.t, bestErr)
+	require.Equal(chain.t, block.Hash().String(), best.Hash().String(), "an accepted block extends the chain")
 }
 
-// TestValidateBlock_CoinbaseFinality_Service is AC-BV-BODY-019.1 on the service's full validation
-// route: a block at height H whose coinbase has nLockTime = H and input sequence 0 is non-final and
-// MUST be rejected ERR_BLOCK_INVALID, and the same coinbase with sequence 0xFFFFFFFF MUST NOT be
-// rejected on that rule. The blocks are regtest, which has no checkpoints, so every height is above
-// the highest hardcoded checkpoint as the AC requires. Regtest's CSVHeight (576) is above H, but
-// the time-lock cutoff plays no part in a height-based nLockTime.
+// TestValidateBlock_CoinbaseFinality_Service checks the height-based coinbase lock on the service's
+// full validation route.
+//
+// Spec: BV-BODY-019 and AC-BV-BODY-019.1.
+//
+// Scenario: Given a regtest chain of genesis plus 5 stored blocks and a candidate at height H = 6,
+// below regtest's CSVHeight (576). When the candidate's coinbase has nLockTime = H and input
+// sequence 0, Then the service rejects it ERR_BLOCK_INVALID, records it invalid and keeps the old
+// tip. When the coinbase has nLockTime = H-1 and sequence 0, Then the block becomes the new tip.
+// Regtest has no checkpoints, so every height is above the highest hardcoded checkpoint; the
+// time-lock cutoff plays no part in a height-based nLockTime.
+//
+// Controls: the same nLockTime = H coinbase with the final sequence 0xFFFFFFFF is accepted, so the
+// rejection is down to finality alone.
 func TestValidateBlock_CoinbaseFinality_Service(t *testing.T) {
-	csvHeight := test.CreateBaseTestSettings(t).ChainCfgParams.CSVHeight
-	require.Greater(t, csvHeight, uint32(finalityAncestorCount+1), "fixture precondition: regtest CSV is not active at H")
-
-	t.Run("AC-BV-BODY-019.1: nLockTime == H with sequence 0 is rejected INVALID", func(t *testing.T) {
-		h := newServiceFinalityChain(t, csvHeight)
-		block := h.candidate(h.height, 0)
-
-		h.requireRejectedNonFinal(block, h.validate(block))
-	})
-
-	t.Run("AC-BV-BODY-019.1 control: nLockTime == H with sequence 0xFFFFFFFF is accepted", func(t *testing.T) {
-		h := newServiceFinalityChain(t, csvHeight)
-		block := h.candidate(h.height, bt.DefaultSequenceNumber)
-
-		h.requireAccepted(block, h.validate(block))
-	})
-
-	t.Run("BV-BODY-019: nLockTime == H-1 with sequence 0 is accepted", func(t *testing.T) {
-		h := newServiceFinalityChain(t, csvHeight)
-		block := h.candidate(h.height-1, 0)
-
-		h.requireAccepted(block, h.validate(block))
-	})
-}
-
-// TestValidateBlock_CoinbaseTimeLockCutoff_Service is BV-BODY-019's time-based threshold on the
-// service's full route: for nLockTime >= 500,000,000 the threshold is BV-BODY-015's lock-time
-// cutoff, the block's own timestamp before CSVHeight and the parent's median time past from it.
-// The parent's median time past comes from the ancestor chain the service reads from the blockchain
-// store, so the post-CSV cases fail if the service does not pass that chain to block validation.
-func TestValidateBlock_CoinbaseTimeLockCutoff_Service(t *testing.T) {
 	const (
-		preCSV  = uint32(1_000) // CSV not yet active at the candidate's height
-		postCSV = uint32(1)     // CSV active at the candidate's height
+		nonFinalSequence = uint32(0)
+		finalSequence    = bt.DefaultSequenceNumber // 0xFFFFFFFF
 	)
 
-	between := func(h *serviceFinalityChain) uint32 { return h.parentMTP + (h.headerTime-h.parentMTP)/2 }
+	regtestCSVHeight := test.CreateBaseTestSettings(t).ChainCfgParams.CSVHeight
+	require.Greater(t, regtestCSVHeight, uint32(coinbaseFinalityAncestorCount+1), "fixture precondition: regtest CSV is not active at H")
+
+	t.Run("coinbase locked until the block's own height with sequence 0 is rejected as invalid", func(t *testing.T) {
+		// Given
+		chain := newCoinbaseFinalityChain(t, regtestCSVHeight)
+		lockedUntilBlockHeight := chain.height
+		block := chain.candidateWithCoinbaseLock(lockedUntilBlockHeight, nonFinalSequence)
+
+		// When
+		err := chain.validateThroughService(block)
+
+		// Then
+		chain.requireRejectedAsNonFinal(block, err)
+	})
+
+	t.Run("control: the same coinbase with the final sequence 0xFFFFFFFF is accepted", func(t *testing.T) {
+		// Given
+		chain := newCoinbaseFinalityChain(t, regtestCSVHeight)
+		lockedUntilBlockHeight := chain.height
+		block := chain.candidateWithCoinbaseLock(lockedUntilBlockHeight, finalSequence)
+
+		// When
+		err := chain.validateThroughService(block)
+
+		// Then
+		chain.requireAcceptedAsNewTip(block, err)
+	})
+
+	t.Run("coinbase locked until one below the block's height with sequence 0 is accepted", func(t *testing.T) {
+		// Given
+		chain := newCoinbaseFinalityChain(t, regtestCSVHeight)
+		lockedUntilParentHeight := chain.height - 1
+		block := chain.candidateWithCoinbaseLock(lockedUntilParentHeight, nonFinalSequence)
+
+		// When
+		err := chain.validateThroughService(block)
+
+		// Then
+		chain.requireAcceptedAsNewTip(block, err)
+	})
+}
+
+// TestValidateBlock_CoinbaseTimeLockCutoff_Service checks the time-based coinbase lock on the
+// service's full validation route.
+//
+// Spec: BV-BODY-019 and BV-BODY-015.
+//
+// Scenario: Given a regtest chain of genesis plus 5 stored blocks 600s apart and a candidate at
+// height 6 stamped after them, so the parent's median time past (MTP) is below the candidate's
+// header time. When the candidate's coinbase has a time-based nLockTime (>= 500,000,000) and input
+// sequence 0, Then before CSV (CSVHeight 1,000) the cutoff is the header time: a lock between the
+// parent MTP and the header time is accepted, a lock equal to the header time is rejected
+// ERR_BLOCK_INVALID. From CSV (CSVHeight 1) the cutoff is the parent MTP: a lock between the
+// parent MTP and the header time, or equal to the parent MTP, is rejected, and a lock one below the
+// parent MTP is accepted. The parent MTP comes from the ancestor chain the service reads from the
+// blockchain store, so the post-CSV cases fail if the service does not pass that chain to block
+// validation.
+func TestValidateBlock_CoinbaseTimeLockCutoff_Service(t *testing.T) {
+	const (
+		preCSV           = uint32(1_000) // CSV not yet active at the candidate's height
+		postCSV          = uint32(1)     // CSV active at the candidate's height
+		nonFinalSequence = uint32(0)
+	)
 
 	t.Run("pre-CSV: nLockTime between the parent MTP and the header time is accepted", func(t *testing.T) {
-		h := newServiceFinalityChain(t, preCSV)
-		block := h.candidate(between(h), 0)
+		// Given
+		chain := newCoinbaseFinalityChain(t, preCSV)
+		block := chain.candidateWithCoinbaseLock(chain.timeBetweenParentMTPAndHeaderTime(), nonFinalSequence)
 
-		h.requireAccepted(block, h.validate(block))
+		// When
+		err := chain.validateThroughService(block)
+
+		// Then
+		chain.requireAcceptedAsNewTip(block, err)
 	})
 
 	t.Run("pre-CSV: nLockTime equal to the header time is rejected INVALID", func(t *testing.T) {
-		h := newServiceFinalityChain(t, preCSV)
-		block := h.candidate(h.headerTime, 0)
+		// Given
+		chain := newCoinbaseFinalityChain(t, preCSV)
+		lockedUntilHeaderTime := chain.headerTime
+		block := chain.candidateWithCoinbaseLock(lockedUntilHeaderTime, nonFinalSequence)
 
-		h.requireRejectedNonFinal(block, h.validate(block))
+		// When
+		err := chain.validateThroughService(block)
+
+		// Then
+		chain.requireRejectedAsNonFinal(block, err)
 	})
 
 	t.Run("post-CSV: nLockTime between the parent MTP and the header time is rejected INVALID", func(t *testing.T) {
-		h := newServiceFinalityChain(t, postCSV)
-		block := h.candidate(between(h), 0)
+		// Given
+		chain := newCoinbaseFinalityChain(t, postCSV)
+		block := chain.candidateWithCoinbaseLock(chain.timeBetweenParentMTPAndHeaderTime(), nonFinalSequence)
 
-		h.requireRejectedNonFinal(block, h.validate(block))
+		// When
+		err := chain.validateThroughService(block)
+
+		// Then
+		chain.requireRejectedAsNonFinal(block, err)
 	})
 
 	t.Run("post-CSV: nLockTime equal to the parent MTP is rejected INVALID", func(t *testing.T) {
-		h := newServiceFinalityChain(t, postCSV)
-		block := h.candidate(h.parentMTP, 0)
+		// Given
+		chain := newCoinbaseFinalityChain(t, postCSV)
+		lockedUntilParentMTP := chain.parentMTP
+		block := chain.candidateWithCoinbaseLock(lockedUntilParentMTP, nonFinalSequence)
 
-		h.requireRejectedNonFinal(block, h.validate(block))
+		// When
+		err := chain.validateThroughService(block)
+
+		// Then
+		chain.requireRejectedAsNonFinal(block, err)
 	})
 
 	t.Run("post-CSV: nLockTime one below the parent MTP is accepted", func(t *testing.T) {
-		h := newServiceFinalityChain(t, postCSV)
-		block := h.candidate(h.parentMTP-1, 0)
+		// Given
+		chain := newCoinbaseFinalityChain(t, postCSV)
+		lockedUntilJustBeforeParentMTP := chain.parentMTP - 1
+		block := chain.candidateWithCoinbaseLock(lockedUntilJustBeforeParentMTP, nonFinalSequence)
 
-		h.requireAccepted(block, h.validate(block))
+		// When
+		err := chain.validateThroughService(block)
+
+		// Then
+		chain.requireAcceptedAsNewTip(block, err)
 	})
 }

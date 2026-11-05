@@ -73,20 +73,27 @@ func TestQuickValidateBlock_CoinbaseFinality(t *testing.T) {
 	})
 }
 
-// coinbaseLockTimeBlock builds a coinbase-only block at preBindHeight that chains from genesis,
-// whose coinbase has the given nLockTime and input sequence 0, so finality turns on nLockTime alone.
-// headerTime sets the header timestamp (the nonce is re-ground for it); 0 keeps newPreBindBlock's.
-func (h *preBindHarness) coinbaseLockTimeBlock(lockTime, headerTime uint32) *model.Block {
+// coinbaseLockedBlock builds a coinbase-only block at preBindHeight that chains from genesis, whose
+// coinbase has the given nLockTime and input sequence 0, so finality turns on nLockTime alone. The
+// header keeps newPreBindBlock's timestamp.
+func (h *preBindHarness) coinbaseLockedBlock(lockTime uint32) *model.Block {
 	h.t.Helper()
 
-	coinbase := preBindCoinbase(h.t, 0x42)
+	const coinbaseNonce = 0x42 // preBindCoinbase nonce for these boundary blocks
+
+	coinbase := preBindCoinbase(h.t, coinbaseNonce)
 	coinbase.LockTime = lockTime
 	coinbase.Inputs[0].SequenceNumber = 0
 
-	block := h.newPreBindBlock(coinbase, nil, coinbase.TxIDChainHash(), 1)
-	if headerTime == 0 {
-		return block
-	}
+	return h.newPreBindBlock(coinbase, nil, coinbase.TxIDChainHash(), 1)
+}
+
+// coinbaseLockedBlockStampedAt is coinbaseLockedBlock with the header timestamp set to headerTime
+// (the nonce is re-ground for it).
+func (h *preBindHarness) coinbaseLockedBlockStampedAt(lockTime, headerTime uint32) *model.Block {
+	h.t.Helper()
+
+	block := h.coinbaseLockedBlock(lockTime)
 
 	header := *block.Header
 	header.Timestamp = headerTime
@@ -102,59 +109,102 @@ func (h *preBindHarness) coinbaseLockTimeBlock(lockTime, headerTime uint32) *mod
 
 	return &model.Block{
 		Header:           &header,
-		CoinbaseTx:       coinbase,
+		CoinbaseTx:       block.CoinbaseTx,
 		Height:           preBindHeight,
 		Subtrees:         []*chainhash.Hash(nil),
 		TransactionCount: 1,
 	}
 }
 
-// TestQuickValidateBlock_CoinbaseFinalityBoundaries is BV-BODY-019 on the quick route, whose
-// harness is regtest (no checkpoints, so above the highest hardcoded checkpoint, where BV-QUICK-031
-// says quick validation SHOULD still enforce coinbase finality) at preBindHeight = 1, below regtest's
-// CSVHeight. The height threshold is the block's height H: with sequence 0, nLockTime = H-1 is
-// final and commits, nLockTime = H+1 is non-final, rejected ERR_BLOCK_INVALID and never stored. At
-// the harness height H-1 is 0, which is also final by the nLockTime = 0 clause; the H-1 boundary at a
-// height where the two differ is covered on the full route by TestValidateBlock_CoinbaseFinality_Service.
-// Before CSV the time threshold is the block's own header time (BV-BODY-015): nLockTime equal to
-// it is non-final, one below it is final.
-func TestQuickValidateBlock_CoinbaseFinalityBoundaries(t *testing.T) {
-	t.Run("nLockTime == H-1 with sequence 0 commits", func(t *testing.T) {
-		h := newPreBindHarness(t, nil)
-		block := h.coinbaseLockTimeBlock(preBindHeight-1, 0)
+// requirePreCSVHarness asserts the fixture precondition that the harness height is below CSVHeight.
+func (h *preBindHarness) requirePreCSVHarness() {
+	h.t.Helper()
 
-		require.NoError(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
-		h.requireBlockStored(block, true)
+	require.Less(h.t, preBindHeight, h.bv.settings.ChainCfgParams.CSVHeight, "fixture precondition: the harness height is pre-CSV")
+}
+
+// TestQuickValidateBlock_CoinbaseFinalityBoundaries checks the coinbase-finality boundaries on the
+// quick-validation route.
+//
+// Spec: BV-BODY-019, BV-BODY-015 and BV-QUICK-031.
+//
+// Scenario: Given the quick-route harness, regtest (no checkpoints, so above the highest
+// hardcoded checkpoint, where quick validation should still enforce coinbase finality) at
+// preBindHeight H = 1, below regtest's CSVHeight. When the coinbase has sequence 0 and
+// nLockTime = H-1, Then the block commits; with nLockTime = H+1, Then it is rejected
+// ERR_BLOCK_INVALID and never stored. At this height H-1 is 0, which is also final by the
+// nLockTime = 0 clause; the H-1 boundary at a height where the two differ is covered on the full
+// route by TestValidateBlock_CoinbaseFinality_Service. Before CSV the time threshold is the
+// block's own header time: When nLockTime equals the header time, Then the block is rejected and
+// never stored; When it is one below the header time, Then the block commits.
+func TestQuickValidateBlock_CoinbaseFinalityBoundaries(t *testing.T) {
+	const (
+		peerID         = "peer"
+		noBaseURL      = ""
+		blockIsStored  = true
+		blockNotStored = false
+	)
+
+	t.Run("nLockTime == H-1 with sequence 0 commits", func(t *testing.T) {
+		// Given
+		harness := newPreBindHarness(t, nil)
+		lockedUntilParentHeight := preBindHeight - 1
+		block := harness.coinbaseLockedBlock(lockedUntilParentHeight)
+
+		// When
+		err := harness.bv.quickValidateBlock(harness.ctx, block, peerID, noBaseURL)
+
+		// Then
+		require.NoError(t, err)
+		harness.requireBlockStored(block, blockIsStored)
 	})
 
 	t.Run("nLockTime == H+1 with sequence 0 is rejected and never stored", func(t *testing.T) {
-		h := newPreBindHarness(t, nil)
-		block := h.coinbaseLockTimeBlock(preBindHeight+1, 0)
+		// Given
+		harness := newPreBindHarness(t, nil)
+		lockedUntilNextHeight := preBindHeight + 1
+		block := harness.coinbaseLockedBlock(lockedUntilNextHeight)
 
-		requireNonFinalCoinbaseVerdict(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
-		h.requireBlockStored(block, false)
+		// When
+		err := harness.bv.quickValidateBlock(harness.ctx, block, peerID, noBaseURL)
+
+		// Then
+		requireNonFinalCoinbaseVerdict(t, err)
+		harness.requireBlockStored(block, blockNotStored)
 	})
 
 	headerTime := uint32(time.Now().Unix()) //nolint:gosec
 
 	t.Run("pre-CSV: nLockTime equal to the header time is rejected and never stored", func(t *testing.T) {
-		h := newPreBindHarness(t, nil)
-		require.Less(t, preBindHeight, h.bv.settings.ChainCfgParams.CSVHeight, "fixture precondition: the harness height is pre-CSV")
+		// Given
+		harness := newPreBindHarness(t, nil)
+		harness.requirePreCSVHarness()
 
-		block := h.coinbaseLockTimeBlock(headerTime, headerTime)
+		lockedUntilHeaderTime := headerTime
+		block := harness.coinbaseLockedBlockStampedAt(lockedUntilHeaderTime, headerTime)
 
-		requireNonFinalCoinbaseVerdict(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
-		h.requireBlockStored(block, false)
+		// When
+		err := harness.bv.quickValidateBlock(harness.ctx, block, peerID, noBaseURL)
+
+		// Then
+		requireNonFinalCoinbaseVerdict(t, err)
+		harness.requireBlockStored(block, blockNotStored)
 	})
 
 	t.Run("pre-CSV: nLockTime one below the header time commits", func(t *testing.T) {
-		h := newPreBindHarness(t, nil)
-		require.Less(t, preBindHeight, h.bv.settings.ChainCfgParams.CSVHeight, "fixture precondition: the harness height is pre-CSV")
+		// Given
+		harness := newPreBindHarness(t, nil)
+		harness.requirePreCSVHarness()
 
-		block := h.coinbaseLockTimeBlock(headerTime-1, headerTime)
+		lockedUntilJustBeforeHeaderTime := headerTime - 1
+		block := harness.coinbaseLockedBlockStampedAt(lockedUntilJustBeforeHeaderTime, headerTime)
 
-		require.NoError(t, h.bv.quickValidateBlock(h.ctx, block, "peer", ""))
-		h.requireBlockStored(block, true)
+		// When
+		err := harness.bv.quickValidateBlock(harness.ctx, block, peerID, noBaseURL)
+
+		// Then
+		require.NoError(t, err)
+		harness.requireBlockStored(block, blockIsStored)
 	})
 }
 
