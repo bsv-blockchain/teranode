@@ -3318,6 +3318,7 @@ func TestMarkSkippedForkTxs_HeldRepairOfAGoneForkBlock(t *testing.T) {
 		requireBlockAssemblyTip(t, items, c3)
 		require.NotZero(t, unminedSince(t, items, v))
 		require.NotZero(t, unminedSince(t, items, y))
+		require.Contains(t, ba.skippedForkBlocksMarked, *f2.Hash(), "F2 is given up once both are repaired")
 	})
 
 	// F2's files are still reported there when the run starts and gone when it reads the block.
@@ -3537,4 +3538,16 @@ func (s *vanishingSubtreeStore) Exists(ctx context.Context, key []byte, fileType
 	}
 
 	return s.Store.Exists(ctx, key, fileType, opts...)
+}
+
+// TestMarkSkippedForkTxs_LeavesAnUnfinishedForkBlockWithoutSubtree: a fork block block validation
+// has not finished marked nothing mined, and its subtree may still come; it is neither taken
+// for one whose subtree is gone nor given up, but waited for.
+func TestMarkSkippedForkTxs_LeavesAnUnfinishedForkBlockWithoutSubtree(t *testing.T) {
+	items, _, f, _ := skippedForkSetup(t, false, false)
+	ba := items.blockAssembler
+
+	var unprocessed *skippedForkUnprocessedError
+	require.ErrorAs(t, ba.markSkippedForkTxs(t.Context(), false), &unprocessed)
+	require.NotContains(t, ba.skippedForkBlocksMarked, *f.Hash(), "F is read again once block validation finished it")
 }

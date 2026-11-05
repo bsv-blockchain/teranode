@@ -781,9 +781,11 @@ func (b *BlockAssembler) goneForkBlocks(ctx context.Context, forkBlocks []blockH
 // They are added to skippedForkHeldRepair and recorded before the write, so a restart, whose
 // pool is empty, repairs them too; at start the pool is not read. A restart before they are
 // recorded loses them: after block validation marked one mined in a fork block that was the
-// best tip for a moment, and before a run of the mark lists and checks that block, for example
-// while block assembly is not on the best tip yet or the run cannot list the fork blocks. A
-// restart before the reorg's whole-pool mark, which ran on every reorg, lost them the same way.
+// best tip for a moment, and before a run of the mark lists and checks that block and reads
+// the metadata of the pool's transactions, for example while block assembly is not on the best
+// tip yet, or the blockchain or UTXO store does not answer. Which of them to record is known
+// only after that read. A restart before the reorg's whole-pool mark, which ran on every reorg,
+// lost them the same way.
 // The pool read covers the subtrees, not the intake queue, as the reset's whole-pool mark does.
 func (b *BlockAssembler) repairHeldTxsOfGoneBlocks(ctx context.Context, gone []blockHeaderWithMeta, best *model.BlockHeader) error {
 	if len(gone) > 0 && !b.skippedForkAtStart {
