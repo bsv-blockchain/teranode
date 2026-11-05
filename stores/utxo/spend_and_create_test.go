@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -503,10 +504,26 @@ func TestAllInputsSpent(t *testing.T) {
 
 // TestSequentialSpendAndCreate_CreateFirst covers the create-first ordering folded
 // into the combined path (createFirst=true, neither CreateOnly nor SpendOnly).
+// scriptedTwoInputTx returns a tx with two inputs, each carrying the previous locking script
+// that the spend hash needs.
+func scriptedTwoInputTx(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	tx := bt.NewTx()
+
+	for vout := uint32(0); vout < 2; vout++ {
+		in := &bt.Input{PreviousTxOutIndex: vout, PreviousTxSatoshis: 1000, PreviousTxScript: bscript.NewFromBytes([]byte{0x51}), UnlockingScript: bscript.NewFromBytes([]byte{})}
+		require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{byte(vout + 1)}))
+		tx.Inputs = append(tx.Inputs, in)
+	}
+
+	return tx
+}
+
 func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	tx := bt.NewTx()
+	tx := scriptedTwoInputTx(t)
 
 	t.Run("orders create-tentative then spend then finalize", func(t *testing.T) {
 		f := &fakeSequentialStore{spends: []*Spend{{}}, createMeta: &meta.Data{Creating: true}}
@@ -535,14 +552,14 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.Nil(t, md)
 		require.Equal(t, []string{"create", "spend", "begin", "unspend", "delete"}, f.callSeq)
 		require.Equal(t, 0, f.finalizeCalls)
-		require.Equal(t, []*Spend{free}, f.unspentWith, "only the spends that succeeded are reversed")
+		require.Len(t, f.unspentWith, 2, "every input of the tx is reversed, not only the spends that succeeded")
 		require.Len(t, f.deletedHashes, 1)
 		require.Equal(t, tx.TxIDChainHash().String(), f.deletedHashes[0].String())
 		require.Len(t, spends, 2, "the caller still classifies the per-input errors")
 		require.ErrorIs(t, spends[0].Err, errors.ErrSpent)
 	})
 
-	t.Run("spend failure with nothing spent still deletes the tentative record", func(t *testing.T) {
+	t.Run("spend failure with nothing succeeded still reverses every input and deletes the tentative record", func(t *testing.T) {
 		f := &fakeSequentialStore{
 			spends:     []*Spend{{Err: errors.ErrSpent}},
 			spendErr:   errors.NewUtxoError("double spend"),
@@ -551,7 +568,8 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 
 		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
-		require.Equal(t, []string{"create", "spend", "begin", "delete"}, f.callSeq)
+		require.Equal(t, []string{"create", "spend", "begin", "unspend", "delete"}, f.callSeq)
+		require.Len(t, f.unspentWith, 2, "an earlier attempt may have spent inputs this pass did not")
 		require.Len(t, spends, 1)
 	})
 
@@ -668,7 +686,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.Len(t, spends, 2)
 	})
 
-	t.Run("record still creating has its successful spends unspent and is then deleted", func(t *testing.T) {
+	t.Run("record still creating has every input unspent and is then deleted", func(t *testing.T) {
 		free := &Spend{}
 		f := &fakeSequentialStore{
 			spends:     []*Spend{{Err: errors.ErrSpent}, free},
@@ -679,7 +697,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.Error(t, err)
 		require.Equal(t, []string{"create", "spend", "begin", "unspend", "delete"}, f.callSeq)
-		require.Equal(t, []*Spend{free}, f.unspentWith)
+		require.Len(t, f.unspentWith, 2)
 		require.Len(t, f.deletedHashes, 1)
 		require.Equal(t, tx.TxIDChainHash().String(), f.deletedHashes[0].String())
 	})
@@ -845,21 +863,29 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 	})
 }
 
-// TestRollBackCreating pins the rollback order: mark, reverse the spends that succeeded,
+// TestRollBackCreating pins the rollback order: mark, reverse every input of the tx,
 // then delete, and the cases that must do less.
 func TestRollBackCreating(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
-	tx := bt.NewTx()
+	tx := scriptedTwoInputTx(t)
+	noInputs := bt.NewTx()
 
-	t.Run("marks, unspends only the succeeded spends, then deletes", func(t *testing.T) {
-		free := &Spend{}
+	t.Run("marks, unspends every input of the tx, then deletes", func(t *testing.T) {
 		f := &fakeSequentialStore{}
 
-		err := RollBackCreating(ctx, logger, f, tx, []*Spend{{Err: errors.ErrSpent}, free, nil})
+		err := RollBackCreating(ctx, logger, f, tx)
 		require.NoError(t, err)
 		require.Equal(t, []string{"begin", "unspend", "delete"}, f.callSeq)
-		require.Equal(t, []*Spend{free}, f.unspentWith)
+		require.Len(t, f.unspentWith, 2)
+
+		for i, sp := range f.unspentWith {
+			require.Equal(t, tx.Inputs[i].PreviousTxIDChainHash().String(), sp.TxID.String())
+			require.Equal(t, tx.Inputs[i].PreviousTxOutIndex, sp.Vout)
+			require.Equal(t, tx.TxIDChainHash().String(), sp.SpendingData.TxID.String())
+			require.Equal(t, i, sp.SpendingData.Vin)
+		}
+
 		require.Len(t, f.deletedHashes, 1)
 		require.Equal(t, tx.TxIDChainHash().String(), f.deletedHashes[0].String())
 	})
@@ -867,7 +893,7 @@ func TestRollBackCreating(t *testing.T) {
 	t.Run("a marker that reports false does nothing more and is not an error", func(t *testing.T) {
 		f := &fakeSequentialStore{beginDeclined: true}
 
-		err := RollBackCreating(ctx, logger, f, tx, []*Spend{{}})
+		err := RollBackCreating(ctx, logger, f, tx)
 		require.NoError(t, err)
 		require.Equal(t, []string{"begin"}, f.callSeq)
 	})
@@ -875,7 +901,7 @@ func TestRollBackCreating(t *testing.T) {
 	t.Run("a failed marker returns the error and does nothing more", func(t *testing.T) {
 		f := &fakeSequentialStore{beginErr: errors.NewStorageError("begin boom")}
 
-		err := RollBackCreating(ctx, logger, f, tx, []*Spend{{}})
+		err := RollBackCreating(ctx, logger, f, tx)
 		require.ErrorIs(t, err, errors.ErrStorageError)
 		require.Equal(t, []string{"begin"}, f.callSeq)
 	})
@@ -885,16 +911,25 @@ func TestRollBackCreating(t *testing.T) {
 
 		f := &fakeSequentialStore{unspendErrs: []error{errors.NewStorageError("u1"), errors.NewStorageError("u2"), errors.NewStorageError("u3")}}
 
-		err := RollBackCreating(ctx, logger, f, tx, []*Spend{{}})
+		err := RollBackCreating(ctx, logger, f, tx)
 		require.Error(t, err)
 		require.Equal(t, 3, f.unspendCalls)
 		require.Equal(t, 0, f.deleteCalls)
 	})
 
-	t.Run("no succeeded spend still deletes", func(t *testing.T) {
+	t.Run("a parent that is already gone does not fail the rollback", func(t *testing.T) {
+		f := &fakeSequentialStore{unspendErrs: []error{errors.NewTxNotFoundError("gone")}}
+
+		err := RollBackCreating(ctx, logger, f, tx)
+		require.NoError(t, err)
+		require.Equal(t, 3, f.unspendCalls, "one batch call, then one call per input")
+		require.Equal(t, []string{"begin", "unspend", "unspend", "unspend", "delete"}, f.callSeq)
+	})
+
+	t.Run("a tx without inputs still deletes", func(t *testing.T) {
 		f := &fakeSequentialStore{}
 
-		err := RollBackCreating(ctx, logger, f, tx, []*Spend{{Err: errors.ErrSpent}})
+		err := RollBackCreating(ctx, logger, f, noInputs)
 		require.NoError(t, err)
 		require.Equal(t, []string{"begin", "delete"}, f.callSeq)
 	})
@@ -905,7 +940,7 @@ func TestRollBackCreating(t *testing.T) {
 
 		f := &fakeSequentialStore{}
 
-		err := RollBackCreating(cancelled, logger, f, tx, []*Spend{{}})
+		err := RollBackCreating(cancelled, logger, f, tx)
 		require.NoError(t, err)
 		require.Equal(t, []string{"begin", "unspend", "delete"}, f.callSeq)
 	})

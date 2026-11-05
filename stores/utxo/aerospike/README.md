@@ -421,7 +421,9 @@ The healers (setMined pre-flight and pruner sweep) are not gated on the flag.
 
 A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`:
 `BeginCreateFirstRollback` sets the `rollingBack` bin on the master with a filter on the
-`creating` bin, the spends that succeeded are unspent, then `DeleteComplete` removes the
+`creating` bin, every input of the tx is unspent (not only the spends that succeeded in the failing pass, because
+an earlier attempt may have spent an input that now fails for another reason; the Lua ownership
+check makes an input the tx does not own a no-op), then `DeleteComplete` removes the
 record. While the marker is set, `FinalizeTransaction` (single and multi-record) refuses
 the record with `ErrTxNotFound`, so a concurrent roll-forward cannot complete it; the
 roll-forward then unspends the spends it made. The Lua spend gate still reads `creating`,

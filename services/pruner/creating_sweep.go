@@ -23,7 +23,7 @@ const defaultCreatingSweepMaxPerPass = 1000
 // ignore locks: a locked parent is the hand-off barrier, so ErrTxLocked leaves the record
 // creating and it is retried on a later pass. A tx that lost a double-spend (ErrSpent,
 // ErrTxConflicting, ErrFrozen, ErrUtxoHashMismatch) is rolled back by
-// utxo.RollBackCreating: the record is marked rolling back, the inputs it did take are
+// utxo.RollBackCreating: the record is marked rolling back, every input of the tx is
 // unspent and the record is deleted. A record already marked rolling back was abandoned by
 // a crashed rollback owner; the sweep finishes it by unspending every input and deleting
 // the record. Records it cannot roll forward for another reason (e.g. a missing parent) are
@@ -110,7 +110,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 		_, spends, spendErr := s.utxoStore.SpendAndCreate(ctx, md.Tx, blockHeight, utxo.WithSpendOnly())
 		if spendErr != nil {
 			if isUnwinnableSpendError(spendErr) {
-				if rbErr := utxo.RollBackCreating(ctx, s.logger, s.utxoStore, md.Tx, spends); rbErr != nil {
+				if rbErr := utxo.RollBackCreating(ctx, s.logger, s.utxoStore, md.Tx); rbErr != nil {
 					s.logger.Errorf("[pruner][creating-sweep][%d] rollback of %s failed, will retry next block: %v", blockHeight, hash, rbErr)
 					prunerCreatingSweepFailures.Inc()
 

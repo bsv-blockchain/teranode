@@ -292,9 +292,25 @@ func succeededSpends(spends []*Spend) []*Spend {
 	return succeeded
 }
 
+// tolerantReverser unspends through UnspendTolerantOfMissingParents, so a parent that is
+// already gone does not fail a rollback.
+type tolerantReverser struct {
+	SpendReverser
+}
+
+func (r tolerantReverser) Unspend(ctx context.Context, spends []*Spend, flagAsLocked ...bool) error {
+	return UnspendTolerantOfMissingParents(ctx, r.SpendReverser, spends)
+}
+
 // RollBackCreating undoes a create-first transition whose spend failed: it marks the record
-// rolling back, reverses the spends that succeeded, then deletes the record. It runs under
-// one detached context bounded like the spend-first rollback (SpendRollbackTimeout).
+// rolling back, unspends every input of tx, then deletes the record. It runs under one
+// detached context bounded like the spend-first rollback (SpendRollbackTimeout).
+//
+// The unspend covers the whole input set, not only the spends that succeeded in the caller's
+// pass. An input that an earlier attempt spent may fail in this pass for another reason, for
+// example a locked parent, and a reversal limited to this pass would leave it spent by the
+// deleted record. The store's ownership check makes an unspend of an input that tx does not
+// own a no-op, so a rival's spend is never cleared.
 //
 // The marker is what makes the order safe. While the record carries it, no roll-forward
 // can finalize the record, so the rollback owner is the only writer of its final outcome.
@@ -315,7 +331,7 @@ func succeededSpends(spends []*Spend) []*Spend {
 // which must outlast utxostore_spendRollbackTimeout in wall-clock time. A rollback owner
 // that stalls past that bound and resumes after a fresh create of the same txid can still
 // clear that create's spends. That is the attempt-identity gap tracked in issue 1291.
-func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, tx *bt.Tx, spends []*Spend) error {
+func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, tx *bt.Tx) error {
 	rbCtx, cancel := rollbackContext(ctx, s)
 	defer cancel()
 
@@ -334,8 +350,15 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 		return nil
 	}
 
-	if succeeded := succeededSpends(spends); len(succeeded) > 0 {
-		if err := unspendWithRetry(rbCtx, logger, s, succeeded); err != nil {
+	inputs, err := GetSpends(tx)
+	if err != nil {
+		logger.Errorf("SpendAndCreate create-first: building the input spends failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
+
+		return err
+	}
+
+	if len(inputs) > 0 {
+		if err := unspendWithRetry(rbCtx, logger, tolerantReverser{s}, inputs); err != nil {
 			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
 
 			return err
@@ -374,8 +397,8 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 //     the spend batch may still commit after the caller returned, so nothing is reversed or
 //     deleted. The creating record stays as the recovery journal and the sweep re-spends
 //     idempotently.
-//   - Spend fails otherwise: RollBackCreating marks the record rolling back, reverses the
-//     spends that succeeded and deletes the record, under a detached context bounded like the
+//   - Spend fails otherwise: RollBackCreating marks the record rolling back, unspends every
+//     input of the tx and deletes the record, under a detached context bounded like the
 //     spend-first rollback. Without the rollback a partially spent tx would leave its free
 //     inputs naming a record that is later pruned (the #1214 shape), and every rejected
 //     double-spend would leave a durable record. The per-input spends and the error are
@@ -433,7 +456,7 @@ func sequentialCreateFirst(ctx context.Context, logger ulogger.Logger, s Sequent
 			return nil, spends, err
 		}
 
-		if rollbackErr := RollBackCreating(ctx, logger, s, tx, spends); rollbackErr != nil {
+		if rollbackErr := RollBackCreating(ctx, logger, s, tx); rollbackErr != nil {
 			return nil, spends, errors.NewProcessingError("SpendAndCreate: error reversing utxo spends: %v", rollbackErr, err)
 		}
 

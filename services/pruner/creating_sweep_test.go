@@ -145,7 +145,7 @@ func newSweepServer(t *testing.T, store utxo.Store) *Server {
 // oneOutputTx returns a minimal tx (distinct txid via the vout index) usable as md.Tx.
 func oneOutputTx(vout uint32) *bt.Tx {
 	tx := bt.NewTx()
-	in := &bt.Input{PreviousTxOutIndex: vout, UnlockingScript: bscript.NewFromBytes([]byte{})}
+	in := &bt.Input{PreviousTxOutIndex: vout, PreviousTxSatoshis: 1000, PreviousTxScript: bscript.NewFromBytes([]byte{0x51}), UnlockingScript: bscript.NewFromBytes([]byte{})}
 	_ = in.PreviousTxIDAdd(&chainhash.Hash{})
 	tx.Inputs = append(tx.Inputs, in)
 	tx.Outputs = append(tx.Outputs, &bt.Output{Satoshis: 1000, LockingScript: bscript.NewFromBytes([]byte{0x51})})
@@ -359,7 +359,6 @@ func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
 
 	txA := oneOutputTx(1)
 	hashA := *txA.TxIDChainHash()
-	taken := &utxo.Spend{Vout: 7}
 	failed := &utxo.Spend{Vout: 8, Err: errors.ErrSpent}
 
 	store := &fakeSweepStore{
@@ -367,14 +366,17 @@ func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
 		stale:       []chainhash.Hash{hashA},
 		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
 		spendErr:    errors.ErrSpent,
-		spendSpends: []*utxo.Spend{taken, failed},
+		spendSpends: []*utxo.Spend{failed},
 	}
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
 
 	require.Equal(t, []string{"begin", "unspend", "delete"}, store.events, "a loser is marked rolling back, unspent, then deleted")
 	require.Equal(t, []chainhash.Hash{hashA}, store.began)
-	require.Equal(t, [][]*utxo.Spend{{taken}}, store.unspent, "only the inputs this attempt took are unspent")
+	require.Len(t, store.unspent, 1)
+	require.Len(t, store.unspent[0], len(txA.Inputs), "every input of the tx is unspent, not only the ones this pass took")
+	require.Equal(t, txA.Inputs[0].PreviousTxOutIndex, store.unspent[0][0].Vout)
+	require.Equal(t, hashA.String(), store.unspent[0][0].SpendingData.TxID.String())
 	require.Equal(t, []chainhash.Hash{hashA}, store.deleted)
 	require.Empty(t, store.setConflicting, "a loser is deleted, not marked conflicting")
 	require.Empty(t, store.finalized, "a loser must never be finalized")
