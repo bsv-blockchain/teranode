@@ -774,25 +774,43 @@ drain:
 	// replay position nothing replays them, so the reset owes the mark of skipped fork
 	// transactions a move to the best header owes. As for that move, it is recorded first,
 	// since the reset persists its new tip, and without the record the reset does not run.
-	// The mark then runs before the reset, whose reload takes in what it unmarks; a mark
-	// that does not finish is run again after the reset, with a reload of its own.
+	//
+	// Owed work runs before the reset, whose reload takes in what it unmarks, so the pass
+	// needs no second reload. Without a replay position the record is then written again
+	// and the work owed again: the reset reads the best tip anew, and a block that became the
+	// best tip in between is marked by the run that ends the pass. A run that does not finish
+	// is not run a second time in the pass (runOwedSkippedForkWork).
+	refuse := func(err error) {
+		b.skippedForkMarkPending = true
+		b.noteSkippedForkMarkFailure(time.Now())
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
+
+		refused := errors.NewProcessingError("[BlockAssembler] reset refused: the mark of skipped fork transactions it would owe cannot be recorded", err)
+		b.logger.Errorf("%v", refused)
+		b.drainPendingInvalidations(ctx)
+		answer(refused)
+	}
+
 	wasPending := b.bestTipResetReplayPending.Load()
 	if !b.bestTipPosKnown.Load() {
 		if err := b.saveSkippedForkMark(ctx, true); err != nil {
-			b.skippedForkMarkPending = true
-			b.noteSkippedForkMarkFailure(time.Now())
-			prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
-
-			refused := errors.NewProcessingError("[BlockAssembler] reset refused: the mark of skipped fork transactions it would owe cannot be recorded", err)
-			b.logger.Errorf("%v", refused)
-			b.drainPendingInvalidations(ctx)
-			answer(refused)
-
+			refuse(err)
 			return
 		}
 
 		b.skippedForkMarkPending = true
-		_ = b.markSkippedForkTxs(ctx, true)
+	}
+
+	if b.skippedForkWorkOwed() {
+		if err := b.markSkippedForkTxs(ctx, true); err == nil && !b.bestTipPosKnown.Load() {
+			if err = b.saveSkippedForkMark(ctx, true); err != nil {
+				refuse(err)
+				return
+			}
+
+			b.skippedForkMarkPending = true
+			b.skippedForkMarkRan = false
+		}
 	}
 
 	// If FullReset requested, run lightweight consistency scan first
@@ -1526,6 +1544,9 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 			prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
 			b.logger.Errorf("[BlockAssembler] not following the best header to %s, the mark of skipped fork transactions it would owe cannot be recorded, retrying at %s: %v", bestBlockchainBlockHeader.Hash(), b.skippedForkMarkRetryAt.Format(time.RFC3339), err)
 
+			// The failure is this pass's one attempt (runOwedSkippedForkWork).
+			b.skippedForkMarkRan = true
+
 			return
 		}
 
@@ -1535,8 +1556,10 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	// A move that ran a reset ends on the best tip as well (errBestTipReset is the replay's
 	// version of the same outcome).
 	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil && !errors.Is(err, errors.ErrBlockAssemblyReset) {
-		// The pending mark keeps the idle wake retrying the move, after a back-off.
+		// The pending mark keeps the idle wake retrying the move, after a back-off. The
+		// failure is this pass's one attempt (runOwedSkippedForkWork).
 		b.noteSkippedForkMarkFailure(time.Now())
+		b.skippedForkMarkRan = true
 	}
 }
 

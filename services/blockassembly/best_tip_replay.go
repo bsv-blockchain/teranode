@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
@@ -55,6 +54,10 @@ const (
 	// to skippedForkMarkRetryMax.
 	skippedForkMarkRetryBase = 5 * time.Second
 	skippedForkMarkRetryMax  = 5 * time.Minute
+
+	// maxRestampPresizePerBlock bounds how many hashes per block restampStaleBranch allocates
+	// up front from the blocks' transaction counts; blockTxHashes grows it past that once.
+	maxRestampPresizePerBlock = 10_000_000
 )
 
 // errBestTipReset reports that applying a block from the replay ran a full reset, which leaves
@@ -351,8 +354,9 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 			// store is asked directly; a failure to answer is retried like any other.
 			gone := false
 			if errors.Is(err, errors.ErrNotFound) {
-				if gone, err = b.subtreeFilesGone(ctx, fb.header); err != nil {
-					b.logger.Errorf("[BlockAssembler] error checking the subtree files of fork block %s: %v", hash, err)
+				var existsErr error
+				if gone, existsErr = b.subtreeFilesGone(ctx, fb.header); existsErr != nil {
+					b.logger.Errorf("[BlockAssembler] error checking the subtree files of fork block %s: %v", hash, existsErr)
 				}
 			}
 
@@ -476,12 +480,14 @@ func (b *BlockAssembler) skippedForkWorkOwed() bool {
 // cleared unmined_since before the write, would otherwise be left with it set while it is mined
 // on the best chain, and moving forward onto that block does not mark it again.
 //
-// A failure after the write leaves the hashes in skippedForkRecheck, so the next run of
-// markSkippedForkTxs checks them again: the block that holds one may be on the best chain now,
-// and no fork block it reads would show it. A restart's load of the unmined transactions marks
-// such a transaction mined as well.
+// A failure leaves the hashes in skippedForkRecheck, so the next run of markSkippedForkTxs
+// checks them again: the block that holds one may be on the best chain now, and no fork block it
+// reads would show it. That includes a failed write, which the stores do in chunks and may have
+// done in part. A restart's load of the unmined transactions marks such a transaction mined as
+// well.
 func (b *BlockAssembler) markOffLongestChain(ctx context.Context, hashes []chainhash.Hash) ([]chainhash.Hash, error) {
 	if err := b.utxoStore.MarkTransactionsOnLongestChain(ctx, hashes, false); err != nil {
+		b.skippedForkRecheck = append(b.skippedForkRecheck, hashes...)
 		return nil, err
 	}
 
@@ -625,10 +631,6 @@ func (b *BlockAssembler) skippedForkBlocks(ctx context.Context, best *model.Bloc
 			}
 
 			forks = append(forks, blockHeaderWithMeta{header: header, meta: meta})
-		}
-
-		if start > math.MaxUint32-pageSize {
-			return forks, nil
 		}
 	}
 }
@@ -1413,7 +1415,12 @@ func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockH
 	}
 
 	staleIDs := make(map[uint32]struct{}, len(branch))
-	hashes := make([]chainhash.Hash, 0, len(branch)*100)
+	txCount := uint64(0)
+	for _, hm := range branch {
+		txCount += hm.meta.TxCount
+	}
+
+	hashes := make([]chainhash.Hash, 0, min(txCount, uint64(len(branch))*maxRestampPresizePerBlock))
 
 	for _, hm := range branch {
 		if hm.meta.Invalid {

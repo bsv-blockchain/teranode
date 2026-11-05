@@ -186,8 +186,8 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   the time the mark is written is marked as mined again. It lists the blocks above its
   floor that the best chain does not hold, a window of heights at a time
   (`GetBlockHeadersFromHeight`, bounded by `blockchain_maxBlockHeadersPerRequest`),
-  without computing chain tips' branch lengths, and reads, once, each valid one block
-  validation has finished whose subtree files the subtree retention still keeps. It runs with block assembly on the best tip,
+  without computing chain tips' branch lengths, and reads each valid one block validation
+  has finished whose subtree files the subtree retention still keeps, once per process. It runs with block assembly on the best tip,
   or before the reset it follows. The run is recorded as pending under a new blockchain
   state key, `BlockAssemblerSkippedForkMark`, before block assembly follows the best
   header, resets without a replay position, or gives the replay's history up; if that
