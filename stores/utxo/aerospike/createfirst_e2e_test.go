@@ -381,7 +381,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.True(t, sawSpent, "the loser must fail with ErrSpent (top-level or per-spend), got: %v", err)
 
 		// Roll back as the submit path and the sweep do: mark, unspend what was taken, delete.
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, parent3, spends))
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, parent3))
 
 		got := &meta.Data{}
 		err = store.GetMeta(ctx, parent3.TxIDChainHash(), got)
@@ -396,6 +396,76 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		_, err = store.Spend(ctx, parent3, 106)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrSpent) || errors.Is(err, errors.ErrTxNotFound), "the winner's spend must survive, got: %v", err)
+	})
+
+	t.Run("sweep rollback reverses an input that fails the pass for another reason", func(t *testing.T) {
+		parentA := spendableChildTx(t, tests.ParentTx, 0)
+		parentA.Version = 41
+
+		parentB := spendableChildTx(t, tests.ParentTx, 0)
+		parentB.Version = 42
+
+		_, err := store.Create(ctx, parentA, 120)
+		require.NoError(t, err)
+
+		_, err = store.Create(ctx, parentB, 120)
+		require.NoError(t, err)
+
+		loser := spendableChildTx(t, parentA, 0)
+		require.NoError(t, loser.From(
+			parentB.TxIDChainHash().String(), 0,
+			parentB.Outputs[0].LockingScript.String(),
+			parentB.Outputs[0].Satoshis,
+		))
+
+		// The original attempt spent both inputs, then crashed before finalize.
+		_, err = store.Create(ctx, loser, 121, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		loserSpends, err := utxo.GetSpends(loser)
+		require.NoError(t, err)
+
+		_, err = store.Spend(ctx, loser, 121)
+		require.NoError(t, err)
+
+		// A rival takes input 0 of the loser's tx, and the parent of input 1 is locked.
+		require.NoError(t, store.Unspend(ctx, loserSpends[:1]))
+
+		rival := spendableChildTx(t, parentA, 0)
+		rival.Version = 7
+
+		_, err = store.Spend(ctx, rival, 122, utxo.IgnoreFlags{SkipUTXOHashCheck: true})
+		require.NoError(t, err)
+
+		require.NoError(t, store.SetLocked(ctx, []chainhash.Hash{*parentB.TxIDChainHash()}, true))
+
+		// The sweep pass: the re-spend fails, input 0 with ErrSpent and input 1 with ErrTxLocked.
+		_, spends, err := store.SpendAndCreate(ctx, loser, 123, utxo.WithSpendOnly())
+		require.ErrorIs(t, err, errors.ErrSpent)
+
+		var sawLocked bool
+
+		for _, sp := range spends {
+			if sp != nil && errors.Is(sp.Err, errors.ErrTxLocked) {
+				sawLocked = true
+			}
+		}
+
+		require.True(t, sawLocked, "input 1 must fail this pass with ErrTxLocked")
+
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, loser))
+
+		got := &meta.Data{}
+		require.ErrorIs(t, store.GetMeta(ctx, loser.TxIDChainHash(), got), errors.ErrTxNotFound, "the rolled back record must be gone")
+
+		resp, err := store.GetSpend(ctx, loserSpends[1])
+		require.NoError(t, err)
+		require.Nil(t, resp.SpendingData, "input 1 must not stay spent by the deleted record")
+
+		resp, err = store.GetSpend(ctx, loserSpends[0])
+		require.NoError(t, err)
+		require.NotNil(t, resp.SpendingData, "input 0 must still belong to the rival")
+		require.Equal(t, rival.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 	})
 }
 
