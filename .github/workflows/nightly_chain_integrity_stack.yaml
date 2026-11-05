@@ -10,7 +10,8 @@ on:
     - cron: '0 5 * * *'  # after nightly_tests (02:00) and fuzz (04:00), which share the runner pool
   # TEMPORARY: proves the nightly on the self-hosted runners before the workflow reaches the
   # default branch (workflow_dispatch only lists workflows that are on it). Runs --quick; a
-  # commit message containing [nightly-full] runs the full nightly. Remove before merging.
+  # commit message containing [nightly-integrity] runs phase 1 at full length, and
+  # [nightly-full] the full nightly. Remove before merging.
   push:
     branches: [chaostest-nightly-proof]
   workflow_dispatch:
@@ -148,8 +149,12 @@ jobs:
         run: |
           args=(--phases "${{ inputs.phases || '1,2,3' }}")
           [ "${{ inputs.quick }}" = true ] && args=(--quick)
-          if [ "${{ github.event_name }}" = push ] && [ "${{ contains(github.event.head_commit.message, '[nightly-full]') }}" != true ]; then
-            args=(--quick)
+          if [ "${{ github.event_name }}" = push ]; then
+            if [ "${{ contains(github.event.head_commit.message, '[nightly-integrity]') }}" = true ]; then
+              args=(--phases 1)
+            elif [ "${{ contains(github.event.head_commit.message, '[nightly-full]') }}" != true ]; then
+              args=(--quick)
+            fi
           fi
           [ -n "${{ steps.previous.outputs.dir }}" ] && args+=(--previous "${{ steps.previous.outputs.dir }}")
           compose/chaostest/nightly.sh "${args[@]}"
