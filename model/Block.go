@@ -1195,7 +1195,7 @@ func IsConsensusCoinbase(tx *bt.Tx) bool {
 // length is within the consensus bound: parity with bitcoin-sv CheckCoinbase (bad-cb-length),
 // inclusive 2 <= size <= params.MaxCoinbaseScriptSigSize. The caller must guarantee coinbaseTx has
 // at least one input before calling (Valid's step 4b above relies on IsCoinbase() for that; the
-// quick-validation path's own nil/empty check gives the same guarantee) — Inputs[0] is indexed
+// quick-validation path relies on its own post-binding IsConsensusCoinbase checks) — Inputs[0] is indexed
 // unconditionally. A nil UnlockingScript is treated as length 0 and fails the lower bound,
 // matching an empty scriptSig.
 //
@@ -1230,8 +1230,8 @@ func CoinbaseScriptSigLengthInBounds(coinbaseTx *bt.Tx, params *chaincfg.Params)
 // quick-validation path (services/blockvalidation/quick_validate.go), which never calls Valid, calls
 // it at both of its entry points — so the three routes cannot drift.
 //
-// The caller must guarantee a non-nil CoinbaseTx: Valid's step 4 and quick validation's own
-// nil/empty coinbase precheck both do.
+// The caller must guarantee a non-nil CoinbaseTx: Valid's step 4 and blockvalidation's
+// coinbaseNotDelivered precheck both do.
 func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 	if len(b.Subtrees) != 0 {
 		return nil

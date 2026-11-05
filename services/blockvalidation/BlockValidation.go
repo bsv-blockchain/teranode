@@ -2053,10 +2053,12 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// rejected by block.Valid with the bad-version token; a below-floor block that ALSO fails the
 		// outer nil-coinbase precheck below returns earlier with the documented non-parity reason
 		// (block-incomplete) instead. Either way the block is rejected.
-		if block.CoinbaseTx == nil || block.CoinbaseTx.Inputs == nil || len(block.CoinbaseTx.Inputs) == 0 {
+		if coinbaseNotDelivered(block) {
 			// Use BlockIncomplete rather than BlockInvalid — a missing coinbase likely means the peer
 			// doesn't have full block data (e.g. seeded peer). Don't store as invalid so we can
-			// accept the valid version from another peer later.
+			// accept the valid version from another peer later. A coinbase with no inputs that the
+			// header commits to is not missing: it falls through and block.Valid condemns it (see
+			// coinbaseNotDelivered).
 			//
 			// This is the ABSENT-DATA ErrBlockIncomplete, distinct from the FLOATER ErrBlockIncomplete
 			// that the caught-up handlers poison (bitcoin-sv/teranode#4692). This return is an outer
@@ -2305,8 +2307,8 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if !opts.IsRevalidation {
 				reason := fmt.Sprintf("parent block %s is invalid", block.Header.HashPrevBlock.String())
 
-				// CoinbaseTx is non-nil here: the precheck at the top of this function rejects a
-				// block without one.
+				// CoinbaseTx is non-nil here: the coinbaseNotDelivered precheck at the top of this
+				// function rejects a block without one.
 				if len(block.Subtrees) == 0 && block.CheckCoinbaseOnlyBodyBound() == nil {
 					u.storeInvalidBlock(ctx, block, opts.PeerID, baseURL, reason)
 				} else {
@@ -2479,6 +2481,15 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			if !opts.IsCatchupMode {
 				ctxLogger.Infof("[ValidateBlock][%s] useOptimisticMining override: %v", block.Header.Hash().String(), useOptimisticMining)
 			}
+		}
+
+		// A coinbase-only body whose only transaction is not coinbase-shaped (for instance a
+		// coinbase with no inputs, which the precheck lets through when the header commits to it)
+		// is invalid, and block.Valid says so. It must not be added to the chain first: the store
+		// reads the BIP34 height from the coinbase input during AddBlock, so the block would fail
+		// there as a storage error instead of being condemned. Validate it synchronously.
+		if useOptimisticMining && len(block.Subtrees) == 0 && !model.IsConsensusCoinbase(block.CoinbaseTx) {
+			useOptimisticMining = false
 		}
 
 		// The block's subtrees are in the subtree store now. Under optimistic mining the block is

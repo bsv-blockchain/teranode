@@ -1645,6 +1645,13 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 			coinbaseTx:  &bt.Tx{Inputs: []*bt.Input{}},
 			expectError: "coinbase tx is nil or empty",
 		},
+		{
+			// The seeder's output-only coinbase: outputs but no input. The header does not commit
+			// to it, so it is missing data from the peer, not a miner's invalid coinbase.
+			name:        "Output-only coinbase the header does not commit to returns ErrBlockIncomplete",
+			coinbaseTx:  &bt.Tx{Outputs: []*bt.Output{{Satoshis: 50 * 100_000_000, LockingScript: &bscript.Script{0x51}}}},
+			expectError: "coinbase tx is nil or empty",
+		},
 	}
 
 	for _, tt := range tests {
