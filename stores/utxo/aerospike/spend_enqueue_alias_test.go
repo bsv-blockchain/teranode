@@ -150,7 +150,7 @@ func TestSpend_EnqueuesOnlyAcceptedItemsWhenBreakerHalfOpen(t *testing.T) {
 	cb := newCircuitBreaker(1, 1, time.Millisecond)
 	require.NotNil(t, cb)
 
-	cb.RecordFailure() // trips the breaker open
+	cb.RecordFailure(currentProbe(cb)) // trips the breaker open
 
 	time.Sleep(20 * time.Millisecond) // let the cooldown elapse so the next Allow half-opens
 
@@ -183,7 +183,7 @@ func TestSpend_FiltersFromTheFirstInputWhenBreakerFullyOpen(t *testing.T) {
 	cb := newCircuitBreaker(1, 1, time.Hour)
 	require.NotNil(t, cb)
 
-	cb.RecordFailure() // trips the breaker open, cooldown will not elapse
+	cb.RecordFailure(currentProbe(cb)) // trips the breaker open, cooldown will not elapse
 
 	s.spendCircuitBreaker = cb
 
@@ -230,14 +230,14 @@ type silentSpendBatcher struct{ recordingSpendBatcher }
 
 func (r *silentSpendBatcher) PutBatchCtx(context.Context, []*batchSpend, ...int) {}
 
-// halfOpenBreaker returns a breaker in the open state whose next Allow half-opens it.
+// halfOpenBreaker returns a breaker in the open state whose next Admit half-opens it.
 func halfOpenBreaker(t *testing.T) *circuitBreaker {
 	t.Helper()
 
 	cb := newCircuitBreaker(1, 1, time.Hour)
 	require.NotNil(t, cb)
 
-	cb.RecordFailure()
+	cb.RecordFailure(currentProbe(cb))
 
 	cb.mu.Lock()
 	cb.nextAttempt = time.Now().Add(-time.Millisecond)
@@ -256,7 +256,7 @@ func TestSpend_AbandonedRequestReleasesHalfOpenSlot(t *testing.T) {
 
 	_, err := s.Spend(ctx, txWithInputs(t, 1), 100)
 	require.Error(t, err)
-	require.True(t, s.spendCircuitBreaker.Allow(), "the abandoned probe must give its slot back")
+	require.True(t, admitted(s.spendCircuitBreaker), "the abandoned probe must give its slot back")
 }
 
 // breakerMovingBatcher swallows the items and, on enqueue, trips the breaker,
@@ -268,9 +268,9 @@ type breakerMovingBatcher struct {
 }
 
 func (b *breakerMovingBatcher) PutBatchCtx(context.Context, []*batchSpend, ...int) {
-	b.cb.RecordFailure()
+	b.cb.RecordFailure(currentProbe(b.cb))
 	expireCooldown(b.cb)
-	b.cb.Allow()
+	admitted(b.cb)
 }
 
 func TestSpend_AbandoningAnItemAdmittedWhileClosedDoesNotFreeAHalfOpenSlot(t *testing.T) {
@@ -289,7 +289,7 @@ func TestSpend_AbandoningAnItemAdmittedWhileClosedDoesNotFreeAHalfOpenSlot(t *te
 
 	require.Equal(t, cbStateHalfOpen, cb.state)
 	require.Equal(t, 1, cb.halfOpenAttempts)
-	require.False(t, cb.Allow(), "the abandoned item took no slot, so none may be freed for another probe")
+	require.False(t, admitted(cb), "the abandoned item took no slot, so none may be freed for another probe")
 }
 
 func TestSpend_DispatchRejectReleasesHalfOpenSlot(t *testing.T) {
@@ -299,7 +299,7 @@ func TestSpend_DispatchRejectReleasesHalfOpenSlot(t *testing.T) {
 
 	allowed, slot := cb.Admit()
 	require.True(t, allowed, "the request takes the only half-open slot")
-	require.False(t, cb.Allow())
+	require.False(t, admitted(cb))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -316,6 +316,6 @@ func TestSpend_DispatchRejectReleasesHalfOpenSlot(t *testing.T) {
 
 	require.True(t, item.completed.Load())
 	require.Error(t, item.err)
-	require.True(t, cb.Allow(), "an item rejected at dispatch must give its slot back")
-	require.False(t, cb.Allow(), "and only once")
+	require.True(t, admitted(cb), "an item rejected at dispatch must give its slot back")
+	require.False(t, admitted(cb), "and only once")
 }

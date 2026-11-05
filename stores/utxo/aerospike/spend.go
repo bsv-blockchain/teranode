@@ -1094,6 +1094,8 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 		deferFn()
 	}()
 
+	defer s.releaseUnsettledSlots(batch)
+
 	// Repeated expression outcomes are coalesced across parts until an opposite
 	// outcome occurs. Lua records always count, in processing order.
 	var outcome spendBreakerOutcome
@@ -1161,6 +1163,8 @@ func (s *Store) executeLuaSpendBatchContext(parentCtx context.Context, batch []*
 		})
 	}()
 
+	defer s.releaseUnsettledSlots(batch)
+
 	s.runLuaSpendBatch(parentCtx, batch, &spendBreakerOutcome{})
 }
 
@@ -1188,6 +1192,10 @@ func (s *Store) runLuaSpendBatch(parentCtx context.Context, batch []*batchSpend,
 	batchRecords, batchRecordKeys := s.createBatchRecords(batchesByKey)
 
 	if err := s.executeSpendBatchContext(ctx, batchRecords, batch, batchID); err != nil {
+		if isInfrastructureFailure(err) {
+			outcome.record(s.spendCircuitBreaker, false, batchProbeSlots(batchesByKey, batch)...)
+		}
+
 		return
 	}
 
@@ -1347,9 +1355,17 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 		s.handleBatchError(batchByKey, batch, thisBlockHeight, batchID, batchErr)
 		// Only infrastructure failures count toward the circuit breaker. Per-record
 		// data-state errors (e.g. KEY_NOT_FOUND_ERROR from missing parents during
-		// catch-up sync) must not trip it — issue #953.
-		if isInfrastructureFailure(batchErr) {
-			outcome.record(s.spendCircuitBreaker, false)
+		// catch-up sync) must not trip it — issue #953. They still prove the
+		// backend answered, so they count as a success for half-open probes.
+		switch {
+		case isInfrastructureFailure(batchErr):
+			outcome.record(s.spendCircuitBreaker, false, takeProbeSlots(batchByKey, batch)...)
+		case isServerAnswer(batchErr):
+			if slots := takeProbeSlots(batchByKey, batch); len(slots) > 0 {
+				outcome.record(s.spendCircuitBreaker, true, slots...)
+			}
+		default:
+			s.releaseProbeSlots(batchByKey, batch)
 		}
 		return
 	}
@@ -1357,12 +1373,14 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	response := batchRecord.BatchRec().Record
 	if response == nil || response.Bins == nil || response.Bins[LuaSuccess.String()] == nil {
 		s.handleMissingResponse(batchByKey, batch, txID)
+		s.releaseProbeSlots(batchByKey, batch)
 		return
 	}
 
 	res, parseErr := s.ParseLuaMapResponse(response.Bins[LuaSuccess.String()])
 	if parseErr != nil {
 		s.handleParseError(batchByKey, batch, txID, parseErr)
+		s.releaseProbeSlots(batchByKey, batch)
 		return
 	}
 
@@ -1375,10 +1393,78 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	switch res.Status {
 	case LuaStatusOK:
 		s.handleSuccessfulSpends(batchByKey, batch)
-		outcome.record(s.spendCircuitBreaker, true)
+		outcome.record(s.spendCircuitBreaker, true, takeProbeSlots(batchByKey, batch)...)
 	case LuaStatusError:
 		s.handleErrorSpends(res, batchByKey, batch, txID, thisBlockHeight, batchID)
+
+		if slots := takeProbeSlots(batchByKey, batch); len(slots) > 0 {
+			outcome.record(s.spendCircuitBreaker, true, slots...)
+		}
+	default:
+		for _, batchItem := range batchByKey {
+			idx := batchItem["idx"].(int)
+			batch[idx].complete(errors.NewProcessingError("[SPEND_BATCH_LUA][%s] unknown response status %q", txID.String(), res.Status))
+		}
+
+		s.releaseProbeSlots(batchByKey, batch)
 	}
+}
+
+// takeSlot hands over the half-open probe slot of an item and clears it, so a
+// slot is recorded or released exactly once.
+func takeSlot(item *batchSpend) breakerSlot {
+	if item == nil {
+		return breakerSlot{}
+	}
+
+	slot := item.breakerSlot
+	item.breakerSlot = breakerSlot{}
+
+	return slot
+}
+
+// takeProbeSlots takes the half-open probe slots held by the items of one batch record.
+func takeProbeSlots(batchByKey []aerospike.MapValue, batch []*batchSpend) []breakerSlot {
+	var slots []breakerSlot
+
+	for _, batchItem := range batchByKey {
+		if slot := takeSlot(batch[batchItem["idx"].(int)]); slot.taken {
+			slots = append(slots, slot)
+		}
+	}
+
+	return slots
+}
+
+// releaseProbeSlots gives back the probe slots of items whose response carried
+// no evidence about the health of the backend.
+func (s *Store) releaseProbeSlots(batchByKey []aerospike.MapValue, batch []*batchSpend) {
+	for _, slot := range takeProbeSlots(batchByKey, batch) {
+		s.spendCircuitBreaker.Release(slot)
+	}
+}
+
+// releaseUnsettledSlots gives back every probe slot in batch that no outcome has
+// consumed: items completed before reaching the backend, responses with an
+// unknown status, a non-infrastructure whole-batch error, or a panic part way
+// through the results.
+func (s *Store) releaseUnsettledSlots(batch []*batchSpend) {
+	for _, item := range batch {
+		if slot := takeSlot(item); slot.taken {
+			s.spendCircuitBreaker.Release(slot)
+		}
+	}
+}
+
+// batchProbeSlots takes the probe slots of the items of every record in batchesByKey.
+func batchProbeSlots(batchesByKey map[keyIgnoreLocked][]aerospike.MapValue, batch []*batchSpend) []breakerSlot {
+	slots := make([]breakerSlot, 0, len(batchesByKey))
+
+	for _, batchByKey := range batchesByKey {
+		slots = append(slots, takeProbeSlots(batchByKey, batch)...)
+	}
+
+	return slots
 }
 
 // handleBatchError handles errors from batch operations

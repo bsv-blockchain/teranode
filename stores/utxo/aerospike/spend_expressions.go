@@ -296,6 +296,8 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "SpendMultiWithExpressions")
 	defer deferFn()
 
+	defer s.releaseUnsettledSlots(batch)
+
 	batchID := s.batchID.Add(1)
 	s.logSpendBatchStart(batchID, len(batch))
 
@@ -358,6 +360,18 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 	if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
+		if isInfrastructureFailure(err) {
+			var slots []breakerSlot
+
+			for _, bItem := range spendIndex {
+				if slot := takeSlot(bItem); slot.taken {
+					slots = append(slots, slot)
+				}
+			}
+
+			outcome.recordExpressions(s.spendCircuitBreaker, false, true, nil, slots)
+		}
+
 		// complete is CAS-guarded: items already completed above (key-creation/
 		// validation failures) are no-ops here, so this safely covers every
 		// remaining item without racing or double-signalling.
@@ -395,6 +409,13 @@ func (s *Store) processSpendBatchResultsExpressions(
 	// (missing parent during catch-up) or FILTERED_OUT — issue #953.
 	infraErrCount := 0
 
+	// Half-open probe slots of the items answered, by outcome. A completed round
+	// trip, even one that carries a data-state error, proves the backend is
+	// healthy. A response that cannot be parsed proves nothing, so its slot is
+	// released.
+	var successSlots []breakerSlot
+	var failureSlots []breakerSlot
+
 	// Collect follow-up actions. Extra-record increments are grouped by the spend's
 	// block height so each tx's delete-at-height is stamped from its own spend
 	// height (a single batch may aggregate spends from different blocks).
@@ -421,6 +442,9 @@ func (s *Store) processSpendBatchResultsExpressions(
 				if aErr.ResultCode == types.KEY_NOT_FOUND_ERROR {
 					bItem.complete(errors.NewTxNotFoundError("transaction not found: %s", bItem.spend.TxID.String()))
 					errCount++
+
+					successSlots = appendTaken(successSlots, bItem)
+
 					continue
 				}
 
@@ -438,9 +462,17 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 			bItem.complete(errors.NewStorageError("spend error for %s:%d", bItem.spend.TxID.String(), bItem.spend.Vout, batchRec.Err))
 			errCount++
-			if isInfrastructureFailure(batchRec.Err) {
+
+			switch {
+			case isInfrastructureFailure(batchRec.Err):
 				infraErrCount++
+				failureSlots = appendTaken(failureSlots, bItem)
+			case isServerAnswer(batchRec.Err):
+				successSlots = appendTaken(successSlots, bItem)
+			default:
+				s.releaseUnsettledSlots([]*batchSpend{bItem})
 			}
+
 			continue
 		}
 
@@ -448,6 +480,9 @@ func (s *Store) processSpendBatchResultsExpressions(
 		if batchRec.Record == nil || batchRec.Record.Bins == nil {
 			bItem.complete(nil)
 			okCount++
+
+			successSlots = appendTaken(successSlots, bItem)
+
 			continue
 		}
 
@@ -455,6 +490,8 @@ func (s *Store) processSpendBatchResultsExpressions(
 		if err != nil {
 			bItem.complete(errors.NewProcessingError("failed to parse spend state", err))
 			errCount++
+			s.releaseUnsettledSlots([]*batchSpend{bItem})
+
 			continue
 		}
 
@@ -477,13 +514,15 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 		bItem.complete(nil)
 		okCount++
+
+		successSlots = appendTaken(successSlots, bItem)
 	}
 
 	// Record circuit-breaker outcome. Only count true infrastructure errors;
 	// data-state errors (KEY_NOT_FOUND_ERROR, FILTERED_OUT) take their own
 	// per-record branches above and are deliberately excluded from
 	// infraErrCount — issue #953.
-	outcome.recordExpressions(s.spendCircuitBreaker, okCount > 0, infraErrCount > 0)
+	outcome.recordExpressions(s.spendCircuitBreaker, okCount > 0 || len(successSlots) > 0, infraErrCount > 0, successSlots, failureSlots)
 
 	prometheusUtxoMapSpend.Add(float64(okCount))
 	if errCount > 0 {
@@ -529,4 +568,13 @@ func (s *Store) processSpendBatchResultsExpressions(
 
 		s.executeLuaSpendBatch(retryThroughLua, outcome)
 	}
+}
+
+// appendTaken takes the probe slot of item and appends it to slots when it holds one.
+func appendTaken(slots []breakerSlot, item *batchSpend) []breakerSlot {
+	if slot := takeSlot(item); slot.taken {
+		return append(slots, slot)
+	}
+
+	return slots
 }

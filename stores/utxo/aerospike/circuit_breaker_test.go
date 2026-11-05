@@ -85,18 +85,18 @@ func TestCircuitBreakerNilSafety(t *testing.T) {
 	var cb *circuitBreaker
 
 	t.Run("AllowWithNilCircuitBreaker", func(t *testing.T) {
-		allowed := cb.Allow()
+		allowed, _ := cb.Admit()
 		assert.True(t, allowed, "nil circuit breaker should always allow")
 	})
 
 	t.Run("RecordSuccessWithNilCircuitBreaker", func(t *testing.T) {
 		// Should not panic
-		cb.RecordSuccess()
+		cb.RecordSuccess(breakerSlot{})
 	})
 
 	t.Run("RecordFailureWithNilCircuitBreaker", func(t *testing.T) {
 		// Should not panic
-		cb.RecordFailure()
+		cb.RecordFailure(breakerSlot{})
 	})
 }
 
@@ -105,9 +105,9 @@ func TestCircuitBreakerClosedState(t *testing.T) {
 		cb := newCircuitBreaker(3, 2, 100*time.Millisecond)
 		require.NotNil(t, cb)
 
-		assert.True(t, cb.Allow(), "should allow in closed state")
-		assert.True(t, cb.Allow(), "should allow in closed state")
-		assert.True(t, cb.Allow(), "should allow in closed state")
+		assert.True(t, admitted(cb), "should allow in closed state")
+		assert.True(t, admitted(cb), "should allow in closed state")
+		assert.True(t, admitted(cb), "should allow in closed state")
 	})
 
 	t.Run("RecordSuccessResetsFailureCount", func(t *testing.T) {
@@ -115,12 +115,12 @@ func TestCircuitBreakerClosedState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Record 2 failures
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, 2, cb.consecutiveFailures)
 
 		// Success should reset counter
-		cb.RecordSuccess()
+		cb.RecordSuccess(currentProbe(cb))
 		assert.Equal(t, 0, cb.consecutiveFailures)
 		assert.Equal(t, cbStateClosed, cb.state)
 	})
@@ -130,11 +130,11 @@ func TestCircuitBreakerClosedState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Record failures up to threshold
-		cb.RecordFailure() // 1
+		cb.RecordFailure(currentProbe(cb)) // 1
 		assert.Equal(t, cbStateClosed, cb.state)
-		cb.RecordFailure() // 2
+		cb.RecordFailure(currentProbe(cb)) // 2
 		assert.Equal(t, cbStateClosed, cb.state)
-		cb.RecordFailure() // 3 - should trip
+		cb.RecordFailure(currentProbe(cb)) // 3 - should trip
 		assert.Equal(t, cbStateOpen, cb.state)
 	})
 }
@@ -145,13 +145,13 @@ func TestCircuitBreakerOpenState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Trip the circuit
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, cbStateOpen, cb.state)
 
 		// Should reject requests
-		assert.False(t, cb.Allow(), "should reject in open state")
-		assert.False(t, cb.Allow(), "should reject in open state")
+		assert.False(t, admitted(cb), "should reject in open state")
+		assert.False(t, admitted(cb), "should reject in open state")
 	})
 
 	t.Run("TransitionsToHalfOpenAfterCooldown", func(t *testing.T) {
@@ -159,18 +159,18 @@ func TestCircuitBreakerOpenState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Trip the circuit
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, cbStateOpen, cb.state)
 
 		// Should reject before cooldown
-		assert.False(t, cb.Allow())
+		assert.False(t, admitted(cb))
 
 		// Wait for cooldown
 		time.Sleep(60 * time.Millisecond)
 
 		// Next Allow() should transition to half-open
-		allowed := cb.Allow()
+		allowed := admitted(cb)
 		assert.True(t, allowed, "should allow first request after cooldown")
 		assert.Equal(t, cbStateHalfOpen, cb.state)
 	})
@@ -181,8 +181,8 @@ func TestCircuitBreakerOpenState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		before := time.Now()
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		after := time.Now()
 
 		assert.Equal(t, cbStateOpen, cb.state)
@@ -198,21 +198,21 @@ func TestCircuitBreakerHalfOpenState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Trip to open
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 
 		// Wait for cooldown to transition to half-open
 		time.Sleep(60 * time.Millisecond)
-		assert.True(t, cb.Allow()) // First attempt transitions to half-open
+		assert.True(t, admitted(cb)) // First attempt transitions to half-open
 
 		// Should allow halfOpenMax attempts
 		for i := 1; i < halfOpenMax; i++ {
-			allowed := cb.Allow()
+			allowed := admitted(cb)
 			assert.True(t, allowed, "should allow attempt %d/%d in half-open", i+1, halfOpenMax)
 		}
 
 		// Should reject after reaching limit
-		assert.False(t, cb.Allow(), "should reject after reaching halfOpenMax")
+		assert.False(t, admitted(cb), "should reject after reaching halfOpenMax")
 	})
 
 	t.Run("SuccessfulAttemptsCloseCircuit", func(t *testing.T) {
@@ -221,14 +221,14 @@ func TestCircuitBreakerHalfOpenState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Trip to open, then transition to half-open
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		time.Sleep(60 * time.Millisecond)
-		cb.Allow() // Transition to half-open
+		admitted(cb) // Transition to half-open
 
 		// Record successes equal to halfOpenMax
 		for i := 0; i < halfOpenMax; i++ {
-			cb.RecordSuccess()
+			cb.RecordSuccess(currentProbe(cb))
 			if i < halfOpenMax-1 {
 				assert.Equal(t, cbStateHalfOpen, cb.state, "should stay half-open until all successes recorded")
 			}
@@ -246,17 +246,17 @@ func TestCircuitBreakerHalfOpenState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Trip to open, then transition to half-open
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		time.Sleep(60 * time.Millisecond)
-		cb.Allow() // Transition to half-open
+		admitted(cb) // Transition to half-open
 
 		// Record one success
-		cb.RecordSuccess()
+		cb.RecordSuccess(currentProbe(cb))
 		assert.Equal(t, cbStateHalfOpen, cb.state)
 
 		// Record failure - should trip back to open
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, cbStateOpen, cb.state)
 	})
 
@@ -265,19 +265,19 @@ func TestCircuitBreakerHalfOpenState(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Trip to open, then transition to half-open
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		time.Sleep(60 * time.Millisecond)
-		cb.Allow()
+		admitted(cb)
 
 		// Record partial successes
-		cb.RecordSuccess()
+		cb.RecordSuccess(currentProbe(cb))
 		assert.Equal(t, 1, cb.consecutiveSuccess)
-		cb.RecordSuccess()
+		cb.RecordSuccess(currentProbe(cb))
 		assert.Equal(t, 2, cb.consecutiveSuccess)
 
 		// Failure should reset consecutive success count
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, 0, cb.consecutiveSuccess)
 		assert.Equal(t, cbStateOpen, cb.state)
 	})
@@ -299,11 +299,11 @@ func TestCircuitBreakerConcurrency(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < iterations; j++ {
-					cb.Allow()
+					admitted(cb)
 					if j%2 == 0 {
-						cb.RecordSuccess()
+						cb.RecordSuccess(currentProbe(cb))
 					} else {
-						cb.RecordFailure()
+						cb.RecordFailure(currentProbe(cb))
 					}
 				}
 			}(i)
@@ -327,7 +327,7 @@ func TestCircuitBreakerConcurrency(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			go func() {
 				defer wg.Done()
-				cb.RecordFailure()
+				cb.RecordFailure(currentProbe(cb))
 			}()
 		}
 		wg.Wait()
@@ -345,7 +345,7 @@ func TestCircuitBreakerConcurrency(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			go func() {
 				defer wg.Done()
-				if cb.Allow() {
+				if admitted(cb) {
 					mu.Lock()
 					allowCount++
 					mu.Unlock()
@@ -366,27 +366,27 @@ func TestCircuitBreakerFullCycle(t *testing.T) {
 
 		// Start in closed state
 		assert.Equal(t, cbStateClosed, cb.state)
-		assert.True(t, cb.Allow())
+		assert.True(t, admitted(cb))
 
 		// Trip to open
-		cb.RecordFailure()
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, cbStateOpen, cb.state)
-		assert.False(t, cb.Allow(), "should reject in open state")
+		assert.False(t, admitted(cb), "should reject in open state")
 
 		// Wait for cooldown
 		time.Sleep(110 * time.Millisecond)
 
 		// Transition to half-open
-		assert.True(t, cb.Allow(), "should allow after cooldown")
+		assert.True(t, admitted(cb), "should allow after cooldown")
 		assert.Equal(t, cbStateHalfOpen, cb.state)
 
 		// Succeed to close circuit
-		cb.RecordSuccess()
-		cb.RecordSuccess()
+		cb.RecordSuccess(currentProbe(cb))
+		cb.RecordSuccess(currentProbe(cb))
 		assert.Equal(t, cbStateClosed, cb.state)
-		assert.True(t, cb.Allow(), "should allow in closed state")
+		assert.True(t, admitted(cb), "should allow in closed state")
 	})
 
 	t.Run("MultipleOpenClosesCycles", func(t *testing.T) {
@@ -395,17 +395,17 @@ func TestCircuitBreakerFullCycle(t *testing.T) {
 
 		for cycle := 0; cycle < 3; cycle++ {
 			// Closed -> Open
-			cb.RecordFailure()
-			cb.RecordFailure()
+			cb.RecordFailure(currentProbe(cb))
+			cb.RecordFailure(currentProbe(cb))
 			assert.Equal(t, cbStateOpen, cb.state, "cycle %d: should be open", cycle)
 
 			// Open -> Half-Open
 			time.Sleep(60 * time.Millisecond)
-			cb.Allow()
+			admitted(cb)
 			assert.Equal(t, cbStateHalfOpen, cb.state, "cycle %d: should be half-open", cycle)
 
 			// Half-Open -> Closed
-			cb.RecordSuccess()
+			cb.RecordSuccess(currentProbe(cb))
 			assert.Equal(t, cbStateClosed, cb.state, "cycle %d: should be closed", cycle)
 		}
 	})
@@ -417,16 +417,16 @@ func TestCircuitBreakerEdgeCases(t *testing.T) {
 		require.NotNil(t, cb)
 
 		// Single failure should trip
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, cbStateOpen, cb.state)
 
 		// Very short cooldown
 		time.Sleep(2 * time.Millisecond)
-		assert.True(t, cb.Allow())
+		assert.True(t, admitted(cb))
 		assert.Equal(t, cbStateHalfOpen, cb.state)
 
 		// Single success should close
-		cb.RecordSuccess()
+		cb.RecordSuccess(currentProbe(cb))
 		assert.Equal(t, cbStateClosed, cb.state)
 	})
 
@@ -436,10 +436,10 @@ func TestCircuitBreakerEdgeCases(t *testing.T) {
 
 		// Should take 100 failures to trip
 		for i := 0; i < 99; i++ {
-			cb.RecordFailure()
+			cb.RecordFailure(currentProbe(cb))
 			assert.Equal(t, cbStateClosed, cb.state, "should stay closed until 100 failures")
 		}
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, cbStateOpen, cb.state)
 	})
 
@@ -447,19 +447,19 @@ func TestCircuitBreakerEdgeCases(t *testing.T) {
 		cb := newCircuitBreaker(3, 2, 50*time.Millisecond)
 		require.NotNil(t, cb)
 
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, 2, cb.consecutiveFailures)
 
 		// Interleaved success
-		cb.RecordSuccess()
+		cb.RecordSuccess(currentProbe(cb))
 		assert.Equal(t, 0, cb.consecutiveFailures)
 
 		// Need 3 more failures to trip now
-		cb.RecordFailure()
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, cbStateClosed, cb.state)
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		assert.Equal(t, cbStateOpen, cb.state)
 	})
 }
@@ -571,12 +571,12 @@ func TestCircuitBreaker_KeyNotFoundDoesNotTrip(t *testing.T) {
 	// Simulate the gated call site: only record failure if the error is infra.
 	for i := 0; i < 1000; i++ {
 		if isInfrastructureFailure(keyNotFound) {
-			cb.RecordFailure()
+			cb.RecordFailure(currentProbe(cb))
 		}
 	}
 
 	require.Equal(t, cbStateClosed, cb.state, "breaker must stay closed under KEY_NOT_FOUND flood")
-	require.True(t, cb.Allow(), "breaker must still allow requests")
+	require.True(t, admitted(cb), "breaker must still allow requests")
 }
 
 // TestCircuitBreaker_InfraErrorStillTrips ensures the safety net still works:
@@ -589,12 +589,12 @@ func TestCircuitBreaker_InfraErrorStillTrips(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		if isInfrastructureFailure(timeout) {
-			cb.RecordFailure()
+			cb.RecordFailure(currentProbe(cb))
 		}
 	}
 
 	require.Equal(t, cbStateOpen, cb.state, "breaker must trip on 3 consecutive infra failures")
-	require.False(t, cb.Allow(), "breaker must reject while open")
+	require.False(t, admitted(cb), "breaker must reject while open")
 }
 
 // ensure net.Error interface assertions compile (linter hint).
@@ -616,28 +616,28 @@ func TestCircuitBreakerRelease(t *testing.T) {
 
 	t.Run("open state is unchanged", func(t *testing.T) {
 		cb := newCircuitBreaker(1, 2, time.Hour)
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		cb.Release(breakerSlot{epoch: cb.halfOpenEpoch, taken: true})
 		require.Equal(t, cbStateOpen, cb.state)
 		require.Equal(t, 0, cb.halfOpenAttempts)
-		require.False(t, cb.Allow())
+		require.False(t, admitted(cb))
 	})
 
 	t.Run("half-open gives back one slot and never goes below zero", func(t *testing.T) {
 		cb := newCircuitBreaker(1, 2, time.Hour)
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		expireCooldown(cb)
 
 		allowed, slot := cb.Admit()
 		require.True(t, allowed)
 		require.True(t, slot.taken)
-		require.True(t, cb.Allow())
-		require.False(t, cb.Allow())
+		require.True(t, admitted(cb))
+		require.False(t, admitted(cb))
 
 		cb.Release(slot)
 		require.Equal(t, 1, cb.halfOpenAttempts)
-		require.True(t, cb.Allow())
-		require.False(t, cb.Allow())
+		require.True(t, admitted(cb))
+		require.False(t, admitted(cb))
 
 		cb.Release(slot)
 		cb.Release(slot)
@@ -653,29 +653,29 @@ func TestCircuitBreakerRelease(t *testing.T) {
 		require.True(t, allowed)
 		require.False(t, closedSlot.taken, "a closed breaker hands out no slot")
 
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		expireCooldown(cb)
 
 		allowed, _ = cb.Admit()
 		require.True(t, allowed)
 		allowed, _ = cb.Admit()
 		require.True(t, allowed)
-		require.False(t, cb.Allow())
+		require.False(t, admitted(cb))
 
 		cb.Release(closedSlot)
 		require.Equal(t, 2, cb.halfOpenAttempts)
-		require.False(t, cb.Allow(), "releasing an item admitted while closed must not admit another probe")
+		require.False(t, admitted(cb), "releasing an item admitted while closed must not admit another probe")
 	})
 
 	t.Run("a slot from an earlier half-open epoch is ignored after backstop re-entry", func(t *testing.T) {
 		cb := newCircuitBreaker(1, 2, time.Minute)
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		expireCooldown(cb)
 
 		allowed, oldSlot := cb.Admit()
 		require.True(t, allowed)
-		require.True(t, cb.Allow())
-		require.False(t, cb.Allow())
+		require.True(t, admitted(cb))
+		require.False(t, admitted(cb))
 
 		cb.mu.Lock()
 		cb.nextAttempt = time.Now().Add(-2 * time.Minute)
@@ -685,13 +685,13 @@ func TestCircuitBreakerRelease(t *testing.T) {
 		require.True(t, allowed, "the backstop re-enters half-open")
 		require.True(t, newSlot.taken)
 		require.NotEqual(t, oldSlot.epoch, newSlot.epoch)
-		require.True(t, cb.Allow())
-		require.False(t, cb.Allow())
+		require.True(t, admitted(cb))
+		require.False(t, admitted(cb))
 		require.Equal(t, 2, cb.halfOpenAttempts)
 
 		cb.Release(oldSlot)
 		require.Equal(t, 2, cb.halfOpenAttempts, "the new epoch's count is untouched")
-		require.False(t, cb.Allow(), "the new epoch still refuses after halfOpenMax probes")
+		require.False(t, admitted(cb), "the new epoch still refuses after halfOpenMax probes")
 
 		cb.Release(newSlot)
 		require.Equal(t, 1, cb.halfOpenAttempts, "a slot of the current epoch is still released")
@@ -699,22 +699,22 @@ func TestCircuitBreakerRelease(t *testing.T) {
 
 	t.Run("a slot from before a trip is ignored in the next half-open epoch", func(t *testing.T) {
 		cb := newCircuitBreaker(1, 1, time.Hour)
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		expireCooldown(cb)
 
 		allowed, oldSlot := cb.Admit()
 		require.True(t, allowed)
 
-		cb.RecordFailure()
+		cb.RecordFailure(currentProbe(cb))
 		expireCooldown(cb)
 
 		allowed, _ = cb.Admit()
 		require.True(t, allowed)
-		require.False(t, cb.Allow())
+		require.False(t, admitted(cb))
 
 		cb.Release(oldSlot)
 		require.Equal(t, 1, cb.halfOpenAttempts)
-		require.False(t, cb.Allow())
+		require.False(t, admitted(cb))
 	})
 }
 
@@ -727,20 +727,20 @@ func expireCooldown(cb *circuitBreaker) {
 
 func TestCircuitBreakerHalfOpenBackstop(t *testing.T) {
 	cb := newCircuitBreaker(1, 1, 50*time.Millisecond)
-	cb.RecordFailure()
+	cb.RecordFailure(currentProbe(cb))
 	time.Sleep(60 * time.Millisecond)
 
-	require.True(t, cb.Allow(), "enters half-open")
-	require.False(t, cb.Allow(), "the only probe slot is taken")
+	require.True(t, admitted(cb), "enters half-open")
+	require.False(t, admitted(cb), "the only probe slot is taken")
 
 	time.Sleep(120 * time.Millisecond)
-	require.True(t, cb.Allow(), "a probe that never reported must not hold half-open shut")
+	require.True(t, admitted(cb), "a probe that never reported must not hold half-open shut")
 	require.Equal(t, cbStateHalfOpen, cb.state)
 	require.Equal(t, 1, cb.halfOpenAttempts)
 	require.Equal(t, 0, cb.consecutiveSuccess)
-	require.False(t, cb.Allow())
+	require.False(t, admitted(cb))
 
-	cb.RecordSuccess()
+	cb.RecordSuccess(currentProbe(cb))
 	require.Equal(t, cbStateClosed, cb.state)
 }
 
@@ -749,7 +749,7 @@ func TestCircuitBreakerHalfOpenBackstop(t *testing.T) {
 // of successive backstop epochs must add up, or the breaker stays half-open.
 func TestCircuitBreakerClosesAcrossBackstopEpochs(t *testing.T) {
 	cb := newCircuitBreaker(1, 4, time.Minute)
-	cb.RecordFailure()
+	cb.RecordFailure(currentProbe(cb))
 	expireCooldown(cb)
 
 	for epoch := 1; epoch <= 4; epoch++ {
@@ -757,12 +757,12 @@ func TestCircuitBreakerClosesAcrossBackstopEpochs(t *testing.T) {
 		require.True(t, allowed, "epoch %d must admit a probe", epoch)
 
 		for range 3 {
-			require.True(t, cb.Allow())
+			require.True(t, admitted(cb))
 		}
 
-		require.False(t, cb.Allow(), "epoch %d is full", epoch)
+		require.False(t, admitted(cb), "epoch %d is full", epoch)
 
-		cb.RecordSuccess()
+		cb.RecordSuccess(currentProbe(cb))
 
 		if epoch < 4 {
 			cb.mu.Lock()
@@ -782,13 +782,13 @@ func TestCircuitBreakerClosesAcrossBackstopEpochs(t *testing.T) {
 
 func TestCircuitBreakerTripZeroesHalfOpenSuccesses(t *testing.T) {
 	cb := newCircuitBreaker(1, 4, time.Minute)
-	cb.RecordFailure()
+	cb.RecordFailure(currentProbe(cb))
 	expireCooldown(cb)
 
-	require.True(t, cb.Allow())
-	cb.RecordSuccess()
-	cb.RecordSuccess()
-	cb.RecordFailure()
+	require.True(t, admitted(cb))
+	cb.RecordSuccess(currentProbe(cb))
+	cb.RecordSuccess(currentProbe(cb))
+	cb.RecordFailure(currentProbe(cb))
 
 	cb.mu.Lock()
 	require.Equal(t, cbStateOpen, cb.state)
@@ -796,12 +796,164 @@ func TestCircuitBreakerTripZeroesHalfOpenSuccesses(t *testing.T) {
 	cb.mu.Unlock()
 
 	expireCooldown(cb)
-	require.True(t, cb.Allow())
-	cb.RecordSuccess()
+	require.True(t, admitted(cb))
+	cb.RecordSuccess(currentProbe(cb))
 
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
 	require.Equal(t, cbStateHalfOpen, cb.state)
 	require.Equal(t, 1, cb.consecutiveSuccess)
+}
+
+func TestCircuitBreakerHalfOpenOutcomesAreTiedToProbeSlots(t *testing.T) {
+	t.Run("every probe reporting a success with its slot closes the breaker", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 3, time.Hour)
+		cb.RecordFailure(breakerSlot{})
+		expireCooldown(cb)
+
+		slots := make([]breakerSlot, 3)
+		for i := range slots {
+			allowed, slot := cb.Admit()
+			require.True(t, allowed)
+			require.True(t, slot.taken)
+
+			slots[i] = slot
+		}
+
+		for i, slot := range slots {
+			require.Equal(t, cbStateHalfOpen, cb.state, "still half-open before success %d", i+1)
+			cb.RecordSuccess(slot)
+		}
+
+		require.Equal(t, cbStateClosed, cb.state)
+	})
+
+	t.Run("a success without a taken slot does not count", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 2, time.Hour)
+		cb.RecordFailure(breakerSlot{})
+		expireCooldown(cb)
+
+		allowed, _ := cb.Admit()
+		require.True(t, allowed)
+
+		cb.RecordSuccess(breakerSlot{})
+		cb.RecordSuccess(breakerSlot{epoch: cb.halfOpenEpoch})
+		require.Equal(t, 0, cb.consecutiveSuccess)
+		require.Equal(t, cbStateHalfOpen, cb.state)
+	})
+
+	t.Run("a success from an earlier epoch does not count", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 2, time.Hour)
+		cb.RecordFailure(breakerSlot{})
+		expireCooldown(cb)
+
+		allowed, oldSlot := cb.Admit()
+		require.True(t, allowed)
+
+		cb.RecordFailure(oldSlot)
+		expireCooldown(cb)
+
+		allowed, newSlot := cb.Admit()
+		require.True(t, allowed)
+		require.NotEqual(t, oldSlot.epoch, newSlot.epoch)
+
+		cb.RecordSuccess(oldSlot)
+		require.Equal(t, 0, cb.consecutiveSuccess)
+
+		cb.RecordSuccess(newSlot)
+		require.Equal(t, 1, cb.consecutiveSuccess)
+	})
+
+	t.Run("a failure from a current-epoch probe trips", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 3, time.Hour)
+		cb.RecordFailure(breakerSlot{})
+		expireCooldown(cb)
+
+		allowed, slot := cb.Admit()
+		require.True(t, allowed)
+
+		cb.RecordSuccess(slot)
+		require.Equal(t, 1, cb.consecutiveSuccess)
+
+		cb.RecordFailure(slot)
+		require.Equal(t, cbStateOpen, cb.state)
+		require.Equal(t, 0, cb.consecutiveSuccess)
+	})
+
+	t.Run("a failure from a non-probe or stale slot is ignored while half-open", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 3, time.Hour)
+		cb.RecordFailure(breakerSlot{})
+		expireCooldown(cb)
+
+		allowed, slot := cb.Admit()
+		require.True(t, allowed)
+
+		cb.RecordSuccess(slot)
+		cb.RecordFailure(breakerSlot{})
+		cb.RecordFailure(breakerSlot{epoch: slot.epoch - 1, taken: true})
+
+		require.Equal(t, cbStateHalfOpen, cb.state)
+		require.Equal(t, 1, cb.consecutiveSuccess)
+	})
+}
+
+func TestCircuitBreakerBatchFailure(t *testing.T) {
+	t.Run("trips when any slot is a current probe", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 1, time.Hour)
+		cb.RecordFailure(breakerSlot{})
+		expireCooldown(cb)
+
+		_, stale := cb.Admit()
+		cb.mu.Lock()
+		cb.nextAttempt = time.Now().Add(-2 * time.Hour)
+		cb.mu.Unlock()
+
+		_, current := cb.Admit()
+		require.NotEqual(t, stale.epoch, current.epoch)
+
+		cb.RecordBatchFailure([]breakerSlot{stale, current})
+		require.Equal(t, cbStateOpen, cb.state)
+	})
+
+	t.Run("ignored when every slot is stale or untaken", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 3, time.Hour)
+		cb.RecordFailure(breakerSlot{})
+		expireCooldown(cb)
+
+		_, slot := cb.Admit()
+		cb.RecordBatchFailure([]breakerSlot{{}, {epoch: slot.epoch - 1, taken: true}})
+		require.Equal(t, cbStateHalfOpen, cb.state)
+	})
+
+	t.Run("counts once in the closed state however many slots", func(t *testing.T) {
+		cb := newCircuitBreaker(3, 1, time.Hour)
+
+		cb.RecordBatchFailure([]breakerSlot{{epoch: 1, taken: true}, {epoch: 2, taken: true}, {epoch: 3, taken: true}})
+		require.Equal(t, 1, cb.consecutiveFailures)
+		require.Equal(t, cbStateClosed, cb.state)
+	})
+}
+
+func TestIsServerAnswer(t *testing.T) {
+	require.True(t, isServerAnswer(&aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}))
+	require.True(t, isServerAnswer(&aerospike.AerospikeError{ResultCode: types.FILTERED_OUT}))
+	require.False(t, isServerAnswer(&aerospike.AerospikeError{ResultCode: types.DEVICE_OVERLOAD}))
+	require.False(t, isServerAnswer(&aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}))
+	require.False(t, isServerAnswer(&aerospike.AerospikeError{ResultCode: types.TIMEOUT}))
+	require.False(t, isServerAnswer(context.Canceled))
+	require.False(t, isServerAnswer(nil))
+}
+
+func currentProbe(cb *circuitBreaker) breakerSlot {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	return breakerSlot{epoch: cb.halfOpenEpoch, taken: true}
+}
+
+func admitted(cb *circuitBreaker) bool {
+	allowed, _ := cb.Admit()
+
+	return allowed
 }
