@@ -743,3 +743,65 @@ func TestCircuitBreakerHalfOpenBackstop(t *testing.T) {
 	cb.RecordSuccess()
 	require.Equal(t, cbStateClosed, cb.state)
 }
+
+// A probe epoch admits halfOpenMax inputs but can report fewer successes, for
+// example one Lua record for a tx whose inputs spend one parent. The successes
+// of successive backstop epochs must add up, or the breaker stays half-open.
+func TestCircuitBreakerClosesAcrossBackstopEpochs(t *testing.T) {
+	cb := newCircuitBreaker(1, 4, time.Minute)
+	cb.RecordFailure()
+	expireCooldown(cb)
+
+	for epoch := 1; epoch <= 4; epoch++ {
+		allowed, _ := cb.Admit()
+		require.True(t, allowed, "epoch %d must admit a probe", epoch)
+
+		for range 3 {
+			require.True(t, cb.Allow())
+		}
+
+		require.False(t, cb.Allow(), "epoch %d is full", epoch)
+
+		cb.RecordSuccess()
+
+		if epoch < 4 {
+			cb.mu.Lock()
+			require.Equal(t, cbStateHalfOpen, cb.state)
+			require.Equal(t, epoch, cb.consecutiveSuccess)
+			cb.nextAttempt = time.Now().Add(-2 * time.Minute)
+			cb.mu.Unlock()
+		}
+	}
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	require.Equal(t, cbStateClosed, cb.state, "four successes over four epochs must close the breaker")
+	require.Zero(t, cb.consecutiveSuccess)
+}
+
+func TestCircuitBreakerTripZeroesHalfOpenSuccesses(t *testing.T) {
+	cb := newCircuitBreaker(1, 4, time.Minute)
+	cb.RecordFailure()
+	expireCooldown(cb)
+
+	require.True(t, cb.Allow())
+	cb.RecordSuccess()
+	cb.RecordSuccess()
+	cb.RecordFailure()
+
+	cb.mu.Lock()
+	require.Equal(t, cbStateOpen, cb.state)
+	require.Zero(t, cb.consecutiveSuccess, "a trip must drop the successes of the failed probe round")
+	cb.mu.Unlock()
+
+	expireCooldown(cb)
+	require.True(t, cb.Allow())
+	cb.RecordSuccess()
+
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	require.Equal(t, cbStateHalfOpen, cb.state)
+	require.Equal(t, 1, cb.consecutiveSuccess)
+}

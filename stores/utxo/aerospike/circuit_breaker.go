@@ -241,11 +241,14 @@ func (cb *circuitBreaker) Admit() (bool, breakerSlot) {
 	}
 }
 
+// enterHalfOpen starts a new probe epoch. consecutiveSuccess is kept: one epoch
+// admits halfOpenMax inputs but a batch reports one outcome per record, so an
+// epoch can report fewer successes than slots. Only a trip zeroes the count, so
+// the successes of several epochs add up and the breaker closes.
 func (cb *circuitBreaker) enterHalfOpen(now time.Time) {
 	cb.state = cbStateHalfOpen
 	cb.halfOpenEpoch++
 	cb.halfOpenAttempts = 1
-	cb.consecutiveSuccess = 0
 	cb.nextAttempt = now
 }
 
@@ -311,6 +314,7 @@ func (cb *circuitBreaker) trip() {
 	cb.nextAttempt = time.Now().Add(cb.cooldown)
 	cb.consecutiveFailures = 0
 	cb.halfOpenAttempts = 0
+	cb.consecutiveSuccess = 0
 }
 
 func (cb *circuitBreaker) reset() {
