@@ -144,20 +144,21 @@ npm test && npm run lint && npm run check && npm run build
   instead of burying them.
 - Self-review before reporting (logic, edge cases, races, security, side effects),
   and report concretely: what changed, what was run and its result, residual risk.
-- A breaking change gets a `CHANGELOG.md` entry in the same PR, under
-  `## [Unreleased]` / `### Breaking`. Breaking means an operator or integrator must act
-  before or during the upgrade, or something that worked stops working without their
-  action: a removed, renamed or newly required setting, or a startup failure on
-  previously valid config; access a deployment didn't need before (credentials, Kafka
-  ACLs); a wire, proto, gRPC or HTTP API incompatibility for external clients, error and
-  status codes included; a consensus change, or any other upgrade-order or no-downgrade
-  constraint, between services that can be upgraded separately too; a removed, renamed or
-  redefined metric or label value; a store or interface change that breaks out-of-tree
-  implementations. A bug fix that does any of these still gets an entry. No entry for
-  other bug fixes (even observable ones), new limits or defaults that don't break sane
-  existing use, internal behaviour changes, log changes, error-message wording or
-  performance changes. Entry: 1–3 lines saying what changed, who is affected and what
-  to do, ending with the PR number (add it once the PR is open). Detail goes in the PR.
+- A breaking change gets a `CHANGELOG.md` entry in the same PR, under `## [Unreleased]`
+  / `### Breaking`. Breaking means an operator or integrator must act before or during
+  the upgrade, or something that worked stops working without their action: a removed,
+  renamed or newly required setting, a change to what an existing setting does, or a
+  startup failure on previously valid config; access a deployment didn't need before
+  (credentials, Kafka ACLs); a wire, proto, gRPC or HTTP API incompatibility for
+  external clients, error and status codes included; a consensus change, or any other
+  upgrade-order or no-downgrade constraint, between services that can be upgraded
+  separately too; a removed, renamed or redefined metric or label value; a store or
+  interface change that breaks out-of-tree implementations. A bug fix that does any of
+  these still gets an entry. No entry for other bug fixes (even observable ones), new
+  limits or defaults that don't break sane existing use, internal behaviour changes, log
+  changes, error-message wording or performance changes. Entry: 1–3 lines saying what
+  changed, who is affected and what to do, ending with the PR number (add it once the PR
+  is open). Detail goes in the PR.
 
 ## Security Rules
 

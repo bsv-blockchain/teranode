@@ -6,8 +6,8 @@ upgrade, and what stops working if they don't. The format follows
 
 A change gets an entry when it:
 
-- removes or renames a setting, adds a required one, or makes previously valid config fail
-  at startup;
+- removes or renames a setting, adds a required one, changes what an existing one does, or
+  makes previously valid config fail at startup;
 - needs access a deployment didn't need before (credentials, Kafka topic ACLs);
 - breaks wire, proto, gRPC or HTTP API compatibility for external clients, including error
   codes or status codes clients act on;
@@ -55,9 +55,12 @@ read every section between yours and the target.
 - **`subtreevalidation_processTxMetaUsingCache_BatchSize` is removed** and `..._Concurrency` now
   sizes two service-wide pools instead of each call. Delete the first; raise the second if
   subtree validation slows down. (#1957)
+- **`blockassembly_livenessStallTimeout` measures progress, not main-loop passes.** Catch-ups,
+  reorgs and block-validation waits now beat while they progress. If you set it, re-size it from
+  `teranode_blockassembly_liveness_heartbeat_age_seconds`. (#1832)
 - **Blockchain caps MTP range requests (`blockchain_maxMedianTimePastHeights`, default 10000).**
-  Older validator, subtree validation and block validation services validate nothing against it.
-  Upgrade Blockchain last, or set the cap above the chain height until the rest are upgraded. (#1776)
+  Older validator, subtree and block validation services send whole-chain MTP requests, which it
+  rejects, so they stop validating. Upgrade Blockchain last or raise the cap above chain height. (#1776)
 - **Conflict recovery adds five `utxo.Store` methods and changes the UTXO WAL.** Upgrade block
   assembly together with the UTXO store and don't downgrade while conflict-recovery records are
   pending; they block startup. Follow [conflict recovery](docs/topics/conflict-recovery.md). (#2023)
@@ -73,6 +76,12 @@ read every section between yours and the target.
 - **Upgrade block assembly no later than the RPC service.** A newer RPC service answers
   `getminingcandidate` with `coinbase=true` with an error against an older block assembly. The
   returned coinbase is now the one block assembly mines. (#2027)
+- **Upgrade the validator after propagation, RPC, legacy and subtree validation.** A newer validator
+  answers `ERR_TX_UNLOCK_FAILED` (42) for an accepted transaction whose unlock timed out, and older
+  callers treat it as a rejection. Applies where the validator runs as its own service. (#1925)
+- **Upgrade subtree and block validation together.** A peer's HTTP 429 is now
+  `ERR_SERVICE_RATE_LIMITED` (52), not `ERR_SERVICE_ERROR` (59); an older service gets an unknown
+  code over gRPC. Log alerts on `SERVICE_ERROR (59)` for 429s must match the new code. (#1802)
 - **Subtree validation produces to the `kafka_txPolicyRejectedConfig` topic.** Grant it write
   access where Kafka ACLs are on, and upgrade every subtree validator together: an older one
   mistakes the new messages for validator rejections. (#2038)
@@ -84,9 +93,15 @@ read every section between yours and the target.
 - **JSON-RPC error codes change.** Missing blocks answer `-5`, bad heights and arguments `-8`,
   missing inputs `-25` and not-ready `-28` (retry), most of them `-32603` before. Re-check clients
   that act on error codes. (#1637, #1953)
+- **Some script failures move between `TX_POLICY` and `TX_INVALID`.** A policy-limit failure is
+  re-run under consensus limits: `TX_POLICY` if that passes, else `TX_INVALID`. Propagation clients
+  that retry or drop by these codes should re-check; RPC codes don't change. (#2068)
 - **Six heavy Asset routes are limited to `asset_httpHeavyRateLimit` (10 req/s per IP)**: the
   `/merkle_proof/*` routes, `/utxos/:hash/json`, `/subtree/:hash/txs/json` and `/blockgraphdata`.
   SPV clients and explorers above that get 429: raise the limit or allowlist peers. (#1789)
+- **`/lastblocks` returns at most 1000 blocks** (lower with `asset_maxLastNBlocks`) and a negative
+  `n` returns 400. Common-ancestor header routes return 400 above 256 locator hashes. Explorers that
+  page with a larger `n` must page in 1000s. (#1792)
 - **Peers must not use a larger `subtreevalidation_missingTransactionsBatchSize` than this node.**
   Larger batches get 413 (`asset_maxBatchRecords`, default 16384, and the allowlisted signed-body
   cap), which fails the peer's catch-up. Align batch sizes or raise the cap. (#1788, #1797)
@@ -95,9 +110,9 @@ read every section between yours and the target.
   `asset_corsAllowOrigins`. An invalid entry (`*`, `null`, a path) stops Asset at startup. (#1793)
 - **`asset_trustedProxyCIDRs`, when set, no longer trusts private proxies implicitly.** List
   internal ingress ranges, or every client shares the proxy's rate-limit and ban key. (#1793)
-- **`asset_concurrency_get_legacy_block_reader` caps whole block streams.** An explicit value now
-  limits concurrent legacy block streams for their full length; extra requests fail after 30 s.
-  Re-size or remove it (default now 0, unlimited). (#1794)
+- **`asset_concurrency_get_legacy_block_reader` caps whole block streams**; extra requests fail
+  after 30 s. Re-size or remove it (default now 0, unlimited). Legacy block serving no longer follows
+  redirects: point `asset_httpAddress` at its final address, or SV peers get no blocks. (#1794)
 - **Four Aerospike pruner metrics are removed**: `utxo_pruner_parents_skipped_pruned_total`,
   `utxo_pruner_pruned_set_size`, `utxo_pruner_pruned_set_saturated` and
   `utxo_pruner_pruned_set_rotations`. Remove their queries. (#1969)
@@ -112,6 +127,9 @@ read every section between yours and the target.
   `bad_digest` or `bad_sig` go quiet: populate `asset_peerAuthAllowlist` or retarget them. (#1788)
 - **Asset catch-up route 429s move to `scope="heavy_catchup"`** on
   `teranode_asset_http_rate_limited_total`. Use `scope=~"heavy|heavy_catchup"`. (#1801)
+- **Global-limit 429s leave `teranode_asset_http_request_duration_seconds` and
+  `..._response_size_bytes`**, and their `method` label folds non-standard methods into `other`.
+  Count those 429s with `teranode_asset_http_rate_limited_total{scope="global"}`. (#1793)
 - **Out-of-tree `utxo.Store` implementations must add `SpendAndCreateMulti` and
   `ParentOutputsForValidation`.** `utxo.DefaultSpendAndCreateMulti` provides the first. (#1875)
 
