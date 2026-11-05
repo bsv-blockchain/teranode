@@ -94,6 +94,11 @@ type Client struct {
 	// inBlockBatcher batches transactions that arrived inside a block, kept apart from batcher
 	// so block assembly can apply a different verdict to the batch
 	inBlockBatcher *batcher.Batcher[batchItem]
+
+	// sendSlots is the one limiter both batchers share, so blockassembly_sendBatchMaxConcurrent
+	// bounds the sends in flight from this client in total. Each batcher's own limit applies
+	// only to it, and two of them together would allow twice the cap.
+	sendSlots chan struct{}
 }
 
 // NewClient creates a new block assembly client.
@@ -208,7 +213,14 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 func (s *Client) newTxBatcher(ctx context.Context, name string, batchSize int, duration time.Duration) *batcher.Batcher[batchItem] {
 	tSettings := s.settings
 
+	slots := s.sharedSendSlots()
+
 	sendBatch := func(batch []*batchItem) {
+		if slots != nil {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+		}
+
 		s.sendBatchToBlockAssembly(ctx, batch)
 	}
 	b := batcher.NewWithPool(batchSize, duration, sendBatch, tSettings.BatcherBackground,
@@ -231,6 +243,18 @@ func (s *Client) newTxBatcher(ctx context.Context, name string, batchSize int, d
 	}
 
 	return b
+}
+
+// sharedSendSlots returns the limiter shared by both batchers, or nil when
+// blockassembly_sendBatchMaxConcurrent does not set a cap.
+func (s *Client) sharedSendSlots() chan struct{} {
+	if s.sendSlots == nil {
+		if limit := s.settings.BlockAssembly.SendBatchMaxConcurrent; limit > 0 {
+			s.sendSlots = make(chan struct{}, limit)
+		}
+	}
+
+	return s.sendSlots
 }
 
 // inBlockContextKey marks a context whose block assembly hand-off is for a transaction that

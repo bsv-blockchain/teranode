@@ -1342,3 +1342,68 @@ func TestBackpressure_HeldAndQueueFillBothMustCoolToResume(t *testing.T) {
 	c.tick(ctx)
 	require.Equal(t, 1, consumer.resumeCount())
 }
+
+func TestBackpressure_HeldSmallLimitPausesAtTwoAndResumesAtOne(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	c.maxHeld = 2
+	pause, resume := c.heldThresholds()
+	require.Equal(t, int64(2), pause, "the pause threshold is at least 2 at a tiny limit")
+	require.Equal(t, int64(1), resume, "the resume count is one below it, so it is reachable with the coinbase placeholder held")
+
+	reader.setHeld(1, 2, 0)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.pauseCount(), "the placeholder alone is not a pause")
+
+	reader.setHeld(2, 2, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+	require.True(t, c.paused.Load())
+
+	reader.setHeld(1, 2, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "the held count fell below the pause threshold")
+	require.False(t, c.paused.Load())
+}
+
+func TestBackpressure_HeldResumesOnceTheCountFallsBelowPause(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+
+	reader.setHeld(900, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "at the pause threshold the count has not fallen below it")
+
+	reader.setHeld(899, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "a block connect that leaves the count below the pause threshold resumes, with no half-way hysteresis")
+}
+
+func TestBackpressure_HeldPauseLogsTheHeldNumbers(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	logger := &capturingLogger{}
+
+	initPrometheusMetrics()
+
+	cfg := testBackpressureConfig()
+	cfg.PauseQueueFillPercent = 90
+	c := newKafkaBackpressureController(logger, cfg, 0, reader, consumer)
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+
+	require.Equal(t, 1, consumer.pauseCount())
+	require.Contains(t, logger.joined(), "held 950/1000 >= 900 transactions", "a pause caused by the held count names the held numbers")
+	require.NotContains(t, logger.joined(), "queue fill 0/0 >= ", "and not queue-fill numbers that did not fire")
+}

@@ -151,6 +151,8 @@ func TestReorgBlocks_CatchUp_FiltersQueueAgainstEveryBlock(t *testing.T) {
 			require.NotContains(t, hashes, f.txA, "queued tx mined in an earlier catch-up block must not re-enter the subtrees")
 			require.NotContains(t, hashes, f.txB, "queued tx mined in the last catch-up block must not re-enter the subtrees")
 			require.Contains(t, hashes, f.txC, "queued tx mined in no block must be kept")
+			require.Equal(t, uint64(len(hashes)), f.stp.txCount.Load(), "the catch-up leaves the transaction count equal to what the subtrees hold") // nolint:gosec
+			require.Equal(t, int64(len(hashes)), f.stp.HeldCount(), "so the held total does not read low")                                           // nolint:gosec
 		})
 	}
 }

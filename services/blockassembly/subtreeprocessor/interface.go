@@ -50,24 +50,19 @@ type Interface interface {
 	//   - txInpoints: Transaction input points for each node for dependency tracking
 	AddBatch(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints)
 
-	// AddBatchIfRoom adds a batch only if the configured capacity bound would not
-	// be exceeded, reporting whether it did. When no bound is configured it never
-	// refuses and behaves identically to AddBatch.
+	// AddBatchBounded offers a batch under the configured capacity bounds and reports which
+	// bound refused it, if one did. When no bound is configured it never refuses and behaves
+	// identically to AddBatch. inBlock marks transactions that arrived inside a block: the
+	// in-memory transaction limit does not refuse them; the ingest queue bound still does.
 	//
 	// Parameters:
 	//   - nodes: The transaction nodes to add to processing
 	//   - txInpoints: Transaction input points for each node for dependency tracking
+	//   - inBlock: Whether the transactions arrived inside a block
 	//
 	// Returns:
-	//   - bool: true if the batch was enqueued, false if it was refused for room
-	AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool
-
-	// AddBatchInBlockIfRoom is AddBatchIfRoom for transactions that arrived inside a block.
-	// The in-memory transaction limit does not refuse them; the ingest queue bound still does.
-	//
-	// Returns:
-	//   - bool: true if the batch was enqueued, false if it was refused for room
-	AddBatchInBlockIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool
+	//   - Admission: Admitted, or the bound that refused the batch
+	AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission
 
 	// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted,
 	// and already in subtrees.
@@ -75,13 +70,6 @@ type Interface interface {
 	// Returns:
 	//   - int64: Transactions held in memory
 	HeldCount() int64
-
-	// HeldLimitExceededBy reports whether admitting n more transactions would put the
-	// transactions held in memory over the limit. It is false when there is no limit.
-	//
-	// Returns:
-	//   - bool: true if the in-memory limit is the bound that would refuse them
-	HeldLimitExceededBy(n int) bool
 
 	// Start starts the main processing goroutine for the SubtreeProcessor.
 	// This should be called after loading unmined transactions at startup to avoid race conditions.

@@ -403,21 +403,24 @@ func (c *kafkaBackpressureController) fillThresholds() (pause, resume int64) {
 }
 
 // heldThresholds returns the pause and resume counts for the transactions block assembly holds
-// in memory, or 0, 0 when there is no usable signal. It applies the same percentage and the same
-// half-way resume as fillThresholds, and is inert in the same cases: no reported limit, or the
-// percentage set to 0. With the default blockassembly_maxTransactionsInMemory=0 the controller
-// behaves exactly as it did before.
+// in memory, or 0, 0 when there is no usable signal. It applies the same percentage as
+// fillThresholds and is inert in the same cases: no reported limit, or the percentage set to 0.
+// With the default blockassembly_maxTransactionsInMemory=0 the controller behaves exactly as it
+// did before.
+//
+// It does not resume half-way as fillThresholds does. The held count steps down only when a
+// block connects and never reaches 0, because the coinbase placeholder stays, so a half-way
+// resume can be unreachable at a small limit. The consumer resumes as soon as the count is
+// below the pause threshold, and the pause threshold is at least 2 so that the resume count,
+// one below it, is at least 1.
 func (c *kafkaBackpressureController) heldThresholds() (pause, resume int64) {
 	if c.maxHeld <= 0 || c.cfg.PauseQueueFillPercent <= 0 {
 		return 0, 0
 	}
 
-	pause = c.maxHeld * int64(c.cfg.PauseQueueFillPercent) / 100
-	if pause < 1 {
-		pause = 1
-	}
+	pause = max(c.maxHeld*int64(c.cfg.PauseQueueFillPercent)/100, 2)
 
-	return pause, pause / 2
+	return pause, pause - 1
 }
 
 // evaluate applies the hysteresis decision to a freshly-read queue-head age and
@@ -443,9 +446,10 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	fillPause, fillResume := c.fillThresholds()
 	heldPause, heldResume := c.heldThresholds()
 	hotByHeld := heldPause > 0 && c.heldCount >= heldPause
+	hotByQueue := fillPause > 0 && c.queueCount >= fillPause
 	coolByHeld := heldPause == 0 || c.heldCount <= heldResume
 
-	hotByFill := (fillPause > 0 && c.queueCount >= fillPause) || hotByHeld
+	hotByFill := hotByQueue || hotByHeld
 	coolByFill := (fillPause == 0 || c.queueCount <= fillResume) && coolByHeld
 
 	// A genuine drain means BOTH predicates are cool, and it means the same thing
@@ -477,7 +481,7 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 			// Age takes the log line when both fired: the fill wording exists to name
 			// the regime age cannot see, and claiming it while age is also hot would
 			// be false.
-			c.pause(effectiveAge, hotByFill && !hotByAge, fillPause)
+			c.pause(effectiveAge, hotByFill && !hotByAge, hotByHeld && !hotByQueue, fillPause, heldPause)
 		}
 
 		return
@@ -499,15 +503,23 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 	}
 }
 
-// pause suspends the consumer and records the pause start. byFill says which
-// predicate fired, so the log names the reason an operator has to act on.
-func (c *kafkaBackpressureController) pause(age time.Duration, byFill bool, fillPause int64) {
+// pause suspends the consumer and records the pause start. byFill says a fill predicate fired
+// without the age predicate, and byHeld says that predicate was the held count alone, so the
+// log names the numbers an operator has to act on.
+func (c *kafkaBackpressureController) pause(age time.Duration, byFill, byHeld bool, fillPause, heldPause int64) {
 	c.consumer.PauseAll()
 	c.pauseStart = c.now()
 	c.paused.Store(true)
 
 	prometheusKafkaBackpressurePaused.Set(1)
 	prometheusKafkaBackpressurePauseTotal.Inc()
+
+	if byHeld {
+		c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (held %d/%d >= %d transactions, queue fill %d/%d, queue-head age %s still below pause watermark %s)",
+			c.heldCount, c.maxHeld, heldPause, c.queueCount, c.queueMaxItems, age, c.cfg.PauseQueueAge)
+
+		return
+	}
 
 	if byFill {
 		c.logger.Warnf("[Validator] kafka backpressure: paused tx consumer (queue fill %d/%d >= %d items, held %d/%d, queue-head age %s still below pause watermark %s)",

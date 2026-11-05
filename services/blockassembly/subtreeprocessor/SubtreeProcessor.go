@@ -3153,6 +3153,21 @@ func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints 
 	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints)
 }
 
+// AddBatchBounded offers a batch to the queue under the configured bounds and reports which
+// bound refused it, if one did. inBlock marks transactions that arrived inside a block: the
+// in-memory transaction limit does not refuse them and the ingest queue bound still does.
+//
+// Parameters:
+//   - nodes: Transaction nodes to add
+//   - txInpoints: Parent transaction references for each node
+//   - inBlock: Whether the transactions arrived inside a block
+//
+// Returns:
+//   - Admission: Admitted, or the bound that refused the batch
+func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission {
+	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock)
+}
+
 // AddBatchInBlockIfRoom is AddBatchIfRoom for transactions that arrived inside a block. The
 // in-memory transaction limit does not refuse them; the ingest queue bound still does. See
 // LockFreeQueue.enqueueBatchInBlockIfRoom for why.
@@ -3174,18 +3189,6 @@ func (stp *SubtreeProcessor) AddBatchInBlockIfRoom(nodes []subtreepkg.Node, txIn
 //   - int64: Transactions held in memory
 func (stp *SubtreeProcessor) HeldCount() int64 {
 	return stp.queue.heldCount()
-}
-
-// HeldLimitExceededBy reports whether admitting n more transactions would put the transactions
-// held in memory over the limit. It is false when there is no limit.
-//
-// Parameters:
-//   - n: Number of transactions that would be added
-//
-// Returns:
-//   - bool: true if the in-memory limit is the bound that would refuse them
-func (stp *SubtreeProcessor) HeldLimitExceededBy(n int) bool {
-	return stp.queue.heldWouldExceed(int64(n))
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
@@ -7241,11 +7244,7 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 		itemsProcessed += int64(len(batch.nodes))
 
 		if chunkItems >= maxItems {
-			err := fn(chunk)
-
-			stp.queue.settle(int64(chunkItems))
-
-			if err != nil {
+			if err := stp.runDrainChunk(chunk, chunkItems, fn); err != nil {
 				return err
 			}
 
@@ -7254,14 +7253,25 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	}
 
 	if len(chunk) > 0 {
-		err := fn(chunk)
-
-		stp.queue.settle(int64(chunkItems))
-
-		return err
+		return stp.runDrainChunk(chunk, chunkItems, fn)
 	}
 
 	return nil
+}
+
+// runDrainChunk hands one dequeued chunk to fn, then counts what fn placed and settles the
+// chunk. The count comes first: addNode does not add to txCount, so settling before it would
+// leave the placed transactions in none of the queue length, the unsettled count or the
+// subtrees count, and the held total would read low until the drain's final recount. The
+// settle is deferred so a panic in fn, which runHandlerWithRecover absorbs, cannot leave the
+// chunk counted as unsettled for good.
+func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn func(batches []*TxBatch) error) error {
+	defer func() {
+		stp.setTxCountFromSubtrees()
+		stp.queue.settle(int64(chunkItems))
+	}()
+
+	return fn(chunk)
 }
 
 // processCoinbaseUtxos processes UTXOs from coinbase transactions.

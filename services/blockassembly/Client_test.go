@@ -1052,6 +1052,80 @@ func TestClient_Store_BatchMode_MaxConcurrent(t *testing.T) {
 		"concurrent calls should never exceed maxConcurrent=2")
 }
 
+// The ingest batcher and the block-transaction batcher each take the configured limit, so
+// without a limiter they share, two of them allow twice the documented in-flight sends.
+func TestClient_Store_BothBatchersShareTheMaxConcurrentCap(t *testing.T) {
+	ctx := context.Background()
+	mockClient := &mockBlockAssemblyAPIClient{}
+
+	tSettings := &settings.Settings{
+		BatcherBackground: true,
+		BlockAssembly: settings.BlockAssemblySettings{
+			SendBatchSize:          1,
+			SendBatchTimeout:       10,
+			SendBatchMaxConcurrent: 2,
+		},
+	}
+
+	client := &Client{
+		client:    mockClient,
+		logger:    ulogger.TestLogger{},
+		settings:  tSettings,
+		batchSize: 1,
+		batchCh:   make(chan []*batchItem),
+	}
+
+	var inFlight, maxSeen, started atomic.Int32
+
+	gate := make(chan struct{})
+
+	mockClient.On("AddTxBatch", mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ mock.Arguments) {
+			current := inFlight.Add(1)
+
+			for {
+				old := maxSeen.Load()
+				if current <= old || maxSeen.CompareAndSwap(old, current) {
+					break
+				}
+			}
+
+			started.Add(1)
+			<-gate
+			inFlight.Add(-1)
+		}).
+		Return(&blockassembly_api.AddTxBatchResponse{}, nil)
+
+	client.batcher = client.newTxBatcher(ctx, "test_ingest", 1, 10*time.Millisecond)
+	client.inBlockBatcher = client.newTxBatcher(ctx, "test_in_block", 1, 10*time.Millisecond)
+
+	hash, _ := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	txInpoints := subtree.TxInpoints{}
+
+	for i := 0; i < 6; i++ {
+		go func() {
+			_, _ = client.Store(ctx, hash, 1000, 250, txInpoints)
+		}()
+
+		go func() {
+			_, _ = client.Store(ContextWithInBlock(ctx), hash, 1000, 250, txInpoints)
+		}()
+	}
+
+	require.Eventually(t, func() bool { return inFlight.Load() == 2 }, 2*time.Second, 5*time.Millisecond, "the cap is reached")
+
+	// Give a second batcher the time it needs to start a send it should not be allowed.
+	time.Sleep(200 * time.Millisecond)
+
+	require.Equal(t, int32(2), inFlight.Load(), "both batchers together hold the cap, not the cap each")
+	require.Equal(t, int32(2), started.Load())
+
+	close(gate)
+
+	require.Eventually(t, func() bool { return started.Load() == 12 }, 5*time.Second, 10*time.Millisecond, "every batch is sent once slots free")
+	require.LessOrEqual(t, maxSeen.Load(), int32(2), "sends in flight never exceeded the configured cap across both batchers")
+}
+
 func TestNewClientWithAddress_ConfigErrors(t *testing.T) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}

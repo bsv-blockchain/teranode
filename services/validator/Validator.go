@@ -1117,8 +1117,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// idempotent success and must not mutate lock state. It does not
 			// re-drive the block-assembly handoff.
 			//
-			// A queue-full shed no longer leaves a record behind (see unwindShed),
-			// so reaching here means a genuine duplicate rather than shed residue.
+			// A shed of a mempool or Kafka submission leaves no record behind (see
+			// unwindShed), but a shed of a block-context transaction does: it stays
+			// Locked and unmined outside the template. Reaching here therefore means
+			// a genuine duplicate, or a resubmit of a record left that way, which
+			// takes the locked-and-unmined branch below and is counted there.
 			// True but incomplete: reaching here DURING another submission's shed
 			// window means the success returned below can later be undone by that
 			// shed's unwind, which deletes the very record this call just read. That
@@ -1578,8 +1581,14 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			}
 
 			// The block-context arm above clears err deliberately: the transaction
-			// carries on through the txmeta publish and the two-phase commit, so it
-			// ends fully accepted and unlocked, only without a template entry.
+			// carries on through the txmeta publish and the two-phase commit, but it
+			// is not delivered, so it stays Locked and has no template entry.
+			//
+			// Residual: subtree validation also sets InBlock for transactions of
+			// announced subtrees that may never be mined. Such a record stays Locked
+			// until the next unmined reload, and an ordinary child of it is refused
+			// with TX_LOCKED for that whole time. A block's setMined clears the lock
+			// only for transactions that a block actually mines.
 			if err != nil {
 				span.RecordError(err)
 
@@ -1617,10 +1626,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 // isRetryableShed reports whether err is a block assembly shed worth retrying in place: the
 // ingest queue was full, which clears within a few drain passes. The in-memory transaction
-// limit also arrives as ErrThresholdExceeded, marked with ErrServiceUnavailable. It clears when a
-// block connects, so a retry cannot succeed inside the retry budget and is skipped.
+// limit also arrives as ErrThresholdExceeded, marked in its error data (see
+// blockassembly.IsHeldLimitShed). It clears when a block connects, so a retry cannot succeed
+// inside the retry budget and is skipped.
 func isRetryableShed(err error) bool {
-	return errors.Is(err, errors.ErrThresholdExceeded) && !errors.Is(err, errors.ErrServiceUnavailable)
+	return errors.Is(err, errors.ErrThresholdExceeded) && !blockassembly.IsHeldLimitShed(err)
 }
 
 // warnInBlockShed warns that a block transaction was accepted without a template entry. While the
