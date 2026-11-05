@@ -189,16 +189,19 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 }
 
 // isUnwinnableSpendError reports whether a spend error means the tx can never be
-// completed: an input is spent by another tx, conflicting, frozen or does not match.
+// completed: an input is spent by another tx, conflicting, frozen, does not match or names
+// an output that does not exist.
 func isUnwinnableSpendError(err error) bool {
 	return errors.Is(err, errors.ErrSpent) ||
+		errors.Is(err, errors.ErrTxNotFound) ||
 		errors.Is(err, errors.ErrTxConflicting) ||
 		errors.Is(err, errors.ErrFrozen) ||
 		errors.Is(err, errors.ErrUtxoHashMismatch)
 }
 
 // finishRollback completes a rollback a crashed owner left marked: it unspends every input of
-// tx, tolerating parents that are already gone, then deletes the record. Both steps are
+// tx, skipping inputs the tx can never have spent (a parent that is already gone, a vout that
+// does not exist or a UTXO hash that does not match), then deletes the record. Both steps are
 // idempotent. The record is rolling back, so nothing can finalize it meanwhile.
 func (s *Server) finishRollback(ctx context.Context, tx *bt.Tx) error {
 	spends, err := utxo.GetSpends(tx)
