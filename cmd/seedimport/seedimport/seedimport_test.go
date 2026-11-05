@@ -22,9 +22,11 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
@@ -70,6 +72,39 @@ func TestLoadWrapperMakesOutputsSpendable(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int(utxo.Status_OK), resp.Status, "vout %d should be spendable", vout)
 		require.Nil(t, resp.SpendingData)
+	}
+}
+
+// TestLoadWrapperCohortStamping checks the label loadWrapper writes: with
+// CohortStamping on, imported records carry the Historical sentinel, and with
+// it off the label stays Unset.
+func TestLoadWrapperCohortStamping(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stamping bool
+		want     cohort.ID
+	}{
+		{name: "on", stamping: true, want: cohort.Historical},
+		{name: "off", stamping: false, want: cohort.Unset},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := newTestUTXOStore(t)
+
+			txid := chainhash.HashH([]byte("cohort-wrapper-" + tc.name))
+
+			w := &utxopersister.UTXOWrapper{
+				TxID:   txid,
+				Height: 100,
+				UTXOs:  []*utxopersister.UTXO{{Index: 0, Value: 1000, Script: []byte{0x51}}},
+			}
+
+			require.NoError(t, loadWrapper(ctx, store, w, 42, tc.stamping))
+
+			got, err := store.Get(ctx, &txid, fields.Cohort)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cohort.ID(got.Cohort))
+		})
 	}
 }
 
@@ -305,6 +340,44 @@ func TestRunLoadsAndVerifies(t *testing.T) {
 	respA, err := utxoStore.GetSpend(ctx, &utxo.Spend{TxID: &txA, Vout: 0})
 	require.NoError(t, err)
 	require.Equal(t, int(utxo.Status_IMMATURE), respA.Status)
+}
+
+// TestRunCarriesCohortStamping checks that Config.CohortStamping reaches the
+// store through Run, not only through loadWrapper: on, every imported record
+// carries the Historical sentinel; off, the label stays Unset.
+func TestRunCarriesCohortStamping(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stamping bool
+		want     cohort.ID
+	}{
+		{name: "on", stamping: true, want: cohort.Historical},
+		{name: "off", stamping: false, want: cohort.Unset},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			wrappers := sampleWrappers()
+			seedStore, blockHash, trustedKey := buildSeed(t, wrappers, 101)
+			utxoStore := newTestUTXOStore(t)
+
+			require.NoError(t, Run(ctx, ulogger.TestLogger{}, Config{
+				SeedStore:      seedStore,
+				UTXOStore:      utxoStore,
+				Lookup:         stubLookup{id: 7, height: 101, onMain: true},
+				TrustedKeys:    [][]byte{trustedKey},
+				BlockHash:      blockHash,
+				NetworkMagic:   testNetMagic,
+				CohortStamping: tc.stamping,
+			}))
+
+			for _, w := range wrappers {
+				got, err := utxoStore.Get(ctx, &w.TxID, fields.Cohort)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, cohort.ID(got.Cohort), "tx %s", w.TxID)
+			}
+		})
+	}
 }
 
 func TestRunRejectsUntrustedKey(t *testing.T) {

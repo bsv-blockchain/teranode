@@ -26,6 +26,7 @@ import (
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/bsv-blockchain/teranode/util/uaerospike"
 	"github.com/stretchr/testify/assert"
@@ -1597,7 +1598,7 @@ func TestSmokeTests(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
-	_, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
 
 	t.Cleanup(func() {
 		deferFn()
@@ -1675,6 +1676,29 @@ func TestSmokeTests(t *testing.T) {
 		require.NoError(t, err)
 
 		tests.CohortRoundTrip(t, store)
+	})
+
+	// A transaction with more outputs than utxoBatchSize is split across a
+	// master record and pagination records and stored by a separate goroutine
+	// (create.go, the len(binsToStore) > 1 branch). The cohort bin lives on the
+	// master record, so it must survive that path and read back.
+	t.Run("aerospike_cohort_multi_record", func(t *testing.T) {
+		bigTx := createTransactionWithOutputs(tSettings.UtxoStore.UtxoBatchSize + 1)
+		stamp := cohort.ID(1_700_000_000)
+
+		_, err := store.Create(ctx, bigTx, 0, utxo.WithCohort(stamp))
+		require.NoError(t, err)
+
+		bigTxKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(bigTx.TxIDChainHash(), 0))
+		require.NoError(t, err)
+
+		rec, err := client.Get(util.GetAerospikeReadPolicy(tSettings), bigTxKey)
+		require.NoError(t, err)
+		require.Equal(t, 1, rec.Bins[fields.TotalExtraRecs.String()], "pre-condition: the tx must span a pagination record")
+
+		got, err := store.Get(ctx, bigTx.TxIDChainHash(), fields.Cohort)
+		require.NoError(t, err)
+		require.Equal(t, uint32(stamp), got.Cohort, "the cohort must survive the multi-record create")
 	})
 
 	t.Run("aerospike_spend_and_create_create_only", func(t *testing.T) {

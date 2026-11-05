@@ -60,3 +60,20 @@ func TestMockStoreAllocateSplitCohortKeysOnTheNumericID(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, a, b, "a different source cohort in the same block is a different allocation")
 }
+
+// TestMockStoreAllocateSplitCohortRejectsUnsplittableSources proves the mock
+// refuses the unset and sentinel sources with InvalidArgument, as the SQL store
+// does, and records no allocation for them.
+func TestMockStoreAllocateSplitCohortRejectsUnsplittableSources(t *testing.T) {
+	m := &MockStore{}
+	ctx := context.Background()
+	hash := &chainhash.Hash{0x01}
+
+	for _, source := range []cohort.ID{cohort.Unset, cohort.Historical, cohort.BornMined} {
+		_, err := m.AllocateSplitCohort(ctx, source, hash)
+		require.Error(t, err, "splitting %s must be refused", source)
+		require.True(t, errors.Is(err, errors.ErrInvalidArgument), "splitting %s must be an invalid argument, got %v", source, err)
+	}
+
+	require.Empty(t, m.SplitAllocations)
+}

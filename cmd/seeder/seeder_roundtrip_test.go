@@ -11,8 +11,10 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/utxopersister"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/cohort"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,7 +70,7 @@ func writeCompleteSnapshotFile(t testing.TB, wrappers []*utxopersister.UTXOWrapp
 // processUTXOs uses: readUTXOFrames feeds a channel of frames that are decoded and passed to processUTXO
 // drains into store, exactly as worker() does, but without the extra worker
 // pool machinery that's orthogonal to file-format correctness.
-func importSnapshotFile(t *testing.T, path string, store *utxosql.Store) error {
+func importSnapshotFile(t *testing.T, path string, store *utxosql.Store, cohortStamping bool) error {
 	t.Helper()
 
 	f, reader := openForReading(t, path)
@@ -86,7 +88,7 @@ func importSnapshotFile(t *testing.T, path string, store *utxosql.Store) error {
 	for frame := range frameCh {
 		w, err := utxopersister.DecodeUTXOWrapperFrame(frame)
 		if err == nil {
-			err = processUTXO(context.Background(), store, w, nil, false, false)
+			err = processUTXO(context.Background(), store, w, nil, false, cohortStamping)
 		}
 
 		if err != nil && processErr == nil {
@@ -136,7 +138,7 @@ func TestSeederImport_RoundTripsRealSnapshotFile(t *testing.T) {
 
 	path := writeCompleteSnapshotFile(t, wrappers)
 
-	require.NoError(t, importSnapshotFile(t, path, store))
+	require.NoError(t, importSnapshotFile(t, path, store, false))
 
 	gotA, err := store.Get(ctx, &txA)
 	require.NoError(t, err)
@@ -207,7 +209,7 @@ func TestSeederImport_CompleteFile_FinishesCleanly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "complete.utxo-set")
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 
-	require.NoError(t, importSnapshotFile(t, path, store))
+	require.NoError(t, importSnapshotFile(t, path, store, false))
 
 	// The two wrappers built by buildSnapshotWrappers use TxID[0] = 0x01/0x02.
 	var txid1, txid2 chainhash.Hash
@@ -237,4 +239,37 @@ func TestSeederImport_CompleteFile_FinishesCleanly(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, txCount, gotTxCount)
 	require.Equal(t, utxoCount, gotUTXOCount)
+}
+
+// TestSeederImport_CohortStamping drives a snapshot file through the seeder's
+// import path with UtxoStore.CohortStamping on and off. On, every imported
+// record carries the Historical sentinel; off, the label stays Unset.
+func TestSeederImport_CohortStamping(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		stamping bool
+		want     cohort.ID
+	}{
+		{name: "on", stamping: true, want: cohort.Historical},
+		{name: "off", stamping: false, want: cohort.Unset},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := newTestUtxoStore(ctx, t)
+
+			txid := chainhash.HashH([]byte("cohort-stamping-" + tc.name))
+
+			path := writeCompleteSnapshotFile(t, []*utxopersister.UTXOWrapper{{
+				TxID:   txid,
+				Height: 200,
+				UTXOs:  []*utxopersister.UTXO{{Index: 0, Value: 1000, Script: []byte{0x51}}},
+			}})
+
+			require.NoError(t, importSnapshotFile(t, path, store, tc.stamping))
+
+			got, err := store.Get(ctx, &txid, fields.Cohort)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cohort.ID(got.Cohort))
+		})
+	}
 }

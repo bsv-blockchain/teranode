@@ -274,85 +274,101 @@ func (s *SQL) AllocateSplitCohort(ctx context.Context, sourceCohort cohort.ID, b
 // allocateSplitCohortOnce runs one allocation attempt in its own transaction. It
 // returns ok=false when the insert was swallowed because another allocation took
 // the number first, in which case the caller retries and recomputes.
+//
+// The transaction runs through RetryTx, so a lock error (SQLite BUSY or LOCKED,
+// a Postgres serialization failure or deadlock) rolls back and re-runs the whole
+// attempt instead of surfacing as a failed insert. The closure returns driver
+// errors unwrapped so RetryTx can recognise them, and the outcome is reset at the
+// top of every run because a retried run starts from scratch.
 func (s *SQL) allocateSplitCohortOnce(ctx context.Context, sourceCohort cohort.ID, hashBytes []byte) (cohort.ID, bool, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return cohort.Unset, false, errors.NewStorageError("failed to begin split cohort allocation", err)
-	}
+	var (
+		allocated cohort.ID
+		ok        bool
+		step      string
+	)
 
-	committed := false
-
-	defer func() {
-		if !committed {
-			_ = tx.Rollback()
-		}
-	}()
-
-	// Already allocated for this exact pair? Then that number is the answer,
-	// however many times we are asked.
-	var existing uint64
-
-	err = tx.QueryRowContext(ctx,
-		`SELECT new_cohort FROM cohort_split_allocations WHERE source_cohort = $1 AND block_hash = $2`,
-		uint64(sourceCohort), hashBytes,
-	).Scan(&existing)
-
-	switch {
-	case err == nil:
-		committed = true
-		if commitErr := tx.Commit(); commitErr != nil {
-			return cohort.Unset, false, errors.NewStorageError("failed to commit split cohort read", commitErr)
-		}
-
-		return cohort.ID(existing), true, nil
-	case errors.Is(err, sql.ErrNoRows):
-		// Fall through and allocate a fresh number.
-	default:
-		return cohort.Unset, false, errors.NewStorageError("failed to read split cohort allocation", err)
-	}
-
-	next, err := nextSyntheticCohort(ctx, tx)
-	if err != nil {
-		return cohort.Unset, false, err
-	}
-
-	var q string
+	var insertQ string
 	if s.engine == util.Postgres {
 		// No conflict target: the row can collide either on the (source, block)
 		// primary key or on the unique new_cohort index, and both mean somebody
 		// else got there first.
-		q = `INSERT INTO cohort_split_allocations (source_cohort, block_hash, new_cohort) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`
+		insertQ = `INSERT INTO cohort_split_allocations (source_cohort, block_hash, new_cohort) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING`
 	} else {
-		q = `INSERT OR IGNORE INTO cohort_split_allocations (source_cohort, block_hash, new_cohort) VALUES ($1,$2,$3)`
+		insertQ = `INSERT OR IGNORE INTO cohort_split_allocations (source_cohort, block_hash, new_cohort) VALUES ($1,$2,$3)`
 	}
 
-	if _, err = tx.ExecContext(ctx, q, uint64(sourceCohort), hashBytes, uint64(next)); err != nil {
-		return cohort.Unset, false, errors.NewStorageError("failed to insert split cohort allocation", err)
-	}
+	const selectQ = `SELECT new_cohort FROM cohort_split_allocations WHERE source_cohort = $1 AND block_hash = $2`
 
-	// Re-read rather than trusting the insert: if it was swallowed because a
-	// concurrent allocation took our number, the row is not ours and the caller
-	// has to try again with a recomputed number.
-	var stored uint64
+	err := s.db.RetryTx(ctx, nil, func(tx *sql.Tx) error {
+		allocated, ok, step = cohort.Unset, false, ""
 
-	err = tx.QueryRowContext(ctx,
-		`SELECT new_cohort FROM cohort_split_allocations WHERE source_cohort = $1 AND block_hash = $2`,
-		uint64(sourceCohort), hashBytes,
-	).Scan(&stored)
-
-	switch {
-	case err == nil:
-		committed = true
-		if commitErr := tx.Commit(); commitErr != nil {
-			return cohort.Unset, false, errors.NewStorageError("failed to commit split cohort allocation", commitErr)
+		// On Postgres, take a lock that conflicts with itself before reading
+		// MAX(new_cohort). Without it every concurrent allocation reads the same
+		// MAX, picks the same number and all but one lose, so N racers need N
+		// rounds and run out of attempts. Readers are not blocked. SQLite already
+		// runs one writer at a time, and a lock error there is retried by RetryTx.
+		if s.engine == util.Postgres {
+			if _, err := tx.ExecContext(ctx, `LOCK TABLE cohort_split_allocations IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+				step = "lock cohort_split_allocations"
+				return err
+			}
 		}
 
-		return cohort.ID(stored), true, nil
-	case errors.Is(err, sql.ErrNoRows):
-		return cohort.Unset, false, nil
-	default:
-		return cohort.Unset, false, errors.NewStorageError("failed to confirm split cohort allocation", err)
+		// Already allocated for this exact pair? Then that number is the answer,
+		// however many times we are asked.
+		var existing uint64
+
+		err := tx.QueryRowContext(ctx, selectQ, uint64(sourceCohort), hashBytes).Scan(&existing)
+
+		switch {
+		case err == nil:
+			allocated, ok = cohort.ID(existing), true
+			return nil
+		case errors.Is(err, sql.ErrNoRows):
+			// Fall through and allocate a fresh number.
+		default:
+			step = "read split cohort allocation"
+			return err
+		}
+
+		next, err := nextSyntheticCohort(ctx, tx)
+		if err != nil {
+			step = "pick the next synthetic cohort"
+			return err
+		}
+
+		if _, err = tx.ExecContext(ctx, insertQ, uint64(sourceCohort), hashBytes, uint64(next)); err != nil {
+			step = "insert split cohort allocation"
+			return err
+		}
+
+		// Re-read rather than trusting the insert: if it was swallowed because a
+		// concurrent allocation took our number, the row is not ours and the
+		// caller has to try again with a recomputed number.
+		var stored uint64
+
+		err = tx.QueryRowContext(ctx, selectQ, uint64(sourceCohort), hashBytes).Scan(&stored)
+
+		switch {
+		case err == nil:
+			allocated, ok = cohort.ID(stored), true
+			return nil
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		default:
+			step = "confirm split cohort allocation"
+			return err
+		}
+	})
+	if err != nil {
+		if step == "" {
+			step = "run split cohort allocation"
+		}
+
+		return cohort.Unset, false, errors.NewStorageError("failed to %s", step, err)
 	}
+
+	return allocated, ok, nil
 }
 
 // nextSyntheticCohort returns the lowest unused synthetic cohort number, which

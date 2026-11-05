@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"net/url"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -31,6 +32,38 @@ func newCohortMapTestStore(t *testing.T) *SQL {
 	waitForStartupRebuild(t, s)
 
 	return s
+}
+
+// newCohortMapPostgresTestStore is newCohortMapTestStore on a throwaway Postgres
+// container, so the Postgres branches of the cohort SQL run too. It skips under
+// -short and when no container runtime is available.
+func newCohortMapPostgresTestStore(t *testing.T) *SQL {
+	t.Helper()
+
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, _ := newSchemaTestDB(t)
+
+	s, err := New(ulogger.TestLogger{}, dbURL, test.CreateBaseTestSettings(t))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	waitForStartupRebuild(t, s)
+
+	return s
+}
+
+// forEachCohortMapEngine runs fn once against SQLite and once against Postgres.
+// The two engines take different SQL for every cohort write (INSERT OR IGNORE
+// against ON CONFLICT DO NOTHING), so a property the design depends on is only
+// pinned once both have passed it.
+func forEachCohortMapEngine(t *testing.T, fn func(t *testing.T, s *SQL)) {
+	t.Helper()
+
+	t.Run("sqlite", func(t *testing.T) { fn(t, newCohortMapTestStore(t)) })
+	t.Run("postgres", func(t *testing.T) { fn(t, newCohortMapPostgresTestStore(t)) })
 }
 
 // storeCohortTestBlock stores one block and returns its blocks-table id.
@@ -80,41 +113,42 @@ func dumpCohortMap(t *testing.T, s *SQL) []rawCohortMapRow {
 // on for crash safety: re-recording a row that is already there neither errors
 // nor changes what is stored, so replaying a block's map writes is a no-op.
 func TestCohortMap_InsertIsInsertOnly(t *testing.T) {
-	s := newCohortMapTestStore(t)
-	ctx := context.Background()
+	forEachCohortMapEngine(t, func(t *testing.T, s *SQL) {
+		ctx := context.Background()
 
-	blockID := storeCohortTestBlock(t, s, block1)
+		blockID := storeCohortTestBlock(t, s, block1)
 
-	c := cohort.GenesisTime + 1000
+		c := cohort.GenesisTime + 1000
 
-	require.NoError(t, s.RecordCohortMap(ctx, []model.CohortMapRow{{
-		Cohort:      c,
-		BlockID:     blockID,
-		MemberCount: 42,
-		Verified:    true,
-	}}))
+		require.NoError(t, s.RecordCohortMap(ctx, []model.CohortMapRow{{
+			Cohort:      c,
+			BlockID:     blockID,
+			MemberCount: 42,
+			Verified:    true,
+		}}))
 
-	before := dumpCohortMap(t, s)
-	require.Len(t, before, 1)
+		before := dumpCohortMap(t, s)
+		require.Len(t, before, 1)
 
-	// Re-record the same (cohort, block) pair with different payload. The row
-	// must survive exactly as first written, and the call must not error.
-	require.NoError(t, s.RecordCohortMap(ctx, []model.CohortMapRow{{
-		Cohort:      c,
-		BlockID:     blockID,
-		MemberCount: 999,
-		Verified:    false,
-	}}))
+		// Re-record the same (cohort, block) pair with different payload. The row
+		// must survive exactly as first written, and the call must not error.
+		require.NoError(t, s.RecordCohortMap(ctx, []model.CohortMapRow{{
+			Cohort:      c,
+			BlockID:     blockID,
+			MemberCount: 999,
+			Verified:    false,
+		}}))
 
-	require.Equal(t, before, dumpCohortMap(t, s), "a repeated insert must leave the row untouched")
+		require.Equal(t, before, dumpCohortMap(t, s), "a repeated insert must leave the row untouched")
 
-	blocks, err := s.CohortBlocks(ctx, []cohort.ID{c})
-	require.NoError(t, err)
-	require.Len(t, blocks[c], 1)
-	require.Equal(t, uint64(42), blocks[c][0].MemberCount)
-	require.True(t, blocks[c][0].Verified)
-	require.Equal(t, blockID, blocks[c][0].BlockID)
-	require.Equal(t, block1.Hash().String(), blocks[c][0].Hash.String())
+		blocks, err := s.CohortBlocks(ctx, []cohort.ID{c})
+		require.NoError(t, err)
+		require.Len(t, blocks[c], 1)
+		require.Equal(t, uint64(42), blocks[c][0].MemberCount)
+		require.True(t, blocks[c][0].Verified)
+		require.Equal(t, blockID, blocks[c][0].BlockID)
+		require.Equal(t, block1.Hash().String(), blocks[c][0].Hash.String())
+	})
 }
 
 // TestCohortMap_CohortMappedToTwoBlocks checks that a cohort straddling two
@@ -217,36 +251,37 @@ func TestCohortMap_RecordBatchesLargeInput(t *testing.T) {
 // number handed out for one (source cohort, block) split is stable: a retry
 // after a crash has to get the number the first attempt took, not a second one.
 func TestCohortMap_AllocateSplitCohortIsIdempotent(t *testing.T) {
-	s := newCohortMapTestStore(t)
-	ctx := context.Background()
+	forEachCohortMapEngine(t, func(t *testing.T, s *SQL) {
+		ctx := context.Background()
 
-	source := cohort.GenesisTime + 4000
+		source := cohort.GenesisTime + 4000
 
-	first, err := s.AllocateSplitCohort(ctx, source, block1.Hash())
-	require.NoError(t, err)
-	require.True(t, first.IsSynthetic(), "allocated %s must be in the synthetic range", first)
+		first, err := s.AllocateSplitCohort(ctx, source, block1.Hash())
+		require.NoError(t, err)
+		require.True(t, first.IsSynthetic(), "allocated %s must be in the synthetic range", first)
 
-	again, err := s.AllocateSplitCohort(ctx, source, block1.Hash())
-	require.NoError(t, err)
-	require.Equal(t, first, again, "the same (source, block) pair must always get the same number")
+		again, err := s.AllocateSplitCohort(ctx, source, block1.Hash())
+		require.NoError(t, err)
+		require.Equal(t, first, again, "the same (source, block) pair must always get the same number")
 
-	// A different block for the same source is a different split.
-	otherBlock, err := s.AllocateSplitCohort(ctx, source, block2.Hash())
-	require.NoError(t, err)
-	require.True(t, otherBlock.IsSynthetic())
-	require.NotEqual(t, first, otherBlock)
+		// A different block for the same source is a different split.
+		otherBlock, err := s.AllocateSplitCohort(ctx, source, block2.Hash())
+		require.NoError(t, err)
+		require.True(t, otherBlock.IsSynthetic())
+		require.NotEqual(t, first, otherBlock)
 
-	// A different source against the same block is a different split too.
-	otherSource, err := s.AllocateSplitCohort(ctx, cohort.GenesisTime+4001, block1.Hash())
-	require.NoError(t, err)
-	require.True(t, otherSource.IsSynthetic())
-	require.NotEqual(t, first, otherSource)
-	require.NotEqual(t, otherBlock, otherSource)
+		// A different source against the same block is a different split too.
+		otherSource, err := s.AllocateSplitCohort(ctx, cohort.GenesisTime+4001, block1.Hash())
+		require.NoError(t, err)
+		require.True(t, otherSource.IsSynthetic())
+		require.NotEqual(t, first, otherSource)
+		require.NotEqual(t, otherBlock, otherSource)
 
-	// A synthetic cohort can itself be split again.
-	nested, err := s.AllocateSplitCohort(ctx, first, block3.Hash())
-	require.NoError(t, err)
-	require.True(t, nested.IsSynthetic())
+		// A synthetic cohort can itself be split again.
+		nested, err := s.AllocateSplitCohort(ctx, first, block3.Hash())
+		require.NoError(t, err)
+		require.True(t, nested.IsSynthetic())
+	})
 }
 
 // TestCohortMap_AllocateSplitCohortRejectsUnsplittableSources checks the guard
@@ -272,57 +307,58 @@ func TestCohortMap_AllocateSplitCohortRejectsUnsplittableSources(t *testing.T) {
 // rewritten or deleted. If this test ever fails, the design's claim that a
 // reorg costs no per-transaction work has failed with it.
 func TestCohortMap_ReorgFlipsTheAnswerWithoutTouchingTheMap(t *testing.T) {
-	s := newCohortMapTestStore(t)
-	ctx := context.Background()
+	forEachCohortMapEngine(t, func(t *testing.T, s *SQL) {
+		ctx := context.Background()
 
-	// A small chain: genesis -> block1 -> block2 -> block3.
-	storeCohortTestBlock(t, s, block1)
-	storeCohortTestBlock(t, s, block2)
-	block3ID := storeCohortTestBlock(t, s, block3)
+		// A small chain: genesis -> block1 -> block2 -> block3.
+		storeCohortTestBlock(t, s, block1)
+		storeCohortTestBlock(t, s, block2)
+		block3ID := storeCohortTestBlock(t, s, block3)
 
-	c := cohort.GenesisTime + 6000
+		c := cohort.GenesisTime + 6000
 
-	require.NoError(t, s.RecordCohortMap(ctx, []model.CohortMapRow{{
-		Cohort:      c,
-		BlockID:     block3ID,
-		MemberCount: 5,
-		Verified:    true,
-	}}))
+		require.NoError(t, s.RecordCohortMap(ctx, []model.CohortMapRow{{
+			Cohort:      c,
+			BlockID:     block3ID,
+			MemberCount: 5,
+			Verified:    true,
+		}}))
 
-	before, err := s.CohortBlocks(ctx, []cohort.ID{c})
-	require.NoError(t, err)
-	require.Len(t, before[c], 1)
-	require.True(t, before[c][0].OnMainChain, "pre-condition: block3 is on the main chain")
-	require.False(t, before[c][0].Invalid, "pre-condition: block3 is valid")
+		before, err := s.CohortBlocks(ctx, []cohort.ID{c})
+		require.NoError(t, err)
+		require.Len(t, before[c], 1)
+		require.True(t, before[c][0].OnMainChain, "pre-condition: block3 is on the main chain")
+		require.False(t, before[c][0].Invalid, "pre-condition: block3 is valid")
 
-	mapBefore := dumpCohortMap(t, s)
-	require.Len(t, mapBefore, 1)
+		mapBefore := dumpCohortMap(t, s)
+		require.Len(t, mapBefore, 1)
 
-	// Take block3 off the main chain.
-	_, err = s.InvalidateBlock(ctx, block3.Hash())
-	require.NoError(t, err)
-	require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "block3 must be off the main chain")
+		// Take block3 off the main chain.
+		_, err = s.InvalidateBlock(ctx, block3.Hash())
+		require.NoError(t, err)
+		require.False(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "block3 must be off the main chain")
 
-	after, err := s.CohortBlocks(ctx, []cohort.ID{c})
-	require.NoError(t, err)
-	require.Len(t, after[c], 1)
-	require.False(t, after[c][0].OnMainChain, "the cohort's answer must flip with the block's flag")
-	require.True(t, after[c][0].Invalid)
+		after, err := s.CohortBlocks(ctx, []cohort.ID{c})
+		require.NoError(t, err)
+		require.Len(t, after[c], 1)
+		require.False(t, after[c][0].OnMainChain, "the cohort's answer must flip with the block's flag")
+		require.True(t, after[c][0].Invalid)
 
-	// The map itself is untouched: same row count, same contents.
-	require.Equal(t, mapBefore, dumpCohortMap(t, s), "a reorg must not write to cohort_map")
+		// The map itself is untouched: same row count, same contents.
+		require.Equal(t, mapBefore, dumpCohortMap(t, s), "a reorg must not write to cohort_map")
 
-	// And it flips back when the block returns, still with no writes.
-	require.NoError(t, s.RevalidateBlock(ctx, block3.Hash()))
-	require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "block3 must be back on the main chain")
+		// And it flips back when the block returns, still with no writes.
+		require.NoError(t, s.RevalidateBlock(ctx, block3.Hash()))
+		require.True(t, getOnMainChain(t, s, block3.Hash().CloneBytes()), "block3 must be back on the main chain")
 
-	restored, err := s.CohortBlocks(ctx, []cohort.ID{c})
-	require.NoError(t, err)
-	require.Len(t, restored[c], 1)
-	require.True(t, restored[c][0].OnMainChain)
-	require.False(t, restored[c][0].Invalid)
+		restored, err := s.CohortBlocks(ctx, []cohort.ID{c})
+		require.NoError(t, err)
+		require.Len(t, restored[c], 1)
+		require.True(t, restored[c][0].OnMainChain)
+		require.False(t, restored[c][0].Invalid)
 
-	require.Equal(t, mapBefore, dumpCohortMap(t, s), "revalidation must not write to cohort_map either")
+		require.Equal(t, mapBefore, dumpCohortMap(t, s), "revalidation must not write to cohort_map either")
+	})
 }
 
 // TestCohortMap_DeletingABlockCascadesItsRowsAway checks that the only way a
@@ -401,4 +437,127 @@ func TestCohortMap_AllocateSplitCohortNumbersAreDistinct(t *testing.T) {
 	}
 
 	require.Len(t, seen, pairs)
+}
+
+// TestCohortMap_AllocateSplitCohortConcurrent runs allocations for distinct
+// (source, block) pairs at the same time and checks that every pair gets its own
+// synthetic number and its own row. Two racing allocations compute the same
+// candidate number; the loser's insert is swallowed by the unique index and it
+// has to retry, and on SQLite a racer can also hit a lock error that RetryTx
+// absorbs. Either path going wrong shows up here as an error or a duplicate.
+func TestCohortMap_AllocateSplitCohortConcurrent(t *testing.T) {
+	forEachCohortMapEngine(t, func(t *testing.T, s *SQL) {
+		ctx := context.Background()
+
+		const workers = 16
+
+		results := make([]cohort.ID, workers)
+		errs := make([]error, workers)
+
+		var wg sync.WaitGroup
+
+		start := make(chan struct{})
+
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+
+			go func(i int) {
+				defer wg.Done()
+
+				<-start
+
+				hash := chainhash.HashH([]byte{0xC0, byte(i)})
+				results[i], errs[i] = s.AllocateSplitCohort(ctx, cohort.GenesisTime+cohort.ID(11000+i), &hash) //nolint:gosec // i is bounded by workers
+			}(i)
+		}
+
+		close(start)
+		wg.Wait()
+
+		seen := make(map[cohort.ID]struct{}, workers)
+
+		for i := 0; i < workers; i++ {
+			require.NoError(t, errs[i], "allocation %d", i)
+			require.True(t, results[i].IsSynthetic(), "allocation %d returned %s", i, results[i])
+
+			_, duplicate := seen[results[i]]
+			require.False(t, duplicate, "synthetic number %s handed out twice", results[i])
+
+			seen[results[i]] = struct{}{}
+		}
+
+		var rows int
+		require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM cohort_split_allocations`).Scan(&rows))
+		require.Equal(t, workers, rows)
+	})
+}
+
+// TestCohortMap_AllocateSplitCohortExhausted checks the guard at the top of the
+// synthetic range: once LastSynthetic has been handed out, the next allocation
+// must fail and must not write a row, rather than wrapping into the clock range.
+func TestCohortMap_AllocateSplitCohortExhausted(t *testing.T) {
+	s := newCohortMapTestStore(t)
+	ctx := context.Background()
+
+	full := chainhash.HashH([]byte("exhausted"))
+
+	_, err := s.db.Exec(
+		`INSERT INTO cohort_split_allocations (source_cohort, block_hash, new_cohort) VALUES ($1,$2,$3)`,
+		uint64(cohort.GenesisTime+12000), full.CloneBytes(), uint64(cohort.LastSynthetic),
+	)
+	require.NoError(t, err)
+
+	next := chainhash.HashH([]byte("one too many"))
+
+	_, err = s.AllocateSplitCohort(ctx, cohort.GenesisTime+12001, &next)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "exhausted")
+
+	var rows int
+	require.NoError(t, s.db.QueryRow(`SELECT COUNT(*) FROM cohort_split_allocations`).Scan(&rows))
+	require.Equal(t, 1, rows, "a refused allocation must not add a row")
+}
+
+// TestCohortMap_HeavierForkFlipsTheAnswerWithoutTouchingTheMap is the ordinary
+// reorg, as opposed to the invalidation above: a heavier fork from block2
+// arrives, block3 drops off the main chain while staying valid, and the cohort
+// mapped to block3 reads as not on the main chain. cohort_map is not written.
+func TestCohortMap_HeavierForkFlipsTheAnswerWithoutTouchingTheMap(t *testing.T) {
+	forEachCohortMapEngine(t, func(t *testing.T, s *SQL) {
+		ctx := context.Background()
+
+		storeCohortTestBlock(t, s, block1)
+		storeCohortTestBlock(t, s, block2)
+		block3ID := storeCohortTestBlock(t, s, block3)
+
+		c := cohort.GenesisTime + 13000
+
+		require.NoError(t, s.RecordCohortMap(ctx, []model.CohortMapRow{{Cohort: c, BlockID: block3ID, MemberCount: 5}}))
+
+		before, err := s.CohortBlocks(ctx, []cohort.ID{c})
+		require.NoError(t, err)
+		require.Len(t, before[c], 1)
+		require.True(t, before[c][0].OnMainChain, "pre-condition: block3 is on the main chain")
+
+		mapBefore := dumpCohortMap(t, s)
+
+		// Two blocks on top of block2 outweigh block3 alone.
+		forkA := createTestBlock(t, 1001, block2.Hash())
+		forkB := createTestBlock(t, 1002, forkA.Hash())
+
+		storeCohortTestBlock(t, s, forkA)
+		storeCohortTestBlock(t, s, forkB)
+
+		best, _, err := s.GetBestBlockHeader(ctx)
+		require.NoError(t, err)
+		require.Equal(t, forkB.Hash().String(), best.Hash().String(), "pre-condition: the fork is the best chain")
+
+		after, err := s.CohortBlocks(ctx, []cohort.ID{c})
+		require.NoError(t, err)
+		require.Len(t, after[c], 1)
+		require.False(t, after[c][0].OnMainChain, "the cohort's answer must flip when its block is reorged out")
+		require.False(t, after[c][0].Invalid, "a reorged-out block is still valid")
+
+		require.Equal(t, mapBefore, dumpCohortMap(t, s), "a reorg must not write to cohort_map")
+	})
 }

@@ -193,6 +193,36 @@ func TestIsBlockchainSchemaCurrent_MissingCohortMapIndex(t *testing.T) {
 	require.True(t, current, "the DDL run must re-create idx_cohort_map_block_id")
 }
 
+// TestIsBlockchainSchemaCurrent_MissingSplitAllocationIndex covers a DDL run that
+// died after CREATE TABLE cohort_split_allocations and before its unique index.
+// Without that index two splits can be handed the same synthetic cohort, so the
+// probe must report not-current and the next DDL run must rebuild it.
+func TestIsBlockchainSchemaCurrent_MissingSplitAllocationIndex(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	_, err = db.Exec(`DROP INDEX ux_cohort_split_allocations_new`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, false)
+	require.NoError(t, err)
+	require.False(t, current, "schema must not be current when ux_cohort_split_allocations_new is missing")
+
+	require.NoError(t, createPostgresSchema(ulogger.TestLogger{}, db, false))
+
+	current, err = isBlockchainSchemaCurrent(db, false)
+	require.NoError(t, err)
+	require.True(t, current, "the DDL run must re-create ux_cohort_split_allocations_new")
+}
+
 func TestIsBlockchainSchemaCurrent_MissingIndex(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")

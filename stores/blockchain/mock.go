@@ -831,9 +831,10 @@ func (m *MockStore) GetFSMState(ctx context.Context) (string, error) {
 // RecordCohortMap records cohort->block rows in the mock's in-memory map,
 // insert-only: a pair that is already present is left exactly as it is.
 //
-// The unset cohort is rejected exactly as the SQL store rejects it, and before
-// anything is written, so a test written against the mock cannot pass on a call
-// that the real store would fail.
+// The unset cohort is rejected as the SQL store rejects it, before anything is
+// written. That is the only input check the mock mirrors: it does not check that
+// BlockID names a stored block, which the SQL store enforces with a foreign key,
+// so a row for an unknown block succeeds here and fails there.
 func (m *MockStore) RecordCohortMap(_ context.Context, rows []CohortMapRow) error {
 	for _, row := range rows {
 		if row.Cohort.IsUnset() {
@@ -910,9 +911,15 @@ func (m *MockStore) CohortBlocks(_ context.Context, cohorts []cohort.ID) (map[co
 
 // AllocateSplitCohort hands out a synthetic cohort number for a (source cohort,
 // block hash) pair, returning the same number on every later call for that pair.
+// It refuses a nil hash and a sentinel or unset source with InvalidArgument, the
+// same checks the SQL store makes.
 func (m *MockStore) AllocateSplitCohort(_ context.Context, sourceCohort cohort.ID, blockHash *chainhash.Hash) (cohort.ID, error) {
 	if blockHash == nil {
 		return cohort.Unset, errors.NewInvalidArgumentError("block hash cannot be nil")
+	}
+
+	if !sourceCohort.IsClock() && !sourceCohort.IsSynthetic() {
+		return cohort.Unset, errors.NewInvalidArgumentError("cannot split %s: only clock and synthetic cohorts hold splittable transactions", sourceCohort)
 	}
 
 	m.mu.Lock()
