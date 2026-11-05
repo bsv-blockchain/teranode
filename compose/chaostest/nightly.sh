@@ -151,7 +151,9 @@ phase() {
 
 if $build; then
   note "building teranode:latest and the orchestrator image"
-  if ! { "$MULTINODE" build && "$MULTINODE" sim build; } >"$OUT/build.log" 2>&1; then
+  # A plain docker build, as the Makefile's chain-integrity targets do: 'multinode.sh build'
+  # needs a stack that 'up' has generated, which a fresh runner does not have.
+  if ! { docker build -t teranode:latest "$REPO_ROOT" && "$MULTINODE" sim build; } >"$OUT/build.log" 2>&1; then
     echo "error: build failed; see $OUT/build.log" >&2
     python3 -I "$SCRIPT_DIR/nightly_report.py" "$OUT" "$SUITES/known-failures.txt" "$previous" --error "build failed" || true
     exit 1
