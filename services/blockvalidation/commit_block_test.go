@@ -3,13 +3,11 @@ package blockvalidation
 import (
 	"context"
 	"net/url"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -18,6 +16,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	testutil "github.com/bsv-blockchain/teranode/util/test"
+	"github.com/bsv-blockchain/teranode/util/test/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,6 +31,10 @@ import (
 // The block has no subtrees so unlockSubtreeTransactionsIfNeeded is a no-op.
 func newCommitBlockHarness(t *testing.T) (*BlockValidation, *model.Block, context.Context) {
 	t.Helper()
+
+	// commitBlock observes the quick-commit histograms; without this the tests pass only when an
+	// earlier test in the run happened to register the metrics.
+	initPrometheusMetrics()
 
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
@@ -138,20 +141,6 @@ func TestCommitBlock_AddsBlockAndSetsExists(t *testing.T) {
 	require.True(t, mined, "commitBlock must AddBlock with MinedSet=true")
 }
 
-// countingSubtreesSetClient is the real local client with SetBlockSubtreesSet counted. Every
-// other call goes straight to the sqlitememory store, so the block row read back below is the
-// store's own answer, not a mock's.
-type countingSubtreesSetClient struct {
-	blockchain.ClientI
-	subtreesSetCalls atomic.Int32
-}
-
-func (c *countingSubtreesSetClient) SetBlockSubtreesSet(ctx context.Context, blockHash *chainhash.Hash) error {
-	c.subtreesSetCalls.Add(1)
-
-	return c.ClientI.SetBlockSubtreesSet(ctx, blockHash)
-}
-
 // TestCommitBlock_WritesSubtreesSetOnceAtInsert pins that the quick commit sets subtrees_set
 // through AddBlock alone. The insert already writes the column, so a second SetBlockSubtreesSet
 // call would re-UPDATE a row that is already true, commit on its own, clear the blockchain
@@ -160,12 +149,14 @@ func (c *countingSubtreesSetClient) SetBlockSubtreesSet(ctx context.Context, blo
 func TestCommitBlock_WritesSubtreesSetOnceAtInsert(t *testing.T) {
 	u, block, ctx := newCommitBlockHarness(t)
 
-	counting := &countingSubtreesSetClient{ClientI: u.blockchainClient}
-	u.blockchainClient = counting
+	// The real local client with every call logged. Every call goes straight to the sqlitememory
+	// store, so the block row read back below is the store's own answer, not a mock's.
+	calls := fault.NewPlan()
+	u.blockchainClient = fault.NewBlockchainClient(u.blockchainClient, calls)
 
 	require.NoError(t, u.commitBlock(ctx, block, "test-peer", "commitBlock"))
 
-	require.Equal(t, int32(0), counting.subtreesSetCalls.Load(), "the quick commit must not send SetBlockSubtreesSet")
+	require.Zero(t, calls.Count("SetBlockSubtreesSet"), "the quick commit must not send SetBlockSubtreesSet")
 
 	_, meta, err := u.blockchainClient.GetBlockHeader(ctx, block.Hash())
 	require.NoError(t, err)
