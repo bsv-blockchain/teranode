@@ -481,6 +481,68 @@ func Test_headAgeGaugeConsumerEmptyClearReReadRepair(t *testing.T) {
 	require.NotZero(t, q.headAgeMillis(fixed.Add(time.Second).UnixMilli()))
 }
 
+// headAgeInvariantBroken reports whether the point-5 invariant is violated right
+// now: the queue holds items but the head age reads 0. While a producer is inside
+// enqueueBatch that is legitimate, in two windows: queueLength is reserved before the
+// batch is linked, and publish swaps the tail before it links the previous batch to
+// the new one, so a batch linked behind it is unreachable from the head until it
+// does. inflight is the number of producers inside enqueueBatch, and the invariant is
+// only checked when it is 0, read first: then every reserved item is linked and
+// reachable. A producer that starts between the reads is a one-read skew the caller's
+// re-confirm rejects.
+func headAgeInvariantBroken(q *LockFreeQueue, inflight *atomic.Int64, now int64) bool {
+	if inflight.Load() != 0 {
+		return false
+	}
+
+	return q.headAgeMillis(now) == 0 && q.length() > 0
+}
+
+// Test_headAgeInvariantBrokenIgnoresStalledReservation pins what the race test's
+// monitor may and may not flag. A producer parked inside enqueueBatch, between its
+// length reservation and its link or between publish's tail swap and its link, makes
+// length>0 with age 0 for as long as it stays parked. That is not a latched gauge, and
+// no amount of re-confirming distinguishes the two while the producer is parked, so
+// the monitor does not judge while a producer is in flight. A batch behind a zeroed
+// gauge with no producer in flight is the real defect and must be flagged.
+func Test_headAgeInvariantBrokenIgnoresStalledReservation(t *testing.T) {
+	fixed := time.UnixMilli(1_700_000_000_000).UTC()
+	now := fixed.Add(time.Second).UnixMilli()
+
+	q := NewLockFreeQueue()
+	q.clock = fixedClock{t: fixed}
+
+	var inflight atomic.Int64
+
+	// A producer parked after the reservation of enqueueBatch, before publish.
+	inflight.Add(1)
+	q.queueLength.Add(1)
+
+	require.Zero(t, q.headAgeMillis(now), "a parked reservation presents age 0 by design")
+	require.Equal(t, int64(1), q.length())
+	require.False(t, headAgeInvariantBroken(q, &inflight, now), "a parked reservation is not a latched gauge")
+
+	// It resumes and finishes: the batch is linked and the gauge set.
+	q.publish([]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}}, []*subtree.TxInpoints{{}})
+	inflight.Add(-1)
+
+	require.NotZero(t, q.headAgeMillis(now))
+	require.False(t, headAgeInvariantBroken(q, &inflight, now))
+
+	// A zeroed gauge over a batch while another producer is in flight, as after a
+	// batch linked behind one whose producer swapped the tail and has not linked yet,
+	// is not judged.
+	q.oldestPendingMillis.Store(0)
+	inflight.Add(1)
+
+	require.False(t, headAgeInvariantBroken(q, &inflight, now), "not judged while a producer is in flight")
+
+	// With no producer in flight, a latched stale 0 over a linked batch is flagged.
+	inflight.Add(-1)
+
+	require.True(t, headAgeInvariantBroken(q, &inflight, now), "a linked batch behind a zeroed gauge must be flagged")
+}
+
 // Test_headAgeGaugeConcurrentDrainRace exercises the gauge writers — the producer
 // CAS, the consumer empty-clear + recheck, and the refusal-path refresh — under
 // -race with many producers and a single draining/refusing consumer, all on a
@@ -493,16 +555,17 @@ func Test_headAgeGaugeConsumerEmptyClearReReadRepair(t *testing.T) {
 // q.head (which the single consumer mutates without a lock; the after-join drain
 // below is the only place q.head is read).
 //
-// The two atomics cannot be sampled in one snapshot, so at the instant the queue
-// refills a transient (age==0, length>0) skew is possible: enqueueBatch now
-// reserves the length BEFORE it links the batch and runs the gauge CAS, so a
-// monitor can see length>0 for a moment before the gauge is set. That transient
-// resolves as soon as the producer's very next step links and CASes. A genuine
-// regression — a latched stale 0 while a backlog is held (the exact defect the
-// refusal-path refresh and the empty-clear re-read remove) — instead persists
-// across the consumer's passes. The monitor therefore re-confirms a bounded number
-// of times and flags only a violation that does not clear, which is the strongest
-// variant observable without a q.head read.
+// While a producer is inside enqueueBatch, length>0 with a zero age is legitimate:
+// the length is reserved before the batch is linked, and publish swaps the tail
+// before it links the previous batch, so a batch behind it is not reachable yet. A
+// producer parked in either window keeps it so for as long as it stays parked, which
+// no re-confirm loop can outwait; a yield-only monitor flaked under GOMAXPROCS=1 for
+// that reason. The monitor therefore judges only while no producer is in flight
+// (headAgeInvariantBroken), re-confirming to reject a producer starting between its
+// reads, and after all goroutines join the queue must not hold items behind a zero
+// age. Both catch a gauge latched at 0 over a backlog. They do not pin the
+// refusal-path refresh or the empty-clear re-read on their own: producers and the
+// consumer repair a cleared gauge within microseconds without them.
 func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 	fixed := time.UnixMilli(1_700_000_000_000).UTC()
 
@@ -514,6 +577,7 @@ func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 	var (
 		wg         sync.WaitGroup
 		violations atomic.Int64
+		inflight   atomic.Int64 // producers currently inside enqueueBatch
 		stop       = make(chan struct{})
 	)
 
@@ -530,10 +594,12 @@ func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 				default:
 				}
 
+				inflight.Add(1)
 				q.enqueueBatch(
 					[]subtree.Node{{Hash: chainhash.Hash{}, Fee: 1, SizeInBytes: 0}},
 					[]*subtree.TxInpoints{{}},
 				)
+				inflight.Add(-1)
 			}
 		}()
 	}
@@ -572,7 +638,7 @@ func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 			default:
 			}
 
-			if q.headAgeMillis(nowMillis) != 0 || q.length() == 0 {
+			if !headAgeInvariantBroken(q, &inflight, nowMillis) {
 				continue
 			}
 
@@ -581,20 +647,12 @@ func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 			persisted := true
 
 			for i := 0; i < 100_000; i++ {
-				// Yield the P between reads. On a constrained GOMAXPROCS (as CI
-				// runners commonly are) a tight loop of atomic-only reads never
-				// hits a cooperative preemption point on its own, so a producer
-				// that reserved queueLength but has not yet completed publish's
-				// CAS can be starved for the loop's entire duration - the
-				// documented one-batch skew then reads as "persisted" even
-				// though it is not a latched gauge, just a descheduled producer
-				// that never got a turn. Gosched gives that producer the
-				// scheduling opportunity the skew's self-healing depends on,
-				// so only a genuinely latched value - one that does not clear
-				// no matter how many turns other goroutines get - survives.
+				// Yield the P between reads so the producers and the consumer get
+				// turns; a tight loop of atomic reads would otherwise starve them
+				// under a constrained GOMAXPROCS.
 				runtime.Gosched()
 
-				if q.headAgeMillis(nowMillis) != 0 || q.length() == 0 {
+				if !headAgeInvariantBroken(q, &inflight, nowMillis) {
 					persisted = false
 					break
 				}
@@ -613,6 +671,11 @@ func Test_headAgeGaugeConcurrentDrainRace(t *testing.T) {
 
 	require.Zero(t, violations.Load(),
 		"a non-empty queue must never present a zero head age (point-5 invariant)")
+
+	// Every producer has returned, so every reserved item is linked and reachable.
+	if q.length() > 0 {
+		require.NotZero(t, q.headAgeMillis(nowMillis), "a queue holding items after the producers returned presents a head age")
+	}
 
 	// All goroutines have joined; touching q.head is now safe. Drain fully and
 	// assert the gauge clears to 0 exactly when the queue empties.
