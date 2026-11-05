@@ -15,6 +15,11 @@ replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v
 // resource-manager scope was never released and a long-running node ran out of
 // inbound connection slots (bsv-blockchain/teranode#2121). The fork branch is
 // bsv/v0.50.0-inbound-scope-leak on github.com/bsv-blockchain/go-libp2p.
+// The replace has no version on the left, so it pins this build regardless of
+// the go-libp2p version go.mod requires. Whenever that required version changes
+// (e.g. a go-p2p-message-bus bump that needs v0.51.x), move the replace to the
+// matching fork branch: for v0.51.0 that is bsv/v0.51.0-inbound-scope-leak,
+// v0.51.1-0.20261105140325-08b4a4af773a.
 // Remove this replace once a go-libp2p release contains the fix.
 replace github.com/libp2p/go-libp2p => github.com/bsv-blockchain/go-libp2p v0.50.1-0.20261105081114-9308a3209e3b
 
