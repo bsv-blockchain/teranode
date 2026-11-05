@@ -213,8 +213,11 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       `blockassembly_reconcileInterval=0`.
     - **A missing subtree gives a block up.** A fork block whose subtree the subtree
       store does not have, for example because the retention was raised after it was
-      deleted, is logged, counted under `skipped_fork_subtree_lost` and skipped; its
-      skipped transactions stay marked mined.
+      deleted, is logged, counted under `skipped_fork_subtree_lost` and skipped. First,
+      the transactions it mined that block assembly still holds are marked off the
+      longest chain, so a restart loads them; until that write finishes their hashes
+      follow the pending byte in `BlockAssemblerSkippedForkMark`, and a restart marks
+      them before it loads the pool. Its other skipped transactions stay marked mined.
     - **Start fails while it is unfinished.** A restart finishes a pending run before it
       loads the unmined transactions, waiting once for a fork block block validation is
       still finishing. If it cannot, for example because the subtree store cannot be

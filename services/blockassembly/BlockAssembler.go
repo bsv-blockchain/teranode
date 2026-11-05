@@ -285,8 +285,14 @@ type BlockAssembler struct {
 	// skippedForkMarkRetryAt. skippedForkMarkRan is set once a run started in the current pass
 	// (runOwedSkippedForkWork). skippedForkRecheck holds transactions a mark wrote off the
 	// longest chain without finishing its check against the best chain (markOffLongestChain).
-	// All are owned by the block-processing loop, and by Start before it.
+	// skippedForkHeldRepair holds the transactions block assembly held that a fork block whose
+	// subtree is gone mined, while their mark off the longest chain is unfinished; the record
+	// under SkippedForkMarkStateKey carries them, so a start repairs them although its pool is
+	// empty. skippedForkAtStart is set while Start runs the mark, before the pool is loaded. All
+	// are owned by the block-processing loop, and by Start before it.
 	skippedForkBlocksMarked  map[chainhash.Hash]uint32
+	skippedForkHeldRepair    []chainhash.Hash
+	skippedForkAtStart       bool
 	skippedForkMarkPending   bool
 	skippedForkReloadPending bool
 	skippedForkMarkWait      time.Duration

@@ -27,6 +27,8 @@ const BestTipPositionStateKey = "BlockAssemblerBestTipPos"
 
 // SkippedForkMarkStateKey is the key under which block assembly records, as one byte, whether a
 // mark of skipped fork transactions (markSkippedForkTxs) is unfinished, so a restart finishes it.
+// A pending byte 1 may be followed by the 32-byte hashes of held transactions it still has to
+// mark off the longest chain (skippedForkHeldRepair).
 const SkippedForkMarkStateKey = "BlockAssemblerSkippedForkMark"
 
 const (
@@ -253,7 +255,8 @@ func (b *BlockAssembler) followBestTipChanges(ctx context.Context) bool {
 // next start finishes it before it loads the unmined transactions, or fails. A fork block whose
 // subtree the subtree store does not have is given up, counted and logged, not retried: the file
 // can be gone lawfully, for example after the retention was raised, and nothing else could read
-// it.
+// it. Before that, the transactions of it block assembly still holds are marked off the longest
+// chain (repairHeldTxsOfGoneBlocks); its others stay marked mined.
 func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bool) (err error) {
 	best, bestMeta, bestErr := b.blockchainClient.GetBestBlockHeader(ctx)
 
@@ -297,6 +300,10 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 		return err
 	}
 
+	if err = b.applyHeldRepair(ctx, best); err != nil {
+		return err
+	}
+
 	floor := b.skippedForkMarkFloor(bestMeta.Height)
 
 	for hash, height := range b.skippedForkBlocksMarked {
@@ -320,6 +327,8 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 
 	txMap := b.subtreeProcessor.GetCurrentTxMap()
 	unread, unprocessed := 0, 0
+
+	var gone []blockHeaderWithMeta
 
 	// Block by block, so a block that cannot be read does not hold up the others; it is not
 	// recorded, and the next run reads it again.
@@ -349,21 +358,21 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 			// A subtree file the store does not have is not read by a later run either. It can
 			// be gone lawfully: a raised retention, block assembly's own subtrees stored with
 			// the global retention, or a reused subtree that kept an earlier delete height.
-			// The block's transactions are given up rather than block assembly stopped. The
-			// subtree read reports any failure of its fallback read as not found too, so the
-			// store is asked directly; a failure to answer is retried like any other.
-			gone := false
+			// The block's transactions are given up rather than block assembly stopped, once
+			// those block assembly holds are repaired (repairHeldTxsOfGoneBlocks). The subtree
+			// read reports any failure of its fallback read as not found too, so the store is
+			// asked directly; a failure to answer is retried like any other.
+			filesGone := false
 			if errors.Is(err, errors.ErrNotFound) {
 				var existsErr error
-				if gone, existsErr = b.subtreeFilesGone(ctx, fb.header); existsErr != nil {
+				if filesGone, existsErr = b.subtreeFilesGone(ctx, fb.header); existsErr != nil {
 					b.logger.Errorf("[BlockAssembler] error checking the subtree files of fork block %s: %v", hash, existsErr)
 				}
 			}
 
-			if gone {
-				prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost").Inc()
-				b.logger.Errorf("[BlockAssembler] fork block %s has no subtree in the subtree store, giving up the mark of its skipped transactions: %v", hash, err)
-				b.skippedForkBlocksMarked[hash] = fb.meta.Height
+			if filesGone {
+				b.logger.Errorf("[BlockAssembler] fork block %s has no subtree in the subtree store: %v", hash, err)
+				gone = append(gone, fb)
 
 				continue
 			}
@@ -433,6 +442,17 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 		b.skippedForkBlocksMarked[hash] = fb.meta.Height
 	}
 
+	var heldErr error
+	if len(gone) > 0 {
+		if heldErr = b.repairHeldTxsOfGoneBlocks(ctx, gone, best); heldErr == nil {
+			for _, fb := range gone {
+				prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_subtree_lost").Inc()
+				b.logger.Errorf("[BlockAssembler] giving up the mark of the skipped transactions of fork block %s, whose subtree is gone, but those block assembly holds", fb.header.Hash())
+				b.skippedForkBlocksMarked[*fb.header.Hash()] = fb.meta.Height
+			}
+		}
+	}
+
 	// A reload is a reset, which waits for every block block validation has not finished; with
 	// such a fork block in the run it would hold block assembly until that block is done. The
 	// reload waits for the run that finds none: until block validation sets mined_set on each
@@ -443,6 +463,10 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 		if err = b.reloadAfterSkippedForkMark(ctx, beforeReload); err != nil {
 			return err
 		}
+	}
+
+	if heldErr != nil {
+		return errors.NewProcessingError("[markSkippedForkTxs] error repairing the transactions block assembly holds of %d fork blocks whose subtree is gone", len(gone), heldErr)
 	}
 
 	if unread > 0 {
@@ -691,16 +715,112 @@ func (b *BlockAssembler) reloadAfterSkippedForkMark(ctx context.Context, beforeR
 }
 
 // saveSkippedForkMark records under SkippedForkMarkStateKey whether a run of markSkippedForkTxs
-// is unfinished, so a restart finishes it.
+// is unfinished, so a restart finishes it: the byte 0 or 1, and after a pending 1 the hashes of
+// skippedForkHeldRepair, which a restart cannot find otherwise.
 func (b *BlockAssembler) saveSkippedForkMark(ctx context.Context, pending bool) error {
-	value := byte(0)
+	value := []byte{0}
 	if pending {
-		value = 1
+		value = make([]byte, 1, 1+chainhash.HashSize*len(b.skippedForkHeldRepair))
+		value[0] = 1
+
+		for _, hash := range b.skippedForkHeldRepair {
+			value = append(value, hash[:]...)
+		}
 	}
 
-	if err := b.blockchainClient.SetState(ctx, SkippedForkMarkStateKey, []byte{value}); err != nil {
-		return errors.NewStorageError("[saveSkippedForkMark] error saving state[%s]=%d", SkippedForkMarkStateKey, value, err)
+	if err := b.blockchainClient.SetState(ctx, SkippedForkMarkStateKey, value); err != nil {
+		return errors.NewStorageError("[saveSkippedForkMark] error saving state[%s]=%d with %d held transactions to repair", SkippedForkMarkStateKey, value[0], (len(value)-1)/chainhash.HashSize, err)
 	}
+
+	return nil
+}
+
+// repairHeldTxsOfGoneBlocks marks off the longest chain the transactions block assembly holds
+// that a fork block in gone, whose subtree is gone, mined: those still stamped mined and that
+// no block of the best chain holds. The fork block cannot say which transactions it has, but
+// block assembly still holds those it had; a reorg marks only the transactions it moves back.
+// They are recorded first (skippedForkHeldRepair), so a restart, whose pool is empty, repairs
+// them too. At start the pool is not loaded yet, and holds nothing to repair. A crash between
+// the move that skipped the block and that record loses them, as a crash before the reorg's
+// whole-pool mark did when it ran on every reorg.
+func (b *BlockAssembler) repairHeldTxsOfGoneBlocks(ctx context.Context, gone []blockHeaderWithMeta, best *model.BlockHeader) error {
+	if b.skippedForkAtStart {
+		return nil
+	}
+
+	goneIDs := make(map[uint32]struct{}, len(gone))
+	for _, fb := range gone {
+		goneIDs[fb.meta.ID] = struct{}{}
+	}
+
+	held := b.subtreeProcessor.GetTransactionHashes(ctx)
+	if err := ctx.Err(); err != nil {
+		return errors.NewProcessingError("[repairHeldTxsOfGoneBlocks] error reading the transactions block assembly holds", err)
+	}
+
+	offBest, _, err := b.branchOnlyMeta(ctx, held, nil, best, fields.UnminedSince)
+	if err != nil {
+		return err
+	}
+
+	var repair []chainhash.Hash
+
+	for _, u := range offBest {
+		if u.Data == nil || u.Data.UnminedSince != 0 {
+			continue
+		}
+
+		for _, id := range u.Data.BlockIDs {
+			if _, inGone := goneIDs[id]; inGone {
+				repair = append(repair, u.Hash)
+				break
+			}
+		}
+	}
+
+	if len(repair) == 0 {
+		return nil
+	}
+
+	b.skippedForkHeldRepair = repair
+
+	if err = b.saveSkippedForkMark(ctx, true); err != nil {
+		return err
+	}
+
+	return b.applyHeldRepair(ctx, best)
+}
+
+// applyHeldRepair marks off the longest chain the transactions of skippedForkHeldRepair still
+// stamped mined that no block of the best chain holds, then clears it. markOffLongestChain
+// marks again those a block of the best chain holds by then.
+func (b *BlockAssembler) applyHeldRepair(ctx context.Context, best *model.BlockHeader) error {
+	if len(b.skippedForkHeldRepair) == 0 {
+		return nil
+	}
+
+	offBest, _, err := b.branchOnlyMeta(ctx, b.skippedForkHeldRepair, nil, best, fields.UnminedSince)
+	if err != nil {
+		return err
+	}
+
+	toMark := make([]chainhash.Hash, 0, len(offBest))
+
+	for _, u := range offBest {
+		if u.Data != nil && u.Data.UnminedSince == 0 {
+			toMark = append(toMark, u.Hash)
+		}
+	}
+
+	if len(toMark) > 0 {
+		if _, err = b.markOffLongestChain(ctx, toMark); err != nil {
+			return errors.NewProcessingError("[applyHeldRepair] error marking %d held transactions of fork blocks whose subtree is gone as not on the longest chain", len(toMark), err)
+		}
+
+		b.logger.Warnf("[BlockAssembler] marked %d held transactions of fork blocks whose subtree is gone as not on the longest chain", len(toMark))
+	}
+
+	b.skippedForkHeldRepair = nil
 
 	return nil
 }
@@ -721,9 +841,17 @@ func (b *BlockAssembler) finishSkippedForkMarkAtStart(ctx context.Context) error
 		return errors.NewStorageError("[BlockAssembler] error reading state[%s]", SkippedForkMarkStateKey, err)
 	case len(data) == 1 && data[0] == 0:
 		return nil
+	case len(data) > 1 && data[0] == 1 && (len(data)-1)%chainhash.HashSize == 0:
+		b.skippedForkHeldRepair = make([]chainhash.Hash, 0, (len(data)-1)/chainhash.HashSize)
+		for i := 1; i < len(data); i += chainhash.HashSize {
+			b.skippedForkHeldRepair = append(b.skippedForkHeldRepair, chainhash.Hash(data[i:i+chainhash.HashSize]))
+		}
 	}
 
-	b.logger.Warnf("[BlockAssembler] a mark of skipped fork transactions was left unfinished before the restart, finishing it")
+	b.logger.Warnf("[BlockAssembler] a mark of skipped fork transactions was left unfinished before the restart, finishing it with %d held transactions to repair", len(b.skippedForkHeldRepair))
+
+	b.skippedForkAtStart = true
+	defer func() { b.skippedForkAtStart = false }()
 
 	err = b.markSkippedForkTxs(ctx, true)
 

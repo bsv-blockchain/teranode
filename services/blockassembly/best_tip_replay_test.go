@@ -3,6 +3,8 @@ package blockassembly
 import (
 	"context"
 	"io"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -1077,7 +1079,9 @@ func TestReplayBestTipChanges_ExternalResetFailureGatesCandidates(t *testing.T) 
 // of the unmined transactions, and onIsMined runs on every GetBlockIsMined.
 type noBestTipOrderClient struct {
 	blockchain.ClientI
-	failMarkSave   bool
+	failMarkSave bool
+	// failListSave refuses a write of SkippedForkMarkStateKey that carries held transactions.
+	failListSave   bool
 	afterList      func()
 	fail           string
 	staleMinedSet  bool
@@ -1283,7 +1287,7 @@ func (c *noBestTipOrderClient) BlocksBetterThan(context.Context, model.BestTipKe
 }
 
 func (c *noBestTipOrderClient) SetState(ctx context.Context, key string, data []byte) error {
-	if (c.failMarkSave || c.fail == "SetState") && key == SkippedForkMarkStateKey {
+	if key == SkippedForkMarkStateKey && (c.failMarkSave || c.fail == "SetState" || (c.failListSave && len(data) > 1)) {
 		return errors.NewStorageError("state write refused")
 	}
 
@@ -2913,4 +2917,456 @@ func TestRunOwedSkippedForkWork_RunsARecheckOffTheTip(t *testing.T) {
 	ba.runOwedSkippedForkWork(ctx)
 	require.Empty(t, ba.skippedForkRecheck, "the recheck ran off the tip")
 	require.False(t, ba.reconcileDue(time.Now()), "nothing is owed, so the idle wake is not due")
+}
+
+// heldTxReorgSetup builds the case a missing fork subtree leaves to the pool. Block assembly is
+// on A2 and holds Y. F2, a sibling of A2 whose subtree files are gone, was the best tip for a
+// moment and block validation marked Y mined in it; C2 and C3 overtook it before block assembly
+// looked. Following the best header is a reorg from A2 to C3 over a moved-back block, A2, whose
+// transactions do not include Y, so the reorg's mark leaves Y marked mined. F2 is returned with
+// the block assembler's client, which does not serve the best-tip order.
+func heldTxReorgSetup(t *testing.T) (*baTestItems, *noBestTipOrderClient, *model.BlockHeader, *model.BlockHeader, *bt.Tx) {
+	t.Helper()
+	initPrometheusMetrics()
+	ctx := t.Context()
+
+	items := setupBlockAssemblyTest(t, withCoinbaseMaturity(testCoinbaseMaturity))
+	ba := items.blockAssembler
+	ba.subtreeProcessor.Stop(context.Background())
+	stp, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, ba.settings, items.blobStore, items.blockchainClient, items.utxoStore, items.newSubtreeChan)
+	require.NoError(t, err)
+	ba.subtreeProcessor = stp
+	stp.Start(ctx)
+
+	genesis := genesisHeader(t, items)
+	a1 := buildChain(genesis, 1, 130000)[0]
+	addBlockWithMinedSet(ctx, t, items, a1)
+	a2 := buildChain(a1, 1, 131000)[0]
+	addBlockWithMinedSet(ctx, t, items, a2)
+
+	ba.setBestBlockHeader(a2, 2)
+	stp.InitCurrentBlockHeader(a2)
+
+	funding := replayPoolTx(&chainhash.Hash{}, 100)
+	y := replayPoolTx(funding.TxIDChainHash(), 97)
+	for _, tx := range []*bt.Tx{funding, y} {
+		_, err = items.utxoStore.(*utxosql.Store).Create(ctx, tx, 1)
+		require.NoError(t, err)
+	}
+
+	_, genMeta, err := items.blockchainClient.GetBlockHeader(ctx, genesis.Hash())
+	require.NoError(t, err)
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	stp.AddBatch([]subtree.Node{{Hash: *y.TxIDChainHash(), Fee: 1, SizeInBytes: uint64(len(y.Bytes()))}}, []*subtree.TxInpoints{{}})
+	require.Eventually(t, func() bool { return stp.GetCurrentTxMap().Exists(*y.TxIDChainHash()) }, 5*time.Second, 10*time.Millisecond, "Y is in block assembly")
+
+	// F2's subtree is in neither the subtree store's subtree file nor its file still to be
+	// checked.
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+	gone := chainhash.HashH([]byte("F2's subtree"))
+	f2 := buildChain(a1, 1, 132000)[0]
+	require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: f2, CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{&gone}}, "", blockchainoptions.WithSubtreesSet(true), blockchainoptions.WithMinedSet(true)))
+
+	_, f2Meta, err := items.blockchainClient.GetBlockHeader(ctx, f2.Hash())
+	require.NoError(t, err)
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{y.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: f2Meta.ID, BlockHeight: 2, OnLongestChain: true})
+	require.NoError(t, err)
+
+	c := buildChain(a1, 2, 133000)
+	for _, h := range c {
+		addBlockWithMinedSet(ctx, t, items, h)
+	}
+
+	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, c[1].Hash().String(), best.Hash().String(), "precondition: C3 is the best tip")
+
+	for _, fileType := range []fileformat.FileType{fileformat.FileTypeSubtree, fileformat.FileTypeSubtreeToCheck} {
+		exists, err := items.blobStore.Exists(ctx, gone[:], fileType)
+		require.NoError(t, err)
+		require.False(t, exists, "precondition: F2's subtree is gone")
+	}
+
+	meta, err := items.utxoStore.Get(ctx, y.TxIDChainHash(), fields.BlockIDs, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Equal(t, []uint32{f2Meta.ID}, meta.BlockIDs, "precondition: only F2 mined Y")
+	require.Zero(t, meta.UnminedSince, "precondition: Y is marked mined")
+
+	client := &noBestTipOrderClient{ClientI: items.blockchainClient}
+	ba.blockchainClient = client
+
+	return items, client, f2, c[1], y
+}
+
+// TestFollowBestHeader_MissingForkSubtreePreservesHeldTxAfterReorg: a fork block whose subtree
+// is gone cannot say which transactions it mined, but block assembly still holds the ones it
+// had. Following the best header reorgs from A2 to C3; the mark that follows gives F2 up and
+// marks Y, which block assembly holds, off the longest chain, so a restart loads it again.
+func TestFollowBestHeader_MissingForkSubtreePreservesHeldTxAfterReorg(t *testing.T) {
+	items, _, f2, c3, y := heldTxReorgSetup(t)
+	ba := items.blockAssembler
+	ctx := t.Context()
+
+	reorgs := testutil.ToFloat64(prometheusBlockAssemblerReorg)
+
+	ba.processNewBlockAnnouncement(ctx)
+
+	requireBlockAssemblyTip(t, items, c3)
+	require.Equal(t, reorgs+1, testutil.ToFloat64(prometheusBlockAssemblerReorg), "precondition: block assembly reorged from A2 to C3")
+	require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "Y is still held")
+	require.NotZero(t, unminedSince(t, items, y), "Y, which no block of the best chain holds, is marked unmined")
+	require.Contains(t, ba.skippedForkBlocksMarked, *f2.Hash(), "F2 is given up once Y is repaired")
+	require.False(t, ba.skippedForkWorkOwed())
+	require.Empty(t, ba.skippedForkHeldRepair, "nothing is left to repair")
+
+	record, err := items.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
+	require.NoError(t, err)
+	require.Equal(t, []byte{0}, record, "the record says the mark finished")
+
+	ba.subtreeProcessor.Stop(context.Background())
+
+	restarted, err := startBlockAssembler(t, items, ba.settings, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
+
+	require.True(t, restarted.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the restarted pool holds Y")
+}
+
+// TestMarkSkippedForkTxs_HeldRepairOfAGoneForkBlock covers the repair of the transactions block
+// assembly holds that a fork block whose subtree is gone mined.
+func TestMarkSkippedForkTxs_HeldRepairOfAGoneForkBlock(t *testing.T) {
+	// W, which C3 on the best chain mined as well, stays mined.
+	t.Run("a tx the best chain mined too", func(t *testing.T) {
+		items, _, f2, c3, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		w := replayPoolTx(y.TxIDChainHash(), 90)
+		_, err := items.utxoStore.(*utxosql.Store).Create(ctx, w, 1)
+		require.NoError(t, err)
+
+		_, f2Meta, err := items.blockchainClient.GetBlockHeader(ctx, f2.Hash())
+		require.NoError(t, err)
+		_, c3Meta, err := items.blockchainClient.GetBlockHeader(ctx, c3.Hash())
+		require.NoError(t, err)
+		for _, id := range []uint32{f2Meta.ID, c3Meta.ID} {
+			_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{w.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: id, BlockHeight: 2, OnLongestChain: true})
+			require.NoError(t, err)
+		}
+
+		ba.subtreeProcessor.AddBatch([]subtree.Node{{Hash: *w.TxIDChainHash(), Fee: 1, SizeInBytes: uint64(len(w.Bytes()))}}, []*subtree.TxInpoints{{}})
+		require.Eventually(t, func() bool { return ba.subtreeProcessor.GetCurrentTxMap().Exists(*w.TxIDChainHash()) }, 5*time.Second, 10*time.Millisecond)
+
+		ba.processNewBlockAnnouncement(ctx)
+
+		requireBlockAssemblyTip(t, items, c3)
+		require.NotZero(t, unminedSince(t, items, y))
+		require.Zero(t, unminedSince(t, items, w), "W, mined on the best chain, stays mined")
+	})
+
+	// D, extending C3, mines Y between the repair's selection and its write; the check after
+	// the write marks Y mined again.
+	t.Run("the best tip moves during the repair", func(t *testing.T) {
+		items, client, _, c3, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		d := buildChain(c3, 1, 134000)[0]
+		ba.utxoStore = &partialWriteUtxoStore{Store: items.utxoStore, failRemark: true, beforeWrite: func() {
+			addBlockWithMinedSet(ctx, t, items, d)
+			_, dMeta, err := items.blockchainClient.GetBlockHeader(ctx, d.Hash())
+			require.NoError(t, err)
+			_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{y.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: dMeta.ID, BlockHeight: dMeta.Height, OnLongestChain: true})
+			require.NoError(t, err)
+		}}
+
+		ba.processNewBlockAnnouncement(ctx)
+		require.True(t, ba.skippedForkWorkOwed(), "the check after the write failed")
+
+		ba.utxoStore = items.utxoStore
+		ba.blockchainClient = client
+		ba.processNewBlockAnnouncement(ctx)
+
+		requireBlockAssemblyTip(t, items, d)
+		require.Zero(t, unminedSince(t, items, y), "Y, mined in D on the best chain, is mined")
+		require.False(t, ba.skippedForkWorkOwed())
+	})
+
+	// V, which only an invalid fork block mined, is not a transaction of F2 and is left alone.
+	t.Run("a tx only another fork block mined", func(t *testing.T) {
+		items, _, _, c3, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		v := replayPoolTx(y.TxIDChainHash(), 80)
+		_, err := items.utxoStore.(*utxosql.Store).Create(ctx, v, 1)
+		require.NoError(t, err)
+
+		a1, _, err := items.blockchainClient.GetBlockHeader(ctx, c3.HashPrevBlock)
+		require.NoError(t, err)
+		a1, _, err = items.blockchainClient.GetBlockHeader(ctx, a1.HashPrevBlock)
+		require.NoError(t, err)
+
+		coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+		require.NoError(t, err)
+		x := buildChain(a1, 1, 135000)[0]
+		require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: x, CoinbaseTx: coinbase, TransactionCount: 1, Subtrees: []*chainhash.Hash{}}, "", blockchainoptions.WithInvalid(true), blockchainoptions.WithMinedSet(true)))
+
+		_, xMeta, err := items.blockchainClient.GetBlockHeader(ctx, x.Hash())
+		require.NoError(t, err)
+		_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{v.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: xMeta.ID, BlockHeight: 2, OnLongestChain: true})
+		require.NoError(t, err)
+
+		ba.subtreeProcessor.AddBatch([]subtree.Node{{Hash: *v.TxIDChainHash(), Fee: 1, SizeInBytes: uint64(len(v.Bytes()))}}, []*subtree.TxInpoints{{}})
+		require.Eventually(t, func() bool { return ba.subtreeProcessor.GetCurrentTxMap().Exists(*v.TxIDChainHash()) }, 5*time.Second, 10*time.Millisecond)
+
+		ba.processNewBlockAnnouncement(ctx)
+
+		requireBlockAssemblyTip(t, items, c3)
+		require.NotZero(t, unminedSince(t, items, y))
+		require.Zero(t, unminedSince(t, items, v), "V is no transaction of a fork block whose subtree is gone")
+	})
+
+	// A read of the pool cut short is not an empty pool.
+	t.Run("the pool read is cancelled", func(t *testing.T) {
+		items, _, f2, c3, _ := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+
+		_, f2Meta, err := items.blockchainClient.GetBlockHeader(t.Context(), f2.Hash())
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		require.Error(t, ba.repairHeldTxsOfGoneBlocks(ctx, []blockHeaderWithMeta{{header: f2, meta: f2Meta}}, c3))
+	})
+
+	// The record of the held transactions comes before their write: without it nothing is
+	// written, and F2 is not given up.
+	t.Run("the record of the held txs is refused", func(t *testing.T) {
+		items, client, f2, _, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+
+		client.failListSave = true
+		ba.processNewBlockAnnouncement(t.Context())
+
+		require.Zero(t, unminedSince(t, items, y), "Y is not written without its record")
+		require.NotContains(t, ba.skippedForkBlocksMarked, *f2.Hash())
+		require.True(t, ba.skippedForkMarkPending)
+	})
+
+	// Z, which F2 mined but not on the longest chain, is unmined already and not written again;
+	// nor is it when a restart applies a recorded list.
+	t.Run("an unmined tx is not written again", func(t *testing.T) {
+		items, _, f2, c3, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		z := replayPoolTx(y.TxIDChainHash(), 70)
+		_, err := items.utxoStore.(*utxosql.Store).Create(ctx, z, 1)
+		require.NoError(t, err)
+
+		_, f2Meta, err := items.blockchainClient.GetBlockHeader(ctx, f2.Hash())
+		require.NoError(t, err)
+		_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{z.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: f2Meta.ID, BlockHeight: 2, OnLongestChain: false})
+		require.NoError(t, err)
+		require.NotZero(t, unminedSince(t, items, z), "precondition: Z is unmined")
+
+		ba.subtreeProcessor.AddBatch([]subtree.Node{{Hash: *z.TxIDChainHash(), Fee: 1, SizeInBytes: uint64(len(z.Bytes()))}}, []*subtree.TxInpoints{{}})
+		require.Eventually(t, func() bool { return ba.subtreeProcessor.GetCurrentTxMap().Exists(*z.TxIDChainHash()) }, 5*time.Second, 10*time.Millisecond)
+
+		// The record carries only Y.
+		ba.utxoStore = &failingUtxoStore{Store: items.utxoStore, fail: "MarkTransactionsOnLongestChain"}
+		ba.processNewBlockAnnouncement(ctx)
+
+		record, err := items.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
+		require.NoError(t, err)
+		require.Equal(t, append([]byte{1}, y.TxIDChainHash()[:]...), record, "only Y is recorded")
+
+		store := &recordingUtxoStore{Store: items.utxoStore}
+		ba.utxoStore = store
+		ba.skippedForkMarkRetryAt = time.Time{}
+		ba.processNewBlockAnnouncement(ctx)
+
+		requireBlockAssemblyTip(t, items, c3)
+		require.Equal(t, [][]chainhash.Hash{{*y.TxIDChainHash()}}, store.markedOff, "only Y is written")
+
+		// The list a restart reads.
+		require.NoError(t, items.utxoStore.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{*y.TxIDChainHash()}, true))
+		store.markedOff = nil
+		ba.skippedForkHeldRepair = []chainhash.Hash{*y.TxIDChainHash(), *z.TxIDChainHash()}
+
+		require.NoError(t, ba.applyHeldRepair(ctx, c3))
+		require.Equal(t, [][]chainhash.Hash{{*y.TxIDChainHash()}}, store.markedOff, "only Y is written")
+	})
+
+	// The repair's write fails: F2 is not given up, and the next pass repairs Y.
+	t.Run("a failed write is retried", func(t *testing.T) {
+		items, _, f2, _, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		ba.utxoStore = &failingUtxoStore{Store: items.utxoStore, fail: "MarkTransactionsOnLongestChain"}
+		ba.processNewBlockAnnouncement(ctx)
+
+		require.Zero(t, unminedSince(t, items, y))
+		require.NotContains(t, ba.skippedForkBlocksMarked, *f2.Hash(), "F2 is not given up before Y is repaired")
+		require.True(t, ba.skippedForkMarkPending)
+
+		ba.utxoStore = items.utxoStore
+		ba.skippedForkMarkRetryAt = time.Time{}
+		ba.processNewBlockAnnouncement(ctx)
+
+		require.NotZero(t, unminedSince(t, items, y))
+		require.Contains(t, ba.skippedForkBlocksMarked, *f2.Hash())
+		require.False(t, ba.skippedForkWorkOwed())
+	})
+
+	// The repair's write fails and block assembly restarts: its pool is gone and F2 still
+	// cannot say what it mined, so the record carries Y, and the start repairs it before it
+	// loads the unmined transactions.
+	t.Run("a failed write survives a restart", func(t *testing.T) {
+		items, _, _, _, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		ba.utxoStore = &failingUtxoStore{Store: items.utxoStore, fail: "MarkTransactionsOnLongestChain"}
+		ba.processNewBlockAnnouncement(ctx)
+		require.Zero(t, unminedSince(t, items, y), "precondition: the repair did not write")
+
+		record, err := items.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
+		require.NoError(t, err)
+		require.Equal(t, append([]byte{1}, y.TxIDChainHash()[:]...), record, "the record carries Y")
+
+		ba.subtreeProcessor.Stop(context.Background())
+
+		restarted, err := startBlockAssembler(t, items, ba.settings, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
+
+		require.NotZero(t, unminedSince(t, items, y))
+		require.True(t, restarted.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the restarted pool holds Y")
+
+		record, err = items.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
+		require.NoError(t, err)
+		require.Equal(t, []byte{0}, record)
+	})
+}
+
+// orderServingClient is noBestTipOrderClient with the best-tip order served, so the replay works.
+type orderServingClient struct {
+	*noBestTipOrderClient
+}
+
+func (c *orderServingClient) BlocksBetterThan(ctx context.Context, pos model.BestTipKey, from *model.BestTipKey, floor, limit uint32) ([]*model.BlockHeader, []*model.BlockHeaderMeta, bool, error) {
+	return c.ClientI.BlocksBetterThan(ctx, pos, from, floor, limit)
+}
+
+// TestSkippedForkReloadOnly_IdleRetryAfterFailedReset: a pool reload is the only work a finished
+// mark owes, and the reset that would do it fails before it rotates the pool. Nothing else is
+// owed: no mark, no recheck, no reset recovery, no history, and the reconcile timer is off. The
+// owed reload alone wakes the idle tick once its back-off is over, and that pass reloads Y.
+func TestSkippedForkReloadOnly_IdleRetryAfterFailedReset(t *testing.T) {
+	items, client, _, y := skippedForkSetup(t, true, true)
+	ba := items.blockAssembler
+	ba.settings.BlockAssembly.ReconcileInterval = 0
+	ctx := t.Context()
+
+	best, bestMeta, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	startReplayAt(t, items, best, bestMeta.Height)
+
+	served := &orderServingClient{noBestTipOrderClient: client}
+	ba.blockchainClient = served
+
+	// The mark before a reset leaves the reload to the reset.
+	require.NoError(t, ba.markSkippedForkTxs(ctx, true))
+	require.NotZero(t, unminedSince(t, items, y), "Y is marked")
+	require.False(t, ba.skippedForkMarkPending)
+	require.True(t, ba.skippedForkReloadPending)
+	require.Empty(t, ba.skippedForkRecheck)
+
+	// The reset's own read of the best header fails, before it rotates the pool.
+	failed := false
+	client.onBestCall = func(n int) {
+		if !failed && calledFrom("resetWithResponse") {
+			failed = true
+			client.failBestCall = n
+		}
+	}
+	client.headerIDsCalls = 0
+
+	answer := make(chan error, 1)
+	ba.handleResetRequests(ctx, resetRequest{ErrCh: answer})
+	require.ErrorContains(t, <-answer, "error getting best block header", "the reset fails reading the best header")
+	require.True(t, failed)
+	require.Zero(t, client.headerIDsCalls, "nothing was reloaded")
+	require.False(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "Y is not in the pool")
+
+	require.False(t, ba.skippedForkMarkPending, "no mark is owed")
+	require.True(t, ba.skippedForkReloadPending, "the reload is owed")
+	require.Empty(t, ba.skippedForkRecheck, "no recheck is owed")
+	require.False(t, ba.bestTipResetReplayPending.Load(), "no reset recovery is pending")
+	require.False(t, ba.bestTipResetIncomplete.Load(), "no reset is incomplete")
+	requireBlockAssemblyTip(t, items, best)
+
+	client.onBestCall, client.failBestCall = nil, 0
+
+	require.False(t, ba.reconcileDue(time.Now()), "not woken before the back-off")
+
+	ba.skippedForkMarkRetryAt = time.Now().Add(-time.Millisecond)
+	require.True(t, ba.reconcileDue(time.Now()), "the owed reload is due with the timer off")
+	require.True(t, ba.idleReconcileNeeded(ctx), "the idle tick wakes a pass for it")
+
+	// The idle tick's dispatch, and the pass it wakes.
+	if ba.reconcileDue(time.Now()) && ba.idleReconcileNeeded(ctx) {
+		ba.triggerReconcile()
+	}
+
+	select {
+	case <-ba.reconcileCh:
+	default:
+		require.Fail(t, "the idle tick did not wake a pass")
+	}
+
+	ba.processNewBlockAnnouncement(ctx)
+
+	require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the reload put Y in the pool")
+	require.Equal(t, 1, client.headerIDsCalls, "one reload")
+	require.False(t, ba.skippedForkWorkOwed())
+	require.False(t, ba.reconcileDue(time.Now()), "no further idle work")
+}
+
+// calledFrom reports whether a function named name is on the caller's stack.
+func calledFrom(name string) bool {
+	pcs := make([]uintptr, 64)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+
+	for {
+		frame, more := frames.Next()
+		if strings.HasSuffix(frame.Function, "."+name) {
+			return true
+		}
+
+		if !more {
+			return false
+		}
+	}
+}
+
+// recordingUtxoStore records the hashes of each mark as not on the longest chain.
+type recordingUtxoStore struct {
+	utxo.Store
+	markedOff [][]chainhash.Hash
+}
+
+func (s *recordingUtxoStore) MarkTransactionsOnLongestChain(ctx context.Context, hashes []chainhash.Hash, onLongestChain bool) error {
+	if !onLongestChain {
+		s.markedOff = append(s.markedOff, append([]chainhash.Hash(nil), hashes...))
+	}
+
+	return s.Store.MarkTransactionsOnLongestChain(ctx, hashes, onLongestChain)
 }
