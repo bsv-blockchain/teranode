@@ -61,6 +61,9 @@ read every section between yours and the target.
 - **Conflict recovery adds five `utxo.Store` methods and changes the UTXO WAL.** Upgrade block
   assembly together with the UTXO store and don't downgrade while conflict-recovery records are
   pending; they block startup. Follow [conflict recovery](docs/topics/conflict-recovery.md). (#2023)
+- **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
+  the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
+  the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
 - **Script-number overflow is a consensus failure.** Earlier builds accept transactions and blocks
   this one rejects: upgrade all your nodes together. These transactions are no longer published to
   the `kafka_txPolicyRejectedConfig` topic. (#1911)

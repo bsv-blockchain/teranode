@@ -84,6 +84,31 @@ func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpoint
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
 // logger still reports true, and the gates that query through the decorator engage).
+// TestConflictingTxHashes_Delegates pins that the logger decorator returns the
+// wrapped store's answer unchanged, including indexed=false.
+func TestConflictingTxHashes_Delegates(t *testing.T) {
+	ctx := context.Background()
+	want := []chainhash.Hash{{1}, {2}}
+
+	inner := &MockStore{}
+	inner.On("ConflictingTxHashes", ctx).Return(want, true, nil).Once()
+	inner.On("ConflictingTxHashes", ctx).Return(nil, false, nil).Once()
+
+	s := New(ctx, ulogger.TestLogger{}, inner)
+
+	hashes, indexed, err := s.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, want, hashes)
+
+	hashes, indexed, err = s.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, hashes)
+
+	inner.AssertExpectations(t)
+}
+
 func TestSupportsOutpointOnlySpend_Delegates(t *testing.T) {
 	for _, want := range []bool{true, false} {
 		inner := &MockStore{SupportsOutpointOnlySpendResult: want}
@@ -165,6 +190,14 @@ func (m *MockStore) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(utxo.UnminedTxIterator), args.Error(1)
+}
+
+func (m *MockStore) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).([]chainhash.Hash), args.Bool(1), args.Error(2)
 }
 
 func (m *MockStore) RemoveFromConflictingChildren(ctx context.Context, removals []utxo.ConflictingChildRemoval) error {
