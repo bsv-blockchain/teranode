@@ -288,7 +288,9 @@ func (s *Store) buildSpendOperations(
 // Unlike the Lua-based spendMulti which handles multiple spends per transaction in a single UDF call,
 // this creates individual batch operations for each spend but executes them in a single batch.
 //
-// The caller records outcome on the spend circuit breaker once per batcher batch.
+// Records the expression outcome on `outcome`, which coalesces repeated
+// expression outcomes across the parts of one batcher batch until an opposite
+// outcome is recorded.
 func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpend, outcome *spendBreakerOutcome) {
 	start := time.Now()
 	_, _, deferFn := tracing.Tracer("aerospike").Start(ctx, "SpendMultiWithExpressions")

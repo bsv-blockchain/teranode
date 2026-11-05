@@ -113,9 +113,9 @@ type batchSpend struct {
 	published         atomic.Bool
 	ignoreConflicting bool
 	ignoreLocked      bool
-	// tookBreakerSlot is set when Allow admitted the item, so a release only
-	// returns a slot the item took.
-	tookBreakerSlot bool
+	// breakerSlot is the half-open probe slot Admit gave the item, if any, so a
+	// release only returns a slot the item took in the epoch it took it.
+	breakerSlot breakerSlot
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
 	requireParentOutput bool
@@ -127,9 +127,10 @@ type batchSpend struct {
 // releaseBreakerSlot returns the half-open probe slot of an item that will never
 // reach the backend. The caller must have won the abandonment of the item.
 func (s *Store) releaseBreakerSlot(item *batchSpend) {
-	if item.tookBreakerSlot {
-		item.tookBreakerSlot = false
-		s.spendCircuitBreaker.Release()
+	if item.breakerSlot.taken {
+		slot := item.breakerSlot
+		item.breakerSlot = breakerSlot{}
+		s.spendCircuitBreaker.Release(slot)
 	}
 }
 
@@ -559,7 +560,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		items[idx] = item
 
 		// Fast-fail check: if circuit breaker is already open, reject immediately.
-		if s.spendCircuitBreaker != nil && !s.spendCircuitBreaker.Allow() {
+		admitted, slot := s.spendCircuitBreaker.Admit()
+		if !admitted {
 			// First rejection: every earlier item was accepted, so items[:idx] is
 			// exactly the accepted prefix. Tracked with a bool rather than a nil
 			// test on toEnqueue, because make([]T, 0, n) is non-nil and a nil test
@@ -574,7 +576,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			continue
 		}
 
-		item.tookBreakerSlot = s.spendCircuitBreaker != nil
+		item.breakerSlot = slot
 
 		if filtered {
 			toEnqueue = append(toEnqueue, item)
@@ -594,6 +596,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	}
 
 	if waitErr := group.Wait(requestCtx, 0); waitErr != nil {
+		callerDone := ctx.Err() != nil
+
 		for _, item := range items {
 			if item.admission.Abandon() {
 				s.releaseBreakerSlot(item)
@@ -626,7 +630,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// race, and an in-flight item still reads Err==nil (misclassified as a
 		// successful spend). A Wait error means the whole operation failed;
 		// callers must treat it as such and not inspect per-item slots.
-		if ctx.Err() != nil {
+		if callerDone {
 			return nil, errors.NewContextCanceledError("[SPEND] context canceled while waiting for batch response: %s", waitErr)
 		}
 

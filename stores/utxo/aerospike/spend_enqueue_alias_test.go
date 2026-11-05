@@ -259,12 +259,46 @@ func TestSpend_AbandonedRequestReleasesHalfOpenSlot(t *testing.T) {
 	require.True(t, s.spendCircuitBreaker.Allow(), "the abandoned probe must give its slot back")
 }
 
+// breakerMovingBatcher swallows the items and, on enqueue, trips the breaker,
+// lets its cooldown elapse and takes the only half-open probe, so the items
+// Spend admitted while the breaker was closed are abandoned after half-open.
+type breakerMovingBatcher struct {
+	silentSpendBatcher
+	cb *circuitBreaker
+}
+
+func (b *breakerMovingBatcher) PutBatchCtx(context.Context, []*batchSpend, ...int) {
+	b.cb.RecordFailure()
+	expireCooldown(b.cb)
+	b.cb.Allow()
+}
+
+func TestSpend_AbandoningAnItemAdmittedWhileClosedDoesNotFreeAHalfOpenSlot(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	cb := newCircuitBreaker(1, 1, time.Hour)
+	require.NotNil(t, cb)
+
+	s.spendCircuitBreaker = cb
+	s.spendBatcher = &breakerMovingBatcher{cb: cb}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := s.Spend(ctx, txWithInputs(t, 1), 100)
+	require.Error(t, err)
+
+	require.Equal(t, cbStateHalfOpen, cb.state)
+	require.Equal(t, 1, cb.halfOpenAttempts)
+	require.False(t, cb.Allow(), "the abandoned item took no slot, so none may be freed for another probe")
+}
+
 func TestSpend_DispatchRejectReleasesHalfOpenSlot(t *testing.T) {
 	s := newTestStoreForSpendEnqueue(t)
 	cb := halfOpenBreaker(t)
 	s.spendCircuitBreaker = cb
 
-	require.True(t, cb.Allow(), "the request takes the only half-open slot")
+	allowed, slot := cb.Admit()
+	require.True(t, allowed, "the request takes the only half-open slot")
 	require.False(t, cb.Allow())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -272,10 +306,10 @@ func TestSpend_DispatchRejectReleasesHalfOpenSlot(t *testing.T) {
 
 	parent, utxoHash, spender := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
 	item := &batchSpend{
-		spend:           &utxo.Spend{TxID: &parent, UTXOHash: &utxoHash, SpendingData: spendpkg.NewSpendingData(&spender, 0)},
-		group:           completion.NewGroup(1),
-		requestCtx:      ctx,
-		tookBreakerSlot: true,
+		spend:       &utxo.Spend{TxID: &parent, UTXOHash: &utxoHash, SpendingData: spendpkg.NewSpendingData(&spender, 0)},
+		group:       completion.NewGroup(1),
+		requestCtx:  ctx,
+		breakerSlot: slot,
 	}
 
 	s.sendSpendBatchLua([]*batchSpend{item})

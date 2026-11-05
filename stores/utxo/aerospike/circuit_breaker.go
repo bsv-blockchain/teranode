@@ -164,6 +164,17 @@ type circuitBreaker struct {
 	halfOpenAttempts    int
 	consecutiveSuccess  int
 	nextAttempt         time.Time
+
+	// halfOpenEpoch advances on every entry to half-open and every trip, so a
+	// slot handed out in one half-open epoch cannot be released into another.
+	halfOpenEpoch uint64
+}
+
+// breakerSlot records whether an admission took a half-open probe slot and the
+// half-open epoch it took it in. The zero value took no slot.
+type breakerSlot struct {
+	epoch uint64
+	taken bool
 }
 
 func newCircuitBreaker(failureThreshold, halfOpenMax int, cooldown time.Duration) *circuitBreaker {
@@ -185,9 +196,18 @@ func newCircuitBreaker(failureThreshold, halfOpenMax int, cooldown time.Duration
 	}
 }
 
+// Allow reports whether a request may proceed, discarding the slot Admit hands back.
 func (cb *circuitBreaker) Allow() bool {
+	allowed, _ := cb.Admit()
+
+	return allowed
+}
+
+// Admit reports whether a request may proceed. The slot is taken only when the
+// admission consumed a half-open probe slot, and must be passed to Release.
+func (cb *circuitBreaker) Admit() (bool, breakerSlot) {
 	if cb == nil {
-		return true
+		return true, breakerSlot{}
 	}
 
 	cb.mu.Lock()
@@ -197,48 +217,50 @@ func (cb *circuitBreaker) Allow() bool {
 
 	switch cb.state {
 	case cbStateClosed:
-		return true
+		return true, breakerSlot{}
 	case cbStateOpen:
 		if now.After(cb.nextAttempt) {
 			cb.enterHalfOpen(now)
-			return true
+			return true, breakerSlot{epoch: cb.halfOpenEpoch, taken: true}
 		}
-		return false
+		return false, breakerSlot{}
 	case cbStateHalfOpen:
 		if cb.halfOpenAttempts >= cb.halfOpenMax {
 			// Backstop: a probe that never reports must not hold half-open
 			// shut for ever. One cooldown after entry, probe again.
 			if now.After(cb.nextAttempt.Add(cb.cooldown)) {
 				cb.enterHalfOpen(now)
-				return true
+				return true, breakerSlot{epoch: cb.halfOpenEpoch, taken: true}
 			}
-			return false
+			return false, breakerSlot{}
 		}
 		cb.halfOpenAttempts++
-		return true
+		return true, breakerSlot{epoch: cb.halfOpenEpoch, taken: true}
 	default:
-		return true
+		return true, breakerSlot{}
 	}
 }
 
 func (cb *circuitBreaker) enterHalfOpen(now time.Time) {
 	cb.state = cbStateHalfOpen
+	cb.halfOpenEpoch++
 	cb.halfOpenAttempts = 1
 	cb.consecutiveSuccess = 0
 	cb.nextAttempt = now
 }
 
-// Release gives back a half-open probe slot taken by Allow for a request that
-// will never report an outcome. It does nothing in any other state.
-func (cb *circuitBreaker) Release() {
-	if cb == nil {
+// Release gives back a half-open probe slot taken by Admit for a request that
+// will never report an outcome. It does nothing for a slot that was not taken
+// or that belongs to an earlier half-open epoch.
+func (cb *circuitBreaker) Release(slot breakerSlot) {
+	if cb == nil || !slot.taken {
 		return
 	}
 
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 
-	if cb.state == cbStateHalfOpen && cb.halfOpenAttempts > 0 {
+	if cb.state == cbStateHalfOpen && slot.epoch == cb.halfOpenEpoch && cb.halfOpenAttempts > 0 {
 		cb.halfOpenAttempts--
 	}
 }
@@ -285,6 +307,7 @@ func (cb *circuitBreaker) RecordFailure() {
 
 func (cb *circuitBreaker) trip() {
 	cb.state = cbStateOpen
+	cb.halfOpenEpoch++
 	cb.nextAttempt = time.Now().Add(cb.cooldown)
 	cb.consecutiveFailures = 0
 	cb.halfOpenAttempts = 0

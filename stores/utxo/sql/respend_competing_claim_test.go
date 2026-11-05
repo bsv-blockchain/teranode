@@ -4,12 +4,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/stretchr/testify/require"
 )
 
-// assertRespendBehindLoserInSameBatch pins bitcoin-sv/teranode#4934 at the
+// assertRespendBehindLoserInSameBatch pins the respend-behind-loser behaviour at the
 // in-batch filter, driving sendSpendBatch with an explicit batch so no timing
 // is involved.
 //
@@ -226,4 +228,69 @@ func TestSpendBatchPanicAnswersEveryClaim(t *testing.T) {
 	spent, err := store.Spend(ctx, spendOf(t, parent, 1, 0), 2)
 	require.NoError(t, err, "the panicked part must not leave output 0 spent")
 	require.Len(t, spent, 1)
+}
+
+// Claims with different checks on one outpoint must not share a verdict. A
+// refusal that only the first claim's checks produce is not evidence about the
+// claim behind it.
+func TestSpendBatchClaimWithoutHashCheckIsNotRefusedForAnotherClaimsHashMismatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := setupSharedBatch(ctx, t, "same-checks-hash")
+	require.NoError(t, store.SetBlockHeight(2))
+	parent := twoOutParent(ctx, t, store, "same-checks-hash")
+
+	checked, err := utxo.GetSpends(spendOf(t, parent, 1, 0))
+	require.NoError(t, err)
+	unchecked, err := utxo.GetSpends(spendOf(t, parent, 2, 0))
+	require.NoError(t, err)
+
+	stale := chainhash.Hash{99}
+	checked[0].UTXOHash = &stale
+	unchecked[0].UTXOHash = &stale
+
+	first := &batchSpend{spend: checked[0], blockHeight: 2, errCh: make(chan error, 1)}
+	second := &batchSpend{spend: unchecked[0], blockHeight: 2, skipUTXOHashCheck: true, errCh: make(chan error, 1)}
+	store.sendSpendBatch([]*batchSpend{first, second})
+
+	require.ErrorIs(t, <-first.errCh, errors.ErrUtxoHashMismatch)
+	require.NoError(t, <-second.errCh, "the claim that skips the hash check must not inherit the other claim's mismatch")
+
+	probe, err := utxo.GetSpends(spendOf(t, parent, 2, 0))
+	require.NoError(t, err)
+
+	stored, err := store.GetSpend(ctx, probe[0])
+	require.NoError(t, err)
+	require.Equal(t, int(utxo.Status_SPENT), stored.Status)
+	require.NotNil(t, stored.SpendingData)
+	require.Equal(t, unchecked[0].SpendingData.Bytes(), stored.SpendingData.Bytes())
+}
+
+func TestSpendBatchClaimIgnoringConflictingIsNotRefusedForAnotherClaimsConflictingVerdict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := setupSharedBatch(ctx, t, "same-checks-conflicting")
+	require.NoError(t, store.SetBlockHeight(2))
+	grandparent := twoOutParent(ctx, t, store, "same-checks-conflicting")
+	parent := spendOf(t, grandparent, 7, 0)
+	parent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+	_, err := store.Create(ctx, parent, 1, utxo.WithConflicting(true))
+	require.NoError(t, err)
+
+	strict, err := utxo.GetSpends(spendOf(t, parent, 1, 0))
+	require.NoError(t, err)
+	lenient, err := utxo.GetSpends(spendOf(t, parent, 2, 0))
+	require.NoError(t, err)
+
+	first := &batchSpend{spend: strict[0], blockHeight: 2, errCh: make(chan error, 1)}
+	second := &batchSpend{spend: lenient[0], blockHeight: 2, ignoreConflicting: true, errCh: make(chan error, 1)}
+	store.sendSpendBatch([]*batchSpend{first, second})
+
+	require.ErrorIs(t, <-first.errCh, errors.ErrTxConflicting)
+	require.NoError(t, <-second.errCh, "the claim that ignores conflicting must not inherit the other claim's verdict")
+
+	stored, err := store.GetSpend(ctx, lenient[0])
+	require.NoError(t, err)
+	require.NotNil(t, stored.SpendingData)
+	require.Equal(t, lenient[0].SpendingData.Bytes(), stored.SpendingData.Bytes())
 }

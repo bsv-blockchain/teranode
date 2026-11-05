@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestRespendBehindLoserInSameBatch is the Aerospike half of bitcoin-sv/teranode#4934.
+// TestRespendBehindLoserInSameBatch pins the Aerospike half of the respend-behind-loser behaviour.
 //
 // S0 already owns both parent outputs. A batch then carries a double-spend
 // attempt on output 0 AHEAD of S0's idempotent re-spend. The filter used to
