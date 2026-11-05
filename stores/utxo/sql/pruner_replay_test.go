@@ -88,7 +88,7 @@ func testPrunedChildReplay(t *testing.T, ctx context.Context, store *Store, tc r
 		_, err = store.db.ExecContext(ctx, "DROP TABLE deleted_children")
 		require.NoError(t, err)
 		if store.engine == "postgres" {
-			err = createPostgresSchema(store.db)
+			err = createPostgresSchema(ctx, store.logger, store.db)
 		} else {
 			err = createSqliteSchema(store.db)
 		}

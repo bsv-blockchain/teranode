@@ -904,6 +904,17 @@ type Store interface {
 	// transactions during a rewind.
 	GetConflictingTxIterator() (UnminedTxIterator, error)
 
+	// ConflictingTxHashes returns the hash of every transaction whose record the
+	// store currently flags conflicting, answered from an index of conflicting
+	// records rather than by reading each transaction. Block validation uses it to
+	// check already-validated subtrees without a read per transaction.
+	//
+	// indexed is false when the store cannot answer from an index right now (an
+	// index still building, or a server that cannot hold one); the hashes are then
+	// nil and the caller must find the conflicting transactions some other way.
+	// An error means the store failed to answer and must not be read as "none".
+	ConflictingTxHashes(ctx context.Context) (hashes []chainhash.Hash, indexed bool, err error)
+
 	// SetLocked marks transactions as locked for spending.
 	SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error
 
