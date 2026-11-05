@@ -209,7 +209,7 @@ A failure MUST be classified `ERR_BLOCK_CORRUPT`.
 
 **BV-BODY-021.** Below `GenesisActivationHeight`, the total sigops of the block, counted with P2SH, MUST be ≤ 20,000 × ⌈block size in bytes / 1,000,000⌉. A violation MUST be classified `ERR_BLOCK_INVALID`.
 
-**BV-BODY-022.** Below `BIP0034Height`, except at blocks 91842 and 91880, a block MUST NOT contain a transaction whose ID equals that of a transaction in an ancestor with unspent outputs (BIP30). At any height, a coinbase whose ID collides with an earlier coinbase MUST NOT leave the earlier coinbase's unspent outputs in the UTXO set.
+**BV-BODY-022.** Below `BIP0034Height`, except for the two historic blocks at heights 91842 and 91880 (identified by height and hash, as bitcoin-sv's `fEnforceBIP30` does: `00000000000a4d0a…0caec` and `00000000000743f1…cd721`), a block MUST NOT contain a transaction whose ID equals that of a transaction in an ancestor with unspent outputs (BIP30). At any height, a coinbase whose ID collides with an earlier coinbase MUST NOT leave the earlier coinbase's unspent outputs in the UTXO set.
 
 **BV-BODY-016.** A transaction-invalid result from Subtree Validation SHALL be classified as follows:
 
@@ -1387,16 +1387,19 @@ Both full and quick validation return `ERR_BLOCK_INCOMPLETE` for a coinbase with
 *Affects:* BV-BODY-020, BV-BODY-015.
 Finality, coinbase maturity, BIP68 and era script flags are evaluated once, in the context where a transaction was first validated. Transactions found in the txmeta cache are not re-validated (`services/subtreevalidation/SubtreeValidation.go` ~832-856), and cached subtrees are re-checked only for double-spend ancestry (`check_block_subtrees.go` ~777-806, whose comment assumes context-free validity does not change between blocks). A sibling or fork block at a lower height or median-time-past can therefore include a transaction that is non-final, or spends an immature coinbase, at that block's height. The BIP68 median-time store is also height-indexed rather than branch-aware (`Validator.go` ~2927-2948; pre-Genesis only), and the block-subtree path does not pass a candidate block time, so pre-`CSVHeight` finality is skipped there (`services/subtreevalidation/Server.go` ~968). Medium confidence; not reproduced.
 *Work required:* re-evaluate the context-dependent rules per candidate block, or key the cached result by the context it was validated in.
+*Proof:* confirmed by `TestGapBV047_StoredNonFinalTxRejectedInSiblingBlock`, `TestGapBV047_StoredTxSpendingImmatureCoinbaseRejectedAtLowerForkHeight` and `TestGapBV047_CachedSubtreeReevaluatedAgainstLowerParentMTP` (`services/subtreevalidation/gap_bv047_test.go`, test task T08), which fail today; their controls show the same records are re-checked when flagged Conflicting, so the re-check is gated on that flag.
 
 **GAP-BV-048.** No pre-Genesis block sigop limit.
 *Affects:* BV-BODY-021.
 No block-level sigop accumulator exists outside the legacy service. On mainnet every pre-Genesis block is below the highest hardcoded checkpoint, so the impact is limited to full re-validation of history, test networks, and chains without checkpoints.
 *Work required:* add the limit for heights below `GenesisActivationHeight`.
+*Proof:* confirmed by the `TestGapBV048_*` tests (`services/blockvalidation/gap_bv048_test.go`, test task T08): 20,001 sigops in 900 KB and in exactly 1 MB, 40,001 just over 1 MB, and P2SH-counted sigops are all accepted today.
 
 **GAP-BV-049.** BIP30 and coinbase-collision handling differ from bitcoin-sv.
 *Affects:* BV-BODY-022.
 Teranode does not enforce BIP30 below `BIP0034Height`, and when a coinbase's ID collides with an existing one, it silently skips re-creating it (`services/blockassembly/subtreeprocessor/SubtreeProcessor.go` ~6596-6601), leaving the earlier outputs in place where bitcoin-sv would overwrite them. Reachable only below the checkpoints or at the known future coinbase-collision heights (from ~1,983,702). Low impact.
 *Work required:* match bitcoin-sv's behaviour at those heights.
+*Proof:* confirmed by `TestGapBV049_DuplicateOfUnspentAncestorBelowBIP34IsRejected` and `TestGapBV049_CollidingCoinbaseLeavesNoEarlierOutputs` (`services/blockvalidation/gap_bv049_test.go`, test task T08), which fail today. Not covered: the 91842/91880 exemption (a faked height cannot match the block hashes) and re-creation of a fully spent transaction (Open Question 23).
 
 **GAP-BV-050.** Future-dated catchup headers are reported malicious.
 *Affects:* BV-CATCHUP-007, BV-HEADER-006.
@@ -1465,6 +1468,11 @@ The mined-not-set sweep is guarded by a compare-and-swap (`BlockValidation.go` ~
 *Work required:* abort the catchup (LOCAL, no peer charge) when either call fails.
 *Proof:* confirmed by `TestGapBV061_CatchupAbortsWhenOldBranchMinedSetClearFails` (header read and clear failures), which fails today (`make test-bvgaps`).
 
+**GAP-BV-062.** Quick validation never evaluates a post-CSV time-based coinbase lock, including above the hardcoded checkpoints.
+*Affects:* BV-QUICK-031, BV-BODY-019.
+`checkQuickValidationCoinbase` (`quick_validate.go`) always passes a parent median-time-past of 0 to `model.CoinbaseFinalityViolation`, which then skips a time-based nLockTime from `CSVHeight` on (`model/block_coinbase_finality.go`). Its comment justifies the skip as "a block below a hash-verified checkpoint". That holds under BV-QUICK-030, but not on the range above the highest hardcoded checkpoint that the operator catchup-checkpoint override opens (BV-CONFIG-005, `catchup.go` override checkpoint), where BV-QUICK-031 says coinbase finality SHOULD still be enforced. The height lock, the sequence rule and the pre-CSV time lock are enforced on that range. Verified by reading the code; found while writing the T08 tests, which deliberately do not pin it.
+*Work required:* on the override range, compute the parent's median-time-past for quick validation (or route those blocks through full validation), and enforce the post-CSV cutoff.
+
 ---
 
 ## Open Questions
@@ -1508,3 +1516,4 @@ These are unresolved design questions, distinct from Conformance Gaps.
     | BV-NFR-005 | No honest-tip wedge longer than one cooldown window | Generalised from the corrupt-cap rationale |
 21. Teranode enforces consensus-frozen outputs and confiscation re-assignment from the alert system (`stores/utxo/sql/sql.go` ~2579-2595; `services/alert/node.go` ~397). Parity with bitcoin-sv on the height-interval semantics of a freeze and on the 1000-block maturity of confiscation outputs (`bad-txns-inputs-frozen`, `consensus.h` ~79) has not been verified. Should these rules be stated in this spec, in the Validator's spec, or both?
 22. Is the 1,000,000-byte floor on `excessiveblocksize` (BV-BODY-018) already enforced at settings load? Not verified.
+23. BIP30 re-creation of a fully spent transaction (BV-BODY-022): bitcoin-sv allows a block to repeat the txid of an ancestor whose outputs are all spent; Teranode's `utxoset` backend refuses it (an anti-inflation rule, pinned by its own tests). Which behaviour does the spec require, per backend? The T08 gap proofs deliberately cover only the cases both agree on.

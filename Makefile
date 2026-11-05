@@ -190,13 +190,13 @@ test-heavy:
 # target is not part of `make test`. When a gap is fixed, drop the bvgaps tag from its test file.
 .PHONY: test-bvgaps
 test-bvgaps:
-	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestGapBV' ./model/... ./services/blockvalidation/...
+	SETTINGS_CONTEXT=test go test -race -count=1 -tags "bvgaps testtxmetacache" -run '^TestGapBV' ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
 
 # compile and vet the gap-proof tests without running them, so a rename in the code they exercise
 # breaks the build here (and in CI) instead of silently when a gap is fixed.
 .PHONY: vet-bvgaps
 vet-bvgaps:
-	go vet -tags "bvgaps testtxmetacache" ./model/... ./services/blockvalidation/...
+	go vet -tags "bvgaps testtxmetacache" ./model/... ./services/blockvalidation/... ./services/subtreevalidation/...
 
 # run tagged service regressions and tests in the test/longtest directory
 .PHONY: longtest
