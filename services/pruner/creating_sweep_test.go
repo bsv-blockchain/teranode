@@ -36,6 +36,7 @@ type fakeSweepStore struct {
 	events    []string
 	began     []chainhash.Hash
 	unspent   [][]*utxo.Spend
+	unspendFn func(spends []*utxo.Spend) error
 	deleted   []chainhash.Hash
 
 	spends         []chainhash.Hash
@@ -111,6 +112,10 @@ func (f *fakeSweepStore) BeginCreateFirstRollback(_ context.Context, hash *chain
 func (f *fakeSweepStore) Unspend(_ context.Context, spends []*utxo.Spend, _ ...bool) error {
 	f.events = append(f.events, "unspend")
 	f.unspent = append(f.unspent, spends)
+
+	if f.unspendFn != nil {
+		return f.unspendFn(spends)
+	}
 
 	return nil
 }
@@ -383,7 +388,7 @@ func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
 }
 
 func TestSweepCreatingTxsEveryUnwinnableErrorRollsBack(t *testing.T) {
-	for _, spendErr := range []error{errors.ErrSpent, errors.ErrTxConflicting, errors.ErrFrozen, errors.ErrUtxoHashMismatch} {
+	for _, spendErr := range []error{errors.ErrSpent, errors.ErrTxConflicting, errors.ErrFrozen, errors.ErrUtxoHashMismatch, errors.ErrTxNotFound} {
 		ns, err := nullstore.NewNullStore()
 		require.NoError(t, err)
 
@@ -402,6 +407,30 @@ func TestSweepCreatingTxsEveryUnwinnableErrorRollsBack(t *testing.T) {
 		require.Equal(t, []chainhash.Hash{hashA}, store.deleted, "%v must roll the record back", spendErr)
 		require.Empty(t, store.finalized)
 	}
+}
+
+func TestSweepCreatingTxsRollsBackCreatingRecordWithMissingVout(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	missingVout := &bt.Input{PreviousTxOutIndex: 9, PreviousTxSatoshis: 1, PreviousTxScript: bscript.NewFromBytes([]byte{0x51}), UnlockingScript: bscript.NewFromBytes([]byte{})}
+	require.NoError(t, missingVout.PreviousTxIDAdd(&chainhash.Hash{1}))
+	txA.Inputs = append(txA.Inputs, missingVout)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		spendErr:  errors.NewTxNotFoundError("[SPEND_BATCH_LUA][%s] UTXO not found for vout 9", hashA.String()),
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.deleted, "a record whose input names a missing vout must be rolled back and deleted")
+	require.Empty(t, store.finalized)
+	require.Equal(t, []string{"begin", "unspend", "delete"}, store.events)
 }
 
 func TestSweepCreatingTxsLockedParentRetriesNextBlock(t *testing.T) {
@@ -474,6 +503,39 @@ func TestSweepCreatingTxsFinishesAbandonedRollback(t *testing.T) {
 	require.Equal(t, []chainhash.Hash{hashA}, store.deleted)
 	require.Empty(t, store.spends, "a rolling-back record must never be re-spent")
 	require.Empty(t, store.finalized)
+}
+
+func TestSweepCreatingTxsFinishesRollbackPastUnspendableInput(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	badInput := &bt.Input{PreviousTxOutIndex: 9, PreviousTxSatoshis: 1, PreviousTxScript: bscript.NewFromBytes([]byte{0x51}), UnlockingScript: bscript.NewFromBytes([]byte{})}
+	require.NoError(t, badInput.PreviousTxIDAdd(&chainhash.Hash{1}))
+	txA.Inputs = append(txA.Inputs, badInput)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		unspendFn: func(spends []*utxo.Spend) error {
+			for _, sp := range spends {
+				if sp.Vout == 9 {
+					return errors.NewUtxoHashMismatchError("mismatch")
+				}
+			}
+
+			return nil
+		},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.deleted, "a mismatched input must not keep the record rolling back")
+	require.Len(t, store.unspent, 3, "one batch call, then one call per input")
+	require.Len(t, store.unspent[1], 1)
+	require.Equal(t, uint32(1), store.unspent[1][0].Vout, "the valid input is unspent on its own")
 }
 
 func TestSweepCreatingTxsSkipsAlreadyFinalized(t *testing.T) {
