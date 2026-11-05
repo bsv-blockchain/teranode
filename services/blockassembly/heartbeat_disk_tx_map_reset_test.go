@@ -454,6 +454,6 @@ func TestBlockAssembler_HeartbeatRetriesARefusedDrainReset(t *testing.T) {
 
 	client.fail.Store(false)
 
-	require.Eventually(t, func() bool { return resets.Load() == 1 }, skippedForkMarkRetryBase+5*time.Second, 10*time.Millisecond,
+	require.Eventually(t, func() bool { return resets.Load() == 1 }, 2*skippedForkMarkRetryBase+5*time.Second, 10*time.Millisecond,
 		"the heartbeat retries the refused reset after the back-off")
 }

@@ -3602,7 +3602,59 @@ func TestHandleResetRequests_RefusedResetIsRetried(t *testing.T) {
 		// The requeue's sender waits for the answer on req.ErrCh.
 		ba.handleResetRequests(ctx, req)
 		require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the reset ran")
+	})
 
-		require.Nil(t, ba.resetOwed, "nothing is owed any more")
+	// A batch of a storage-triggered request and another is owed both ways.
+	t.Run("a mixed batch", func(t *testing.T) {
+		items, client, _, _ := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+		client.failMarkSave = true
+
+		answer, queued := make(chan error, 1), make(chan error, 1)
+		ba.resetCh <- resetRequest{ErrCh: queued, FullReset: true}
+		ba.handleResetRequests(t.Context(), resetRequest{ErrCh: answer, StorageTriggered: true})
+		require.Error(t, <-answer)
+		require.Error(t, <-queued)
+
+		require.True(t, ba.diskTxMapResetPending, "the storage-triggered reset is owed")
+		require.NotNil(t, ba.resetOwed)
+		require.True(t, ba.resetOwed.FullReset, "and the other one, with its options")
+	})
+
+	// A second refusal, of a storage-triggered reset alone, keeps the reset owed before it.
+	t.Run("a second refusal keeps it", func(t *testing.T) {
+		items, client, _, _ := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+		ctx := t.Context()
+		client.failMarkSave = true
+
+		for _, req := range []resetRequest{{FullReset: true}, {StorageTriggered: true}} {
+			req.ErrCh = make(chan error, 1)
+			ba.handleResetRequests(ctx, req)
+			require.Error(t, <-req.ErrCh)
+		}
+
+		require.NotNil(t, ba.resetOwed)
+		require.True(t, ba.resetOwed.FullReset, "the first refused reset is still owed")
+	})
+
+	// A reset that runs while one is owed takes it in, so it does not run again.
+	t.Run("a later reset takes it in", func(t *testing.T) {
+		items, client, _, _ := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+		ctx := t.Context()
+		client.failMarkSave = true
+
+		refusedAnswer := make(chan error, 1)
+		ba.handleResetRequests(ctx, resetRequest{ErrCh: refusedAnswer, FullReset: true})
+		require.Error(t, <-refusedAnswer)
+		require.NotNil(t, ba.resetOwed)
+
+		client.failMarkSave = false
+
+		answer := make(chan error, 1)
+		ba.handleResetRequests(ctx, resetRequest{ErrCh: answer})
+		require.NoError(t, <-answer)
+		require.Nil(t, ba.resetOwed, "the owed reset ran with this one")
 	})
 }

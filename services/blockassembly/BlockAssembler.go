@@ -772,6 +772,15 @@ drain:
 		storageTriggered = storageTriggered || req.StorageTriggered
 	}
 
+	// A reset refused earlier (resetOwed) runs with this one, so it does not run again.
+	owed := b.resetOwed
+	b.resetOwed = nil
+
+	if owed != nil {
+		fullReset = fullReset || owed.FullReset
+		validateInputs = validateInputs || owed.ValidateInputs
+	}
+
 	answer := func(err error) {
 		for _, req := range batch {
 			if req.ErrCh != nil {
@@ -805,6 +814,8 @@ drain:
 		b.logger.Errorf("%v", refused)
 
 		b.onResetDone(storageTriggered, subtreeprocessor.ResetResponse{}, refused)
+
+		b.resetOwed = owed
 
 		for _, req := range batch {
 			if req.StorageTriggered {
