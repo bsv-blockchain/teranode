@@ -374,8 +374,9 @@ func (a Admission) String() string {
 // memory while it validates, and they count toward the total, so mempool ingest sees the node as
 // full.
 //
-// A refusal is classified from the same observations that made the decision, never from a later
-// read, which another producer or a drain could have changed.
+// The queue bound is judged from the reservation's own read. The held bound reads the placed and
+// dequeued counts again, and leaves out every queued item, so a reservation another producer is
+// about to roll back cannot make this refusal a held one.
 //
 // Parameters:
 //   - nodes: The transaction nodes to add
