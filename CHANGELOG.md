@@ -137,9 +137,73 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Set a real `grpc_admin_api_key` on every service.** `settings.conf` no longer ships `testkey`,
+  placeholders are ignored, and P2P won't start on a key under 16 characters off loopback. Bans,
+  reputation reset, peer connect and mutating P2P RPCs need it. (#1257, #1532, #1575)
+- **`p2p_grpcListenAddress` defaults to `localhost:${P2P_GRPC_PORT}`.** Outside the `docker.m`,
+  `docker.ss` and `operator` contexts, a P2P service in its own container or pod is unreachable until
+  you set `p2p_grpcListenAddress = :${P2P_GRPC_PORT}`. (#1532)
+- **P2P refuses to start when `p2p_listen_addresses` names anything but a wildcard bind**; narrower
+  values were ignored before. libp2p always listens on `p2p_port`, and `p2p_share_private_addresses`
+  no longer advertises listen addresses: use `p2p_advertise_addresses`. (#1684)
+- **`blockpersister_batchMissingTransactions` is removed**; the persister always batches. Delete the
+  key. (#1656)
+- **Block Assembly refuses to start with no saved state on a chain past genesis.** This hits nodes
+  seeded with the v0.15.9 seeder that never ran Block Assembly: reseed with the v0.16.0 seeder or set
+  the state with `rewindblockchain`. (#1120)
+- **The LEGACYSYNCING FSM state, `LEGACYSYNC` event and `LegacySync` RPC are gone.** Scripts using
+  `setfsmstate --fsmstate legacysyncing` must use `catchingblocks`. A persisted LEGACYSYNCING state
+  becomes CATCHINGBLOCKS on startup. (#1042)
+- **`RUN` is refused below the highest checkpoint from every FSM state, IDLE included.** Tooling that
+  forces a syncing node to `running` gets an error: send `catchingblocks` and the node promotes itself
+  once caught up. (#1685)
+- **Peer fetches refuse DataHub hostnames that resolve to a private address** (RFC1918, `fc00::/7`,
+  `100.64.0.0/10`). Nodes that peer over a private network or internal DNS must set
+  `p2p_allow_private_ips = true`, or they can't catch up from each other. (#1749)
 - **Kubernetes: shared Kafka sits behind a NetworkPolicy** once
   `deploy/kubernetes/kafka/kafka-shared-networkpolicy.yaml` is applied. Services in another
   namespace lose Kafka: move Kafka or add a `namespaceSelector` before applying. (#1617)
+- **The reference Kubernetes manifests read `blockchain_store` and `utxostore` from the
+  `teranode-operator-secrets` Secret.** Create it before re-applying `deploy/kubernetes/teranode/`.
+  (#1180)
+- **BIP34/66/65 are enforced as in SV Node.** From each network's activation height, blocks below
+  version 2/3/4 or without a minimally encoded coinbase height are invalid. Earlier builds accept them,
+  and mine a non-minimal height below 32768: upgrade all your nodes together. (#1301, #1338)
+- **Median-time-past uses the 11 blocks ending at the parent, as in SV Node.** Earlier builds measured
+  it about 90 blocks further back and accept blocks this one rejects: upgrade all your nodes
+  together. (#1481)
+- **tstn has a new genesis block.** Wipe tstn chain data and resync. Regtest activates Genesis at
+  height 100 and Chronicle at 200 (were 10000 and 15000): regenerate regtest chains and don't mix
+  versions on one. (#1220, #1592)
+- **Upgrade subtree validation no later than a remote validator.** The validator drops the parent
+  metadata older subtree validation sends, so those reject blocks with same-block parent chains
+  (`bad-txns-unconfirmed-input-in-block`). In-process validators (the default) are unaffected. (#1075)
+- **`POST /txs` returns the rejection's status, not 500.** A rejected batch gets 400, 403, 409 or
+  422, 500 means a server fault, and already-known transactions count as success. Update clients that
+  treat 500 as a rejection. (#1295)
+- **`/api/v1/merkle_proof/:hash` no longer accepts a subtree root** and returns 404 unless the hash
+  is a mined transaction. Request per-transaction proofs. (#1716)
+- **P2P HTTP is rate-limited per source by `p2p_httpRateLimit` (default 100 req/s).** Tools that
+  poll it faster get 429: raise the limit or set it to 0. (#1566)
+- **The Asset Centrifuge websocket rejects cross-origin browser connections.** List a dashboard or
+  web app served from another host in `asset_centrifugeAllowOrigins`. Non-browser clients are
+  unaffected. (#1770)
+- **Pruner metrics move from `pruner_*` to `teranode_pruner_*`** (`pruner_errors_total` becomes
+  `teranode_pruner_errors_total`). Update dashboards and alerts. (#1564)
+- **Txmeta-cache metrics change.** `teranode_subtreevalidation_set_tx_meta_cache_kafka` becomes
+  `..._kafka_batch`, `..._set_tx_meta_cache_kafka_count` counts entries, not Kafka messages, and
+  `teranode_tx_meta_cache_hit_old_tx` is gone. (#1211)
+- **`teranode_blockvalidation_setmined_retry_total` and `..._setmined_drops_total` lose their
+  `blockhash` label.** Queries that group or filter on it must aggregate. (#918, #1102)
+- **`teranode_validator_invalid_transactions` no longer counts Kafka missing-parent rejections**;
+  they go to `teranode_validator_missing_parent_transactions`. Alerts should sum both. (#1617)
 - **`txMetaCacheTrimRatio` is renamed `subtreevalidation_txMetaCacheTrimRatio`.** A local
   override under the old name is ignored; rename it. Only the `preallocated` txmeta cache
   reads it. (#1746)
+- **Out-of-tree `utxo.Store` implementations break.** `Create` and `Spend` become `SpendAndCreate`,
+  `SetBlockState` is added, and `utxo.Spend.BlockIDs` is removed. (#1326, #1398, #1485)
+- **`utxo.Store` adds `BeginConflictIntent`, `CompleteConflictIntent`, `PendingConflictIntents`,
+  `SupportsOutpointOnlySpend` and `DeleteComplete`.** Aerospike users with set-scoped privileges also
+  allow the new `<set>_conflictwal` set. (#1126, #1178, #1502)
+- **The blockchain `Store` interface requires `Close(ctx) error`.** Out-of-tree blockchain stores
+  must add it; a no-op is fine. (#1127)
