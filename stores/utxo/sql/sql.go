@@ -3482,21 +3482,25 @@ func (s *Store) setDAH(ctx context.Context, txn *sql.Tx, transactionID int) erro
 
 // writeDAH stores a delete_at_height decision taken under the row lock (Postgres). A
 // value is raised to the row's mined floor and never lowers a stamp already stored, as
-// a second guard. A NULL clears the stamp. A row that PreserveTransactions protects is
-// left untouched.
+// a second guard. The query text is constant and the retention is bound as $3. A NULL
+// clears the stamp. A row that PreserveTransactions protects is left untouched.
 func (s *Store) writeDAH(ctx context.Context, txn *sql.Tx, transactionID int, value sql.NullInt64, retention uint32) error {
-	qUpdate := fmt.Sprintf(`
+	const qUpdate = `
 		UPDATE transactions
 		SET delete_at_height = CASE
 		        WHEN preserve_until IS NOT NULL THEN delete_at_height
 		        WHEN CAST($2 AS BIGINT) IS NULL THEN NULL
-		        WHEN delete_at_height IS NOT NULL AND delete_at_height > %[1]s THEN delete_at_height
-		        ELSE %[1]s
+		        WHEN delete_at_height IS NOT NULL AND delete_at_height > (
+		            CASE WHEN (SELECT MAX(bi.block_height) + CAST($3 AS BIGINT) FROM block_ids bi WHERE bi.transaction_id = transactions.id) > CAST($2 AS BIGINT) THEN (SELECT MAX(bi.block_height) + CAST($3 AS BIGINT) FROM block_ids bi WHERE bi.transaction_id = transactions.id) ELSE CAST($2 AS BIGINT) END
+		        ) THEN delete_at_height
+		        ELSE (
+		            CASE WHEN (SELECT MAX(bi.block_height) + CAST($3 AS BIGINT) FROM block_ids bi WHERE bi.transaction_id = transactions.id) > CAST($2 AS BIGINT) THEN (SELECT MAX(bi.block_height) + CAST($3 AS BIGINT) FROM block_ids bi WHERE bi.transaction_id = transactions.id) ELSE CAST($2 AS BIGINT) END
+		        )
 		    END
 		WHERE id = $1
-	`, flooredDAHSQL("transactions.id", "CAST($2 AS BIGINT)", retention))
+	`
 
-	if _, err := txn.ExecContext(ctx, qUpdate, transactionID, value); err != nil {
+	if _, err := txn.ExecContext(ctx, qUpdate, transactionID, value, int64(retention)); err != nil {
 		return errors.NewStorageError("[setDAH] error setting DAH for %d", transactionID, err)
 	}
 
