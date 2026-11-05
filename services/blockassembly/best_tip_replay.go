@@ -914,10 +914,11 @@ func (b *BlockAssembler) applyHeldRepair(ctx context.Context, best *model.BlockH
 
 // finishSkippedForkMarkAtStart runs a mark of skipped fork transactions left pending before a
 // restart, before the start loads the unmined transactions, so it finds those the mark makes
-// unmined. Without a record there is nothing pending; a record that is not the single byte 0 is
-// read as pending. A run that does not finish fails the start: the pool would be loaded without
-// the transactions it owes. Block validation starts alongside block assembly, so a fork block it
-// is still finishing is waited for and the run tried once more first.
+// unmined. Without a record there is nothing pending; a single byte other than 0 is read as
+// pending, and so is a 1 followed by the hashes of held transactions to repair. A longer record
+// of any other form fails the start. A run that does not finish fails the start: the pool would
+// be loaded without the transactions it owes. Block validation starts alongside block assembly,
+// so a fork block it is still finishing is waited for and the run tried once more first.
 func (b *BlockAssembler) finishSkippedForkMarkAtStart(ctx context.Context) error {
 	data, err := b.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
 
@@ -933,6 +934,10 @@ func (b *BlockAssembler) finishSkippedForkMarkAtStart(ctx context.Context) error
 		for i := 1; i < len(data); i += chainhash.HashSize {
 			b.skippedForkHeldRepair = append(b.skippedForkHeldRepair, chainhash.Hash(data[i:i+chainhash.HashSize]))
 		}
+	case len(data) > 1:
+		// It carries held transactions to repair that cannot be read: a pool loaded without
+		// them could not find them again.
+		return errors.NewStorageError("[BlockAssembler] state[%s] of %d bytes is not a pending mark with 32-byte transaction hashes; clear it to start without the held transactions it lists", SkippedForkMarkStateKey, len(data))
 	}
 
 	b.logger.Warnf("[BlockAssembler] a mark of skipped fork transactions was left unfinished before the restart, finishing it with %d held transactions to repair", len(b.skippedForkHeldRepair))

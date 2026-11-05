@@ -2187,7 +2187,8 @@ func TestMarkSkippedForkTxs_SkipsABlockInvalidatedSinceTheListing(t *testing.T) 
 }
 
 // TestFinishSkippedForkMarkAtStart_ReadsTheRecordStrictly: a record that cannot be read fails
-// the start, and one that is not the single byte 0 reads as pending.
+// the start, a single byte other than 0 reads as pending, and a longer record that is not a
+// pending mark with whole transaction hashes fails the start.
 func TestFinishSkippedForkMarkAtStart_ReadsTheRecordStrictly(t *testing.T) {
 	t.Run("unreadable", func(t *testing.T) {
 		items, client, _, _ := skippedForkSetup(t, true, true)
@@ -2196,13 +2197,28 @@ func TestFinishSkippedForkMarkAtStart_ReadsTheRecordStrictly(t *testing.T) {
 		require.Error(t, items.blockAssembler.finishSkippedForkMarkAtStart(t.Context()))
 	})
 
-	t.Run("malformed", func(t *testing.T) {
+	t.Run("unknown byte", func(t *testing.T) {
 		items, _, _, y := skippedForkSetup(t, true, true)
 
-		require.NoError(t, items.blockchainClient.SetState(t.Context(), SkippedForkMarkStateKey, []byte{7, 7}))
+		require.NoError(t, items.blockchainClient.SetState(t.Context(), SkippedForkMarkStateKey, []byte{7}))
 		require.NoError(t, items.blockAssembler.finishSkippedForkMarkAtStart(t.Context()))
 		require.NotZero(t, unminedSince(t, items, y), "the run it reads as pending marked Y")
 	})
+
+	// A record that carries held transactions it cannot read would lose them: the start fails.
+	for name, record := range map[string][]byte{
+		"cut list":     append([]byte{1}, make([]byte, chainhash.HashSize-1)...),
+		"list after 0": append([]byte{0}, make([]byte, chainhash.HashSize)...),
+		"unknown data": {7, 7},
+	} {
+		t.Run(name, func(t *testing.T) {
+			items, _, _, y := skippedForkSetup(t, true, true)
+
+			require.NoError(t, items.blockchainClient.SetState(t.Context(), SkippedForkMarkStateKey, record))
+			require.ErrorContains(t, items.blockAssembler.finishSkippedForkMarkAtStart(t.Context()), SkippedForkMarkStateKey)
+			require.Zero(t, unminedSince(t, items, y), "nothing ran")
+		})
+	}
 }
 
 // TestFinishSkippedForkMarkAtStart_WaitsForBlockValidation: block validation starts alongside
