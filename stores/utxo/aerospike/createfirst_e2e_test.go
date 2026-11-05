@@ -467,6 +467,64 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.NotNil(t, resp.SpendingData, "input 0 must still belong to the rival")
 		require.Equal(t, rival.TxIDChainHash().String(), resp.SpendingData.TxID.String())
 	})
+
+	rollBackBadInput := func(t *testing.T, version uint32, badInput func(parent *bt.Tx) (vout uint32, script string, satoshis uint64), wantErr error) {
+		t.Helper()
+
+		goodParent := spendableChildTx(t, tests.ParentTx, 0)
+		goodParent.Version = version
+
+		badParent := spendableChildTx(t, tests.ParentTx, 0)
+		badParent.Version = version + 1
+
+		_, err := store.Create(ctx, goodParent, 130)
+		require.NoError(t, err)
+
+		_, err = store.Create(ctx, badParent, 130)
+		require.NoError(t, err)
+
+		vout, script, satoshis := badInput(badParent)
+
+		child := spendableChildTx(t, goodParent, 0)
+		require.NoError(t, child.From(badParent.TxIDChainHash().String(), vout, script, satoshis))
+
+		_, err = store.Create(ctx, child, 131, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		_, err = store.Spend(ctx, child, 131, utxo.IgnoreFlags{RequireParentOutputs: true})
+		require.ErrorIs(t, err, wantErr, "the spend must fail on the bad input")
+
+		inputs, err := utxo.GetSpends(child)
+		require.NoError(t, err)
+		require.Len(t, inputs, 2)
+
+		before, err := store.GetSpend(ctx, inputs[0])
+		require.NoError(t, err)
+		require.NotNil(t, before.SpendingData, "the valid input is spent in the failing pass, so the rollback has work to undo")
+		require.Equal(t, child.TxIDChainHash().String(), before.SpendingData.TxID.String())
+
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child),
+			"an input the tx can never have spent must not fail the rollback")
+
+		require.ErrorIs(t, store.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
+			"the rolled back record must be gone, not left rolling back")
+
+		resp, err := store.GetSpend(ctx, inputs[0])
+		require.NoError(t, err)
+		require.Nil(t, resp.SpendingData, "the valid input must not stay spent by the deleted record")
+	}
+
+	t.Run("rollback skips an input whose UTXO hash does not match", func(t *testing.T) {
+		rollBackBadInput(t, 51, func(parent *bt.Tx) (uint32, string, uint64) {
+			return 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis + 1
+		}, errors.ErrUtxoHashMismatch)
+	})
+
+	t.Run("rollback skips an input whose vout does not exist", func(t *testing.T) {
+		rollBackBadInput(t, 61, func(parent *bt.Tx) (uint32, string, uint64) {
+			return 7, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis
+		}, errors.ErrTxNotFound)
+	})
 }
 
 // TestSpendAndCreate_CreateFirst_Aerospike proves the fold end-to-end: with the

@@ -39,6 +39,7 @@ type fakeSequentialStore struct {
 	deleteCalls    int
 	deletedHashes  []*chainhash.Hash
 	unspentWith    []*Spend
+	unspentBatches [][]*Spend
 	spendFlags     []IgnoreFlags
 	beginCalls     int
 	lastCreateOpts CreateOptions
@@ -69,6 +70,7 @@ func (f *fakeSequentialStore) Create(_ context.Context, _ *bt.Tx, _ uint32, opts
 func (f *fakeSequentialStore) Unspend(_ context.Context, spends []*Spend, _ ...bool) error {
 	f.unspendCalls++
 	f.unspentWith = spends
+	f.unspentBatches = append(f.unspentBatches, spends)
 	f.callSeq = append(f.callSeq, "unspend")
 
 	if len(f.unspendErrs) > 0 {
@@ -924,6 +926,25 @@ func TestRollBackCreating(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 3, f.unspendCalls, "one batch call, then one call per input")
 		require.Equal(t, []string{"begin", "unspend", "unspend", "unspend", "delete"}, f.callSeq)
+	})
+
+	t.Run("an input whose UTXO hash does not match is skipped and the other input is unspent", func(t *testing.T) {
+		f := &fakeSequentialStore{unspendErrs: []error{
+			errors.NewUtxoHashMismatchError("mismatch"),
+			nil,
+			errors.NewUtxoHashMismatchError("mismatch"),
+		}}
+
+		err := RollBackCreating(ctx, logger, f, tx)
+		require.NoError(t, err)
+		require.Equal(t, []string{"begin", "unspend", "unspend", "unspend", "delete"}, f.callSeq)
+		require.Len(t, f.unspentBatches, 3)
+		require.Len(t, f.unspentBatches[0], 2, "the first call carries every input")
+		require.Len(t, f.unspentBatches[1], 1)
+		require.Equal(t, 0, f.unspentBatches[1][0].SpendingData.Vin, "input 0 is unspent on its own")
+		require.Len(t, f.unspentBatches[2], 1)
+		require.Equal(t, 1, f.unspentBatches[2][0].SpendingData.Vin, "input 1 is the one skipped")
+		require.Equal(t, 1, f.deleteCalls)
 	})
 
 	t.Run("a tx without inputs still deletes", func(t *testing.T) {

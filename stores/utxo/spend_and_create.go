@@ -293,7 +293,8 @@ func succeededSpends(spends []*Spend) []*Spend {
 }
 
 // tolerantReverser unspends through UnspendTolerantOfMissingParents, so a parent that is
-// already gone does not fail a rollback.
+// already gone, a vout that does not exist or a UTXO hash that does not match does not fail
+// a rollback.
 type tolerantReverser struct {
 	SpendReverser
 }

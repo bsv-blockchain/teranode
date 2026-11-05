@@ -280,6 +280,14 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 			return errors.NewNotFoundError("output %s:%d not found", spend.TxID, spend.Vout)
 		}
 
+		if res.ErrorCode == LuaErrorCodeUtxoNotFound {
+			return errors.NewTxNotFoundError("[unspend][%s] UTXO not found for vout %d: %s", spend.TxID, spend.Vout, res.Message)
+		}
+
+		if res.ErrorCode == LuaErrorCodeUtxoHashMismatch {
+			return errors.NewUtxoHashMismatchError("[unspend][%s] UTXO hash mismatch for vout %d: %s", spend.TxID, spend.Vout, res.Message)
+		}
+
 		return errors.NewStorageError("error in aerospike unspend record: %s", res.Message)
 	}
 

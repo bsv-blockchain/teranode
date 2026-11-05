@@ -423,7 +423,7 @@ A spend that fails after the tentative create is rolled back by `utxo.RollBackCr
 `BeginCreateFirstRollback` sets the `rollingBack` bin on the master with a filter on the
 `creating` bin, every input of the tx is unspent (not only the spends that succeeded in the failing pass, because
 an earlier attempt may have spent an input that now fails for another reason; the Lua ownership
-check makes an input the tx does not own a no-op), then `DeleteComplete` removes the
+check makes an input the tx does not own a no-op, and an input whose UTXO hash does not match or whose vout does not exist is skipped, because the tx can never have spent it), then `DeleteComplete` removes the
 record. While the marker is set, `FinalizeTransaction` (single and multi-record) refuses
 the record with `ErrTxNotFound`, so a concurrent roll-forward cannot complete it; the
 roll-forward then unspends the spends it made. The Lua spend gate still reads `creating`,
