@@ -8,6 +8,11 @@ name: nightly-chain-integrity-stack
 on:
   schedule:
     - cron: '0 5 * * *'  # after nightly_tests (02:00) and fuzz (04:00), which share the runner pool
+  # TEMPORARY: proves the nightly on the self-hosted runners before the workflow reaches the
+  # default branch (workflow_dispatch only lists workflows that are on it). Runs --quick; a
+  # commit message containing [nightly-full] runs the full nightly. Remove before merging.
+  push:
+    branches: [chaostest-nightly-proof]
   workflow_dispatch:
     inputs:
       quick:
@@ -18,11 +23,11 @@ on:
         description: 'Phases to run (1 integrity, 2 broadcaster e2e, 3 chaos library)'
         default: '1,2,3'
       chaos_test_repo:
-        description: 'chaos-test repository'
-        default: 'galt-tr/chaos-test'
+        description: 'chaos-test repository (default: env.CHAOS_TEST_REPO)'
+        default: ''
       chaos_test_ref:
-        description: 'chaos-test ref (needs arcade_tx_status, chain_audit, proof_audit)'
-        default: 'main'
+        description: 'chaos-test ref (default: env.CHAOS_TEST_REF; needs arcade_tx_status, chain_audit, proof_audit)'
+        default: ''
 
 permissions:
   contents: read
@@ -35,6 +40,10 @@ concurrency:
 
 env:
   GO_VERSION: '1.27.0'
+  # chaos-test with the checks the scenarios use (arcade_tx_status, chain_audit, proof_audit,
+  # chaos on services), pinned to a commit until they are merged upstream in galt-tr/chaos-test.
+  CHAOS_TEST_REPO: sugh01/chaos-test
+  CHAOS_TEST_REF: 330de62dd0868e3d0790ca78fa690531dea126c0
 
 jobs:
   chain-integrity-stack:
@@ -61,8 +70,8 @@ jobs:
       - name: Checkout chaos-test
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
         with:
-          repository: ${{ inputs.chaos_test_repo || 'galt-tr/chaos-test' }}
-          ref: ${{ inputs.chaos_test_ref || 'main' }}
+          repository: ${{ inputs.chaos_test_repo || env.CHAOS_TEST_REPO }}
+          ref: ${{ inputs.chaos_test_ref || env.CHAOS_TEST_REF }}
           path: chaos-test
           token: ${{ secrets.CHAOS_TEST_TOKEN || github.token }}
 
@@ -114,6 +123,9 @@ jobs:
         run: |
           args=(--phases "${{ inputs.phases || '1,2,3' }}")
           [ "${{ inputs.quick }}" = true ] && args=(--quick)
+          if [ "${{ github.event_name }}" = push ] && [ "${{ contains(github.event.head_commit.message, '[nightly-full]') }}" != true ]; then
+            args=(--quick)
+          fi
           [ -n "${{ steps.previous.outputs.dir }}" ] && args+=(--previous "${{ steps.previous.outputs.dir }}")
           compose/chaostest/nightly.sh "${args[@]}"
 
