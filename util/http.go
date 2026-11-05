@@ -957,39 +957,23 @@ func executeHTTPRequestWithClient(ctx context.Context, cancelFn context.CancelFu
 	return resp.Body, cancelFn, nil
 }
 
-// maxHTTPErrorBodyBytes bounds how much of a non-2xx response body is read for the
-// error message. The body is peer-supplied and is read on every failure path,
-// including the ones reached from DoHTTPRequestBounded: without a bound, a hostile
-// peer defeats that function's cap simply by answering with an error status and then
-// streaming indefinitely. An error message only needs enough to be diagnosable.
-//
-// Kept small because the snippet is %q-escaped below, and escaping expands: a body of
-// control bytes becomes up to four characters each, so this is the bound on bytes read,
-// not on the length of the resulting message.
-const maxHTTPErrorBodyBytes = 2 * 1024
-
-// maxHTTPErrorBodyDrainBytes bounds how much of the REMAINDER of an error body is
-// drained, after the snippet above has been read, purely so the connection can go
-// back into http.Transport's idle pool.
+// maxHTTPErrorBodyDrainBytes bounds how much of a non-2xx response body is drained,
+// purely so the connection can go back into http.Transport's idle pool. None of it is
+// retained: see buildHTTPError for why the body never reaches the error.
 //
 // The trade-off is deliberate. A body must be read to EOF for the connection to be
-// reusable, so capping the read at maxHTTPErrorBodyBytes and closing turned every
-// error larger than 2 KiB into a fresh TCP (+TLS) handshake — on the high-rate
-// failure path, which is exactly when handshakes hurt most. An unbounded
-// io.Copy(io.Discard, ...) would restore reuse but reopen the hole the snippet cap
-// was added to close: a hostile peer answering with an error status and streaming
-// forever. So the drain is itself bounded. A body whose remainder fits is drained
-// and its connection reused; anything larger is abandoned and Close tears the
-// connection down, which is the correct outcome for a peer that streams
-// unboundedly on an error status.
-//
-// The budget is measured from wherever the snippet read stopped, so bodies just
-// over the snippet cap — the common case for a verbose error page — are fully
-// drained.
+// reusable, so closing without reading turns every error response into a fresh
+// TCP (+TLS) handshake — on the high-rate failure path, which is exactly when
+// handshakes hurt most. An unbounded io.Copy(io.Discard, ...) would restore reuse but
+// let a hostile peer answer with an error status and stream forever, defeating the
+// cap on DoHTTPRequestBounded. So the drain is itself bounded. A body that fits is
+// drained and its connection reused; anything larger is abandoned and Close tears the
+// connection down, which is the correct outcome for a peer that streams unboundedly
+// on an error status.
 const maxHTTPErrorBodyDrainBytes = 64 * 1024
 
-// maxHTTPErrorBodyDrainWait bounds how long the CALLER waits for the remainder drain
-// before abandoning it to the background.
+// maxHTTPErrorBodyDrainWait bounds how long the CALLER waits for the drain before
+// abandoning it to the background.
 //
 // It exists because the drain's two requirements pull in opposite directions:
 //
@@ -1005,7 +989,7 @@ const maxHTTPErrorBodyDrainBytes = 64 * 1024
 //     up to six 503 retries.
 //
 // So the drain is synchronous up to this budget and abandoned past it. A peer whose
-// remainder is already buffered — the common case for a verbose error page — drains in
+// body is already buffered — the common case for a verbose error page — drains in
 // microseconds and its connection is reused; a dribbler costs the caller this much and
 // no more.
 //
@@ -1019,9 +1003,8 @@ const maxHTTPErrorBodyDrainBytes = 64 * 1024
 // reuse the synchronous drain exists to buy.
 const maxHTTPErrorBodyDrainWait = 250 * time.Millisecond
 
-// drainAndCloseErrorBody drains the remainder of an error body and closes it so the
-// connection can return to http.Transport's idle pool, while bounding what that costs
-// the caller.
+// drainAndCloseErrorBody drains an error body and closes it so the connection can
+// return to http.Transport's idle pool, while bounding what that costs the caller.
 //
 // Bounded three ways: in BYTES by maxHTTPErrorBodyDrainBytes, against a peer that
 // streams forever; in the CALLER'S TIME by maxHTTPErrorBodyDrainWait; and, once
@@ -1029,12 +1012,6 @@ const maxHTTPErrorBodyDrainWait = 250 * time.Millisecond
 //
 // The goroutine takes sole ownership of the body and closes it exactly once, whether it
 // finished or was abandoned — callers must not touch the body afterwards.
-//
-// Note what this does NOT bound: a caller can still block on the snippet read in
-// buildHTTPError, which is synchronous and capped in bytes (2 KiB) but not in time.
-// That exposure is pre-existing and strictly smaller than the unbounded io.ReadAll it
-// replaced; bounding it in time needs a bounded-time reader and would trade away the
-// body of a legitimately slow error response.
 func drainAndCloseErrorBody(body io.ReadCloser) {
 	if body == nil {
 		return
@@ -1081,16 +1058,17 @@ func drainErrorBody(body io.ReadCloser) {
 // node's own stack, so keep the delivering peer". A remote rate limit is neither a
 // local fault nor a peer fault, and must not perturb those decisions.
 //
-// The body is read up to maxHTTPErrorBodyBytes; anything beyond that is discarded
-// rather than retained in the error string, and the message says so. The snippet is
-// %q-escaped because this message is logged verbatim and forwarded to the peer
-// registry: raw peer bytes would otherwise let a peer embed newlines to forge log
-// lines, or terminal escapes, and would break the single-line log convention.
+// The error carries only the status code and the redacted URL, never any of the body.
+// The URL is chosen by the peer, so the body is whatever answers there: with a redirect
+// or a DataHub URL aimed at an internal service, that is a response from inside this
+// node's network. The error is logged, stored in the peer registry as LastCatchupError
+// and served by the Asset /peers endpoint, so an echoed body would hand that response
+// to an unauthenticated caller (bitcoin-sv/teranode#4855). The status code is enough
+// for every caller's decisions, which branch on the error type above.
 //
-// The remainder of the body is then drained and closed by drainAndCloseErrorBody,
-// bounded in bytes and in how long it may hold this function, so the connection can be
-// reused without a dribbling peer stalling the caller. The call is deferred so it also
-// covers the early return on a read error and any future early return added here.
+// The body is drained and closed by drainAndCloseErrorBody, bounded in bytes and in
+// how long it may hold this function, so the connection can be reused without a
+// dribbling peer stalling the caller.
 func buildHTTPError(resp *http.Response, rawURL string) error {
 	errFn := errors.NewServiceError
 	switch resp.StatusCode {
@@ -1102,38 +1080,7 @@ func buildHTTPError(resp *http.Response, rawURL string) error {
 		errFn = errors.NewServiceRateLimitedError
 	}
 
-	if resp.Body != nil {
-		// Ownership of the body transfers to the drain once this returns; the snippet
-		// read below completes first, because the deferred call runs last.
-		defer drainAndCloseErrorBody(resp.Body)
-
-		// Read one byte past the cap so truncation is detected by arrival of that
-		// byte, not by a length equality: io.LimitReader(body, max) returns exactly
-		// max bytes both for a body of exactly max and for a longer one, so
-		// len(b) == max would report complete peer errors as cut short — a false
-		// diagnostic in the very place an operator is trying to diagnose something.
-		// The extra byte is never rendered, so the %q-expansion bound documented on
-		// maxHTTPErrorBodyBytes is unchanged.
-		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxHTTPErrorBodyBytes+1))
-		if readErr != nil {
-			return errFn("http request [%s] returned status code [%d]", urlutil.RedactString(rawURL), resp.StatusCode, readErr)
-		}
-
-		b := raw
-		truncated := len(raw) > maxHTTPErrorBodyBytes
-
-		if truncated {
-			b = raw[:maxHTTPErrorBodyBytes]
-		}
-
-		if b != nil {
-			if truncated {
-				return errFn("http request [%s] returned status code [%d] with body %q (truncated)", urlutil.RedactString(rawURL), resp.StatusCode, string(b))
-			}
-
-			return errFn("http request [%s] returned status code [%d] with body %q", urlutil.RedactString(rawURL), resp.StatusCode, string(b))
-		}
-	}
+	drainAndCloseErrorBody(resp.Body)
 
 	return errFn("http request [%s] returned status code [%d]", urlutil.RedactString(rawURL), resp.StatusCode)
 }

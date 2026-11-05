@@ -20,9 +20,12 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/null"
+	"github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -4699,4 +4702,219 @@ func TestRemoveCoinbaseUtxos_NilCoinbase_ReturnsErrorNotPanic(t *testing.T) {
 	// mapping it onto ErrTxNotFound would make every caller skip it silently.
 	require.False(t, errors.Is(err, errors.ErrTxNotFound),
 		"a nil coinbase must not be reported as an absent transaction")
+}
+
+type coinbaseChildFixture struct {
+	stp         *SubtreeProcessor
+	utxoStore   utxo.Store
+	blobStore   blob.Store
+	block       *model.Block
+	coinbase    *bt.Tx
+	otherParent *bt.Tx
+	child       *bt.Tx
+}
+
+func newCoinbaseChildFixture(t *testing.T, subtreeStore func(blob.Store) blob.Store) *coinbaseChildFixture {
+	t.Helper()
+
+	ctx := context.Background()
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///" + t.Name())
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, test.CreateBaseTestSettings(t), utxoStoreURL)
+	require.NoError(t, err)
+	require.NoError(t, utxoStore.SetBlockHeight(4))
+
+	settings := test.CreateBaseTestSettings(t)
+	settings.BlockAssembly.InitialMerkleItemsPerSubtree = 128
+
+	newSubtreeChan := make(chan NewSubtreeRequest, 10)
+	go func() {
+		for req := range newSubtreeChan {
+			if req.ErrChan != nil {
+				req.ErrChan <- nil
+			}
+		}
+	}()
+	t.Cleanup(func() { close(newSubtreeChan) })
+
+	backing := blob_memory.New()
+
+	stp, err := NewSubtreeProcessor(ctx, ulogger.TestLogger{}, settings, subtreeStore(backing), nil, utxoStore, newSubtreeChan)
+	require.NoError(t, err)
+	stp.Start(ctx)
+
+	coinbase := coinbaseTx
+	_, err = utxoStore.Create(ctx, coinbase, 1)
+	require.NoError(t, err)
+
+	otherParent := bt.NewTx()
+	require.NoError(t, otherParent.From(coinbase.TxIDChainHash().String(), 0, coinbase.Outputs[0].LockingScript.String(), uint64(coinbase.Outputs[0].Satoshis)))
+	require.NoError(t, otherParent.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	otherParent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err = utxoStore.Create(ctx, otherParent, 1)
+	require.NoError(t, err)
+
+	child := bt.NewTx()
+	require.NoError(t, child.From(coinbase.TxIDChainHash().String(), 0, coinbase.Outputs[0].LockingScript.String(), uint64(coinbase.Outputs[0].Satoshis)))
+	require.NoError(t, child.From(otherParent.TxIDChainHash().String(), 0, otherParent.Outputs[0].LockingScript.String(), otherParent.Outputs[0].Satoshis))
+	require.NoError(t, child.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 500))
+	child.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+	child.Inputs[1].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, err = utxoStore.Create(ctx, child, 1)
+	require.NoError(t, err)
+
+	spends, err := utxoStore.Spend(ctx, child, 2, utxo.IgnoreFlags{})
+	require.NoError(t, err)
+
+	for _, s := range spends {
+		require.NoError(t, s.Err)
+	}
+
+	return &coinbaseChildFixture{
+		stp:         stp,
+		utxoStore:   utxoStore,
+		blobStore:   backing,
+		coinbase:    coinbase,
+		otherParent: otherParent,
+		child:       child,
+		block: &model.Block{
+			CoinbaseTx: coinbase,
+			Header: &model.BlockHeader{
+				Version:        1,
+				HashPrevBlock:  &chainhash.Hash{},
+				HashMerkleRoot: &chainhash.Hash{},
+				Timestamp:      1234567890,
+				Bits:           model.NBit{},
+				Nonce:          12345,
+			},
+			Subtrees: []*chainhash.Hash{},
+		},
+	}
+}
+
+func (f *coinbaseChildFixture) otherParentSpend(t *testing.T) *utxo.SpendResponse {
+	t.Helper()
+
+	utxoHash, err := util.UTXOHashFromInput(f.child.Inputs[1])
+	require.NoError(t, err)
+
+	resp, err := f.utxoStore.GetSpend(context.Background(), &utxo.Spend{
+		TxID:     f.otherParent.TxIDChainHash(),
+		Vout:     0,
+		UTXOHash: utxoHash,
+	})
+	require.NoError(t, err)
+
+	return resp
+}
+
+func TestRemoveCoinbaseUtxosUnspendsParentsOfDeletedChildren(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	before := f.otherParentSpend(t)
+	require.NotNil(t, before.SpendingData, "precondition: other parent output is spent by the child")
+	require.Equal(t, f.child.TxIDChainHash().String(), before.SpendingData.TxID.String())
+
+	require.NoError(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+
+	_, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "the child record must be deleted")
+
+	require.Nil(t, f.otherParentSpend(t).SpendingData, "a surviving parent must not name the deleted child as its spender")
+}
+
+func TestRemoveCoinbaseUtxosKeepsDeletedChildrenForReorgBack(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	require.NoError(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+
+	kept, err := f.blobStore.Get(ctx, f.block.Header.Hash()[:], fileformat.FileTypeReorgDeletedTxs)
+	require.NoError(t, err, "the deleted children must be kept under the moved-back block's hash")
+
+	saved, err := decodeReorgDeletedTxs(kept)
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+	require.Equal(t, f.child.TxIDChainHash().String(), saved[0].tx.TxIDChainHash().String())
+	require.True(t, saved[0].tx.IsExtended(), "the kept tx must carry its previous outputs so it can be spent again")
+}
+
+type failingSetStore struct {
+	blob.Store
+}
+
+func (failingSetStore) Set(context.Context, []byte, fileformat.FileType, []byte, ...options.FileOption) error {
+	return errors.NewStorageError("disk full")
+}
+
+func TestRemoveCoinbaseUtxosKeepsEverythingWhenTheChildrenCannotBeSaved(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return failingSetStore{Store: s} })
+
+	require.Error(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+
+	_, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash())
+	require.NoError(t, err, "no record may be deleted when its data could not be saved")
+
+	_, err = f.utxoStore.Get(ctx, f.coinbase.TxIDChainHash())
+	require.NoError(t, err, "the coinbase must survive too")
+
+	require.NotNil(t, f.otherParentSpend(t).SpendingData, "no parent may be unspent")
+}
+
+func TestMoveForwardBlockRestoresChildrenDeletedWhenTheBlockWasMovedBack(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	require.NoError(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+
+	_, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "precondition: the child was deleted by the move back")
+	require.Nil(t, f.otherParentSpend(t).SpendingData, "precondition: the surviving parent was unspent")
+
+	require.NoError(t, f.stp.processCoinbaseUtxos(ctx, f.block), "the move forward recreates the coinbase first")
+
+	_, restoreErr := f.stp.restoreReorgDeletedTxs(ctx, f.block)
+	require.NoError(t, restoreErr)
+
+	restored, err := f.utxoStore.Get(ctx, f.child.TxIDChainHash(), fields.Tx)
+	require.NoError(t, err, "the child must exist again")
+	require.Equal(t, f.child.TxIDChainHash().String(), restored.Tx.TxIDChainHash().String())
+
+	spend := f.otherParentSpend(t)
+	require.NotNil(t, spend.SpendingData, "the surviving parent's output is spent by the recreated child again")
+	require.Equal(t, f.child.TxIDChainHash().String(), spend.SpendingData.TxID.String())
+
+	_, restoreErr = f.stp.restoreReorgDeletedTxs(ctx, f.block)
+	require.NoError(t, restoreErr, "restoring twice must be safe")
+}
+
+func TestRestoreReorgDeletedTxsIgnoresABlockWithNothingSaved(t *testing.T) {
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	_, restoreErr := f.stp.restoreReorgDeletedTxs(context.Background(), f.block)
+	require.NoError(t, restoreErr)
+}
+
+func TestMoveForwardBlockRecreatesChildrenOfAnEmptyBlockMovedBackEarlier(t *testing.T) {
+	ctx := context.Background()
+	f := newCoinbaseChildFixture(t, func(s blob.Store) blob.Store { return s })
+
+	f.stp.currentBlockHeader.Store(&model.BlockHeader{Version: 1, HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}, Nonce: 1})
+	f.block.Header.HashPrevBlock = f.stp.currentBlockHeader.Load().Hash()
+
+	require.NoError(t, f.stp.removeCoinbaseUtxos(ctx, f.block))
+	require.Nil(t, f.otherParentSpend(t).SpendingData, "precondition: the surviving parent was unspent")
+
+	_, _, err := f.stp.moveForwardBlock(ctx, f.block, true, map[chainhash.Hash]struct{}{}, false, true)
+	require.NoError(t, err)
+
+	_, err = f.utxoStore.Get(ctx, f.child.TxIDChainHash())
+	require.NoError(t, err, "moving the block forward must recreate the child")
+	require.NotNil(t, f.otherParentSpend(t).SpendingData, "the recreated child spends the surviving parent again")
 }

@@ -1,8 +1,11 @@
 package aerospike
 
 import (
+	"context"
 	"sync"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	aeropruner "github.com/bsv-blockchain/teranode/stores/utxo/aerospike/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 )
@@ -77,6 +80,9 @@ func (s *Store) GetPrunerService() (pruner.Service, error) {
 		IndexWaiter:                   s,
 		LuaPackage:                    LuaPackage,
 		BuildAddDeletedChildrenRecord: s.prunerAddDeletedChildrenRecord,
+		ClearParentRefs: func(ctx context.Context, txHash *chainhash.Hash) error {
+			return utxo.ClearParentRefs(ctx, s, txHash)
+		},
 
 		// Give the pruner the same runtime demotion every other native call site
 		// has. The startup probe samples one partition master, so a mixed-version
