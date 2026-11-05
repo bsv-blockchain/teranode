@@ -18,7 +18,7 @@ import (
 )
 
 // setupSharedBatch builds a store whose spend batcher actually accumulates more
-// than one claim per batch, which is the precondition #4934 needs.
+// than one claim per batch, which the respend tests need.
 //
 // The package's setup() forces BatcherDrainMode=true so batch callbacks fire
 // immediately and every batch holds one item. Here drain mode is off and the
@@ -77,8 +77,8 @@ func spendOf(t *testing.T, parent *bt.Tx, lockTime uint32, vouts ...uint32) *bt.
 	return tx
 }
 
-// TestRespendBehindLoserInSameBatchKeepsLegitimateSpends is the repro for
-// bitcoin-sv/teranode#4934.
+// TestRespendBehindLoserInSameBatchKeepsLegitimateSpends reproduces the
+// respend-behind-loser failure.
 //
 // S0 legitimately spends both of the parent's outputs. A later batch then
 // carries a double-spend attempt S1 on output 0 AHEAD of an idempotent re-spend
@@ -182,9 +182,9 @@ func TestRespendBehindLoserInSameBatchKeepsLegitimateSpends(t *testing.T) {
 // dispatching the abandoned second claim would create a dangling spent output.
 func TestSpendBatchDoesNotCommitAbandonedLaterClaim(t *testing.T) {
 	for _, cancelCaller := range []bool{false, true} {
-		name := "timeout"
+		name, wantClass := "timeout", errors.ErrServiceUnavailable
 		if cancelCaller {
-			name = "cancellation"
+			name, wantClass = "cancellation", errors.ErrContextCanceled
 		}
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -226,7 +226,7 @@ func TestSpendBatchDoesNotCommitAbandonedLaterClaim(t *testing.T) {
 			}
 			select {
 			case err := <-result:
-				require.Error(t, err)
+				require.ErrorIs(t, err, wantClass)
 			case <-time.After(3 * time.Second):
 				t.Fatal("caller did not stop waiting")
 			}
@@ -242,7 +242,7 @@ func TestSpendBatchDoesNotCommitAbandonedLaterClaim(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, int(utxo.Status_OK), stored.Status)
 			require.Nil(t, stored.SpendingData, "no transaction record exists for the abandoned caller")
-			require.Error(t, later.err)
+			require.ErrorIs(t, later.err, wantClass)
 			_, err = store.Get(ctx, later.spend.SpendingData.TxID)
 			require.ErrorIs(t, err, errors.ErrTxNotFound)
 		})

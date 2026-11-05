@@ -55,8 +55,8 @@ type spendOwner[T any] struct {
 // carried over to the next part, and the current part keeps filling with the
 // claims that do not compete. Once a claim on an outpoint is carried, every
 // later claim on that outpoint is carried too, so the earlier claim on an
-// outpoint is always dispatched in an earlier part. The number of parts is the
-// largest number of claims on one outpoint, not the number of competitions.
+// outpoint is always dispatched in an earlier part. The number of parts is at most
+// the largest number of claims on one outpoint, not the number of competitions.
 // After each part, the answers tell the stored owner:
 //   - success names the claim itself;
 //   - UTXO_SPENT names the owner in its data, unless that data is the claim's own;

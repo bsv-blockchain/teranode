@@ -604,12 +604,12 @@ var _ net.Error = fakeNonTimeoutNetErr{}
 func TestCircuitBreakerRelease(t *testing.T) {
 	t.Run("nil breaker", func(t *testing.T) {
 		var cb *circuitBreaker
-		require.NotPanics(t, cb.Release)
+		require.NotPanics(t, func() { cb.Release(breakerSlot{taken: true}) })
 	})
 
 	t.Run("closed state is unchanged", func(t *testing.T) {
 		cb := newCircuitBreaker(2, 2, time.Hour)
-		cb.Release()
+		cb.Release(breakerSlot{taken: true})
 		require.Equal(t, cbStateClosed, cb.state)
 		require.Equal(t, 0, cb.halfOpenAttempts)
 	})
@@ -617,7 +617,7 @@ func TestCircuitBreakerRelease(t *testing.T) {
 	t.Run("open state is unchanged", func(t *testing.T) {
 		cb := newCircuitBreaker(1, 2, time.Hour)
 		cb.RecordFailure()
-		cb.Release()
+		cb.Release(breakerSlot{epoch: cb.halfOpenEpoch, taken: true})
 		require.Equal(t, cbStateOpen, cb.state)
 		require.Equal(t, 0, cb.halfOpenAttempts)
 		require.False(t, cb.Allow())
@@ -626,25 +626,103 @@ func TestCircuitBreakerRelease(t *testing.T) {
 	t.Run("half-open gives back one slot and never goes below zero", func(t *testing.T) {
 		cb := newCircuitBreaker(1, 2, time.Hour)
 		cb.RecordFailure()
-		cb.mu.Lock()
-		cb.nextAttempt = time.Now().Add(-time.Millisecond)
-		cb.mu.Unlock()
+		expireCooldown(cb)
 
-		require.True(t, cb.Allow())
+		allowed, slot := cb.Admit()
+		require.True(t, allowed)
+		require.True(t, slot.taken)
 		require.True(t, cb.Allow())
 		require.False(t, cb.Allow())
 
-		cb.Release()
+		cb.Release(slot)
 		require.Equal(t, 1, cb.halfOpenAttempts)
 		require.True(t, cb.Allow())
 		require.False(t, cb.Allow())
 
-		cb.Release()
-		cb.Release()
-		cb.Release()
+		cb.Release(slot)
+		cb.Release(slot)
+		cb.Release(slot)
 		require.Equal(t, 0, cb.halfOpenAttempts)
 		require.Equal(t, cbStateHalfOpen, cb.state)
 	})
+
+	t.Run("a slot that was not taken is never released", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 2, time.Hour)
+
+		allowed, closedSlot := cb.Admit()
+		require.True(t, allowed)
+		require.False(t, closedSlot.taken, "a closed breaker hands out no slot")
+
+		cb.RecordFailure()
+		expireCooldown(cb)
+
+		allowed, _ = cb.Admit()
+		require.True(t, allowed)
+		allowed, _ = cb.Admit()
+		require.True(t, allowed)
+		require.False(t, cb.Allow())
+
+		cb.Release(closedSlot)
+		require.Equal(t, 2, cb.halfOpenAttempts)
+		require.False(t, cb.Allow(), "releasing an item admitted while closed must not admit another probe")
+	})
+
+	t.Run("a slot from an earlier half-open epoch is ignored after backstop re-entry", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 2, time.Minute)
+		cb.RecordFailure()
+		expireCooldown(cb)
+
+		allowed, oldSlot := cb.Admit()
+		require.True(t, allowed)
+		require.True(t, cb.Allow())
+		require.False(t, cb.Allow())
+
+		cb.mu.Lock()
+		cb.nextAttempt = time.Now().Add(-2 * time.Minute)
+		cb.mu.Unlock()
+
+		allowed, newSlot := cb.Admit()
+		require.True(t, allowed, "the backstop re-enters half-open")
+		require.True(t, newSlot.taken)
+		require.NotEqual(t, oldSlot.epoch, newSlot.epoch)
+		require.True(t, cb.Allow())
+		require.False(t, cb.Allow())
+		require.Equal(t, 2, cb.halfOpenAttempts)
+
+		cb.Release(oldSlot)
+		require.Equal(t, 2, cb.halfOpenAttempts, "the new epoch's count is untouched")
+		require.False(t, cb.Allow(), "the new epoch still refuses after halfOpenMax probes")
+
+		cb.Release(newSlot)
+		require.Equal(t, 1, cb.halfOpenAttempts, "a slot of the current epoch is still released")
+	})
+
+	t.Run("a slot from before a trip is ignored in the next half-open epoch", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 1, time.Hour)
+		cb.RecordFailure()
+		expireCooldown(cb)
+
+		allowed, oldSlot := cb.Admit()
+		require.True(t, allowed)
+
+		cb.RecordFailure()
+		expireCooldown(cb)
+
+		allowed, _ = cb.Admit()
+		require.True(t, allowed)
+		require.False(t, cb.Allow())
+
+		cb.Release(oldSlot)
+		require.Equal(t, 1, cb.halfOpenAttempts)
+		require.False(t, cb.Allow())
+	})
+}
+
+func expireCooldown(cb *circuitBreaker) {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.nextAttempt = time.Now().Add(-time.Millisecond)
 }
 
 func TestCircuitBreakerHalfOpenBackstop(t *testing.T) {
