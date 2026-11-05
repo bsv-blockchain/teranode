@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -38,7 +39,7 @@ func TestPrunerSkipsUnminedRecords(t *testing.T) {
 				_, err := store.db.ExecContext(ctx, `
 					INSERT INTO transactions (hash, version, lock_time, fee, size_in_bytes, conflicting, unmined_since, delete_at_height)
 					VALUES ($1, 1, 0, 0, 100, $2, $3, $4)`,
-					[]byte{hash}, conflicting, unminedSince, pruneHeight-1)
+					testHash(hash), conflicting, unminedSince, pruneHeight-1)
 				require.NoError(t, err)
 			}
 
@@ -48,7 +49,7 @@ func TestPrunerSkipsUnminedRecords(t *testing.T) {
 
 			// unmined and preserved: survives and keeps its DAH, as the Aerospike Lua does
 			insert(4, false, 50)
-			_, err = store.db.ExecContext(ctx, `UPDATE transactions SET preserve_until = 500 WHERE hash = $1`, []byte{4})
+			_, err = store.db.ExecContext(ctx, `UPDATE transactions SET preserve_until = 500 WHERE hash = $1`, testHash(4))
 			require.NoError(t, err)
 
 			deleted, err := prunerSvc.Prune(ctx, pruneHeight, "test")
@@ -58,13 +59,13 @@ func TestPrunerSkipsUnminedRecords(t *testing.T) {
 			var remaining []byte
 
 			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT hash FROM transactions WHERE hash IN ($1,$2,$3)`,
-				[]byte{1}, []byte{2}, []byte{3}).Scan(&remaining))
-			require.Equal(t, []byte{1}, remaining)
+				testHash(1), testHash(2), testHash(3)).Scan(&remaining))
+			require.Equal(t, testHash(1), remaining)
 
 			dah := func(hash byte) sql.NullInt64 {
 				var v sql.NullInt64
 
-				require.NoError(t, store.db.QueryRowContext(ctx, `SELECT delete_at_height FROM transactions WHERE hash = $1`, []byte{hash}).Scan(&v))
+				require.NoError(t, store.db.QueryRowContext(ctx, `SELECT delete_at_height FROM transactions WHERE hash = $1`, testHash(hash)).Scan(&v))
 
 				return v
 			}
@@ -75,7 +76,7 @@ func TestPrunerSkipsUnminedRecords(t *testing.T) {
 			// a second cycle no longer matches the cleared record
 			var matching int
 
-			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM transactions WHERE delete_at_height <= $1 AND hash = $2`, pruneHeight, []byte{1}).Scan(&matching))
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT count(*) FROM transactions WHERE delete_at_height <= $1 AND hash = $2`, pruneHeight, testHash(1)).Scan(&matching))
 			require.Zero(t, matching)
 		})
 	}
@@ -221,3 +222,7 @@ func TestMarkTransactionsOnLongestChain_DAHRules(t *testing.T) {
 }
 
 func ptr(v int64) *int64 { return &v }
+
+func testHash(b byte) []byte {
+	return bytes.Repeat([]byte{b}, chainhash.HashSize)
+}

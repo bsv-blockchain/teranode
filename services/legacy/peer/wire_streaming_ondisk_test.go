@@ -399,8 +399,10 @@ func TestStreamingBlockHandlerDrainsThePayloadAfterAGateRejection(t *testing.T) 
 }
 
 // TestStreamingBlockHandlerReportsASinkRefusalAsRejected pins the arm that
-// turns the sink's two peer-fault codes into the typed error the read loop acts
-// on, and only those two. Every other coded error keeps the "malformed" wrap:
+// turns the sink's peer-fault verdicts into the typed error the read loop acts
+// on, and only those: the two block codes, and the network code the sink raises
+// for a block whose conversion keeps panicking, each read as the outermost code.
+// Every other coded error keeps the "malformed" wrap:
 // this node's own faults are absorbed inside the sync manager's sink wrapper
 // and never reach here while it is live, and once it is shutting down any code
 // comes through and the disconnect costs nothing.
@@ -435,6 +437,17 @@ func TestStreamingBlockHandlerReportsASinkRefusalAsRejected(t *testing.T) {
 		{
 			name:    "a storage fault is not a rejection",
 			sinkErr: errors.NewStorageError("disk full"),
+		},
+		{
+			// netsync recoveredSinkPanic: a block whose conversion keeps panicking costs
+			// its sender the whole association, as a refused body does, and never a ban.
+			name:         "the sink's repeated-panic verdict is rejected",
+			sinkErr:      errors.NewNetworkInvalidResponseError("converting the block panicked again"),
+			wantRejected: true,
+		},
+		{
+			name:    "that code inside a fault of ours is not a rejection",
+			sinkErr: errors.NewProcessingError("[sink] failed", errors.NewNetworkInvalidResponseError("a wrapped cause")),
 		},
 		{
 			name:           "the ban marker in a body delivered in full is a mismatch in full",

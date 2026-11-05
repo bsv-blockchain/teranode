@@ -170,3 +170,14 @@ func TestGetConflictingChildrenWalksTheNotedConeFromAMinedParent(t *testing.T) {
 	require.True(t, names[loser.TxIDChainHash().String()],
 		"a mined parent must still name the transaction contesting its UTXO")
 }
+
+// TestConflictingTxHashesIsNotIndexed pins that this store sends block validation to its
+// per-transaction read for already-validated subtrees. No index serves the conflicting flag
+// here, so a set read once per block would be a scan of every partition; answering "not
+// indexed" keeps the read this store has always had, and never claims "nothing is conflicting".
+func TestConflictingTxHashesIsNotIndexed(t *testing.T) {
+	hashes, indexed, err := (&Store{}).ConflictingTxHashes(t.Context())
+	require.NoError(t, err)
+	require.False(t, indexed)
+	require.Nil(t, hashes)
+}
