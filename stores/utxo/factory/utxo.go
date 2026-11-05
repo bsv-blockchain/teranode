@@ -115,6 +115,10 @@ func NewStore(ctx context.Context, logger ulogger.Logger, tSettings *settings.Se
 			return nil, err
 		}
 
+		if tSettings.UtxoStore.UseCreateFirstOrder && !utxoStore.SupportsCreateFirst() {
+			logger.Warnf("[UTXOStore] utxostore_useCreateFirstOrder is enabled but the %s store does not support create-first ordering, the setting is ignored and spend-first ordering is used", storeURL.Scheme)
+		}
+
 		if storeURL.Query().Get("logging") == "true" {
 			utxoStore = storelogger.New(ctx, logger, utxoStore)
 		}

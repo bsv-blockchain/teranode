@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 
@@ -506,4 +507,47 @@ func (m *MockUTXOStore) SetConflictLocks(ctx context.Context, id chainhash.Hash,
 
 func (m *MockUTXOStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
 	return nil
+}
+
+type warnCapturingLogger struct {
+	ulogger.TestLogger
+	warns *[]string
+}
+
+func (l warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	*l.warns = append(*l.warns, fmt.Sprintf(format, args...))
+}
+
+func TestNewStore_CreateFirstWarning(t *testing.T) {
+	newSettings := func(t *testing.T, createFirst bool) *settings.Settings {
+		tSettings := test.CreateBaseTestSettings(t)
+		u, err := url.Parse("sqlitememory:///createfirstwarn")
+		require.NoError(t, err)
+
+		tSettings.UtxoStore.UtxoStore = u
+		tSettings.UtxoStore.UseCreateFirstOrder = createFirst
+
+		return tSettings
+	}
+
+	t.Run("warns when the store cannot honour the flag", func(t *testing.T) {
+		var warns []string
+
+		store, err := NewStore(context.Background(), warnCapturingLogger{warns: &warns}, newSettings(t, true), "test-source", false)
+		require.NoError(t, err)
+		require.False(t, store.SupportsCreateFirst())
+
+		require.Len(t, warns, 1)
+		require.Contains(t, warns[0], "utxostore_useCreateFirstOrder")
+		require.Contains(t, warns[0], "sqlitememory")
+		require.NotContains(t, warns[0], "\n")
+	})
+
+	t.Run("silent when the flag is off", func(t *testing.T) {
+		var warns []string
+
+		_, err := NewStore(context.Background(), warnCapturingLogger{warns: &warns}, newSettings(t, false), "test-source", false)
+		require.NoError(t, err)
+		require.Empty(t, warns)
+	})
 }
