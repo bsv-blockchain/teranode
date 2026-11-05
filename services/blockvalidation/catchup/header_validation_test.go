@@ -20,7 +20,7 @@ func TestValidateHeaderProofOfWork(t *testing.T) {
 		header := createValidPoWHeader(t, "207fffff")
 
 		// This header has valid proof of work
-		err := ValidateHeaderProofOfWork(header)
+		err := ValidateHeaderProofOfWork(header, nil)
 		assert.NoError(t, err, "Valid proof of work should pass")
 	})
 
@@ -40,7 +40,7 @@ func TestValidateHeaderProofOfWork(t *testing.T) {
 		header.Bits = *bits
 
 		// The hash will be greater than this difficult target
-		err = ValidateHeaderProofOfWork(header)
+		err = ValidateHeaderProofOfWork(header, nil)
 		assert.Error(t, err, "Invalid proof of work should fail")
 		assert.Contains(t, err.Error(), "fails proof of work")
 	})
@@ -60,7 +60,7 @@ func TestValidateHeaderProofOfWork(t *testing.T) {
 		require.NoError(t, err)
 		header.Bits = *bits
 
-		err = ValidateHeaderProofOfWork(header)
+		err = ValidateHeaderProofOfWork(header, nil)
 		// This should typically pass unless we get extremely unlucky with the hash
 		// The test verifies the function handles max target correctly
 		if err != nil {
