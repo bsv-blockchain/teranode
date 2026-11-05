@@ -18,6 +18,35 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — action required before upgrading
 
+- **Block validation reads conflicting transactions from an index, and the
+  Aerospike UTXO store builds a new secondary index for it.** For subtrees the node
+  has already validated, `CheckBlockSubtrees` now asks the UTXO store once per block
+  which transactions are conflicting. Before, it read the `conflicting` flag of every
+  transaction in those subtrees, which on a block of a billion transactions took
+  minutes. The Aerospike store creates an expression index named `conflictingIndex`
+  on the UTXO set at startup. It holds only records whose `conflicting` bin is true,
+  so it stays small. Aerospike builds it in the background, and a large namespace
+  pays one full scan while it builds. Expression indexes need Aerospike 8.1 or later.
+  Once the index is built, every process runs a self-test in the background: it
+  writes one record without a TTL, flips its `conflicting` flag both ways, checks
+  that the index follows, and deletes the record. On an older server, until the
+  self-test passes, and for the life of a process whose self-test saw the index
+  miss a change, block validation keeps reading every transaction, as before, and
+  logs a warning on each block. The PostgreSQL store builds the partial index
+  `px_transactions_conflicting` with `CREATE INDEX CONCURRENTLY` in the background
+  after startup, so writes to `transactions` are not blocked, and retries a failed
+  build; until the index is valid, block validation reads every transaction, as
+  it does on an older Aerospike server. A PostgreSQL UTXO store that starts while
+  another process is building the index waits for the build to finish before it
+  touches the schema. A store running the previous release does not wait: one that
+  starts during the build blocks every read and write of `transactions` until the
+  build finishes, and can abort it, after which it is retried. On PostgreSQL, keep
+  previous-release processes from starting until the first upgraded process has
+  built the index, for example by stopping them before the upgrade. The SQLite
+  store creates it at startup. The `utxoset` store has no index for the flag and
+  keeps the per-transaction read. External `utxo.Store` implementations must
+  implement `ConflictingTxHashes`. (#2110)
+
 - **Conflict undo now checks current-chain confirmation.** BlockAssembly stops
   recovery if a transaction affected by rollback or reverse processing is still
   confirmed in any current-chain block, or if that check fails. The WAL remains

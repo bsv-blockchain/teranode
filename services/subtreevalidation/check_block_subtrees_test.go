@@ -2356,6 +2356,10 @@ func setupTestServer(t *testing.T) (*Server, func()) {
 		mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 	// Set up default mock for GetBlockHeight method
+	// No conflicting index: cached subtrees take the per-transaction path these
+	// tests were written against. Tests of the index path wrap the store.
+	mockUtxoStore.On("ConflictingTxHashes", mock.Anything).
+		Return(nil, false, nil).Maybe()
 	mockUtxoStore.On("GetBlockHeight").
 		Return(uint32(100)).Maybe()
 	// Set up default mock for GetMeta method
