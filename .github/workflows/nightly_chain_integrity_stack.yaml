@@ -47,8 +47,11 @@ env:
 
 jobs:
   chain-integrity-stack:
-    # amd64 is required: the SV node, merkle-service and wallet-infra images are amd64-only.
-    runs-on: teranode-runner-16-core
+    # The org's self-hosted pool by default. A fork sets the repository variable NIGHTLY_RUNNER
+    # to its own runner's label, e.g. chaos-stack (a JSON list such as ["self-hosted","chaos-stack"]
+    # also works). The SV node, merkle-service and wallet-infra images are amd64-only: the
+    # runner must be amd64 or run them under emulation (Docker Desktop on Apple silicon).
+    runs-on: ${{ vars.NIGHTLY_RUNNER && (startsWith(vars.NIGHTLY_RUNNER, '[') && fromJSON(vars.NIGHTLY_RUNNER) || vars.NIGHTLY_RUNNER) || 'teranode-runner-16-core' }}
     timeout-minutes: 150
     env:
       CHAOS_TEST_DIR: ${{ github.workspace }}/chaos-test
@@ -57,10 +60,29 @@ jobs:
       - name: Check the runner
         run: |
           set -eu
-          echo "arch=$(uname -m) cpus=$(nproc) mem=$(free -g | awk '/Mem:/{print $2}')G disk=$(df -BG --output=avail . | tail -1)"
-          [ "$(uname -m)" = x86_64 ] || { echo "::error::needs amd64 (SV node, merkle-service and wallet-infra images)"; exit 1; }
-          busy=$(ss -ltnH | awk '{print $4}' | grep -Eo '[0-9]+$' | awk '($1>=3000&&$1<=3030)||$1==15432||($1>=18080&&$1<=18700)||($1>=20000&&$1<=25999)' | sort -u | tr '\n' ' ')
-          [ -z "$busy" ] || { echo "::error::ports the stack needs are in use: $busy"; exit 1; }
+          arch=$(uname -m)
+          cpus=$(getconf _NPROCESSORS_ONLN)
+          if [ "$(uname -s)" = Darwin ]; then
+            mem=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+          else
+            mem=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1048576 ))
+          fi
+          echo "os=$(uname -s) arch=$arch cpus=$cpus mem=${mem}G"
+          case "$arch" in
+            x86_64|amd64) ;;
+            arm64|aarch64)
+              docker run --rm --platform linux/amd64 alpine:3.20 true ||
+                { echo "::error::arm64 runner cannot run amd64 images (SV node, merkle-service, wallet-infra)"; exit 1; }
+              echo "::notice::arm64 runner: amd64 images run under emulation, expect it to be slower" ;;
+            *) echo "::error::unsupported architecture $arch"; exit 1 ;;
+          esac
+          if command -v ss >/dev/null; then
+            listening=$(ss -ltnH | awk '{print $4}')
+          else
+            listening=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}')
+          fi
+          busy=$(echo "$listening" | grep -Eo '[0-9]+$' | awk '($1>=3000&&$1<=3030)||$1==15432||($1>=18080&&$1<=18700)||($1>=20000&&$1<=25999)' | sort -u | tr '\n' ' ')
+          [ -z "$busy" ] || { echo "::error::ports the stack needs are in use (another stack running?): $busy"; exit 1; }
 
       - name: Checkout teranode
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
@@ -116,7 +138,8 @@ jobs:
           id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow nightly_chain_integrity_stack.yaml --status success --limit 1 --json databaseId -q '.[0].databaseId')
           [ -n "$id" ] || exit 0
           gh run download "$id" -R "$GITHUB_REPOSITORY" -D previous
-          echo "dir=$(find "$PWD/previous" -name summary.md -printf '%h\n' | head -1)" >> "$GITHUB_OUTPUT"
+          summary=$(find "$PWD/previous" -name summary.md | head -1)
+          [ -n "$summary" ] && echo "dir=$(dirname "$summary")" >> "$GITHUB_OUTPUT"
 
       - name: Run the nightly
         working-directory: teranode

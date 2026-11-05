@@ -206,6 +206,14 @@ diagnostics and merkle-service's consumer groups. The exit code is non-zero for 
 listed in `suites/known-failures.txt`; chain divergences and wrong proofs are never quarantined.
 Scenario parameters can be overridden per run with `chaosctl.sh scenario run ... --param k=v`.
 
+To run the workflow from a fork on your own machine: register a self-hosted runner for the fork
+(Settings → Actions → Runners) with a label such as `chaos-stack`, and set the repository
+variable `NIGHTLY_RUNNER` to that label (or a JSON list, `["self-hosted","chaos-stack"]`). The
+runner needs Docker, about 16 GB of RAM for the stack, and amd64 or amd64 emulation (Docker
+Desktop on Apple silicon works, more slowly). Bring any local stack down first: the run checks
+that the stack's host ports are free. Without a `TERANODE_COINBASE_TOKEN` secret the run uses
+wallet load only.
+
 ## Split topology
 
 By default each node is a single container running every teranode microservice in one process (`-allinone=1`). For chaos testing you usually want finer-grained failure injection. Pass `-allinone=0` and each node is generated as nine sibling containers, one per microservice:
