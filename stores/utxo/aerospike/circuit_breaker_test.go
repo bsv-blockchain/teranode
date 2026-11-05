@@ -600,3 +600,68 @@ func TestCircuitBreaker_InfraErrorStillTrips(t *testing.T) {
 // ensure net.Error interface assertions compile (linter hint).
 var _ net.Error = fakeTimeoutNetErr{}
 var _ net.Error = fakeNonTimeoutNetErr{}
+
+func TestCircuitBreakerRelease(t *testing.T) {
+	t.Run("nil breaker", func(t *testing.T) {
+		var cb *circuitBreaker
+		require.NotPanics(t, cb.Release)
+	})
+
+	t.Run("closed state is unchanged", func(t *testing.T) {
+		cb := newCircuitBreaker(2, 2, time.Hour)
+		cb.Release()
+		require.Equal(t, cbStateClosed, cb.state)
+		require.Equal(t, 0, cb.halfOpenAttempts)
+	})
+
+	t.Run("open state is unchanged", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 2, time.Hour)
+		cb.RecordFailure()
+		cb.Release()
+		require.Equal(t, cbStateOpen, cb.state)
+		require.Equal(t, 0, cb.halfOpenAttempts)
+		require.False(t, cb.Allow())
+	})
+
+	t.Run("half-open gives back one slot and never goes below zero", func(t *testing.T) {
+		cb := newCircuitBreaker(1, 2, time.Hour)
+		cb.RecordFailure()
+		cb.mu.Lock()
+		cb.nextAttempt = time.Now().Add(-time.Millisecond)
+		cb.mu.Unlock()
+
+		require.True(t, cb.Allow())
+		require.True(t, cb.Allow())
+		require.False(t, cb.Allow())
+
+		cb.Release()
+		require.Equal(t, 1, cb.halfOpenAttempts)
+		require.True(t, cb.Allow())
+		require.False(t, cb.Allow())
+
+		cb.Release()
+		cb.Release()
+		cb.Release()
+		require.Equal(t, 0, cb.halfOpenAttempts)
+		require.Equal(t, cbStateHalfOpen, cb.state)
+	})
+}
+
+func TestCircuitBreakerHalfOpenBackstop(t *testing.T) {
+	cb := newCircuitBreaker(1, 1, 50*time.Millisecond)
+	cb.RecordFailure()
+	time.Sleep(60 * time.Millisecond)
+
+	require.True(t, cb.Allow(), "enters half-open")
+	require.False(t, cb.Allow(), "the only probe slot is taken")
+
+	time.Sleep(120 * time.Millisecond)
+	require.True(t, cb.Allow(), "a probe that never reported must not hold half-open shut")
+	require.Equal(t, cbStateHalfOpen, cb.state)
+	require.Equal(t, 1, cb.halfOpenAttempts)
+	require.Equal(t, 0, cb.consecutiveSuccess)
+	require.False(t, cb.Allow())
+
+	cb.RecordSuccess()
+	require.Equal(t, cbStateClosed, cb.state)
+}

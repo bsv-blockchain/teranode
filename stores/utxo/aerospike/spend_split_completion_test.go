@@ -390,21 +390,15 @@ func TestSpendLuaBreakerCountsLaterPartFailure(t *testing.T) {
 	s.batchOperateFn = func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 		calls++
 		if calls == 1 {
-			require.Len(t, records, 1)
-			records[0].BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{
-				LuaSuccess.String(): map[interface{}]interface{}{"status": "OK"},
-			}}
-		} else {
 			require.Len(t, records, 2)
 			for _, record := range records {
-				// Only the plain record shares the first part's value ID.
-				// The competing claim gets a data error, which must not count.
-				if record.(*aerospike.BatchUDF).FunctionArgs[2] == aerospike.BoolValue(true) {
-					record.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
-				} else {
-					failRecords([]aerospike.BatchRecordIfc{record})
-				}
+				record.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{
+					LuaSuccess.String(): map[interface{}]interface{}{"status": "OK"},
+				}}
 			}
+		} else {
+			require.Len(t, records, 1)
+			failRecords(records)
 		}
 		return nil
 	}

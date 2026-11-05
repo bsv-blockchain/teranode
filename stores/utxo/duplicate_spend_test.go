@@ -1,6 +1,7 @@
 package utxo
 
 import (
+	"context"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -311,22 +312,151 @@ func TestSpendBatchAdmissionErrorIsNotReused(t *testing.T) {
 	require.False(t, second.local)
 }
 
-func TestSpendBatchRechecksAdmissionForPendingUnrelatedClaim(t *testing.T) {
-	parent, other, hash, a, b := chainhash.Hash{1}, chainhash.Hash{9}, chainhash.Hash{2}, chainhash.Hash{3}, chainhash.Hash{4}
+func TestSpendBatchRechecksAdmissionForCarriedClaim(t *testing.T) {
+	parent, hash, a, b := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}, chainhash.Hash{4}
 	first := &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&a, 0)}}
-	pending := &batchTestItem{spend: &Spend{TxID: &other, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&a, 0)}}
 	conflict := &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&b, 0)}}
+	conflict.ignoreConflicting = true
 	abandoned := false
 	backend := &batchTestBackend{
 		start: func(item *batchTestItem) error {
-			if abandoned && item == pending {
+			if abandoned && item == conflict {
 				return errors.NewServiceUnavailableError("caller expired")
 			}
 			return nil
 		},
 		answer: func(*Spend) error { abandoned = true; return nil },
 	}
-	backend.run([]*batchTestItem{first, conflict, pending})
+	backend.run([]*batchTestItem{first, conflict})
 	require.Equal(t, [][]*batchTestItem{{first}}, backend.parts)
-	require.Error(t, pending.err)
+	require.ErrorIs(t, conflict.err, errors.ErrServiceUnavailable)
+}
+
+func TestSpendBatchPartCountIsBoundedPerOutpoint(t *testing.T) {
+	hash := chainhash.Hash{2}
+	a, b, c := chainhash.Hash{3}, chainhash.Hash{4}, chainhash.Hash{5}
+
+	t.Run("interleaved pairs on independent outpoints cost two calls", func(t *testing.T) {
+		items := make([]*batchTestItem, 0, 1024)
+		for i := range 512 {
+			parent := chainhash.HashH([]byte{byte(i), byte(i >> 8)})
+			first := &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&a, 0)}}
+			second := &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(&b, 0)}, ignoreConflicting: true}
+			items = append(items, first, second)
+		}
+
+		backend := &batchTestBackend{answer: func(spend *Spend) error {
+			if sameSpendingData(spendpkg.NewSpendingData(&b, 0), spend.SpendingData) {
+				return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spendpkg.NewSpendingData(&a, 0))
+			}
+			return nil
+		}}
+		backend.run(items)
+
+		require.Len(t, backend.parts, 2)
+		require.Len(t, backend.parts[0], 512)
+		require.Len(t, backend.parts[1], 512)
+		for i, item := range items {
+			require.True(t, item.answered)
+			require.Equal(t, i%2 == 1, item.err != nil)
+		}
+	})
+
+	t.Run("three claims on one outpoint cost three calls", func(t *testing.T) {
+		parent := chainhash.Hash{1}
+		mk := func(txID *chainhash.Hash, ignore bool) *batchTestItem {
+			return &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(txID, 0)}, ignoreConflicting: ignore}
+		}
+		first, second, third := mk(&a, false), mk(&b, true), mk(&c, false)
+		backend := &batchTestBackend{answer: func(*Spend) error { return errors.NewUtxoError("claimant dependent") }}
+		backend.run([]*batchTestItem{first, second, third})
+
+		require.Equal(t, [][]*batchTestItem{{first}, {second}, {third}}, backend.parts)
+	})
+
+	t.Run("owner learning rejects the third claim", func(t *testing.T) {
+		parent := chainhash.Hash{1}
+		mk := func(txID *chainhash.Hash, ignore bool) *batchTestItem {
+			return &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(txID, 0)}, ignoreConflicting: ignore}
+		}
+		first, second, third := mk(&a, false), mk(&b, true), mk(&c, false)
+		backend := &batchTestBackend{answer: func(spend *Spend) error {
+			if sameSpendingData(spendpkg.NewSpendingData(&a, 0), spend.SpendingData) {
+				return nil
+			}
+			return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, spendpkg.NewSpendingData(&a, 0))
+		}}
+		backend.run([]*batchTestItem{first, second, third})
+
+		require.Equal(t, [][]*batchTestItem{{first}, {second}}, backend.parts)
+		require.True(t, third.local)
+		requireSpentBy(t, third.err, spendpkg.NewSpendingData(&a, 0))
+	})
+
+	t.Run("a claim behind a carried claim keeps its order", func(t *testing.T) {
+		parent := chainhash.Hash{1}
+		mk := func(txID *chainhash.Hash, ignore bool) *batchTestItem {
+			return &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: spendpkg.NewSpendingData(txID, 0)}, ignoreConflicting: ignore}
+		}
+		first, second, again := mk(&a, false), mk(&b, true), mk(&a, false)
+		backend := &batchTestBackend{answer: func(*Spend) error { return nil }}
+		backend.run([]*batchTestItem{first, second, again})
+
+		require.Equal(t, [][]*batchTestItem{{first}, {second}, {again}}, backend.parts)
+	})
+}
+
+func TestSpendBatchInvalidSpendProvesOwner(t *testing.T) {
+	parent, hash, a, b := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}, chainhash.Hash{4}
+	ownerA, ownerB := spendpkg.NewSpendingData(&a, 0), spendpkg.NewSpendingData(&b, 0)
+	mk := func(owner *spendpkg.SpendingData) *batchTestItem {
+		return &batchTestItem{spend: &Spend{TxID: &parent, UTXOHash: &hash, SpendingData: owner}}
+	}
+
+	t.Run("a replayed owner makes a competing claim UTXO_SPENT naming the owner", func(t *testing.T) {
+		replay, competing := mk(ownerA), mk(ownerB)
+		backend := &batchTestBackend{answer: func(spend *Spend) error {
+			if sameSpendingData(ownerA, spend.SpendingData) {
+				return errors.NewUtxoInvalidSpendError(ownerA, "replay after prune")
+			}
+			t.Fatal("the competing claim must be answered locally")
+			return nil
+		}}
+		backend.run([]*batchTestItem{replay, competing})
+
+		require.Equal(t, [][]*batchTestItem{{replay}}, backend.parts)
+		require.ErrorIs(t, replay.err, errors.ErrUtxoError)
+		require.True(t, competing.local)
+		requireSpentBy(t, competing.err, ownerA)
+	})
+
+	t.Run("a generic UTXO error is not reused for a competing claim", func(t *testing.T) {
+		first, competing := mk(ownerA), mk(ownerB)
+		backend := &batchTestBackend{answer: func(spend *Spend) error {
+			if sameSpendingData(ownerA, spend.SpendingData) {
+				return errors.NewUtxoError("claimant dependent")
+			}
+			return errors.NewUtxoSpentError(*spend.TxID, spend.Vout, *spend.UTXOHash, ownerA)
+		}}
+		backend.run([]*batchTestItem{first, competing})
+
+		require.Equal(t, [][]*batchTestItem{{first}, {competing}}, backend.parts)
+		require.False(t, competing.local)
+		requireSpentBy(t, competing.err, ownerA)
+	})
+}
+
+func TestReusableFailure(t *testing.T) {
+	for _, err := range []error{
+		errors.NewStorageError("x"), errors.NewServiceUnavailableError("x"), errors.NewContextCanceledError("x"),
+		context.Canceled, context.DeadlineExceeded, errors.NewTxNotFoundError("x"), errors.NewTxLockedError("x"),
+		errors.NewTxCreatingError("x"), errors.NewTxConflictingError("x"), errors.NewUtxoHashMismatchError("x"),
+		errors.NewUtxoFrozenError("x"), errors.NewTxCoinbaseImmatureError("x"),
+	} {
+		require.True(t, reusableFailure(err), err.Error())
+	}
+
+	for _, err := range []error{nil, errors.NewUtxoError("x"), errors.NewProcessingError("x"), errors.NewUtxoSpentError(chainhash.Hash{}, 0, chainhash.Hash{}, nil)} {
+		require.False(t, reusableFailure(err))
+	}
 }

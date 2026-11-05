@@ -113,12 +113,24 @@ type batchSpend struct {
 	published         atomic.Bool
 	ignoreConflicting bool
 	ignoreLocked      bool
+	// tookBreakerSlot is set when Allow admitted the item, so a release only
+	// returns a slot the item took.
+	tookBreakerSlot bool
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
 	requireParentOutput bool
 	// err is the answer complete stored. Only the batcher goroutine reads it,
 	// because the caller may rewrite spend.Err once the group completes.
 	err error
+}
+
+// releaseBreakerSlot returns the half-open probe slot of an item that will never
+// reach the backend. The caller must have won the abandonment of the item.
+func (s *Store) releaseBreakerSlot(item *batchSpend) {
+	if item.tookBreakerSlot {
+		item.tookBreakerSlot = false
+		s.spendCircuitBreaker.Release()
+	}
 }
 
 // complete writes err into the item's result slot (spend.Err) and marks the
@@ -505,6 +517,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			continue
 		}
 
+		item.tookBreakerSlot = s.spendCircuitBreaker != nil
+
 		if filtered {
 			toEnqueue = append(toEnqueue, item)
 		}
@@ -524,7 +538,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 	if waitErr := group.Wait(requestCtx, 0); waitErr != nil {
 		for _, item := range items {
-			item.admission.Abandon()
+			if item.admission.Abandon() {
+				s.releaseBreakerSlot(item)
+			}
 		}
 		// The group did not complete within budget (context canceled, or the
 		// dispatcher took longer than spendTimeout). Some items may already
@@ -1026,6 +1042,9 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			if item == nil {
 				return nil
 			}
+			if item.requestCtx != nil && item.requestCtx.Err() != nil && item.admission.Abandon() {
+				s.releaseBreakerSlot(item)
+			}
 			return item.admission.Start(item.requestCtx)
 		},
 		Spend: func(item *batchSpend) *utxo.Spend {
@@ -1462,6 +1481,12 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 		return errors.NewStorageError("[SPEND_BATCH_LUA][%s] UTXO already spent but no spending data provided", txID.String())
 
 	case LuaErrorCodeInvalidSpend:
+		if errMsg.SpendingData != "" {
+			if spendingData, parseErr := spendpkg.NewSpendingDataFromString(errMsg.SpendingData); parseErr == nil {
+				return errors.NewUtxoInvalidSpendError(spendingData, "[SPEND_BATCH_LUA][%s] invalid spend for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
+			}
+		}
+
 		return errors.NewUtxoError("[SPEND_BATCH_LUA][%s] invalid spend for vout %d: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
 	case LuaErrorCodeFrozen:

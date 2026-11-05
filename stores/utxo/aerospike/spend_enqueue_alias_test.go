@@ -7,9 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -218,4 +222,66 @@ func TestSpend_CompletesEveryEnqueuedItemWhenSendRejected(t *testing.T) {
 		require.Error(t, spend.Err, "input %d must be completed with the shutdown error, not parked", i)
 		require.Contains(t, spend.Err.Error(), "shutting down")
 	}
+}
+
+// silentSpendBatcher accepts items and never completes them, so Spend waits
+// until its caller gives up.
+type silentSpendBatcher struct{ recordingSpendBatcher }
+
+func (r *silentSpendBatcher) PutBatchCtx(context.Context, []*batchSpend, ...int) {}
+
+// halfOpenBreaker returns a breaker in the open state whose next Allow half-opens it.
+func halfOpenBreaker(t *testing.T) *circuitBreaker {
+	t.Helper()
+
+	cb := newCircuitBreaker(1, 1, time.Hour)
+	require.NotNil(t, cb)
+
+	cb.RecordFailure()
+
+	cb.mu.Lock()
+	cb.nextAttempt = time.Now().Add(-time.Millisecond)
+	cb.mu.Unlock()
+
+	return cb
+}
+
+func TestSpend_AbandonedRequestReleasesHalfOpenSlot(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	s.spendBatcher = &silentSpendBatcher{}
+	s.spendCircuitBreaker = halfOpenBreaker(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := s.Spend(ctx, txWithInputs(t, 1), 100)
+	require.Error(t, err)
+	require.True(t, s.spendCircuitBreaker.Allow(), "the abandoned probe must give its slot back")
+}
+
+func TestSpend_DispatchRejectReleasesHalfOpenSlot(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	cb := halfOpenBreaker(t)
+	s.spendCircuitBreaker = cb
+
+	require.True(t, cb.Allow(), "the request takes the only half-open slot")
+	require.False(t, cb.Allow())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	parent, utxoHash, spender := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
+	item := &batchSpend{
+		spend:           &utxo.Spend{TxID: &parent, UTXOHash: &utxoHash, SpendingData: spendpkg.NewSpendingData(&spender, 0)},
+		group:           completion.NewGroup(1),
+		requestCtx:      ctx,
+		tookBreakerSlot: true,
+	}
+
+	s.sendSpendBatchLua([]*batchSpend{item})
+
+	require.True(t, item.completed.Load())
+	require.Error(t, item.err)
+	require.True(t, cb.Allow(), "an item rejected at dispatch must give its slot back")
+	require.False(t, cb.Allow(), "and only once")
 }
