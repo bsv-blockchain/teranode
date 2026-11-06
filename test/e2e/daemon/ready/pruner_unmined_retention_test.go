@@ -448,11 +448,11 @@ func TestPrunerExternalRecordsMixedChildrenPreservation(t *testing.T) {
 	prevBlock, err := node.BlockchainClient.GetBlockByHeight(ctx, parentMinedHeight)
 	require.NoError(t, err)
 
-	// Block 1: includes minedChild (spends parent output 0 from master record)
+	// Block 1: includes minedChild (spends parent outputs 0, 1 and 3)
 	_, block := node.CreateTestBlock(t, prevBlock, 9000, minedChild)
 	err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy", 0, false)
 	require.NoError(t, err)
-	t.Logf("Block %d: mined child %s included (spends parent output 0)", block.Height, minedChildHash)
+	t.Logf("Block %d: mined child %s included (spends parent outputs 0, 1 and 3)", block.Height, minedChildHash)
 	prevBlock = block
 
 	// Blocks 2-8: empty blocks to exceed parent's DAH
