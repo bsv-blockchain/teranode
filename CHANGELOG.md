@@ -45,7 +45,7 @@ read every section between yours and the target.
   hold mainnet values. An explicit key list needs 3–10 compressed public keys or startup fails. (#1955)
 - **Block Validation `BlockFound` with `wait_to_complete` returns the block's outcome.** It no
   longer answers success at enqueue: a rejected block returns its error, and a block whose parent is
-  missing returns a retryable `ERR_SERVICE_ERROR`. gRPC callers that wait must handle both.
+  missing returns a retryable `ERR_SERVICE_ERROR`. gRPC callers that wait must handle both. (#2132)
 - **`utxostore_updateTxMinedStatus` is removed.** Nodes that set it to `false` now always run
   mined-tagging and its duplicate-transaction check, with no way to turn them off. Delete the
   key; the loader ignores it. (#2019)
