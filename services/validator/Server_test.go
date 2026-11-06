@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -571,4 +572,31 @@ func TestValidateTransaction_NotRefusedWhileSyncing(t *testing.T) {
 	_, err := server.ValidateTransaction(context.Background(), &validator_api.ValidateTransactionRequest{TransactionData: sampleTx, BlockHeight: 100})
 	require.NoError(t, err)
 	require.Equal(t, 1, validated)
+}
+
+// A Kafka transaction that block assembly refused at its in-memory limit was valid: the node had
+// no room for it. It must not count or log as an invalid transaction, once per message, on top of
+// the validator's own rate-limited drop warning.
+func TestHandleKafkaTxMessage_HeldLimitShedIsNotInvalid(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &capturingLogger{}
+
+	server := NewServer(logger, test.CreateBaseTestSettings(t), nil, nil, nil, nil, nil, nil, nil)
+	server.validator = &MockValidator{
+		ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+			return nil, heldLimitShed()
+		},
+	}
+
+	invalidBefore := testutil.ToFloat64(prometheusInvalidTransactions)
+	heldBefore := testutil.ToFloat64(prometheusHeldLimitShedTransactions)
+
+	require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessage(t)), "the offset is committed without a second error line")
+	require.Equal(t, invalidBefore, testutil.ToFloat64(prometheusInvalidTransactions), "a held shed is not an invalid transaction")
+	require.Equal(t, heldBefore+1, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "it is counted on its own")
+
+	for _, line := range logger.lines {
+		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
+	}
 }

@@ -2513,3 +2513,21 @@ func TestWarnInBlockShedIsRateLimited(t *testing.T) {
 	require.Contains(t, logger.lines[1], "tx-z")
 	require.Contains(t, logger.lines[1], "(4 more", "it says how many were held back")
 }
+
+// The in-block shed keeps the record Locked on purpose and warns at a bounded rate. The deferred
+// unlock must not add a per-transaction "not delivered" warning on top.
+func TestValidate_InBlockShedDoesNotWarnPerTransactionAboutTheKeptLock(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, _, childTx, _, logger := recoverySetupWithLogger(t, "queue_shed_inblock_no_undelivered_warning", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err)
+
+	logged := strings.Join(logger.lines, "\n")
+	require.Contains(t, logged, "accepted locked without a template entry", "the rate-limited shed warning is the one line for this")
+	require.NotContains(t, logged, "tx stays locked, it was not delivered", "the kept lock is deliberate, not an undelivered error")
+}

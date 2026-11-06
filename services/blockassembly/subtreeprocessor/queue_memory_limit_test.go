@@ -414,19 +414,23 @@ func TestSubtreeProcessor_DrainKeepsTheHeldTotalAtEveryChunkBoundary(t *testing.
 	startHeld := stp.HeldCount()
 	chunks := 0
 
-	err := stp.forEachDrainChunk(perBatch, func(chunk []*TxBatch) error {
+	err := stp.forEachDrainChunk(perBatch, func(chunk []*TxBatch) (int, error) {
 		require.GreaterOrEqual(t, stp.HeldCount(), startHeld,
 			"the transactions an earlier chunk placed must still count, or producers are admitted past the limit")
+
+		placed := 0
 
 		for _, batch := range chunk {
 			for i, node := range batch.nodes {
 				require.NoError(t, stp.addNode(node, batch.txInpoints[i], true))
+
+				placed++
 			}
 		}
 
 		chunks++
 
-		return nil
+		return placed, nil
 	})
 
 	require.NoError(t, err)
@@ -443,7 +447,7 @@ func TestSubtreeProcessor_DrainSettlesWhenTheChunkCallbackPanics(t *testing.T) {
 	enqueueDistinctBatches(t, stp, 3, 4)
 
 	require.Panics(t, func() {
-		_ = stp.forEachDrainChunk(1, func(_ []*TxBatch) error {
+		_ = stp.forEachDrainChunk(1, func(_ []*TxBatch) (int, error) {
 			panic("chunk callback failed")
 		})
 	})
@@ -658,7 +662,7 @@ func TestSubtreeProcessor_UnminedLoadingNests(t *testing.T) {
 	require.Less(t, stp.HeldCount(), limit)
 }
 
-func TestSubtreeProcessor_DrainDoesNotRecountPerChunkWithoutALimit(t *testing.T) {
+func TestSubtreeProcessor_DrainAddsWhatEachChunkReportsWithoutARecount(t *testing.T) {
 	stp := newTestProcessorNoStart(t)
 
 	require.Equal(t, int64(0), stp.MaxTransactionsInMemory(), "precondition: no in-memory limit")
@@ -666,19 +670,23 @@ func TestSubtreeProcessor_DrainDoesNotRecountPerChunkWithoutALimit(t *testing.T)
 	enqueueDistinctBatches(t, stp, 3, 4)
 
 	before := stp.txCount.Load()
+	chunks := 0
 
-	err := stp.forEachDrainChunk(4, func(chunk []*TxBatch) error {
+	err := stp.forEachDrainChunk(4, func(chunk []*TxBatch) (int, error) {
 		for _, batch := range chunk {
 			for i, node := range batch.nodes {
 				require.NoError(t, stp.addNode(node, batch.txInpoints[i], true))
 			}
 		}
 
-		return nil
+		chunks++
+
+		return 1, nil
 	})
 
 	require.NoError(t, err)
-	require.Equal(t, before, stp.txCount.Load(), "no limit reads the count, so the drain must not walk every chained subtree per chunk")
+	require.Equal(t, 3, chunks, "precondition: the drain crossed chunk boundaries")
+	require.Equal(t, before+3, stp.txCount.Load(), "each chunk adds the number its callback reported, not a walk of every chained subtree")
 	require.Equal(t, int64(0), stp.queue.unsettled.Load(), "the chunks are still settled")
 }
 

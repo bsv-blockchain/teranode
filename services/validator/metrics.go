@@ -49,6 +49,12 @@ var (
 	// topic's concurrent per-partition consumption, not a genuinely invalid or attack transaction.
 	prometheusMissingParentTransactions prometheus.Counter
 
+	// prometheusHeldLimitShedTransactions counts Kafka-sourced transactions that block assembly
+	// refused at its in-memory transaction limit. Kept separate from
+	// prometheusInvalidTransactions because the transaction was valid; the node had no room for
+	// it, and the validator unwound and dropped it.
+	prometheusHeldLimitShedTransactions prometheus.Counter
+
 	// prometheusValidatorParentCommitRetries counts retries spent waiting for a parent
 	// transaction to finish its own commit, labelled by condition (TX_LOCKED or
 	// TX_CREATING). Paired with prometheusValidatorParentCommitExhausted, this gives the
@@ -290,6 +296,16 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "missing_parent_transactions",
 			Help:      "Number of Kafka-sourced transactions rejected because their parent UTXO had not been seen yet (ordering artifact, not necessarily invalid)",
+		},
+	)
+
+	// Held-limit shed counter (Kafka intake only)
+	prometheusHeldLimitShedTransactions = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "held_limit_shed_transactions",
+			Help:      "Number of Kafka-sourced transactions dropped because block assembly refused them at its in-memory transaction limit (valid transactions, not invalid ones)",
 		},
 	)
 
