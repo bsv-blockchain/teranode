@@ -165,7 +165,9 @@ func (stp *SubtreeProcessor) addDrainedBatches(ctx context.Context, batches []*T
 
 // addDrainedNodesSequentially is dequeueDuringBlockMovement's per-tx loop
 // for nodes already taken from the queue, without conflicting hashes. It
-// reports how many it placed in subtrees.
+// reports how many it placed in subtrees: a duplicate that placeNode skipped
+// is not counted, and a node that placeNode put in a subtree is counted even
+// when completing that subtree failed.
 func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node, inpoints []*subtreepkg.TxInpoints,
 	transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap) (int, error) {
 	placed := 0
@@ -179,9 +181,12 @@ func (stp *SubtreeProcessor) addDrainedNodesSequentially(nodes []subtreepkg.Node
 			continue
 		}
 
-		if err := stp.addNode(node, inpoints[i], false); err != nil {
+		wasPlaced, err := stp.placeNode(node, inpoints[i], false)
+		if err != nil {
 			stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), err)
-		} else {
+		}
+
+		if wasPlaced {
 			placed++
 		}
 	}

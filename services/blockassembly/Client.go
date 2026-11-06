@@ -155,8 +155,10 @@ func NewClient(ctx context.Context, logger ulogger.Logger, tSettings *settings.S
 		batchCh:   make(chan []*batchItem),
 	}
 
-	client.batcher = client.newTxBatcher(ctx, "blockassembly_client", batchSize, duration)
-	client.inBlockBatcher = client.newTxBatcher(ctx, "blockassembly_client_in_block", batchSize, duration)
+	if batchSize > 0 {
+		client.batcher = client.newTxBatcher(ctx, "blockassembly_client", batchSize, duration)
+		client.inBlockBatcher = client.newTxBatcher(ctx, "blockassembly_client_in_block", batchSize, duration)
+	}
 
 	return client, nil
 }
@@ -200,8 +202,10 @@ func NewClientWithAddress(ctx context.Context, logger ulogger.Logger, tSettings 
 		batchCh:   make(chan []*batchItem),
 	}
 
-	client.batcher = client.newTxBatcher(ctx, "blockassembly_client", batchSize, duration)
-	client.inBlockBatcher = client.newTxBatcher(ctx, "blockassembly_client_in_block", batchSize, duration)
+	if batchSize > 0 {
+		client.batcher = client.newTxBatcher(ctx, "blockassembly_client", batchSize, duration)
+		client.inBlockBatcher = client.newTxBatcher(ctx, "blockassembly_client_in_block", batchSize, duration)
+	}
 
 	return client, nil
 }

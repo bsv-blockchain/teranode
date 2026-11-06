@@ -71,6 +71,18 @@ The limit is soft. The count includes transactions dequeued but not yet placed i
 
 A value below one drain pass plus the coinbase placeholder is clamped up with a warning. Budget roughly 1KB of RAM per transaction when sizing.
 
+### Early shed at the limit
+
+A validator polls block assembly's held count and limit with the same queue-stats call as the Kafka backpressure controller, and shares that reading when the controller runs. Backpressure does not have to be enabled. While the held count is at the limit, the validator refuses an ingest transaction, one that did not arrive inside a block, before any UTXO store work. The refusal carries the same held marker as block assembly's own, so the Kafka handler, subtree validation, gRPC and HTTP treat it as a held shed: not invalid, counted once in `teranode_validator_held_limit_shed_transactions`, and warned at a bounded rate. A transaction inside a block is never refused early. The reading can lag by one poll interval, so a transaction that crosses the limit between two polls still takes the refusal and unwind in the table above. The gate fails open: with no fresh reading, no reported limit or a failed read, the validator takes the ordinary path.
+
+### Upgrade order
+
+Upgrade every validator and subtree-validation pod to a build that sends the `InBlock` flag before you set `blockassembly_maxTransactionsInMemory` on block assembly, and keep the default 0 until then. Block assembly cannot tell an old validator from a mempool batch. A validator that never sends `InBlock` has its block transactions refused as held, and its in-block shed arm then accepts them and unlocks them without a template entry. A block transaction is then outside the template with nothing holding its children back, which peers reject as an invalid block.
+
+### Block transactions kept Locked
+
+When block assembly refuses a block transaction on the ingest queue bound (`blockassembly_maxQueueItems`), the validator accepts the transaction and keeps its record Locked, so an ordinary child cannot enter the template without it. `teranode_validator_shed_inblock_dropped_total` counts these, and a rising value is the signal to act. The lock clears when the block's `setMined` runs. A block that validates and never connects leaves the record Locked, and an ordinary child of it is refused as locked. A block assembly reset, or a restart, runs the unmined reload. It reads every unmined record, including Locked ones, adds them to the template and unlocks them.
+
 ## Coinbase Divergence Recovery
 
 Block assembly keeps two pieces of state that have to agree: the chain pointer (the

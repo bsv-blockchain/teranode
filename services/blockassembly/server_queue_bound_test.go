@@ -630,3 +630,13 @@ func TestIsHeldLimitShed(t *testing.T) {
 	require.True(t, IsHeldLimitShed(errors.UnwrapGRPC(shed)), "the marker survives the gRPC hop")
 	require.True(t, IsHeldLimitShed(errors.NewProcessingError("handoff failed", errors.UnwrapGRPC(shed))), "and a wrapper around it")
 }
+
+func TestNewHeldLimitShedError(t *testing.T) {
+	shed := NewHeldLimitShedError(65, 64)
+
+	require.True(t, IsHeldLimitShed(shed), "the validator's early shed is classified as block assembly's own held shed")
+	require.ErrorIs(t, shed, errors.ErrThresholdExceeded, "it is the same resource-exhausted class as every shed")
+	require.Contains(t, shed.Error(), "holds 65 transactions in memory, limit 64")
+	require.True(t, IsHeldLimitShed(errors.UnwrapGRPC(errors.WrapGRPC(shed))), "and it survives the gRPC hop")
+	require.False(t, errors.Is(shed, errors.ErrServiceUnavailable), "a retry layer must not take it for a transient fault")
+}
