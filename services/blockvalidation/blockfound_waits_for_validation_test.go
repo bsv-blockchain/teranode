@@ -7,9 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
+	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
 	"github.com/stretchr/testify/require"
@@ -258,4 +262,35 @@ func TestBlockFoundWait_FetchFailureAnswersAtOnceAndRequeues(t *testing.T) {
 	exists, err := store.GetBlockExists(ctx, block.Hash())
 	require.NoError(t, err)
 	require.False(t, exists)
+}
+
+// invalidStoredChain reports every block as stored, and stored invalid.
+type invalidStoredChain struct {
+	blockchain.ClientI
+}
+
+func (c *invalidStoredChain) GetBlockExists(context.Context, *chainhash.Hash) (bool, error) {
+	return true, nil
+}
+
+func (c *invalidStoredChain) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return &model.BlockHeader{}, &model.BlockHeaderMeta{Invalid: true}, nil
+}
+
+// TestBlockFoundWait_StoredInvalidBlockIsNotSuccess: a block already stored, but marked invalid,
+// "exists" for every existence check. A waiting caller must get ERR_BLOCK_INVALID, not nil.
+func TestBlockFoundWait_StoredInvalidBlockIsNotSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, _, block := newProcessBlockFoundHarness(ctx, t)
+	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, s.settings, &invalidStoredChain{ClientI: s.blockchainClient}, blobmemory.New(), s.txStore, s.utxoStore, nil, nil)
+
+	select {
+	case err := <-blockFoundAndWait(ctx, s, block):
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "want ERR_BLOCK_INVALID, got %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("BlockFound did not return for a stored block")
+	}
 }

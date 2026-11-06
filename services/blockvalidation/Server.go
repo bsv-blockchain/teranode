@@ -1342,7 +1342,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 // was not stored, so the caller must not get nil (BV-INGRESS-017). It is a ServiceError, which
 // callers read as retry-later: once catchup has stored the parent, a new BlockFound succeeds.
 func errNotCommittedCatchup(hash *chainhash.Hash) error {
-	return errors.NewServiceError("[BlockFound][%s] block not validated: its parent is not stored, so it was handed to catchup", hash.String())
+	return errors.NewServiceError("[BlockFound][%s] block not validated: it is not stored, and its parent is not stored; catchup may bring it in later", hash.String())
 }
 
 // Start begins the block validation service operations including gRPC server startup
