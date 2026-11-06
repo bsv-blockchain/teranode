@@ -289,6 +289,10 @@ func TestReorgBlocks_MarkFalseScope(t *testing.T) {
 	require.True(t, finalTxMap.Exists(a1), "a1 is back in the mempool after its block was moved back")
 	require.True(t, finalTxMap.Exists(m1))
 	require.True(t, finalTxMap.Exists(m2))
+	// B mined shared, so the forward move took it out of block assembly: the tx map alone keeps
+	// it out of the mark-false set, and the winning-set check in movedBackStillInAssembly is a
+	// second guard behind it.
+	require.False(t, finalTxMap.Exists(shared), "a tx the moveForward block mined is not in block assembly")
 
 	// The mark-false set is exactly what the reorg moved off the chain.
 	require.True(t, store.markedFalse(a1), "a moved-back tx not in the new chain must be marked not on the longest chain")

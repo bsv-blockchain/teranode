@@ -833,8 +833,11 @@ func (b *BlockAssembler) repairHeldTxsOfGoneBlocks(ctx context.Context, gone []b
 }
 
 // heldTxsOfGoneBlocks returns the transactions block assembly holds that a block in gone mined,
-// that are still stamped mined and that no block of the best chain holds. It reads them a chunk
-// at a time, so it keeps the metadata of one chunk.
+// that are still stamped mined and that no block of the best chain holds. It copies the hashes
+// of the whole pool first (GetTransactionHashes, 32 bytes a transaction: about 12 GB at 380
+// million), as the reorg's whole-pool mark did on every reorg and the reset's still does; it
+// runs only when a fork block's subtree is gone. Their metadata it reads a chunk at a time, so
+// it keeps the metadata of one chunk.
 func (b *BlockAssembler) heldTxsOfGoneBlocks(ctx context.Context, gone []blockHeaderWithMeta, best *model.BlockHeader) ([]chainhash.Hash, error) {
 	goneIDs := make(map[uint32]struct{}, len(gone))
 	for _, fb := range gone {
