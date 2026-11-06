@@ -6,7 +6,6 @@ import (
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
-	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -255,8 +254,12 @@ func TestSpendAndCreateRecheckAfterAnUnknownCreate(t *testing.T) {
 //   - unlocked unmined record: an original whose block was invalidated after
 //     the pruner marked it, a live unmined transaction. It is kept.
 //   - no record: nothing to remove, and the replay is still rejected.
-//   - parent locked: an original a reorg's move-back has locked, parent
-//     first, and is saving for restoration. It is kept.
+//   - moved back: an original whose block was invalidated, so unlocked with
+//     no block id, that a reorg's move-back has then locked through the real
+//     walk (GetAndLockChildren), parent first, and is saving for restoration.
+//     It is kept, still locked, so the move-back's save finds it.
+//
+// In every row the parent keeps C's marker, so the next replay is rejected too.
 func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -267,7 +270,7 @@ func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 		wantGone     bool
 	}{
 		{name: "unmined record", record: true, wantGone: true},
-		{name: "parent locked", record: true, parentLocked: true},
+		{name: "moved back", record: true, unlocked: true, parentLocked: true},
 		{name: "mined record", record: true, mined: true},
 		{name: "unlocked unmined record", record: true, unlocked: true},
 		{name: "no record", wantGone: true},
@@ -306,7 +309,9 @@ func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 			}
 
 			if tc.parentLocked {
-				require.NoError(t, store.SetLocked(ctx, []chainhash.Hash{*parent.TxIDChainHash()}, true))
+				locked, walkErr := utxo.GetAndLockChildren(ctx, store, *parent.TxIDChainHash())
+				require.NoError(t, walkErr)
+				require.Contains(t, locked, *child.TxIDChainHash(), "precondition: the walk reached C")
 			}
 
 			_, err = store.db.ExecContext(ctx,
@@ -317,12 +322,22 @@ func TestSpendAndCreateRetryOfAMarkedReplayRemovesTheKeptRecord(t *testing.T) {
 			_, _, err = utxo.SequentialSpendAndCreate(ctx, ulogger.TestLogger{}, store, child, 1000)
 			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is rejected at the spend")
 
-			_, getErr := store.Get(ctx, child.TxIDChainHash())
+			got, getErr := store.Get(ctx, child.TxIDChainHash())
 			if tc.wantGone {
 				require.ErrorIs(t, getErr, errors.ErrTxNotFound, "no record of the pruned transaction may remain")
 			} else {
 				require.NoError(t, getErr, "a mined, unlocked or move-back-locked record is never removed on this path")
 			}
+
+			if tc.parentLocked {
+				require.True(t, got.Locked, "the move-back still holds C, so its save reads it")
+			}
+
+			var markers int
+			require.NoError(t, store.db.QueryRowContext(ctx,
+				`SELECT COUNT(*) FROM deleted_children d JOIN transactions t ON t.id = d.parent_id WHERE t.hash = $1 AND d.child_hash = $2`,
+				parent.TxIDChainHash()[:], child.TxIDChainHash()[:]).Scan(&markers))
+			require.Equal(t, 1, markers, "the parent keeps C's marker, so the next replay is rejected too")
 
 			require.Equal(t, spendpkg.NewSpendingData(child.TxIDChainHash(), 0).Bytes(), outputSpendingData(t, ctx, store, parent, 0),
 				"the parent keeps C's spend")

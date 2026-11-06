@@ -9,6 +9,8 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // unspendRetryBackoffBase is the base delay for the exponential backoff between
@@ -213,6 +215,14 @@ type metaReader interface {
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 }
 
+// prometheusReplayCleanup counts what removeMarkedRecreation did with a record
+// behind a pruner marker, by outcome. A failed read or delete leaves the record
+// and the caller's answer is unchanged, so this is where those failures show.
+var prometheusReplayCleanup = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "teranode", Subsystem: "utxo", Name: "replay_cleanup_total",
+	Help: "Records found behind a pruned transaction's marker when a spend met it, by what the cleanup did: removed, kept_parent_locked, kept_changed, read_failed, delete_failed, unsupported",
+}, []string{"outcome"})
+
 // conditionalDeleter removes a record only while it is still locked and has no
 // block id, checked by the store in the same write. removeMarkedRecreation uses
 // it so that a record unlocked after its reads is not removed. Both in-tree
@@ -379,6 +389,7 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 
 	if !canDelete || !canRead {
 		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and the store cannot check or remove a recreated record", hash.String())
+		prometheusReplayCleanup.WithLabelValues("unsupported").Inc()
 
 		return false, false
 	}
@@ -402,6 +413,7 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 		return err
 	}); err != nil {
 		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and the record could not be read: %v", hash.String(), err)
+		prometheusReplayCleanup.WithLabelValues("read_failed").Inc()
 
 		return false, false
 	}
@@ -416,10 +428,12 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 
 	if parent, locked, err := lockedParent(readCtx, reader, tx); err != nil {
 		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and a parent of the locked record could not be read, leaving it: %v", hash.String(), err)
+		prometheusReplayCleanup.WithLabelValues("read_failed").Inc()
 
 		return false, false
 	} else if locked {
 		logger.Warnf("[SpendAndCreate] %s: spend met a pruned transaction's marker; the locked, unmined record is left because its parent %s is locked, as a reorg's move-back leaves it", hash.String(), parent.String())
+		prometheusReplayCleanup.WithLabelValues("kept_parent_locked").Inc()
 
 		return false, false
 	}
@@ -437,17 +451,20 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 		return err
 	}); err != nil {
 		logger.Errorf("[SpendAndCreate] %s: spend met a pruned transaction's marker and the recreated record could not be removed: %v", hash.String(), err)
+		prometheusReplayCleanup.WithLabelValues("delete_failed").Inc()
 
 		return false, false
 	}
 
 	if !deleted {
 		logger.Warnf("[SpendAndCreate] %s: spend met a pruned transaction's marker; the record changed after it was read and is left", hash.String())
+		prometheusReplayCleanup.WithLabelValues("kept_changed").Inc()
 
 		return false, false
 	}
 
 	logger.Warnf("[SpendAndCreate] %s: removed a locked, unmined record of a pruned transaction whose spend met the pruner's marker", hash.String())
+	prometheusReplayCleanup.WithLabelValues("removed").Inc()
 
 	return true, true
 }

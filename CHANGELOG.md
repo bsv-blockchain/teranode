@@ -197,6 +197,16 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   parent, or its output page for a paginated parent), and registers a new UDF
   module, `teranode_v66`, on startup.
 
+  A replay that meets a marker can find a record of the pruned transaction still
+  in the store. A new counter, `teranode_utxo_replay_cleanup_total`, labelled by
+  `outcome`, counts what happened to that record: `removed`, `kept_parent_locked`
+  (a reorg's move-back holds it), `kept_changed`, `read_failed`, `delete_failed`
+  or `unsupported`. Alert on a rising `read_failed` or `delete_failed`, since in
+  those cases a recreated record stays in the store. On Aerospike the pruner's
+  delayed delete of a child is now refused when the child became locked or
+  unmined after selection; the child's markers are withdrawn and it is counted as
+  held back.
+
   One validator request field is new, `ignore_locked`, and the gRPC client now
   sends it, where it used to drop it. On a deployment with a remote validator
   (`useLocalValidator=false`), subtree validation's spends past a parent locked by an

@@ -2681,6 +2681,14 @@ const detachedStoreCallBoundDefault = 150 * time.Second
 // spend and, when that spend fails part-way, the rollback of the spends that succeeded. So the
 // bound is the spend's own budget (SpendWaitTimeout) plus the rollback's (SpendRollbackTimeout),
 // whose documentation names it the longest a failed or cancelled spend can block its caller.
+//
+// It does not bound the store's replay cleanup. When a spend meets a pruned transaction's
+// marker, or a recheck finds a replay, utxo.SequentialSpendAndCreate reads and removes the
+// recreated record under context.WithoutCancel, which drops this deadline, with each step
+// under its own SpendRollbackTimeout. On that path a call can run past this bound by up to
+// three SpendRollbackTimeouts (the recheck, the read of the record and its parents, and the
+// delete), 360s more at the defaults. Each step is still bounded, so a wedged store cannot
+// hold the wave forever.
 func (u *BlockValidation) detachedStoreCallBound() time.Duration {
 	if u.settings == nil {
 		return detachedStoreCallBoundDefault
