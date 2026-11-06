@@ -2514,6 +2514,37 @@ func TestWarnInBlockShedIsRateLimited(t *testing.T) {
 	require.Contains(t, logger.lines[1], "(4 more", "it says how many were held back")
 }
 
+func TestUnlockLockedTxOnExit_WarnsAboutAnUndeliveredTxUnlessItWasShedInBlock(t *testing.T) {
+	tx := &bt.Tx{}
+
+	t.Run("a nil error from a recovered panic still warns", func(t *testing.T) {
+		logger := &capturingLogger{}
+		v := &Validator{logger: logger}
+
+		var err error
+
+		delivered, shed := false, false
+
+		v.unlockLockedTxOnExit(context.Background(), tx, "tx-panic", &meta.Data{Locked: true}, &err, &delivered, &shed)
+
+		require.Len(t, logger.lines, 1)
+		require.Contains(t, logger.lines[0], "tx stays locked")
+	})
+
+	t.Run("the in-block shed does not warn again", func(t *testing.T) {
+		logger := &capturingLogger{}
+		v := &Validator{logger: logger}
+
+		var err error
+
+		delivered, shed := false, true
+
+		v.unlockLockedTxOnExit(context.Background(), tx, "tx-shed", &meta.Data{Locked: true}, &err, &delivered, &shed)
+
+		require.Empty(t, logger.lines)
+	})
+}
+
 // The in-block shed keeps the record Locked on purpose and warns at a bounded rate. The deferred
 // unlock must not add a per-transaction "not delivered" warning on top.
 func TestValidate_InBlockShedDoesNotWarnPerTransactionAboutTheKeptLock(t *testing.T) {

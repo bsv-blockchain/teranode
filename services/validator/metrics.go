@@ -157,6 +157,10 @@ var (
 	// consumer has spent paused by the controller.
 	prometheusKafkaBackpressurePausedSecondsTotal prometheus.Counter
 
+	// prometheusKafkaBackpressurePauseSeconds holds how long the current pause has run, in
+	// seconds, under the cause label age, fill or held, and 0 once the consumer resumes.
+	prometheusKafkaBackpressurePauseSeconds *prometheus.GaugeVec
+
 	// prometheusKafkaBackpressureReadErrors tracks the current consecutive
 	// queue-stats read-error streak (resets to 0 on a good read).
 	prometheusKafkaBackpressureReadErrors prometheus.Gauge
@@ -526,6 +530,16 @@ func _initPrometheusMetrics() {
 			Name:      "kafka_backpressure_paused_seconds_total",
 			Help:      "Total seconds the tx Kafka consumer has spent paused by the backpressure controller",
 		},
+	)
+
+	prometheusKafkaBackpressurePauseSeconds = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "kafka_backpressure_pause_seconds",
+			Help:      "Seconds the current backpressure pause has run, by cause (age, fill or held), 0 once the consumer resumes",
+		},
+		[]string{"cause"},
 	)
 
 	prometheusKafkaBackpressureReadErrors = promauto.NewGauge(

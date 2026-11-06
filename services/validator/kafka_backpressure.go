@@ -122,6 +122,9 @@ type kafkaBackpressureController struct {
 	// pauseStart is when the current pause began; valid only while paused.
 	pauseStart time.Time
 
+	// pauseCause is the label of the predicate that started the current pause: age, fill or held.
+	pauseCause string
+
 	// failOpenResumeAt is when the last fail-open resume happened, and
 	// failOpenCooldown is how long a new pause stays suppressed from that
 	// instant; both zero when no cooldown is armed.
@@ -489,6 +492,8 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 		return
 	}
 
+	prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(c.now().Sub(c.pauseStart).Seconds())
+
 	// Already paused: resume on a genuine drain (low watermark AND cool fill), or
 	// when the pause has run past its hard cap (fail-open) even if it is still hot.
 	if drained {
@@ -501,7 +506,9 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 		// held count clears only when a block connects, so resuming earlier does not relieve it:
 		// the consumer would pull at line rate and every transaction would be refused, unwound and
 		// dropped until then. Waiting in Kafka is the better outcome. A queue or age pause, or a
-		// stale signal, still fails open.
+		// stale signal, still fails open. The pause has no upper bound, so on a node that mines no
+		// block for longer than the Kafka topic retention the backlog expires unseen. The operator's
+		// signal is the gauge teranode_validator_kafka_backpressure_pause_seconds with cause held.
 		if hotByHeld && !hotByQueue && effectiveAge < c.cfg.PauseQueueAge {
 			return
 		}
@@ -520,6 +527,14 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 func (c *kafkaBackpressureController) pause(age time.Duration, byFill, byHeld bool, fillPause, heldPause int64) {
 	c.consumer.PauseAll()
 	c.pauseStart = c.now()
+	c.pauseCause = "age"
+
+	if byHeld {
+		c.pauseCause = "held"
+	} else if byFill {
+		c.pauseCause = "fill"
+	}
+
 	c.paused.Store(true)
 
 	prometheusKafkaBackpressurePaused.Set(1)
@@ -552,6 +567,7 @@ func (c *kafkaBackpressureController) resume(reason string) {
 	c.paused.Store(false)
 
 	prometheusKafkaBackpressurePaused.Set(0)
+	prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(0)
 	prometheusKafkaBackpressureResumeTotal.Inc()
 	prometheusKafkaBackpressurePausedSecondsTotal.Add(pausedFor.Seconds())
 

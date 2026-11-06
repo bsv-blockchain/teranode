@@ -57,6 +57,8 @@
 
 `blockassembly_maxTransactionsInMemory` caps the transactions block assembly holds in RAM, counted as those already placed in subtrees plus those queued for ingest. It is checked where every transaction enters block assembly, the ingest queue reservation, so it applies to all ingress paths, including the validator's gRPC and HTTP listeners.
 
+The limit assumes trusted gRPC callers. The `InBlock` flag on the validator `ValidateTransaction` request and on block assembly `AddTx` and `AddTxBatch` lifts the limit, like the other trust flags on those RPCs. The shipped profile sets `security_level_grpc = 0`, so an unauthenticated client that can reach the gRPC port can bypass the limit. Operators who expose gRPC must set `security_level_grpc`.
+
 A batch that would cross the limit is refused with the same resource-exhausted status as a full ingest queue (`blockassembly_maxQueueItems`):
 
 | Caller | Outcome |
