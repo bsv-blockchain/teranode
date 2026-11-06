@@ -327,7 +327,7 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "aerospike",
 			Name:      "utxo_spend_abort_in_flight",
-			Help:      "Spend items still in flight when the batch aborted, excluded from the rollback set and applied by the dispatcher afterwards (residual dangling-ref window, see #1291)",
+			Help:      "Spend items a backend part had started and not published when their caller gave up, each rolled back by whoever completes it if it succeeds, unless a transient lock suppresses the batch rollback and leaves it applied (residual window see #1291)",
 		},
 	)
 

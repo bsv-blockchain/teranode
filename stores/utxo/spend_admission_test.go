@@ -2,6 +2,8 @@ package utxo
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +18,12 @@ func TestSpendAdmission(t *testing.T) {
 		var admission SpendAdmission
 		require.ErrorIs(t, admission.Start(ctx), errors.ErrServiceUnavailable)
 		require.ErrorIs(t, admission.Start(context.Background()), errors.ErrServiceUnavailable)
+	})
+	t.Run("context cancelled with a deadline cause is a timeout", func(t *testing.T) {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(context.DeadlineExceeded)
+		var admission SpendAdmission
+		require.ErrorIs(t, admission.Start(ctx), errors.ErrServiceUnavailable)
 	})
 	t.Run("cancelled context before dispatch", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -57,4 +65,34 @@ func TestSpendAdmissionStarted(t *testing.T) {
 	require.False(t, queued.Started())
 	require.True(t, started.Started())
 	require.False(t, abandoned.Started())
+}
+
+func TestSpendOrphanClaimsExactlyOnce(t *testing.T) {
+	var unmarked SpendOrphan
+	require.False(t, unmarked.Claim(), "an item whose caller still waits must not be claimed")
+
+	for i := 0; i < 200; i++ {
+		var (
+			orphan SpendOrphan
+			wins   atomic.Int32
+			wg     sync.WaitGroup
+		)
+
+		orphan.Mark()
+
+		for j := 0; j < 8; j++ {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				if orphan.Claim() {
+					wins.Add(1)
+				}
+			}()
+		}
+
+		wg.Wait()
+		require.Equal(t, int32(1), wins.Load(), "exactly one side must win the rollback")
+	}
 }

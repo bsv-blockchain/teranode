@@ -128,17 +128,18 @@ func _initPrometheusMetrics() {
 		},
 	)
 
-	// Mirrors the aerospike counter of the same name: a give-up on a per-item
-	// wait (ctx.Done() or the per-item timer) inside the batched Spend leaves
-	// that item still enqueued in the batcher, so a straggler UPDATE can land
-	// after the rollback above has already run — the same #1214 dangling
-	// reference this rollback exists to prevent, just uncounted until now.
+	// Mirrors the aerospike counter of the same name. It counts inputs a backend
+	// part had started and not published when the courtesy wait for them ended
+	// inside the batched Spend. Unless a transient lock suppresses the batch
+	// rollback, each is marked orphaned and whoever completes it rolls its spend
+	// back if it succeeds, with no time bound. A suppressed batch leaves it
+	// applied. The counter measures such items, not dangling references.
 	prometheusUtxoSpendAbortInFlight = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "teranode",
 			Subsystem: "sql",
 			Name:      "utxo_spend_abort_in_flight",
-			Help:      "Spend items still in flight when the batch aborted, excluded from the rollback set and applied by the batcher afterwards (residual dangling-ref window, see #1291)",
+			Help:      "Spend items a backend part had started and not published when their caller gave up, each rolled back by whoever completes it if it succeeds, unless a transient lock suppresses the batch rollback and leaves it applied (residual window see #1291)",
 		},
 	)
 

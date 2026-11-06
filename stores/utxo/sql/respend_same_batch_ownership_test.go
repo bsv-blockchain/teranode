@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -436,4 +438,329 @@ func TestSpendBatchClaimAtMatureHeightIsNotRefusedForAnotherClaimsImmatureVerdic
 
 	require.ErrorIs(t, first.err, errors.ErrTxCoinbaseImmature)
 	require.NoError(t, second.err, "a claim at a mature height was refused with another claim's immature verdict")
+}
+
+type heldClaim struct {
+	store   *Store
+	parent  *bt.Tx
+	later   *batchSpend
+	result  chan error
+	release chan struct{}
+	done    chan struct{}
+}
+
+// startHeldClaim runs Spend for a claim that sits behind a wrong hash claim and
+// whose backend part is held until release is closed. It returns once that part
+// has started.
+func startHeldClaim(t *testing.T, name string, wait, bound time.Duration) *heldClaim {
+	t.Helper()
+
+	ctx := context.Background()
+	store := setupSharedBatch(ctx, t, name)
+	require.NoError(t, store.SetBlockHeight(2))
+
+	parent := twoOutParent(ctx, t, store, name)
+
+	store.spendBatcher.Close()
+	queued := make(chan *batchSpend, 1)
+	store.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(items []*batchSpend) { queued <- items[0] }, false)
+	store.settings.UtxoStore.SpendWaitTimeout = wait
+	store.settings.UtxoStore.SpendRollbackTimeout = bound
+
+	held := &heldClaim{store: store, parent: parent, result: make(chan error, 1), release: make(chan struct{}), done: make(chan struct{})}
+
+	go func() { _, err := store.Spend(ctx, spendOf(t, parent, 2, 0), 2); held.result <- err }()
+
+	select {
+	case held.later = <-queued:
+	case <-time.After(3 * time.Second):
+		t.Fatal("claim not queued")
+	}
+
+	first, err := utxo.GetSpends(spendOf(t, parent, 1, 0))
+	require.NoError(t, err)
+
+	wrongHash := chainhash.Hash{99}
+	first[0].UTXOHash = &wrongHash
+	firstItem := &batchSpend{spend: first[0], blockHeight: 2, errCh: make(chan error, 1)}
+
+	entered := make(chan struct{})
+	store.beforeSpendPart = func(part []*batchSpend) {
+		for _, item := range part {
+			if item == held.later {
+				close(entered)
+				<-held.release
+
+				return
+			}
+		}
+	}
+
+	go func() { defer close(held.done); store.sendSpendBatch([]*batchSpend{firstItem, held.later}) }()
+
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("claim part did not start")
+	}
+
+	return held
+}
+
+func abortInFlightCount(t *testing.T) float64 {
+	t.Helper()
+
+	var metric dto.Metric
+	require.NoError(t, prometheusUtxoSpendAbortInFlight.Write(&metric))
+
+	return metric.GetCounter().GetValue()
+}
+
+func outputIsUnspent(ctx context.Context, store *Store, spend *utxo.Spend) bool {
+	stored, err := store.GetSpend(ctx, spend)
+
+	return err == nil && stored.Status == int(utxo.Status_OK) && stored.SpendingData == nil
+}
+
+// A claim that started before its caller gave up and finishes after the
+// courtesy wait ends must be rolled back by whoever completes it, with no time
+// bound, because the caller got an error and no spender record is ever created.
+func TestSpendRollsBackClaimThatFinishesAfterAwaitBound(t *testing.T) {
+	initPrometheusMetrics()
+	inFlight := abortInFlightCount(t)
+	held := startHeldClaim(t, "orphan-after-bound", 300*time.Millisecond, 4*time.Second)
+
+	select {
+	case err := <-held.result:
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return while its started claim was still held")
+	}
+
+	select {
+	case <-held.done:
+		t.Fatal("the claim finished before the caller returned, so the late path was not exercised")
+	default:
+	}
+
+	require.Equal(t, inFlight+1, abortInFlightCount(t), "the claim the caller gave up on must count as in flight")
+
+	close(held.release)
+
+	select {
+	case <-held.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("batch did not complete")
+	}
+
+	require.NoError(t, held.later.err, "the claim must have run to completion for this test to exercise the late path")
+	require.Eventually(t, func() bool { return outputIsUnspent(context.Background(), held.store, held.later.spend) }, 10*time.Second, 20*time.Millisecond,
+		"the late claim's spend was left on the outpoint")
+}
+
+// A claim whose success was published before its caller gave up on it must be
+// rolled back by the caller's side of the hand-off.
+func TestSpendRollsBackClaimPublishedBeforeItsCallerGaveUp(t *testing.T) {
+	ctx := context.Background()
+	store := setupSharedBatch(ctx, t, "orphan-after-publish")
+	require.NoError(t, store.SetBlockHeight(2))
+	parent := twoOutParent(ctx, t, store, "orphan-after-publish")
+
+	spends, err := utxo.GetSpends(spendOf(t, parent, 2, 0))
+	require.NoError(t, err)
+
+	item := &batchSpend{spend: spends[0], blockHeight: 2, errCh: make(chan error, 1), rollbackOrphan: store.rollbackOrphanedSpend}
+	store.sendSpendBatch([]*batchSpend{item})
+	require.NoError(t, item.err, "the claim must have succeeded for this test to exercise the orphan path")
+	require.False(t, outputIsUnspent(ctx, store, spends[0]), "the claim must have spent the output")
+
+	item.markOrphaned()
+
+	require.Eventually(t, func() bool { return outputIsUnspent(ctx, store, spends[0]) }, 10*time.Second, 20*time.Millisecond,
+		"a claim published before its caller gave up was left on the output")
+}
+
+// The courtesy wait for a started claim and the rollback share one budget, so a
+// failed Spend returns within SpendWaitTimeout plus SpendRollbackTimeout. The
+// courtesy wait is only a quarter of that budget, so with a claim held past it
+// the caller returns well before the whole budget is gone.
+func TestSpendCallerBoundHoldsWhileStartedClaimIsHeld(t *testing.T) {
+	const (
+		wait  = 300 * time.Millisecond
+		bound = 2 * time.Second
+	)
+
+	started := time.Now()
+	held := startHeldClaim(t, "caller-bound", wait, bound)
+
+	select {
+	case err := <-held.result:
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	case <-time.After(wait + bound + 2*time.Second):
+		t.Fatal("caller did not return within the documented bound")
+	}
+
+	elapsed := time.Since(started)
+	require.LessOrEqual(t, elapsed, wait+bound+500*time.Millisecond, "caller held longer than SpendWaitTimeout plus SpendRollbackTimeout")
+	require.Less(t, elapsed, wait+bound/2, "the courtesy wait must take a quarter of the budget, not all of it")
+
+	close(held.release)
+	<-held.done
+}
+
+// A blocking enqueue on a full batcher channel must not use up the wait budget:
+// the budget starts when the enqueue returns.
+func TestSpendWaitBudgetStartsAfterEnqueueOnSaturatedBatcher(t *testing.T) {
+	ctx := context.Background()
+	store := setupSharedBatch(ctx, t, "saturated-batcher")
+	require.NoError(t, store.SetBlockHeight(2))
+	parent := twoOutParent(ctx, t, store, "saturated")
+
+	store.spendBatcher.Close()
+
+	release := make(chan struct{})
+	store.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(items []*batchSpend) {
+		<-release
+
+		real := make([]*batchSpend, 0, len(items))
+
+		for _, item := range items {
+			if item.errCh != nil && item.spend.TxID != nil {
+				real = append(real, item)
+			}
+		}
+
+		if len(real) > 0 {
+			store.sendSpendBatch(real)
+		}
+	}, false)
+	store.settings.UtxoStore.SpendWaitTimeout = 300 * time.Millisecond
+
+	var puts sync.WaitGroup
+
+	for i := 0; i < 1000; i++ {
+		puts.Add(1)
+
+		go func() {
+			defer puts.Done()
+			store.spendBatcher.Put(&batchSpend{spend: &utxo.Spend{}})
+		}()
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	laterTx := spendOf(t, parent, 2, 0)
+	result := make(chan error, 1)
+	go func() { _, err := store.Spend(ctx, laterTx, 2); result <- err }()
+
+	time.Sleep(800 * time.Millisecond)
+	close(release)
+
+	select {
+	case err := <-result:
+		require.NoError(t, err, "a spend that waited for room in the batcher longer than SpendWaitTimeout must still succeed")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Spend did not return after the batcher drained")
+	}
+
+	puts.Wait()
+
+	spends, err := utxo.GetSpends(laterTx)
+	require.NoError(t, err)
+	require.False(t, outputIsUnspent(ctx, store, spends[0]), "the spend must have been applied")
+}
+
+// When a completed spend of the same tx failed with ErrTxLocked and nothing
+// proves the tx unwinnable, a concurrent attempt at the same txid may own the
+// spends, so the batch rollback is suppressed. The late claim must then be left
+// as the batch's own spends are, not unspent.
+func TestSpendDoesNotRollBackLateClaimWhenTransientLockSuppressesRollback(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := context.Background()
+	store := setupSharedBatch(ctx, t, "orphan-suppressed")
+	require.NoError(t, store.SetBlockHeight(2))
+
+	parent := twoOutParent(ctx, t, store, "orphan-suppressed")
+
+	lockedParent := bt.NewTx()
+	prev := chainhash.DoubleHashH([]byte("orphan-suppressed-locked"))
+	require.NoError(t, lockedParent.From(prev.String(), 0, "76a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac", 1e8))
+	lockedParent.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{bscript.OpTRUE})
+	require.NoError(t, lockedParent.PayToAddress("1BUBHgpCBWCsD2Ajbeu7ZgCgvMHsoYHm3W", 1000))
+	_, err := store.Create(ctx, lockedParent, 1, utxo.WithLocked(true))
+	require.NoError(t, err)
+
+	twoInputs := bt.NewTx()
+	require.NoError(t, twoInputs.From(lockedParent.TxIDChainHash().String(), 0, lockedParent.Outputs[0].LockingScript.String(), lockedParent.Outputs[0].Satoshis))
+	require.NoError(t, twoInputs.From(parent.TxIDChainHash().String(), 0, parent.Outputs[0].LockingScript.String(), parent.Outputs[0].Satoshis))
+	require.NoError(t, twoInputs.PayToAddress("1BUBHgpCBWCsD2Ajbeu7ZgCgvMHsoYHm3W", 1))
+	twoInputs.LockTime = 2
+
+	store.spendBatcher.Close()
+	queued := make(chan *batchSpend, 2)
+	store.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(items []*batchSpend) { queued <- items[0] }, false)
+	store.settings.UtxoStore.SpendWaitTimeout = 300 * time.Millisecond
+	store.settings.UtxoStore.SpendRollbackTimeout = 4 * time.Second
+
+	inFlight := abortInFlightCount(t)
+	result := make(chan error, 1)
+	go func() { _, err := store.Spend(ctx, twoInputs, 2); result <- err }()
+
+	var lockedItem, claim *batchSpend
+
+	for i := 0; i < 2; i++ {
+		select {
+		case item := <-queued:
+			if item.spend.TxID.IsEqual(lockedParent.TxIDChainHash()) {
+				lockedItem = item
+			} else {
+				claim = item
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("claims not queued")
+		}
+	}
+
+	require.NotNil(t, lockedItem)
+	require.NotNil(t, claim)
+
+	store.sendSpendBatch([]*batchSpend{lockedItem})
+	require.ErrorIs(t, lockedItem.err, errors.ErrTxLocked)
+
+	entered, release := make(chan struct{}), make(chan struct{})
+	store.beforeSpendPart = func(part []*batchSpend) {
+		for _, item := range part {
+			if item == claim {
+				close(entered)
+				<-release
+
+				return
+			}
+		}
+	}
+
+	done := make(chan struct{})
+	go func() { defer close(done); store.sendSpendBatch([]*batchSpend{claim}) }()
+
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("claim part did not start")
+	}
+
+	select {
+	case err := <-result:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return while its started claim was still held")
+	}
+
+	require.Equal(t, inFlight+1, abortInFlightCount(t), "a suppressed late claim still counts as in flight")
+
+	close(release)
+	<-done
+	require.NoError(t, claim.err)
+
+	require.Never(t, func() bool { return outputIsUnspent(ctx, store, claim.spend) }, 2*time.Second, 20*time.Millisecond,
+		"the late claim was rolled back although a transient lock suppressed the batch rollback")
 }

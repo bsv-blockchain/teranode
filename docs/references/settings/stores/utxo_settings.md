@@ -16,6 +16,7 @@
 | SpendBatcherSize | int | 100 | utxostore_spendBatcherSize | Spend operation batch size |
 | SpendBatcherConcurrency | int | 32 | utxostore_spendBatcherConcurrency | SQL per-transaction input-spend cap (`SpendBatcherSize` × this); also caps quick-validation concurrent transactions (`SpendBatcherSize` × this × 2) |
 | SpendWaitTimeout | time.Duration | 30s | utxostore_spendWaitTimeout | Spend operation wait timeout |
+| SpendRollbackTimeout | time.Duration | 120s | utxostore_spendRollbackTimeout | Budget that starts when a failed Spend gives up: a courtesy wait of at most a quarter of it for started inputs, then the partial-spend rollback on the rest, so a failed Spend holds its caller for at most `SpendWaitTimeout` + this value. A started input still unpublished after the wait is rolled back by whoever completes it, with no time bound |
 | SpendCircuitBreakerFailureCount | int | 10 | utxostore_spendCircuitBreakerFailureCount | Circuit breaker failure threshold (infrastructure-level errors only — see "Spend Circuit Breaker Trigger Set" below) |
 | SpendCircuitBreakerCooldown | time.Duration | 30s | utxostore_spendCircuitBreakerCooldown | Circuit breaker cooldown period |
 | SpendCircuitBreakerHalfOpenMax | int | 4 | utxostore_spendCircuitBreakerHalfOpenMax | Circuit breaker half-open max |
