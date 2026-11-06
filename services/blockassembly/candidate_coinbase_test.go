@@ -183,7 +183,7 @@ func TestSubmitMiningSolution_CoinbaseLessMinesTheIssuedCoinbase(t *testing.T) {
 // TestSubmitMiningSolution_InvalidSolutionKeepsTheIssuedCoinbase pins that a consensus-invalid
 // solution leaves the job, and so its coinbase, in place, as bitcoin-sv leaves a candidate alone
 // after an invalid submitminingsolution. Deleting the job made the next poll for the same id, which
-// for an empty block is derived from the parent alone, build a coinbase with a new random
+// every poll in the same second shares, build a coinbase with a new random
 // extranonce, so every other miner still hashing the first one failed the proof-of-work check and
 // deleted the job again. A share that misses the target, the commonest invalid solution, did worse:
 // block.Valid reports a miss as a processing error, so it also reset block assembly. A miner on the
@@ -440,4 +440,42 @@ func TestGenerateBlocks_NoMinerKeys(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, block.CoinbaseTx.Outputs, 1)
 	require.Equal(t, want, block.CoinbaseTx.Outputs[0].LockingScript.Bytes(), "the coinbase must pay the requested address")
+}
+
+// TestGetMiningCandidate_EmptyBlockPollsKeepTheirOwnTime pins that each empty-block candidate keeps
+// the time it was issued with. A solution may omit its time, and the node then builds the header
+// with the job's. The empty-block candidate id used to come from the parent alone, so every poll at
+// one tip shared a job and each poll overwrote its time. A miner still hashing an earlier poll's
+// time got a header rebuilt with a later one, and the block failed the proof-of-work check.
+func TestGetMiningCandidate_EmptyBlockPollsKeepTheirOwnTime(t *testing.T) {
+	server, _ := setupServer(t)
+	require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+	// With no transactions both polls take the empty-block path.
+	first, err := server.GetMiningCandidate(t.Context(), &blockassembly_api.GetMiningCandidateRequest{})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.CoinbaseTx)
+
+	var later *model.MiningCandidate
+
+	require.Eventually(t, func() bool {
+		later, err = server.GetMiningCandidate(t.Context(), &blockassembly_api.GetMiningCandidateRequest{})
+		require.NoError(t, err)
+
+		return later.Time != first.Time
+	}, 5*time.Second, 50*time.Millisecond, "the candidate time should advance with the clock")
+
+	require.Equal(t, first.PreviousHash, later.PreviousHash, "both polls must be at the same tip")
+	require.NotEqual(t, first.Id, later.Id, "a poll at a later time must get a job of its own")
+
+	// Mine on the first poll and submit the nonce alone, as a miner that keeps the candidate's
+	// time, version and coinbase may.
+	resp, err := server.submitMiningSolution(t.Context(), &BlockSubmissionRequest{
+		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{
+			Id:    first.Id,
+			Nonce: mine(t, first, first.Version),
+		},
+	})
+	require.NoError(t, err, "the first poll's job must still hold the time the miner hashed")
+	require.True(t, resp.Ok)
 }
