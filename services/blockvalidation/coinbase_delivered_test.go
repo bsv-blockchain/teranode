@@ -318,6 +318,22 @@ func TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete(t *testing.T
 			"a present, bound, malformed coinbase must be ERR_BLOCK_INVALID, got: %v", err)
 	})
 
+	t.Run("async quick path, 64-byte zero-input coinbase bound to the header", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.OptimisticMining = false
+
+		bv, client := newNoPersistHarness(ctx, t, tSettings)
+		block := gap046BlockWithCoinbase(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
+
+		writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+		_, _, err := bv.quickValidateBlockAsync(ctx, block, "peer-serving", "http://localhost", writeJobsChan)
+		requireIncompleteNotCondemned(ctx, t, client, block, err)
+	})
+
 	t.Run("async quick path, header does not commit to the coinbase", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()

@@ -3,8 +3,8 @@ package blockvalidation
 import "github.com/bsv-blockchain/teranode/model"
 
 // mutatedBodyTxSize is the serialised size of a transaction whose txid could be an inner merkle
-// node rather than a leaf: an inner node is the double SHA-256 of two 32-byte child hashes, so 64
-// bytes that parse as a transaction hash to the merkle root of the block they were cut from.
+// node rather than a leaf: an inner node is the double SHA-256 of two 32-byte child hashes, so the
+// top-level pair under a block's merkle root, if it parses as a transaction, hashes to that root.
 const mutatedBodyTxSize = 64
 
 // coinbaseNotDelivered reports whether the serving peer failed to hand over a coinbase the
