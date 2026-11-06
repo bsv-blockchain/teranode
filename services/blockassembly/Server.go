@@ -1745,9 +1745,10 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 // which it is cleaned up automatically. The coinbase is the one a solution without its own is mined
 // with, as bitcoin-sv keeps the candidate block's coinbase, so it must not change under a miner who
 // has been handed it. Candidate ids repeat: the main path hashes the subtree root, parent and time,
-// so polls in the same second share one, and the empty-block path derives its id from the parent
-// alone. A poll for an id whose job is still held therefore reuses that job's coinbase rather than
-// building a new one, provided it pays the same value at the same height.
+// and the empty-block path the parent and time, so polls at one tip with the same candidate time
+// (and, on the main path, the same subtrees) share one. A poll for an id whose job is still held
+// therefore reuses that job's coinbase rather than building a new one, provided it pays the same
+// value at the same height.
 //
 // Building the coinbase needs miner_wallet_private_keys, which a pool that submits its own coinbase
 // and generatetoaddress, which pays an explicit address, have never needed. So a coinbase that
@@ -2260,11 +2261,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 			ba.logger.Warnf("[BlockAssembly][%s][%s] rejected mining solution, block breaks a consensus rule: %v", jobID, block.Hash().String(), err)
 
 			// Keep the job. Its coinbase is the one every miner on this candidate id was handed, and
-			// the id outlives a single coinbase-less poll (the empty-block id is derived from the
-			// parent alone), so deleting it would make the next poll build a coinbase with a new
-			// extranonce and fail every other miner still hashing the old one, which would delete it
-			// again. As in bitcoin-sv, where an invalid submitminingsolution leaves the candidate
-			// alone, the job goes when its TTL lapses or a block is mined.
+			// the id outlives a single coinbase-less poll (every poll at that tip with the same
+			// candidate time and, on the main path, the same subtrees shares it), so deleting it
+			// would make the next poll build a coinbase with a new extranonce and fail every other
+			// miner still hashing the old one, which would delete it again. As in bitcoin-sv, where
+			// an invalid submitminingsolution leaves the candidate alone, the job goes when its TTL
+			// lapses or a block is mined.
 			return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err)
 		}
 

@@ -2747,14 +2747,22 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 
 	blockSubsidy := util.GetBlockSubsidyForHeight(nextBlockHeight, b.settings.ChainCfgParams)
 
-	id := &chainhash.Hash{}
-	copy(id[:], bestBlockHeader.Hash()[:])
-	id[0] ^= 0xFF
+	// The id covers the time as well as the parent, as the main candidate's does. A job keeps the
+	// time it was issued with, and a solution that omits its time is mined with the job's. With an id
+	// from the parent alone every poll at one tip shared a job, each poll overwrote its time, and a
+	// miner still hashing an earlier poll's time submitted a header the node rebuilt with a later one,
+	// which failed the proof-of-work check. A poll with a different candidate time now gets a job of
+	// its own. Polls that share a time, in the same second or while the median-time-past floor holds
+	// the time fixed, share a job and that time.
+	timeBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
+	previousHash := bestBlockHeader.Hash()
+	id := chainhash.HashB(append(previousHash.CloneBytes(), timeBytes...))
 
 	// Version uses miningCandidateVersion (same as the main candidate) rather than the tip's version.
 	miningCandidate := &model.MiningCandidate{
-		Id:                  id[:],
-		PreviousHash:        bestBlockHeader.Hash()[:],
+		Id:                  id,
+		PreviousHash:        previousHash[:],
 		CoinbaseValue:       blockSubsidy,
 		Version:             miningCandidateVersion,
 		NBits:               nBits[:],
