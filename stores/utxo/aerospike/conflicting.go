@@ -42,6 +42,7 @@ func (s *Store) GetConflictingChildren(ctx context.Context, hash chainhash.Hash)
 func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, setValue bool) ([]*utxo.Spend, []chainhash.Hash, error) {
 	var (
 		batchRecords   = make([]aerospike.BatchRecordIfc, 0, len(txHashes))
+		batchTxHashes  = make([]*chainhash.Hash, 0, len(txHashes))
 		batchUDFPolicy = aerospike.NewBatchUDFPolicy()
 		txs            = make([]*bt.Tx, len(txHashes))
 		g, gCtx        = errgroup.WithContext(ctx)
@@ -87,6 +88,8 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		if err != nil {
 			return nil, nil, errors.NewProcessingError("could not create aerospike key", err)
 		}
+
+		batchTxHashes = append(batchTxHashes, tx.TxIDChainHash())
 
 		// set the conflicting flag using a lua script in the batch
 		batchRecords = append(batchRecords, s.teranodeBatchRecord(
@@ -141,11 +144,46 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 	}
 
-	if err := s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
 		return nil, nil, errors.NewProcessingError("could not batch write conflicting flag", err)
 	}
 
+	if err := s.propagateConflictingDAHSignals(batchRecords, batchTxHashes, s.GetBlockHeight()); err != nil {
+		return nil, nil, err
+	}
+
 	return affectedParentSpends, spendingTxHashes, nil
+}
+
+// propagateConflictingDAHSignals brings the child pages of each record in line with the master's
+// stamp reported by its setConflicting response. It writes the pages on every response, so a retry
+// repairs pages whose write failed or whose response was lost after the master already committed.
+// See reconcileChildDAH.
+func (s *Store) propagateConflictingDAHSignals(batchRecords []aerospike.BatchRecordIfc, txHashes []*chainhash.Hash, blockHeight uint32) error {
+	var aggErr error
+
+	for i, record := range batchRecords {
+		batchRec := record.BatchRec()
+		if batchRec == nil || batchRec.Err != nil || batchRec.Record == nil || batchRec.Record.Bins == nil {
+			continue
+		}
+
+		raw := batchRec.Record.Bins[LuaSuccess.String()]
+		if raw == nil {
+			continue
+		}
+
+		res, err := s.ParseLuaMapResponse(raw)
+		if err != nil || res.Status != LuaStatusOK {
+			continue
+		}
+
+		if err := s.reconcileChildDAH(txHashes[i], res, blockHeight); err != nil {
+			aggErr = errors.Join(aggErr, err)
+		}
+	}
+
+	return aggErr
 }
 
 func (s *Store) updateParentConflictingChildren(tx *bt.Tx) error {
