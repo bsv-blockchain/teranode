@@ -320,12 +320,15 @@ func TestPrunerMixedChildrenParentPreservation(t *testing.T) {
 //   - Child record 2 (index 2): output 4
 //
 // This test creates children that spend from different records:
-//   - Mined child: spends parent output 0 (master record)
+//   - Mined child: spends parent outputs 0, 1 (master record) and 3 (child record 1)
 //   - Unmined child 1: spends parent output 2 (child record 1)
 //   - Unmined child 2: spends parent output 4 (child record 2)
 //
-// After exceeding parent's DAH, the pruner should preserve the entire parent
-// (all 3 records) because it has unmined children.
+// Every output is spent, so the parent is stamped with a DeleteAtHeight. Phase 1 only
+// preserves records that already carry a DAH (prune-eligibility gate), so a parent with
+// unspent outputs would survive without Phase 1 doing anything. After exceeding the
+// parent's DAH, the pruner should preserve the entire parent (all 3 records) because it
+// has unmined children.
 func TestPrunerExternalRecordsMixedChildrenPreservation(t *testing.T) {
 	const (
 		unminedTxRetention       = 2
@@ -425,13 +428,16 @@ func TestPrunerExternalRecordsMixedChildrenPreservation(t *testing.T) {
 	t.Logf("Unmined child 2 %s (spends parent output 4 from child record 2) UnminedSince=%d",
 		unminedChild2Hash, unminedMeta2.UnminedSince)
 
-	// Mined child: spends parent output 0 (from master record)
+	// Mined child: spends the remaining parent outputs 0, 1 (master record) and 3 (child
+	// record 1), leaving the parent fully spent so it gets a DeleteAtHeight
 	minedChild := node.CreateTransactionWithOptions(t,
 		transactions.WithInput(parentTx, 0),
+		transactions.WithInput(parentTx, 1),
+		transactions.WithInput(parentTx, 3),
 		transactions.WithP2PKHOutputs(1, outputAmount/2),
 	)
 	minedChildHash := minedChild.TxIDChainHash()
-	t.Logf("Mined child %s (spends parent output 0 from master record)", minedChildHash)
+	t.Logf("Mined child %s (spends parent outputs 0, 1 and 3; parent now fully spent)", minedChildHash)
 
 	// Verify parent exists before pruning
 	_, err = node.UtxoStore.Get(ctx, parentHash)
@@ -444,7 +450,7 @@ func TestPrunerExternalRecordsMixedChildrenPreservation(t *testing.T) {
 
 	// Block 1: includes minedChild (spends parent output 0 from master record)
 	_, block := node.CreateTestBlock(t, prevBlock, 9000, minedChild)
-	err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy")
+	err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy", 0, false)
 	require.NoError(t, err)
 	t.Logf("Block %d: mined child %s included (spends parent output 0)", block.Height, minedChildHash)
 	prevBlock = block
@@ -452,7 +458,7 @@ func TestPrunerExternalRecordsMixedChildrenPreservation(t *testing.T) {
 	// Blocks 2-8: empty blocks to exceed parent's DAH
 	for i := 1; i < 8; i++ {
 		_, block = node.CreateTestBlock(t, prevBlock, uint32(9000+i))
-		err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy")
+		err = node.BlockValidationClient.ProcessBlock(ctx, block, block.Height, "", "legacy", 0, false)
 		require.NoError(t, err)
 		prevBlock = block
 	}
@@ -473,7 +479,26 @@ func TestPrunerExternalRecordsMixedChildrenPreservation(t *testing.T) {
 		return true
 	}, 30*time.Second, 1*time.Second,
 		"Parent tx (external, 3 records) should still exist after pruner (Phase 1 preservation)")
-	t.Logf("Parent tx %s (3 records) preserved by Phase 1 despite DAH exceeded", parentHash)
+	// The parent surviving alone would also pass if the pruner never ran. Wait for a
+	// completed prune cycle at the current height, then check that Phase 1 actually
+	// protected the parent: PreserveUntil set and DeleteAtHeight cleared.
+	node.WaitForPruner(t, 30*time.Second, meta.Height)
+
+	rawParent, ok := GetRawTx(t, node.UtxoStore, *parentHash,
+		fields.PreserveUntil.String(), fields.DeleteAtHeight.String()).(map[string]interface{})
+	require.True(t, ok, "raw parent record should be a bin map")
+	PrintRawTx(t, "Raw parentTx after pruner", rawParent)
+
+	preserveUntil, ok := rawParent[fields.PreserveUntil.String()].(int)
+	require.True(t, ok, "parent master record should have a PreserveUntil bin after Phase 1, got %v",
+		rawParent[fields.PreserveUntil.String()])
+	require.Greater(t, preserveUntil, int(meta.Height),
+		"PreserveUntil should be beyond the current height")
+	require.Nil(t, rawParent[fields.DeleteAtHeight.String()],
+		"Phase 1 should have cleared the parent's DeleteAtHeight")
+
+	t.Logf("Parent tx %s (3 records) preserved by Phase 1 despite DAH exceeded (PreserveUntil=%d)",
+		parentHash, preserveUntil)
 
 	// Verify parent still has all outputs accessible (all external records intact)
 	parentMetaAfter, err := node.UtxoStore.Get(ctx, parentHash, fields.Utxos)
