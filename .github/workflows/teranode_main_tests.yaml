@@ -21,7 +21,7 @@ jobs:
     # ARM runner (see teranode_pr_tests.yaml): more headroom for the heavy
     # `make test` -race+coverage compile; runs natively on arm64.
     runs-on: teranode-runner-16-core-arm
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4
 
