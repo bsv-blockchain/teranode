@@ -158,3 +158,56 @@ func TestTxMetaCache_DeleteComplete_EvictsEvenWhenTheDurableDeleteFails(t *testi
 	_, found = cache.GetMetaCached(ctx, hash)
 	require.False(t, found, "the entry must be evicted even though the durable delete failed")
 }
+
+// TestTxMetaCache_BeginCreateFirstRollback_DelegatesAndEvicts pins that the marker call reaches
+// the underlying store and drops the cache entry whatever the store answers: a cached entry
+// would keep describing the record as an ordinary creating one after it is marked.
+func TestTxMetaCache_BeginCreateFirstRollback_DelegatesAndEvicts(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_begin_rollback_evicts")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	beginErr := errors.NewStorageError("marking the record failed")
+	marking := &beginRollbackStore{Store: underlying, began: true, err: beginErr}
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, marking, Unallocated)
+	require.NoError(t, err)
+
+	cache, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+
+	hash := testHash(18)
+	require.NoError(t, cache.SetCache(&hash, testMeta()))
+
+	_, found := cache.GetMetaCached(ctx, hash)
+	require.True(t, found, "precondition: the entry is in the cache")
+
+	began, err := cache.BeginCreateFirstRollback(ctx, &hash)
+	require.ErrorIs(t, err, errors.ErrStorageError, "the underlying error is propagated")
+	require.True(t, began, "the underlying answer is propagated")
+	require.Equal(t, 1, marking.calls)
+
+	_, found = cache.GetMetaCached(ctx, hash)
+	require.False(t, found, "the entry must be evicted even though the marker call failed")
+}
+
+// beginRollbackStore decorates a REAL utxo.Store and scripts BeginCreateFirstRollback.
+type beginRollbackStore struct {
+	utxo.Store
+
+	began bool
+	err   error
+	calls int
+}
+
+func (s *beginRollbackStore) BeginCreateFirstRollback(_ context.Context, _ *chainhash.Hash) (bool, error) {
+	s.calls++
+
+	return s.began, s.err
+}

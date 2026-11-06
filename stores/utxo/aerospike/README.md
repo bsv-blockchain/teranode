@@ -370,3 +370,102 @@ if res.Status == LuaStatusOK {
 ## Migration Notes
 
 This is a breaking change from the previous string-based response format. However, since Lua and Go changes are released together, no backward compatibility is maintained. All functions now consistently return map objects, making the interface more robust and easier to extend.
+
+## Create-First Two-Phase Commit (the `creating` flag)
+
+`SpendAndCreate`'s default (combined) path normally spends the inputs then creates the
+record — so a crash in that window leaves parent outputs marked spent by a record that
+never landed (a dangling spender reference). When `utxostore_useCreateFirstOrder` is
+enabled and the store reports `SupportsCreateFirst() == true` (Aerospike only), the
+shared `SequentialSpendAndCreate` instead runs **create-first**:
+
+1. **Create tentative** — the record is written with the `creating` bin set (via
+   `WithCreating(true)`); every spend of its outputs is rejected with `ErrTxCreating`
+   (Lua spend gate + expression filter) until the flag is cleared. Written only when
+   true; absence == not creating.
+2. **Spend inputs** — the transaction's parent outputs are spent.
+3. **Finalize** — `FinalizeTransaction(tx)` clears the `creating` bin (children first,
+   master last), making the outputs spendable.
+
+Because the record exists before its spends are written, a crash between steps 2 and 3
+leaves an inspectable, recoverable record instead of a dangling reference. There is **no
+native Aerospike TTL** on creating records — the record is the recovery WAL and must
+survive until finalize. `WithCreateOnly` / `WithSpendOnly` callers (coinbase, seeding,
+reorg/conflict helpers) are single-phase and bypass the create-first ordering.
+
+### Recovery paths (roll-forward everywhere)
+
+- **Retry** — a re-encounter hits `ErrTxExists` on a still-`creating` record; the
+  create-first `SpendAndCreate` rolls it forward in the same call (re-spend under the
+  caller's ignore flags, then finalize) and returns an `ErrTxExists` for which
+  `utxo.IsRolledForward` is true, so the validator hands the transaction to block assembly.
+  A record that is rolling back is refused with a transient error until its owner, or the
+  sweep, has deleted it.
+- **Pruner sweeper** — `QueryStaleCreatingTxs` (secondary index on `unminedSince` +
+  `creating` filter) finds abandoned creating records older than
+  `pruner_creatingTxSweepMinAgeBlocks`; the sweeper re-spends (`SpendAndCreate(WithSpendOnly)`,
+  without ignoring locks) and finalizes them, rolls back and deletes a loser whose input
+  belongs to another transaction, and finishes a rollback a crashed owner left marked.
+- **setMined** — a pre-flight in `SetMinedMulti` rolls a still-creating record forward
+  (re-spend, then finalize) before the mined write. The write paths no longer clear the
+  `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
+  says, so turning the flag off cannot strand creating records. Correctness rests on the
+  pre-flight, which fails closed, because the native sub-op write path's handling of the bin
+  is not verifiable from this repository.
+
+The healers (setMined pre-flight and pruner sweep) are not gated on the flag.
+
+### Rollback of a failed create-first spend
+
+A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`:
+`BeginCreateFirstRollback` sets the `rollingBack` bin on the master with a filter on the
+`creating` bin, every input of the tx is unspent (not only the spends that succeeded in the failing pass, because
+an earlier attempt may have spent an input that now fails for another reason; the Lua ownership
+check makes an input the tx does not own a no-op, and an input whose UTXO hash does not match or whose vout does not exist is skipped, because the tx can never have spent it), then `DeleteComplete` removes the
+record. While the marker is set, `FinalizeTransaction` (single and multi-record) refuses
+the record with `ErrTxNotFound`, so a concurrent roll-forward cannot complete it; the
+roll-forward then unspends the spends it made. The Lua spend gate still reads `creating`,
+so a rolling-back record's outputs stay unspendable. A spend whose batch may still be in
+flight (a context error, or the `utxostore_spendWaitTimeout` ServiceUnavailable) is not
+rolled back: the record stays creating for the sweep. The fresh create-first spend sets
+`RequireParentOutputs`, because the record the blessed-probe would find is its own.
+
+### Sweep visibility of mined creating records
+
+The sweep selects by the `unminedSince` index. A creating record created with mined block
+info (the block-validation path) also gets `unminedSince = blockHeight`, so the sweep can
+find it. `FinalizeTransaction` removes `unminedSince` from the master record when the record
+has block IDs, on both the single-record and multi-record paths; a record without block IDs
+keeps it. While such a record is creating, the unmined iterator skips it, and
+`setDeleteAtHeight` sets no `deleteAtHeight` because the record does not count as on the
+longest chain; both are correct for a record that must not be pruned or re-added yet.
+
+### Duplicate create of a multi-record transaction
+
+When every record of a multi-record transaction already exists, the duplicate `Create`
+returns `ErrTxExists`. With `utxostore_useCreateFirstOrder` on, it leaves the `creating` flag
+untouched, because the duplicate's own options say nothing about another attempt's tentative
+record: only `FinalizeTransaction` and the roll-forward healers clear it. With the flag off,
+the legacy cleanup still clears it.
+
+### Lua package version and re-registration
+
+The Lua package name carries a version (`teranode_v63`). A UDF registered under the same
+filename is no longer trusted: at startup the registered body is read back (`udf-get`) and
+compared byte for byte with the embedded script. On a mismatch the store logs a warning with
+both SHA-1 digests and the listed hash, and registers the embedded script again
+(`RegisterUDF` overwrites). The `udf-list` `hash` field is a 40-character lowercase hex
+string, but it is not a plain SHA-1 of the file bytes, so it is only logged, never compared.
+
+### Spend of a creating record whose parent is missing
+
+If a parent is missing (`ErrTxNotFound`) and the spender record exists, creating or not, the
+input counts as already blessed. A parent is pruned only once every output is spent, so the
+input has been taken, by this tx or by a rival. A rival's take is the same exposure
+spend-first has, and the conflict path bounds it. This lets a roll-forward of a creating
+record whose parent was pruned converge.
+
+Creating records are excluded from the block-assembly unmined-restore iterator (default
+mode) and rejected as parents during parent-chain validation; the PRUNER-mode iterator
+still sees them so permanently-failed ones are eventually evicted. On a finalize failure
+after successful spends the seam logs-and-continues (`teranode_utxo_create_first_finalize_failed_total`).

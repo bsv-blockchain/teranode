@@ -37,6 +37,9 @@ type MockUtxostore struct {
 	// Defaults to false; set true in tests that exercise the below-checkpoint fast path.
 	SupportsOutpointOnlySpendResult bool
 
+	// SupportsCreateFirstResult is what SupportsCreateFirst returns.
+	SupportsCreateFirstResult bool
+
 	// wal keeps the conflict WAL in memory, so ProcessConflicting sees the checklist that
 	// BeginConflictIntent records, as it does on a real store.
 	walMu sync.Mutex
@@ -65,6 +68,17 @@ func (m *MockUtxostore) Close(ctx context.Context) error {
 // (default false). Reading a field rather than m.Called() keeps the mock usable in
 // tests that have not set an expectation for this capability query.
 func (m *MockUtxostore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
+
+// SupportsCreateFirst returns the configurable SupportsCreateFirstResult (default false).
+func (m *MockUtxostore) SupportsCreateFirst() bool { return m.SupportsCreateFirstResult }
+
+// FinalizeTransaction mocks clearing the tentative creating state.
+func (m *MockUtxostore) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error { return nil }
+
+// QueryStaleCreatingTxs mocks the stale-creating query.
+func (m *MockUtxostore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
 
 // Create mocks the creation of transaction metadata in the UTXO store.
 // Returns the configured mock response for transaction creation operations.
@@ -153,6 +167,18 @@ func (m *MockUtxostore) Delete(ctx context.Context, hash *chainhash.Hash) error 
 func (m *MockUtxostore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 	return args.Error(0)
+}
+
+// DeleteRollingBack mocks deleting a record only while it is rolling back.
+func (m *MockUtxostore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
+// BeginCreateFirstRollback mocks marking a tentative record as rolling back.
+func (m *MockUtxostore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	args := m.Called(ctx, hash)
+	return args.Bool(0), args.Error(1)
 }
 
 // GetSpend mocks the retrieval of spend information from the UTXO store.

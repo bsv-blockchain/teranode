@@ -1184,6 +1184,29 @@ func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) 
 	return err
 }
 
+// DeleteRollingBack deletes a rolling back record from the underlying store and evicts the
+// cache entry whatever the outcome, for the same reason DeleteComplete does.
+func (t *TxMetaCache) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	err := t.utxoStore.DeleteRollingBack(ctx, hash)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return err
+}
+
+// BeginCreateFirstRollback marks a creating record as rolling back in the underlying store
+// and evicts the cache entry whatever the outcome, for the same reason DeleteComplete does:
+// a cached entry would keep reporting the record as an ordinary creating one.
+func (t *TxMetaCache) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	began, err := t.utxoStore.BeginCreateFirstRollback(ctx, hash)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return began, err
+}
+
 // GetCacheStats retrieves current operational statistics from the underlying cache.
 // These statistics are useful for monitoring cache performance and behavior.
 //
@@ -1233,6 +1256,26 @@ func (t *TxMetaCache) SupportsOutpointOnlySpend() bool {
 // NetsBelowCheckpoint forwards the wrapped store's answer.
 func (t *TxMetaCache) NetsBelowCheckpoint() bool {
 	return utxo.NetsBelowCheckpoint(t.utxoStore)
+}
+
+// SupportsCreateFirst delegates to the wrapped store.
+func (t *TxMetaCache) SupportsCreateFirst() bool { return t.utxoStore.SupportsCreateFirst() }
+
+// FinalizeTransaction delegates and invalidates the cached meta so a stale
+// Creating=true entry cannot be served after the flag is cleared.
+func (t *TxMetaCache) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
+	if err := t.utxoStore.FinalizeTransaction(ctx, tx); err != nil {
+		return err
+	}
+
+	_ = t.Delete(ctx, tx.TxIDChainHash())
+
+	return nil
+}
+
+// QueryStaleCreatingTxs delegates to the wrapped store.
+func (t *TxMetaCache) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return t.utxoStore.QueryStaleCreatingTxs(ctx, unminedSinceBefore, limit)
 }
 
 // Close delegates to the wrapped UTXO store so its in-flight batched writes

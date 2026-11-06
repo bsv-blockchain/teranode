@@ -113,6 +113,77 @@ func Test_InBlockFlagRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, d.InBlock)
 	})
+
+	t.Run("Bytes/NewDataFromBytes carries Creating", func(t *testing.T) {
+		data := &Data{
+			Fee:         100,
+			SizeInBytes: 200,
+			TxInpoints:  testInpointsHash3Hash4,
+			Tx:          &bt.Tx{},
+			Creating:    true,
+		}
+
+		b, err := data.Bytes()
+		require.NoError(t, err)
+
+		d, err := NewDataFromBytes(b)
+		require.NoError(t, err)
+		assert.True(t, d.Creating, "Bytes/NewDataFromBytes must round-trip the Creating flag")
+
+		// NewMetaDataFromBytes (the in-place decoder) must also read the flag.
+		var m Data
+		require.NoError(t, NewMetaDataFromBytes(b, &m))
+		assert.True(t, m.Creating)
+
+		// A non-creating tx must not spuriously read Creating=true.
+		data.Creating = false
+		b2, err := data.Bytes()
+		require.NoError(t, err)
+		d2, err := NewDataFromBytes(b2)
+		require.NoError(t, err)
+		assert.False(t, d2.Creating)
+	})
+
+	t.Run("RollingBack is flag bit 6 and round-trips through every encoder and decoder", func(t *testing.T) {
+		data := &Data{
+			Fee:         100,
+			SizeInBytes: 200,
+			TxInpoints:  testInpointsHash3Hash4,
+			Tx:          &bt.Tx{},
+			Creating:    true,
+			RollingBack: true,
+		}
+
+		b, err := data.Bytes()
+		require.NoError(t, err)
+		require.Equal(t, byte(0b1100000), b[16], "Creating is bit 5 and RollingBack bit 6")
+
+		d, err := NewDataFromBytes(b)
+		require.NoError(t, err)
+		require.True(t, d.RollingBack)
+		require.True(t, d.Creating)
+
+		var m Data
+		require.NoError(t, NewMetaDataFromBytes(b, &m))
+		require.True(t, m.RollingBack)
+
+		mb, err := data.MetaBytes()
+		require.NoError(t, err)
+		require.Equal(t, byte(0b1100000), mb[16])
+
+		var m2 Data
+		require.NoError(t, NewMetaDataFromBytes(mb, &m2))
+		require.True(t, m2.RollingBack)
+
+		data.RollingBack = false
+		b2, err := data.Bytes()
+		require.NoError(t, err)
+
+		d2, err := NewDataFromBytes(b2)
+		require.NoError(t, err)
+		require.False(t, d2.RollingBack, "a creating record that is not rolling back must not read as rolling back")
+		require.True(t, d2.Creating)
+	})
 }
 
 func Test_NewDataFromBytes(t *testing.T) {

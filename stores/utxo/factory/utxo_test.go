@@ -2,6 +2,7 @@ package factory
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 
@@ -71,6 +72,13 @@ func (m *MockUTXOStore) Stamper() pruner.Stamper { return pruner.NoStamp }
 
 // Implement remaining interface methods as no-ops for testing
 func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
+func (m *MockUTXOStore) SupportsCreateFirst() bool       { return false }
+func (m *MockUTXOStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
+	return nil
+}
+func (m *MockUTXOStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
 
 func (m *MockUTXOStore) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, error) {
 	return nil, nil
@@ -86,6 +94,14 @@ func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error 
 
 func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	return nil
+}
+
+func (m *MockUTXOStore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+}
+
+func (m *MockUTXOStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	return false, nil
 }
 
 func (m *MockUTXOStore) GetSpend(ctx context.Context, spend *utxo.Spend) (*utxo.SpendResponse, error) {
@@ -495,4 +511,47 @@ func (m *MockUTXOStore) SetConflictLocks(ctx context.Context, id chainhash.Hash,
 
 func (m *MockUTXOStore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
 	return nil
+}
+
+type warnCapturingLogger struct {
+	ulogger.TestLogger
+	warns *[]string
+}
+
+func (l warnCapturingLogger) Warnf(format string, args ...interface{}) {
+	*l.warns = append(*l.warns, fmt.Sprintf(format, args...))
+}
+
+func TestNewStore_CreateFirstWarning(t *testing.T) {
+	newSettings := func(t *testing.T, createFirst bool) *settings.Settings {
+		tSettings := test.CreateBaseTestSettings(t)
+		u, err := url.Parse("sqlitememory:///createfirstwarn")
+		require.NoError(t, err)
+
+		tSettings.UtxoStore.UtxoStore = u
+		tSettings.UtxoStore.UseCreateFirstOrder = createFirst
+
+		return tSettings
+	}
+
+	t.Run("warns when the store cannot honour the flag", func(t *testing.T) {
+		var warns []string
+
+		store, err := NewStore(context.Background(), warnCapturingLogger{warns: &warns}, newSettings(t, true), "test-source", false)
+		require.NoError(t, err)
+		require.False(t, store.SupportsCreateFirst())
+
+		require.Len(t, warns, 1)
+		require.Contains(t, warns[0], "utxostore_useCreateFirstOrder")
+		require.Contains(t, warns[0], "sqlitememory")
+		require.NotContains(t, warns[0], "\n")
+	})
+
+	t.Run("silent when the flag is off", func(t *testing.T) {
+		var warns []string
+
+		_, err := NewStore(context.Background(), warnCapturingLogger{warns: &warns}, newSettings(t, false), "test-source", false)
+		require.NoError(t, err)
+		require.Empty(t, warns)
+	})
 }

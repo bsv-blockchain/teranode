@@ -544,6 +544,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			LockedBatcherDurationMillis:             getInt("utxostore_lockedBatcherDurationMillis", 5, alternativeContext...),
 			LongestChainBatcherSize:                 getInt("utxostore_longestChainBatcherSize", 1024, alternativeContext...),
 			LongestChainBatcherDurationMillis:       getInt("utxostore_longestChainBatcherDurationMillis", 5, alternativeContext...),
+			UseCreateFirstOrder:                     getBool("utxostore_useCreateFirstOrder", false, alternativeContext...),
 			GetBatcherDrainMode:                     getBool("utxostore_getBatcherDrainMode", false, alternativeContext...),
 			SpendBatcherDrainMode:                   getBool("utxostore_spendBatcherDrainMode", false, alternativeContext...),
 			StoreBatcherDrainMode:                   getBool("utxostore_storeBatcherDrainMode", false, alternativeContext...),
@@ -709,6 +710,8 @@ func NewSettings(alternativeContext ...string) *Settings {
 			SkipProcessExpiredPreservations: getBool("pruner_skipProcessExpiredPreservations", false, alternativeContext...),      // Skip Phase 1b: expire old parent preservations
 			SkipDeletions:                   getBool("pruner_skipDeletions", false, alternativeContext...),                        // Skip deletions for performance
 			MinBlockHeight:                  getUint32("pruner_min_block_height", 0, alternativeContext...),                       // Do not prune blocks at or below this height
+			CreatingTxSweepMinAgeBlocks:     getUint32("pruner_creatingTxSweepMinAgeBlocks", 2, alternativeContext...),            // Roll forward create-first creating txs older than this many blocks (0 disables)
+			CreatingTxSweepMaxPerPass:       getUint32("pruner_creatingTxSweepMaxPerPass", 1000, alternativeContext...),           // Per-pass cap on creating txs rolled forward by the sweep (0 = 1000)
 		},
 		SubtreeValidation: SubtreeValidationSettings{
 			QuorumAbsoluteTimeout:                     getDuration("subtree_quorum_absolute_timeout", 30*time.Second, alternativeContext...),

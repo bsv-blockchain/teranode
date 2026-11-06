@@ -159,6 +159,11 @@ var (
 	// shed's store work (delete the record, then unspend the inputs).
 	prometheusValidatorShedUnwindTotal prometheus.Counter
 
+	// prometheusValidatorShedRolledForwardKept counts queue-full sheds of a record this
+	// attempt only rolled forward. The record is not this attempt's work, so it is not
+	// unwound: it stays finalized and locked for the unmined reload.
+	prometheusValidatorShedRolledForwardKept prometheus.Counter
+
 	// prometheusValidatorShedUnwindFailures counts unwinds whose delete or unspend
 	// returned an error, whatever the outcome then was. It is the "something in the
 	// unwind failed at all" signal and deliberately overlaps the two counters below:
@@ -525,6 +530,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "shed_unwind_total",
 			Help:      "Number of times a queue-full shed's store work was unwound (record deleted, then inputs unspent)",
+		},
+	)
+
+	prometheusValidatorShedRolledForwardKept = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_rolled_forward_kept_total",
+			Help:      "Number of queue-full sheds of a record this attempt only rolled forward; the record is left finalized and locked for the unmined reload instead of being unwound",
 		},
 	)
 

@@ -131,3 +131,20 @@ func TestNullStoreConflictingTxHashes(t *testing.T) {
 	require.True(t, indexed)
 	require.Empty(t, hashes)
 }
+
+func TestNullStoreCreateFirstNoOps(t *testing.T) {
+	store := &NullStore{}
+	ctx := context.Background()
+	tx := &bt.Tx{}
+
+	assert.False(t, store.SupportsCreateFirst())
+	assert.NoError(t, store.FinalizeTransaction(ctx, tx))
+
+	began, err := store.BeginCreateFirstRollback(ctx, tx.TxIDChainHash())
+	assert.NoError(t, err)
+	assert.False(t, began, "a store with no records has nothing to roll back")
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	assert.NoError(t, err)
+	assert.Nil(t, hashes)
+}

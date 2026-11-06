@@ -235,6 +235,9 @@ type IgnoreFlags struct {
 	// ONLY by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
 	// whose records the first wave created before any of those spends, so the record proves
 	// nothing. Its first-wave combined calls spend before they create and leave it unset.
+	// The fresh create-first spend sets it too: the record it would find is its own tentative
+	// one, so it proves nothing. A create-first roll-forward re-spend leaves it unset: that
+	// record exists by design, and a parent is pruned only once every output is spent.
 	RequireParentOutputs bool
 }
 
@@ -256,7 +259,7 @@ type BlockIDsRemoval struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating}
+	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating, fields.RollingBack}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
 	MetaFieldsWithTx = append(MetaFields, fields.Tx)
 )
@@ -294,6 +297,7 @@ type CreateOptions struct {
 	Frozen             bool
 	Conflicting        bool
 	Locked             bool
+	Creating           bool
 	SkipExtendedInputs bool
 
 	// SpendAndCreate-specific options.
@@ -456,6 +460,17 @@ func WithLocked(b bool) CreateOption {
 	return optLockedFalse
 }
 
+// WithCreating creates the transaction in the tentative "creating" state: the
+// record exists (Get/GetMeta return it with meta.Data.Creating=true) but every
+// spend of its outputs is rejected with ErrTxCreating until FinalizeTransaction
+// clears the flag. Used by the create-first ordering inside SpendAndCreate
+// (create → spend inputs → finalize).
+func WithCreating(b bool) CreateOption {
+	return func(o *CreateOptions) {
+		o.Creating = b
+	}
+}
+
 // WithSkipExtendedInputs marks a create as minimal: compute meta with fee=0 (no GetFees) and
 // persist per-input parent script/satoshis as empty/zero, while ALWAYS retaining the per-input
 // outpoint and every output. Set ONLY on the gated below-checkpoint path (spec §3.2 Seam 3, §3.3).
@@ -590,6 +605,28 @@ type Store interface {
 	// delegate to the wrapped store.
 	SupportsOutpointOnlySpend() bool
 
+	// SupportsCreateFirst reports whether this store implements the tentative-create
+	// contract: SpendAndCreate's create phase honours CreateOptions.Creating (spends of
+	// the tx's outputs are rejected with ErrTxCreating while set), FinalizeTransaction
+	// clears the state, and QueryStaleCreatingTxs finds abandoned tentative records.
+	// SpendAndCreate only uses the create-first ordering when this returns true; stores
+	// that ignore CreateOptions.Creating MUST return false.
+	SupportsCreateFirst() bool
+
+	// FinalizeTransaction clears the tentative "creating" state set by the create-first
+	// phase of SpendAndCreate, making the transaction's outputs spendable. It takes the
+	// full tx so multi-record stores can derive the record count without a read.
+	// Idempotent; stores without create-first support return nil.
+	FinalizeTransaction(ctx context.Context, tx *bt.Tx) error
+
+	// QueryStaleCreatingTxs returns the hashes of transactions still in the "creating"
+	// state whose unminedSince height is strictly below unminedSinceBefore. Used by the
+	// pruner sweeper to roll forward abandoned tentative creates. When limit > 0 the
+	// result is bounded to that many hashes (the caller sweeps any remainder next pass)
+	// and the query is aborted early; limit <= 0 means unbounded. The context aborts an
+	// in-progress scan. Stores without create-first support return (nil, nil).
+	QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error)
+
 	// Close drains any in-flight batched writes (Create, Spend, Get, Unlock,
 	// or any other batched operations the implementation owns) and releases
 	// backing resources (connection pools, file handles, batcher workers).
@@ -632,6 +669,25 @@ type Store interface {
 	// Delete.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
 
+	// BeginCreateFirstRollback claims the rollback of a record that is still creating, by
+	// marking it as rolling back, so no concurrent roll-forward can finalize it. The claim is
+	// exclusive: it reports true only to the one caller whose write set the marker, and that
+	// caller alone reverses the spends and deletes the record. It reports false, and writes
+	// nothing, when the record is absent, already finalized, or already rolling back under
+	// another caller. A store with no tentative state reports false. Used by the create-first
+	// rollback, which then reverses its spends and calls DeleteRollingBack. The pruner sweep
+	// resumes an abandoned rollback without this call, because the record already carries the
+	// marker.
+	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error)
+
+	// DeleteRollingBack is DeleteComplete for the create-first rollback: it removes the
+	// transaction only while its master record is still marked as rolling back. A record that
+	// is absent, or that is no longer rolling back because a new attempt at the same
+	// transaction created it afresh, is left alone and the call reports success. It is
+	// idempotent in the same way DeleteComplete is. A store with no tentative state treats it
+	// as DeleteComplete, because it is never called for a record that store marked.
+	DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error
+
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
 
@@ -647,6 +703,11 @@ type Store interface {
 	//     ErrTxExists, successful spends are rolled back before returning.
 	//   - ErrTxExists from the create phase is returned to the caller WITH the
 	//     spends left in place; the caller decides what to do with the existing tx.
+	//     The create-first path differs: when the existing record is still creating,
+	//     the call rolls it forward itself (re-spend, finalize) under the caller's
+	//     ignore flags and returns an error for which IsRolledForward is true, with the
+	//     spends. When it cannot complete the record it returns that failure instead,
+	//     and a rolling-back record is an error that is not ErrTxExists.
 	//   - WithCreateOnly(): skip the spend phase (coinbase, seeding, batch flows
 	//     whose inputs are spent elsewhere). Returned []*Spend is nil.
 	//   - WithSpendOnly(): skip the create phase (reorg/conflict helpers, batch

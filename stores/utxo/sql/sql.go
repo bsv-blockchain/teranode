@@ -385,6 +385,18 @@ func (s *Store) Close(ctx context.Context) error {
 // outpoint-only fast path (SkipExtendedInputs on Create, SkipUTXOHashCheck on Spend).
 func (s *Store) SupportsOutpointOnlySpend() bool { return true }
 
+// SupportsCreateFirst returns false: the SQL store ignores CreateOptions.Creating,
+// so SpendAndCreate keeps spend-first order.
+func (s *Store) SupportsCreateFirst() bool { return false }
+
+// FinalizeTransaction is a no-op: the SQL store has no tentative-create state.
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error { return nil }
+
+// QueryStaleCreatingTxs returns nothing: the SQL store has no tentative-create state.
+func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
+
 // Health checks the database connection and returns status information.
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	details := fmt.Sprintf("SQL Engine is %s", s.engine)
@@ -3633,6 +3645,19 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 // whole transaction; DeleteComplete is therefore equivalent to Delete here.
 func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	return s.Delete(ctx, hash)
+}
+
+// DeleteRollingBack is DeleteComplete here. The SQL store has no tentative state, so
+// BeginCreateFirstRollback never marks a record and nothing calls this for one.
+func (s *Store) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	return s.DeleteComplete(ctx, hash)
+}
+
+// BeginCreateFirstRollback reports false and writes nothing. The SQL store has no
+// tentative-create state (SupportsCreateFirst is false), so every record is final and there
+// is nothing to roll back.
+func (s *Store) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+	return false, nil
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {

@@ -93,6 +93,11 @@ type Data struct {
 	// When true, the transaction is incomplete and should trigger re-processing for auto-recovery
 	Creating bool `json:"creating"`
 
+	// RollingBack marks a creating record whose create-first transition is being undone: its
+	// spends are being reversed and the record deleted. Only the rollback owner may complete
+	// it, so finalize and roll-forward refuse a record in this state. Always accompanies Creating.
+	RollingBack bool `json:"rollingBack"`
+
 	// SpendingDatas is the transaction ID of the transaction that spent the given tx output idx
 	SpendingDatas []*spendpkg.SpendingData `json:"spendingDatas"`
 }
@@ -104,7 +109,7 @@ type Data struct {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock, bit 5: Creating, bit 6: RollingBack)
 //   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
 //   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
 //     vout-count followed by 4 bytes per vout (uint32, little-endian)
@@ -128,6 +133,8 @@ func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
 	d.Conflicting = (dataBytes[16] & 0b100) == 0b100
 	d.Locked = (dataBytes[16] & 0b1000) == 0b1000
 	d.InBlock = (dataBytes[16] & 0b10000) == 0b10000
+	d.Creating = (dataBytes[16] & 0b100000) == 0b100000
+	d.RollingBack = (dataBytes[16] & 0b1000000) == 0b1000000
 
 	d.TxInpoints, err = subtree.NewTxInpointsFromBytes(dataBytes[17:])
 
@@ -141,7 +148,7 @@ func NewMetaDataFromBytes(dataBytes []byte, d *Data) (err error) {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock, bit 5: Creating, bit 6: RollingBack)
 //   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
 //   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
 //     vout-count followed by 4 bytes per vout (uint32, little-endian)
@@ -176,6 +183,8 @@ func NewDataFromBytes(dataBytes []byte) (d *Data, err error) {
 	d.Conflicting = dataBytes[16]&0b100 == 0b100
 	d.Locked = dataBytes[16]&0b1000 == 0b1000
 	d.InBlock = dataBytes[16]&0b10000 == 0b10000
+	d.Creating = dataBytes[16]&0b100000 == 0b100000
+	d.RollingBack = dataBytes[16]&0b1000000 == 0b1000000
 
 	buf := bytes.NewReader(dataBytes[17:])
 
@@ -263,7 +272,7 @@ func (d *Data) TxIsSerializable() bool {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock, bit 5: Creating, bit 6: RollingBack)
 //   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
 //   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
 //     vout-count followed by 4 bytes per vout (uint32, little-endian)
@@ -301,6 +310,14 @@ func (d *Data) Bytes() ([]byte, error) {
 		buf[16] |= 0b10000
 	}
 
+	if d.Creating {
+		buf[16] |= 0b100000
+	}
+
+	if d.RollingBack {
+		buf[16] |= 0b1000000
+	}
+
 	txInpointsBytes, err := d.TxInpoints.Serialize()
 	if err != nil {
 		return nil, err
@@ -330,7 +347,7 @@ func (d *Data) Bytes() ([]byte, error) {
 // The binary format is as follows:
 //   - [0:8]   - 8 bytes for Fee (uint64, little-endian)
 //   - [8:16]  - 8 bytes for SizeInBytes (uint64, little-endian)
-//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock)
+//   - [16]    - 1 byte for flags (bit 0: IsCoinbase, bit 1: Frozen, bit 2: Conflicting, bit 3: Locked, bit 4: InBlock, bit 5: Creating, bit 6: RollingBack)
 //   - [17:21] - 4 bytes for number of ParentTxHashes (uint32, little-endian)
 //   - [21+]   - 32 bytes for each ParentTxHash, then per parent a 4-byte
 //     vout-count followed by 4 bytes per vout (uint32, little-endian)
@@ -400,6 +417,14 @@ func (d *Data) MetaBytesInto(dst []byte) ([]byte, error) {
 
 	if d.InBlock {
 		buf[16] |= 0b10000
+	}
+
+	if d.Creating {
+		buf[16] |= 0b100000
+	}
+
+	if d.RollingBack {
+		buf[16] |= 0b1000000
 	}
 
 	buf = append(buf, txInpointsBytes...)

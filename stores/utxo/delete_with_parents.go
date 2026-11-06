@@ -66,7 +66,7 @@ func ClearParentRefs(ctx context.Context, s Store, txHash *chainhash.Hash) error
 		})
 	}
 
-	if err = unspendTolerantOfMissingParents(ctx, s, spends); err != nil {
+	if err = UnspendTolerantOfMissingParents(ctx, s, spends); err != nil {
 		return errors.NewStorageError("[ClearParentRefs][%s] failed to unspend parents", txHash.String(), err)
 	}
 
@@ -102,10 +102,11 @@ func ClearParentRefs(ctx context.Context, s Store, txHash *chainhash.Hash) error
 	return nil
 }
 
-// unspendTolerantOfMissingParents unspends the outputs, skipping any whose parent is gone. A store may
-// run one Unspend call as one database transaction, so a missing parent would undo the unspends of the
-// surviving parents in the same call. On not found, it repeats one spend at a time.
-func unspendTolerantOfMissingParents(ctx context.Context, s Store, spends []*Spend) error {
+// UnspendTolerantOfMissingParents unspends the outputs, skipping any whose parent is gone and any whose
+// output the spending tx cannot have spent: a vout that does not exist or a UTXO hash that does not match.
+// A store may run one Unspend call as one database transaction, so one of these would undo the unspends of
+// the other parents in the same call. On such an error, it repeats one spend at a time.
+func UnspendTolerantOfMissingParents(ctx context.Context, s SpendReverser, spends []*Spend) error {
 	if len(spends) == 0 {
 		return nil
 	}
@@ -115,12 +116,12 @@ func unspendTolerantOfMissingParents(ctx context.Context, s Store, spends []*Spe
 		return nil
 	}
 
-	if !isNotFoundErr(err) {
+	if !isNeverSpentErr(err) {
 		return err
 	}
 
 	for _, spend := range spends {
-		if err = s.Unspend(ctx, []*Spend{spend}); err != nil && !isNotFoundErr(err) {
+		if err = s.Unspend(ctx, []*Spend{spend}); err != nil && !isNeverSpentErr(err) {
 			return err
 		}
 	}
@@ -130,4 +131,8 @@ func unspendTolerantOfMissingParents(ctx context.Context, s Store, spends []*Spe
 
 func isNotFoundErr(err error) bool {
 	return errors.Is(err, errors.ErrTxNotFound) || errors.Is(err, errors.ErrNotFound)
+}
+
+func isNeverSpentErr(err error) bool {
+	return isNotFoundErr(err) || errors.Is(err, errors.ErrUtxoHashMismatch)
 }

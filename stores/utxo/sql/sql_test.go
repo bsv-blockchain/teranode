@@ -3817,3 +3817,32 @@ func TestPreviousOutputsDecorate_MissingParentIsTxNotFound(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrTxNotFound)
 }
+
+func TestSQLStore_CreateFirstNoOps(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///createfirst_noops")
+	require.NoError(t, err)
+
+	store, err := New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	// SQL is spend-first: no create-first support, finalize is a no-op, no stale creating txs.
+	require.False(t, store.SupportsCreateFirst())
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}))
+
+	// Every record is final, so the rollback marker reports false and deletes nothing.
+	_, err = store.Create(ctx, tests.Tx, 100)
+	require.NoError(t, err)
+
+	began, err := store.BeginCreateFirstRollback(ctx, tests.Tx.TxIDChainHash())
+	require.NoError(t, err)
+	require.False(t, began)
+	require.NoError(t, store.GetMeta(ctx, tests.Tx.TxIDChainHash(), &meta.Data{}), "a final record must survive")
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
+}
