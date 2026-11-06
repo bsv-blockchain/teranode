@@ -423,6 +423,44 @@ func TestWriteDAHFloorsValueAndClearsOnNull(t *testing.T) {
 	})
 }
 
+// A row that PreserveTransactions protects keeps whatever stamp it has: a stale value
+// decided before the preservation committed is not written back, and a NULL decision
+// does not clear a stamp the preservation left in place.
+func TestWriteDAHLeavesPreservedRowUntouched(t *testing.T) {
+	forEachFloorBackend(t, func(t *testing.T, ctx context.Context, store *Store, _ bool) {
+		retention := floorRetention(t, store)
+
+		hash := createMinedAboveTip(ctx, t, store)
+		id := floorRowID(ctx, t, store, hash)
+
+		write := func(value sql.NullInt64) {
+			txn, err := store.db.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			require.NoError(t, store.writeDAH(ctx, txn, id, value, uint32(retention)))
+			require.NoError(t, txn.Commit())
+		}
+
+		_, err := store.db.ExecContext(ctx,
+			"UPDATE transactions SET preserve_until = 20, delete_at_height = NULL WHERE id = $1", id)
+		require.NoError(t, err)
+
+		write(sql.NullInt64{Int64: int64(floorMinedHeight) + retention, Valid: true})
+		require.Nil(t, readDAH(ctx, t, store, hash), "a stale decision must not stamp a preserved row")
+
+		stamp := int64(floorMinedHeight) + retention + 7
+
+		_, err = store.db.ExecContext(ctx,
+			"UPDATE transactions SET delete_at_height = $2 WHERE id = $1", id, stamp)
+		require.NoError(t, err)
+
+		write(sql.NullInt64{})
+
+		dah := readDAH(ctx, t, store, hash)
+		require.NotNil(t, dah, "a NULL decision must not clear a preserved row")
+		require.Equal(t, stamp, *dah)
+	})
+}
+
 // Flagged conflicting while unmined at the lagging tip, then mined into a fork far
 // above it: the stamp must follow the mined height, not stay at tip + retention.
 func TestSetMinedOffLongestChainRaisesConflictingStamp(t *testing.T) {
