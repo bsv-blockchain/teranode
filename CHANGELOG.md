@@ -1254,7 +1254,7 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
   `teranode_utxo_lock_walk_missing_descendants_total` and
   `teranode_subtreeprocessor_reorg_deleted_txs_vanished_total`. A non-zero value of
   either means a stale spender reference exists in the UTXO store. Nothing to
-  configure. (part of bsv-blockchain/teranode#1214)
+  configure. (bsv-blockchain/teranode#2128, part of bsv-blockchain/teranode#1214)
 
 - **Legacy bans now disconnect connected peers, and the ban list no longer leaks
   goroutines.** The legacy service's ban listener only started at shutdown, so a
