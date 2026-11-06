@@ -13,15 +13,19 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation/blockvalidation_api"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/jarcoal/httpmock"
+	"github.com/jellydator/ttlcache/v3"
 	"github.com/stretchr/testify/require"
 )
 
-// These tests drive BlockFound with WaitToComplete through the real pipeline: a blockFoundCh
-// worker, the priority queue and a block-processing worker, against the sqlitememory UTXO store
-// of newProcessBlockFoundHarness. The caller must be answered with the block's final outcome:
+// Most of these tests drive BlockFound with WaitToComplete through the real pipeline: a
+// blockFoundCh worker, the priority queue and a block-processing worker, against the sqlitememory
+// UTXO store of newProcessBlockFoundHarness. The rest call one step of that pipeline directly with
+// a reply, to reach an answer the full pipeline cannot reach on its own. The caller must be
+// answered with the block's outcome:
 // nil only once the block is stored (BV-INGRESS-005), and an error when it was handed to catchup
 // instead (BV-INGRESS-017).
 
@@ -293,4 +297,200 @@ func TestBlockFoundWait_StoredInvalidBlockIsNotSuccess(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("BlockFound did not return for a stored block")
 	}
+}
+
+// awaitReply reads reply's answer, failing the test if none comes.
+func awaitReply(t *testing.T, reply *blockFoundReply) error {
+	t.Helper()
+
+	select {
+	case err := <-reply.ch:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatal("the reply was never answered")
+		return nil
+	}
+}
+
+// useInvalidStoredChain makes every block read as stored invalid by s's validation.
+func useInvalidStoredChain(ctx context.Context, s *Server) {
+	s.blockValidation = NewBlockValidation(ctx, ulogger.TestLogger{}, s.settings, &invalidStoredChain{ClientI: s.blockchainClient}, blobmemory.New(), s.txStore, s.utxoStore, nil, nil)
+}
+
+// TestBlockFoundWait_WorkerNilWithoutStoreIsNotSuccess: the worker's processing returns nil for a
+// queued block whose parent has gone missing by the time it runs, because processBlockFound hands
+// the block to catchup. The block is not stored, so the reply must be a retry-later
+// ERR_SERVICE_ERROR, not the nil the processing returned.
+func TestBlockFoundWait_WorkerNilWithoutStoreIsNotSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, store, block := newProcessBlockFoundHarness(ctx, t)
+	delete(store.BlockExists, *block.Header.HashPrevBlock)
+	delete(store.Blocks, *block.Header.HashPrevBlock)
+
+	serveBlock(t, block, 0, nil)
+
+	reply := newBlockFoundReply()
+	s.blockPriorityQueue.Add(processBlockFound{hash: block.Hash(), baseURL: waitTestPeer, reply: reply}, PriorityChainExtending, block.Height)
+	s.startBlockProcessingSystem(ctx)
+
+	err := awaitReply(t, reply)
+	require.Error(t, err, "a block the worker did not store must not be answered nil")
+	require.True(t, errors.Is(err, errors.ErrServiceError), "want ERR_SERVICE_ERROR, got %v", err)
+
+	exists, err := store.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+// TestBlockFoundWait_WorkerNilForStoredInvalidIsNotSuccess: the worker's processing returns nil for
+// a queued block it finds already stored, here stored invalid. The reply must be ERR_BLOCK_INVALID.
+func TestBlockFoundWait_WorkerNilForStoredInvalidIsNotSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, _, block := newProcessBlockFoundHarness(ctx, t)
+	useInvalidStoredChain(ctx, s)
+
+	reply := newBlockFoundReply()
+	s.blockPriorityQueue.Add(processBlockFound{hash: block.Hash(), baseURL: waitTestPeer, reply: reply}, PriorityChainExtending, block.Height)
+	s.startBlockProcessingSystem(ctx)
+
+	err := awaitReply(t, reply)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, errors.ErrBlockInvalid), "want ERR_BLOCK_INVALID, got %v", err)
+}
+
+// TestBlockFoundWait_StoredInvalidBeforeQueueIsNotSuccess covers the two "already stored" answers
+// before the queue, which a block stored invalid also reaches: processBlockFoundChannel's exists
+// check and addBlockToPriorityQueue's. Both must answer ERR_BLOCK_INVALID, not nil.
+func TestBlockFoundWait_StoredInvalidBeforeQueueIsNotSuccess(t *testing.T) {
+	steps := map[string]func(ctx context.Context, t *testing.T, s *Server, bf processBlockFound){
+		"processBlockFoundChannel": func(ctx context.Context, t *testing.T, s *Server, bf processBlockFound) {
+			require.NoError(t, s.processBlockFoundChannel(ctx, bf))
+		},
+		"addBlockToPriorityQueue": func(ctx context.Context, _ *testing.T, s *Server, bf processBlockFound) {
+			s.addBlockToPriorityQueue(ctx, bf)
+		},
+	}
+
+	for name, step := range steps {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			s, _, block := newProcessBlockFoundHarness(ctx, t)
+			useInvalidStoredChain(ctx, s)
+
+			reply := newBlockFoundReply()
+			step(ctx, t, s, processBlockFound{hash: block.Hash(), baseURL: waitTestPeer, reply: reply})
+
+			err := awaitReply(t, reply)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "want ERR_BLOCK_INVALID, got %v", err)
+			require.False(t, s.blockPriorityQueue.Contains(*block.Hash()), "a stored block must not be queued")
+		})
+	}
+}
+
+// requireNotStoredAnswer checks a catchup divert's answer: a retry-later ERR_SERVICE_ERROR, with
+// the block neither stored nor queued.
+func requireNotStoredAnswer(ctx context.Context, t *testing.T, s *Server, store *blockchain_store.MockStore, block *model.Block, reply *blockFoundReply) {
+	t.Helper()
+
+	err := awaitReply(t, reply)
+	require.Error(t, err, "a block diverted to catchup must not be answered nil")
+	require.True(t, errors.Is(err, errors.ErrServiceError), "want ERR_SERVICE_ERROR, got %v", err)
+	require.False(t, s.blockPriorityQueue.Contains(*block.Hash()), "a diverted block must not be queued")
+
+	exists, err := store.GetBlockExists(ctx, block.Hash())
+	require.NoError(t, err)
+	require.False(t, exists)
+}
+
+// TestBlockFoundWait_CatchupAttemptsSpentIsNotSuccess: a block with a missing parent whose catchup
+// attempts are spent is dropped until the cooldown lapses. The caller must not get nil.
+func TestBlockFoundWait_CatchupAttemptsSpentIsNotSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, store, block := newProcessBlockFoundHarness(ctx, t)
+	delete(store.BlockExists, *block.Header.HashPrevBlock)
+	delete(store.Blocks, *block.Header.HashPrevBlock)
+
+	s.settings.BlockValidation.CatchupMaxAttemptsPerBlock = 1
+	s.recordCatchupAttempt(block.Hash())
+	require.True(t, s.catchupAttemptsExhausted(block.Hash()), "setup: the block's catchup attempts must be spent")
+
+	reply := newBlockFoundReply()
+	s.queueFetchedBlock(ctx, processBlockFound{hash: block.Hash(), baseURL: waitTestPeer, reply: reply}, block)
+
+	requireNotStoredAnswer(ctx, t, s, store, block, reply)
+	require.Nil(t, s.processBlockNotify.Get(*block.Hash()), "a block with spent attempts must not be sent to catchup")
+}
+
+// TestBlockFoundWait_AlreadyInCatchupIsNotSuccess: a block with a missing parent that catchup is
+// already working on is added as an alternative source. The caller must not get nil.
+func TestBlockFoundWait_AlreadyInCatchupIsNotSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, store, block := newProcessBlockFoundHarness(ctx, t)
+	delete(store.BlockExists, *block.Header.HashPrevBlock)
+	delete(store.Blocks, *block.Header.HashPrevBlock)
+
+	s.processBlockNotify.Set(*block.Hash(), true, ttlcache.DefaultTTL)
+
+	reply := newBlockFoundReply()
+	s.queueFetchedBlock(ctx, processBlockFound{hash: block.Hash(), baseURL: waitTestPeer, reply: reply}, block)
+
+	requireNotStoredAnswer(ctx, t, s, store, block, reply)
+
+	alternatives := s.catchupAlternatives.Get(*block.Hash())
+	require.NotNil(t, alternatives, "the announcement must be kept as a catchup alternative")
+	require.Len(t, alternatives.Value(), 1)
+}
+
+// movedTipChain reports tip as the best block and passes every other call through.
+type movedTipChain struct {
+	blockchain.ClientI
+	tip    *model.BlockHeader
+	height uint32
+}
+
+func (c *movedTipChain) GetBestBlockHeader(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return c.tip, &model.BlockHeaderMeta{Height: c.height}, nil
+}
+
+// TestBlockFoundWait_BacklogDivertIsNotSuccess: with UseCatchupWhenBehind and a backed-up queue, a
+// block that does not extend the best chain is sent to catchup though its parent is stored. The
+// caller must not get nil.
+func TestBlockFoundWait_BacklogDivertIsNotSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s, store, block := newProcessBlockFoundHarness(ctx, t)
+	s.settings.BlockValidation.UseCatchupWhenBehind = true
+
+	// The classifier sees a best block other than the parent, so the block classifies as a fork.
+	// Only the classifier sees it: the store's best block is read by a background goroutine.
+	s.blockClassifier = NewBlockClassifier(ulogger.TestLogger{}, 0, &movedTipChain{
+		ClientI: s.blockchainClient,
+		tip:     &model.BlockHeader{Version: 1, HashPrevBlock: &chainhash.Hash{1}, HashMerkleRoot: &chainhash.Hash{}, Bits: block.Header.Bits},
+		height:  block.Height + 100,
+	})
+
+	// More than 10 queued blocks is a backlog.
+	for i := 0; i < 11; i++ {
+		h := chainhash.Hash{0xbb, byte(i)}
+		s.blockPriorityQueue.Add(processBlockFound{hash: &h, baseURL: waitTestPeer}, PriorityDeepFork, 1)
+	}
+
+	serveBlock(t, block, 0, nil)
+
+	reply := newBlockFoundReply()
+	require.NoError(t, s.processBlockFoundChannel(ctx, processBlockFound{hash: block.Hash(), baseURL: waitTestPeer, reply: reply}))
+
+	requireNotStoredAnswer(ctx, t, s, store, block, reply)
 }

@@ -1098,8 +1098,10 @@ func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaB
 // A WaitToComplete caller waits on bf.reply, which answers once (see blockFoundReply). The
 // processing below answers it on every early return, and the worker that settles a queued block
 // answers it later. If the processing panics, the recover answers the panic error. When the
-// processing had already answered, or had already queued the block, that answer is dropped or
-// comes second, so the caller never gets two answers and this worker never blocks on one.
+// processing had already answered, the panic error is dropped. When it had already queued the
+// block, the panic error reaches the caller first, before the worker settles the block, and the
+// worker's answer is dropped. Either way the caller never gets two answers and this worker never
+// blocks on one.
 //
 // The recover also counts the panic toward the recovered-panic cap of (bf.hash, serving peerID), in
 // blockPanicAttempts, the budget that the priority worker's recover also fills. The serving peer is
@@ -1338,11 +1340,13 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 
 // errNotCommittedCatchup is the answer for a WaitToComplete caller whose block was not stored:
 // it was handed to catchup, or dropped because the catchup channel was full or its catchup
-// attempts were spent, instead of being validated. The block
-// was not stored, so the caller must not get nil (BV-INGRESS-017). It is a ServiceError, which
-// callers read as retry-later: once catchup has stored the parent, a new BlockFound succeeds.
+// attempts were spent, instead of being validated. The parent may be missing, or, for a
+// non-chain-extending block diverted while the queue is backed up, stored. The block was not
+// stored, so the caller must not get nil (BV-INGRESS-017). It is a ServiceError, which callers
+// read as retry-later: once the node has caught up or the catchup cooldown has lapsed, a new
+// BlockFound may succeed.
 func errNotCommittedCatchup(hash *chainhash.Hash) error {
-	return errors.NewServiceError("[BlockFound][%s] block not validated: it is not stored, and its parent is not stored; catchup may bring it in later", hash.String())
+	return errors.NewServiceError("[BlockFound][%s] block not validated: it was handed to catchup or dropped instead of being stored; retry later", hash.String())
 }
 
 // Start begins the block validation service operations including gRPC server startup
@@ -1561,10 +1565,20 @@ func stopWaitContext(ctx context.Context) (context.Context, context.CancelFunc) 
 //   - req: Contains the block hash and source URL
 //
 // Returns an EmptyMessage on success or an error if validation cannot be initiated.
-// If WaitToComplete is set in the request, waits until the block is settled and returns the
-// outcome: nil once the block is stored valid, the validation error if it is rejected, and a
-// retry-later ERR_SERVICE_ERROR if its parent is missing and it was handed to catchup. The wait
-// ends early, with a context error, if ctx ends first.
+// If WaitToComplete is set in the request, waits until the worker's first attempt at the block
+// ends and returns the outcome:
+//   - nil once the block is stored and not marked invalid. With optimistic mining on the
+//     peer-block path (blockvalidation_optimistic_mining and
+//     blockvalidation_optimistic_mining_peer_blocks both true) the block is added before its
+//     block-level checks finish in the background, so nil means added, not fully validated.
+//   - the validation error if the block is rejected, and ERR_BLOCK_INVALID if it is already
+//     stored as invalid.
+//   - the first attempt's error if the fetch fails, even though the block is requeued for a
+//     retry; a fetch failure's code says retry-later, not that the block is bad.
+//   - a retry-later ERR_SERVICE_ERROR if the block was handed to catchup or dropped instead of
+//     being stored: a missing parent, a non-chain-extending block diverted while the queue is
+//     backed up, a full catchup channel or spent catchup attempts.
+//   - ERR_CONTEXT_CANCELED if ctx ends first.
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
@@ -2557,12 +2571,17 @@ func (u *Server) finishProcessedBlock(workerID int, blockFound processBlockFound
 // the node would miss the block until a peer re-announces it. A waiting caller is different: it
 // can call BlockFound again itself. Holding it through every retry (3 by default, 5 s apart for a
 // fetch failure, a minute apart for a deadline) would make it wait for an error it could already
-// act on, and the retry asks the same peer that just failed unless another peer announced the
-// block meanwhile. So the caller gets the first failure, and the block still goes back on the
-// queue. A fetch failure is not a verdict on the block, and its error code says so, so the caller
+// act on, and the retry asks the same peer that just failed: the requeued item carries only that
+// source, not the other announcers' (the worker's take dropped them). Only an announcement that
+// arrives after the take, and so makes a new queue entry, brings another source. So the caller
+// gets the first failure, and the block still goes back on the queue. A fetch failure is not a verdict on the block, and its error code says so, so the caller
 // can tell "try again" from "the block is bad". The cost: the caller can hear a failure for a
 // block that the node stores a few seconds later, on the retry. requeueBlock drops the reply, so
 // a caller that announces the hash again waits on the retry's outcome, not this answered one.
+//
+// A caller that announced a hash already on the queue was joined to that entry's reply (see
+// BlockPriorityQueue.Add). It gets the outcome of the attempt on the first announcer's source,
+// not on its own: its source is not tried before that answer is sent.
 //
 // A nil from the processing is not enough for nil: processBlockFound also returns nil when it
 // hands the block to catchup, or finds it stored already, which may be as invalid. So the store
@@ -2697,8 +2716,9 @@ func (u *Server) clearBlockRetryAttempts(hash *chainhash.Hash) {
 }
 
 // requeueBlock puts a failed block back on the queue with the peer that announced it and the
-// class and height it had, held back for delay. A waiting caller has already been answered with
-// this attempt's failure (see answerQueuedBlock), so the reply is dropped: left on the item, a
+// class and height it had, held back for delay. The worker answers a waiting caller with this
+// attempt's failure right after this returns (see answerQueuedBlock), so the reply is dropped
+// from the requeued item: left on it, a
 // caller who announces the hash again would be joined to it and get that stale answer at once,
 // instead of the retry's outcome.
 func (u *Server) requeueBlock(blockFound processBlockFound, delay time.Duration) {

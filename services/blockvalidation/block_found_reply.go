@@ -6,7 +6,8 @@ import "sync"
 // gets: nil once its block is stored, or the error that ended the attempt. The item that holds it
 // travels from blockFoundCh through the priority queue to the worker that settles the block, and
 // whichever step settles the block answers it. That may be an early return before the queue, or
-// the worker after the last retry.
+// the worker after its first attempt at the queued block (a failure is answered at once, even one
+// that is retried; see answerQueuedBlock).
 //
 // It answers once. A later answer is dropped, so a path that answers and then panics, or two steps
 // that both think they settled the block, can never block a worker or hand the caller a second
