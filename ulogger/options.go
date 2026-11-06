@@ -36,19 +36,25 @@ type Options struct {
 
 type Option func(*Options)
 
+const defaultLogLevel = "INFO"
+
+// defaultOptions omits the output writer, which is unused when duplicating a logger.
+func defaultOptions() *Options {
+	return &Options{
+		logLevel:   defaultLogLevel,
+		loggerType: "zerolog",
+		filepath:   "citest.log",
+	}
+}
+
 func DefaultOptions() *Options {
-	output := zerolog.ConsoleWriter{
+	opts := defaultOptions()
+	opts.writer = zerolog.ConsoleWriter{
 		Out:     os.Stdout,
 		NoColor: !isStdoutTerminal(), // Disable color if output is not a terminal
 	}
 
-	return &Options{
-		logLevel:   "INFO",
-		loggerType: "zerolog",
-		writer:     output,
-		filepath:   "citest.log",
-		skip:       0,
-	}
+	return opts
 }
 
 // WithLoggerType sets the logger type
