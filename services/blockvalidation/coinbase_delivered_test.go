@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -26,6 +27,14 @@ func gap046Block(ctx context.Context, t *testing.T, tSettings *settings.Settings
 	require.NoError(t, cb.AddP2PKHOutputFromAddress("1DkmRkb5iQFkDu4NBysog5bugnsyx7kwtn", 50*100_000_000))
 	require.Empty(t, cb.Inputs, "fixture precondition: a present coinbase with no inputs")
 
+	return gap046BlockWithCoinbase(ctx, t, tSettings, bv, height, cb)
+}
+
+// gap046BlockWithCoinbase builds a coinbase-only block around cb, with a header that commits to
+// exactly cb (merkle root = its txid), so the body is bound.
+func gap046BlockWithCoinbase(ctx context.Context, t *testing.T, tSettings *settings.Settings, bv *BlockValidation, height uint32, cb *bt.Tx) *model.Block {
+	t.Helper()
+
 	timestamp := uint32(time.Now().Unix()) //nolint:gosec
 
 	expected, err := bv.blockchainClient.GetNextWorkRequired(ctx, tSettings.ChainCfgParams.GenesisHash, int64(timestamp))
@@ -40,6 +49,46 @@ func gap046Block(ctx context.Context, t *testing.T, tSettings *settings.Settings
 	require.NoError(t, block.CheckCoinbaseOnlyBodyBound(), "fixture precondition: the body is bound to the header")
 
 	return block
+}
+
+// gap046SixtyFourByteCoinbase builds a zero-input transaction that serialises to exactly 64
+// bytes: version(4) + 00 inputs + 01 output + value(8) + 0x2d + script(45) + locktime(4). Two
+// concatenated child hashes under a merkle root can take this shape (a miner can grind the
+// coinbase txid for it), so its txid can be an honest block's merkle root.
+func gap046SixtyFourByteCoinbase(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	script := make([]byte, 45)
+	for i := range script {
+		script[i] = byte(i + 1)
+	}
+
+	cb := bt.NewTx()
+	cb.AddOutput(&bt.Output{Satoshis: 50 * 100_000_000, LockingScript: bscript.NewFromBytes(script)})
+	require.Empty(t, cb.Inputs, "fixture precondition: no inputs")
+	require.Equal(t, 64, cb.Size(), "fixture precondition: a 64-byte transaction")
+
+	return cb
+}
+
+// gap046SpendShapedCoinbase builds a one-input transaction whose input spends a non-null
+// outpoint, so it has an input but is not coinbase-shaped.
+func gap046SpendShapedCoinbase(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		UnlockingScript:    bscript.NewFromBytes([]byte{0x51, 0x51}),
+		SequenceNumber:     bt.DefaultSequenceNumber,
+	}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{0x01}))
+
+	cb := bt.NewTx()
+	cb.Inputs = append(cb.Inputs, in)
+	require.NoError(t, cb.AddP2PKHOutputFromAddress("1DkmRkb5iQFkDu4NBysog5bugnsyx7kwtn", 50*100_000_000))
+	require.False(t, model.IsConsensusCoinbase(cb), "fixture precondition: not coinbase-shaped")
+
+	return cb
 }
 
 // gap046StandIn swaps the bound coinbase for the shape a peer without the coinbase serves: a
@@ -129,6 +178,42 @@ func TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete(t *testing.T
 		requireStoredInvalid(ctx, t, client, block)
 	})
 
+	t.Run("full path with optimistic mining, one-input coinbase with a non-null prevout", func(t *testing.T) {
+		// The optimistic-mining guard keys on coinbase shape, not on a missing input: a committed
+		// coinbase that has an input but spends a non-null outpoint must also be validated first.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.OptimisticMining = true
+		tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
+
+		bv, client := newNoPersistHarness(ctx, t, tSettings)
+		block := gap046BlockWithCoinbase(ctx, t, tSettings, bv, blockHeight, gap046SpendShapedCoinbase(t))
+
+		err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid),
+			"a bound coinbase that spends a non-null outpoint must be condemned, not added optimistically, got: %v", err)
+		requireStoredInvalid(ctx, t, client, block)
+	})
+
+	t.Run("full path, 64-byte zero-input coinbase bound to the header", func(t *testing.T) {
+		// 64 bytes that bind may be the two child hashes under an honest block's merkle root, so
+		// the hash must not be condemned on them: the block stays INCOMPLETE and is fetched again.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.OptimisticMining = false
+
+		bv, client := newNoPersistHarness(ctx, t, tSettings)
+		block := gap046BlockWithCoinbase(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
+
+		err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+		requireIncompleteNotCondemned(ctx, t, client, block, err)
+	})
+
 	t.Run("full path, header does not commit to the coinbase", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -174,6 +259,20 @@ func TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete(t *testing.T
 		bv, client := newNoPersistHarness(ctx, t, tSettings)
 		block := gap046Block(ctx, t, tSettings, bv, blockHeight)
 		gap046StandIn(t, block)
+
+		err := bv.quickValidateBlock(ctx, block, "peer-serving", "http://localhost")
+		requireIncompleteNotCondemned(ctx, t, client, block, err)
+	})
+
+	t.Run("quick path, 64-byte zero-input coinbase bound to the header", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.OptimisticMining = false
+
+		bv, client := newNoPersistHarness(ctx, t, tSettings)
+		block := gap046BlockWithCoinbase(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
 
 		err := bv.quickValidateBlock(ctx, block, "peer-serving", "http://localhost")
 		requireIncompleteNotCondemned(ctx, t, client, block, err)
