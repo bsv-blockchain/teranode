@@ -795,6 +795,16 @@ The current implementation does not validate `InitialMerkleItemsPerSubtree` and 
 The current implementation hardcodes `50` as the anti-creep threshold at `subtreeprocessor/SubtreeProcessor.go:1600`. The spec requires it to be a function of `MinimumMerkleItemsPerSubtree` so the gate scales with deployment configuration.
 *Work required:* replace the hardcoded constant with a derived value (e.g. a small multiple of `MinimumMerkleItemsPerSubtree`); the chosen factor MUST be commented in the source.
 
+**GAP-BA-004.** Coinbase persistence failure does not stop or invalidate the block.
+*Affects:* BA-SOLUTION-003, BA-SOLUTION-007.
+`submitMiningSolution` logs a failed coinbase write to the TX store, then submits the block to the Blockchain service anyway and returns `Ok`. Nothing invalidates the block afterwards, so the chain advances on a block whose coinbase transaction was never persisted. Proof: `TestKnownDefect_CoinbaseStoreFailureStillSubmitsBlock` (build tag `bagaps`).
+*Work required:* fail the submission before `AddBlock` when the coinbase cannot be persisted, or invalidate the block via the Blockchain client per BA-SOLUTION-007.
+
+**GAP-BA-005.** `GetMiningCandidate` is not gated while unmined transactions are loading.
+*Affects:* BA-STATE-001, BA-CANDIDATE-001.
+`GetMiningCandidate` checks only that the blockchain FSM is `RUNNING`; it never checks the block-assembly-side loading flag that `SubmitMiningSolution` and the reset operations check. During startup recovery the FSM is usually already `RUNNING` while block assembly is still reloading unmined transactions, so a miner can be handed a candidate that omits transactions not yet reloaded. Proof: `TestKnownDefect_GetMiningCandidateServesWhileUnminedTxsLoading` (build tag `bagaps`).
+*Work required:* reject `GetMiningCandidate` with "service not ready" while unmined transactions are loading, as `SubmitMiningSolution` does.
+
 ---
 
 ## Open Questions
