@@ -1227,3 +1227,46 @@ func TestGRPCHelperIntegration(t *testing.T) {
 	assert.NotNil(t, server)
 	server.Stop()
 }
+
+func TestRetryInterceptorFinalAttemptReturnsContextError(t *testing.T) {
+	t.Run("maxAttempts=1, context canceled during invoke returns Canceled", func(t *testing.T) {
+		interceptor := retryInterceptor(1, 1*time.Millisecond, "test")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		callCount := 0
+		mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+			callCount++
+			// Cancel the context during the invoke (simulating a cancellation during the call)
+			cancel()
+			return status.Error(codes.Unavailable, "service unavailable")
+		}
+
+		err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+
+		require.Error(t, err)
+		assert.Equal(t, codes.Canceled, status.Code(err))
+		assert.Equal(t, 1, callCount, "Should call invoker exactly once")
+	})
+
+	t.Run("maxAttempts=1, context deadline expires after invoke returns DeadlineExceeded", func(t *testing.T) {
+		interceptor := retryInterceptor(1, 1*time.Millisecond, "test")
+
+		// Create a context with a very short deadline
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+		defer cancel()
+		
+		callCount := 0
+		mockInvoker := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+			callCount++
+			// Simulate a delay that would cause the deadline to be exceeded
+			time.Sleep(10 * time.Millisecond)
+			return status.Error(codes.Unavailable, "service unavailable")
+		}
+
+		err := interceptor(ctx, "/test.service/TestMethod", "request", "reply", nil, mockInvoker)
+
+		require.Error(t, err)
+		assert.Equal(t, codes.DeadlineExceeded, status.Code(err))
+		assert.Equal(t, 1, callCount, "Should call invoker exactly once")
+	})
+}

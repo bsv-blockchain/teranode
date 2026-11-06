@@ -390,6 +390,13 @@ func retryInterceptor(maxAttempts int, retryBackoff time.Duration, callerName st
 				break
 			}
 
+			// Check again if the caller's context ended after the invoker call but before the potential retry.
+			// This closes the final-attempt gap: with maxAttempts=1 and a cancel during the invoke,
+			// the interceptor must return Canceled, not Unavailable.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return status.FromContextError(ctxErr).Err()
+			}
+
 			// Only count and sleep if there is a subsequent attempt
 			if i < maxAttempts-1 {
 				grpcClientRetriesTotal.WithLabelValues(callerName, status.Code(err).String()).Inc()
