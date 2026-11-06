@@ -520,3 +520,72 @@ func mineMissingAt(t *testing.T, issued *model.MiningCandidate, version uint32, 
 		header.Nonce++
 	}
 }
+
+// TestGetMiningCandidate_EmptyBlockIdCoversParentAndTime pins both halves of the empty-block
+// candidate id through the real empty-block path and job store. Two polls with the same parent and
+// candidate time must share one job and one coinbase, so a miner handed the first poll is not moved
+// to a new extranonce by the second. A poll on a different parent with the same candidate time must
+// get a job of its own: a tip that arrives from the network does not clear the job store, so with
+// an id from the time alone the new tip's poll would overwrite the old job, and a nonce-only
+// solution from a miner still on the old tip would be rebuilt on the new parent and fail the
+// proof-of-work check. The median-time-past floor holds the candidate time fixed, since every block
+// here is stamped well ahead of the clock.
+func TestGetMiningCandidate_EmptyBlockIdCoversParentAndTime(t *testing.T) {
+	server, _ := setupServer(t)
+	require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+	ctx := t.Context()
+	baseTime := uint32(time.Now().Add(100 * time.Minute).Unix())
+	tipA := buildFutureChain(t, ctx, server.blockchainClient, baseTime)
+
+	// tipB is a sibling of tipA: same parent, height and time, another nonce. Its ancestors carry
+	// the same timestamps, so its median-time-past, and with it the candidate time, is tipA's.
+	tipABlock, err := server.blockchainClient.GetBlock(ctx, tipA.Hash())
+	require.NoError(t, err)
+
+	tipB := *tipA
+	tipB.Nonce = tipA.Nonce + 1000
+	require.NoError(t, server.blockchainClient.AddBlock(ctx, &model.Block{
+		Header:           &tipB,
+		CoinbaseTx:       tipABlock.CoinbaseTx,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}, ""))
+
+	_, metaA, err := server.blockchainClient.GetBlockHeader(ctx, tipA.Hash())
+	require.NoError(t, err)
+
+	// poll does what GetMiningCandidate does on the empty-block path, at a chosen tip.
+	poll := func(tip *model.BlockHeader) *model.MiningCandidate {
+		candidate, subtrees, err := server.blockAssembler.generateEmptyBlockCandidate(ctx, tip, metaA.Height)
+		require.NoError(t, err)
+
+		id, err := chainhash.NewHash(candidate.Id)
+		require.NoError(t, err)
+
+		server.storeJobWithCoinbase(id, candidate, subtrees)
+
+		return candidate
+	}
+
+	first := poll(tipA)
+	second := poll(tipA)
+	onB := poll(&tipB)
+
+	require.Equal(t, baseTime+6, first.Time, "the median-time-past floor must hold the candidate time")
+	require.Equal(t, first.Time, second.Time)
+	require.Equal(t, first.Time, onB.Time, "both tips must give the same candidate time")
+	require.NotEmpty(t, first.CoinbaseTx)
+
+	require.Equal(t, first.Id, second.Id, "polls with the same parent and time must share a job")
+	require.Equal(t, first.CoinbaseTx, second.CoinbaseTx, "polls sharing a job must share its coinbase")
+
+	require.NotEqual(t, first.Id, onB.Id, "a poll on another parent must get a job of its own")
+
+	firstID, err := chainhash.NewHash(first.Id)
+	require.NoError(t, err)
+
+	held := server.jobStore.Get(*firstID)
+	require.NotNil(t, held, "the first tip's job must still be held")
+	require.Equal(t, tipA.Hash().CloneBytes(), held.Value().MiningCandidate.PreviousHash, "the first tip's job must keep its parent")
+}
