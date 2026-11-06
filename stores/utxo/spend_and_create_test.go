@@ -340,6 +340,9 @@ type unknownCreateStore struct {
 	// changed makes the conditional delete find the record no longer locked
 	// and unmined.
 	changed bool
+	// partialErr makes the first conditional delete remove the record and
+	// still fail, as a failed pagination pass does; later attempts find it gone.
+	partialErr error
 }
 
 func (u *unknownCreateStore) GetMeta(_ context.Context, hash *chainhash.Hash, data *meta.Data) error {
@@ -358,6 +361,14 @@ func (u *unknownCreateStore) GetMeta(_ context.Context, hash *chainhash.Hash, da
 
 func (u *unknownCreateStore) DeleteCompleteIfLockedUnmined(context.Context, *chainhash.Hash) (bool, error) {
 	u.deleteCalls++
+
+	if u.partialErr != nil {
+		if u.deleteCalls == 1 {
+			return true, u.partialErr
+		}
+
+		return false, nil
+	}
 
 	return !u.changed, u.deleteErr
 }
@@ -458,6 +469,7 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 			readErr     error
 			parent      *meta.Data
 			changed     bool
+			partialErr  error
 			wantAttempt bool
 			wantDelete  bool
 		}{
@@ -467,6 +479,9 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 			// the child for restoration; removing it would drop it from that file.
 			{name: "marker, unmined, locked, parent locked by a move-back", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, parent: &meta.Data{Locked: true, BlockIDs: []uint32{3}}},
 			// The record was unlocked after it was read, as a failed move-back does.
+			// The first attempt removes the record and fails on its pages; the
+			// retry finds it gone. It was removed, and is reported so.
+			{name: "marker, unmined, locked, removed by an attempt that then failed", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, partialErr: errors.NewStorageError("page pass failed"), wantAttempt: true, wantDelete: true},
 			{name: "marker, unmined, locked, changed before the delete", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, changed: true, wantAttempt: true},
 			// An original whose block was invalidated after the pruner marked it
 			// is unmined and unlocked too; it is a live transaction and stays.
@@ -483,9 +498,10 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 						fakeSequentialStore: fakeSequentialStore{spends: []*Spend{&tc.spend}, createErr: unknown},
 						recheckErr:          tc.recheck,
 					}},
-					record:  tc.record,
-					readErr: tc.readErr,
-					changed: tc.changed,
+					record:     tc.record,
+					readErr:    tc.readErr,
+					changed:    tc.changed,
+					partialErr: tc.partialErr,
 				}
 
 				spent := tx
@@ -499,7 +515,9 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 				require.Len(t, spends, 1, "the spends are kept")
 				require.Equal(t, 0, f.unspendCalls)
 
-				if tc.wantAttempt {
+				if tc.partialErr != nil {
+					require.Equal(t, 2, f.deleteCalls, "the failed attempt is retried")
+				} else if tc.wantAttempt {
 					require.Equal(t, 1, f.deleteCalls)
 				} else {
 					require.Equal(t, 0, f.deleteCalls)

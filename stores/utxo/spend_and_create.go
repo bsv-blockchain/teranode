@@ -444,9 +444,10 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 	defer delCancel()
 
 	if err := retryStoreCall(delCtx, func() error {
-		var err error
-
-		deleted, err = deleter.DeleteCompleteIfLockedUnmined(delCtx, hash)
+		// An attempt that removed the record and then failed is retried, and the
+		// retry finds it gone; keep the earlier answer.
+		d, err := deleter.DeleteCompleteIfLockedUnmined(delCtx, hash)
+		deleted = deleted || d
 
 		return err
 	}); err != nil {
