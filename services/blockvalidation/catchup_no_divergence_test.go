@@ -33,16 +33,28 @@ type noDivergenceRun struct {
 	minedClears        int64
 	blocksRequests     int
 	errorType          string
-	breakerFailures    int
+}
+
+// noDivergenceCase sets up one runNoDivergenceCatchup run.
+type noDivergenceCase struct {
+	peerID         string
+	servedFrom     int    // first main-chain height the peer serves
+	servedTo       int    // last main-chain height the peer serves
+	maxAccumulated int    // CatchupMaxAccumulatedHeaders; 0 keeps the default
+	forkLen        int    // headers of a fork on b<servedTo> served after the main-chain range
+	utxoHeight     uint32 // UTXO store height, where our block locator starts; 0 means our tip
 }
 
 // runNoDivergenceCatchup runs catchup() against a real sqlitememory blockchain store holding
-// genesis..b120, every block mined. The peer serves b1..b<served> followed by fork, and the target
-// is the last header of fork, or a block on b120 the peer never serves when fork is empty. With a
-// coinbase maturity of 100 and our tip at 120, any ancestor at b19 or below scores as a fork deeper
-// than maturity.
-func runNoDivergenceCatchup(t *testing.T, peerID string, served int, maxAccumulated int, forkLen int) noDivergenceRun {
+// genesis..b120, every block mined. The peer serves b<servedFrom>..b<servedTo> followed by fork,
+// and the target is the last header of fork, or a block on b120 the peer never serves when fork is
+// empty. With a coinbase maturity of 100 and our tip at 120, any ancestor at b19 or below scores as
+// a fork deeper than maturity. A UTXO height below 120 starts our block locator there, as it does
+// while the UTXO store lags the chain.
+func runNoDivergenceCatchup(t *testing.T, c noDivergenceCase) noDivergenceRun {
 	t.Helper()
+
+	peerID := c.peerID
 
 	initPrometheusMetrics()
 
@@ -64,8 +76,8 @@ func runNoDivergenceCatchup(t *testing.T, peerID string, served int, maxAccumula
 	tSettings.BlockValidation.SecretMiningThreshold = 50
 	tSettings.BlockValidation.GRPCListenAddress = ""
 
-	if maxAccumulated > 0 {
-		tSettings.BlockValidation.CatchupMaxAccumulatedHeaders = maxAccumulated
+	if c.maxAccumulated > 0 {
+		tSettings.BlockValidation.CatchupMaxAccumulatedHeaders = c.maxAccumulated
 	}
 
 	store, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
@@ -90,12 +102,12 @@ func runNoDivergenceCatchup(t *testing.T, peerID string, served int, maxAccumula
 	require.NoError(t, err)
 	require.Equal(t, uint32(localTip), bestMeta.Height)
 
-	servedHeaders := append([]*model.BlockHeader{}, mainChain[:served]...)
+	servedHeaders := append([]*model.BlockHeader{}, mainChain[c.servedFrom-1:c.servedTo]...)
 
 	var target *model.BlockHeader
 
-	if forkLen > 0 {
-		fork := forkHeadersFrom(t, mainChain[served-1], forkLen, uint32(served+1), 1000) //nolint:gosec // small test height
+	if c.forkLen > 0 {
+		fork := forkHeadersFrom(t, mainChain[c.servedTo-1], c.forkLen, uint32(c.servedTo+1), 1000) //nolint:gosec // small test height
 		servedHeaders = append(servedHeaders, fork...)
 		target = fork[len(fork)-1]
 	} else {
@@ -107,6 +119,13 @@ func runNoDivergenceCatchup(t *testing.T, peerID string, served int, maxAccumula
 
 	utxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+
+	utxoHeight := c.utxoHeight
+	if utxoHeight == 0 {
+		utxoHeight = localTip
+	}
+
+	require.NoError(t, utxoStore.SetBlockHeight(utxoHeight))
 
 	subtreeStore := memory.New()
 
@@ -149,8 +168,6 @@ func runNoDivergenceCatchup(t *testing.T, peerID string, served int, maxAccumula
 
 	err = server.catchup(ctx, &model.Block{Header: target, Height: localTip + 1}, peerID, "http://peer")
 
-	_, breakerFailures, _, _ := server.peerCircuitBreakers.GetBreaker(peerID).GetStats()
-
 	errorType := ""
 	if server.previousCatchupAttempt != nil {
 		errorType = server.previousCatchupAttempt.ErrorType
@@ -162,7 +179,6 @@ func runNoDivergenceCatchup(t *testing.T, peerID string, served int, maxAccumula
 		minedClears:        recorder.clears.Load(),
 		blocksRequests:     int(blocksRequests.Load()),
 		errorType:          errorType,
-		breakerFailures:    breakerFailures,
 	}
 }
 
@@ -177,24 +193,27 @@ func runNoDivergenceCatchup(t *testing.T, peerID string, served int, maxAccumula
 // the existing "no new headers" outcome: the peer is charged for not serving the block it
 // announced, as on a dead fork, but not reported malicious.
 //
-// truncated_by_our_cap: the peer serves b1..b10 and our accumulated-header cap of 5 cut the list
-// at b5. The list ended because we stopped asking, so the peer is not charged at all.
+// truncated_by_our_cap: the UTXO store lags at height 2, so our locator starts at b2. The peer
+// honours it and serves b2..b11, and our accumulated-header cap of 5 cuts the list at b6. The list
+// ended because we stopped asking, so the peer is not charged at all.
 //
-// deep_fork_control: the same setup with a real fork on b5. The walk stops on a header we lack,
-// the depth of 115 is real, and the peer is still reported, so the zero counts above are not
-// vacuous.
+// capped_list_ignoring_our_locator: the same locator, but the peer serves b1..b10, a list that does
+// not start where our locator does. Our cap still cuts it at b5, but a peer that ignores the
+// locator can trip the cap at will, so the list is charged to the peer as an invalid response.
 //
-// Two changes guard this, and each is load-bearing. findCommonAncestor no longer measures a fork
-// depth for a list that ran out, and catchup() skips every fork check for one. The secret-mining
-// check measures from the ancestor's height, not from the depth, so the threshold here is set
-// below 115 to put it in play.
+// deep_fork_control: a real fork on b5. The walk stops on a header we lack, the depth of 115 is
+// real, and the peer is still reported, so the zero counts above are not vacuous.
 //
-// Mutation proofs: dropping the short-circuit in catchup() alone fails both no-fork subtests, on
-// the secret-mining abort "deep fork with no offered headers". Restoring the depth measurement as
-// well brings back the coinbase-maturity violation in both.
+// The short-circuit in catchup() is what this test guards: without it the no-fork subtests fail on
+// the secret-mining abort "deep fork with no offered headers", and without the zero depth as well
+// they fail on the coinbase-maturity violation. The zero depth on its own is pinned by
+// TestFindCommonAncestor_ListWeAllHoldMeasuresNoForkDepth. The secret-mining check measures from
+// the ancestor's height, not from the depth, so the threshold here is set below 115 to put it in
+// play. Dropping the locator-start check in handleExhaustedAncestorWalk fails
+// capped_list_ignoring_our_locator.
 func TestCatchup_HeadersWeAllHoldAreNoFork(t *testing.T) {
 	t.Run("served_in_full", func(t *testing.T) {
-		run := runNoDivergenceCatchup(t, "peer-all-held", 5, 0, 0)
+		run := runNoDivergenceCatchup(t, noDivergenceCase{peerID: "peer-all-held", servedFrom: 1, servedTo: 5})
 
 		require.Error(t, run.err, "the announced block is unknown and the peer served nothing past our chain")
 		require.Zero(t, run.maturityViolations, "a list we hold entirely is no fork, so no coinbase-maturity violation")
@@ -205,20 +224,33 @@ func TestCatchup_HeadersWeAllHoldAreNoFork(t *testing.T) {
 	})
 
 	t.Run("truncated_by_our_cap", func(t *testing.T) {
-		run := runNoDivergenceCatchup(t, "peer-all-held-capped", 10, 5, 0)
+		run := runNoDivergenceCatchup(t, noDivergenceCase{peerID: "peer-all-held-capped", servedFrom: 2, servedTo: 11, maxAccumulated: 5, utxoHeight: 2})
 
 		require.Error(t, run.err)
 		require.Zero(t, run.maturityViolations, "a list our own cap cut short is no fork, so no coinbase-maturity violation")
 		require.True(t, isLocalCatchupFault(run.err), "our cap cut the list, so the peer must not be charged: %v", run.err)
 		require.False(t, errors.Is(run.err, errors.ErrNetworkInvalidResponse), "must not carry a peer-fault code: %v", run.err)
 		require.Contains(t, run.err.Error(), "stopped on our own header cap")
-		require.Zero(t, run.breakerFailures, "the header fetch itself succeeded")
+		require.Equal(t, "local_header_cap", run.errorType, "the catchup status must not file our own cap against the peer")
+		require.Zero(t, run.minedClears, "no local block may be un-stamped")
+		require.Zero(t, run.blocksRequests, "no block body may be fetched")
+	})
+
+	t.Run("capped_list_ignoring_our_locator", func(t *testing.T) {
+		run := runNoDivergenceCatchup(t, noDivergenceCase{peerID: "peer-ignores-locator", servedFrom: 1, servedTo: 10, maxAccumulated: 5, utxoHeight: 2})
+
+		require.Error(t, run.err)
+		require.Zero(t, run.maturityViolations, "still no fork, so no coinbase-maturity violation")
+		require.False(t, isLocalCatchupFault(run.err), "a list that does not start at our locator must not pass as our own cap: %v", run.err)
+		require.True(t, errors.Is(run.err, errors.ErrNetworkInvalidResponse), "the peer is charged for the list it served: %v", run.err)
+		require.Contains(t, run.err.Error(), "not at our block locator's first entry")
+		require.Equal(t, "network_error", run.errorType, "filed against the peer")
 		require.Zero(t, run.minedClears, "no local block may be un-stamped")
 		require.Zero(t, run.blocksRequests, "no block body may be fetched")
 	})
 
 	t.Run("deep_fork_control", func(t *testing.T) {
-		run := runNoDivergenceCatchup(t, "peer-deep-fork", 5, 0, 3)
+		run := runNoDivergenceCatchup(t, noDivergenceCase{peerID: "peer-deep-fork", servedFrom: 1, servedTo: 5, forkLen: 3})
 
 		require.Error(t, run.err)
 		require.Equal(t, float64(1), run.maturityViolations, "a real fork 115 deep must still be reported, else the no-fork subtests are vacuous")

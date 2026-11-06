@@ -4194,7 +4194,7 @@ func TestFindCommonAncestor_FindsAncestorAboveLaggingUTXOHeight(t *testing.T) {
 }
 
 // TestFindCommonAncestor_ListWeAllHoldMeasuresNoForkDepth covers the walk running off the end of
-// the peer's list with every header on our chain, below our tip. The walk found no header we lack,
+// the peer's list with every header one we hold, below our tip. The walk found no header we lack,
 // so it has seen no divergence: the last header is where the list ended, not where the chains part,
 // and 200 - 152 is no fork depth. The walk records that it ran out, and catchup() acts on that
 // (TestCatchup_HeadersWeAllHoldAreNoFork).
