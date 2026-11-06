@@ -4156,12 +4156,60 @@ func TestFindCommonAncestor_FindsAncestorAboveLaggingUTXOHeight(t *testing.T) {
 
 	blocks := testhelpers.CreateTestBlockChain(t, 5)
 
-	peerHeaders := make([]*model.BlockHeader, 3)
-	for i := 0; i < 3; i++ {
+	peerHeaders := make([]*model.BlockHeader, 4)
+	for i := 0; i < 4; i++ {
 		peerHeaders[i] = blocks[i].Header
 	}
 
-	// All three exist in our chain at 150, 151, 152 — above the old ceiling of 100.
+	// The first three exist in our chain at 150, 151, 152 — above the old ceiling of 100.
+	for i, header := range peerHeaders[:3] {
+		mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).Return(
+			header,
+			&model.BlockHeaderMeta{Height: uint32(150 + i)},
+			nil,
+		)
+	}
+
+	// The fourth is where the chains diverge. Without it the walk would run out of headers, which
+	// measures no fork depth at all (TestFindCommonAncestor_ListWeAllHoldMeasuresNoForkDepth).
+	mockBlockchainClient.On("GetBlockHeader", mock.Anything, peerHeaders[3].Hash()).Return(
+		(*model.BlockHeader)(nil), (*model.BlockHeaderMeta)(nil),
+		errors.NewBlockNotFoundError("block not found"),
+	)
+
+	catchupCtx := &CatchupContext{
+		blockUpTo: blocks[4],
+		headersFetchResult: &catchup.Result{
+			Headers: peerHeaders,
+		},
+	}
+
+	require.NoError(t, server.findCommonAncestor(context.Background(), catchupCtx))
+	assert.Equal(t, 2, catchupCtx.commonAncestorIndex)
+	assert.Equal(t, uint32(152), catchupCtx.commonAncestorMeta.Height)
+	assert.False(t, catchupCtx.walkExhausted)
+
+	// And the depth is measured from the accepted tip: 200 - 152.
+	assert.Equal(t, uint32(48), catchupCtx.forkDepth)
+}
+
+// TestFindCommonAncestor_ListWeAllHoldMeasuresNoForkDepth covers the walk running off the end of
+// the peer's list with every header one we hold, below our tip. The walk found no header we lack,
+// so it has seen no divergence: the last header is where the list ended, not where the chains part,
+// and 200 - 152 is no fork depth. The walk records that it ran out, and catchup() acts on that
+// (TestCatchup_HeadersWeAllHoldAreNoFork).
+func TestFindCommonAncestor_ListWeAllHoldMeasuresNoForkDepth(t *testing.T) {
+	server, mockBlockchainClient, _, cleanup := setupTestCatchupServer(t)
+	defer cleanup()
+
+	mockBlockchainClient.On("GetBestBlockHeader", mock.Anything).Return(
+		&model.BlockHeader{}, &model.BlockHeaderMeta{Height: 200}, nil,
+	)
+
+	blocks := testhelpers.CreateTestBlockChain(t, 5)
+
+	peerHeaders := []*model.BlockHeader{blocks[0].Header, blocks[1].Header, blocks[2].Header}
+
 	for i, header := range peerHeaders {
 		mockBlockchainClient.On("GetBlockHeader", mock.Anything, header.Hash()).Return(
 			header,
@@ -4178,11 +4226,9 @@ func TestFindCommonAncestor_FindsAncestorAboveLaggingUTXOHeight(t *testing.T) {
 	}
 
 	require.NoError(t, server.findCommonAncestor(context.Background(), catchupCtx))
-	assert.Equal(t, 2, catchupCtx.commonAncestorIndex)
+	assert.True(t, catchupCtx.walkExhausted, "every header was held, so the walk ran out")
 	assert.Equal(t, uint32(152), catchupCtx.commonAncestorMeta.Height)
-
-	// And the depth is measured from the accepted tip: 200 - 152.
-	assert.Equal(t, uint32(48), catchupCtx.forkDepth)
+	assert.Equal(t, uint32(0), catchupCtx.forkDepth, "running out of headers is no evidence of a fork")
 }
 
 // TestFindCommonAncestor_IgnoresStoredBlocksAboveOurTip pins the ceiling that survives the
