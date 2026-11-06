@@ -1200,7 +1200,9 @@ func TestHandleReorgWithInvalidBlock_Integration(t *testing.T) {
 	// so call SetBlockMinedSet directly — otherwise BA's reset() blocks in
 	// waitForBlockMinedSet until its retry budget exhausts.
 	for i := range invalidatedHashes {
-		require.NoError(t, ba.blockchainClient.SetBlockMinedSet(ctx, &invalidatedHashes[i]),
+		_, invalidatedMeta, err := ba.blockchainClient.GetBlockHeader(ctx, &invalidatedHashes[i])
+		require.NoError(t, err)
+		require.NoError(t, ba.blockchainClient.SetBlockMinedSet(ctx, &invalidatedHashes[i], invalidatedMeta.MinedSetGeneration),
 			"failed to re-set mined_set on invalidated block %s", invalidatedHashes[i].String())
 	}
 

@@ -240,7 +240,7 @@ func TestReplayBestTipChanges_LatestChangeOnOwnChainMovesBack(t *testing.T) {
 
 	_, err := items.blockchainClient.InvalidateBlock(t.Context(), chain[2].Hash())
 	require.NoError(t, err)
-	require.NoError(t, items.blockchainClient.SetBlockMinedSet(t.Context(), chain[2].Hash()))
+	setBlockMinedSetAtCurrentGeneration(t.Context(), t, items, chain[2].Hash())
 
 	// The mark names chain[2] as the tip that dropped. Block assembly applied it, so the reorg
 	// off it is the one reset; the dropped tip must not add a reset of its own.
@@ -302,7 +302,7 @@ func TestReplayBestTipChanges_InvalidNeverAppliedResets(t *testing.T) {
 	require.NoError(t, err)
 
 	// Block validation has processed the invalidation.
-	require.NoError(t, items.blockchainClient.SetBlockMinedSet(t.Context(), b[1].Hash()))
+	setBlockMinedSetAtCurrentGeneration(t.Context(), t, items, b[1].Hash())
 
 	_, bMeta, err := items.blockchainClient.GetBlockHeader(t.Context(), b[1].Hash())
 	require.NoError(t, err)

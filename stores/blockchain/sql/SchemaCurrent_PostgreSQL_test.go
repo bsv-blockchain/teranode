@@ -106,6 +106,49 @@ func TestIsBlockchainSchemaCurrent_MissingColumn(t *testing.T) {
 	assert.False(t, current, "schema should not be current after column drop")
 }
 
+// TestBlockchainSchema_AddsMinedSetGenToExistingBlocks covers the upgrade of a database that
+// predates mined_set_gen: reopening the store must add the column, give existing rows 0, and
+// leave the schema current, so a tagging run on an old block reads generation 0 and its
+// SetBlockMinedSet still lands.
+func TestBlockchainSchema_AddsMinedSetGenToExistingBlocks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+
+	_, _, err = s.StoreBlock(context.Background(), block1, "")
+	require.NoError(t, err)
+	require.NoError(t, s.Close(context.Background()))
+
+	// simulate a database written by a build without the column
+	_, err = db.Exec(`ALTER TABLE blocks DROP COLUMN mined_set_gen`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.False(t, current, "a missing mined_set_gen must send the store through the DDL path")
+
+	s, err = New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	current, err = isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	require.True(t, current, "reopening the store must add mined_set_gen back")
+
+	_, meta, err := s.GetBlockHeader(context.Background(), block1.Hash())
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), meta.MinedSetGeneration, "existing rows start at generation 0")
+
+	gen := meta.MinedSetGeneration
+	require.NoError(t, s.SetBlockMinedSet(context.Background(), block1.Hash(), &gen))
+}
+
 func TestIsBlockchainSchemaCurrent_MissingReservationsTable(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping postgres-backed test in -short mode")

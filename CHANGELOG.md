@@ -67,6 +67,9 @@ read every section between yours and the target.
 - **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
   the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
   the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
+- **`SetBlockMinedSet` takes a mined-set generation and can refuse a write with `ERR_STATE_ERROR`.**
+  Out-of-tree blockchain store and client implementations add the parameter; a caller that sets
+  `mined_set_generation` must handle the refusal. Mixed versions keep working, in any order. (#2018)
 - **Script-number overflow is a consensus failure.** Earlier builds accept transactions and blocks
   this one rejects: upgrade all your nodes together. These transactions are no longer published to
   the `kafka_txPolicyRejectedConfig` topic. (#1911)

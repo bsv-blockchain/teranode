@@ -2543,7 +2543,7 @@ func TestSetBlockMinedSet(t *testing.T) {
 	t.Run("error - store returns error", func(t *testing.T) {
 		hash := chainhash.DoubleHashH([]byte("error-case"))
 		mockStore := &mockStoreGetSetBlockIsMined{}
-		mockStore.On("SetBlockMinedSet", mock.Anything, &hash).
+		mockStore.On("SetBlockMinedSet", mock.Anything, &hash, (*uint64)(nil)).
 			Return(errors.NewProcessingError("forced error"))
 
 		server, _ := New(ctx, logger, tSettings, mockStore, nil)
@@ -2561,7 +2561,7 @@ func TestSetBlockMinedSet(t *testing.T) {
 	t.Run("success - block marked as mined", func(t *testing.T) {
 		hash := chainhash.DoubleHashH([]byte("success-case"))
 		mockStore := &mockStoreGetSetBlockIsMined{}
-		mockStore.On("SetBlockMinedSet", mock.Anything, &hash).
+		mockStore.On("SetBlockMinedSet", mock.Anything, &hash, (*uint64)(nil)).
 			Return(nil)
 
 		server, _ := New(ctx, logger, tSettings, mockStore, nil)
@@ -2571,6 +2571,27 @@ func TestSetBlockMinedSet(t *testing.T) {
 		}
 
 		resp, err := server.SetBlockMinedSet(ctx, req)
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		mockStore.AssertExpectations(t)
+	})
+
+	t.Run("a present generation reaches the store", func(t *testing.T) {
+		// the two cases above send no generation, as an older blockvalidation does, and the
+		// store gets nil (the unconditional write); a present one must arrive intact
+		hash := chainhash.DoubleHashH([]byte("generation-case"))
+		gen := uint64(3)
+		mockStore := &mockStoreGetSetBlockIsMined{}
+		mockStore.On("SetBlockMinedSet", mock.Anything, &hash, mock.MatchedBy(func(g *uint64) bool {
+			return g != nil && *g == gen
+		})).Return(nil)
+
+		server, _ := New(ctx, logger, tSettings, mockStore, nil)
+
+		resp, err := server.SetBlockMinedSet(ctx, &blockchain_api.SetBlockMinedSetRequest{
+			BlockHash:          hash.CloneBytes(),
+			MinedSetGeneration: &gen,
+		})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 		mockStore.AssertExpectations(t)

@@ -209,7 +209,18 @@ func playParentSetTxMined(ctx context.Context, t *testing.T, blockchainClient bl
 		utxostore.MinedBlockInfo{BlockID: extras.parentMeta.ID, BlockHeight: extras.parentMeta.Height, OnLongestChain: true})
 	require.NoError(t, err)
 
-	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, blockC.Header.HashPrevBlock))
+	setBlockMinedSetAtCurrentGeneration(ctx, t, blockchainClient, blockC.Header.HashPrevBlock)
+}
+
+// setBlockMinedSetAtCurrentGeneration tags a block mined the way a tagging run does: it reads the
+// block's current mined_set generation and writes against it, so the write is not refused.
+func setBlockMinedSetAtCurrentGeneration(ctx context.Context, t *testing.T, blockchainClient blockchain.ClientI, hash *chainhash.Hash) {
+	t.Helper()
+
+	_, meta, err := blockchainClient.GetBlockHeader(ctx, hash)
+	require.NoError(t, err)
+
+	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, hash, meta.MinedSetGeneration))
 }
 
 // TestReValidateBlock_InvalidAncestorVerdictActsDespiteStaleHeaderCache pins that the parent wait
@@ -231,7 +242,7 @@ func TestReValidateBlock_InvalidAncestorVerdictActsDespiteStaleHeaderCache(t *te
 	require.NotEmpty(t, primed)
 	require.False(t, primed[0].MinedSet, "precondition: the cached run has the parent not mined")
 
-	require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, blockC.Header.HashPrevBlock))
+	setBlockMinedSetAtCurrentGeneration(ctx, t, blockchainClient, blockC.Header.HashPrevBlock)
 
 	_, cached, err := bv.parentHeaderRun(ctx, blockC, count)
 	require.NoError(t, err)
@@ -440,7 +451,7 @@ func newAncestorVerdictFixture(ctx context.Context, t *testing.T, opts ancestorV
 	require.NoError(t, err)
 
 	if opts.parentMinedSet {
-		require.NoError(t, blockchainClient.SetBlockMinedSet(ctx, childParent.Hash()))
+		setBlockMinedSetAtCurrentGeneration(ctx, t, blockchainClient, childParent.Hash())
 	}
 
 	if opts.extras != nil {

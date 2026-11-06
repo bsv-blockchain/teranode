@@ -4365,7 +4365,7 @@ func TestClientSetBlockMinedSet(t *testing.T) {
 			settings: tSettings,
 		}
 
-		err := c.SetBlockMinedSet(ctx, &blockHash)
+		err := c.SetBlockMinedSet(ctx, &blockHash, 0)
 		require.NoError(t, err)
 	})
 
@@ -4379,9 +4379,47 @@ func TestClientSetBlockMinedSet(t *testing.T) {
 			settings: tSettings,
 		}
 
-		err := c.SetBlockMinedSet(ctx, &blockHash)
+		err := c.SetBlockMinedSet(ctx, &blockHash, 0)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "grpc error")
+	})
+
+	t.Run("refused write keeps ErrStateError across gRPC", func(t *testing.T) {
+		// setTxMinedStatus re-queues the block only if errors.Is(err, ErrStateError)
+		// still holds after the server's WrapGRPC and the client's UnwrapGRPC
+		c := &Client{
+			client: &mockBlockClient{
+				err: errors.WrapGRPC(errors.NewStateError("mined_set generation moved")),
+			},
+			logger:   logger,
+			settings: tSettings,
+		}
+
+		err := c.SetBlockMinedSet(ctx, &blockHash, 7)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrStateError), "expected ErrStateError, got %v", err)
+
+		req := c.client.(*mockBlockClient).lastSetBlockMinedSetReq
+		require.NotNil(t, req.MinedSetGeneration, "the generation must be sent as present, so the server applies the guard")
+		require.Equal(t, uint64(7), *req.MinedSetGeneration)
+	})
+
+	t.Run("generation zero is still sent as present", func(t *testing.T) {
+		// zero is a real generation (a block never reset); it must not read as "absent",
+		// which the server treats as an old caller and writes unconditionally
+		c := &Client{
+			client: &mockBlockClient{
+				responseSetBlockMinedSet: &emptypb.Empty{},
+			},
+			logger:   logger,
+			settings: tSettings,
+		}
+
+		require.NoError(t, c.SetBlockMinedSet(ctx, &blockHash, 0))
+
+		req := c.client.(*mockBlockClient).lastSetBlockMinedSetReq
+		require.NotNil(t, req.MinedSetGeneration)
+		require.Equal(t, uint64(0), *req.MinedSetGeneration)
 	})
 }
 

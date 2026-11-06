@@ -256,7 +256,7 @@ func TestReplayBestTipChanges_LowWaterReplaysShortBranch(t *testing.T) {
 
 	// X2 is revalidated and processed again by block validation; Y3 stays the best tip.
 	require.NoError(t, items.blockchainClient.RevalidateBlock(ctx, x2.Hash()))
-	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, x2.Hash()))
+	setBlockMinedSetAtCurrentGeneration(ctx, t, items, x2.Hash())
 	best, _, err = items.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
 	require.Equal(t, y[1].Hash().String(), best.Hash().String())
@@ -350,7 +350,7 @@ func TestReplayBestTipChanges_DroppedTipNeverAppliedReloadsItsTransactions(t *te
 	require.NoError(t, err)
 	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{blockOnly.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: xMeta.ID, BlockHeight: 2, UnsetMined: true})
 	require.NoError(t, err)
-	require.NoError(t, items.blockchainClient.SetBlockMinedSet(ctx, x.Hash()))
+	setBlockMinedSetAtCurrentGeneration(ctx, t, items, x.Hash())
 
 	best, _, err = items.blockchainClient.GetBestBlockHeader(ctx)
 	require.NoError(t, err)
@@ -512,7 +512,7 @@ func TestRestampStaleBranch_WaitsForPendingMinedSet(t *testing.T) {
 			validationDone <- err
 			return
 		}
-		validationDone <- items.blockchainClient.SetBlockMinedSet(ctx, y.Hash())
+		validationDone <- items.blockchainClient.SetBlockMinedSet(ctx, y.Hash(), yMeta.MinedSetGeneration)
 	}()
 
 	require.NoError(t, ba.restampStaleBranch(ctx, []blockHeaderWithMeta{{header: y, meta: yMeta}}, best))
