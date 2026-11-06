@@ -3079,21 +3079,39 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 	return giveUp("[applyList][%s] %d of a list of %d transactions still failing after %d retries", lastErr, block.Hash().String(), len(txs), total, maxRetries)
 }
 
-// compensatingDeleteTimeout bounds the cleanup after a list that failed on a
-// pruned replay, which runs detached from the batch context (see
-// removePrunedReplayGhosts).
-const compensatingDeleteTimeout = 2 * time.Minute
+// compensatingDeleteTimeoutDefault bounds each step of the cleanup after a list
+// that failed on a pruned replay, which runs detached from the batch context
+// (see removePrunedReplayGhosts), when no settings are wired. It is the settings
+// default of utxostore_spendRollbackTimeout.
+const compensatingDeleteTimeoutDefault = 2 * time.Minute
+
+// compensatingDeleteTimeout bounds each step of the replay-ghost cleanup: the
+// leftover read and the delete. The cleanup is a compensation for writes the
+// failed list made, the same job as a spend's rollback, so it takes the
+// rollback's budget (utxostore_spendRollbackTimeout).
+func (u *BlockValidation) compensatingDeleteTimeout() time.Duration {
+	if u.settings == nil || u.settings.UtxoStore.SpendRollbackTimeout <= 0 {
+		return compensatingDeleteTimeoutDefault
+	}
+
+	return u.settings.UtxoStore.SpendRollbackTimeout
+}
 
 // listReplays is what applyList saw, across all of its passes, that the cleanup
 // after a pruned replay needs: the records the list itself wrote, and the
 // transactions the store answered with a pruned-replay answer.
+//
+// The cleanup runs only after a failed list that saw a replay answer, which a
+// block that applies cleanly never does, so the created txids are appended and
+// not hashed into a set. createdSet builds the set once, on that path.
 type listReplays struct {
-	created  map[chainhash.Hash]struct{}
+	created  []chainhash.Hash
 	rejected map[chainhash.Hash]error
+	set      map[chainhash.Hash]struct{}
 }
 
 func newListReplays() *listReplays {
-	return &listReplays{created: make(map[chainhash.Hash]struct{}), rejected: make(map[chainhash.Hash]error)}
+	return &listReplays{rejected: make(map[chainhash.Hash]error)}
 }
 
 // observe records one transaction's result from one pass. A record is ours from
@@ -3105,12 +3123,25 @@ func (r *listReplays) observe(txid chainhash.Hash, result utxo.SpendAndCreateMul
 	}
 
 	if result.Created {
-		r.created[txid] = struct{}{}
+		r.created = append(r.created, txid)
+		r.set = nil
 	}
 
 	if result.Status == utxo.MultiTxFailed && utxo.IsReplayAnswer(result.Err) {
 		r.rejected[txid] = result.Err
 	}
+}
+
+// createdSet is the set of every txid observe saw created, built on first use.
+func (r *listReplays) createdSet() map[chainhash.Hash]struct{} {
+	if r.set == nil {
+		r.set = make(map[chainhash.Hash]struct{}, len(r.created))
+		for _, txid := range r.created {
+			r.set[txid] = struct{}{}
+		}
+	}
+
+	return r.set
 }
 
 // removePrunedReplayGhosts deletes the records a failed list left behind for a
@@ -3165,11 +3196,13 @@ func (u *BlockValidation) removePrunedReplayGhosts(ctx context.Context, block *m
 		leftovers = nil
 	}
 
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), compensatingDeleteTimeout)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.compensatingDeleteTimeout())
 	defer cancel()
 
+	created := replays.createdSet()
+
 	createdHere := func(txHash *chainhash.Hash) bool {
-		if _, ok := replays.created[*txHash]; ok {
+		if _, ok := created[*txHash]; ok {
 			return true
 		}
 
@@ -3226,13 +3259,14 @@ func (u *BlockValidation) removePrunedReplayGhosts(ctx context.Context, block *m
 // the retry takes an id of its own (recordedBlockID checks again before it
 // adopts).
 func (u *BlockValidation) prunedReplayLeftovers(ctx context.Context, block *model.Block, txids []chainhash.Hash, replays *listReplays) (map[chainhash.Hash]struct{}, bool, error) {
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), compensatingDeleteTimeout)
+	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.compensatingDeleteTimeout())
 	defer cancel()
 
+	created := replays.createdSet()
 	notCreated := make([]*chainhash.Hash, 0, len(txids))
 
 	for i := range txids {
-		if _, ok := replays.created[txids[i]]; !ok {
+		if _, ok := created[txids[i]]; !ok {
 			notCreated = append(notCreated, &txids[i])
 		}
 	}

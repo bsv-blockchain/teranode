@@ -2574,3 +2574,33 @@ func TestQuickValidateRemovesOwnGhostsWhenLeftoverReadFails(t *testing.T) {
 			"D:0 was consumed by mined E; the unlocked ghost of D must not make it spendable again")
 	})
 }
+
+// TestListReplaysCreatedSet: the created set is built on first use from every
+// txid observe saw created, and a create observed after that is in the next set.
+func TestListReplaysCreatedSet(t *testing.T) {
+	a, b, c := chainhash.HashH([]byte("a")), chainhash.HashH([]byte("b")), chainhash.HashH([]byte("c"))
+
+	replays := newListReplays()
+	replays.observe(a, utxo.SpendAndCreateMultiResult{Status: utxo.MultiTxCreated, Created: true})
+	replays.observe(b, utxo.SpendAndCreateMultiResult{Status: utxo.MultiTxExisted})
+
+	require.Equal(t, map[chainhash.Hash]struct{}{a: {}}, replays.createdSet())
+
+	replays.observe(c, utxo.SpendAndCreateMultiResult{Status: utxo.MultiTxCreated, Created: true})
+
+	require.Equal(t, map[chainhash.Hash]struct{}{a: {}, c: {}}, replays.createdSet(), "a later create joins the set")
+}
+
+// TestCompensatingDeleteTimeout: the replay-ghost cleanup takes the spend
+// rollback's budget, and the constant only when no settings or no budget is set.
+func TestCompensatingDeleteTimeout(t *testing.T) {
+	require.Equal(t, compensatingDeleteTimeoutDefault, (&BlockValidation{}).compensatingDeleteTimeout())
+
+	tSettings := testutil.CreateBaseTestSettings(t)
+
+	tSettings.UtxoStore.SpendRollbackTimeout = 7 * time.Second
+	require.Equal(t, 7*time.Second, (&BlockValidation{settings: tSettings}).compensatingDeleteTimeout())
+
+	tSettings.UtxoStore.SpendRollbackTimeout = 0
+	require.Equal(t, compensatingDeleteTimeoutDefault, (&BlockValidation{settings: tSettings}).compensatingDeleteTimeout())
+}
