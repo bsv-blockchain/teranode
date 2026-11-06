@@ -3817,3 +3817,62 @@ func TestPreviousOutputsDecorate_MissingParentIsTxNotFound(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrTxNotFound)
 }
+
+// TestDeleteCompleteIfLockedUnmined calls the conditional delete directly. The
+// replay cleanup in utxo.SequentialSpendAndCreate checks locked and unmined in
+// Go before it gets here, so only a direct call proves the WHERE clause itself
+// leaves a record that fails the condition whole.
+func TestDeleteCompleteIfLockedUnmined(t *testing.T) {
+	ctx := context.Background()
+	store, _ := setup(ctx, t)
+
+	for i, tc := range []struct {
+		name        string
+		opts        []utxo.CreateOption
+		wantDeleted bool
+	}{
+		{name: "locked, unmined", opts: []utxo.CreateOption{utxo.WithLocked(true)}, wantDeleted: true},
+		{name: "unlocked, unmined"},
+		{name: "locked, mined", opts: []utxo.CreateOption{utxo.WithLocked(true), utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 1000})}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := bt.NewTx()
+			require.NoError(t, tx.From("6666666666666666666666666666666666666666666666666666666666666666", uint32(i), "51", 30000)) //nolint:gosec // small test index
+			tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x51})
+			require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+			require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 5000))
+
+			hash := tx.TxIDChainHash()
+
+			_, err := store.Create(ctx, tx, 1000, tc.opts...)
+			require.NoError(t, err)
+
+			var id int64
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT id FROM transactions WHERE hash = $1`, hash[:]).Scan(&id))
+
+			deleted, err := store.DeleteCompleteIfLockedUnmined(ctx, hash)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantDeleted, deleted)
+
+			var outputs int
+			require.NoError(t, store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM outputs WHERE transaction_id = $1`, id).Scan(&outputs))
+
+			_, getErr := store.Get(ctx, hash)
+			if tc.wantDeleted {
+				require.ErrorIs(t, getErr, errors.ErrTxNotFound)
+				require.Zero(t, outputs, "the outputs go with the transaction")
+			} else {
+				require.NoError(t, getErr, "a record not locked and unmined is left")
+				require.Equal(t, 2, outputs, "and so are its outputs")
+			}
+		})
+	}
+
+	t.Run("absent", func(t *testing.T) {
+		missing := chainhash.HashH([]byte("never written"))
+
+		deleted, err := store.DeleteCompleteIfLockedUnmined(ctx, &missing)
+		require.NoError(t, err)
+		require.False(t, deleted)
+	})
+}
