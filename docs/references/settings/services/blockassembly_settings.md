@@ -48,9 +48,40 @@
 | ParallelSetIfNotExistsThreshold      | int           | 10000            | blockassembly_parallelSetIfNotExistsThreshold      | Threshold for parallelizing conditional writes                                       |
 | StoreTxInpointsForSubtreeMeta        | bool          | true             | blockassembly_storeTxInpointsForSubtreeMeta        | Store transaction input points in subtree metadata (required for checkblocktemplate) |
 | IdleSleepDuration                    | time.Duration | 10ms             | blockassembly_idle_sleep_duration                  | Sleep duration when subtree processor queue is empty                                 |
+| MaxTransactionsInMemory              | uint64        | 0                | blockassembly_maxTransactionsInMemory              | Refuse ingest while this many transactions are held in memory (subtrees plus queue); block transactions are not refused; 0 = off |
 | CoinbaseRecoveryMaxGapBlocks         | int           | 200              | blockassembly_coinbaseRecoveryMaxGapBlocks         | Startup scan window below the tip, and the largest coinbase gap auto-repair will fix |
 | CoinbaseRecoveryConsecutiveGood      | int           | 6                | blockassembly_coinbaseRecoveryConsecutiveGood      | Consecutive present coinbases proving the gap floor during walk-back                 |
 | CoinbaseRecoveryMaxAttempts          | int           | 3                | blockassembly_coinbaseRecoveryMaxAttempts          | Automatic coinbase-recovery attempts before raising an operator alert                |
+
+## In-Memory Transaction Limit
+
+`blockassembly_maxTransactionsInMemory` caps the transactions block assembly holds in RAM, counted as those already placed in subtrees plus those queued for ingest. It is checked where every transaction enters block assembly, the ingest queue reservation, so it applies to all ingress paths, including the validator's gRPC and HTTP listeners.
+
+The limit assumes trusted gRPC callers. The `InBlock` flag on the validator `ValidateTransaction` request and on block assembly `AddTx` and `AddTxBatch` lifts the limit, like the other trust flags on those RPCs. The shipped profile sets `security_level_grpc = 0`, so an unauthenticated client that can reach the gRPC port can bypass the limit. Operators who expose gRPC must set `security_level_grpc`.
+
+A batch that would cross the limit is refused with the same resource-exhausted status as a full ingest queue (`blockassembly_maxQueueItems`):
+
+| Caller | Outcome |
+|--------|---------|
+| Synchronous submitter (gRPC, HTTP) | Told to retry; the validator undoes the work it did for the transaction |
+| Kafka ingest | Dropped at once, with no in-place retry, because this bound clears when a block connects or a load or reset ends; alert on `teranode_validator_shed_dropped_total`. Enable `validator_kafkaBackpressureEnabled` so the backlog waits in Kafka. With it off, every Kafka transaction at the limit, or during a load or reset, is validated, refused, unwound and dropped |
+| Transaction inside a block (block validation, subtree validation, legacy sync) | Not refused by this limit. It is admitted and counted. `blockassembly_maxQueueItems` still applies to it |
+
+The limit is soft. The count includes transactions dequeued but not yet placed in a subtree, so it does not under-read while a drain pass runs. Transactions inside a block are admitted past the limit, and the overshoot is bounded by the blocks being validated. A batch larger than the whole limit is admitted alone while the node is below it. The clamp floor comes from this pod's `blockassembly_sendBatchSize`, but validator pods fill batches from their own config. The unmined-transaction reload at startup or reset, and transactions re-added from a reorged block, bypass the queue and are not limited: a node that restarts holding more than the limit loads them all and then refuses new ingest until blocks drain it. The held count reads full from construction of block assembly until its unmined load ends, during every reset, and while a failed reload waits for its retry, so mempool ingest is refused as held for that whole time, whatever the real count.
+
+A value below one drain pass plus the coinbase placeholder is clamped up with a warning. Budget roughly 1KB of RAM per transaction when sizing.
+
+### Early shed at the limit
+
+A validator polls block assembly's held count and limit with the same queue-stats call as the Kafka backpressure controller, and shares that reading when the controller runs. Backpressure does not have to be enabled. While the held count is at the limit, the validator refuses an ingest transaction, one that did not arrive inside a block, before any UTXO store work. The refusal carries the same held marker as block assembly's own, so the Kafka handler, subtree validation, gRPC and HTTP treat it as a held shed: not invalid, counted once in `teranode_validator_held_limit_shed_transactions`, and warned at a bounded rate. A transaction inside a block is never refused early. The reading can lag by one poll interval, so a transaction that crosses the limit between two polls still takes the refusal and unwind in the table above. The gate fails open: with no fresh reading, no reported limit or a failed read, the validator takes the ordinary path.
+
+### Upgrade order
+
+Upgrade every validator and subtree-validation pod to a build that sends the `InBlock` flag before you set `blockassembly_maxTransactionsInMemory` on block assembly, and keep the default 0 until then. Block assembly cannot tell an old validator from a mempool batch. A validator that never sends `InBlock` has its block transactions refused as held, and its in-block shed arm then accepts them and unlocks them without a template entry. A block transaction is then outside the template with nothing holding its children back, which peers reject as an invalid block.
+
+### Block transactions kept Locked
+
+When block assembly refuses a block transaction on the ingest queue bound (`blockassembly_maxQueueItems`), the validator accepts the transaction and keeps its record Locked, so an ordinary child cannot enter the template without it. `teranode_validator_shed_inblock_dropped_total` counts these, and a rising value is the signal to act. The lock clears when the block's `setMined` runs. A block that validates and never connects leaves the record Locked, and an ordinary child of it is refused as locked. A block assembly reset, or a restart, runs the unmined reload. It reads every unmined record, including Locked ones, adds them to the template and unlocks them.
 
 ## Coinbase Divergence Recovery
 

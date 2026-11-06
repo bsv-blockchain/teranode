@@ -335,6 +335,25 @@ func outpointSpent(t *testing.T, store utxostore.Store, tx *bt.Tx, vout uint32) 
 	return resp.Status == int(utxostore.Status_SPENT)
 }
 
+// outpointHasSpender reports whether a spend is recorded against the output,
+// whatever the output's status. GetSpend reports LOCKED ahead of SPENT, so a
+// spent output of a Locked record cannot be told apart by status alone.
+func outpointHasSpender(t *testing.T, store utxostore.Store, tx *bt.Tx, vout uint32) bool {
+	t.Helper()
+
+	utxoHash, err := util.UTXOHashFromOutput(tx.TxIDChainHash(), tx.Outputs[vout], vout)
+	require.NoError(t, err)
+
+	resp, err := store.GetSpend(context.Background(), &utxostore.Spend{
+		TxID:     tx.TxIDChainHash(),
+		Vout:     vout,
+		UTXOHash: utxoHash,
+	})
+	require.NoError(t, err)
+
+	return resp.SpendingData != nil
+}
+
 // requireTxAbsent asserts the transaction has no record left in the store.
 func requireTxAbsent(t *testing.T, store utxostore.Store, hash *chainhash.Hash) {
 	t.Helper()
@@ -357,6 +376,10 @@ type recoveryBAStore struct {
 	err       error
 	calls     int
 	shedFirst int
+
+	// inBlockSeen records, per hand-off, whether the context marked it as a transaction that
+	// arrived inside a block.
+	inBlockSeen []bool
 
 	blockUntilCtxDone bool
 	blockAfter        int
@@ -383,6 +406,7 @@ var _ blockassembly.Store = (*recoveryBAStore)(nil)
 
 func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
 	f.calls++
+	f.inBlockSeen = append(f.inBlockSeen, blockassembly.InBlockFromContext(ctx))
 
 	if f.cancelCaller != nil {
 		f.cancelCaller()
@@ -1923,10 +1947,14 @@ func TestValidate_InBlockShedIsAcceptedWithoutUnwind(t *testing.T) {
 
 	require.GreaterOrEqual(t, baStore.calls, 1, "the hand-off was still attempted")
 
-	// Fully accepted: record present, unlocked by the two-phase commit, inputs spent.
-	require.NotNil(t, metaLocked(t, realStore, childTx.TxIDChainHash()), "the record survives")
-	require.False(t, txMeta.Locked, "the two-phase commit ran, so the transaction is spendable")
-	require.Equal(t, 1, spy.unlockCalls, "the 2PC unlock ran exactly once")
+	// Accepted but kept Locked: the record is outside the template, so an ordinary
+	// child must not be able to spend it and enter the template without its parent.
+	// setMined clears the lock when the block connects.
+	stored := metaLocked(t, realStore, childTx.TxIDChainHash())
+	require.NotNil(t, stored, "the record survives")
+	require.True(t, stored.Locked, "the store record stays Locked after Validate returns")
+	require.True(t, txMeta.Locked, "the returned meta agrees with the store")
+	require.Equal(t, 0, spy.unlockCalls, "the 2PC unlock must not run for a transaction outside the template")
 	require.True(t, parentOutpointSpent(t, realStore, parentTx), "the parent's output stays spent by this transaction")
 
 	require.Equal(t, 0, spy.unspendCalls, "nothing is unspent on the block-context arm")
@@ -1974,7 +2002,7 @@ func TestValidate_InBlockShedDoesNotDeleteAParentADescendantSpent(t *testing.T) 
 
 	require.NotNil(t, metaLocked(t, realStore, childTx.TxIDChainHash()),
 		"the parent a descendant spent must still exist")
-	require.True(t, outpointSpent(t, realStore, childTx, 0),
+	require.True(t, outpointHasSpender(t, realStore, childTx, 0),
 		"the descendant's spend of the parent's output must survive")
 	require.True(t, parentOutpointSpent(t, realStore, parentTx))
 }
@@ -2368,4 +2396,272 @@ func TestValidate_ShedUnwindSecondVerifyReadFailureIsNotAReappearance(t *testing
 
 	// The bounded retry ran on the second round too: read 1 plus shedUnwindVerifyAttempts.
 	require.Equal(t, 1+shedUnwindVerifyAttempts, spy.verifyReadCalls)
+}
+
+func heldLimitShed() error {
+	shedErr := errors.NewThresholdExceededError("block assembly holds 65 transactions in memory, limit 65")
+	shedErr.SetData("heldLimit", true)
+
+	return shedErr
+}
+
+func TestIsRetryableShed(t *testing.T) {
+	require.False(t, isRetryableShed(nil))
+	require.True(t, isRetryableShed(errors.NewThresholdExceededError("block assembly queue full")), "a queue-full shed clears in milliseconds")
+	require.False(t, isRetryableShed(heldLimitShed()), "the in-memory limit clears when a block connects")
+	require.False(t, isRetryableShed(errors.NewServiceError("block assembly unreachable")), "not a shed at all")
+	require.False(t, isRetryableShed(errors.NewServiceUnavailableError("a store is shedding load")), "a bare unavailable is not a shed either")
+}
+
+// The in-memory limit holds until a block connects, so the in-place retry cannot succeed. Retrying
+// anyway parks every Kafka transaction for the whole window while it holds spent inputs and a
+// created record.
+func TestValidate_KafkaIngestDoesNotRetryTheInMemoryLimit(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx, logger := recoverySetupWithLogger(t, "queue_shed_kafka_held_limit", 1)
+
+	baStore.err = heldLimitShed()
+
+	v.settings.Validator.BlockAssemblyShedRetryTimeout = 5 * time.Second
+
+	initPrometheusMetrics()
+
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+
+	start := time.Now()
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the refusal is still a shed")
+	require.Equal(t, 1, baStore.calls, "one hand-off and no retry")
+	require.Less(t, time.Since(start), 2*time.Second, "the 5s retry budget must not be spent")
+
+	require.Equal(t, droppedBefore+1, testutil.ToFloat64(prometheusValidatorShedDroppedTotal), "the drop is still counted")
+
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "it unwinds like any other shed")
+	require.Equal(t, 0, spy.unlockCalls)
+
+	logged := strings.Join(logger.lines, "\n")
+	require.Contains(t, logged, "holds its in-memory transaction limit", "the drop is worded for the limit")
+	require.NotContains(t, logged, "after the bounded block-assembly handoff retry", "no retry ran, so the log must not say one did")
+}
+
+func TestWarnHeldShedDroppedIsRateLimited(t *testing.T) {
+	logger := &capturingLogger{}
+	v := &Validator{logger: logger}
+
+	for i := 0; i < 5; i++ {
+		v.warnHeldShedDropped("tx-" + string(rune('a'+i)))
+	}
+
+	require.Len(t, logger.lines, 1, "a sustained held shed logs once, not once per transaction")
+	require.Contains(t, logger.lines[0], "(0 more")
+
+	v.heldShedWarnedAt.Store(time.Now().Add(-2 * inBlockShedWarnInterval).UnixNano())
+
+	v.warnHeldShedDropped("tx-z")
+
+	require.Len(t, logger.lines, 2)
+	require.Contains(t, logger.lines[1], "(4 more", "it says how many were held back")
+}
+
+func TestValidate_BlockContextHandoffIsMarkedInBlock(t *testing.T) {
+	ctx := context.Background()
+
+	v, _, baStore, _, childTx, _ := recoverySetup(t, "queue_shed_handoff_inblock")
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err)
+	require.Equal(t, []bool{true}, baStore.inBlockSeen, "a block transaction is handed off marked, so the in-memory limit does not refuse it")
+
+	v2, _, baStore2, _, childTx2, _ := recoverySetup(t, "queue_shed_handoff_not_inblock")
+
+	_, err = v2.Validate(ctx, childTx2, 100, WithSkipPolicyChecks(true))
+	require.NoError(t, err)
+	require.Equal(t, []bool{false}, baStore2.inBlockSeen, "an ingest transaction is not marked")
+}
+
+func TestValidate_InBlockRetryReusesTheBlockMarker(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, _, childTx, _ := recoverySetup(t, "queue_shed_inblock_retry_marker")
+
+	baStore.shedFirst = 2
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true), WithWaitForBlockAssembly(true))
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, true, true}, baStore.inBlockSeen, "every retry of a block hand-off keeps the marker")
+}
+
+func TestWarnInBlockShedIsRateLimited(t *testing.T) {
+	logger := &capturingLogger{}
+	v := &Validator{logger: logger}
+
+	for i := 0; i < 5; i++ {
+		v.warnInBlockShed("tx-" + string(rune('a'+i)))
+	}
+
+	require.Len(t, logger.lines, 1, "a sustained shed logs once, not once per transaction")
+	require.Contains(t, logger.lines[0], "tx-a")
+	require.Contains(t, logger.lines[0], "(0 more")
+
+	v.inBlockShedWarnedAt.Store(time.Now().Add(-2 * inBlockShedWarnInterval).UnixNano())
+
+	v.warnInBlockShed("tx-z")
+
+	require.Len(t, logger.lines, 2, "a warning is due again once the interval has passed")
+	require.Contains(t, logger.lines[1], "tx-z")
+	require.Contains(t, logger.lines[1], "(4 more", "it says how many were held back")
+}
+
+func TestUnlockLockedTxOnExit_WarnsAboutAnUndeliveredTxUnlessItWasShedInBlock(t *testing.T) {
+	tx := &bt.Tx{}
+
+	t.Run("a nil error from a recovered panic still warns", func(t *testing.T) {
+		logger := &capturingLogger{}
+		v := &Validator{logger: logger}
+
+		var err error
+
+		delivered, shed := false, false
+
+		v.unlockLockedTxOnExit(context.Background(), tx, "tx-panic", &meta.Data{Locked: true}, &err, &delivered, &shed)
+
+		require.Len(t, logger.lines, 1)
+		require.Contains(t, logger.lines[0], "tx stays locked")
+	})
+
+	t.Run("the in-block shed does not warn again", func(t *testing.T) {
+		logger := &capturingLogger{}
+		v := &Validator{logger: logger}
+
+		var err error
+
+		delivered, shed := false, true
+
+		v.unlockLockedTxOnExit(context.Background(), tx, "tx-shed", &meta.Data{Locked: true}, &err, &delivered, &shed)
+
+		require.Empty(t, logger.lines)
+	})
+}
+
+// The in-block shed keeps the record Locked on purpose and warns at a bounded rate. The deferred
+// unlock must not add a per-transaction "not delivered" warning on top.
+func TestValidate_InBlockShedDoesNotWarnPerTransactionAboutTheKeptLock(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, _, childTx, _, logger := recoverySetupWithLogger(t, "queue_shed_inblock_no_undelivered_warning", 1)
+
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err)
+
+	logged := strings.Join(logger.lines, "\n")
+	require.Contains(t, logged, "accepted locked without a template entry", "the rate-limited shed warning is the one line for this")
+	require.NotContains(t, logged, "tx stays locked, it was not delivered", "the kept lock is deliberate, not an undelivered error")
+}
+
+func atLimitGate(t *testing.T) *heldLimitGate {
+	t.Helper()
+
+	reader := &fakeReader{}
+	reader.setHeld(100, 100, 0)
+
+	gate := newHeldLimitGate(t.Context(), testBackpressureConfig(), reader)
+	t.Cleanup(gate.stop)
+
+	stats, err := reader.GetBlockAssemblyQueueStats(t.Context())
+	require.NoError(t, err)
+
+	gate.observe(stats)
+
+	return gate
+}
+
+func TestValidate_AtTheHeldLimitAnIngestTxIsShedBeforeTheUtxoStore(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "early_held_shed")
+	v.heldGate = atLimitGate(t)
+
+	initPrometheusMetrics()
+
+	heldBefore := testutil.ToFloat64(prometheusHeldLimitShedTransactions)
+	unwindBefore := testutil.ToFloat64(prometheusValidatorShedUnwindTotal)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded)
+	require.True(t, blockassembly.IsHeldLimitShed(err), "it carries the marker block assembly's own held shed carries")
+	require.False(t, errors.Is(err, errors.ErrTxInvalid), "a held shed is not an invalid transaction")
+
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "no input was spent")
+	require.Equal(t, 0, spy.unspendCalls)
+	require.Equal(t, 0, baStore.calls, "block assembly was not called")
+	require.Equal(t, unwindBefore, testutil.ToFloat64(prometheusValidatorShedUnwindTotal), "nothing was created, so nothing is unwound")
+	require.Equal(t, heldBefore, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "the validator does not count it, the caller counts a held shed once")
+}
+
+func TestValidate_EarlyHeldShedOfAKafkaTxIsWarnedAtTheBoundedRate(t *testing.T) {
+	ctx := context.Background()
+	v, _, _, _, childTx, _, logger := recoverySetupWithLogger(t, "early_held_shed_kafka", 1)
+	v.heldGate = atLimitGate(t)
+
+	initPrometheusMetrics()
+
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+
+	for i := 0; i < 3; i++ {
+		_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+		require.True(t, blockassembly.IsHeldLimitShed(err))
+	}
+
+	require.Equal(t, droppedBefore+3, testutil.ToFloat64(prometheusValidatorShedDroppedTotal))
+	warnings := 0
+
+	for _, line := range logger.lines {
+		if strings.Contains(line, "holds its in-memory transaction limit") {
+			warnings++
+		}
+	}
+
+	require.Equal(t, 1, warnings, "the drop is warned once per interval, not once per transaction")
+}
+
+func TestValidate_InBlockTxIsNotGatedByTheHeldLimit(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, realStore, childTx, parentTx := recoverySetup(t, "early_held_shed_in_block")
+	v.heldGate = atLimitGate(t)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+
+	require.NoError(t, err, "block assembly does not refuse a block transaction for the limit, so neither does the gate")
+	require.Equal(t, 1, baStore.calls)
+	require.Equal(t, []bool{true}, baStore.inBlockSeen)
+	require.True(t, parentOutpointSpent(t, realStore, parentTx))
+}
+
+func TestValidate_BelowTheHeldLimitAnIngestTxIsNotGated(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, _, childTx, _ := recoverySetup(t, "early_held_shed_below_limit")
+
+	reader := &fakeReader{}
+	reader.setHeld(10, 100, 0)
+
+	gate := newHeldLimitGate(ctx, testBackpressureConfig(), reader)
+	t.Cleanup(gate.stop)
+
+	stats, err := reader.GetBlockAssemblyQueueStats(ctx)
+	require.NoError(t, err)
+
+	gate.observe(stats)
+
+	v.heldGate = gate
+
+	_, err = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, baStore.calls)
 }

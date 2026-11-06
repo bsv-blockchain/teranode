@@ -20,6 +20,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/labstack/echo/v4"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -571,4 +572,63 @@ func TestValidateTransaction_NotRefusedWhileSyncing(t *testing.T) {
 	_, err := server.ValidateTransaction(context.Background(), &validator_api.ValidateTransactionRequest{TransactionData: sampleTx, BlockHeight: 100})
 	require.NoError(t, err)
 	require.Equal(t, 1, validated)
+}
+
+// A Kafka transaction that block assembly refused at its in-memory limit was valid: the node had
+// no room for it. It must not count or log as an invalid transaction, once per message, on top of
+// the validator's own rate-limited drop warning.
+func TestHandleKafkaTxMessage_HeldLimitShedIsNotInvalid(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &capturingLogger{}
+
+	server := NewServer(logger, test.CreateBaseTestSettings(t), nil, nil, nil, nil, nil, nil, nil)
+	server.validator = &MockValidator{
+		ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+			return nil, heldLimitShed()
+		},
+	}
+
+	invalidBefore := testutil.ToFloat64(prometheusInvalidTransactions)
+	heldBefore := testutil.ToFloat64(prometheusHeldLimitShedTransactions)
+
+	require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessage(t)), "the offset is committed without a second error line")
+	require.Equal(t, invalidBefore, testutil.ToFloat64(prometheusInvalidTransactions), "a held shed is not an invalid transaction")
+	require.Equal(t, heldBefore+1, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "it is counted on its own")
+
+	for _, line := range logger.lines {
+		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
+	}
+}
+
+// With block assembly at its limit the validator sheds an ingest transaction before it touches the
+// UTXO store. The Kafka handler must treat that early shed as it treats block assembly's own: the
+// offset is committed, the transaction is not invalid, and it is counted once as a held shed.
+func TestHandleKafkaTxMessage_EarlyHeldShedIsNotInvalidAndCountedOnce(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &capturingLogger{}
+	v, spy, baStore, realStore, childTx, parentTx, _ := recoverySetupWithLogger(t, "kafka_early_held_shed", 1)
+	v.heldGate = atLimitGate(t)
+
+	server := NewServer(logger, test.CreateBaseTestSettings(t), nil, nil, nil, nil, nil, nil, nil)
+	server.validator = v
+
+	invalidBefore := testutil.ToFloat64(prometheusInvalidTransactions)
+	heldBefore := testutil.ToFloat64(prometheusHeldLimitShedTransactions)
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+
+	require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessageFor(t, childTx.ExtendedBytes())), "the offset is committed")
+	require.Equal(t, invalidBefore, testutil.ToFloat64(prometheusInvalidTransactions), "a held shed is not an invalid transaction")
+	require.Equal(t, heldBefore+1, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "it is counted once, by the handler")
+	require.Equal(t, droppedBefore+1, testutil.ToFloat64(prometheusValidatorShedDroppedTotal), "the drop of an ingest transaction is still counted")
+
+	require.Equal(t, 0, baStore.calls, "block assembly was never called")
+	require.Equal(t, 0, spy.unspendCalls)
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the parent was never spent")
+
+	for _, line := range logger.lines {
+		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
+	}
 }
