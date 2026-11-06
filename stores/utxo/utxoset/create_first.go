@@ -22,6 +22,12 @@ func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore ui
 	return nil, nil
 }
 
+// DeleteRollingBack is DeleteComplete here. The store has no tentative state, so
+// BeginCreateFirstRollback never marks a record and nothing calls this for one.
+func (s *Store) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	return s.DeleteComplete(ctx, hash)
+}
+
 // BeginCreateFirstRollback reports false and writes nothing. The store has no tentative
 // state, so every record is final and there is nothing to roll back.
 func (s *Store) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {

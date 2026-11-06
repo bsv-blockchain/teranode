@@ -168,6 +168,11 @@ func (m *MockStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 	return args.Error(0)
 }
 
+func (m *MockStore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
 func (m *MockStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	args := m.Called(ctx, hash)
 	return args.Bool(0), args.Error(1)

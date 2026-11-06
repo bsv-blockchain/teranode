@@ -308,6 +308,11 @@ func (m *NullStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 	return nil
 }
 
+// DeleteRollingBack does nothing: the null store holds no records.
+func (m *NullStore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+}
+
 // BeginCreateFirstRollback reports false: the null store holds no records, so none is creating.
 func (m *NullStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	return false, nil

@@ -206,6 +206,21 @@ const (
 // utxostore_utxoBatchSize, with nothing in the node to recreate a pagination
 // child. Unreachable residue is preferred over wrongly reachable residue.
 func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
+	return s.deleteComplete(ctx, hash, false)
+}
+
+// DeleteRollingBack is DeleteComplete for the create-first rollback: it removes the
+// transaction only while its master record still carries the rollingBack bin, so it removes
+// the attempt that was rolled back and never a record of the same txid created after that
+// attempt was deleted. The master delete is filtered on the rollingBack bin, atomically. A
+// master that is absent, or no longer rolling back, means the attempt is already gone: the
+// call reports success and leaves the pagination children and blobs to whoever owns the
+// record now. The ordering and failure semantics are those of DeleteComplete.
+func (s *Store) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	return s.deleteComplete(ctx, hash, true)
+}
+
+func (s *Store) deleteComplete(ctx context.Context, hash *chainhash.Hash, onlyRollingBack bool) error {
 	// The operator's reader policy, as every other record read in this store uses
 	// (get.go) and as the child pass below already does for its batch policy. The Go
 	// client does not observe ctx on this call, so the policy's timeout is the only
@@ -220,7 +235,7 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	}
 
 	// Read TotalExtraRecs from the master to discover how many pagination children exist.
-	masterRecord, aErr := s.client.Get(policy, key, fields.TotalExtraRecs.String())
+	masterRecord, aErr := s.client.Get(policy, key, fields.TotalExtraRecs.String(), fields.RollingBack.String())
 	if aErr != nil {
 		// Nothing addressable is left: the child count lived on the master, so an
 		// absent master means the tx never existed, the cascade completed, or it
@@ -235,19 +250,64 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	}
 
 	childCount := 0
+	rollingBack := false
+
 	if masterRecord != nil && masterRecord.Bins != nil {
 		if v, ok := masterRecord.Bins[fields.TotalExtraRecs.String()].(int); ok {
 			childCount = v
 		}
+
+		rb, ok := masterRecord.Bins[fields.RollingBack.String()].(bool)
+		rollingBack = ok && rb
+	}
+
+	if onlyRollingBack && !rollingBack {
+		return nil
 	}
 
 	// 1. Delete the master record first, so any failure from here on leaves nothing
 	// that can be read back, enumerated or mined.
-	if err := s.Delete(ctx, hash); err != nil {
+	if onlyRollingBack {
+		deleted, err := s.deleteMasterIfRollingBack(key)
+		if err != nil {
+			return err
+		}
+
+		if !deleted {
+			return nil
+		}
+	} else if err := s.Delete(ctx, hash); err != nil {
 		return err
 	}
 
 	return s.deleteCompleteTail(ctx, hash, childCount)
+}
+
+// deleteMasterIfRollingBack deletes the master record at key only while it carries the
+// rollingBack bin. It reports false, with no error, when the record is absent or the filter
+// refused the delete.
+func (s *Store) deleteMasterIfRollingBack(key *aerospike.Key) (bool, error) {
+	policy := util.GetAerospikeWritePolicy(s.settings, 0)
+	policy.FilterExpression = aerospike.ExpBinExists(fields.RollingBack.String())
+
+	_, err := s.client.Delete(policy, key)
+	if err != nil {
+		if errors.Is(err, aerospike.ErrKeyNotFound) || isFilteredOut(err) {
+			return false, nil
+		}
+
+		if e, ok := err.(*aerospike.AerospikeError); ok {
+			prometheusUtxoMapErrors.WithLabelValues("Delete", e.ResultCode.String()).Inc()
+		} else {
+			prometheusUtxoMapErrors.WithLabelValues("Delete", "unknown").Inc()
+		}
+
+		return false, errors.NewStorageError("error in aerospike delete key", err)
+	}
+
+	prometheusUtxoMapDelete.Inc()
+
+	return true, nil
 }
 
 // deleteCompleteTail removes the pagination children and external blob(s) of a
