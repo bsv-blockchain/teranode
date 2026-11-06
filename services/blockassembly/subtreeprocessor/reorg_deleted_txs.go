@@ -67,7 +67,8 @@ func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *mod
 					// the record vanished between the lock and this read. Failing would gain nothing:
 					// the caller would unlock and a retry would skip the record as missing, so the tx
 					// would still be absent from the file. It is left out and reported instead, and a
-					// return to this block will not recreate it.
+					// return to this block will not recreate it. removeCoinbaseUtxos still takes it,
+					// and its descendants, out of block assembly.
 					prometheusReorgDeletedTxsVanished.Inc()
 					stp.logger.Errorf("[keepReorgDeletedTxs][%s] tx %s vanished after it was locked and has no earlier saved copy, it is not in the saved file", block.String(), txHashes[i].String())
 				}

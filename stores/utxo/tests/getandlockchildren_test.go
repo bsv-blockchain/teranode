@@ -19,6 +19,8 @@ package tests
 import (
 	"context"
 	"net/url"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -422,11 +424,14 @@ func TestGetAndLockChildrenSkippingMissing(t *testing.T) {
 
 	// A store that runs SpendAndCreate as a spend then a create names the child on the parent before
 	// the child's record exists. The walk must read such a child again once everything else is locked,
-	// and walk it if it is there by then, instead of settling it as missing on the first read.
+	// and walk it if it is there by then, instead of settling it as missing on the first read. kept has
+	// a chain two deep below it, so the second read comes after the walk locked the deepest of them.
 	t.Run("reads a missing descendant again and walks it if its create has landed", func(t *testing.T) {
 		store, parent, gone, kept := build(t)
 
 		grandchild := spend(t, store, spentOutput{gone, 0})
+		k1 := spend(t, store, spentOutput{kept, 0})
+		k2 := spend(t, store, spentOutput{k1, 0})
 
 		wrapped := &setLockedNotFound{Store: store, target: *gone.TxIDChainHash(), failures: 1}
 
@@ -434,10 +439,26 @@ func TestGetAndLockChildrenSkippingMissing(t *testing.T) {
 
 		children, missing, err := utxo.GetAndLockChildrenSkippingMissing(ctx, wrapped, *parent.TxIDChainHash())
 		require.NoError(t, err)
-		require.ElementsMatch(t, []chainhash.Hash{*gone.TxIDChainHash(), *kept.TxIDChainHash(), *grandchild.TxIDChainHash()}, children)
+		require.ElementsMatch(t, []chainhash.Hash{*gone.TxIDChainHash(), *kept.TxIDChainHash(), *grandchild.TxIDChainHash(),
+			*k1.TxIDChainHash(), *k2.TxIDChainHash()}, children)
 		require.Empty(t, missing)
 		require.Equal(t, before, lockWalkMissingCount(t), "a record found on the second read is not counted as missing")
 		require.Equal(t, 2, wrapped.calls, "the late record is read exactly twice")
+
+		order := wrapped.lockOrder()
+		lockedK2 := slices.Index(order, *k2.TxIDChainHash())
+
+		var goneLocks []int
+
+		for i := range order {
+			if order[i] == *gone.TxIDChainHash() {
+				goneLocks = append(goneLocks, i)
+			}
+		}
+
+		require.GreaterOrEqual(t, lockedK2, 0, "precondition: the walk locked k2")
+		require.Len(t, goneLocks, 2, "precondition: the walk tried to lock gone twice")
+		require.Greater(t, goneLocks[1], lockedK2, "the second read of the missing record waits until the walk has locked everything else")
 
 		for name, tx := range map[string]*bt.Tx{"gone": gone, "grandchild": grandchild} {
 			txMeta, getErr := store.Get(ctx, tx.TxIDChainHash(), fields.Locked)
@@ -475,14 +496,31 @@ type spentOutput struct {
 // record that is not there. With failures set it fails only that many calls for the hash and then lets
 // them through, the way a record whose create lands late looks to the walk; with failures zero it fails
 // every call.
+// Every hash it is asked to lock is recorded in call order.
 type setLockedNotFound struct {
 	utxo.Store
 	target   chainhash.Hash
 	failures int
 	calls    int
+	mu       sync.Mutex
+	order    []chainhash.Hash
+}
+
+func (s *setLockedNotFound) lockOrder() []chainhash.Hash {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]chainhash.Hash(nil), s.order...)
 }
 
 func (s *setLockedNotFound) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if value {
+		s.order = append(s.order, txHashes...)
+	}
+
 	for i := range txHashes {
 		if txHashes[i] == s.target {
 			s.calls++

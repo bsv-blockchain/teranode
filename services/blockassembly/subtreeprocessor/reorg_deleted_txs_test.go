@@ -3,6 +3,7 @@ package subtreeprocessor
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1409,8 +1410,9 @@ func containsAll(line string, parts ...string) bool {
 // A parent's spending data can name a child whose record is gone. The move back must skip that child
 // and still save and delete every descendant the walk reaches through a record that exists, not report
 // success and leave the coinbase and its other descendants in the store. A descendant reachable only
-// through the missing child is not reached. Block assembly can still hold a copy of the missing child,
-// so the move back takes it out of the subtrees and marks it for removal.
+// through the missing child is not reached in the store, so its record stays. Block assembly can still
+// hold the missing child and its descendants, so the move back takes them all out of the subtrees and
+// marks them for removal, and leaves an unrelated tx in place.
 func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
 	ctx := context.Background()
 	stp, block := newMoveForwardCommitBoundaryProcessor(t)
@@ -1439,8 +1441,25 @@ func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
 	_, _, err = stp.utxoStore.SpendAndCreate(ctx, kept, spendHeight)
 	require.NoError(t, err)
 
-	addToAssembly(t, stp, gone)
-	require.True(t, stp.currentTxMap.Exists(*gone.TxIDChainHash()), "precondition: block assembly holds the tx whose record goes")
+	// only spends gone and has no other parent, grand spends only: neither is reachable in the store
+	// once the record of gone is removed
+	only := spendingTx(t, gone, 0, gone.Outputs[0].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, only, spendHeight)
+	require.NoError(t, err)
+
+	grand := spendingTx(t, only, 0, only.Outputs[0].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, grand, spendHeight)
+	require.NoError(t, err)
+
+	// unrelated spends a tx outside the coinbase's descendants, so the move back must leave it
+	unrelatedParent := bt.NewTx()
+	require.NoError(t, unrelatedParent.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	unrelated := spendingTx(t, unrelatedParent, 0, 500)
+
+	for _, tx := range []*bt.Tx{gone, only, grand, unrelated} {
+		addToAssembly(t, stp, tx)
+		require.True(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "precondition: block assembly holds %s", tx.TxIDChainHash())
+	}
 
 	// the record of gone is removed, and the output of first that gone spent still names it
 	require.NoError(t, stp.utxoStore.Delete(ctx, gone.TxIDChainHash()))
@@ -1472,6 +1491,24 @@ func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
 
 	foundIndex, _, _ := stp.locateTxInSubtrees(*gone.TxIDChainHash())
 	require.Equal(t, -1, foundIndex, "the missing tx must not be in any subtree")
+
+	for name, tx := range map[string]*bt.Tx{"only": only, "grand": grand} {
+		require.False(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "%s descends from the missing tx and must be taken out of block assembly", name)
+		require.True(t, stp.removeMap.Exists(*tx.TxIDChainHash()), "%s must be in the remove map", name)
+
+		foundIndex, _, _ = stp.locateTxInSubtrees(*tx.TxIDChainHash())
+		require.Equal(t, -1, foundIndex, "%s must not be in any subtree", name)
+
+		// the walk cannot reach it in the store, so its record stays
+		_, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash())
+		require.NoError(t, getErr, "the record of %s is not reached by the walk", name)
+	}
+
+	require.True(t, stp.currentTxMap.Exists(*unrelated.TxIDChainHash()), "an unrelated tx stays in block assembly")
+	require.False(t, stp.removeMap.Exists(*unrelated.TxIDChainHash()), "an unrelated tx is not marked for removal")
+
+	foundIndex, _, _ = stp.locateTxInSubtrees(*unrelated.TxIDChainHash())
+	require.GreaterOrEqual(t, foundIndex, 0, "an unrelated tx stays in the subtrees")
 
 	saved, err := stp.readReorgDeletedTxs(ctx, block.Header.Hash())
 	require.NoError(t, err)
@@ -1558,4 +1595,55 @@ func TestKeepReorgDeletedTxsCountsATxThatVanishedAfterItWasLocked(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, []chainhash.Hash{*first.TxIDChainHash()}, kept)
 	require.Equal(t, before+1, testutil.ToFloat64(prometheusReorgDeletedTxsVanished), "a tx with a saved copy is not counted")
+}
+
+// vanishOnSaveRead deletes the target record just before the move back reads it back for the save,
+// so it is gone after the walk locked it and before keepReorgDeletedTxs reads its tx.
+type vanishOnSaveRead struct {
+	utxostore.Store
+	target chainhash.Hash
+}
+
+func (s *vanishOnSaveRead) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	if hash.Equal(s.target) && slices.Contains(f, fields.Tx) {
+		if err := s.Store.Delete(ctx, hash); err != nil && !errors.Is(err, errors.ErrTxNotFound) {
+			return nil, err
+		}
+	}
+
+	return s.Store.Get(ctx, hash, f...)
+}
+
+// A tx the walk locked that vanishes before the save is not in the saved file and has no record to
+// delete, but block assembly can still hold it and its descendants. The move back takes them out of
+// the subtrees and marks them for removal, as it does for a missing tx.
+func TestRemoveCoinbaseUtxosTakesAVanishedTxOutOfBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	// third spends second and is only in block assembly, so the walk never reaches it
+	third := spendingTx(t, second, 0, second.Outputs[0].Satoshis/2)
+
+	for _, tx := range []*bt.Tx{first, second, third} {
+		addToAssembly(t, stp, tx)
+		require.True(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "precondition: block assembly holds %s", tx.TxIDChainHash())
+	}
+
+	before := testutil.ToFloat64(prometheusReorgDeletedTxsVanished)
+
+	stp.utxoStore = &vanishOnSaveRead{Store: stp.utxoStore, target: *second.TxIDChainHash()}
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusReorgDeletedTxsVanished), "precondition: second vanished after the lock")
+
+	for name, tx := range map[string]*bt.Tx{"first": first, "second": second, "third": third} {
+		require.False(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "%s must be taken out of block assembly", name)
+		require.True(t, stp.removeMap.Exists(*tx.TxIDChainHash()), "%s must be in the remove map", name)
+
+		foundIndex, _, _ := stp.locateTxInSubtrees(*tx.TxIDChainHash())
+		require.Equal(t, -1, foundIndex, "%s must not be in any subtree", name)
+	}
 }

@@ -1533,7 +1533,9 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 // first. So a descendant is not settled as missing on its first not-found. Once the walk has locked
 // every record it reached, it reads each missing hash once more; one that exists by then is locked
 // and walked like any other child. This narrows the window to a create that is still in flight after
-// the whole walk, it does not close it. Only hashes still absent on that second read are returned in
+// the whole walk, it does not close it. The locks stop a spend made without IgnoreLocked from adding a
+// spender to a record the walk has read, but block and subtree validation spend with IgnoreLocked, so
+// they can still add a spender, and with it a descendant, that this walk does not see. Only hashes still absent on that second read are returned in
 // missing, and each one increments teranode_utxo_lock_walk_missing_descendants_total.
 //
 // The walk reaches a missing record's descendants only through another parent that exists. A
@@ -1641,8 +1643,10 @@ func getAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash, skipM
 		}
 
 		if len(nextLevel) == 0 {
-			// every reachable record is locked, so no new spend can land on one: give each missing
-			// hash its one second read, in case its create was still in flight on the first
+			// every reachable record is locked, so a spend made without IgnoreLocked cannot land on
+			// one (block and subtree validation spend with IgnoreLocked and can still add a spender
+			// this walk will not see): give each missing hash its one second read, in case its create
+			// was still in flight on the first
 			for _, missingHash := range missingOrder {
 				if _, gone := missingSet[missingHash]; !gone {
 					continue
