@@ -12,6 +12,7 @@
     - [Additional Kafka Topics](#additional-kafka-topics)
 3. [Reliability and Recoverability](#3-reliability-and-recoverability)
     - [Consumer Resilience](#consumer-resilience)
+    - [Delivery Guarantees](#delivery-guarantees)
 4. [Configuration](#4-configuration)
     - [TLS and Authentication](#tls-and-authentication)
     - [Trust Model and Network Isolation](#trust-model-and-network-isolation)
@@ -175,6 +176,47 @@ Teranode handles offset out of range errors automatically:
 - **Detection**: franz-go detects offset out of range internally
 - **Recovery**: The `offsetReset` configuration resets to the configured offset (typically "latest")
 - **No Data Loss**: For critical topics, longer retention periods prevent offset expiration
+
+### Delivery Guarantees
+
+Kafka in Teranode gives **at-least-once delivery for each record that a handler processes without error**, ordered within a partition. It does **not** give exactly-once delivery, and it does **not** give gap-free delivery. Every consumer must tolerate duplicate records and missing records.
+
+#### Ordering
+
+- Within one partition, the handler receives records in offset order. The consumer marks and commits them in the same order.
+- Across partitions there is no ordering. A topic with more than one partition can deliver records in a different order from the publish order.
+- The producer keeps one produce request in flight per broker (the franz-go default). A produce retry therefore does not reorder records within a partition.
+
+#### Duplicates
+
+A record can arrive more than once:
+
+- The consumer commits an offset only after the handler for that record returns. A crash, a kill or a consumer-group rebalance between the handler and the commit re-delivers the record.
+    - Auto-commit consumers: franz-go commits the marked records every 5 seconds.
+    - Manual-commit consumers: the consumer commits every minute and at graceful shutdown. A crash can re-deliver up to one minute of records.
+- Idempotent producer writes are disabled (`kgo.DisableIdempotentWrite()` in `util/kafka/kafka_producer_async.go`). A produce retry after a lost broker acknowledgement can write the same record twice.
+
+#### Loss
+
+A record can be lost on the producer side:
+
+- The async producer logs a record that franz-go cannot deliver (`Failed to deliver message to topic ...`). It does not retry the record.
+- `TryPublish` drops the record when the publish channel is full. The P2P service uses it for `blocks` and `subtrees`, and the Validator uses it for `tx-policy-rejected`.
+- `Publish` and `TryPublish` drop the record when the producer is shutting down.
+
+A record can be lost on the consumer side:
+
+- No production consumer uses `WithRetryAndStop`. Most consumers use `WithLogErrorAndMoveOn()`. The P2P `invalid-blocks` consumer uses `WithRetryAndMoveOn(2, 2, time.Second)`. The legacy `netsync` listeners and `aerospikekafkaconnector` set no error option.
+- When a handler fails (after the retries, where configured), the consumer logs the record and skips it. A later commit moves the offset past it.
+- With no error option, a handler error abandons the rest of its fetch batch. The next batch of the partition commits past the abandoned records, so the consumer skips them too.
+- A handler panic is recovered, logged and counted in `teranode_kafka_consumer_panics_recovered_total`. The consumer commits the record and does not re-deliver it, whatever the error option.
+- A handler error during shutdown is the only failure that leaves the record uncommitted. The record is re-delivered after restart.
+- A consumer that is offline for longer than the topic retention loses the expired records (see [Offset Out of Range Handling](#offset-out-of-range-handling)). Several default retentions are 60 seconds or less (see the [Topic Reference Table](#topic-reference-table)).
+
+#### Requirements for consumers
+
+- Make each handler idempotent. Two deliveries of a record must have the same effect as one delivery.
+- Do not use Kafka as the only source of completeness. Each consumer needs a recovery path outside Kafka for a missed record. For example, Block Validation catch-up fetches the missing parents when a later block arrives, and the unmined-transaction reload in Block Assembly recovers a transaction that a skipped Validator record left half-applied.
 
 ## 4. Configuration
 
@@ -377,7 +419,7 @@ requirements, should not rely on network isolation alone.** On top of the Networ
     - Monitor consumer lag to detect processing issues
 
 3. **Error Handling**
-    - Services have different retry policies based on criticality
+    - Only the P2P `invalid-blocks` consumer uses the consumer-level retry option; a record that still fails after the handler's own handling is logged and skipped — see [Delivery Guarantees](#delivery-guarantees)
     - Block Validation uses manual commits (`autoCommit=false`); Subtree Validation's `subtrees` consumer uses auto-commit (`autoCommit=true`) — see [Auto-Commit Behavior by Service Criticality](#auto-commit-behavior-by-service-criticality)
 
 ### Monitoring
@@ -496,32 +538,25 @@ kafka://localhost:9092/blocks?offsetReset=earliest
 
 ### Auto-Commit Behavior by Service Criticality
 
-Auto-commit in Kafka is a consumer configuration that determines when and how message offsets are committed (marked as processed) back to Kafka. When auto-commit is enabled, Kafka automatically commits message offsets at regular intervals (default is every 5 seconds). When auto-commit is disabled, it is the responsibility of the application to manually commit offsets after successfully processing messages.
+The `autoCommit` flag selects how the consumer commits offsets. It does not change the delivery guarantee. In both modes the consumer commits a record only after its handler returns, so both modes give at-least-once delivery for records that a handler processes without error. Neither mode gives exactly-once delivery. See [Delivery Guarantees](#delivery-guarantees).
 
-Kafka consumer auto-commit behavior varies by service based on processing criticality:
+- `autoCommit=true` (`kgo.AutoCommitMarks()`): the consumer marks each record after its handler returns. franz-go commits the marked offsets every 5 seconds.
+- `autoCommit=false` (`kgo.DisableAutoCommit()`): the consumer collects the processed records and commits them every minute and at graceful shutdown. The re-delivery window after a crash is therefore longer.
 
-#### Auto-Commit Enabled Services
+| Consumer | Topic | `autoCommit` | Error option |
+|---|---|---|---|
+| Block Validation | `blocks` | `false` | `WithLogErrorAndMoveOn()` |
+| Validator | `validatortxs` | `true` | `WithLogErrorAndMoveOn()` |
+| Subtree Validation | `subtrees` | `true` | `WithLogErrorAndMoveOn()` |
+| Subtree Validation | `txmeta` | `true` | `WithLogErrorAndMoveOn()` |
+| Subtree Validation | `tx-policy-rejected` | `true` | `WithLogErrorAndMoveOn()` |
+| P2P | `rejectedtx` | `true` | `WithLogErrorAndMoveOn()` |
+| P2P | `invalid-blocks` | `true` | `WithRetryAndMoveOn(2, 2, time.Second)` |
+| P2P | `invalid-subtrees` | `true` | `WithLogErrorAndMoveOn()` |
+| Legacy P2P (`netsync`) | `legacy-inv`, `blocks-final`, `txmeta` | `true` | none |
+| `aerospikekafkaconnector` | configured topic | `false` | none |
 
-These services can tolerate potential message loss for performance:
-
-- **TxMeta Cache (Subtree Validation)**: `autoCommit=true`
-    - Rationale: Metadata can be regenerated if lost
-    - Performance priority over strict delivery guarantees
-
-- **Rejected Transactions (P2P)**: `autoCommit=true`
-    - Rationale: Rejection notifications are not critical for consistency
-    - Network efficiency prioritized
-
-- **Subtree Notifications (Subtree Validation)**: `autoCommit=true` (`getKafkaSubtreesConsumerGroup`, `daemon/daemon_kafka.go`)
-    - Rationale: reprocessing a redelivered subtree announcement is harmless — the handler treats an already-validated/already-stored subtree as a benign no-op, so strict offset tracking isn't required for correctness
-
-#### Auto-Commit Disabled Services
-
-These services require exactly-once processing guarantees:
-
-- **Block Validation**: `autoCommit=false`
-    - Rationale: Block processing affects consensus
-    - Manual commit prevents duplicate processing
+Every handler must be idempotent. A redelivered `subtrees` record is an example of a safe duplicate: the handler treats a subtree that is already validated or already stored as a no-op.
 
 Note: the Block Persister has no Kafka consumer at all — it polls the Blockchain service over gRPC (see §2 "Blockchain"), so auto-commit does not apply to it.
 
