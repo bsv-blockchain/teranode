@@ -3610,6 +3610,54 @@ func TestHandleResetRequests_RefusedResetIsRetried(t *testing.T) {
 		require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the reset ran")
 	})
 
+	// The heartbeat's retry arrives as a new request, with resetOwed already cleared. Refused
+	// again, it backs off twice as long; a retry that runs ends the streak.
+	t.Run("a refused retry backs off twice as long", func(t *testing.T) {
+		items, client, _, _ := skippedForkSetup(t, true, true)
+		ba := items.blockAssembler
+		ctx := t.Context()
+		client.failMarkSave = true
+
+		refuse := func() {
+			answer := make(chan error, 1)
+			ba.handleResetRequests(ctx, resetRequest{ErrCh: answer, FullReset: true})
+			require.Error(t, <-answer)
+		}
+
+		retry := func() {
+			ba.resetOwedRetryAt = time.Now().Add(-time.Millisecond)
+			ba.requeueRefusedReset()
+			require.Nil(t, ba.resetOwed, "precondition: the retry took the owed reset")
+
+			var req resetRequest
+			require.Eventually(t, func() bool {
+				select {
+				case req = <-ba.resetCh:
+					return true
+				default:
+					return false
+				}
+			}, 5*time.Second, 10*time.Millisecond, "the refused reset is queued again")
+
+			ba.handleResetRequests(ctx, req)
+		}
+
+		refuse()
+		require.Equal(t, skippedForkMarkRetryBase, ba.resetOwedWait)
+
+		retry()
+		require.NotNil(t, ba.resetOwed, "the retry is refused and owed again")
+		require.Equal(t, skippedForkMarkRetryBase<<1, ba.resetOwedWait, "the refused retry backs off twice as long")
+
+		client.failMarkSave = false
+		retry()
+		require.Nil(t, ba.resetOwed, "the retry ran")
+
+		client.failMarkSave = true
+		refuse()
+		require.Equal(t, skippedForkMarkRetryBase, ba.resetOwedWait, "a refusal after a reset that ran starts the back-off over")
+	})
+
 	// A batch of a storage-triggered request and another is owed both ways.
 	t.Run("a mixed batch", func(t *testing.T) {
 		items, client, _, _ := skippedForkSetup(t, true, true)

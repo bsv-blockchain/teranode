@@ -834,9 +834,11 @@ drain:
 		}
 
 		// Its own back-off, so a mark that keeps failing for another reason, which pushes
-		// skippedForkMarkRetryAt out on every pass, does not hold it back.
+		// skippedForkMarkRetryAt out on every pass, does not hold it back. It doubles while
+		// refusals follow one another, the heartbeat's retry among them, which arrives as a new
+		// request with resetOwed already cleared (requeueRefusedReset).
 		if b.resetOwed != nil {
-			if owed == nil {
+			if b.resetOwedWait == 0 {
 				b.resetOwedWait = skippedForkMarkRetryBase
 			} else {
 				b.resetOwedWait = retry.CappedExponentialBackoff(b.resetOwedWait, 2, skippedForkMarkRetryMax)
@@ -870,6 +872,9 @@ drain:
 			b.skippedForkMarkRan = false
 		}
 	}
+
+	// Past the last refusal: the next refused reset starts its back-off over.
+	b.resetOwedWait = 0
 
 	// If FullReset requested, run lightweight consistency scan first
 	if fullReset {
