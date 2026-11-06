@@ -223,18 +223,18 @@ func TestDynamicSizing_DisabledKeepsFixedSize_BAConfig005(t *testing.T) {
 // TestDynamicSizing_AntiCreepThresholdNotHardcoded_BASubtree024 asserts the
 // anti-creep behavior rather than the source text: the gate that suppresses a
 // size increase under high utilization but low volume must scale with
-// MinimumMerkleItemsPerSubtree (threshold = 2x minimum), not a hardcoded literal.
+// MinimumMerkleItemsPerSubtree (threshold = the minimum), not a hardcoded literal.
 //
-// Both cases use the same average fill (60 nodes) at high utilization (60/64).
-// A hardcoded threshold of 50 would let both through and increase the size; a
-// threshold derived from the minimum holds when 2*min > 60 and increases when
-// 2*min <= 60. Driving both directions off the minimum alone proves the gate is
+// The first two cases use the same average fill (60 nodes) at high utilization
+// (60/64). A hardcoded threshold of 50 would let both through and increase the
+// size; a threshold derived from the minimum holds when min > 60 and increases
+// when min <= 60. Driving both directions off the minimum alone proves the gate is
 // derived from configuration.
 func TestDynamicSizing_AntiCreepThresholdNotHardcoded_BASubtree024(t *testing.T) {
-	// High minimum (40) => threshold 80 > 60: the increase must be suppressed.
+	// Minimum 64 => threshold 64 > 60: the increase must be suppressed.
 	// If the threshold were the old hardcoded 50, 60 >= 50 would let it through.
 	t.Run("high minimum suppresses increase", func(t *testing.T) {
-		stp := newDynamicSizingProcessor(t, 64, 40, 32768)
+		stp := newDynamicSizingProcessor(t, 64, 64, 32768)
 		stp.currentItemsPerFile.Store(64)
 		setSubtreeNodeSamples(stp, []int{60, 60, 60, 60, 60})
 		stp.blockIntervals = repeatInterval(50*time.Millisecond, 3)
@@ -242,10 +242,10 @@ func TestDynamicSizing_AntiCreepThresholdNotHardcoded_BASubtree024(t *testing.T)
 		before := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 		require.Equal(t, before, stp.currentItemsPerFile.Load(),
-			"BA-SUBTREE-024: with 2*min (80) above the average fill (60), the size must be held")
+			"BA-SUBTREE-024: with the minimum (64) above the average fill (60), the size must be held")
 	})
 
-	// Low minimum (4) => threshold 8 <= 60: the same signal must be allowed to
+	// Low minimum (4) => threshold 4 <= 60: the same signal must be allowed to
 	// grow the size, confirming the gate scales down with the minimum.
 	t.Run("low minimum permits increase", func(t *testing.T) {
 		stp := newDynamicSizingProcessor(t, 64, 4, 32768)
@@ -256,7 +256,35 @@ func TestDynamicSizing_AntiCreepThresholdNotHardcoded_BASubtree024(t *testing.T)
 		before := stp.currentItemsPerFile.Load()
 		stp.adjustSubtreeSize()
 		require.Greater(t, stp.currentItemsPerFile.Load(), before,
-			"BA-SUBTREE-024: with 2*min (8) below the average fill (60), the size must increase")
+			"BA-SUBTREE-024: with the minimum (4) below the average fill (60), the size must increase")
+	})
+
+	// The gate must be reachable at the floor. Average fill can never exceed the
+	// current size, so a threshold above the minimum would pin a size that has shrunk
+	// to the minimum there forever. Production defaults: min 1024, and full subtrees
+	// created faster than one per second must grow the size.
+	t.Run("full subtrees at the minimum size permit increase", func(t *testing.T) {
+		stp := newDynamicSizingProcessor(t, 1024, 1024, 32768)
+		stp.currentItemsPerFile.Store(1024)
+		setSubtreeNodeSamples(stp, []int{1024, 1024, 1024, 1024, 1024})
+		stp.blockIntervals = repeatInterval(100*time.Millisecond, 3)
+
+		stp.adjustSubtreeSize()
+		require.Equal(t, int32(2048), stp.currentItemsPerFile.Load(),
+			"BA-SUBTREE-024: full subtrees at the minimum size must be able to grow (2x cap)")
+	})
+
+	// At the floor, partly filled subtrees (e.g. timer-fired) above 80% utilization
+	// are still below the threshold and must hold the size.
+	t.Run("partly filled subtrees at the minimum size hold", func(t *testing.T) {
+		stp := newDynamicSizingProcessor(t, 1024, 1024, 32768)
+		stp.currentItemsPerFile.Store(1024)
+		setSubtreeNodeSamples(stp, []int{1024, 1024, 900, 900, 900}) // avg 949.6 => 92.7%
+		stp.blockIntervals = repeatInterval(100*time.Millisecond, 3)
+
+		stp.adjustSubtreeSize()
+		require.Equal(t, int32(1024), stp.currentItemsPerFile.Load(),
+			"BA-SUBTREE-024: average fill below the minimum must hold the size at the floor")
 	})
 }
 

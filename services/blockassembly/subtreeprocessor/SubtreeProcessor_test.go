@@ -2942,7 +2942,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustment(t *testing.T) {
 		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.UseDynamicSubtreeSize = true
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
-		// Keep the minimum below the initial size so the anti-creep gate (2x minimum)
+		// Keep the minimum below the initial size so the anti-creep gate (the minimum)
 		// does not suppress the increase this test expects.
 		settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
 
@@ -3074,7 +3074,7 @@ func TestSubtreeProcessor_DynamicSizeAdjustmentFast(t *testing.T) {
 		settings := test.CreateBaseTestSettings(t)
 		settings.BlockAssembly.UseDynamicSubtreeSize = true
 		settings.BlockAssembly.InitialMerkleItemsPerSubtree = 1024
-		// Keep the minimum below the initial size so the anti-creep gate (2x minimum)
+		// Keep the minimum below the initial size so the anti-creep gate (the minimum)
 		// does not suppress the increase this test expects.
 		settings.BlockAssembly.MinimumMerkleItemsPerSubtree = 4
 
