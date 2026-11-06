@@ -466,7 +466,11 @@ func parkCommitFailure(err error) parkDisposition {
 	case errors.Is(err, errors.ErrNotFound), errors.Is(err, errors.ErrBlobNotFound):
 		return parkDispositionFilesGone
 
-	case errors.Is(err, errors.ErrTxNotFound):
+	case errors.Is(err, errors.ErrTxNotFound), errors.Is(err, errors.ErrUtxoSpendingTxPruned):
+		// The two answers a replay of a transaction this node already pruned
+		// gets. A parked block is below the checkpoint, so it cannot be
+		// replaying anything wrongly: the store is ahead of the chain, which is
+		// this node's state, not the peer's block.
 		return parkDispositionLocalUtxoFault
 
 	default:

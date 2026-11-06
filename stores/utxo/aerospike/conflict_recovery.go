@@ -233,7 +233,7 @@ func (s *Store) RestoreConflictSpends(ctx context.Context, spends []*utxo.Spend,
 		group := completion.NewGroup(int32(len(batch))) //nolint:gosec // bounded by the spend batcher size
 		items := make([]*batchSpend, len(batch))
 		for i, sp := range batch {
-			items[i] = &batchSpend{spend: sp, blockHeight: height, group: group, ignoreConflicting: true, ignoreLocked: true, requireParentOutput: true}
+			items[i] = &batchSpend{spend: sp, blockHeight: height, group: group, ignoreConflicting: true, ignoreLocked: true, spenderCreatedByCaller: true}
 		}
 		// Direct synchronous dispatch avoids an outstanding queued write after rollback:
 		// sendSpendBatchLua completes every item before it returns, so the wait does not block.

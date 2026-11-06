@@ -120,6 +120,7 @@ func (s *Store) parseSpendState(bins aerospike.BinMap) (SpendState, error) {
 func (s *Store) buildSpendFilterExpression(
 	offset uint32,
 	utxoHash []byte,
+	spendingTxID *chainhash.Hash,
 	ignoreConflicting bool,
 	ignoreLocked bool,
 	currentBlockHeight uint32,
@@ -227,6 +228,44 @@ func (s *Store) buildSpendFilterExpression(
 		),
 	)
 
+	// Replay guard: the incoming spender must not be a child the pruner has
+	// already removed from this parent. On the Aerospike spend path the Lua spend
+	// is the only place the marker verdict is reached (SQL and
+	// SequentialSpendAndCreate reach ErrUtxoSpendingTxPruned by their own
+	// routes), so this filter defers to it: the first-seen clause above is TRUE
+	// again once an Unspend has reset the element to its bare hash, and without
+	// this clause the write then went straight through with no Lua evaluation at
+	// all and recreated the pruned child's spend. Keyed the way the pruner writes
+	// it: the spender's txid as chainhash.Hash.String(), which is what
+	// spendingDataBytesToTxHex produces in Lua.
+	//
+	// Any key for this spender sends the spend to Lua, whatever its value. Lua
+	// tells a verified marker (fields.DeletedChildVerified), which rejects the
+	// spender outright, from a legacy true, which rejects only when the output
+	// still names the spender; a legacy marker for a conflicting loser that
+	// never held this output lets the spend through there. Comparing the value
+	// here would buy nothing: the legacy value is a boolean and the verified
+	// one an integer, and a hit only costs a Lua round trip on a record that
+	// names this exact spender.
+	if spendingTxID != nil {
+		deletedChildrenBin := fields.DeletedChildren.String()
+
+		filterConditions = append(filterConditions,
+			aerospike.ExpOr(
+				aerospike.ExpNot(aerospike.ExpBinExists(deletedChildrenBin)),
+				aerospike.ExpEq(
+					aerospike.ExpMapGetByKey(
+						aerospike.MapReturnType.COUNT,
+						aerospike.ExpTypeINT,
+						aerospike.ExpStringVal(spendingTxID.String()),
+						aerospike.ExpMapBin(deletedChildrenBin),
+					),
+					aerospike.ExpIntVal(0),
+				),
+			),
+		)
+	}
+
 	// Combine all conditions with AND
 	if len(filterConditions) == 1 {
 		return filterConditions[0]
@@ -326,6 +365,7 @@ func (s *Store) SpendMultiWithExpressions(ctx context.Context, batch []*batchSpe
 		filterExp := s.buildSpendFilterExpression(
 			offset,
 			bItem.spend.UTXOHash[:],
+			bItem.spend.SpendingData.TxID,
 			bItem.ignoreConflicting,
 			bItem.ignoreLocked,
 			bItem.blockHeight,

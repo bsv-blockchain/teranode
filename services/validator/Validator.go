@@ -1140,6 +1140,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// count; an uncapped chain makes every subsequent errors.Is on it
 			// walk the full chain (mainnet IBD stall, block 820116).
 			failedSpends := make([]error, 0, 8)
+			prunedReplay := false
 
 			// the capped aggregate cannot tell a double spend from a tx that also spends a
 			// frozen or mismatched output, so it is decided here over every failed spend
@@ -1156,6 +1157,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 					if immatureSpend == nil && spendsImmatureCoinbase(spend.Err) {
 						immatureSpend = spend.Err
+					}
+
+					// The validator never wrote the spender's record itself, so
+					// only the marker identifies a replay here
+					// (utxo.IsPrunedReplayRejection).
+					if utxo.IsPrunedReplayRejection(spend.Err) {
+						prunedReplay = true
 					}
 
 					failedSpends = append(failedSpends, spend.Err)
@@ -1205,9 +1213,19 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// makes it invalid, and creating it as conflicting would drop that failure.
 			saveAsConflicting := validationOptions.CreateConflicting && len(failedSpends) > 0 && everyFailedSpendConflicts
 
+			// A replay of a transaction the pruner removed is never a conflict to
+			// reconcile, even when a sibling input answered ErrSpent. Taking the
+			// conflicting-create branch returned ErrTxConflicting with the marker
+			// rejection dropped from the chain, which the legacy block path
+			// swallows, so the block committed with the replay back in the store.
+			// The rejection must reach the caller as it is.
+			if prunedReplay {
+				saveAsConflicting = false
+			}
+
 			if len(failedSpends) > 0 {
 				if errors.As(err, &tErr) {
-					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, failedSpends...))
+					tErr.SetWrappedErr(errors.JoinCapped(maxAggregatedSpendErrs, utxo.ReplayRejectionsFirst(failedSpends)...))
 				}
 			}
 
@@ -1285,6 +1303,19 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// node's state, set at the height it applied the alert, and another node may differ.
 			if immatureSpend != nil && blockVerdict {
 				err = errors.NewTxInvalidError("[Validate][%s] spends a coinbase output not yet mature at height %d: %v", txID, blockHeight, immatureSpend, err)
+				span.RecordError(err)
+
+				return nil, err
+			}
+
+			// A block that re-includes a transaction the pruner removed spends
+			// outputs that transaction already spent in a block on this chain, so
+			// the block is invalid. Without TX_INVALID the block saw a processing
+			// error, was never marked invalid and its peer never charged. Below a
+			// checkpoint the block is valid by definition and a marker answer
+			// there is a fault of this node's store, so it stays retryable.
+			if prunedReplay && blockVerdict {
+				err = errors.NewTxInvalidError("[Validate][%s] re-includes a transaction the pruner removed as mined and fully spent", txID, err)
 				span.RecordError(err)
 
 				return nil, err

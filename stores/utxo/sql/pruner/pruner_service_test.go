@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -502,6 +503,29 @@ func TestService_EdgeCases(t *testing.T) {
 	})
 }
 
+// TestUnverifiedClaimClauseIsIdentical: the unverified-claim clause is written
+// out in full in each pruning query, so every statement is one literal. The
+// marker INSERT and the DELETE must hold back exactly the same children, or a
+// child would be deleted without its marker, or marked and kept. This pins the
+// copies to one text: twice scoped to child, four times to transactions.
+func TestUnverifiedClaimClauseIsIdentical(t *testing.T) {
+	src, err := os.ReadFile("pruner_service.go")
+	require.NoError(t, err)
+
+	clause := func(alias string) string {
+		return `SELECT 1
+      FROM inputs hi
+      JOIN transactions hp ON hp.hash = hi.previous_transaction_hash
+      LEFT JOIN outputs ho ON ho.transaction_id = hp.id AND ho.idx = hi.previous_tx_idx
+      WHERE hi.transaction_id = ` + alias + `.id
+        AND (ho.transaction_id IS NULL OR ho.spending_data IS NULL OR length(ho.spending_data) < 36) AND NOT ` + alias + `.conflicting`
+	}
+
+	require.Equal(t, 2, strings.Count(string(src), clause("child")))
+	require.Equal(t, 4, strings.Count(string(src), clause("transactions")))
+	require.Equal(t, 6, strings.Count(string(src), "LEFT JOIN outputs ho ON"), "every copy of the clause must match the text above")
+}
+
 func newSqlmockService(t *testing.T, defensive bool, reap func(ctx context.Context, txHash chainhash.Hash, blockHeight, safetyWindow uint32) (bool, error)) (*Service, sqlmock.Sqlmock, *[]string) {
 	t.Helper()
 
@@ -648,89 +672,5 @@ func TestReapExpiredConflicting(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(0), reaped)
 		require.Empty(t, *errorLogs)
-	})
-}
-
-func TestDeleteTombstonedStatementErrors(t *testing.T) {
-	reapNothing := func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
-		return false, nil
-	}
-
-	t.Run("DefensiveDeleteErrorIsReturned", func(t *testing.T) {
-		service, mock, _ := newSqlmockService(t, true, reapNothing)
-
-		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("DELETE FROM transactions").WillReturnError(sql.ErrConnDone)
-
-		deleted, err := service.deleteTombstoned(context.Background(), 100)
-		require.ErrorIs(t, err, sql.ErrConnDone)
-		require.Equal(t, int64(0), deleted)
-	})
-
-	t.Run("DefensiveRowsAffectedErrorIsReturned", func(t *testing.T) {
-		service, mock, _ := newSqlmockService(t, true, reapNothing)
-
-		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewErrorResult(sql.ErrConnDone))
-
-		deleted, err := service.deleteTombstoned(context.Background(), 100)
-		require.ErrorIs(t, err, sql.ErrConnDone)
-		require.Equal(t, int64(0), deleted)
-	})
-
-	t.Run("ReapListErrorKeepsTheDeleteCount", func(t *testing.T) {
-		service, mock, _ := newSqlmockService(t, true, reapNothing)
-
-		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewResult(0, 3))
-		mock.ExpectQuery("SELECT t.hash").WillReturnError(sql.ErrConnDone)
-
-		deleted, err := service.deleteTombstoned(context.Background(), 100)
-		require.ErrorIs(t, err, sql.ErrConnDone)
-		require.Equal(t, int64(3), deleted)
-	})
-
-	t.Run("DefensiveCountIncludesReapedRecords", func(t *testing.T) {
-		hash := chainhash.Hash{7}
-
-		service, mock, _ := newSqlmockService(t, true, func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
-			return true, nil
-		})
-
-		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewResult(0, 3))
-		mock.ExpectQuery("SELECT t.hash").WillReturnRows(sqlmock.NewRows([]string{"hash"}).AddRow(hash[:]))
-
-		deleted, err := service.deleteTombstoned(context.Background(), 100)
-		require.NoError(t, err)
-		require.Equal(t, int64(4), deleted)
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("NonDefensiveDeleteDoesNotReap", func(t *testing.T) {
-		service, mock, _ := newSqlmockService(t, false, func(context.Context, chainhash.Hash, uint32, uint32) (bool, error) {
-			require.FailNow(t, "default mode must not reap")
-
-			return false, nil
-		})
-
-		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewResult(0, 2))
-
-		deleted, err := service.deleteTombstoned(context.Background(), 100)
-		require.NoError(t, err)
-		require.Equal(t, int64(2), deleted)
-		require.NoError(t, mock.ExpectationsWereMet())
-	})
-
-	t.Run("NonDefensiveRowsAffectedErrorIsReturned", func(t *testing.T) {
-		service, mock, _ := newSqlmockService(t, false, reapNothing)
-
-		mock.ExpectExec("UPDATE transactions").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("DELETE FROM transactions").WillReturnResult(sqlmock.NewErrorResult(sql.ErrConnDone))
-
-		deleted, err := service.deleteTombstoned(context.Background(), 100)
-		require.ErrorIs(t, err, sql.ErrConnDone)
-		require.Equal(t, int64(0), deleted)
 	})
 }

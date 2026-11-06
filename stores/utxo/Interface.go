@@ -184,6 +184,17 @@ type Spend struct {
 
 	// error is the error that occurred during the spend operation
 	Err error `json:"err,omitempty"`
+
+	// Idempotent is set by a successful Spend when the output already recorded
+	// exactly this spend, so the call wrote nothing for it. SequentialSpendAndCreate
+	// reads it to recheck a create that may have recreated a pruned transaction.
+	Idempotent bool `json:"-"`
+
+	// Blessed is set by a successful Spend when the parent was gone and the
+	// spend was accepted because the spending transaction's own record exists,
+	// so the call wrote nothing for it. SequentialSpendAndCreate rechecks a
+	// create over it, as for Idempotent.
+	Blessed bool `json:"-"`
 }
 
 // Clone creates a deep copy of the Spend struct.
@@ -194,8 +205,10 @@ func (s *Spend) Clone() *Spend {
 	}
 
 	clone := &Spend{
-		Vout: s.Vout,
-		Err:  s.Err,
+		Vout:       s.Vout,
+		Err:        s.Err,
+		Idempotent: s.Idempotent,
+		Blessed:    s.Blessed,
 	}
 
 	if s.TxID != nil {
@@ -228,13 +241,30 @@ type IgnoreFlags struct {
 	// Set ONLY on the gated below-checkpoint outpoint-only path (spec §3.2 Seam 1). Default
 	// false — above-checkpoint and steady-state spends always enforce the hash.
 	SkipUTXOHashCheck bool
+	// SpenderCreatedByCaller says the caller wrote the spending transaction's own
+	// record in this same pass, so its presence in the store proves nothing about
+	// prior validation. Both stores otherwise treat "parent not found, but the
+	// spending transaction exists" as a transaction that was validated and
+	// blessed before its parent was pruned, and clear the error. The
+	// create-first block paths write the record before they spend, so without
+	// this flag a replay of a transaction whose parent was pruned too is blessed
+	// on the strength of the record the replay itself just created.
+	SpenderCreatedByCaller bool
 	// RequireParentOutputs makes a spend whose parent output is not found fail, even when the
 	// spending transaction already has a record. Without it the store reads that record as
 	// proof the spends were made in an earlier attempt and the parent has since been pruned
 	// ("already blessed"), which holds only when records are created after their spends. Set
-	// ONLY by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
+	// by DefaultSpendAndCreateMulti's second-wave spends for a WithBelowCheckpoint list,
 	// whose records the first wave created before any of those spends, so the record proves
 	// nothing. Its first-wave combined calls spend before they create and leave it unset.
+	// SequentialSpendAndCreate's recheck after a create sets it for the same reason.
+	//
+	// Both stores also decide a failed call's rollback by error class (IsSpendRollbackError)
+	// rather than on a record-existence probe, which would always find the first wave's
+	// record, but without SpenderCreatedByCaller they reverse only what the call wrote. The
+	// record may then belong to a live transaction the list found in place, and an
+	// idempotent match is that transaction's own spend. The second wave sets
+	// SpenderCreatedByCaller as well for a record its first wave created.
 	RequireParentOutputs bool
 }
 
@@ -372,6 +402,15 @@ func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
 func withRequireParentOutputs() CreateOption {
 	return func(o *CreateOptions) {
 		o.IgnoreFlags.RequireParentOutputs = true
+	}
+}
+
+// withRequireParentOutputsCreatedByCaller sets IgnoreFlags.RequireParentOutputs and
+// SpenderCreatedByCaller, for the spend wave's call on a record its first wave created.
+func withRequireParentOutputsCreatedByCaller() CreateOption {
+	return func(o *CreateOptions) {
+		o.IgnoreFlags.RequireParentOutputs = true
+		o.IgnoreFlags.SpenderCreatedByCaller = true
 	}
 }
 

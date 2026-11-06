@@ -17,7 +17,10 @@ import (
 func buildMinedFullySpent(ctx context.Context, t *testing.T, store *Store, tx *bt.Tx, mineHeight uint32) *chainhash.Hash {
 	t.Helper()
 
-	_, _, err := store.SpendAndCreate(ctx, tx, mineHeight, utxostore.WithCreateOnly())
+	// Spend the parent output as well as creating the record, as a block does. The
+	// pruner holds back a candidate whose parent output does not name it as its
+	// spender, because that is what a rolled-back spend leaves behind.
+	_, _, err := store.SpendAndCreate(ctx, tx, mineHeight)
 	require.NoError(t, err)
 
 	txHash := tx.TxIDChainHash()

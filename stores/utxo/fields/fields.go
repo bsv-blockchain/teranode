@@ -88,6 +88,16 @@ const (
 	DeletedChildren FieldName = "deletedChildren"
 )
 
+// DeletedChildVerified is the value the Aerospike pruner stores against a
+// child's txid in the DeletedChildren map. It is written only under a filter
+// that held while an output of the record named that child as its spender, so
+// the Lua spend treats it as proof of a replay whatever the output records now.
+//
+// The older value, true, was written for every deleted child, conflicting
+// losers included, and is honoured only when the output still names the child.
+// teranode.lua carries the same constant as DELETED_CHILD_VERIFIED.
+const DeletedChildVerified = 2
+
 // String returns the string representation of the FieldName.
 // This method implements the Stringer interface, allowing FieldName
 // to be used in contexts requiring a string.
