@@ -92,12 +92,59 @@ const (
 // batchSpend represents a single UTXO spend request in a batch.
 // Mirrors aerospike/spend.go batchSpend struct.
 type batchSpend struct {
+	admission         utxo.SpendAdmission
+	requestCtx        context.Context
 	spend             *utxo.Spend // UTXO to spend
 	blockHeight       uint32      // Current block height
 	errCh             chan error  // Channel for completion notification
 	ignoreConflicting bool
 	ignoreLocked      bool
 	skipUTXOHashCheck bool
+	// delivered is read and written only on the batcher goroutine. err is
+	// written there before published is stored, and the caller reads it only
+	// after observing published.
+	delivered bool
+	err       error
+	published atomic.Bool
+	// orphan decides who rolls back this item's spend when its caller gave up
+	// while the backend had already started it. rollbackOrphan performs that
+	// rollback.
+	orphan         utxo.SpendOrphan
+	rollbackOrphan func(spend *utxo.Spend)
+}
+
+// markOrphaned records that the caller gave up on an item the backend had
+// started. Spend calls it only when the batch rollback is not suppressed, so a
+// late success is unspent exactly when the batch rollback would be. If the
+// item has already published a success the caller rolls the spend back;
+// otherwise deliver does when the item publishes.
+func (b *batchSpend) markOrphaned() {
+	b.orphan.Mark()
+	b.rollbackIfOrphaned()
+}
+
+// rollbackIfOrphaned starts the rollback of this item's spend, on a detached
+// goroutine, when its caller gave up and the item published a success. Both
+// deliver and markOrphaned call it, and the claim lets exactly one of them
+// start the rollback whichever runs first.
+func (b *batchSpend) rollbackIfOrphaned() {
+	if b.rollbackOrphan != nil && b.published.Load() && b.err == nil && b.orphan.Claim() {
+		go b.rollbackOrphan(b.spend)
+	}
+}
+
+// deliver answers the caller once. Later calls are no-ops, so the panic
+// recovery in sendSpendBatch cannot block on a full errCh or answer twice.
+func (b *batchSpend) deliver(err error) {
+	if b.delivered {
+		return
+	}
+
+	b.delivered = true
+	b.err = err
+	b.errCh <- err
+	b.published.Store(true)
+	b.rollbackIfOrphaned()
 }
 
 // Store implements the UTXO store interface using a SQL database backend.
@@ -126,6 +173,10 @@ type Store struct {
 	// block-state methods. SetBlockHeight, SetMedianBlockTime and SetBlockState
 	// are wrapped below to add a debug line.
 	utxo.BlockStateFields
+
+	// beforeSpendPart runs before each backend part of a spend batch. Tests use it
+	// to hold a part after its items started.
+	beforeSpendPart func(part []*batchSpend)
 }
 
 // batchUnlockItem represents a single SetLocked(false) request.
@@ -2090,6 +2141,38 @@ func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
 	}
 }
 
+// spendRollbackBound is the longest a failed Spend holds its caller after the
+// caller gave up: the courtesy wait for started items and the rollback share
+// this one budget, which starts when the first input gives up. Together with
+// SpendWaitTimeout it is the documented bound on a Spend call.
+func (s *Store) spendRollbackBound() time.Duration {
+	if d := s.settings.UtxoStore.SpendRollbackTimeout; d > 0 {
+		return d
+	}
+
+	return 120 * time.Second
+}
+
+// rollbackDeadline is the end of the budget for the rollback. A zero giveUp
+// means no input gave up, so the rollback has a full bound. Otherwise the
+// budget ends spendRollbackBound after giveUp, but never sooner than a quarter
+// of the bound from now, so a wide transaction whose later inputs gave up late
+// still gets a usable rollback.
+func (s *Store) rollbackDeadline(giveUp time.Time) time.Time {
+	now := time.Now()
+	bound := s.spendRollbackBound()
+
+	if giveUp.IsZero() {
+		return now.Add(bound)
+	}
+
+	if floor := now.Add(bound / 4); giveUp.Add(bound).Before(floor) {
+		return floor
+	}
+
+	return giveUp.Add(bound)
+}
+
 // Spend marks UTXOs as spent by updating their spending transaction ID.
 // It performs several validations:
 //   - Checks if the UTXO exists
@@ -2133,6 +2216,9 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	var (
 		mu              sync.Mutex
 		txAlreadyExists bool
+		timedOut        bool
+		giveUp          time.Time
+		orphans         []*batchSpend
 		spentSpends     = make([]*utxo.Spend, 0, len(spends))
 		g               errgroup.Group
 	)
@@ -2163,50 +2249,88 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				handleSpendPanic(recover(), &spends[idx].Err, s.logger)
 			}()
 
+			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
+			if spendTimeout <= 0 {
+				spendTimeout = 30 * time.Second
+			}
+			requestCtx, cancel := context.WithCancelCause(ctx)
+			defer cancel(nil)
 			errCh := make(chan error, 1)
-			s.spendBatcher.PutCtx(ctx, &batchSpend{
+			item := &batchSpend{
 				spend:             spend,
 				blockHeight:       blockHeight,
 				errCh:             errCh,
 				ignoreConflicting: useIgnoreConflicting,
 				ignoreLocked:      useIgnoreLocked,
 				skipUTXOHashCheck: useSkipUTXOHashCheck,
-			})
-
-			// Wait for batch response with timeout to prevent indefinite blocking
-			spendTimeout := s.settings.UtxoStore.SpendWaitTimeout
-			if spendTimeout <= 0 {
-				spendTimeout = 30 * time.Second
+				requestCtx:        requestCtx,
+				rollbackOrphan:    s.rollbackOrphanedSpend,
 			}
+			defer item.admission.Abandon()
 
-			timer := time.NewTimer(spendTimeout)
-			defer timer.Stop()
+			// The enqueue runs on the caller's context and the wait budget starts
+			// after it returns, so a send that blocks on a full batcher channel does
+			// not use up the budget. requestCtx exists before the enqueue only because
+			// the batcher reads it from the item; the timer below ends it.
+			s.spendBatcher.PutCtx(ctx, item)
+
+			waitTimer := time.AfterFunc(spendTimeout, func() { cancel(context.DeadlineExceeded) })
+			defer waitTimer.Stop()
 
 			var batchErr error
 			select {
 			case batchErr = <-errCh:
 				// Batch completed successfully or with error
-			case <-ctx.Done():
-				// Known residual window (#1291, store-level atomic Spend /
-				// reverse-on-abort): this item is still enqueued in the batcher and
-				// will be committed by the callback under the store's own context,
-				// not this caller ctx. A straggler UPDATE can land after we give up
-				// here and after the rollback below has already run, leaving exactly
-				// the #1214 dangling ref. Not fixed here — counted below so it is
-				// at least observable.
-				prometheusUtxoSpendAbortInFlight.Inc()
-				spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
-				return nil
-			case <-timer.C:
-				// Known residual window (#1291, store-level atomic Spend /
-				// reverse-on-abort): same straggler risk as the ctx.Done() arm
-				// above — the item remains enqueued and can still commit under the
-				// store's own context after this per-item wait gives up and after
-				// the rollback below has run. Not fixed here — counted below so it
-				// is at least observable.
-				prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
-				prometheusUtxoSpendAbortInFlight.Inc()
-				spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+			case <-requestCtx.Done():
+				// Abandon first, so no further part of this item can start. An item
+				// that already started is awaited as a courtesy, on a detached context
+				// that ends a quarter of spendRollbackBound after the first caller gave
+				// up, and a prompt success joins spentSpends, so the rollback below
+				// covers it. An item still unpublished then is collected, and after
+				// g.Wait it is marked orphaned unless the transient-window gate
+				// suppresses the rollback, so whoever completes it rolls its spend
+				// back with no time bound.
+				started := !item.admission.Abandon()
+
+				if ctx.Err() != nil {
+					spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
+				} else {
+					prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
+					spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
+				}
+
+				mu.Lock()
+				timedOut = true
+
+				if giveUp.IsZero() {
+					giveUp = time.Now()
+				}
+
+				budgetStart := giveUp
+				mu.Unlock()
+
+				if !started {
+					return nil
+				}
+
+				lateCtx, lateCancel := context.WithDeadline(context.Background(), budgetStart.Add(s.spendRollbackBound()/4))
+				defer lateCancel()
+
+				select {
+				case lateErr := <-errCh:
+					if lateErr == nil {
+						mu.Lock()
+						spentSpends = append(spentSpends, spend)
+						mu.Unlock()
+					}
+				case <-lateCtx.Done():
+					prometheusUtxoSpendAbortInFlight.Inc()
+
+					mu.Lock()
+					orphans = append(orphans, item)
+					mu.Unlock()
+				}
+
 				return nil
 			}
 
@@ -2269,7 +2393,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, errors.NewError("error in sql spend (batched mode)", err)
 	}
 
-	if len(spends) != len(spentSpends) {
+	if timedOut || len(spends) != len(spentSpends) {
 		// Atomicity contract (mirrors aerospike/spend.go rollbackPartialSpends):
 		// roll back the spends that succeeded, whatever the error class of the
 		// ones that failed, so no parent is left naming a spender whose record is
@@ -2299,7 +2423,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		sawTransientLock := hasTransientLockFailure(spends)
 		sawTransientCreating := hasTransientCreatingFailure(spends)
 
-		if len(spentSpends) > 0 && (!(sawTransientLock || sawTransientCreating) || hasUnwinnableFailure(spends)) {
+		suppressed := rollbackSuppressed(spends)
+
+		if !suppressed {
+			for _, item := range orphans {
+				item.markOrphaned()
+			}
+		}
+
+		if len(spentSpends) > 0 && !suppressed {
 			// Wrapped in a closure so rbCancel can be deferred: Spend has a parent
 			// recover() (see the top of this function), and a panic between
 			// context.WithTimeout and a bare inline rbCancel() call would unwind
@@ -2307,8 +2439,6 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			// defer to this closure keeps the leak-proofing without extending
 			// rbCtx's lifetime past this block, as a function-level defer would.
 			func() {
-				rollback := false
-
 				// Detached from the caller's ctx (on the context-cancel path it is
 				// already dead, and that is exactly a case where the partial spends
 				// must still be cleaned up) but bounded, so a wedged database cannot
@@ -2325,49 +2455,19 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				// getting it wrong is the failure mode we're rolling back to fix
 				// (#1214). Do not "optimise" this back to the memo.
 				//
-				// Uses SpendRollbackTimeout, not SpendWaitTimeout: SpendWaitTimeout
-				// is the end-to-end budget for ONE batched spend, while this budget
-				// covers the existence probe plus rollbackSpendChunks' sequence of
-				// chunked Unspend calls over spentSpends — a multiple of that
-				// single-spend cost on a wide transaction. On overrun the loop
+				// The deadline comes from SpendRollbackTimeout, not SpendWaitTimeout:
+				// SpendWaitTimeout is the end-to-end budget for ONE batched spend,
+				// while this budget covers the existence probe plus
+				// rollbackSpendChunks' sequence of chunked Unspend calls over
+				// spentSpends — a multiple of that single-spend cost on a wide
+				// transaction. It ends where the budget shared with the courtesy wait
+				// for started inputs ends (see rollbackDeadline). On overrun the loop
 				// aborts and the remaining spends stay applied, counted via
-				// prometheusUtxoSpendRollbackFailed below.
-				rbTimeout := s.settings.UtxoStore.SpendRollbackTimeout
-				if rbTimeout <= 0 {
-					rbTimeout = 120 * time.Second
-				}
-
-				rbCtx, rbCancel := context.WithTimeout(context.Background(), rbTimeout)
+				// prometheusUtxoSpendRollbackFailed.
+				rbCtx, rbCancel := context.WithDeadline(context.Background(), s.rollbackDeadline(giveUp))
 				defer rbCancel()
 
-				var spendingTxExists bool
-				if scanErr := s.db.QueryRowContext(rbCtx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", tx.TxIDChainHash()[:]).Scan(&spendingTxExists); scanErr != nil {
-					s.logger.Errorf("[SPEND][%s] cannot determine whether spender exists, skipping rollback of %d partial spend(s): %v", tx.TxID(), len(spentSpends), scanErr)
-					prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeIndeterminate).Inc()
-				} else {
-					rollback = !spendingTxExists
-
-					if rollback {
-						prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
-					} else {
-						prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeSpenderExists).Inc()
-					}
-				}
-
-				if rollback {
-					reverted, unspendErr := s.rollbackSpendChunks(rbCtx, spentSpends)
-					if unspendErr != nil {
-						left := len(spentSpends) - reverted
-						s.logger.Errorf("[SPEND][%s] error in sql unspend (batched mode): reverted %d of %d partial spend(s), %d left dangling: %v",
-							tx.TxID(), reverted, len(spentSpends), left, unspendErr)
-						// Counted per dangling spend left behind, not per call: with
-						// chunking, one failing chunk no longer means the whole
-						// rollback failed, so this is read as a ref count.
-						prometheusUtxoSpendRollbackFailed.Add(float64(left))
-					} else {
-						s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (batched mode)", tx.TxID(), reverted)
-					}
-				}
+				s.rollbackUnrecordedSpends(rbCtx, tx.TxIDChainHash(), spentSpends)
 			}()
 		} else if len(spentSpends) > 0 {
 			// Transient suppression: record the outcome so this store's dashboard
@@ -2437,9 +2537,12 @@ func isDeadlock(err error) bool {
 	return strings.Contains(msg, "database is locked") || strings.Contains(msg, "database table is locked")
 }
 
-// sendSpendBatch is the batcher callback that processes a batch of spend operations
-// in a single DB transaction. Called by the go-batcher when the batch is full or
-// the timeout fires. Same SQL for both PostgreSQL and SQLite.
+// sendSpendBatch is the batcher callback that processes a batch of spend operations.
+// Called by the go-batcher when the batch is full or the timeout fires. Same SQL
+// for both PostgreSQL and SQLite. A batch without competing claims on one outpoint
+// runs in a single DB transaction. utxo.ProcessSpendBatch splits a batch with
+// competing claims into ordered parts, one DB transaction each, and rejects a
+// claim locally once the stored owner of its outpoint is known.
 // Mirrors aerospike/spend.go sendSpendBatchLua.
 //
 // Single-phase design: SELECT + UPDATE outputs (validates and marks each output as spent).
@@ -2451,23 +2554,52 @@ func isDeadlock(err error) bool {
 // Aerospike doesn't need this because it uses optimistic single-key operations
 // without DB-level row locking.
 func (s *Store) sendSpendBatch(batch []*batchSpend) {
-	batch = utxo.FilterConflictingDuplicateSpendClaims(batch,
-		func(item *batchSpend) *utxo.Spend {
+	defer func() {
+		util.SignalBatchPanic(recover(), batch, "sendSpendBatch", s.logger, func(item *batchSpend, err error) {
+			if item != nil {
+				item.deliver(err)
+			}
+		})
+	}()
+
+	utxo.ProcessSpendBatch(batch, utxo.SpendBatchHandler[*batchSpend]{
+		Start: func(item *batchSpend) error {
+			if item == nil {
+				return nil
+			}
+			return item.admission.Start(item.requestCtx)
+		},
+		Spend: func(item *batchSpend) *utxo.Spend {
 			if item == nil {
 				return nil
 			}
 			return item.spend
 		},
-		func(item *batchSpend, err error) {
-			item.errCh <- err
-		},
-	)
-	if len(batch) == 0 {
-		return
-	}
+		Process: func(part []*batchSpend) {
+			if s.beforeSpendPart != nil {
+				s.beforeSpendPart(part)
+			}
 
-	s.retrySpendBatch(batch, func(batch []*batchSpend) bool {
-		return s.trySendSpendBatch(s.ctx, batch)
+			s.retrySpendBatch(part, func(part []*batchSpend) bool {
+				return s.trySendSpendBatch(s.ctx, part)
+			})
+		},
+		Result: func(item *batchSpend) (error, bool) {
+			if item == nil || !item.delivered {
+				return nil, false
+			}
+			return item.err, true
+		},
+		Reject: func(item *batchSpend, err error) {
+			item.deliver(err)
+		},
+		SameChecks: func(a, b *batchSpend) bool {
+			return a.blockHeight == b.blockHeight &&
+				a.ignoreConflicting == b.ignoreConflicting &&
+				a.ignoreLocked == b.ignoreLocked &&
+				a.skipUTXOHashCheck == b.skipUTXOHashCheck &&
+				utxo.SameUTXOHash(a.spend, b.spend)
+		},
 	})
 }
 
@@ -2503,7 +2635,7 @@ func (s *Store) retrySpendBatchContext(ctx context.Context, batch []*batchSpend,
 		select {
 		case <-ctx.Done():
 			for _, item := range batch {
-				item.errCh <- errors.NewStorageError("[Spend] deadlock retry cancelled", ctx.Err())
+				item.deliver(errors.NewStorageError("[Spend] deadlock retry cancelled", ctx.Err()))
 			}
 
 			return
@@ -2512,7 +2644,7 @@ func (s *Store) retrySpendBatchContext(ctx context.Context, batch []*batchSpend,
 	}
 	// Exhausted retries — send error to all items
 	for _, item := range batch {
-		item.errCh <- errors.NewStorageError("[Spend] deadlock persisted after %d retries", maxRetries)
+		item.deliver(errors.NewStorageError("[Spend] deadlock persisted after %d retries", maxRetries))
 	}
 }
 
@@ -2565,7 +2697,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	txn, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		for _, item := range batch {
-			item.errCh <- errors.NewStorageError("[Spend] failed to begin transaction", err)
+			item.deliver(errors.NewStorageError("[Spend] failed to begin transaction", err))
 		}
 		return false
 	}
@@ -2601,7 +2733,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			return true
 		}
 		for _, item := range batch {
-			item.errCh <- errors.NewStorageError("[Spend] failed: bulk SELECT outputs", err)
+			item.deliver(errors.NewStorageError("[Spend] failed: bulk SELECT outputs", err))
 		}
 		return false
 	}
@@ -2617,7 +2749,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				return true
 			}
 			for _, item := range batch {
-				item.errCh <- errors.NewStorageError("[Spend] failed: scanning bulk SELECT results", err)
+				item.deliver(errors.NewStorageError("[Spend] failed: scanning bulk SELECT results", err))
 			}
 			return false
 		}
@@ -2628,7 +2760,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			return true
 		}
 		for _, item := range batch {
-			item.errCh <- errors.NewStorageError("[Spend] failed: closing bulk SELECT results", err)
+			item.deliver(errors.NewStorageError("[Spend] failed: closing bulk SELECT results", err))
 		}
 		return false
 	}
@@ -2871,9 +3003,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 			}
 			for i, item := range batch {
 				if valErr, ok := validationErrors[i]; ok {
-					item.errCh <- valErr
+					item.deliver(valErr)
 				} else {
-					item.errCh <- errors.NewStorageError("[Spend] failed: bulk UPDATE outputs", err)
+					item.deliver(errors.NewStorageError("[Spend] failed: bulk UPDATE outputs", err))
 				}
 			}
 			return false
@@ -2887,7 +3019,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 					return true
 				}
 				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: scanning bulk UPDATE results", err)
+					item.deliver(errors.NewStorageError("[Spend] failed: scanning bulk UPDATE results", err))
 				}
 				return false
 			}
@@ -2898,7 +3030,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				return true
 			}
 			for _, item := range batch {
-				item.errCh <- errors.NewStorageError("[Spend] failed: closing bulk UPDATE results", err)
+				item.deliver(errors.NewStorageError("[Spend] failed: closing bulk UPDATE results", err))
 			}
 			return false
 		}
@@ -2950,7 +3082,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 					return true
 				}
 				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: concurrent-idempotent re-check", err)
+					item.deliver(errors.NewStorageError("[Spend] failed: concurrent-idempotent re-check", err))
 				}
 				return false
 			}
@@ -2962,7 +3094,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 						return true
 					}
 					for _, item := range batch {
-						item.errCh <- errors.NewStorageError("[Spend] failed: scanning concurrent-idempotent re-check", err)
+						item.deliver(errors.NewStorageError("[Spend] failed: scanning concurrent-idempotent re-check", err))
 					}
 					return false
 				}
@@ -2977,7 +3109,7 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 					return true
 				}
 				for _, item := range batch {
-					item.errCh <- errors.NewStorageError("[Spend] failed: closing concurrent-idempotent re-check", err)
+					item.deliver(errors.NewStorageError("[Spend] failed: closing concurrent-idempotent re-check", err))
 				}
 				return false
 			}
@@ -3052,9 +3184,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 				}
 				for i, item := range batch {
 					if valErr, ok := validationErrors[i]; ok {
-						item.errCh <- valErr
+						item.deliver(valErr)
 					} else {
-						item.errCh <- errors.NewStorageError("[Spend] failed to recompute DAH for bulk spend fallback", err)
+						item.deliver(errors.NewStorageError("[Spend] failed to recompute DAH for bulk spend fallback", err))
 					}
 				}
 				return false
@@ -3069,9 +3201,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 		}
 		for i, item := range batch {
 			if valErr, ok := validationErrors[i]; ok {
-				item.errCh <- valErr
+				item.deliver(valErr)
 			} else {
-				item.errCh <- errors.NewStorageError("[Spend] failed to commit transaction", err)
+				item.deliver(errors.NewStorageError("[Spend] failed to commit transaction", err))
 			}
 		}
 		return false
@@ -3080,9 +3212,9 @@ func (s *Store) trySendSpendBatchBulk(ctx context.Context, batch []*batchSpend) 
 	// Signal results
 	for i, item := range batch {
 		if valErr, ok := validationErrors[i]; ok {
-			item.errCh <- valErr
+			item.deliver(valErr)
 		} else {
-			item.errCh <- nil // success
+			item.deliver(nil) // success
 		}
 	}
 	return false
@@ -3094,7 +3226,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	txn, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		for _, item := range batch {
-			item.errCh <- errors.NewStorageError("[Spend] failed to begin transaction", err)
+			item.deliver(errors.NewStorageError("[Spend] failed to begin transaction", err))
 		}
 		return false
 	}
@@ -3135,7 +3267,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	// Phase 1: SELECT + validate + UPDATE outputs
 	for i, item := range batch {
 		if aborted {
-			item.errCh <- errors.NewStorageError("[Spend] batch aborted due to previous DB error")
+			item.deliver(errors.NewStorageError("[Spend] batch aborted due to previous DB error"))
 			continue
 		}
 
@@ -3164,7 +3296,7 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			if isDeadlock(err) {
 				return true // retryable
 			}
-			item.errCh <- errors.NewStorageError("[Spend] failed: SELECT output %s:%d - %v", spend.TxID, spend.Vout, err)
+			item.deliver(errors.NewStorageError("[Spend] failed: SELECT output %s:%d - %v", spend.TxID, spend.Vout, err))
 			aborted = true
 			continue
 		}
@@ -3225,14 +3357,14 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			if isDeadlock(err) {
 				return true // retryable
 			}
-			item.errCh <- errors.NewStorageError("[Spend] failed: UPDATE outputs for %s:%d", spend.TxID, spend.Vout, err)
+			item.deliver(errors.NewStorageError("[Spend] failed: UPDATE outputs for %s:%d", spend.TxID, spend.Vout, err))
 			aborted = true
 			continue
 		}
 
 		affected, err := result.RowsAffected()
 		if err != nil {
-			item.errCh <- errors.NewStorageError("[Spend] failed getting affected rows for %s:%d", spend.TxID, spend.Vout, err)
+			item.deliver(errors.NewStorageError("[Spend] failed getting affected rows for %s:%d", spend.TxID, spend.Vout, err))
 			aborted = true
 			continue
 		}
@@ -3261,13 +3393,13 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	if aborted {
 		for i, item := range batch {
 			if valErr, ok := validationErrors[i]; ok {
-				item.errCh <- valErr
+				item.deliver(valErr)
 			}
 			// Items that already received errors via errCh (DB errors) or
 			// successItems are handled: successItems get rollback error below
 		}
 		for _, item := range successItems {
-			item.errCh <- errors.NewStorageError("[Spend] batch rolled back due to DB error")
+			item.deliver(errors.NewStorageError("[Spend] batch rolled back due to DB error"))
 		}
 		return false
 	}
@@ -3292,11 +3424,11 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 			}
 			for i, item := range batch {
 				if valErr, ok := validationErrors[i]; ok {
-					item.errCh <- valErr
+					item.deliver(valErr)
 				}
 			}
 			for _, item := range successItems {
-				item.errCh <- errors.NewStorageError("[Spend] failed to recompute DAH", err)
+				item.deliver(errors.NewStorageError("[Spend] failed to recompute DAH", err))
 			}
 			return false
 		}
@@ -3309,11 +3441,11 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 		}
 		for i, item := range batch {
 			if valErr, ok := validationErrors[i]; ok {
-				item.errCh <- valErr
+				item.deliver(valErr)
 			}
 		}
 		for _, item := range successItems {
-			item.errCh <- errors.NewStorageError("[Spend] failed to commit transaction", err)
+			item.deliver(errors.NewStorageError("[Spend] failed to commit transaction", err))
 		}
 		return false
 	}
@@ -3321,11 +3453,11 @@ func (s *Store) trySendSpendBatchPerRow(ctx context.Context, batch []*batchSpend
 	// Signal results: validation errors and successes
 	for i, item := range batch {
 		if valErr, ok := validationErrors[i]; ok {
-			item.errCh <- valErr
+			item.deliver(valErr)
 		}
 	}
 	for _, item := range successItems {
-		item.errCh <- nil
+		item.deliver(nil)
 	}
 	return false
 }

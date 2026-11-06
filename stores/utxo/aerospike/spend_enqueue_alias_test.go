@@ -7,9 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/go-batcher/v2/completion"
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
+	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -146,7 +150,7 @@ func TestSpend_EnqueuesOnlyAcceptedItemsWhenBreakerHalfOpen(t *testing.T) {
 	cb := newCircuitBreaker(1, 1, time.Millisecond)
 	require.NotNil(t, cb)
 
-	cb.RecordFailure() // trips the breaker open
+	cb.RecordFailure(currentProbe(cb)) // trips the breaker open
 
 	time.Sleep(20 * time.Millisecond) // let the cooldown elapse so the next Allow half-opens
 
@@ -179,7 +183,7 @@ func TestSpend_FiltersFromTheFirstInputWhenBreakerFullyOpen(t *testing.T) {
 	cb := newCircuitBreaker(1, 1, time.Hour)
 	require.NotNil(t, cb)
 
-	cb.RecordFailure() // trips the breaker open, cooldown will not elapse
+	cb.RecordFailure(currentProbe(cb)) // trips the breaker open, cooldown will not elapse
 
 	s.spendCircuitBreaker = cb
 
@@ -218,4 +222,157 @@ func TestSpend_CompletesEveryEnqueuedItemWhenSendRejected(t *testing.T) {
 		require.Error(t, spend.Err, "input %d must be completed with the shutdown error, not parked", i)
 		require.Contains(t, spend.Err.Error(), "shutting down")
 	}
+}
+
+// silentSpendBatcher accepts items and never completes them, so Spend waits
+// until its caller gives up.
+type silentSpendBatcher struct{ recordingSpendBatcher }
+
+func (r *silentSpendBatcher) PutBatchCtx(context.Context, []*batchSpend, ...int) {}
+
+// halfOpenBreaker returns a breaker in the open state whose next Admit half-opens it.
+func halfOpenBreaker(t *testing.T) *circuitBreaker {
+	t.Helper()
+
+	cb := newCircuitBreaker(1, 1, time.Hour)
+	require.NotNil(t, cb)
+
+	cb.RecordFailure(currentProbe(cb))
+
+	cb.mu.Lock()
+	cb.nextAttempt = time.Now().Add(-time.Millisecond)
+	cb.mu.Unlock()
+
+	return cb
+}
+
+func TestSpend_AbandonedRequestReleasesHalfOpenSlot(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	s.spendBatcher = &silentSpendBatcher{}
+	s.spendCircuitBreaker = halfOpenBreaker(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := s.Spend(ctx, txWithInputs(t, 1), 100)
+	require.Error(t, err)
+	require.True(t, admitted(s.spendCircuitBreaker), "the abandoned probe must give its slot back")
+}
+
+// breakerMovingBatcher swallows the items and, on enqueue, trips the breaker,
+// lets its cooldown elapse and takes the only half-open probe, so the items
+// Spend admitted while the breaker was closed are abandoned after half-open.
+type breakerMovingBatcher struct {
+	silentSpendBatcher
+	cb *circuitBreaker
+}
+
+func (b *breakerMovingBatcher) PutBatchCtx(context.Context, []*batchSpend, ...int) {
+	b.cb.RecordFailure(currentProbe(b.cb))
+	expireCooldown(b.cb)
+	admitted(b.cb)
+}
+
+func TestSpend_AbandoningAnItemAdmittedWhileClosedDoesNotFreeAHalfOpenSlot(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	cb := newCircuitBreaker(1, 1, time.Hour)
+	require.NotNil(t, cb)
+
+	s.spendCircuitBreaker = cb
+	s.spendBatcher = &breakerMovingBatcher{cb: cb}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := s.Spend(ctx, txWithInputs(t, 1), 100)
+	require.Error(t, err)
+
+	require.Equal(t, cbStateHalfOpen, cb.state)
+	require.Equal(t, 1, cb.halfOpenAttempts)
+	require.False(t, admitted(cb), "the abandoned item took no slot, so none may be freed for another probe")
+}
+
+func TestSpend_DispatchRejectReleasesHalfOpenSlot(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	cb := halfOpenBreaker(t)
+	s.spendCircuitBreaker = cb
+
+	allowed, slot := cb.Admit()
+	require.True(t, allowed, "the request takes the only half-open slot")
+	require.False(t, admitted(cb))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	parent, utxoHash, spender := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
+	item := &batchSpend{
+		spend:       &utxo.Spend{TxID: &parent, UTXOHash: &utxoHash, SpendingData: spendpkg.NewSpendingData(&spender, 0)},
+		group:       completion.NewGroup(1),
+		requestCtx:  ctx,
+		breakerSlot: slot,
+	}
+
+	s.sendSpendBatchLua([]*batchSpend{item})
+
+	require.True(t, item.completed.Load())
+	require.Error(t, item.err)
+	require.True(t, admitted(cb), "an item rejected at dispatch must give its slot back")
+	require.False(t, admitted(cb), "and only once")
+}
+
+func probeItem(slot breakerSlot, ctx context.Context) *batchSpend {
+	parent, utxoHash, spender := chainhash.Hash{1}, chainhash.Hash{2}, chainhash.Hash{3}
+
+	return &batchSpend{
+		spend:       &utxo.Spend{TxID: &parent, UTXOHash: &utxoHash, SpendingData: spendpkg.NewSpendingData(&spender, 0)},
+		group:       completion.NewGroup(1),
+		requestCtx:  ctx,
+		breakerSlot: slot,
+	}
+}
+
+func TestSpend_DispatchSweepLeavesTheSlotOfAnItemItsCallerAbandoned(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	cb := halfOpenBreaker(t)
+	s.spendCircuitBreaker = cb
+
+	allowed, slot := cb.Admit()
+	require.True(t, allowed)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	item := probeItem(slot, ctx)
+
+	require.True(t, item.admission.Abandon(), "the caller wins the abandonment and now owns the slot")
+	cancel()
+
+	s.sendSpendBatchLua([]*batchSpend{item})
+
+	require.True(t, item.completed.Load())
+	require.True(t, item.breakerSlot.taken, "the batcher must not touch the slot its caller owns")
+	require.False(t, admitted(cb), "the slot stays held until its owner releases it")
+
+	s.releaseBreakerSlot(item)
+
+	require.True(t, admitted(cb), "the owner's release frees the slot")
+	require.False(t, admitted(cb), "and it is freed exactly once")
+}
+
+func TestSpend_DispatchSweepReleasesTheSlotOfAnItemItNeverStarted(t *testing.T) {
+	s := newTestStoreForSpendEnqueue(t)
+	cb := halfOpenBreaker(t)
+	s.spendCircuitBreaker = cb
+
+	allowed, slot := cb.Admit()
+	require.True(t, allowed)
+
+	item := probeItem(slot, context.Background())
+
+	s.releaseUnsettledSlots([]*batchSpend{item})
+	s.releaseUnsettledSlots([]*batchSpend{item})
+
+	require.False(t, item.breakerSlot.taken)
+	require.True(t, admitted(cb), "the sweep owns an item that was never started")
+	require.False(t, admitted(cb), "and releases it exactly once")
 }

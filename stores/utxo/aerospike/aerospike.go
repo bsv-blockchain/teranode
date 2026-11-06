@@ -289,6 +289,10 @@ type Store struct {
 	// result before giving up, so a wedged dispatch fn can never park a caller
 	// for the life of the process. Computed once from the batch policy.
 	batcherWait time.Duration
+
+	// beforeSpendPart runs before each backend part of a spend batch. Tests use it
+	// to hold a part after its items started.
+	beforeSpendPart func(part []*batchSpend)
 }
 
 // batchOperate runs a batch through the underlying Aerospike client, honouring

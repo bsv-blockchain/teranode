@@ -84,6 +84,10 @@ func TestPrunerReplayProtection(t *testing.T) {
 	// check in teranode.lua rather than any spend failure.
 	require.Contains(t, err.Error(), "invalid spend")
 
+	var invalidSpend *errors.UtxoInvalidSpendErrData
+	require.True(t, errors.AsData(err, &invalidSpend), "the replay error must carry the stored owner")
+	require.Equal(t, child.TxIDChainHash().String(), invalidSpend.SpendingData.TxID.String())
+
 	// The symptom in #1701 is the child being recreated as unmined with empty
 	// blockIDs, so a rejected replay that still wrote the record must fail here.
 	exists, err = client.Exists(nil, childKey)

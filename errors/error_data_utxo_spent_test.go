@@ -242,3 +242,27 @@ func TestUtxoSpentErrorMessageCarriesNoCodeRendering(t *testing.T) {
 	require.NotContains(t, err.Error(), "UTXO_SPENT")
 	require.Contains(t, err.Error(), "70: ")
 }
+
+func TestNewUtxoInvalidSpendError(t *testing.T) {
+	txID := chainhash.HashH([]byte("spender"))
+	owner := spendpkg.NewSpendingData(&txID, 3)
+
+	err := NewUtxoInvalidSpendError(owner, "replay of %s", "owner")
+	require.ErrorIs(t, err, ErrUtxoError)
+	require.NotErrorIs(t, err, ErrSpent)
+
+	var data *UtxoInvalidSpendErrData
+	require.True(t, AsData(err, &data))
+	require.Equal(t, owner.Bytes(), data.SpendingData.Bytes())
+	require.Equal(t, owner, data.GetData("spending_data"))
+	require.Nil(t, data.GetData("other"))
+
+	var decoded UtxoInvalidSpendErrData
+	require.NoError(t, json.Unmarshal(data.EncodeErrorData(), &decoded))
+	require.Equal(t, owner.Bytes(), decoded.SpendingData.Bytes())
+
+	var set UtxoInvalidSpendErrData
+	set.SetData("spending_data", owner)
+	require.Equal(t, owner, set.SpendingData)
+	require.Contains(t, set.Error(), "invalid spend")
+}
