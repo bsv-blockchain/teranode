@@ -105,9 +105,10 @@ type processBlockFound struct {
 	// peerID is the P2P peer identifier used for peer tracking via P2P service
 	peerID string
 
-	// errCh receives any errors encountered during block validation and allows
-	// synchronous waiting for validation completion
-	errCh chan error
+	// reply, when not nil, is the answer a BlockFound caller with WaitToComplete waits for. The
+	// step that settles the block answers it: nil once the block is stored, otherwise the error.
+	// It is nil on the Kafka path. See blockFoundReply.
+	reply *blockFoundReply
 
 	// servedBy, when not nil, holds the peerID of the peer whose bytes this item is processing.
 	// processBlockFoundChItem sets it to the announcer. After a 429 from the announcer,
@@ -1076,7 +1077,7 @@ func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaB
 		hash:    hash,
 		baseURL: baseURL.String(),
 		peerID:  kafkaMsg.GetPeerId(),
-		errCh:   nil, // Don't block Kafka consumer waiting for validation
+		// No reply: the Kafka consumer does not wait for validation.
 	}:
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1094,12 +1095,11 @@ func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaB
 // errors with substring classifiers such as IsNetworkError and IsMaliciousResponseError, which
 // match words such as "http" or "timeout". The panic value is in the log line.
 //
-// A WaitToComplete caller gets exactly one answer. Its errCh is unbuffered and BlockFound reads it
-// one time, with no timeout. The processing below can answer it and then panic, so a second send
-// from the recover would block this worker for ever. So the processing answers a relay with room
-// for one answer, and the deferred function below sends the caller one value: the processing's
-// answer if it gave one, or else the panic error. A path that returns with no answer and no panic
-// leaves the caller waiting, as before.
+// A WaitToComplete caller waits on bf.reply, which answers once (see blockFoundReply). The
+// processing below answers it on every early return, and the worker that settles a queued block
+// answers it later. If the processing panics, the recover answers the panic error. When the
+// processing had already answered, or had already queued the block, that answer is dropped or
+// comes second, so the caller never gets two answers and this worker never blocks on one.
 //
 // The recover also counts the panic toward the recovered-panic cap of (bf.hash, serving peerID), in
 // blockPanicAttempts, the budget that the priority worker's recover also fills. The serving peer is
@@ -1110,14 +1110,13 @@ func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaB
 // fetchAnnouncedBlockFromTipPeers skips a capped alternative before it fetches from it. Both hold
 // until the cooldown window lapses. The announcer's gate runs after the exists check, so a stored
 // block still answers nil. The malicious-peer gate sits next to it in processBlockFoundChannel, for
-// the same reason. The panic gate answers a WaitToComplete caller one time with ERR_PROCESSING,
-// through the relay. Its text has no word that IsNetworkError or
+// the same reason. The panic gate answers a WaitToComplete caller with ERR_PROCESSING. Its text has no word that IsNetworkError or
 // IsMaliciousResponseError matches. Neither gate reports a peer failure: a panic is a bug in this
 // node. Another peer's announcement of the hash has its own key and is still processed. An empty
 // peerID is not capped (fail-open), as for the other caps.
 //
 // In production the announcer's cap applies only to Kafka-announced blocks, and those have no
-// WaitToComplete caller: the Kafka handler queues the item with a nil errCh, so a capped
+// WaitToComplete caller: the Kafka handler queues the item with a nil reply, so a capped
 // announcement is logged and dropped. The BlockFound gRPC request has a peer_id field, but
 // Client.BlockFound never sets it, and no code in this repository calls Client.BlockFound. A
 // gRPC announcement therefore has an empty peerID and is never capped. The capped answer above
@@ -1125,11 +1124,6 @@ func (u *Server) blockHandler(ctx context.Context, kafkaMsg *kafkamessage.KafkaB
 // fetchAnnouncedBlock runs the 429 fallback only for an announcement with a peerID, so a gRPC
 // announcement never reaches the fallback peer's cap either.
 func (u *Server) processBlockFoundChItem(ctx context.Context, workerID int, bf processBlockFound) {
-	caller := bf.errCh
-	if caller != nil {
-		bf.errCh = make(chan error, 1)
-	}
-
 	servedBy := bf.peerID
 	bf.servedBy = &servedBy
 
@@ -1141,17 +1135,8 @@ func (u *Server) processBlockFoundChItem(ctx context.Context, workerID int, bf p
 			u.logger.Errorf("[Init] PANIC in processBlockFoundChannel for block %s served by peer %s, announced by peer %s (panic %d for the serving peer in the cooldown window): %v stack=%q", bf.hash.String(), servedBy, bf.peerID, attempts, r, debug.Stack())
 		}
 
-		if caller == nil {
-			return
-		}
-
-		select {
-		case answer := <-bf.errCh:
-			caller <- answer
-		default:
-			if r != nil {
-				caller <- errors.NewProcessingError(recoveredPanicErrFormat, bf.hash.String())
-			}
+		if r != nil {
+			bf.reply.answer(errors.NewProcessingError(recoveredPanicErrFormat, bf.hash.String()))
 		}
 	}()
 
@@ -1184,9 +1169,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 			u.logger.Errorf("[processBlockFoundChannel][%s] Invalid baseURL '%s' for peer %s - must be valid http/https URL, not peer ID", blockFound.hash.String(), blockFound.baseURL, blockFound.peerID)
 			err := errors.NewProcessingError("[processBlockFoundChannel][%s] invalid baseURL - not a valid http/https URL", blockFound.hash.String())
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- err
-			}
+			blockFound.reply.answer(err)
 
 			return err
 		}
@@ -1202,9 +1185,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	if err != nil {
 		u.logger.Errorf("[processBlockFoundChannel] Failed to check if block %s exists: %v", blockFound.hash.String(), err)
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- err
-		}
+		blockFound.reply.answer(err)
 
 		return errors.NewServiceError("[processBlockFoundChannel] failed to check if block exists", err)
 	}
@@ -1212,9 +1193,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	if exists {
 		u.logger.Debugf("[processBlockFoundChannel][%s] already validated, skipping", blockFound.hash.String())
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- nil
-		}
+		u.answerStoredBlock(ctx, blockFound.reply, blockFound.hash)
 
 		return nil
 	}
@@ -1230,9 +1209,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	if u.isPeerMalicious(ctx, blockFound.peerID) {
 		u.logger.Warnf("[blockFound][%s] peer %s (%s) is marked as malicious, skipping", blockFound.hash.String(), blockFound.peerID, blockFound.baseURL)
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- errors.NewProcessingError("peer %s is marked as malicious", blockFound.peerID)
-		}
+		blockFound.reply.answer(errors.NewProcessingError("peer %s is marked as malicious", blockFound.peerID))
 
 		return nil
 	}
@@ -1241,9 +1218,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	if u.panicAttemptsExhausted(blockFound.hash, blockFound.peerID) {
 		u.logger.Warnf("[processBlockFoundChannel][%s] recovered-panic cap reached for peer %s; dropping this announcement before the fetch until the cooldown window expires", blockFound.hash.String(), blockFound.peerID)
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- errors.NewProcessingError("[blockFound][%s] recovered-panic cap reached for this peer; announcement dropped until the cooldown window expires (block not fetched)", blockFound.hash.String())
-		}
+		blockFound.reply.answer(errors.NewProcessingError("[blockFound][%s] recovered-panic cap reached for this peer; announcement dropped until the cooldown window expires (block not fetched)", blockFound.hash.String()))
 
 		return nil
 	}
@@ -1268,9 +1243,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		block = fetched
 		blockFound = source
 		if err != nil {
-			if blockFound.errCh != nil {
-				blockFound.errCh <- err
-			}
+			blockFound.reply.answer(err)
 			return errors.NewProcessingError("[processBlockFoundChannel] failed to get block [%s]", blockFound.hash.String(), err)
 		}
 
@@ -1278,9 +1251,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 		if err != nil {
 			u.logger.Errorf("[processBlockFoundChannel] Failed to check if parent block %s exists: %v", block.Header.HashPrevBlock.String(), err)
-			if blockFound.errCh != nil {
-				blockFound.errCh <- err
-			}
+			blockFound.reply.answer(err)
 			return err
 		}
 
@@ -1292,11 +1263,9 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 			if u.isPeerMalicious(ctx, blockFound.peerID) {
 				u.logger.Warnf("[processBlockFoundChannel][%s] peer %s is malicious, skipping catchup for block with missing parent", blockFound.hash.String(), blockFound.peerID)
 
-				// A WaitToComplete caller blocks on an unbuffered errCh; every
-				// return path must answer it or that caller hangs forever.
-				if blockFound.errCh != nil {
-					blockFound.errCh <- errors.NewProcessingError("peer %s is marked as malicious, skipping catchup", blockFound.peerID)
-				}
+				// Every return path must answer a WaitToComplete caller, which otherwise waits
+				// until its context ends.
+				blockFound.reply.answer(errors.NewProcessingError("peer %s is marked as malicious, skipping catchup", blockFound.peerID))
 
 				return nil
 			}
@@ -1315,9 +1284,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 				u.logger.Warnf("[processBlockFoundChannel] Catchup channel full, dropping block %s", block.Hash().String())
 			}
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 			return nil
 		}
 
@@ -1348,9 +1315,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 				u.logger.Warnf("[processBlockFoundChannel] Catchup channel full, dropping block %s", block.Hash().String())
 			}
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 			return nil
 		}
 	}
@@ -1366,10 +1331,18 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 	// Update metrics
 	prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 
-	// Send response to error channel if it exists (both queue paths answer the errCh internally)
-	// but if it doesn't send a response in all cases, we need to ensure we don't leave the caller hanging
-	// The errCh should already be handled by them, so we just return
+	// Both queue paths answer blockFound.reply on an early return. A queued block's reply goes
+	// with it to the worker, which answers it once the block is settled (answerQueuedBlock).
 	return nil
+}
+
+// errNotCommittedCatchup is the answer for a WaitToComplete caller whose block was not stored:
+// it was handed to catchup, or dropped because the catchup channel was full or its catchup
+// attempts were spent, instead of being validated. The block
+// was not stored, so the caller must not get nil (BV-INGRESS-017). It is a ServiceError, which
+// callers read as retry-later: once catchup has stored the parent, a new BlockFound succeeds.
+func errNotCommittedCatchup(hash *chainhash.Hash) error {
+	return errors.NewServiceError("[BlockFound][%s] block not validated: its parent is not stored, so it was handed to catchup", hash.String())
 }
 
 // Start begins the block validation service operations including gRPC server startup
@@ -1588,7 +1561,10 @@ func stopWaitContext(ctx context.Context) (context.Context, context.CancelFunc) 
 //   - req: Contains the block hash and source URL
 //
 // Returns an EmptyMessage on success or an error if validation cannot be initiated.
-// If WaitToComplete is set in the request, waits for validation to finish before returning.
+// If WaitToComplete is set in the request, waits until the block is settled and returns the
+// outcome: nil once the block is stored valid, the validation error if it is rejected, and a
+// retry-later ERR_SERVICE_ERROR if its parent is missing and it was handed to catchup. The wait
+// ends early, with a context error, if ctx ends first.
 func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockFoundRequest) (*blockvalidation_api.EmptyMessage, error) {
 	ctx, _, deferFn := tracing.Tracer("blockvalidation").Start(ctx, "BlockFound",
 		tracing.WithParentStat(u.stats),
@@ -1612,13 +1588,21 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 
 	if exists {
 		u.logger.Debugf("[BlockFound][%s] already validated, skipping", util.ReverseAndHexEncodeSlice(req.Hash))
+
+		// A waiting caller gets the stored outcome, which is an error for a block stored invalid.
+		if req.WaitToComplete {
+			if err := u.storedBlockAnswer(ctx, hash); err != nil {
+				return nil, errors.WrapGRPC(err)
+			}
+		}
+
 		return &blockvalidation_api.EmptyMessage{}, nil
 	}
 
-	var errCh chan error
+	var reply *blockFoundReply
 
 	if req.WaitToComplete {
-		errCh = make(chan error)
+		reply = newBlockFoundReply()
 	}
 
 	// process the block in the background, in the order we receive them, but without blocking the grpc call
@@ -1628,15 +1612,22 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 			hash:    hash,
 			baseURL: req.GetBaseUrl(),
 			peerID:  req.GetPeerId(),
-			errCh:   errCh,
+			reply:   reply,
 		}
 		prometheusBlockValidationBlockFoundCh.Set(float64(len(u.blockFoundCh)))
 	}()
 
 	if req.WaitToComplete {
-		err := <-errCh
-		if err != nil {
-			return nil, errors.WrapGRPC(err)
+		// The reply comes once the block is stored, rejected, or handed to catchup, which can take
+		// as long as validation does. A caller that gives up first gets its context error; the
+		// answer still lands in the reply's buffer, so the worker that sends it never blocks.
+		select {
+		case err := <-reply.ch:
+			if err != nil {
+				return nil, errors.WrapGRPC(err)
+			}
+		case <-ctx.Done():
+			return nil, errors.WrapGRPC(errors.NewContextCanceledError("[BlockFound][%s] caller stopped waiting for validation", hash.String(), ctx.Err()))
 		}
 	}
 
@@ -2444,15 +2435,14 @@ func (u *Server) blockProcessingWorker(ctx context.Context, workerID int) {
 			err := u.processBlockWithPriorityRecovered(ctx, blockFound)
 
 			u.finishProcessedBlock(workerID, blockFound, err)
+			u.answerQueuedBlock(ctx, blockFound, err)
 		}
 	}
 }
 
 // processBlockWithPriorityRecovered runs processBlockWithPriority and turns a panic into an
 // ERR_PROCESSING error, so one bad block cannot kill the worker or the process (BV-STARTUP-007).
-// It never answers blockFound.errCh: queueFetchedBlock already answered it when the block was
-// queued. That channel is the one-answer relay of processBlockFoundChItem, which passes only the
-// first answer to the caller, so a second answer reaches no one and can block the worker for ever.
+// It never answers blockFound.reply: the worker answers it from the outcome, in answerQueuedBlock.
 // The panic value goes to the log only, not into the error text: the worker reads its error with
 // IsNetworkError and IsMaliciousResponseError, which match words such as "http" or "timeout" in
 // the text, and a panic value with such a word would requeue the block as a fetch failure.
@@ -2558,6 +2548,71 @@ func (u *Server) finishProcessedBlock(workerID int, blockFound processBlockFound
 	}
 }
 
+// answerQueuedBlock answers a WaitToComplete caller with the outcome of the worker's attempt at its
+// queued block.
+//
+// A failure is answered at once, even one that finishProcessedBlock retries, such as a fetch that
+// failed with an HTTP 500. The queue's retry exists for blocks that arrived by Kafka: nobody waits
+// on those, the announcement is already committed and will not be sent again, so without the retry
+// the node would miss the block until a peer re-announces it. A waiting caller is different: it
+// can call BlockFound again itself. Holding it through every retry (3 by default, 5 s apart for a
+// fetch failure, a minute apart for a deadline) would make it wait for an error it could already
+// act on, and the retry asks the same peer that just failed unless another peer announced the
+// block meanwhile. So the caller gets the first failure, and the block still goes back on the
+// queue. A fetch failure is not a verdict on the block, and its error code says so, so the caller
+// can tell "try again" from "the block is bad". The cost: the caller can hear a failure for a
+// block that the node stores a few seconds later, on the retry. requeueBlock drops the reply, so
+// a caller that announces the hash again waits on the retry's outcome, not this answered one.
+//
+// A nil from the processing is not enough for nil: processBlockFound also returns nil when it
+// hands the block to catchup, or finds it stored already, which may be as invalid. So the store
+// decides (storedBlockAnswer).
+func (u *Server) answerQueuedBlock(ctx context.Context, blockFound processBlockFound, err error) {
+	if err != nil {
+		blockFound.reply.answer(err)
+		return
+	}
+
+	u.answerStoredBlock(ctx, blockFound.reply, blockFound.hash)
+}
+
+// answerStoredBlock answers a WaitToComplete caller whose block was found stored before it was
+// queued. It reads the store only when someone waits, so the Kafka path pays nothing.
+func (u *Server) answerStoredBlock(ctx context.Context, reply *blockFoundReply, hash *chainhash.Hash) {
+	if reply.isAnswered() {
+		return
+	}
+
+	reply.answer(u.storedBlockAnswer(ctx, hash))
+}
+
+// storedBlockAnswer is the answer for a WaitToComplete caller whose block processing has ended
+// without an error: nil only if the block is stored and not marked invalid (BV-INGRESS-005).
+// A block that is not stored was handed to catchup or dropped, and gets the retry-later
+// ServiceError of errNotCommittedCatchup (BV-INGRESS-017).
+func (u *Server) storedBlockAnswer(ctx context.Context, hash *chainhash.Hash) error {
+	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
+	if err != nil {
+		return errors.NewServiceError("[BlockFound][%s] failed to check if block is stored", hash.String(), err)
+	}
+
+	if !exists {
+		return errNotCommittedCatchup(hash)
+	}
+
+	// The header is read from the client the exists check used, so both reads see one chain.
+	_, meta, err := u.blockValidation.blockchainClient.GetBlockHeader(ctx, hash)
+	if err != nil {
+		return errors.NewServiceError("[BlockFound][%s] failed to read stored block header", hash.String(), err)
+	}
+
+	if meta != nil && meta.Invalid {
+		return errors.NewBlockInvalidError("[BlockFound][%s] block is stored as invalid", hash.String())
+	}
+
+	return nil
+}
+
 func newBlockRetryAttemptsCache() *ttlcache.Cache[chainhash.Hash, int] {
 	return ttlcache.New[chainhash.Hash, int](
 		ttlcache.WithTTL[chainhash.Hash, int](blockRetryAttemptsTTL),
@@ -2642,10 +2697,12 @@ func (u *Server) clearBlockRetryAttempts(hash *chainhash.Hash) {
 }
 
 // requeueBlock puts a failed block back on the queue with the peer that announced it and the
-// class and height it had, held back for delay. Nobody waits on the retry, so the error
-// channel is dropped.
+// class and height it had, held back for delay. A waiting caller has already been answered with
+// this attempt's failure (see answerQueuedBlock), so the reply is dropped: left on the item, a
+// caller who announces the hash again would be joined to it and get that stale answer at once,
+// instead of the retry's outcome.
 func (u *Server) requeueBlock(blockFound processBlockFound, delay time.Duration) {
-	blockFound.errCh = nil
+	blockFound.reply = nil
 	u.blockPriorityQueue.RequeueAfter(blockFound, blockFound.priority, blockFound.height, delay)
 	u.logger.Infof("[BlockProcessing] Re-queued block %s for retry from %s in %s", blockFound.hash.String(), blockFound.baseURL, delay)
 }
@@ -3597,17 +3654,13 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	exists, err := u.blockValidation.GetBlockExists(ctx, blockFound.hash)
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to check if block exists: %v", err)
-		if blockFound.errCh != nil {
-			blockFound.errCh <- err
-		}
+		blockFound.reply.answer(err)
 		return
 	}
 
 	if exists {
 		u.logger.Debugf("[addBlockToPriorityQueue] Block %s already exists, skipping", blockFound.hash.String())
-		if blockFound.errCh != nil {
-			blockFound.errCh <- nil
-		}
+		u.answerStoredBlock(ctx, blockFound.reply, blockFound.hash)
 		return
 	}
 
@@ -3622,9 +3675,7 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- err
-		}
+		blockFound.reply.answer(err)
 		return
 	}
 
@@ -3632,15 +3683,14 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 }
 
 // queueFetchedBlock hands an announced block, already fetched from blockFound's source, to catchup
-// if its parent is missing and to the priority queue otherwise. It answers blockFound.errCh.
+// if its parent is missing and to the priority queue otherwise. It answers blockFound.reply on
+// every path that does not queue the block.
 func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockFound, block *model.Block) {
 	// Check if parent exists - if not, send directly to catchup
 	parentExists, err := u.blockValidation.GetBlockExists(ctx, block.Header.HashPrevBlock)
 	if err != nil {
 		u.logger.Errorf("[queueFetchedBlock] Failed to check if parent block %s exists: %v", block.Header.HashPrevBlock.String(), err)
-		if blockFound.errCh != nil {
-			blockFound.errCh <- err
-		}
+		blockFound.reply.answer(err)
 		return
 	}
 
@@ -3658,9 +3708,7 @@ func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockF
 		if u.catchupAttemptsExhausted(blockFound.hash) {
 			u.logger.Warnf("[queueFetchedBlock] Block %s has exhausted catchup attempts (cap %d); skipping re-enqueue until cooldown expires", blockFound.hash.String(), u.settings.BlockValidation.CatchupMaxAttemptsPerBlock)
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 
 			return
 		}
@@ -3689,9 +3737,7 @@ func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockF
 				u.catchupAlternatives.Set(*blockFound.hash, altList, ttlcache.DefaultTTL)
 			}
 
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 			return
 		}
 
@@ -3719,9 +3765,7 @@ func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockF
 			}
 		}()
 
-		if blockFound.errCh != nil {
-			blockFound.errCh <- nil
-		}
+		blockFound.reply.answer(errNotCommittedCatchup(blockFound.hash))
 		return
 	}
 
@@ -3764,13 +3808,8 @@ func (u *Server) queueFetchedBlock(ctx context.Context, blockFound processBlockF
 
 	u.logger.Infof("[queueFetchedBlock] Added block %s with priority %d at height %d", blockFound.hash.String(), priority, block.Height)
 
-	// Send success signal if someone is waiting
-	if blockFound.errCh != nil {
-		u.logger.Debugf("[queueFetchedBlock] Sending success response to errCh for block %s", blockFound.hash.String())
-		blockFound.errCh <- nil
-	} else {
-		u.logger.Debugf("[queueFetchedBlock] No errCh to respond to for block %s", blockFound.hash.String())
-	}
+	// A waiting caller is not answered here: its reply is on the queued item, and the worker
+	// answers it once the block is settled (answerQueuedBlock).
 }
 
 // processBlockWithPriority processes a block based on its priority

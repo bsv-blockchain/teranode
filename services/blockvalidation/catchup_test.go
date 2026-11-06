@@ -780,7 +780,7 @@ func TestServer_blockFoundCh_triggersCatchupCh(t *testing.T) {
 	err = baseServer.processBlockFoundChannel(processingCtx, processBlockFound{
 		hash:    dummyBlock.Hash(),
 		baseURL: "http://peer0",
-		errCh:   make(chan error, 1),
+		reply:   newBlockFoundReply(),
 	})
 	require.NoError(t, err)
 
@@ -884,13 +884,13 @@ func TestServer_blockFoundCh_triggersCatchupCh_BlockLocator(t *testing.T) {
 	}
 
 	// Create block found request - will be processed directly
-	pbf1 := processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
+	pbf1 := processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
 
 	// Fill blockFoundCh with 4+ blocks to trigger catchup path (condition: len > 3)
-	server.blockFoundCh <- processBlockFound{hash: blocks[1].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
-	server.blockFoundCh <- processBlockFound{hash: blocks[2].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
-	server.blockFoundCh <- processBlockFound{hash: blocks[3].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
-	server.blockFoundCh <- processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer0", errCh: make(chan error, 1)}
+	server.blockFoundCh <- processBlockFound{hash: blocks[1].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
+	server.blockFoundCh <- processBlockFound{hash: blocks[2].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
+	server.blockFoundCh <- processBlockFound{hash: blocks[3].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
+	server.blockFoundCh <- processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer0", reply: newBlockFoundReply()}
 
 	// Process the first block - this should trigger catchup since:
 	// 1. len(blockFoundCh) > 3 makes shouldConsiderCatchup true
@@ -981,10 +981,10 @@ func TestProcessBlockFoundChannelCatchup(t *testing.T) {
 		blocks: blocks,
 	}
 
-	pbf1 := processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer1", errCh: make(chan error, 1)}
-	pbf2 := processBlockFound{hash: blocks[1].Header.Hash(), baseURL: "http://peer1", errCh: make(chan error, 1)}
-	pbf3 := processBlockFound{hash: blocks[2].Header.Hash(), baseURL: "http://peer2", errCh: make(chan error, 1)}
-	pbf4 := processBlockFound{hash: blocks[3].Header.Hash(), baseURL: "http://peer2", errCh: make(chan error, 1)}
+	pbf1 := processBlockFound{hash: blocks[0].Header.Hash(), baseURL: "http://peer1", reply: newBlockFoundReply()}
+	pbf2 := processBlockFound{hash: blocks[1].Header.Hash(), baseURL: "http://peer1", reply: newBlockFoundReply()}
+	pbf3 := processBlockFound{hash: blocks[2].Header.Hash(), baseURL: "http://peer2", reply: newBlockFoundReply()}
+	pbf4 := processBlockFound{hash: blocks[3].Header.Hash(), baseURL: "http://peer2", reply: newBlockFoundReply()}
 
 	// Fill blockFoundCh with blocks
 	server.blockFoundCh <- pbf1
