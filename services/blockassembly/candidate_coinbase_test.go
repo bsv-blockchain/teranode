@@ -191,10 +191,11 @@ func TestSubmitMiningSolution_CoinbaseLessMinesTheIssuedCoinbase(t *testing.T) {
 // TestSubmitMiningSolution_InvalidSolutionKeepsTheIssuedCoinbase pins that a consensus-invalid
 // solution leaves the job, and so its coinbase, in place, as bitcoin-sv leaves a candidate alone
 // after an invalid submitminingsolution. Deleting the job made the next poll for the same id, which
-// every poll with the same candidate time shares, build a coinbase with a new random extranonce, so every other miner still hashing the first one failed the proof-of-work check and
-// deleted the job again. A share that misses the target, the commonest invalid solution, did worse:
-// block.Valid reports a miss as a processing error, so it also reset block assembly. A miner on the
-// original coinbase must still get its block.
+// every poll with the same candidate time shares, build a coinbase with a new random extranonce, so
+// every other miner still hashing the first one failed the proof-of-work check and deleted the job
+// again. A share that misses the target, the commonest invalid solution, did worse: block.Valid
+// reports a miss as a processing error, so it also reset block assembly. A miner on the original
+// coinbase must still get its block.
 func TestSubmitMiningSolution_InvalidSolutionKeepsTheIssuedCoinbase(t *testing.T) {
 	h := newCandidateCoinbaseHarness(t)
 	issued := h.issue(t)
