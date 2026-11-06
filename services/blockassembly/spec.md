@@ -197,7 +197,7 @@ For any transaction failing validation, the operation SHALL mark it conflicting 
 
 **BA-STARTUP-009.** The service SHALL provide `CheckBlockAssembly` to verify the internal consistency of the assembly state and subtree processor. The operation returns success or an error describing the inconsistency found.
 
-**BA-STARTUP-010.** Reset variants MUST NOT reject ingest. `AddTx`, `AddTxBatch`, and `AddTxBatchColumnar` SHALL continue to accept and queue transactions throughout the duration of a reset. Only subtree completion is paused for the reset duration.
+**BA-STARTUP-010.** Reset variants MUST NOT reject ingest on their own account. `AddTx`, `AddTxBatch`, and `AddTxBatchColumnar` SHALL continue to accept and queue transactions throughout the duration of a reset. Only subtree completion is paused for the reset duration. When `blockassembly_maxTransactionsInMemory` is positive, the reset's unmined reload counts as a load (BA-STARTUP-003): the held count reads at least the limit for the duration of the reload, so a non-block batch is refused with `ERR_THRESHOLD_EXCEEDED` (held) until the reload completes, and block batches (`inBlock`) are admitted. The refusal is the limit's, not the reset's, and `GetBlockAssemblyQueueStats` reports the held count so the validator's Kafka backpressure pauses instead of dropping.
 
 **BA-STARTUP-011.** All reset variants MUST be gated behind the BA-STARTUP-003 unmined-loading guard and SHALL be rejected during startup recovery.
 
@@ -385,7 +385,7 @@ The Block Assembly service exposes 18 gRPC operations. Each is governed by the r
 | **Success effect** | Assembly state realigned to current best block header |
 | **Error responses** | `service not ready` during startup recovery (BA-STARTUP-011) |
 | **Idempotency** | Yes (calling repeatedly converges) |
-| **Concurrency** | Ingest continues during reset (BA-STARTUP-010) |
+| **Concurrency** | Ingest continues during reset (BA-STARTUP-010); with `blockassembly_maxTransactionsInMemory` set, non-block ingest is refused as held while the reset reloads |
 | **Persistence** | None directly; downstream effects flow through normal paths |
 | **Requirement IDs** | BA-STARTUP-006, BA-STARTUP-010, BA-STARTUP-011 |
 
@@ -547,7 +547,7 @@ stateDiagram-v2
 |---|---|---|---|---|---|---|---|
 | `HealthGRPC` | accept | accept | accept | accept | accept | accept | accept |
 | `GetBlockAssemblyState` | accept | accept | accept | accept | accept | accept | accept |
-| `AddTx` / `AddTxBatch` / `AddTxBatchColumnar` | reject (not ready) | reject (not ready) | accept (enqueue) | accept (enqueue) | accept (enqueue) | accept (enqueue) | reject (idle) |
+| `AddTx` / `AddTxBatch` / `AddTxBatchColumnar` | reject (not ready) | reject (not ready) | accept (enqueue) | accept (enqueue); with the in-memory limit set, non-block batches are refused as held while the reset reloads | accept (enqueue) | accept (enqueue) | reject (idle) |
 | `RemoveTx` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
 | `GetMiningCandidate` | reject (not ready) | reject (not ready) | accept | accept (stale data) | accept (stale data) | accept (stale data) | reject (idle) |
 | `GetCurrentDifficulty` | reject (not ready) | reject (not ready) | accept | accept | accept | accept | reject (idle) |
@@ -610,7 +610,9 @@ stateDiagram-v2
 
 **AC-BA-STARTUP-007.1.** Given an unmined transaction T whose input is recorded in the UTXO store as spent by a different transaction T', when `ResetBlockAssemblyValidateInputs` is invoked, then T MUST be marked conflicting, T's descendants in the assembly pipeline MUST be evicted, and the operation MUST complete successfully.
 
-**AC-BA-STARTUP-010.1.** Given the service is in `Resetting` due to an in-flight `ResetBlockAssembly`, when `AddTxBatch` is invoked, then the request MUST be accepted and the transactions MUST be present in the queue when the reset completes.
+**AC-BA-STARTUP-010.1.** Given the service is in `Resetting` due to an in-flight `ResetBlockAssembly` and `blockassembly_maxTransactionsInMemory` is zero, when `AddTxBatch` is invoked, then the request MUST be accepted and the transactions MUST be present in the queue when the reset completes.
+
+**AC-BA-STARTUP-010.2.** Given the service is in `Resetting` and `blockassembly_maxTransactionsInMemory` is positive, when a non-block `AddTxBatch` is invoked while the reset reloads its unmined transactions, then the request MUST be refused with `ERR_THRESHOLD_EXCEEDED` marked as held, a block batch (`inBlock`) MUST be accepted, and a non-block batch invoked after the reload completes MUST be accepted while the held count is below the limit.
 
 **AC-BA-DEPENDENCY-002.1.** Given the Blockchain service has returned three consecutive errors within a 30-second window with no successful interleaved call, when the service evaluates dependency health, then it MUST transition to `Idle` and `GetBlockAssemblyState` MUST report `BlockAssemblyState == "idle"` within one probe interval.
 

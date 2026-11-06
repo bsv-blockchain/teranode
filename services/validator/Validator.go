@@ -1364,13 +1364,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// function exists to prevent.
 	persistedMeta := txMetaData
 	delivered := !addToBlockAssembly
-	keptLockedOutsideTemplate := false
 
 	defer func() {
-		if keptLockedOutsideTemplate {
-			return
-		}
-
 		v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered)
 	}()
 
@@ -1529,7 +1524,6 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					prometheusValidatorShedInBlockDroppedTotal.Inc()
 					v.warnInBlockShed(txID)
 
-					keptLockedOutsideTemplate = true
 					err = nil
 				} else {
 					// A shed leaves no trace: the transaction is either fully accepted
@@ -1595,19 +1589,24 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// carries on through the txmeta publish and the two-phase commit, but it
 			// is not delivered, so it stays Locked and has no template entry.
 			//
-			// Residual: subtree validation also sets InBlock for transactions of
-			// announced subtrees that may never be mined. Such a record stays Locked
-			// until the next unmined reload, and an ordinary child of it is refused
-			// with TX_LOCKED for that whole time. A block's setMined clears the lock
-			// only for transactions that a block actually mines.
+			// InBlock is set by block subtree validation (CheckBlockSubtrees) and legacy
+			// block sync. The peer-announced subtree path (subtreesHandler) passes no
+			// options, so its transactions meet the limit as mempool ingest does: at the
+			// limit each one is validated, refused, unwound and deleted, the subtree
+			// fails, and the work is repeated with InBlock set when the block arrives.
+			//
+			// Residual: a block that validates on a side chain and never connects leaves
+			// its shed transactions Locked until the next unmined reload, and an ordinary
+			// child of one is refused with TX_LOCKED for that whole time. A block's
+			// setMined clears the lock only for transactions that a block actually mines.
 			if err != nil {
 				span.RecordError(err)
 
 				return nil, err
 			}
+		} else {
+			delivered = true
 		}
-
-		delivered = !keptLockedOutsideTemplate
 	}
 
 	// Serialize and enqueue txmeta for the subtree validation kafka topic.
@@ -1810,9 +1809,13 @@ func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID st
 	// Not delivered to block assembly - leave it locked for the unmined-transaction
 	// loader to heal. This covers both ordinary error returns and a panic unwinding
 	// through the window between entering the addToBlockAssembly block and
-	// sendToBlockAssembler returning.
+	// sendToBlockAssembler returning. A clean exit without delivery is the in-block
+	// shed, which chose to keep the record Locked outside the template and already
+	// warned at a bounded rate, so it is not warned about again here.
 	if delivered == nil || !*delivered {
-		v.logger.Warnf("[Validate][%s] tx stays locked, it was not delivered to block assembly", txID)
+		if *err != nil {
+			v.logger.Warnf("[Validate][%s] tx stays locked, it was not delivered to block assembly", txID)
+		}
 
 		return
 	}

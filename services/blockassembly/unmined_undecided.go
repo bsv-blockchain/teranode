@@ -223,14 +223,16 @@ func (b *BlockAssembler) noteFailedUnminedReload(validateInputs bool) {
 
 // clearPendingUnminedReload drops the retry a failed reload left, once a later reset has reloaded
 // the mempool. A reload that did not validate inputs leaves a retry that asked for validation in
-// place, so the validation the failed reset meant to do still happens.
+// place, so the validation the failed reset meant to do still happens. The hold on the held count
+// ends on every successful reload: the subtrees are full again, which is all the hold stood in
+// for, and a validating retry that stays pending runs its own reset with its own hold.
 func (b *BlockAssembler) clearPendingUnminedReload(validatedInputs bool) {
 	if validatedInputs || !b.unminedReloadValidate.Load() {
 		b.unminedReloadPending.Store(false)
+	}
 
-		if b.pendingReloadHeld.CompareAndSwap(true, false) {
-			b.subtreeProcessor.SetUnminedLoading(false)
-		}
+	if b.pendingReloadHeld.CompareAndSwap(true, false) {
+		b.subtreeProcessor.SetUnminedLoading(false)
 	}
 }
 

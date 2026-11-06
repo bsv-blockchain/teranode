@@ -503,6 +503,17 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 			return nil
 		}
 
+		// A shed at block assembly's in-memory limit is not an invalid tx either: the
+		// validator unwound a valid transaction because the node had no room for it.
+		// It is counted on its own, and the validator already logged the drop at a
+		// bounded rate, so nil commits the offset without an error line per message.
+		if blockassembly.IsHeldLimitShed(err) {
+			prometheusHeldLimitShedTransactions.Inc()
+			v.warnBackpressureOffWithLimit(consumerCtx)
+
+			return nil
+		}
+
 		// ErrTxMissingParent here means the tx merely arrived before its
 		// parent on this Kafka topic's 32 concurrent partitions - it is not
 		// evidence of an attack or a malformed tx, so count it separately
@@ -512,10 +523,6 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 			prometheusMissingParentTransactions.Inc()
 		} else {
 			prometheusInvalidTransactions.Inc()
-		}
-
-		if blockassembly.IsHeldLimitShed(err) {
-			v.warnBackpressureOffWithLimit(consumerCtx)
 		}
 
 		v.logger.Errorf("[Validator] Invalid tx: %s", err)

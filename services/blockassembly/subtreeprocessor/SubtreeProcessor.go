@@ -7150,7 +7150,9 @@ func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) 
 // Returns:
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification bool) (err error) {
-	return stp.forEachDrainChunk(1, func(batches []*TxBatch) error {
+	return stp.forEachDrainChunk(1, func(batches []*TxBatch) (int, error) {
+		placed := 0
+
 		for _, batch := range batches {
 			// Process all transactions in this batch
 			for i, node := range batch.nodes {
@@ -7169,13 +7171,15 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 
 				if addErr := stp.addNode(node, txInpoints, skipNotification); addErr != nil {
 					stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), addErr)
+				} else {
+					placed++
 				}
 			}
 
 			prometheusSubtreeProcessorDequeuedTxs.Add(float64(len(batch.nodes)))
 		}
 
-		return nil
+		return placed, nil
 	})
 }
 
@@ -7183,8 +7187,10 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 // movement covers and hands them to fn in queue order, at most maxItems txs
 // at a time (but always at least one batch). Dequeuing as it goes keeps the
 // queue length, and the backpressure that reads it, honest during the
-// drain, and bounds what a failure part-way through can lose.
-func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) error) error {
+// drain, and bounds what a failure part-way through can lose. fn reports how
+// many of the chunk's transactions it placed in subtrees, and that number is
+// added to the subtrees count before the chunk is settled.
+func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) (int, error)) error {
 	// Bound the drain by two complementary cutoffs:
 	//
 	//  1. Time: validFromMillis = clock.Now() at function entry (or
@@ -7259,24 +7265,28 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	return nil
 }
 
-// runDrainChunk hands one dequeued chunk to fn, then counts what fn placed and settles the
-// chunk. The count comes first: addNode does not add to txCount, so settling before it would
+// runDrainChunk hands one dequeued chunk to fn, then adds what fn placed to txCount and settles
+// the chunk. The add comes first: addNode does not add to txCount, so settling before it would
 // leave the placed transactions in none of the queue length, the unsettled count or the
-// subtrees count, and the held total would read low until the drain's final recount. The
-// recount walks every chained subtree, so it runs only when the in-memory limit is on and the
-// count feeds the limit; without a limit the callers' own recount after the drain is enough. The
-// settle is deferred so a panic in fn, which runHandlerWithRecover absorbs, cannot leave the
-// chunk counted as unsettled for good.
-func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn func(batches []*TxBatch) error) error {
+// subtrees count, and the held total would read low until the drain's final recount. The add is
+// the reported number, not a walk of every chained subtree per chunk; a queued duplicate that
+// addNode skipped is over-counted until the callers' recount after the drain. The settle is
+// deferred so a panic in fn, which runHandlerWithRecover absorbs, cannot leave the chunk counted
+// as unsettled for good.
+func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn func(batches []*TxBatch) (int, error)) (err error) {
+	placed := 0
+
 	defer func() {
-		if stp.queue.maxHeld > 0 {
-			stp.setTxCountFromSubtrees()
+		if placed > 0 {
+			stp.txCount.Add(uint64(placed)) // nolint:gosec
 		}
 
 		stp.queue.settle(int64(chunkItems))
 	}()
 
-	return fn(chunk)
+	placed, err = fn(chunk)
+
+	return err
 }
 
 // processCoinbaseUtxos processes UTXOs from coinbase transactions.
