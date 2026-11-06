@@ -102,14 +102,15 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 			continue
 		}
 
-		// Re-spend the inputs only (the record already exists in the creating state).
-		// #1326 removed Store.Spend; the spend-only phase of SpendAndCreate is the
-		// equivalent. Idempotent for the same spender, which makes roll-forward safe.
-		// Locks are not ignored: a locked parent is the hand-off barrier, so ErrTxLocked
-		// is retried on a later pass rather than bypassed.
-		_, spends, spendErr := s.utxoStore.SpendAndCreate(ctx, md.Tx, blockHeight, utxo.WithSpendOnly())
-		if spendErr != nil {
-			if isUnwinnableSpendError(spendErr) {
+		// Re-spend the inputs only (the record already exists in the creating state) and
+		// finalize, through the shared roll-forward rule. Spends are idempotent for the same
+		// spender, which makes roll-forward safe. Locks are not ignored: a locked parent is
+		// the hand-off barrier, so ErrTxLocked is retried on a later pass rather than
+		// bypassed. The rule refuses a record that is rolling back, and reverses its own
+		// spends when the record is rolled back or deleted before the finalize lands.
+		_, rfErr := utxo.RollForwardCreating(ctx, s.logger, s.utxoStore, md.Tx, blockHeight)
+		if rfErr != nil {
+			if isUnwinnableSpendError(rfErr) {
 				if rbErr := utxo.RollBackCreating(ctx, s.logger, s.utxoStore, md.Tx); rbErr != nil {
 					s.logger.Errorf("[pruner][creating-sweep][%d] rollback of %s failed, will retry next block: %v", blockHeight, hash, rbErr)
 					prunerCreatingSweepFailures.Inc()
@@ -122,25 +123,7 @@ func (s *Server) sweepCreatingTxs(ctx context.Context, blockHeight uint32) {
 				continue
 			}
 
-			s.logger.Warnf("[pruner][creating-sweep][%d] spend %s failed, will retry next block: %v", blockHeight, hash, spendErr)
-			prunerCreatingSweepFailures.Inc()
-
-			continue
-		}
-
-		// Defence-in-depth: only finalize when every input was actually spent this pass.
-		// A nil top-level error alone is not proof — guard against a swallowed per-input
-		// error (e.g. an "already blessed" fallback) leaving an input unspent while we
-		// make the outputs spendable.
-		if !utxo.AllInputsSpent(md.Tx, spends) {
-			s.logger.Warnf("[pruner][creating-sweep][%d] spend of %s did not cover all inputs (%d spends for %d inputs); not finalizing", blockHeight, hash, len(spends), len(md.Tx.Inputs))
-			prunerCreatingSweepFailures.Inc()
-
-			continue
-		}
-
-		if finErr := s.utxoStore.FinalizeTransaction(ctx, md.Tx); finErr != nil {
-			s.logger.Errorf("[pruner][creating-sweep][%d] finalize %s failed: %v", blockHeight, hash, finErr)
+			s.logger.Warnf("[pruner][creating-sweep][%d] roll-forward of %s failed, will retry next block: %v", blockHeight, hash, rfErr)
 			prunerCreatingSweepFailures.Inc()
 
 			continue
@@ -213,5 +196,5 @@ func (s *Server) finishRollback(ctx context.Context, tx *bt.Tx) error {
 		return err
 	}
 
-	return s.utxoStore.DeleteComplete(ctx, tx.TxIDChainHash())
+	return s.utxoStore.DeleteRollingBack(ctx, tx.TxIDChainHash())
 }

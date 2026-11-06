@@ -314,7 +314,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.NoError(t, err, "child must be spendable once the parent is rolled forward")
 	})
 
-	t.Run("roll-forward contract: a direct re-spend of a creating record whose parent is missing is blessed", func(t *testing.T) {
+	t.Run("roll-forward contract: a re-spend of a creating record whose parent is missing fails and is rolled back", func(t *testing.T) {
 		// absentGrandparent is a valid tx that is NEVER stored (distinct txid via Version),
 		// so the child's input UTXO record does not exist → the spend hits ErrTxNotFound.
 		absentGrandparent := spendableChildTx(t, tests.ParentTx, 0)
@@ -322,29 +322,24 @@ func TestCreateFirstLifecycle(t *testing.T) {
 
 		child := spendableChildTx(t, absentGrandparent, 0)
 
-		// The child itself exists in the tentative creating state.
 		_, err := store.Create(ctx, child, 106, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		// A parent is pruned only once every output is spent, so a missing parent behind an
-		// existing spender record, creating or not, means the input has been taken: the
-		// spender exists, so the ErrTxNotFound is cleared. A roll-forward of a creating
-		// record whose parent was pruned must converge.
-		spends, spendErr := store.Spend(ctx, child, 106)
-		require.NoError(t, spendErr, "a missing parent behind an existing creating spender is blessed")
+		// The tentative record is not evidence that its own input was spent, so the missing
+		// parent stays an error and the record is never finalized.
+		_, spendErr := store.Spend(ctx, child, 106)
+		require.ErrorIs(t, spendErr, errors.ErrTxNotFound, "a creating child is not proof that its parent was spent")
 
-		for _, sp := range spends {
-			require.NotNil(t, sp)
-			require.NoError(t, sp.Err)
-		}
+		_, rfErr := utxo.RollForwardCreating(ctx, logger, store, child, 106)
+		require.ErrorIs(t, rfErr, errors.ErrTxNotFound)
 
 		got := &meta.Data{}
 		require.NoError(t, store.GetMeta(ctx, child.TxIDChainHash(), got))
-		require.True(t, got.Creating, "Spend alone does not finalize the record")
+		require.True(t, got.Creating, "the record is not finalized")
 
-		require.NoError(t, store.FinalizeTransaction(ctx, child))
-		require.NoError(t, store.GetMeta(ctx, child.TxIDChainHash(), got))
-		require.False(t, got.Creating, "the roll-forward converges to finalized")
+		// The sweep's path for an unwinnable spend error: roll the record back and delete it.
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child))
+		require.ErrorIs(t, store.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound, "the rolled back record is deleted")
 	})
 
 	t.Run("double-spend: creating loser is rolled back and deleted", func(t *testing.T) {
@@ -560,4 +555,38 @@ func TestSpendAndCreate_CreateFirst_Aerospike(t *testing.T) {
 	child := spendableChildTx(t, tx, 0)
 	_, err = store.Spend(ctx, child, 102)
 	require.NoError(t, err, "a child of a create-first SpendAndCreate tx must be spendable")
+}
+
+func TestRollForwardCreating_RollingBackRecordHasNoParentSpent(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	child := spendableChildTx(t, tests.ParentTx, 0)
+
+	_, err = store.Create(ctx, child, 107, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	began, err := store.BeginCreateFirstRollback(ctx, child.TxIDChainHash())
+	require.NoError(t, err)
+	require.True(t, began)
+
+	spends, err := utxo.RollForwardCreating(ctx, logger, store, child, 107, utxo.WithIgnoreLocked(true))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "rolling back")
+	require.Nil(t, spends)
+
+	inputs, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+
+	resp, err := store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.Equal(t, int(utxo.Status_OK), resp.Status, "the parent output must still be unspent")
+	require.Nil(t, resp.SpendingData, "no spender is recorded on the parent output")
 }

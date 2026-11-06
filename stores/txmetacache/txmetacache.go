@@ -1184,6 +1184,17 @@ func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) 
 	return err
 }
 
+// DeleteRollingBack deletes a rolling back record from the underlying store and evicts the
+// cache entry whatever the outcome, for the same reason DeleteComplete does.
+func (t *TxMetaCache) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	err := t.utxoStore.DeleteRollingBack(ctx, hash)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return err
+}
+
 // BeginCreateFirstRollback marks a creating record as rolling back in the underlying store
 // and evicts the cache entry whatever the outcome, for the same reason DeleteComplete does:
 // a cached entry would keep reporting the record as an ordinary creating one.

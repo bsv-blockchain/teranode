@@ -31,6 +31,8 @@ type fakeSweepStore struct {
 	spendErr        error
 	spendIncomplete bool
 	spendSpends     []*utxo.Spend
+	finalizeErr     error
+	beginDeclined   bool
 
 	spendOpts []utxo.CreateOption
 	events    []string
@@ -45,6 +47,7 @@ type fakeSweepStore struct {
 	unlocked       []chainhash.Hash
 	lastLimit      int
 	onUnlock       func()
+	onGet          func()
 }
 
 func (f *fakeSweepStore) SetLocked(_ context.Context, txHashes []chainhash.Hash, value bool) error {
@@ -66,7 +69,13 @@ func (f *fakeSweepStore) QueryStaleCreatingTxs(_ context.Context, _ uint32, limi
 
 func (f *fakeSweepStore) Get(_ context.Context, hash *chainhash.Hash, _ ...fields.FieldName) (*meta.Data, error) {
 	if md, ok := f.getResp[*hash]; ok {
-		return md, nil
+		snapshot := *md
+
+		if f.onGet != nil {
+			f.onGet()
+		}
+
+		return &snapshot, nil
 	}
 
 	return nil, errors.NewTxNotFoundError("not found")
@@ -99,6 +108,17 @@ func (f *fakeSweepStore) SpendAndCreate(_ context.Context, tx *bt.Tx, _ uint32, 
 
 func (f *fakeSweepStore) FinalizeTransaction(_ context.Context, tx *bt.Tx) error {
 	f.finalized = append(f.finalized, *tx.TxIDChainHash())
+	return f.finalizeErr
+}
+
+func (f *fakeSweepStore) GetMeta(_ context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	md, ok := f.getResp[*hash]
+	if !ok {
+		return errors.NewTxNotFoundError("not found")
+	}
+
+	*data = *md
+
 	return nil
 }
 
@@ -106,7 +126,7 @@ func (f *fakeSweepStore) BeginCreateFirstRollback(_ context.Context, hash *chain
 	f.events = append(f.events, "begin")
 	f.began = append(f.began, *hash)
 
-	return true, nil
+	return !f.beginDeclined, nil
 }
 
 func (f *fakeSweepStore) Unspend(_ context.Context, spends []*utxo.Spend, _ ...bool) error {
@@ -120,7 +140,7 @@ func (f *fakeSweepStore) Unspend(_ context.Context, spends []*utxo.Spend, _ ...b
 	return nil
 }
 
-func (f *fakeSweepStore) DeleteComplete(_ context.Context, hash *chainhash.Hash) error {
+func (f *fakeSweepStore) DeleteRollingBack(_ context.Context, hash *chainhash.Hash) error {
 	f.events = append(f.events, "delete")
 	f.deleted = append(f.deleted, *hash)
 
@@ -626,4 +646,51 @@ func TestSweepCreatingTxsSkippedBelowMinAge(t *testing.T) {
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 2)
 
 	require.Empty(t, store.spends, "the sweep must not run when blockHeight <= minAge")
+}
+
+func TestSweepCreatingTxsFinalizeOfGoneRecordUnspendsItsOwnSpends(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:   ns,
+		stale:       []chainhash.Hash{hashA},
+		getResp:     map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+		finalizeErr: errors.NewTxNotFoundError("tx is rolling back"),
+
+		beginDeclined: true,
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []chainhash.Hash{hashA}, store.finalized)
+	require.Len(t, store.unspent, 1, "a rollback that began between the re-spend and the finalize leaves no spend of this pass behind")
+	require.Len(t, store.unspent[0], len(txA.Inputs))
+	require.Empty(t, store.unlocked, "a record that was not finalized is never unlocked")
+}
+
+func TestSweepCreatingTxsDoesNotSpendForRecordThatBeganRollingBack(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore: ns,
+		stale:     []chainhash.Hash{hashA},
+		getResp:   map[chainhash.Hash]*meta.Data{hashA: {Creating: true, Tx: txA}},
+	}
+
+	srv := newSweepServer(t, store)
+	store.onGet = func() { store.getResp[hashA] = &meta.Data{Creating: true, RollingBack: true, Tx: txA} }
+
+	srv.sweepCreatingTxs(context.Background(), 100)
+
+	require.Empty(t, store.spends, "the roll-forward must not spend the parents of a record whose rollback began after the sweep read it")
+	require.Empty(t, store.finalized)
+	require.Empty(t, store.unspent)
 }

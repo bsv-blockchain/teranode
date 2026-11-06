@@ -499,3 +499,69 @@ func TestDeleteComplete_OrphanChildResidueIsUnreachableNotMineable(t *testing.T)
 	_, _, accepted = spendChildOutputStatus(t, ctx, store, child, highVout)
 	require.True(t, accepted, "after adoption and unlock a high-numbered output is spendable again")
 }
+
+func TestDeleteRollingBack_LeavesSameTxidReplacement(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	t.Run("a record that is not rolling back is left alone", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		hash := child.TxIDChainHash()
+
+		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		require.NoError(t, store.DeleteRollingBack(ctx, hash))
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got), "a creating record that nobody is rolling back survives")
+		require.True(t, got.Creating)
+	})
+
+	t.Run("a rolling back record is deleted", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 1)
+		hash := child.TxIDChainHash()
+
+		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		require.NoError(t, store.DeleteRollingBack(ctx, hash))
+		require.ErrorIs(t, store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound)
+	})
+
+	t.Run("a stale rollback does not delete a replacement created after its record went", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 2)
+		hash := child.TxIDChainHash()
+
+		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		require.NoError(t, store.DeleteRollingBack(ctx, hash), "the owner's rollback deletes the record it marked")
+		require.ErrorIs(t, store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound)
+
+		_, err = store.Create(ctx, child, 102, utxo.WithCreating(true))
+		require.NoError(t, err, "a new attempt creates the same txid afresh")
+
+		require.NoError(t, store.DeleteRollingBack(ctx, hash), "a stale rollback of the old attempt reports success")
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got), "the replacement must survive the stale rollback")
+		require.True(t, got.Creating)
+		require.False(t, got.RollingBack)
+	})
+}

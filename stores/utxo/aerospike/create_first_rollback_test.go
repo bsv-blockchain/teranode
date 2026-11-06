@@ -1,6 +1,8 @@
 package aerospike_test
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -75,18 +77,67 @@ func TestBeginCreateFirstRollback(t *testing.T) {
 		require.True(t, got.RollingBack, "GetMeta must report the marker")
 	})
 
-	t.Run("an already rolling-back record reports true", func(t *testing.T) {
+	t.Run("an already rolling-back record is not claimed a second time", func(t *testing.T) {
 		child := spendableChildTx(t, tests.ParentTx, 1)
 		hash := child.TxIDChainHash()
 
 		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		for range 2 {
-			began, err := store.BeginCreateFirstRollback(ctx, hash)
-			require.NoError(t, err)
-			require.True(t, began, "a repeat of the marker call reports true")
+		began, err := store.BeginCreateFirstRollback(ctx, hash)
+		require.NoError(t, err)
+		require.True(t, began, "the first caller owns the rollback")
+
+		began, err = store.BeginCreateFirstRollback(ctx, hash)
+		require.NoError(t, err)
+		require.False(t, began, "a second caller does not own a rollback that is already running")
+
+		bins := recordBins(t, client, store, hash, 0, fields.Creating, fields.RollingBack)
+		require.Equal(t, true, bins[fields.RollingBack.String()], "the marker the owner set is untouched")
+	})
+
+	t.Run("concurrent claims give exactly one owner", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		child.Version = 31
+		hash := child.TxIDChainHash()
+
+		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		const callers = 16
+
+		var (
+			owners  atomic.Int32
+			wg      sync.WaitGroup
+			start   = make(chan struct{})
+			errored atomic.Int32
+		)
+
+		for range callers {
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				<-start
+
+				began, callErr := store.BeginCreateFirstRollback(ctx, hash)
+				if callErr != nil {
+					errored.Add(1)
+					return
+				}
+
+				if began {
+					owners.Add(1)
+				}
+			}()
 		}
+
+		close(start)
+		wg.Wait()
+
+		require.Zero(t, errored.Load())
+		require.Equal(t, int32(1), owners.Load(), "exactly one caller owns the rollback")
 	})
 
 	t.Run("a finalized record is not marked", func(t *testing.T) {
