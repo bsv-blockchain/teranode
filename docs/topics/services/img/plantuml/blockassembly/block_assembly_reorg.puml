@@ -28,12 +28,27 @@ database "SubtreeStore" as SStore
 database "UTXOStore" as UTXOStore
 entity "Block" as BlockEntity
 
-BA -> BC : GetBlockHeaders(ctx, header.Hash(), uint64(b.maxBlockReorgCatchup))
+BA -> BC : GetBlockLocator(ctx, baBestBlockHeader.Hash(), startingHeight)
 activate BC
-BC --> BA : newChain, _, err
+BC --> BA : currentChainLocator
 deactivate BC
 
-BA -> BA : Calculate moveForwardBlockHeaders and moveBackBlockHeaders
+BA -> BC : GetBlockLocator(ctx, header.Hash(), startingHeight)
+activate BC
+BC --> BA : newChainLocator
+deactivate BC
+
+BA -> BA : Find common ancestor in both locators
+
+BA -> BC : GetBlockHeaders(ctx, baBestBlockHeader.Hash(), baBestBlockHeight - commonAncestorHeight + 1)
+activate BC
+BC --> BA : moveBackBlockHeaders
+deactivate BC
+
+BA -> BC : GetBlockHeaders(ctx, header.Hash(), height - commonAncestorHeight)
+activate BC
+BC --> BA : moveForwardBlockHeaders
+deactivate BC
 
 loop For Each BlockHeader in moveForwardBlockHeaders
     BA -> BC : GetBlock(ctx, blockHeader.Hash())

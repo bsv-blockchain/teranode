@@ -14,8 +14,8 @@
 | GRPCRetryBackoff                     | time.Duration | 2s               | blockassembly_grpcRetryBackoff                     | Retry delay timing                                                                   |
 | LivenessStallTimeout                 | time.Duration | 0s               | blockassembly_livenessStallTimeout                 | Liveness reports 503 if the main select stops being serviced for this long; 0 = off  |
 | LocalDAHCache                        | string        | ""               | blockassembly_localDAHCache                        | **UNUSED** - Reserved for future DAH caching                                         |
-| MaxBlockReorgCatchup                 | int           | 100              | blockassembly_maxBlockReorgCatchup                 | Map capacity for current chain tracking                                              |
-| MaxBlockReorgRollback                | int           | 100              | blockassembly_maxBlockReorgRollback                | **UNUSED** - Defined but not referenced in code                                      |
+| MaxBlockReorgCatchup                 | int           | 100              | blockassembly_maxBlockReorgCatchup                 | Initial capacity of two internal maps only; does not limit reorg depth               |
+| MaxBlockReorgRollback                | int           | 100              | blockassembly_maxBlockReorgRollback                | **UNUSED** - Not read by any code; does not limit reorg depth                        |
 | MoveBackBlockConcurrency             | int           | 375              | blockassembly_moveBackBlockConcurrency             | Concurrency limit for reorg processing (SubtreeProcessor)                            |
 | ProcessRemainderTxHashesConcurrency  | int           | 375              | blockassembly_processRemainderTxHashesConcurrency  | Concurrency limit for remainder tx hash processing                                   |
 | ReconcileInterval                    | time.Duration | 30s              | blockassembly_reconcileInterval                    | Idle polling interval, and how often a pass re-reads the low-water mark without a BlockMinedUnset; 0 disables both (a lost BlockMinedUnset then leaves block assembly on an invalidated tip until the next invalidation or a restart), unfinished reset recovery still retries, at most three passes before the history is given up |
@@ -195,7 +195,8 @@ operator that the UTXO state needs manual intervention.
 ### Reorganization Handling
 
 - `MaxGetReorgHashes` prevents excessive memory usage during large reorganizations
-- Works with `MaxBlockReorgCatchup`, `MaxBlockReorgRollback`, `MoveBackBlockConcurrency`
+- `MoveBackBlockConcurrency` bounds the concurrency of subtree processing during a reorg
+- `MaxBlockReorgCatchup` and `MaxBlockReorgRollback` do not limit reorg depth
 
 ### Dynamic Subtree Sizing
 
