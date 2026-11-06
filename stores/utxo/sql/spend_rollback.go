@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
@@ -85,6 +86,64 @@ func (s *Store) rollbackSpendChunks(ctx context.Context, spentSpends []*utxo.Spe
 	}
 
 	return reverted, firstErr
+}
+
+// rollbackUnrecordedSpends reverts spends when the spending tx has no record.
+// An existing record means the refs are not dangling and the spends belong to a
+// live tx, and an indeterminate probe skips the rollback, because wrongly
+// clearing a live spender's slot cannot be undone. The Spend abort path and
+// rollbackOrphanedSpend both end here, so the two apply one rule. The probe is
+// re-queried every time on purpose, see the comment in Spend.
+func (s *Store) rollbackUnrecordedSpends(ctx context.Context, spenderID *chainhash.Hash, spends []*utxo.Spend) {
+	var spenderExists bool
+	if scanErr := s.db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", spenderID[:]).Scan(&spenderExists); scanErr != nil {
+		s.logger.Errorf("[SPEND][%s] cannot determine whether spender exists, skipping rollback of %d partial spend(s): %v", spenderID, len(spends), scanErr)
+		prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeIndeterminate).Inc()
+
+		return
+	}
+
+	if spenderExists {
+		prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeSpenderExists).Inc()
+
+		return
+	}
+
+	prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
+
+	reverted, unspendErr := s.rollbackSpendChunks(ctx, spends)
+	if unspendErr != nil {
+		left := len(spends) - reverted
+		s.logger.Errorf("[SPEND][%s] error in sql unspend (batched mode): reverted %d of %d partial spend(s), %d left dangling: %v",
+			spenderID, reverted, len(spends), left, unspendErr)
+		// Counted per dangling spend left behind, not per call: with chunking,
+		// one failing chunk no longer means the whole rollback failed, so this
+		// is read as a ref count.
+		prometheusUtxoSpendRollbackFailed.Add(float64(left))
+
+		return
+	}
+
+	s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (batched mode)", spenderID, reverted)
+}
+
+// rollbackOrphanedSpend reverts the spend of one input whose caller gave up
+// while the backend had started it and which then succeeded. The context is
+// detached from the caller and from the store, as in Spend, and bounded by
+// spendRollbackBound.
+func (s *Store) rollbackOrphanedSpend(spend *utxo.Spend) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.spendRollbackBound())
+	defer cancel()
+
+	s.rollbackUnrecordedSpends(ctx, spend.SpendingData.TxID, []*utxo.Spend{spend})
+}
+
+// rollbackSuppressed reports whether a concurrent attempt at the same txid may
+// own the spends: a transient lock or creating window was seen and nothing
+// proves the txid unwinnable. The Spend rollback and the orphan hand-off both
+// use it, so a late success is unspent exactly when the batch rollback is.
+func rollbackSuppressed(spends []*utxo.Spend) bool {
+	return (hasTransientLockFailure(spends) || hasTransientCreatingFailure(spends)) && !hasUnwinnableFailure(spends)
 }
 
 // hasTransientLockFailure reports whether any spend failed with ErrTxLocked.

@@ -100,9 +100,37 @@ type batchSpend struct {
 	ignoreConflicting bool
 	ignoreLocked      bool
 	skipUTXOHashCheck bool
-	// delivered and err are read and written only on the batcher goroutine.
+	// delivered is read and written only on the batcher goroutine. err is
+	// written there before published is stored, and the caller reads it only
+	// after observing published.
 	delivered bool
 	err       error
+	published atomic.Bool
+	// orphan decides who rolls back this item's spend when its caller gave up
+	// while the backend had already started it. rollbackOrphan performs that
+	// rollback.
+	orphan         utxo.SpendOrphan
+	rollbackOrphan func(spend *utxo.Spend)
+}
+
+// markOrphaned records that the caller gave up on an item the backend had
+// started. Spend calls it only when the batch rollback is not suppressed, so a
+// late success is unspent exactly when the batch rollback would be. If the
+// item has already published a success the caller rolls the spend back;
+// otherwise deliver does when the item publishes.
+func (b *batchSpend) markOrphaned() {
+	b.orphan.Mark()
+	b.rollbackIfOrphaned()
+}
+
+// rollbackIfOrphaned starts the rollback of this item's spend, on a detached
+// goroutine, when its caller gave up and the item published a success. Both
+// deliver and markOrphaned call it, and the claim lets exactly one of them
+// start the rollback whichever runs first.
+func (b *batchSpend) rollbackIfOrphaned() {
+	if b.rollbackOrphan != nil && b.published.Load() && b.err == nil && b.orphan.Claim() {
+		go b.rollbackOrphan(b.spend)
+	}
 }
 
 // deliver answers the caller once. Later calls are no-ops, so the panic
@@ -115,6 +143,8 @@ func (b *batchSpend) deliver(err error) {
 	b.delivered = true
 	b.err = err
 	b.errCh <- err
+	b.published.Store(true)
+	b.rollbackIfOrphaned()
 }
 
 // Store implements the UTXO store interface using a SQL database backend.
@@ -2111,14 +2141,36 @@ func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
 	}
 }
 
-// spendRollbackBound is the detached time limit for awaiting a late admitted
-// claim and for rolling back partial spends.
+// spendRollbackBound is the longest a failed Spend holds its caller after the
+// caller gave up: the courtesy wait for started items and the rollback share
+// this one budget, which starts when the first input gives up. Together with
+// SpendWaitTimeout it is the documented bound on a Spend call.
 func (s *Store) spendRollbackBound() time.Duration {
 	if d := s.settings.UtxoStore.SpendRollbackTimeout; d > 0 {
 		return d
 	}
 
 	return 120 * time.Second
+}
+
+// rollbackDeadline is the end of the budget for the rollback. A zero giveUp
+// means no input gave up, so the rollback has a full bound. Otherwise the
+// budget ends spendRollbackBound after giveUp, but never sooner than a quarter
+// of the bound from now, so a wide transaction whose later inputs gave up late
+// still gets a usable rollback.
+func (s *Store) rollbackDeadline(giveUp time.Time) time.Time {
+	now := time.Now()
+	bound := s.spendRollbackBound()
+
+	if giveUp.IsZero() {
+		return now.Add(bound)
+	}
+
+	if floor := now.Add(bound / 4); giveUp.Add(bound).Before(floor) {
+		return floor
+	}
+
+	return giveUp.Add(bound)
 }
 
 // Spend marks UTXOs as spent by updating their spending transaction ID.
@@ -2165,6 +2217,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		mu              sync.Mutex
 		txAlreadyExists bool
 		timedOut        bool
+		giveUp          time.Time
+		orphans         []*batchSpend
 		spentSpends     = make([]*utxo.Spend, 0, len(spends))
 		g               errgroup.Group
 	)
@@ -2199,8 +2253,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			if spendTimeout <= 0 {
 				spendTimeout = 30 * time.Second
 			}
-			requestCtx, cancel := context.WithTimeout(ctx, spendTimeout)
-			defer cancel()
+			requestCtx, cancel := context.WithCancelCause(ctx)
+			defer cancel(nil)
 			errCh := make(chan error, 1)
 			item := &batchSpend{
 				spend:             spend,
@@ -2210,9 +2264,18 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				ignoreLocked:      useIgnoreLocked,
 				skipUTXOHashCheck: useSkipUTXOHashCheck,
 				requestCtx:        requestCtx,
+				rollbackOrphan:    s.rollbackOrphanedSpend,
 			}
 			defer item.admission.Abandon()
-			s.spendBatcher.PutCtx(requestCtx, item)
+
+			// The enqueue runs on the caller's context and the wait budget starts
+			// after it returns, so a send that blocks on a full batcher channel does
+			// not use up the budget. requestCtx exists before the enqueue only because
+			// the batcher reads it from the item; the timer below ends it.
+			s.spendBatcher.PutCtx(ctx, item)
+
+			waitTimer := time.AfterFunc(spendTimeout, func() { cancel(context.DeadlineExceeded) })
+			defer waitTimer.Stop()
 
 			var batchErr error
 			select {
@@ -2220,8 +2283,13 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				// Batch completed successfully or with error
 			case <-requestCtx.Done():
 				// Abandon first, so no further part of this item can start. An item
-				// that already started is awaited for a detached, bounded time and a
-				// late success joins spentSpends, so the rollback below covers it.
+				// that already started is awaited as a courtesy, on a detached context
+				// that ends a quarter of spendRollbackBound after the first caller gave
+				// up, and a prompt success joins spentSpends, so the rollback below
+				// covers it. An item still unpublished then is collected, and after
+				// g.Wait it is marked orphaned unless the transient-window gate
+				// suppresses the rollback, so whoever completes it rolls its spend
+				// back with no time bound.
 				started := !item.admission.Abandon()
 
 				if ctx.Err() != nil {
@@ -2233,13 +2301,19 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 				mu.Lock()
 				timedOut = true
+
+				if giveUp.IsZero() {
+					giveUp = time.Now()
+				}
+
+				budgetStart := giveUp
 				mu.Unlock()
 
 				if !started {
 					return nil
 				}
 
-				lateCtx, lateCancel := context.WithTimeout(context.Background(), s.spendRollbackBound())
+				lateCtx, lateCancel := context.WithDeadline(context.Background(), budgetStart.Add(s.spendRollbackBound()/4))
 				defer lateCancel()
 
 				select {
@@ -2251,6 +2325,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 					}
 				case <-lateCtx.Done():
 					prometheusUtxoSpendAbortInFlight.Inc()
+
+					mu.Lock()
+					orphans = append(orphans, item)
+					mu.Unlock()
 				}
 
 				return nil
@@ -2345,7 +2423,15 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		sawTransientLock := hasTransientLockFailure(spends)
 		sawTransientCreating := hasTransientCreatingFailure(spends)
 
-		if len(spentSpends) > 0 && (!(sawTransientLock || sawTransientCreating) || hasUnwinnableFailure(spends)) {
+		suppressed := rollbackSuppressed(spends)
+
+		if !suppressed {
+			for _, item := range orphans {
+				item.markOrphaned()
+			}
+		}
+
+		if len(spentSpends) > 0 && !suppressed {
 			// Wrapped in a closure so rbCancel can be deferred: Spend has a parent
 			// recover() (see the top of this function), and a panic between
 			// context.WithTimeout and a bare inline rbCancel() call would unwind
@@ -2353,8 +2439,6 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			// defer to this closure keeps the leak-proofing without extending
 			// rbCtx's lifetime past this block, as a function-level defer would.
 			func() {
-				rollback := false
-
 				// Detached from the caller's ctx (on the context-cancel path it is
 				// already dead, and that is exactly a case where the partial spends
 				// must still be cleaned up) but bounded, so a wedged database cannot
@@ -2371,44 +2455,19 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				// getting it wrong is the failure mode we're rolling back to fix
 				// (#1214). Do not "optimise" this back to the memo.
 				//
-				// Uses SpendRollbackTimeout, not SpendWaitTimeout: SpendWaitTimeout
-				// is the end-to-end budget for ONE batched spend, while this budget
-				// covers the existence probe plus rollbackSpendChunks' sequence of
-				// chunked Unspend calls over spentSpends — a multiple of that
-				// single-spend cost on a wide transaction. On overrun the loop
+				// The deadline comes from SpendRollbackTimeout, not SpendWaitTimeout:
+				// SpendWaitTimeout is the end-to-end budget for ONE batched spend,
+				// while this budget covers the existence probe plus
+				// rollbackSpendChunks' sequence of chunked Unspend calls over
+				// spentSpends — a multiple of that single-spend cost on a wide
+				// transaction. It ends where the budget shared with the courtesy wait
+				// for started inputs ends (see rollbackDeadline). On overrun the loop
 				// aborts and the remaining spends stay applied, counted via
-				// prometheusUtxoSpendRollbackFailed below.
-				rbCtx, rbCancel := context.WithTimeout(context.Background(), s.spendRollbackBound())
+				// prometheusUtxoSpendRollbackFailed.
+				rbCtx, rbCancel := context.WithDeadline(context.Background(), s.rollbackDeadline(giveUp))
 				defer rbCancel()
 
-				var spendingTxExists bool
-				if scanErr := s.db.QueryRowContext(rbCtx, "SELECT EXISTS(SELECT 1 FROM transactions WHERE hash = $1)", tx.TxIDChainHash()[:]).Scan(&spendingTxExists); scanErr != nil {
-					s.logger.Errorf("[SPEND][%s] cannot determine whether spender exists, skipping rollback of %d partial spend(s): %v", tx.TxID(), len(spentSpends), scanErr)
-					prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeIndeterminate).Inc()
-				} else {
-					rollback = !spendingTxExists
-
-					if rollback {
-						prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
-					} else {
-						prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeSpenderExists).Inc()
-					}
-				}
-
-				if rollback {
-					reverted, unspendErr := s.rollbackSpendChunks(rbCtx, spentSpends)
-					if unspendErr != nil {
-						left := len(spentSpends) - reverted
-						s.logger.Errorf("[SPEND][%s] error in sql unspend (batched mode): reverted %d of %d partial spend(s), %d left dangling: %v",
-							tx.TxID(), reverted, len(spentSpends), left, unspendErr)
-						// Counted per dangling spend left behind, not per call: with
-						// chunking, one failing chunk no longer means the whole
-						// rollback failed, so this is read as a ref count.
-						prometheusUtxoSpendRollbackFailed.Add(float64(left))
-					} else {
-						s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (batched mode)", tx.TxID(), reverted)
-					}
-				}
+				s.rollbackUnrecordedSpends(rbCtx, tx.TxIDChainHash(), spentSpends)
 			}()
 		} else if len(spentSpends) > 0 {
 			// Transient suppression: record the outcome so this store's dashboard

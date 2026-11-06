@@ -124,9 +124,34 @@ type batchSpend struct {
 	// requireParentOutput turns off the "already blessed" fallback for this item;
 	// see utxo.IgnoreFlags.RequireParentOutputs.
 	requireParentOutput bool
-	// err is the answer complete stored. Only the batcher goroutine reads it,
-	// because the caller may rewrite spend.Err once the group completes.
+	// err is the answer complete stored. The batcher goroutine reads it, and so
+	// does the caller after it observes published, because the caller may
+	// rewrite spend.Err once the group completes.
 	err error
+	// orphan decides who rolls back this item's spend when its caller gave up
+	// while the backend had already started it. onOrphan performs that rollback.
+	orphan   utxo.SpendOrphan
+	onOrphan func(item *batchSpend)
+}
+
+// markOrphaned records that the caller gave up on an item the backend had
+// started. Spend calls it only when the batch rollback is not suppressed, so a
+// late success is unspent exactly when the batch rollback would be. If the
+// item has already published a success the caller rolls the spend back;
+// otherwise complete does when the item publishes.
+func (b *batchSpend) markOrphaned() {
+	b.orphan.Mark()
+	b.rollbackIfOrphaned()
+}
+
+// rollbackIfOrphaned starts the rollback of this item's spend, on a detached
+// goroutine, when its caller gave up and the item published a success. Both
+// complete and markOrphaned call it, and the claim lets exactly one of them
+// start the rollback whichever runs first.
+func (b *batchSpend) rollbackIfOrphaned() {
+	if b.onOrphan != nil && b.published.Load() && b.err == nil && b.orphan.Claim() {
+		go b.onOrphan(b)
+	}
 }
 
 // releaseBreakerSlot returns the half-open probe slot of an item that will never
@@ -166,6 +191,7 @@ func (b *batchSpend) complete(err error) {
 		}
 
 		b.group.Done()
+		b.rollbackIfOrphaned()
 	}
 }
 
@@ -479,8 +505,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	if spendTimeout <= 0 {
 		spendTimeout = 30 * time.Second
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, spendTimeout)
-	defer cancel()
+	requestCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 
 	items := make([]*batchSpend, len(spends))
 	group := completion.NewGroup(int32(len(spends)))
@@ -512,6 +538,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			requireParentOutput: useRequireParentOutputs,
 			requestCtx:          requestCtx,
 			done:                make(chan struct{}),
+			onOrphan:            s.rollbackOrphanedSpend,
 		}
 		items[idx] = item
 
@@ -545,13 +572,22 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	// rejected send rejects every item — complete all of them and let the
 	// resolveSpendCompletions path below report it, instead of parking on
 	// group.Wait for the full spendTimeout and reporting a bogus timeout.
-	if enqueueErr := safeBatcherPutBatchCtx(s.spendBatcher, requestCtx, toEnqueue, "spend"); enqueueErr != nil {
+	//
+	// The enqueue runs on the caller's context and the wait budget starts after
+	// it returns, so a send that blocks on a full batcher channel does not use
+	// up the budget. requestCtx is created before the enqueue only because the
+	// batcher reads it from each item; the timer below ends it.
+	if enqueueErr := safeBatcherPutBatchCtx(s.spendBatcher, ctx, toEnqueue, "spend"); enqueueErr != nil {
 		for _, item := range toEnqueue {
 			item.complete(enqueueErr)
 		}
 	}
 
+	waitTimer := time.AfterFunc(spendTimeout, func() { cancel(context.DeadlineExceeded) })
+	defer waitTimer.Stop()
+
 	if waitErr := group.Wait(requestCtx, 0); waitErr != nil {
+		giveUp := time.Now()
 		callerDone := ctx.Err() != nil
 
 		for _, item := range items {
@@ -560,7 +596,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 		}
 
-		s.awaitStartedSpends(items)
+		s.awaitStartedSpends(items, giveUp)
 		// The group did not complete within budget (context canceled, or the
 		// dispatcher took longer than spendTimeout). Some items may already
 		// have finished before the abort — resolveSpendCompletions(onlyCompleted=true)
@@ -569,16 +605,24 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// untouched, since the dispatcher may still be writing to it.
 		result := s.resolveSpendCompletions(ctx, tx, items, true)
 
-		// Roll back the spends we know completed. This is the WEAKEST case for
-		// the atomicity contract, not the strictest: onlyCompleted=true above
-		// excludes every item whose published flag is not yet set, but the
-		// dispatcher runs on s.ctx for items already admitted to a backend part
-		// before abandonment. Only those can still write after we return; a straggler that later
-		// succeeds is never rolled back by this call. prometheusUtxoSpendAbortInFlight
-		// counts those skipped items so this residual window is measurable
-		// rather than invisible; closing it needs attempt identity or
-		// create-before-spend ordering, tracked in #1291.
-		s.rollbackPartialSpends(tx, result, "batched mode, after wait error")
+		// Roll back the spends we know completed. onlyCompleted=true above skips
+		// every item whose published flag is not yet set, but the dispatcher runs
+		// on s.ctx for items already admitted to a backend part before
+		// abandonment, so those can still write after we return. resolveSpendCompletions
+		// collects them, and unless the transient-window gate suppresses the
+		// rollback they are marked orphaned below, so whoever completes one
+		// rolls its spend back with no time bound. A suppressed batch leaves
+		// them applied, like the batch's own spends.
+		// prometheusUtxoSpendAbortInFlight counts them either way. The remaining
+		// window is the one rollbackPartialSpends documents, closed only by
+		// attempt identity or create-before-spend ordering, tracked in #1291.
+		if !result.suppressesRollback() {
+			for _, item := range result.orphans {
+				item.markOrphaned()
+			}
+		}
+
+		s.rollbackPartialSpends(tx, result, "batched mode, after wait error", giveUp.Add(s.spendRollbackBound()))
 
 		// Do NOT return the live spends slice on the abort path: items still
 		// in-flight are owned by the dispatcher goroutine, which will keep
@@ -604,7 +648,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	result := s.resolveSpendCompletions(ctx, tx, items, false)
 
 	if len(spends) != len(result.spentSpends) { // there must have been failures
-		s.rollbackPartialSpends(tx, result, "batched mode")
+		s.rollbackPartialSpends(tx, result, "batched mode", time.Now().Add(s.spendRollbackBound()))
 
 		// Aggregate with a hard cap. The failure count scales with the tx's
 		// input count (a mass DEVICE_OVERLOAD on a 50k-input consolidation tx
@@ -628,8 +672,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	return spends, nil
 }
 
-// spendRollbackBound is the detached time limit for awaiting a late admitted
-// claim and for rolling back partial spends.
+// spendRollbackBound is the longest a failed Spend holds its caller after the
+// caller gave up: the courtesy wait for started items and the rollback share
+// this one budget, which starts when the caller gives up. Together with
+// SpendWaitTimeout it is the documented bound on a Spend call.
 func (s *Store) spendRollbackBound() time.Duration {
 	if d := s.settings.UtxoStore.SpendRollbackTimeout; d > 0 {
 		return d
@@ -638,14 +684,16 @@ func (s *Store) spendRollbackBound() time.Duration {
 	return 120 * time.Second
 }
 
-// awaitStartedSpends waits, up to spendRollbackBound on a context detached from
-// the caller, for every item that a backend part already started and that is not
-// yet published. Its result then reaches resolveSpendCompletions, so a late
-// success is rolled back with the other spends. Items that never started
-// are not awaited. An item still unpublished at the bound stays in the
-// in-flight residual counted by prometheusUtxoSpendAbortInFlight. The caller
-// must have abandoned every queued item first.
-func (s *Store) awaitStartedSpends(items []*batchSpend) {
+// awaitStartedSpends waits, on a context detached from the caller, for every
+// item that a backend part already started and that is not yet published, so a
+// prompt success joins the rollback with the other spends. The wait ends at a
+// quarter of spendRollbackBound after giveUp, which leaves the rest of the
+// budget to the rollback. It is a courtesy only: an item still unpublished
+// when it ends is marked orphaned by resolveSpendCompletions, and whoever
+// completes it rolls its spend back with no time bound. Items that never
+// started are not awaited. The caller must have abandoned every queued item
+// first.
+func (s *Store) awaitStartedSpends(items []*batchSpend, giveUp time.Time) {
 	var waitCtx context.Context
 
 	for _, item := range items {
@@ -656,7 +704,7 @@ func (s *Store) awaitStartedSpends(items []*batchSpend) {
 		if waitCtx == nil {
 			var cancel context.CancelFunc
 
-			waitCtx, cancel = context.WithTimeout(context.Background(), s.spendRollbackBound())
+			waitCtx, cancel = context.WithDeadline(context.Background(), giveUp.Add(s.spendRollbackBound()/4))
 			defer cancel()
 		}
 
@@ -666,6 +714,15 @@ func (s *Store) awaitStartedSpends(items []*batchSpend) {
 			return
 		}
 	}
+}
+
+// rollbackOrphanedSpend reverts the spend of one item whose caller gave up
+// while the backend had started it and which then succeeded. It applies the
+// same spender-existence rule as rollbackPartialSpends: a spender with a record
+// owns the spend, an indeterminate probe skips it, and otherwise the spend is
+// unspent.
+func (s *Store) rollbackOrphanedSpend(item *batchSpend) {
+	s.rollbackDanglingSpends(item.spend.SpendingData.TxID, []*utxo.Spend{item.spend}, "orphaned spend", time.Now().Add(s.spendRollbackBound()))
 }
 
 // spendCompletionResult is the outcome of resolveSpendCompletions: which
@@ -703,6 +760,20 @@ type spendCompletionResult struct {
 	// Create either, meaning nobody can be a legitimate owner of the partial
 	// spends and the rollback is both safe and required (#1214).
 	sawUnwinnable bool
+
+	// orphans are the items a backend part had started and not published when
+	// resolveSpendCompletions ran. Spend marks them orphaned only when
+	// suppressesRollback is false.
+	orphans []*batchSpend
+}
+
+// suppressesRollback reports whether a concurrent attempt at the same txid may
+// own the spends: a transient lock or creating window was seen and nothing
+// proves the txid unwinnable. rollbackPartialSpends and the orphan hand-off in
+// Spend both use it, so a late success is rolled back exactly when the batch
+// rollback would be.
+func (r *spendCompletionResult) suppressesRollback() bool {
+	return (r.sawTransientLock || r.sawTransientCreating) && !r.sawUnwinnable
 }
 
 // rollbackDecision is what the spender-existence probe implies for the spends
@@ -796,7 +867,7 @@ func decideRollback(getErr error) rollbackDecision {
 // surviving dangling ref is at least detectable afterwards via the
 // "indeterminate" outcome on prometheusUtxoPartialSpendRollbacks below — no
 // automated detector for it exists yet.
-func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, phase string) {
+func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, phase string, deadline time.Time) {
 	if len(result.spentSpends) == 0 {
 		return
 	}
@@ -828,7 +899,7 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// would cover it by letting the ownership check tell two attempts apart.
 	// Neither belongs in an error-path rollback. Mirrors the sql store's
 	// hasTransientLockFailure/hasUnwinnableFailure doc comments — keep in step.
-	if (result.sawTransientLock || result.sawTransientCreating) && !result.sawUnwinnable {
+	if result.suppressesRollback() {
 		// When both transient signals fire in the same batch, report
 		// transient_lock: it is the flavour with an existing dashboard history
 		// and the more commonly hit window today (creating only shows up on
@@ -846,6 +917,14 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 		return
 	}
 
+	s.rollbackDanglingSpends(tx.TxIDChainHash(), result.spentSpends, phase, deadline)
+}
+
+// rollbackDanglingSpends probes whether the spending tx has a record and, only
+// when it has none, unspends spends. The probe and the unspend share one
+// context that ends at deadline. rollbackPartialSpends and the orphan rollback
+// both end here, so the two paths apply one rule.
+func (s *Store) rollbackDanglingSpends(spenderID *chainhash.Hash, spends []*utxo.Spend, phase string, deadline time.Time) {
 	// Always probe fresh here rather than reusing resolveSpendCompletions'
 	// memo: that memo answers a different question (the ErrTxNotFound
 	// "already blessed" fallback), taken under a different ctx, potentially
@@ -862,17 +941,18 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// shutdown races in-flight spends. Cleanup of writes we already made has to
 	// outlive the store's own context; the timeout is what keeps that bounded.
 	//
-	// Deliberately SpendRollbackTimeout, not SpendWaitTimeout: SpendWaitTimeout
-	// is the end-to-end budget for ONE batched spend, but this rollback is
-	// len(spentSpends) sequential single-record Unspend calls plus the probe
-	// above — on a wide transaction it needs a multiple of that budget, not the
-	// same one. On overrun the loop aborts and every spend past that point
-	// stays applied (a bounded truncation, not a full revert), counted by
-	// utxo_spend_rollback_failed.
-	rbCtx, cancel := context.WithTimeout(context.Background(), s.spendRollbackBound())
+	// The deadline comes from SpendRollbackTimeout, not SpendWaitTimeout:
+	// SpendWaitTimeout is the end-to-end budget for ONE batched spend, but this
+	// rollback is len(spends) sequential single-record Unspend calls plus the
+	// probe above — on a wide transaction it needs a multiple of that budget,
+	// not the same one. The abort path passes the end of the budget it shares
+	// with the courtesy wait for started items. On overrun the loop aborts and
+	// every spend past that point stays applied (a bounded truncation, not a
+	// full revert), counted by utxo_spend_rollback_failed.
+	rbCtx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 
-	_, getErr := s.Get(rbCtx, tx.TxIDChainHash(), fields.Fee)
+	_, getErr := s.Get(rbCtx, spenderID, fields.Fee)
 
 	decision := decideRollback(getErr)
 
@@ -885,7 +965,7 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 		return
 	case rollbackSkipIndeterminate:
 		s.logger.Errorf("[SPEND][%s] cannot determine whether spender exists, skipping rollback of %d partial spend(s) (%s): %v",
-			tx.TxID(), len(result.spentSpends), phase, getErr)
+			spenderID.String(), len(spends), phase, getErr)
 
 		return
 	case rollbackFire:
@@ -905,19 +985,19 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// means the same thing as the sql store's counter of the same name. Aggregating
 	// calls on one backend and dangling refs on the other would be exactly the
 	// per-backend drift the shared outcome labels exist to prevent.
-	unspendFailed, unspendErr := s.unspend(rbCtx, result.spentSpends)
+	unspendFailed, unspendErr := s.unspend(rbCtx, spends)
 	if unspendErr != nil {
 		if prometheusUtxoSpendRollbackFailed != nil {
 			prometheusUtxoSpendRollbackFailed.Add(float64(unspendFailed))
 		}
 
 		s.logger.Errorf("[SPEND][%s] rolled back %d of %d partial spend(s), %d left dangling (%s): %v",
-			tx.TxID(), len(result.spentSpends)-unspendFailed, len(result.spentSpends), unspendFailed, phase, unspendErr)
+			spenderID.String(), len(spends)-unspendFailed, len(spends), unspendFailed, phase, unspendErr)
 
 		return
 	}
 
-	s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (%s)", tx.TxID(), len(result.spentSpends), phase)
+	s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (%s)", spenderID.String(), len(spends), phase)
 }
 
 // resolveSpendCompletions applies the ErrTxNotFound "already blessed"
@@ -965,8 +1045,12 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			// needs attempt identity (#1291) or create-before-spend ordering
 			// (#1355); prometheusUtxoSpendAbortInFlight counts how often the
 			// window is entered at all.
-			if prometheusUtxoSpendAbortInFlight != nil && item.admission.Started() {
-				prometheusUtxoSpendAbortInFlight.Inc()
+			if item.admission.Started() {
+				if prometheusUtxoSpendAbortInFlight != nil {
+					prometheusUtxoSpendAbortInFlight.Inc()
+				}
+
+				result.orphans = append(result.orphans, item)
 			}
 
 			continue
