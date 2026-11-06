@@ -2,6 +2,7 @@ package validator
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"testing"
 
@@ -9,10 +10,12 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	spendpkg "github.com/bsv-blockchain/teranode/stores/utxo/spend"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -159,4 +162,146 @@ func TestValidateReportsPrunedReplayRatherThanConflict(t *testing.T) {
 	meta, err := store.Get(ctx, c.TxIDChainHash())
 	require.NoError(t, err)
 	require.False(t, meta.Conflicting, "the recreated record must not be flagged conflicting, which is what the conflicting branch did")
+}
+
+// TestValidatePrunedReplayInABlock: replay C spends n parents' output 0. The
+// first n-1 of those outputs were released and taken by X before C was pruned,
+// so they answer ErrSpent and only the last parent carries C's marker.
+//
+// With 11 inputs the marker answer is the eleventh failed spend, past the
+// validator's cap of 10 aggregated errors, and it must still reach the caller.
+// On this store it would without utxo.ReplayRejectionsFirst too: the SQL spend
+// joins its per-input errors into one chain, so the tenth kept error still
+// links to the marker answer. TestBatchedSpendKeepsReplayPastTheErrorCap pins
+// the Aerospike batched spend, where the errors stand alone.
+//
+// In a block above the checkpoint the replay spends outputs C already spent on
+// this chain, so the tx is invalid and the block with it. Below the checkpoint
+// (script validation skipped, outpoint-only spends) the block is valid by
+// definition and the answer stays a non-verdict error.
+func TestValidatePrunedReplayInABlock(t *testing.T) {
+	tracing.SetupMockTracer()
+
+	for _, n := range []int{2, 11} {
+		t.Run(fmt.Sprintf("%d inputs", n), func(t *testing.T) {
+			ctx := context.Background()
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockAssembly.Disabled = true
+			tSettings.BatcherDrainMode = true
+			tSettings.Pruner.UTXODefensiveEnabled = false
+
+			utxoStoreURL, err := url.Parse(fmt.Sprintf("sqlitememory:///pruned_replay_in_block_%d", n))
+			require.NoError(t, err)
+
+			store, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+			require.NoError(t, err)
+
+			sql.ResetPrunerServiceForTests()
+			t.Cleanup(sql.ResetPrunerServiceForTests)
+
+			require.NoError(t, store.SetBlockHeight(1000))
+			require.NoError(t, store.SetMedianBlockTime(1700000000))
+
+			privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("PRUNED_REPLAY_IN_BLOCK_TEST_KEY!"))
+
+			mined := func(height uint32, txs ...*bt.Tx) {
+				hashes := make([]*chainhash.Hash, 0, len(txs))
+				for _, tx := range txs {
+					hashes = append(hashes, tx.TxIDChainHash())
+				}
+
+				_, minedErr := store.SetMinedMulti(ctx, hashes, utxostore.MinedBlockInfo{BlockID: height, BlockHeight: height, OnLongestChain: true})
+				require.NoError(t, minedErr)
+			}
+
+			// Coinbase parents mined at height 1, mature long before 1400. Output
+			// 1 stays unspent so each parent survives the prune.
+			parents := make([]*bt.Tx, n)
+			cInputs := make([]transactions.TxOption, 0, n)
+			xInputs := make([]transactions.TxOption, 0, n-1)
+
+			for i := range parents {
+				parents[i] = transactions.Create(t,
+					transactions.WithCoinbaseData(1, fmt.Sprintf("/pruned replay parent %d/", i)),
+					transactions.WithP2PKHOutputs(2, 10_000, publicKey),
+				)
+				_, err = store.Create(ctx, parents[i], 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 1, OnLongestChain: true}))
+				require.NoError(t, err)
+
+				cInputs = append(cInputs, transactions.WithInput(parents[i], 0, privateKey))
+				if i < n-1 {
+					xInputs = append(xInputs, transactions.WithInput(parents[i], 0, privateKey))
+				}
+			}
+
+			c := transactions.Create(t, append(cInputs, transactions.WithPrivateKey(privateKey), transactions.WithP2PKHOutputs(1, uint64(n)*9_000, publicKey))...) //nolint:gosec // small test count
+			_, _, err = store.SpendAndCreate(ctx, c, 1000)
+			require.NoError(t, err)
+			mined(1000, c)
+
+			g := transactions.Create(t, transactions.WithPrivateKey(privateKey), transactions.WithInput(c, 0, privateKey), transactions.WithP2PKHOutputs(1, uint64(n)*8_000, publicKey)) //nolint:gosec // small test count
+			_, _, err = store.SpendAndCreate(ctx, g, 1001)
+			require.NoError(t, err)
+			mined(1001, g)
+
+			// Release the first n-1 outputs and let X take them, so the prune
+			// marks only the last parent, the one output that still names C.
+			for i := 0; i < n-1; i++ {
+				hash, hashErr := util.UTXOHashFromOutput(parents[i].TxIDChainHash(), parents[i].Outputs[0], 0)
+				require.NoError(t, hashErr)
+				require.NoError(t, store.Unspend(ctx, []*utxostore.Spend{{
+					TxID: parents[i].TxIDChainHash(), Vout: 0, UTXOHash: hash, SpendingData: spendpkg.NewSpendingData(c.TxIDChainHash(), i),
+				}}))
+			}
+
+			x := transactions.Create(t, append(xInputs, transactions.WithPrivateKey(privateKey), transactions.WithP2PKHOutputs(1, uint64(n-1)*9_000, publicKey))...) //nolint:gosec // small test count
+			_, _, err = store.SpendAndCreate(ctx, x, 1400)
+			require.NoError(t, err, "fixture: X takes the released outputs")
+
+			svc, err := store.GetPrunerService()
+			require.NoError(t, err)
+			_, err = svc.Prune(ctx, 1001+tSettings.GetUtxoStoreBlockHeightRetention()+10, "prune-c")
+			require.NoError(t, err)
+
+			_, err = store.Get(ctx, c.TxIDChainHash())
+			require.ErrorIs(t, err, errors.ErrTxNotFound, "fixture: C is pruned")
+
+			v := &Validator{
+				logger:      logger,
+				utxoStore:   store,
+				settings:    tSettings,
+				txValidator: NewTxValidator(logger, tSettings),
+				stats:       gocore.NewStat("validator"),
+			}
+
+			t.Run("above the checkpoint", func(t *testing.T) {
+				opts := NewDefaultOptions()
+				opts.CreateConflicting = true
+				opts.SkipPolicyChecks = true
+				opts.CandidateParentMedianTime = 1700000000
+
+				_, err := v.ValidateWithOptions(ctx, c, 1400, opts)
+				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is reported as one, past the error cap")
+				require.ErrorIs(t, err, errors.ErrTxInvalid, "a block re-including a pruned transaction is invalid")
+				require.NotErrorIs(t, err, errors.ErrTxConflicting)
+			})
+
+			t.Run("below the checkpoint", func(t *testing.T) {
+				tSettings.ChainCfgParams.Checkpoints = []chaincfg.Checkpoint{{Height: 1_000_000}}
+
+				opts := NewDefaultOptions()
+				opts.CreateConflicting = true
+				opts.SkipPolicyChecks = true
+				opts.SkipScriptValidation = true
+				opts.OutpointOnlySpend = true
+				opts.IgnoreLocked = true
+				opts.CandidateParentMedianTime = 1700000000
+
+				_, err := v.ValidateWithOptions(ctx, c, 1400, opts)
+				require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is reported as one, past the error cap")
+				require.NotErrorIs(t, err, errors.ErrTxInvalid, "below the checkpoint a marker answer never condemns the block")
+			})
+		})
+	}
 }

@@ -1307,6 +1307,19 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 
 				return nil, err
 			}
+
+			// A block that re-includes a transaction the pruner removed spends
+			// outputs that transaction already spent in a block on this chain, so
+			// the block is invalid. Without TX_INVALID the block saw a processing
+			// error, was never marked invalid and its peer never charged. Below a
+			// checkpoint the block is valid by definition and a marker answer
+			// there is a fault of this node's store, so it stays retryable.
+			if prunedReplay && blockVerdict {
+				err = errors.NewTxInvalidError("[Validate][%s] re-includes a transaction the pruner removed as mined and fully spent", txID, err)
+				span.RecordError(err)
+
+				return nil, err
+			}
 		} else if errors.Is(err, errors.ErrTxNotFound) {
 			// PHASE ASSUMPTION: this branch (and the ErrUtxoError branch above) assumes the
 			// error originated in the SPEND phase of SpendAndCreate — today no create path

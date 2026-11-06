@@ -2373,6 +2373,57 @@ func TestReplayMarkerVersions(t *testing.T) {
 	}
 }
 
+// TestBatchedSpendKeepsReplayPastTheErrorCap: replay C spends 11 outputs. The
+// first 10 are already spent by another transaction and answer ErrSpent; only
+// the eleventh parent carries C's marker. The batched spend caps its aggregate
+// at 10 errors, so the marker answer reaches the caller only because it is put
+// first, and without it the validator sees a plain double spend.
+func TestBatchedSpendKeepsReplayPastTheErrorCap(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+
+	const inputs = 11
+
+	parents := make([]*bt.Tx, inputs)
+	replay := bt.NewTx()
+	other := bt.NewTx()
+
+	for i := range parents {
+		parents[i] = bt.NewTx()
+		require.NoError(t, parents[i].From("2222222222222222222222222222222222222222222222222222222222222222", uint32(i), "51", 30000))
+		require.NoError(t, parents[i].PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+		_, err := store.Create(ctx, parents[i], 0)
+		require.NoError(t, err)
+
+		require.NoError(t, replay.From(parents[i].TxID(), 0, parents[i].Outputs[0].LockingScript.String(), parents[i].Outputs[0].Satoshis))
+
+		if i < inputs-1 {
+			require.NoError(t, other.From(parents[i].TxID(), 0, parents[i].Outputs[0].LockingScript.String(), parents[i].Outputs[0].Satoshis))
+		}
+	}
+
+	require.NoError(t, replay.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 30000))
+	require.NoError(t, other.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 20000))
+
+	_, err := store.Spend(ctx, other, 1)
+	require.NoError(t, err, "fixture: the first 10 outputs are spent by another transaction")
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parents[inputs-1].TxIDChainHash().CloneBytes())
+	require.NoError(t, err)
+	require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.DeletedChildren.String(),
+		map[interface{}]interface{}{replay.TxIDChainHash().String(): fields.DeletedChildVerified})))
+
+	spends, err := store.Spend(ctx, replay, 1)
+	require.Error(t, err)
+	require.Len(t, spends, inputs)
+	require.ErrorIs(t, spends[inputs-1].Err, errors.ErrUtxoSpendingTxPruned, "fixture: the last input meets the marker")
+	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the marker answer survives the cap on the aggregate")
+}
+
 func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
