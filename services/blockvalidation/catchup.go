@@ -57,7 +57,11 @@ type CatchupContext struct {
 	commonAncestorMeta  *model.BlockHeaderMeta
 	commonAncestorIndex int // Index of common ancestor in peer headers
 	forkDepth           uint32
-	currentHeight       uint32
+	// walkExhausted is set by findCommonAncestor when every header the peer served is one we hold,
+	// at or below our tip: the walk ran off the end of the list without finding where the chains
+	// diverge. forkDepth is not measured then, because nothing has shown there is a fork.
+	walkExhausted bool
+	currentHeight uint32
 	// bestBlockMeta is the accepted chain tip read once by findCommonAncestor and reused by
 	// every later step, so they all reason about the same tip. Reading it a second time would
 	// let the tip move in between: the ancestor is chosen against this height, so a tip that
@@ -302,6 +306,13 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
+	// Step 3.1: A list we hold entirely shows no fork, so nothing below may act on a fork depth
+	// measured from it: not the coinbase-maturity check, the secret-mining check, the netted-route
+	// refusal or the mined_set clear. It also offers nothing to fetch.
+	if catchupCtx.walkExhausted {
+		return u.handleExhaustedAncestorWalk(ctx, catchupCtx)
+	}
+
 	// Step 4: Validate fork depth against coinbase maturity
 	if err = u.validateForkDepth(catchupCtx); err != nil {
 		return u.preferNettedRouteForkRefusal(catchupCtx, err)
@@ -439,6 +450,35 @@ func (u *Server) clearMinedSetOnForkedBlocks(ctx context.Context, catchupCtx *Ca
 		u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
 			catchupCtx.blockUpTo.Hash().String(), len(headers))
 	}
+}
+
+// handleExhaustedAncestorWalk ends a catchup whose served headers are all on our chain, at or
+// below our tip. The walk found no header we lack, so there is no evidence the peer's chain
+// diverges from ours, and nothing the peer offered is new.
+//
+// Why the list ended decides who is at fault. If our own accumulated-header cap or iteration limit
+// cut it, we stopped asking: the peer would have gone on, and the list says nothing about its
+// chain. That is returned as a ServiceError, a local fault, so the peer is not charged and the
+// per-block attempt cap bounds the retries. The same locator truncates the same way, so the retry
+// cannot get further until the gap between the locator and our tip shrinks below the cap; the
+// locator starts below our tip only while the UTXO store lags the chain (catchupGetBlockHeaders).
+//
+// Otherwise the peer ended the list itself, short of the block it announced, which is the case
+// handleNoNewHeaders already judges.
+//
+// Treating the depth as zero instead would be wrong: a long genuine fork is exactly what the cap
+// truncates, so the depth checks must be skipped, not fed a zero.
+func (u *Server) handleExhaustedAncestorWalk(ctx context.Context, catchupCtx *CatchupContext) error {
+	result := catchupCtx.headersFetchResult
+	lastHeight := catchupCtx.commonAncestorMeta.Height
+
+	if result.StoppedOnCap {
+		return errors.NewServiceError("[catchup][%s] header fetch stopped on our own header cap (%s) at height %d, below our tip at %d, with every header on our chain: no evidence of a fork, not charging peer %s", catchupCtx.blockUpTo.Hash().String(), result.StopReason, lastHeight, catchupCtx.currentHeight, catchupCtx.peerID)
+	}
+
+	u.logger.Infof("[catchup][%s] every header peer %s served is on our chain, up to height %d (our tip %d): no fork and nothing new", catchupCtx.blockUpTo.Hash().String(), catchupCtx.peerID, lastHeight, catchupCtx.currentHeight)
+
+	return u.handleNoNewHeaders(ctx, catchupCtx.blockUpTo)
 }
 
 // handleNoNewHeaders is invoked when filterHeaders leaves zero headers to process.
@@ -1085,6 +1125,11 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	var commonAncestorMeta *model.BlockHeaderMeta
 	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
 
+	// The walk ends in one of two ways: it stops on a header that is not on our chain, which is
+	// where the two chains diverge, or it runs off the end of the list with every header held. Only
+	// the first is evidence of a fork; walkExhausted records the second.
+	walkExhausted := true
+
 	for i, header := range peerHeaders {
 		// GetBlockHeader conveys both existence and height in a single RPC: a
 		// not-found error means the block is absent from our chain (stop the search),
@@ -1093,6 +1138,8 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		if err != nil {
 			if errors.Is(err, errors.ErrBlockNotFound) {
 				u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
+				walkExhausted = false
+
 				break // Once we find a header we don't have, stop
 			}
 
@@ -1107,6 +1154,9 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		// what changed is only where the height comes from.
 		if meta.Height > currentHeight {
 			u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of our tip %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
+
+			walkExhausted = false
+
 			break
 		}
 
@@ -1138,9 +1188,11 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		}
 	}
 
-	// Calculate fork depth
+	// Calculate fork depth, only where the walk found the divergence. A list that ran out with every
+	// header held ends where the peer, or our own header cap, stopped serving, not where the chains
+	// part, so the distance from there to our tip is no fork depth.
 	forkDepth := uint32(0)
-	if commonAncestorMeta.Height < currentHeight {
+	if !walkExhausted && commonAncestorMeta.Height < currentHeight {
 		forkDepth = currentHeight - commonAncestorMeta.Height
 	}
 
@@ -1148,8 +1200,9 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	catchupCtx.commonAncestorMeta = commonAncestorMeta
 	catchupCtx.commonAncestorIndex = commonAncestorIndex
 	catchupCtx.forkDepth = forkDepth
+	catchupCtx.walkExhausted = walkExhausted
 
-	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth)
+	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d, ran out of headers: %t", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth, walkExhausted)
 
 	return nil
 }
