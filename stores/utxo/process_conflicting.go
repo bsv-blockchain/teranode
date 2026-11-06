@@ -1505,6 +1505,10 @@ func MarkConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 // descendants (not the root). It is strict: any record it cannot find, the root or a descendant,
 // fails the walk with ErrTxNotFound. See GetAndLockChildrenSkippingMissing for the variant that
 // survives a descendant whose record is gone.
+//
+// It has no production caller: the reorg move-back uses GetAndLockChildrenSkippingMissing. It stays
+// because tests use it as a fail-closed oracle, where a walk that silently left out a descendant
+// would hide the very state they check.
 func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetAndLockChildren")
 
@@ -1522,8 +1526,19 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 // by another path), so the record a spending data points at is not guaranteed to exist. There is
 // nothing to lock, save or delete for such a record, and the walk cannot continue through it, so it
 // is left out of the returned children and its hash is returned in missing instead, for the caller to
-// report. The walk still reaches the descendants of the missing record through any other parent.
-// Each skipped record increments teranode_utxo_lock_walk_missing_descendants_total.
+// report.
+//
+// A spending data can also name a child whose create has not committed yet: a store that runs
+// SpendAndCreate as a spend followed by a create (Aerospike does) records the spender on the parent
+// first. So a descendant is not settled as missing on its first not-found. Once the walk has locked
+// every record it reached, it reads each missing hash once more; one that exists by then is locked
+// and walked like any other child. This narrows the window to a create that is still in flight after
+// the whole walk, it does not close it. Only hashes still absent on that second read are returned in
+// missing, and each one increments teranode_utxo_lock_walk_missing_descendants_total.
+//
+// The walk reaches a missing record's descendants only through another parent that exists. A
+// descendant reachable only through a missing record cannot be found from the store, so it is not
+// locked or returned, and the caller cannot clean it up through this walk.
 //
 // The root is different: if the root itself is absent the walk fails with ErrTxNotFound, as there is
 // nothing to walk from. Any other error fails the walk.
@@ -1544,9 +1559,13 @@ func getAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash, skipM
 	visited := make(map[chainhash.Hash]struct{})
 	visited[hash] = struct{}{}
 	currentLevel := []chainhash.Hash{hash}
-	missingSet := make(map[chainhash.Hash]struct{})
 
-	var missing []chainhash.Hash
+	// missingSet holds the hashes not found on their latest read, missingOrder the order they were
+	// first found missing in, and rechecked the ones already given their second read
+	missingSet := make(map[chainhash.Hash]struct{})
+	rechecked := make(map[chainhash.Hash]struct{})
+
+	var missingOrder []chainhash.Hash
 
 	isRootLevel := true
 
@@ -1587,9 +1606,11 @@ func getAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash, skipM
 
 		for i, gone := range notFound {
 			if gone {
+				if _, seen := rechecked[currentLevel[i]]; !seen {
+					missingOrder = append(missingOrder, currentLevel[i])
+				}
+
 				missingSet[currentLevel[i]] = struct{}{}
-				missing = append(missing, currentLevel[i])
-				prometheusUtxoLockWalkMissingDescendants.Inc()
 			}
 		}
 
@@ -1618,6 +1639,27 @@ func getAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash, skipM
 				}
 			}
 		}
+
+		if len(nextLevel) == 0 {
+			// every reachable record is locked, so no new spend can land on one: give each missing
+			// hash its one second read, in case its create was still in flight on the first
+			for _, missingHash := range missingOrder {
+				if _, gone := missingSet[missingHash]; !gone {
+					continue
+				}
+
+				if _, done := rechecked[missingHash]; done {
+					continue
+				}
+
+				rechecked[missingHash] = struct{}{}
+
+				delete(missingSet, missingHash)
+
+				nextLevel = append(nextLevel, missingHash)
+			}
+		}
+
 		currentLevel = nextLevel
 	}
 
@@ -1631,6 +1673,15 @@ func getAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash, skipM
 		}
 
 		children = append(children, child)
+	}
+
+	var missing []chainhash.Hash
+
+	for _, missingHash := range missingOrder {
+		if _, gone := missingSet[missingHash]; gone {
+			missing = append(missing, missingHash)
+			prometheusUtxoLockWalkMissingDescendants.Inc()
+		}
 	}
 
 	return children, missing, nil

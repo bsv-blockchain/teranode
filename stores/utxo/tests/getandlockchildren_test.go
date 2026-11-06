@@ -298,8 +298,37 @@ func TestGetAndLockChildrenSkippingMissing(t *testing.T) {
 		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
 		"2f6b52de3d7c88ac00000000"
 
-	// parent has two outputs: gone spends the first, kept spends the second, and the record of gone is deleted
-	setup := func(t *testing.T) (store utxo.Store, parent, gone, kept *bt.Tx) {
+	// spend creates a tx with two outputs that spends the given outputs
+	spend := func(t *testing.T, store utxo.Store, from ...spentOutput) *bt.Tx {
+		t.Helper()
+
+		tx := bt.NewTx()
+
+		var total uint64
+
+		for _, in := range from {
+			out := in.tx.Outputs[in.vout]
+			require.NoError(t, tx.From(in.tx.TxIDChainHash().String(), in.vout, out.LockingScript.String(), out.Satoshis))
+
+			total += out.Satoshis
+		}
+
+		// each output takes a quarter of the inputs, the rest is the fee
+		require.NoError(t, tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", total/4))
+		require.NoError(t, tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", total/4))
+
+		for i := range tx.Inputs {
+			tx.Inputs[i].UnlockingScript = bscript.NewFromBytes([]byte{})
+		}
+
+		_, _, err := store.SpendAndCreate(ctx, tx, store.GetBlockHeight()+1)
+		require.NoError(t, err)
+
+		return tx
+	}
+
+	// parent has two outputs: gone spends the first, kept spends the second
+	build := func(t *testing.T) (store utxo.Store, parent, gone, kept *bt.Tx) {
 		t.Helper()
 
 		store = setupSQLiteMemoryStore(ctx, t)
@@ -310,20 +339,17 @@ func TestGetAndLockChildrenSkippingMissing(t *testing.T) {
 		_, _, err = store.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
 		require.NoError(t, err)
 
-		child := func(vout uint32) *bt.Tx {
-			tx := bt.NewTx()
-			require.NoError(t, tx.From(parent.TxIDChainHash().String(), vout, parent.Outputs[vout].LockingScript.String(), parent.Outputs[vout].Satoshis))
-			require.NoError(t, tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 50000))
-			tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+		gone = spend(t, store, spentOutput{parent, 0})
+		kept = spend(t, store, spentOutput{parent, 1})
 
-			_, _, err := store.SpendAndCreate(ctx, tx, store.GetBlockHeight()+1)
-			require.NoError(t, err)
+		return store, parent, gone, kept
+	}
 
-			return tx
-		}
+	// as build, and the record of gone is deleted while parent still names it as a spender
+	setup := func(t *testing.T) (store utxo.Store, parent, gone, kept *bt.Tx) {
+		t.Helper()
 
-		gone = child(0)
-		kept = child(1)
+		store, parent, gone, kept = build(t)
 
 		require.NoError(t, store.Delete(ctx, gone.TxIDChainHash()))
 
@@ -369,6 +395,57 @@ func TestGetAndLockChildrenSkippingMissing(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrTxNotFound, "the root is never skipped")
 	})
 
+	// both spends gone and kept, so the walk reaches it through kept. only spends gone alone, so
+	// nothing that exists names it and the walk cannot reach it.
+	t.Run("reaches a descendant of the missing record only through another parent", func(t *testing.T) {
+		store, parent, gone, kept := build(t)
+
+		both := spend(t, store, spentOutput{gone, 0}, spentOutput{kept, 0})
+		only := spend(t, store, spentOutput{gone, 1})
+
+		require.NoError(t, store.Delete(ctx, gone.TxIDChainHash()))
+
+		children, missing, err := utxo.GetAndLockChildrenSkippingMissing(ctx, store, *parent.TxIDChainHash())
+		require.NoError(t, err)
+		require.ElementsMatch(t, []chainhash.Hash{*kept.TxIDChainHash(), *both.TxIDChainHash()}, children)
+		require.Equal(t, []chainhash.Hash{*gone.TxIDChainHash()}, missing)
+		require.NotContains(t, children, *only.TxIDChainHash(), "a descendant reachable only through the missing record is not reached")
+
+		bothMeta, getErr := store.Get(ctx, both.TxIDChainHash(), fields.Locked)
+		require.NoError(t, getErr)
+		require.True(t, bothMeta.Locked, "the descendant reached through kept is locked")
+
+		onlyMeta, getErr := store.Get(ctx, only.TxIDChainHash(), fields.Locked)
+		require.NoError(t, getErr)
+		require.False(t, onlyMeta.Locked, "the descendant reached only through the missing record is not locked")
+	})
+
+	// A store that runs SpendAndCreate as a spend then a create names the child on the parent before
+	// the child's record exists. The walk must read such a child again once everything else is locked,
+	// and walk it if it is there by then, instead of settling it as missing on the first read.
+	t.Run("reads a missing descendant again and walks it if its create has landed", func(t *testing.T) {
+		store, parent, gone, kept := build(t)
+
+		grandchild := spend(t, store, spentOutput{gone, 0})
+
+		wrapped := &setLockedNotFound{Store: store, target: *gone.TxIDChainHash(), failures: 1}
+
+		before := lockWalkMissingCount(t)
+
+		children, missing, err := utxo.GetAndLockChildrenSkippingMissing(ctx, wrapped, *parent.TxIDChainHash())
+		require.NoError(t, err)
+		require.ElementsMatch(t, []chainhash.Hash{*gone.TxIDChainHash(), *kept.TxIDChainHash(), *grandchild.TxIDChainHash()}, children)
+		require.Empty(t, missing)
+		require.Equal(t, before, lockWalkMissingCount(t), "a record found on the second read is not counted as missing")
+		require.Equal(t, 2, wrapped.calls, "the late record is read exactly twice")
+
+		for name, tx := range map[string]*bt.Tx{"gone": gone, "grandchild": grandchild} {
+			txMeta, getErr := store.Get(ctx, tx.TxIDChainHash(), fields.Locked)
+			require.NoError(t, getErr)
+			require.True(t, txMeta.Locked, "%s is locked by the walk", name)
+		}
+	})
+
 	t.Run("still fails when the root is absent", func(t *testing.T) {
 		store := setupSQLiteMemoryStore(ctx, t)
 
@@ -388,17 +465,31 @@ func TestGetAndLockChildrenSkippingMissing(t *testing.T) {
 	})
 }
 
+// spentOutput names one output of a tx for a test spend.
+type spentOutput struct {
+	tx   *bt.Tx
+	vout uint32
+}
+
 // setLockedNotFound wraps a real store and fails SetLocked for one hash the way Aerospike does for a
-// record that is not there.
+// record that is not there. With failures set it fails only that many calls for the hash and then lets
+// them through, the way a record whose create lands late looks to the walk; with failures zero it fails
+// every call.
 type setLockedNotFound struct {
 	utxo.Store
-	target chainhash.Hash
+	target   chainhash.Hash
+	failures int
+	calls    int
 }
 
 func (s *setLockedNotFound) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
 	for i := range txHashes {
 		if txHashes[i] == s.target {
-			return errors.NewTxNotFoundError("transaction not found: %s", txHashes[i].String())
+			s.calls++
+
+			if s.failures == 0 || s.calls <= s.failures {
+				return errors.NewTxNotFoundError("transaction not found: %s", txHashes[i].String())
+			}
 		}
 	}
 

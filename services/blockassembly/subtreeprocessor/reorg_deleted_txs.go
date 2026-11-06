@@ -64,9 +64,10 @@ func (stp *SubtreeProcessor) keepReorgDeletedTxs(ctx context.Context, block *mod
 					entries = append(entries, saved)
 				} else {
 					// The walk no longer returns a tx it found absent, so this is reached only when
-					// the record vanished between the lock and this read. Failing would make a retry
-					// walk again and hit the same record, so the tx is left out of the file instead,
-					// and a return to this block will not recreate it.
+					// the record vanished between the lock and this read. Failing would gain nothing:
+					// the caller would unlock and a retry would skip the record as missing, so the tx
+					// would still be absent from the file. It is left out and reported instead, and a
+					// return to this block will not recreate it.
 					prometheusReorgDeletedTxsVanished.Inc()
 					stp.logger.Errorf("[keepReorgDeletedTxs][%s] tx %s vanished after it was locked and has no earlier saved copy, it is not in the saved file", block.String(), txHashes[i].String())
 				}

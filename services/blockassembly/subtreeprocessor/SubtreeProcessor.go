@@ -5828,7 +5828,9 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 	}
 
 	// a parent's spending data still names these, but their records are gone, so there is nothing
-	// to save or delete for them
+	// to save or delete for them in the utxo store. The walk saves and deletes every descendant it
+	// reaches through a record that exists. A descendant reachable only through a missing record is
+	// not reached, so this move-back cannot clean it up.
 	for i := range missingHashes {
 		stp.logger.Errorf("[removeCoinbaseUtxos][%s] skipping tx %s, spent from coinbase tx %s but not in the utxo store", block.String(), missingHashes[i].String(), block.CoinbaseTx.TxIDChainHash().String())
 	}
@@ -5872,8 +5874,22 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 		}
 	}
 
+	// a missing tx has no record left to delete, but block assembly can still hold a copy of it:
+	// mark it for removal and take it out of the subtrees with the saved txs
+	for _, missingHash := range missingHashes {
+		if !stp.removeMap.Exists(missingHash) {
+			if err = stp.removeMap.Put(missingHash, 1); err != nil {
+				return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error adding missing child spend to remove map for tx %s", block.String(), missingHash.String(), err)
+			}
+		}
+	}
+
+	removeFromSubtrees := make([]chainhash.Hash, 0, len(savedHashes)+len(missingHashes))
+	removeFromSubtrees = append(removeFromSubtrees, savedHashes...)
+	removeFromSubtrees = append(removeFromSubtrees, missingHashes...)
+
 	// remove from the subtree processor as well
-	if err = stp.removeTxsFromSubtrees(ctx, savedHashes); err != nil {
+	if err = stp.removeTxsFromSubtrees(ctx, removeFromSubtrees); err != nil {
 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error removing child spends from subtrees", block.String(), err)
 	}
 

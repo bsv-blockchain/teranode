@@ -1407,8 +1407,10 @@ func containsAll(line string, parts ...string) bool {
 }
 
 // A parent's spending data can name a child whose record is gone. The move back must skip that child
-// and still save and delete everything else, not report success and leave the coinbase and its other
-// descendants in the store.
+// and still save and delete every descendant the walk reaches through a record that exists, not report
+// success and leave the coinbase and its other descendants in the store. A descendant reachable only
+// through the missing child is not reached. Block assembly can still hold a copy of the missing child,
+// so the move back takes it out of the subtrees and marks it for removal.
 func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
 	ctx := context.Background()
 	stp, block := newMoveForwardCommitBoundaryProcessor(t)
@@ -1437,6 +1439,9 @@ func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
 	_, _, err = stp.utxoStore.SpendAndCreate(ctx, kept, spendHeight)
 	require.NoError(t, err)
 
+	addToAssembly(t, stp, gone)
+	require.True(t, stp.currentTxMap.Exists(*gone.TxIDChainHash()), "precondition: block assembly holds the tx whose record goes")
+
 	// the record of gone is removed, and the output of first that gone spent still names it
 	require.NoError(t, stp.utxoStore.Delete(ctx, gone.TxIDChainHash()))
 
@@ -1461,6 +1466,12 @@ func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
 
 		require.True(t, stp.removeMap.Exists(*tx.TxIDChainHash()) || tx == block.CoinbaseTx, "%s must be in the remove map", name)
 	}
+
+	require.False(t, stp.currentTxMap.Exists(*gone.TxIDChainHash()), "the missing tx must be taken out of block assembly")
+	require.True(t, stp.removeMap.Exists(*gone.TxIDChainHash()), "the missing tx must be in the remove map")
+
+	foundIndex, _, _ := stp.locateTxInSubtrees(*gone.TxIDChainHash())
+	require.Equal(t, -1, foundIndex, "the missing tx must not be in any subtree")
 
 	saved, err := stp.readReorgDeletedTxs(ctx, block.Header.Hash())
 	require.NoError(t, err)
@@ -1501,8 +1512,9 @@ func TestRemoveCoinbaseUtxosWithAnAbsentCoinbaseDoesNothing(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrNotFound, "nothing is saved")
 }
 
-// A tx the walk locked can vanish before it is read back for the save. It cannot be saved and failing
-// would only make a retry hit the same record, so the save goes on without it, and says so.
+// A tx the walk locked can vanish before it is read back for the save. It cannot be saved, and failing
+// would gain nothing: a retry would skip the record as missing, so the tx would still be absent from the
+// file. The save goes on without it, and says so.
 func TestKeepReorgDeletedTxsCountsATxThatVanishedAfterItWasLocked(t *testing.T) {
 	ctx := context.Background()
 	stp, block := newMoveForwardCommitBoundaryProcessor(t)
