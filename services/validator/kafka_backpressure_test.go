@@ -134,6 +134,7 @@ func testBackpressureConfig() settings.ValidatorKafkaBackpressureSettings {
 		MaxPause:            30 * time.Second,
 		MaxFailOpenCooldown: time.Second,
 		StaleErrorLimit:     3,
+		ResumeHeldPercent:   80,
 	}
 }
 
@@ -1405,23 +1406,47 @@ func TestBackpressure_HeldSmallLimitPausesAtTwoAndResumesAtOne(t *testing.T) {
 	require.False(t, c.paused.Load())
 }
 
-func TestBackpressure_HeldResumesOnceTheCountFallsBelowPause(t *testing.T) {
+func TestBackpressure_HeldResumesOnlyOnceTheCountReachesTheResumeBand(t *testing.T) {
 	ctx := context.Background()
 	reader := &fakeReader{}
 	consumer := &fakeConsumer{}
 	c := newFillController(reader, consumer, 90)
 
-	reader.setHeld(950, 1000, 0)
-	c.tick(ctx)
-	require.Equal(t, 1, consumer.pauseCount())
+	c.maxHeld = 1000
+	pause, resume := c.heldThresholds()
+	require.Equal(t, int64(900), pause)
+	require.Equal(t, int64(800), resume)
 
 	reader.setHeld(900, 1000, 0)
 	c.tick(ctx)
-	require.Equal(t, 0, consumer.resumeCount(), "at the pause threshold the count has not fallen below it")
+	require.Equal(t, 1, consumer.pauseCount(), "the held count at the pause threshold pauses")
 
 	reader.setHeld(899, 1000, 0)
 	c.tick(ctx)
-	require.Equal(t, 1, consumer.resumeCount(), "a block connect that leaves the count below the pause threshold resumes, with no half-way hysteresis")
+	require.Equal(t, 0, consumer.resumeCount(), "one below the pause threshold is inside the band, so a small block does not resume")
+
+	reader.setHeld(801, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 0, consumer.resumeCount(), "one above the resume threshold is still inside the band")
+
+	reader.setHeld(800, 1000, 0)
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.resumeCount(), "the held count at the resume threshold resumes")
+	require.False(t, c.paused.Load())
+}
+
+func TestBackpressure_HeldResumeThresholdStaysBelowPauseAndAboveZero(t *testing.T) {
+	c := newFillController(&fakeReader{}, &fakeConsumer{}, 90)
+
+	c.cfg.ResumeHeldPercent = 100
+	c.maxHeld = 1000
+	pause, resume := c.heldThresholds()
+	require.Equal(t, int64(900), pause)
+	require.Equal(t, int64(899), resume, "a resume percentage at or above the pause percentage still leaves a gap")
+
+	c.cfg.ResumeHeldPercent = 0
+	_, resume = c.heldThresholds()
+	require.Equal(t, int64(1), resume, "the coinbase placeholder keeps the held count at 1 or more, so 0 would never be reached")
 }
 
 func TestBackpressure_HeldPauseLogsTheHeldNumbers(t *testing.T) {
@@ -1543,7 +1568,48 @@ func TestBackpressure_HeldThresholdsDoNotOverflowAtAnUnlimitedLimit(t *testing.T
 
 	require.Greater(t, pause, int64(8_000_000_000_000_000_000), "90 percent of the saturated limit, not the 2 an overflowed product floors to")
 	require.Less(t, pause, int64(math.MaxInt64))
-	require.Equal(t, pause-1, resume)
+	require.Greater(t, resume, int64(7_000_000_000_000_000_000), "80 percent of the saturated limit, not the 1 an overflowed product floors to")
+	require.Less(t, resume, pause)
+}
+
+func TestBackpressure_PauseThatBecomesHeldOnlyIsRelabelledHeld(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(7000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setFill(950, 1000, 10)
+	reader.mu.Lock()
+	reader.heldCount = 950
+	reader.maxHeld = 1000
+	reader.mu.Unlock()
+	c.tick(ctx)
+	require.Equal(t, 1, consumer.pauseCount())
+	require.Equal(t, "fill", c.pauseCause, "the queue fill fired first, so the pause starts under that cause")
+
+	now = base.Add(5 * time.Second)
+	c.tick(ctx)
+	require.Equal(t, 5.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("fill")))
+
+	reader.setHeld(950, 1000, 0)
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load(), "the queue cooled and only the held count is hot, so the pause is exempt from MaxPause")
+	require.Equal(t, 0, consumer.resumeCount())
+	require.Equal(t, "held", c.pauseCause)
+	require.Equal(t, 31.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the held series reports the elapsed time, so the recommended alert fires")
+	require.Equal(t, 0.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("fill")), "the old cause no longer reports a pause")
+
+	reader.setHeld(800, 1000, 0)
+	c.tick(ctx)
+
+	require.False(t, c.paused.Load())
+	require.Equal(t, 0.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the resume clears the series it relabelled")
 }
 
 func TestBackpressure_WarnsOnceWhenOffWithInMemoryLimit(t *testing.T) {

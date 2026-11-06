@@ -7216,7 +7216,9 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 				wasPlaced, addErr := stp.placeNode(node, txInpoints, skipNotification)
 				if addErr != nil {
 					stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), addErr)
-				} else if wasPlaced {
+				}
+
+				if wasPlaced {
 					placed++
 				}
 			}
@@ -7314,10 +7316,11 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 // the chunk. The add comes first: addNode does not add to txCount, so settling before it would
 // leave the placed transactions in none of the queue length, the unsettled count or the
 // subtrees count, and the held total would read low until the drain's final recount. The add is
-// the reported number, not a walk of every chained subtree per chunk, so fn must report only the
-// nodes it placed and not a duplicate that placeNode skipped. The settle is
-// deferred so a panic in fn, which runHandlerWithRecover absorbs, cannot leave the chunk counted
-// as unsettled for good.
+// the reported number, not a walk of every chained subtree per chunk, so fn must report every
+// node it put in a subtree, including one whose subtree then failed to complete, and no duplicate
+// that placeNode skipped. The number fn reports is added even when fn returns an error, so the
+// nodes it did place stay counted. The settle is deferred so a panic in fn, which
+// runHandlerWithRecover absorbs, cannot leave the chunk counted as unsettled for good.
 func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn func(batches []*TxBatch) (int, error)) (err error) {
 	placed := 0
 

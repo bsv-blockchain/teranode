@@ -111,6 +111,10 @@ type kafkaBackpressureController struct {
 	lastReportedWindow   time.Duration
 	windowMismatchLogged bool
 
+	// onStats, when set, receives every successful queue-stats read. The validator's held-limit
+	// gate takes its readings from it, so the stats are read once and not twice.
+	onStats func(blockassembly.QueueStats)
+
 	// now supplies the current time; overridable in tests for deterministic
 	// max-pause behaviour.
 	now func() time.Time
@@ -269,6 +273,10 @@ func (c *kafkaBackpressureController) tick(ctx context.Context) {
 	c.heldCount = stats.HeldCount
 	c.maxHeld = stats.MaxHeld
 
+	if c.onStats != nil {
+		c.onStats(stats)
+	}
+
 	c.evaluate(stats.HeadAge)
 }
 
@@ -407,25 +415,33 @@ func (c *kafkaBackpressureController) fillThresholds() (pause, resume int64) {
 }
 
 // heldThresholds returns the pause and resume counts for the transactions block assembly holds
-// in memory, or 0, 0 when there is no usable signal. It applies the same percentage as
+// in memory, or 0, 0 when there is no usable signal. It pauses at the same percentage as
 // fillThresholds and is inert in the same cases: no reported limit, or the percentage set to 0.
 // With the default blockassembly_maxTransactionsInMemory=0 the controller behaves exactly as it
 // did before.
 //
-// It does not resume half-way as fillThresholds does. The held count steps down only when a
-// block connects and never reaches 0, because the coinbase placeholder stays, so a half-way
-// resume can be unreachable at a small limit. The consumer resumes as soon as the count is
-// below the pause threshold, and the pause threshold is at least 2 so that the resume count,
-// one below it, is at least 1.
+// It resumes at ResumeHeldPercent of the limit, so a block that frees one transaction does not
+// toggle the consumer. The held count steps down only when a block connects and never reaches 0,
+// because the coinbase placeholder stays. The pause threshold is at least 2, and the resume
+// threshold is held between 1 and one below it, so a resume is always reachable and always below
+// the pause.
 func (c *kafkaBackpressureController) heldThresholds() (pause, resume int64) {
 	if c.maxHeld <= 0 || c.cfg.PauseQueueFillPercent <= 0 {
 		return 0, 0
 	}
 
-	pct := int64(c.cfg.PauseQueueFillPercent)
-	pause = max(c.maxHeld/100*pct+c.maxHeld%100*pct/100, 2)
+	pause = max(c.percentOfMaxHeld(c.cfg.PauseQueueFillPercent), 2)
+	resume = min(max(c.percentOfMaxHeld(c.cfg.ResumeHeldPercent), 1), pause-1)
 
-	return pause, pause - 1
+	return pause, resume
+}
+
+// percentOfMaxHeld returns pct percent of the reported held limit, without overflowing for a
+// limit near the top of the int64 range.
+func (c *kafkaBackpressureController) percentOfMaxHeld(pct int) int64 {
+	p := int64(pct)
+
+	return c.maxHeld/100*p + c.maxHeld%100*p/100
 }
 
 // evaluate applies the hysteresis decision to a freshly-read queue-head age and
@@ -510,6 +526,14 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 		// block for longer than the Kafka topic retention the backlog expires unseen. The operator's
 		// signal is the gauge teranode_validator_kafka_backpressure_pause_seconds with cause held.
 		if hotByHeld && !hotByQueue && effectiveAge < c.cfg.PauseQueueAge {
+			if c.pauseCause != "held" {
+				prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(0)
+
+				c.pauseCause = "held"
+			}
+
+			prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(pausedFor.Seconds())
+
 			return
 		}
 
@@ -625,6 +649,12 @@ func (v *Server) startKafkaBackpressure(ctx context.Context) {
 	}
 
 	controller := newKafkaBackpressureController(v.logger, cfg, v.settings.BlockAssembly.DoubleSpendWindow, v.blockAssemblyClient, v.consumerClient)
+	if observer, ok := v.validator.(interface {
+		observeQueueStats(blockassembly.QueueStats)
+	}); ok {
+		controller.onStats = observer.observeQueueStats
+	}
+
 	go controller.run(controllerCtx)
 }
 

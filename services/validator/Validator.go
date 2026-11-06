@@ -335,6 +335,10 @@ type Validator struct {
 	// transaction reaches it, so a warning per transaction would flood the log at ingest rate.
 	heldShedWarnedAt   atomic.Int64
 	heldShedSuppressed atomic.Int64
+
+	// heldGate is the validator's view of block assembly's in-memory transaction limit, or nil
+	// when there is no block-assembly client that reports queue stats.
+	heldGate *heldLimitGate
 }
 
 // mtpLoadWindow is a half-open height range [From, To) that an in-flight
@@ -371,6 +375,10 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		rejectedTxKafkaProducerClient:       rejectedTxKafkaProducerClient,
 		policyRejectedTxKafkaProducerClient: policyRejectedTxKafkaProducerClient,
 		blockchainClient:                    blockchainClient,
+	}
+
+	if reader, ok := ba.(queueStatsReader); ok {
+		v.heldGate = newHeldLimitGate(ctx, tSettings.Validator.KafkaBackpressure, reader)
 	}
 
 	// The ingest hand-off subtracts the per-attempt floor from the retry window, so a
@@ -494,6 +502,8 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 // the same bound: a wedged broker flush can't block shutdown, and the outstanding
 // Stop() finishes the flush later if it can.
 func (v *Validator) Close() error {
+	v.heldGate.stop()
+
 	if v.txmetaKafkaBatcher != nil {
 		util.DrainBatcher(v.logger, "validator_txmeta_batcher", util.DefaultBatcherDrainTimeout, v.txmetaKafkaBatcher.Close)
 	}
@@ -1106,6 +1116,13 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
 	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
 
+	if v.shedAtHeldLimit(txID, validationOptions) {
+		err = blockassembly.NewHeldLimitShedError(v.heldGate.held())
+		span.RecordError(err)
+
+		return nil, err
+	}
+
 	// spend the tx's inputs and create its outputs + metadata in one store
 	// operation; the store reverses the spends if the create fails (except on
 	// ErrTxExists, which leaves the spends in place and is handled below)
@@ -1509,9 +1526,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// ignore-locked spend, and returning the shed would fail an
 					// otherwise valid block on local ingest pressure.
 					//
-					// The in-memory transaction limit never reaches this arm: block
-					// assembly does not refuse a block transaction for it. Only the ingest
-					// queue bound does, and that is the pre-existing behaviour.
+					// The in-memory transaction limit never reaches this arm: the early shed
+					// skips a block transaction, and block assembly does not refuse one for
+					// it. Only the ingest queue bound does, and that is the pre-existing
+					// behaviour.
 					//
 					// The record stays Locked while it is outside the template, so an
 					// ordinary child cannot spend it and enter the template without its
@@ -1522,6 +1540,8 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// descendant in the same block spends through IgnoreLocked and is
 					// handed off on its own. The unmined reload recovers a record that
 					// stays outside the template.
+					// prometheusValidatorShedInBlockDroppedTotal counts this; a block assembly
+					// reset or restart runs the unmined reload, which restores the record.
 					prometheusValidatorShedInBlockDroppedTotal.Inc()
 					v.warnInBlockShed(txID)
 
@@ -1593,9 +1613,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			//
 			// InBlock is set by block subtree validation (CheckBlockSubtrees) and legacy
 			// block sync. The peer-announced subtree path (subtreesHandler) passes no
-			// options, so its transactions meet the limit as mempool ingest does: at the
-			// limit each one is validated, refused, unwound and deleted, the subtree
-			// fails, and the work is repeated with InBlock set when the block arrives.
+			// options, so its transactions meet the limit as mempool ingest does. In the
+			// steady state at the limit the early shed (shedAtHeldLimit) refuses them before
+			// any store work, so no record exists for a block's InBlock validation to find
+			// and then lose. This unwind covers only the crossing window, where the limit
+			// was reached between two polls of the gate, and there the subtree fails and
+			// the work is repeated with InBlock set when the block arrives.
 			//
 			// Residual: a block that validates on a side chain and never connects leaves
 			// its shed transactions Locked until the next unmined reload, and an ordinary
@@ -1653,6 +1676,34 @@ func (v *Validator) warnInBlockShed(txID string) {
 		v.logger.Warnf("[Validate][%s] block-assembly queue full on a block-context handoff; accepted locked without a template entry, not unwound (%d more since the last warning)",
 			txID, suppressed)
 	}
+}
+
+// observeQueueStats feeds the held-limit gate a reading taken by the Kafka backpressure controller.
+func (v *Validator) observeQueueStats(stats blockassembly.QueueStats) {
+	v.heldGate.observe(stats)
+}
+
+// shedAtHeldLimit reports whether a transaction is shed before any UTXO-store write because block
+// assembly already holds as many transactions in memory as its limit allows. It covers the steady
+// state at the limit, where every ingest transaction would otherwise be spent, created, refused
+// and unwound. It runs after the parent reads and the script validation, so an invalid transaction
+// keeps its invalid verdict at the limit and only a valid one is shed. A block transaction is never shed here, because block assembly does not
+// refuse it for that limit. The view is the heldLimitGate poll, so it can lag: a transaction that
+// crosses the limit between two polls still takes the late shed and the unwind.
+//
+// The caller counts the shed once, in the Kafka handler. Here an ingest transaction is counted as
+// dropped and warned at the bounded rate, as the late shed does.
+func (v *Validator) shedAtHeldLimit(txID string, validationOptions *Options) bool {
+	if validationOptions.InBlock || !validationOptions.AddTXToBlockAssembly || v.settings.BlockAssembly.Disabled || !v.heldGate.atLimit() {
+		return false
+	}
+
+	if validationOptions.WaitForBlockAssembly {
+		prometheusValidatorShedDroppedTotal.Inc()
+		v.warnHeldShedDropped(txID)
+	}
+
+	return true
 }
 
 // warnHeldShedDropped warns that an ingest transaction was dropped, without a retry, because block

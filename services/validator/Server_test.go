@@ -600,3 +600,35 @@ func TestHandleKafkaTxMessage_HeldLimitShedIsNotInvalid(t *testing.T) {
 		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
 	}
 }
+
+// With block assembly at its limit the validator sheds an ingest transaction before it touches the
+// UTXO store. The Kafka handler must treat that early shed as it treats block assembly's own: the
+// offset is committed, the transaction is not invalid, and it is counted once as a held shed.
+func TestHandleKafkaTxMessage_EarlyHeldShedIsNotInvalidAndCountedOnce(t *testing.T) {
+	initPrometheusMetrics()
+
+	logger := &capturingLogger{}
+	v, spy, baStore, realStore, childTx, parentTx, _ := recoverySetupWithLogger(t, "kafka_early_held_shed", 1)
+	v.heldGate = atLimitGate(t)
+
+	server := NewServer(logger, test.CreateBaseTestSettings(t), nil, nil, nil, nil, nil, nil, nil)
+	server.validator = v
+
+	invalidBefore := testutil.ToFloat64(prometheusInvalidTransactions)
+	heldBefore := testutil.ToFloat64(prometheusHeldLimitShedTransactions)
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+
+	require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessageFor(t, childTx.ExtendedBytes())), "the offset is committed")
+	require.Equal(t, invalidBefore, testutil.ToFloat64(prometheusInvalidTransactions), "a held shed is not an invalid transaction")
+	require.Equal(t, heldBefore+1, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "it is counted once, by the handler")
+	require.Equal(t, droppedBefore+1, testutil.ToFloat64(prometheusValidatorShedDroppedTotal), "the drop of an ingest transaction is still counted")
+
+	require.Equal(t, 0, baStore.calls, "block assembly was never called")
+	require.Equal(t, 0, spy.unspendCalls)
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "the parent was never spent")
+
+	for _, line := range logger.lines {
+		require.NotContains(t, line, "Invalid tx", "no per-message invalid-tx line for a held shed")
+	}
+}

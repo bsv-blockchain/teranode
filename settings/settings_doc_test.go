@@ -911,7 +911,7 @@ var checkedRowsPerDoc = map[string]int{
 	"rpc_settings.md":               11,
 	"subtreevalidation_settings.md": 26,
 	"utxopersister_settings.md":     2,
-	"validator_settings.md":         18,
+	"validator_settings.md":         20,
 	"aerospike_settings.md":         13,
 	"blob_settings.md":              1,
 	"utxo_settings.md":              43,

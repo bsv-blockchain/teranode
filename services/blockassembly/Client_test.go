@@ -139,6 +139,58 @@ func TestNewClientWithAddress_BatchLogging(t *testing.T) {
 	// Note: Connection may or may not fail in test environment
 }
 
+func TestNewClientWithAddress_UnaryModeBuildsNoBatchers(t *testing.T) {
+	ctx := context.Background()
+
+	newClient := func(t *testing.T, batchSize int) *Client {
+		t.Helper()
+
+		tSettings := &settings.Settings{
+			GRPCMaxRetries:   1,
+			GRPCRetryBackoff: 1000,
+			BlockAssembly: settings.BlockAssemblySettings{
+				SendBatchSize:    batchSize,
+				SendBatchTimeout: 100,
+			},
+		}
+
+		client, err := NewClientWithAddress(ctx, ulogger.TestLogger{}, tSettings, "localhost:0")
+		require.NoError(t, err)
+
+		t.Cleanup(func() { _ = client.Close() })
+
+		return client
+	}
+
+	t.Run("unary mode", func(t *testing.T) {
+		client := newClient(t, 0)
+
+		require.Nil(t, client.batcher, "unary mode sends each transaction on its own, so there is nothing to batch")
+		require.Nil(t, client.inBlockBatcher)
+
+		mockClient := &mockBlockAssemblyAPIClient{}
+		client.client = mockClient
+
+		hash, err := chainhash.NewHashFromStr("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+		require.NoError(t, err)
+
+		mockClient.On("AddTx", mock.Anything, mock.MatchedBy(func(req *blockassembly_api.AddTxRequest) bool { return req.InBlock }), mock.Anything).
+			Return(&blockassembly_api.AddTxResponse{}, nil)
+
+		ok, err := client.Store(ContextWithInBlock(ctx), hash, 1000, 250, subtree.TxInpoints{})
+		require.NoError(t, err)
+		require.True(t, ok, "a block transaction is stored in unary mode without a batcher")
+		mockClient.AssertExpectations(t)
+	})
+
+	t.Run("batch mode", func(t *testing.T) {
+		client := newClient(t, 10)
+
+		require.NotNil(t, client.batcher)
+		require.NotNil(t, client.inBlockBatcher)
+	})
+}
+
 func TestClient_Health(t *testing.T) {
 	ctx := context.Background()
 	mockClient := &mockBlockAssemblyAPIClient{}

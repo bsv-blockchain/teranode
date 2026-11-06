@@ -737,6 +737,56 @@ func TestSubtreeProcessor_DrainDoesNotCountADuplicateAsPlaced(t *testing.T) {
 	require.Equal(t, before+1, stp.txCount.Load(), "only the transaction that was not already placed is added")
 }
 
+func TestSubtreeProcessor_DequeueDuringBlockMovementCountsANodeWhoseSubtreeFailedToComplete(t *testing.T) {
+	stp := newTestProcessorNoStart(t)
+
+	stp.newSubtreeChan = make(chan NewSubtreeRequest)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	stp.processorCtx.Store(&cancelled)
+
+	perSubtree := int(stp.currentItemsPerFile.Load())
+
+	enqueueDistinctBatches(t, stp, 1, perSubtree-1)
+
+	require.NoError(t, stp.dequeueDuringBlockMovement(nil, nil, nil, true), "a failed subtree completion is logged, not returned")
+
+	require.Len(t, stp.chainedSubtrees, 1, "precondition: the last node completed the subtree, and sending it failed")
+	require.Equal(t, int64(len(collectSubtreeHashes(stp))), int64(stp.txCount.Load()), "the node that completed the subtree is in it, so it is counted") // nolint:gosec
+	require.Equal(t, int64(stp.txCount.Load()), stp.HeldCount())                                                                                         // nolint:gosec
+}
+
+func TestSubtreeProcessor_SequentialDrainCountsOnlyWhatItPlaced(t *testing.T) {
+	stp := newTestProcessorNoStart(t)
+
+	nodes, inpoints := distinctNodes(5, "drain-sequential")
+
+	require.NoError(t, stp.addNode(nodes[0], inpoints[0], true))
+	require.NoError(t, stp.addNode(nodes[1], inpoints[1], true))
+
+	_, wasSet := stp.currentTxMap.SetIfNotExists(nodes[2].Hash, inpoints[2])
+	require.True(t, wasSet, "the unmined load leaves a transaction in the map before any subtree holds it")
+
+	chunkInpoints := []*subtree.TxInpoints{inpoints[0], inpoints[1], nil, inpoints[3], inpoints[4]}
+
+	enqueueAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.queue.clock = fixedClock{t: enqueueAt}
+	stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
+	stp.queue.enqueueBatch(nodes, chunkInpoints)
+
+	before := stp.txCount.Load()
+
+	err := stp.forEachDrainChunk(drainChunkItems, func(batches []*TxBatch) (int, error) {
+		return stp.addDrainedBatches(context.Background(), batches, &deferredBlockDrain{})
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(0), stp.queue.length(), "precondition: the drain took the batch")
+	require.Equal(t, before+3, stp.txCount.Load(), "the nil-inpoints transaction and the two new ones are placed, the two already in subtrees are not")
+	require.Equal(t, int64(0), stp.queue.unsettled.Load())
+}
+
 func TestSubtreeProcessor_UnminedLoadingEndWithoutStartLeavesTheCountAtZero(t *testing.T) {
 	stp := newLimitedSubtreeProcessor(t, context.Background(), 1)
 

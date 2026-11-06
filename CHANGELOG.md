@@ -31,10 +31,14 @@ read every section between yours and the target.
 
 ### Breaking
 
-- **`blockassembly_maxTransactionsInMemory` needs every validator and subtree-validation pod on
-  this build first.** An old client never sets `inBlock`, so the limit refuses its block
-  hand-offs. With the limit set, `teranode_validator_invalid_transactions` no longer counts a
-  transaction refused at the limit; `teranode_validator_held_limit_shed_transactions` does. (#1593)
+- **Upgrade every validator and subtree-validation pod before you set
+  `blockassembly_maxTransactionsInMemory`, and keep the default 0 until then.** An old validator
+  never sends `inBlock`, so a new block assembly with the limit set refuses its block transactions
+  and the old validator unlocks them without a template entry. With the limit set,
+  `teranode_validator_invalid_transactions` no longer counts a transaction refused at the limit;
+  `teranode_validator_held_limit_shed_transactions` does. A new validator setting,
+  `validator_kafkaBackpressureResumeHeldPercent` (default 80), sets where a held-count pause
+  resumes. (#1593)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)

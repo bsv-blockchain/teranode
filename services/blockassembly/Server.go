@@ -1472,13 +1472,23 @@ func (ba *BlockAssembly) shedHeld() error {
 			"block assembly is loading its unmined transactions and refuses ingest until that completes, in-memory limit %d",
 			ba.blockAssembler.MaxTransactionsInMemory())
 	} else {
-		shedErr = errors.NewThresholdExceededError(
-			"block assembly holds %d transactions in memory, limit %d",
-			ba.blockAssembler.HeldCount(), ba.blockAssembler.MaxTransactionsInMemory())
+		shedErr = NewHeldLimitShedError(ba.blockAssembler.HeldCount(), ba.blockAssembler.MaxTransactionsInMemory())
 	}
+
 	shedErr.SetData(heldShedMarker, true)
 
 	return errors.WrapGRPC(shedErr)
+}
+
+// NewHeldLimitShedError builds the shed for the in-memory transaction limit with the marker that
+// IsHeldLimitShed reads. The validator returns it when its view of block assembly's held count is
+// at the limit, so a transaction shed before the UTXO store is classified exactly like one that
+// block assembly refused.
+func NewHeldLimitShedError(held, limit int64) *errors.Error {
+	shedErr := errors.NewThresholdExceededError("block assembly holds %d transactions in memory, limit %d", held, limit)
+	shedErr.SetData(heldShedMarker, true)
+
+	return shedErr
 }
 
 // shed records and returns the queue-full shed outcome: a ResourceExhausted-

@@ -2562,3 +2562,106 @@ func TestValidate_InBlockShedDoesNotWarnPerTransactionAboutTheKeptLock(t *testin
 	require.Contains(t, logged, "accepted locked without a template entry", "the rate-limited shed warning is the one line for this")
 	require.NotContains(t, logged, "tx stays locked, it was not delivered", "the kept lock is deliberate, not an undelivered error")
 }
+
+func atLimitGate(t *testing.T) *heldLimitGate {
+	t.Helper()
+
+	reader := &fakeReader{}
+	reader.setHeld(100, 100, 0)
+
+	gate := newHeldLimitGate(t.Context(), testBackpressureConfig(), reader)
+	t.Cleanup(gate.stop)
+
+	stats, err := reader.GetBlockAssemblyQueueStats(t.Context())
+	require.NoError(t, err)
+
+	gate.observe(stats)
+
+	return gate
+}
+
+func TestValidate_AtTheHeldLimitAnIngestTxIsShedBeforeTheUtxoStore(t *testing.T) {
+	ctx := context.Background()
+	v, spy, baStore, realStore, childTx, parentTx := recoverySetup(t, "early_held_shed")
+	v.heldGate = atLimitGate(t)
+
+	initPrometheusMetrics()
+
+	heldBefore := testutil.ToFloat64(prometheusHeldLimitShedTransactions)
+	unwindBefore := testutil.ToFloat64(prometheusValidatorShedUnwindTotal)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+
+	require.ErrorIs(t, err, errors.ErrThresholdExceeded)
+	require.True(t, blockassembly.IsHeldLimitShed(err), "it carries the marker block assembly's own held shed carries")
+	require.False(t, errors.Is(err, errors.ErrTxInvalid), "a held shed is not an invalid transaction")
+
+	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
+	require.False(t, parentOutpointSpent(t, realStore, parentTx), "no input was spent")
+	require.Equal(t, 0, spy.unspendCalls)
+	require.Equal(t, 0, baStore.calls, "block assembly was not called")
+	require.Equal(t, unwindBefore, testutil.ToFloat64(prometheusValidatorShedUnwindTotal), "nothing was created, so nothing is unwound")
+	require.Equal(t, heldBefore, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "the validator does not count it, the caller counts a held shed once")
+}
+
+func TestValidate_EarlyHeldShedOfAKafkaTxIsWarnedAtTheBoundedRate(t *testing.T) {
+	ctx := context.Background()
+	v, _, _, _, childTx, _, logger := recoverySetupWithLogger(t, "early_held_shed_kafka", 1)
+	v.heldGate = atLimitGate(t)
+
+	initPrometheusMetrics()
+
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+
+	for i := 0; i < 3; i++ {
+		_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+		require.True(t, blockassembly.IsHeldLimitShed(err))
+	}
+
+	require.Equal(t, droppedBefore+3, testutil.ToFloat64(prometheusValidatorShedDroppedTotal))
+	warnings := 0
+
+	for _, line := range logger.lines {
+		if strings.Contains(line, "holds its in-memory transaction limit") {
+			warnings++
+		}
+	}
+
+	require.Equal(t, 1, warnings, "the drop is warned once per interval, not once per transaction")
+}
+
+func TestValidate_InBlockTxIsNotGatedByTheHeldLimit(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, realStore, childTx, parentTx := recoverySetup(t, "early_held_shed_in_block")
+	v.heldGate = atLimitGate(t)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+
+	require.NoError(t, err, "block assembly does not refuse a block transaction for the limit, so neither does the gate")
+	require.Equal(t, 1, baStore.calls)
+	require.Equal(t, []bool{true}, baStore.inBlockSeen)
+	require.True(t, parentOutpointSpent(t, realStore, parentTx))
+}
+
+func TestValidate_BelowTheHeldLimitAnIngestTxIsNotGated(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, _, childTx, _ := recoverySetup(t, "early_held_shed_below_limit")
+
+	reader := &fakeReader{}
+	reader.setHeld(10, 100, 0)
+
+	gate := newHeldLimitGate(ctx, testBackpressureConfig(), reader)
+	t.Cleanup(gate.stop)
+
+	stats, err := reader.GetBlockAssemblyQueueStats(ctx)
+	require.NoError(t, err)
+
+	gate.observe(stats)
+
+	v.heldGate = gate
+
+	_, err = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+
+	require.NoError(t, err)
+	require.Equal(t, 1, baStore.calls)
+}
