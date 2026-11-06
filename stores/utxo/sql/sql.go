@@ -143,6 +143,10 @@ type Store struct {
 	// block-state methods. SetBlockHeight, SetMedianBlockTime and SetBlockState
 	// are wrapped below to add a debug line.
 	utxo.BlockStateFields
+
+	// beforeSpendPart runs before each backend part of a spend batch. Tests use it
+	// to hold a part after its items started.
+	beforeSpendPart func(part []*batchSpend)
 }
 
 // batchUnlockItem represents a single SetLocked(false) request.
@@ -2107,6 +2111,16 @@ func handleSpendPanic(recovered any, err *error, logger ulogger.Logger) {
 	}
 }
 
+// spendRollbackBound is the detached time limit for awaiting a late admitted
+// claim and for rolling back partial spends.
+func (s *Store) spendRollbackBound() time.Duration {
+	if d := s.settings.UtxoStore.SpendRollbackTimeout; d > 0 {
+		return d
+	}
+
+	return 120 * time.Second
+}
+
 // Spend marks UTXOs as spent by updating their spending transaction ID.
 // It performs several validations:
 //   - Checks if the UTXO exists
@@ -2150,6 +2164,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	var (
 		mu              sync.Mutex
 		txAlreadyExists bool
+		timedOut        bool
 		spentSpends     = make([]*utxo.Spend, 0, len(spends))
 		g               errgroup.Group
 	)
@@ -2204,16 +2219,40 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			case batchErr = <-errCh:
 				// Batch completed successfully or with error
 			case <-requestCtx.Done():
-				// The deferred Abandon runs before this worker returns, so rollback
-				// cannot be followed by dispatch of this still-queued item. A write
-				// admitted before the abort can still finish late (#1291).
-				prometheusUtxoSpendAbortInFlight.Inc()
+				// Abandon first, so no further part of this item can start. An item
+				// that already started is awaited for a detached, bounded time and a
+				// late success joins spentSpends, so the rollback below covers it.
+				started := !item.admission.Abandon()
+
 				if ctx.Err() != nil {
 					spends[idx].Err = errors.NewContextCanceledError("[SPEND][%s:%d] context canceled while waiting for batch response", spend.TxID.String(), spend.Vout)
 				} else {
 					prometheusUtxoErrors.WithLabelValues("Spend", "BatchTimeout").Inc()
 					spends[idx].Err = errors.NewServiceUnavailableError("[SPEND][%s:%d] batch operation timed out after %s", spend.TxID.String(), spend.Vout, spendTimeout)
 				}
+
+				mu.Lock()
+				timedOut = true
+				mu.Unlock()
+
+				if !started {
+					return nil
+				}
+
+				lateCtx, lateCancel := context.WithTimeout(context.Background(), s.spendRollbackBound())
+				defer lateCancel()
+
+				select {
+				case lateErr := <-errCh:
+					if lateErr == nil {
+						mu.Lock()
+						spentSpends = append(spentSpends, spend)
+						mu.Unlock()
+					}
+				case <-lateCtx.Done():
+					prometheusUtxoSpendAbortInFlight.Inc()
+				}
+
 				return nil
 			}
 
@@ -2276,7 +2315,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		return nil, errors.NewError("error in sql spend (batched mode)", err)
 	}
 
-	if len(spends) != len(spentSpends) {
+	if timedOut || len(spends) != len(spentSpends) {
 		// Atomicity contract (mirrors aerospike/spend.go rollbackPartialSpends):
 		// roll back the spends that succeeded, whatever the error class of the
 		// ones that failed, so no parent is left naming a spender whose record is
@@ -2339,12 +2378,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				// single-spend cost on a wide transaction. On overrun the loop
 				// aborts and the remaining spends stay applied, counted via
 				// prometheusUtxoSpendRollbackFailed below.
-				rbTimeout := s.settings.UtxoStore.SpendRollbackTimeout
-				if rbTimeout <= 0 {
-					rbTimeout = 120 * time.Second
-				}
-
-				rbCtx, rbCancel := context.WithTimeout(context.Background(), rbTimeout)
+				rbCtx, rbCancel := context.WithTimeout(context.Background(), s.spendRollbackBound())
 				defer rbCancel()
 
 				var spendingTxExists bool
@@ -2483,6 +2517,10 @@ func (s *Store) sendSpendBatch(batch []*batchSpend) {
 			return item.spend
 		},
 		Process: func(part []*batchSpend) {
+			if s.beforeSpendPart != nil {
+				s.beforeSpendPart(part)
+			}
+
 			s.retrySpendBatch(part, func(part []*batchSpend) bool {
 				return s.trySendSpendBatch(s.ctx, part)
 			})
