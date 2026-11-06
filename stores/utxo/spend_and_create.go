@@ -220,7 +220,7 @@ type metaReader interface {
 // and the caller's answer is unchanged, so this is where those failures show.
 var prometheusReplayCleanup = promauto.NewCounterVec(prometheus.CounterOpts{
 	Namespace: "teranode", Subsystem: "utxo", Name: "replay_cleanup_total",
-	Help: "Records found behind a pruned transaction's marker when a spend met it, by what the cleanup did: removed, kept_parent_locked, kept_changed, read_failed, delete_failed, unsupported",
+	Help: "Records found behind a pruned transaction's marker when a spend met it, by what the cleanup did: removed, removed_pages_failed, kept_original (mined or unlocked), kept_parent_locked, kept_changed, read_failed, delete_failed, unsupported",
 }, []string{"outcome"})
 
 // conditionalDeleter removes a record only while it is still locked and has no
@@ -423,6 +423,8 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 	}
 
 	if len(record.BlockIDs) > 0 || !record.Locked {
+		prometheusReplayCleanup.WithLabelValues("kept_original").Inc()
+
 		return false, false
 	}
 
@@ -438,16 +440,24 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 		return false, false
 	}
 
-	var deleted bool
+	var (
+		deleted bool
+		restErr error
+	)
 
 	delCtx, delCancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackBound(s))
 	defer delCancel()
 
 	if err := retryStoreCall(delCtx, func() error {
-		// An attempt that removed the record and then failed is retried, and the
-		// retry finds it gone; keep the earlier answer.
 		d, err := deleter.DeleteCompleteIfLockedUnmined(delCtx, hash)
-		deleted = deleted || d
+		if d {
+			// The master is gone, whatever failed after it (the pagination
+			// records). Stop here: a retry would find the master absent and
+			// answer cleanly, hiding that failure.
+			deleted, restErr = true, err
+
+			return nil
+		}
 
 		return err
 	}); err != nil {
@@ -455,6 +465,13 @@ func removeMarkedRecreation(ctx context.Context, logger ulogger.Logger, s Sequen
 		prometheusReplayCleanup.WithLabelValues("delete_failed").Inc()
 
 		return false, false
+	}
+
+	if restErr != nil {
+		logger.Errorf("[SpendAndCreate] %s: removed the master of a recreated record of a pruned transaction whose spend met the pruner's marker, but not all of the record: %v", hash.String(), restErr)
+		prometheusReplayCleanup.WithLabelValues("removed_pages_failed").Inc()
+
+		return true, true
 	}
 
 	if !deleted {

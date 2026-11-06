@@ -10,6 +10,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -341,7 +342,8 @@ type unknownCreateStore struct {
 	// and unmined.
 	changed bool
 	// partialErr makes the first conditional delete remove the record and
-	// still fail, as a failed pagination pass does; later attempts find it gone.
+	// still fail, as a failed pagination pass does; a later attempt would find
+	// it gone and answer cleanly.
 	partialErr error
 }
 
@@ -472,27 +474,33 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 			partialErr  error
 			wantAttempt bool
 			wantDelete  bool
+			// wantOutcome is the replay_cleanup_total label that rises by one;
+			// empty means the cleanup did not run and no label moves.
+			wantOutcome string
 		}{
-			{name: "marker, unmined, locked", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, wantAttempt: true, wantDelete: true},
-			{name: "marker, unmined, locked, parent unlocked", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, parent: &meta.Data{BlockIDs: []uint32{3}}, wantAttempt: true, wantDelete: true},
+			{name: "marker, unmined, locked", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, wantAttempt: true, wantDelete: true, wantOutcome: "removed"},
+			{name: "marker, unmined, locked, parent unlocked", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, parent: &meta.Data{BlockIDs: []uint32{3}}, wantAttempt: true, wantDelete: true, wantOutcome: "removed"},
 			// A reorg's move-back locks the parent before the child and saves
 			// the child for restoration; removing it would drop it from that file.
-			{name: "marker, unmined, locked, parent locked by a move-back", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, parent: &meta.Data{Locked: true, BlockIDs: []uint32{3}}},
+			{name: "marker, unmined, locked, parent locked by a move-back", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, parent: &meta.Data{Locked: true, BlockIDs: []uint32{3}}, wantOutcome: "kept_parent_locked"},
+			// The first attempt removes the master and fails on its pages. It is
+			// not retried, since a retry would find the master gone and answer
+			// cleanly; the record was removed and the failure is counted.
+			{name: "marker, unmined, locked, removed by an attempt that then failed", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, partialErr: errors.NewStorageError("page pass failed"), wantAttempt: true, wantDelete: true, wantOutcome: "removed_pages_failed"},
 			// The record was unlocked after it was read, as a failed move-back does.
-			// The first attempt removes the record and fails on its pages; the
-			// retry finds it gone. It was removed, and is reported so.
-			{name: "marker, unmined, locked, removed by an attempt that then failed", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, partialErr: errors.NewStorageError("page pass failed"), wantAttempt: true, wantDelete: true},
-			{name: "marker, unmined, locked, changed before the delete", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, changed: true, wantAttempt: true},
+			{name: "marker, unmined, locked, changed before the delete", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{Locked: true}, changed: true, wantAttempt: true, wantOutcome: "kept_changed"},
 			// An original whose block was invalidated after the pruner marked it
 			// is unmined and unlocked too; it is a live transaction and stays.
-			{name: "marker, unmined, unlocked", spend: Spend{Idempotent: true}, recheck: pruned},
-			{name: "marker, mined", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{BlockIDs: []uint32{7}}},
-			{name: "marker, record unreadable", spend: Spend{Idempotent: true}, recheck: pruned, readErr: errors.NewStorageError("down")},
+			{name: "marker, unmined, unlocked", spend: Spend{Idempotent: true}, recheck: pruned, wantOutcome: "kept_original"},
+			{name: "marker, mined", spend: Spend{Idempotent: true}, recheck: pruned, record: meta.Data{BlockIDs: []uint32{7}}, wantOutcome: "kept_original"},
+			{name: "marker, record unreadable", spend: Spend{Idempotent: true}, recheck: pruned, readErr: errors.NewStorageError("down"), wantOutcome: "read_failed"},
 			{name: "missing parent", spend: Spend{Blessed: true}, recheck: errors.NewTxNotFoundError("parent gone")},
 			{name: "not a replay", spend: Spend{Idempotent: true}},
 			{name: "recheck cannot answer", spend: Spend{Idempotent: true}, recheck: errors.NewStorageError("down")},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
+				before := replayCleanupCounts()
+
 				f := &unknownCreateStore{
 					deletingRecheckStore: deletingRecheckStore{recheckStore: recheckStore{
 						fakeSequentialStore: fakeSequentialStore{spends: []*Spend{&tc.spend}, createErr: unknown},
@@ -515,9 +523,17 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 				require.Len(t, spends, 1, "the spends are kept")
 				require.Equal(t, 0, f.unspendCalls)
 
-				if tc.partialErr != nil {
-					require.Equal(t, 2, f.deleteCalls, "the failed attempt is retried")
-				} else if tc.wantAttempt {
+				after := replayCleanupCounts()
+				for _, outcome := range replayCleanupOutcomes {
+					want := before[outcome]
+					if outcome == tc.wantOutcome {
+						want++
+					}
+
+					require.Equalf(t, want, after[outcome], "replay_cleanup_total{outcome=%q}", outcome)
+				}
+
+				if tc.wantAttempt {
 					require.Equal(t, 1, f.deleteCalls)
 				} else {
 					require.Equal(t, 0, f.deleteCalls)
@@ -571,4 +587,20 @@ func TestSequentialSpendAndCreate_Recheck(t *testing.T) {
 		require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
 		require.Equal(t, 1, f.deleteCalls)
 	})
+}
+
+// replayCleanupOutcomes is every label value removeMarkedRecreation counts.
+var replayCleanupOutcomes = []string{
+	"removed", "removed_pages_failed", "kept_original", "kept_parent_locked",
+	"kept_changed", "read_failed", "delete_failed", "unsupported",
+}
+
+// replayCleanupCounts reads replay_cleanup_total for every outcome.
+func replayCleanupCounts() map[string]float64 {
+	counts := make(map[string]float64, len(replayCleanupOutcomes))
+	for _, outcome := range replayCleanupOutcomes {
+		counts[outcome] = testutil.ToFloat64(prometheusReplayCleanup.WithLabelValues(outcome))
+	}
+
+	return counts
 }
