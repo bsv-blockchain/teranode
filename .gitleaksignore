@@ -1,0 +1,4 @@
+# False positive: generic-api-key matched the constant name gap054EnvKey (value "GAP_BV054_CHILD", an
+# environment variable name used by a gap-proof test). The constant was renamed later; this entry
+# covers the commit that introduced it.
+31686765192a8efdcfdfb57a12452214e4d099af:services/blockvalidation/gap_bv054_test.go:generic-api-key:30
