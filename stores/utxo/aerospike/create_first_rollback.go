@@ -10,17 +10,18 @@ import (
 	"github.com/bsv-blockchain/teranode/util"
 )
 
-// BeginCreateFirstRollback sets the rollingBack bin on a master record that still carries
-// the creating bin, atomically, so a concurrent finalize or roll-forward refuses the record
-// from then on. The write is UPDATE_ONLY and filtered on the creating bin, so a finalized
-// or absent record is never touched.
+// BeginCreateFirstRollback claims the rollback of a master record that still carries the
+// creating bin, by setting the rollingBack bin atomically, so a concurrent finalize or
+// roll-forward refuses the record from then on. The write is UPDATE_ONLY and filtered on the
+// creating bin being present and the rollingBack bin being absent, so a finalized or absent
+// record is never touched and only one caller can set the marker.
 //
-// It reports true when the record is rolling back after the call, whether this call set the
-// marker or an earlier rollback of the same transaction did. A filtered-out write is read
-// back: the write is idempotent, so the only way it is filtered out is that the creating bin
-// is gone, which reports false, while a record that still shows rollingBack reports true. An
-// absent record reports false. Any other error returns (false, err): the caller leaves the
-// record creating and the sweep heals it.
+// It reports true only to the caller whose write set the marker: that caller owns the
+// rollback and is the one that unspends the inputs and deletes the record. It reports false,
+// writing nothing, when the record is absent, already final, or already rolling back under
+// another caller. A filtered-out write is read back only to tell those cases from a store
+// fault. Any other error returns (false, err): the caller leaves the record creating and the
+// sweep heals it.
 func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash) (bool, error) {
 	key, err := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if err != nil {
@@ -29,7 +30,7 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 
 	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-	writePolicy.FilterExpression = aerospike.ExpBinExists(fields.Creating.String())
+	writePolicy.FilterExpression = finalizeFilter()
 
 	_, putErr := s.client.Operate(writePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.RollingBack.String(), true)))
 	if putErr == nil {
@@ -51,11 +52,8 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 		return false, errors.NewStorageError("error reading record after the rolling back marker was filtered out", getErr)
 	}
 
-	switch {
-	case state.absent, !state.creating:
+	if state.absent || !state.creating || state.rollingBack {
 		return false, nil
-	case state.rollingBack:
-		return true, nil
 	}
 
 	return false, errors.NewStorageError("rolling back marker for %s was filtered out but the record is still creating", hash.String())
