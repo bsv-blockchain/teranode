@@ -352,8 +352,8 @@ func (b *BlockAssembler) markSkippedForkTxs(ctx context.Context, beforeReload bo
 			continue
 		}
 
-		// The header read can be served from a cache SetBlockMinedSet does not clear, so a block
-		// it reads as unfinished is asked again, as block validation does.
+		// A block the header read shows without mined_set is asked again: block validation may
+		// set it between the two reads.
 		if !fb.meta.MinedSet {
 			mined, err := b.blockchainClient.GetBlockIsMined(ctx, &hash)
 			if err != nil {
@@ -589,9 +589,11 @@ func (b *BlockAssembler) addSkippedForkRecheck(hashes []chainhash.Hash) {
 }
 
 // skippedForkMarkFloor is the lowest height of a fork block markSkippedForkTxs reads: the replay
-// floor, raised to where subtree files are surely still kept. A subtree file is kept until the
-// UTXO store's height when it was written, normally one below its block, plus the subtree
-// retention. A lower fork block may have lost it, and was the best tip, if ever, a retention ago.
+// floor, raised to where the subtree validation retention still keeps subtree files. A subtree
+// file it writes is kept until the UTXO store's height when it was written, normally one below
+// its block, plus that retention. A lower fork block may have lost it, and was the best tip, if
+// ever, a retention ago. Above the floor a file can still be gone, for example one block
+// assembly wrote with the global retention alone, and such a block is given up.
 func (b *BlockAssembler) skippedForkMarkFloor(bestHeight uint32) uint32 {
 	floor := b.bestTipFloor(bestHeight)
 
@@ -1702,7 +1704,18 @@ func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockH
 	if len(branchOnly) > 0 {
 		b.heartbeat.BeatIfStarted()
 
+		// Owed before the write, as the mark's reload is: once written, a later mark finds
+		// them unmined already and would not know the pool lacks them. The reset below
+		// clears it (onResetDone).
+		b.skippedForkReloadPending = true
+
 		if _, err = b.markOffLongestChain(ctx, branchOnly); err != nil {
+			// The reload it owes now is backed off like any failed mark, so the idle wake
+			// does not run a pass on every tick for it.
+			if !time.Now().Before(b.skippedForkMarkRetryAt) {
+				b.noteSkippedForkMarkFailure(time.Now())
+			}
+
 			return errors.NewProcessingError("[restampStaleBranch] error marking %d stale branch transactions as not on the longest chain", len(branchOnly), err)
 		}
 	}
@@ -1711,7 +1724,19 @@ func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockH
 
 	tip, height := b.CurrentBlock()
 
-	return b.resetToBlockAndRecord(ctx, tip, height, true)
+	if err = b.resetToBlockAndRecord(ctx, tip, height, true); err != nil {
+		// The failed reset is the pass's one attempt: the reload it owes waits for the next
+		// pass, or the idle wake after a back-off, counted once in the pass.
+		if b.skippedForkWorkOwed() && !time.Now().Before(b.skippedForkMarkRetryAt) {
+			b.noteSkippedForkMarkFailure(time.Now())
+		}
+
+		b.skippedForkMarkRan = true
+
+		return err
+	}
+
+	return nil
 }
 
 // branchOnlyTxs returns the hashes, in order, whose transaction no block of the best chain

@@ -1074,8 +1074,8 @@ func TestReplayBestTipChanges_ExternalResetFailureGatesCandidates(t *testing.T) 
 // service that does not serve the best-tip order yet, or one the replay keeps failing on. With
 // failMarkSave it refuses writes of SkippedForkMarkStateKey. afterList runs once, after the first
 // GetBlockHeadersFromHeight. fail names a method that fails while it is set (GetState only for
-// SkippedForkMarkStateKey). staleMinedSet makes header reads report mined_set unset, as their
-// cache can after SetBlockMinedSet. headerIDsCalls counts GetBlockHeaderIDs calls, one per load
+// SkippedForkMarkStateKey). staleMinedSet makes header reads report mined_set unset, as a read
+// just before block validation sets it does. headerIDsCalls counts GetBlockHeaderIDs calls, one per load
 // of the unmined transactions, and onIsMined runs on every GetBlockIsMined.
 type noBestTipOrderClient struct {
 	blockchain.ClientI
@@ -3657,4 +3657,120 @@ func TestHandleResetRequests_RefusedResetIsRetried(t *testing.T) {
 		require.NoError(t, <-answer)
 		require.Nil(t, ba.resetOwed, "the owed reset ran with this one")
 	})
+}
+
+// TestMarkSkippedForkTxs_ReadsAForkAboveTheBestTip: a fork of less work can reach above the best
+// tip. F2 and F3 extend A1 and F3 was the best tip, so block validation marked Y mined in it;
+// C2, a single block of more work, overtook it. The best tip is at height 2 and F3 at 3, so the
+// listing has to read past the best tip's height to find it, here one height at a time.
+func TestMarkSkippedForkTxs_ReadsAForkAboveTheBestTip(t *testing.T) {
+	initPrometheusMetrics()
+	ctx := t.Context()
+
+	items := setupBlockAssemblyTest(t, withCoinbaseMaturity(testCoinbaseMaturity), func(s *settings.Settings) {
+		s.BlockChain.MaxBlockHeadersPerRequest = 1
+	})
+	ba := items.blockAssembler
+	ba.subtreeProcessor.Stop(context.Background())
+	stp, err := subtreeprocessor.NewSubtreeProcessor(ctx, ulogger.TestLogger{}, ba.settings, items.blobStore, items.blockchainClient, items.utxoStore, items.newSubtreeChan)
+	require.NoError(t, err)
+	ba.subtreeProcessor = stp
+	stp.Start(ctx)
+
+	genesis := genesisHeader(t, items)
+	a1 := buildChain(genesis, 1, 140000)[0]
+	addBlockWithMinedSet(ctx, t, items, a1)
+	ba.setBestBlockHeader(a1, 1)
+	stp.InitCurrentBlockHeader(a1)
+
+	funding := replayPoolTx(&chainhash.Hash{}, 100)
+	y := replayPoolTx(funding.TxIDChainHash(), 97)
+	for _, tx := range []*bt.Tx{funding, y} {
+		_, err := items.utxoStore.(*utxosql.Store).Create(ctx, tx, 1)
+		require.NoError(t, err)
+	}
+
+	_, genMeta, err := items.blockchainClient.GetBlockHeader(ctx, genesis.Hash())
+	require.NoError(t, err)
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{funding.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: genMeta.ID, BlockHeight: 0, OnLongestChain: true})
+	require.NoError(t, err)
+
+	tree, err := subtree.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, tree.AddCoinbaseNode())
+	require.NoError(t, tree.AddNode(*y.TxIDChainHash(), 1, uint64(len(y.Bytes()))))
+	treeBytes, err := tree.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, items.blobStore.Set(ctx, tree.RootHash()[:], fileformat.FileTypeSubtree, treeBytes))
+
+	fork := buildChain(a1, 2, 141000)
+	addBlockWithMinedSet(ctx, t, items, fork[0])
+
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+	require.NoError(t, items.blockchainClient.AddBlock(ctx, &model.Block{Header: fork[1], CoinbaseTx: coinbase, TransactionCount: 2, Subtrees: []*chainhash.Hash{tree.RootHash()}}, "", blockchainoptions.WithSubtreesSet(true), blockchainoptions.WithMinedSet(true)))
+
+	_, f3Meta, err := items.blockchainClient.GetBlockHeader(ctx, fork[1].Hash())
+	require.NoError(t, err)
+	_, err = items.utxoStore.SetMinedMulti(ctx, []*chainhash.Hash{y.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: f3Meta.ID, BlockHeight: 3, OnLongestChain: true})
+	require.NoError(t, err)
+
+	harder, err := model.NewNBitFromString("1c00ffff")
+	require.NoError(t, err)
+
+	c2 := buildChain(a1, 1, 142000)[0]
+	c2.Bits = *harder
+	addBlockWithMinedSet(ctx, t, items, c2)
+
+	best, bestMeta, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, c2.Hash().String(), best.Hash().String(), "precondition: C2, of more work, is the best tip")
+	require.Less(t, bestMeta.Height, f3Meta.Height, "precondition: F3 is above the best tip")
+
+	ba.blockchainClient = &noBestTipOrderClient{ClientI: items.blockchainClient}
+	ba.processNewBlockAnnouncement(ctx)
+
+	requireBlockAssemblyTip(t, items, c2)
+	require.NotZero(t, unminedSince(t, items, y), "Y, which only F3 above the best tip mined, is marked not on the longest chain")
+}
+
+// TestRestampStaleBranch_FailedResetKeepsTheReloadOwed: the restamp writes the stale branch's
+// transactions unmined, then reloads the pool by a reset. When that reset fails, the reload stays
+// owed: a mark that runs later finds those transactions unmined already and would not know the
+// pool lacks them. The failed reset is the pass's one attempt, backed off like the mark's.
+func TestRestampStaleBranch_FailedResetKeepsTheReloadOwed(t *testing.T) {
+	items, client, f, y := skippedForkSetup(t, true, true)
+	ba := items.blockAssembler
+	ctx := t.Context()
+
+	best, _, err := items.blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	_, fMeta, err := items.blockchainClient.GetBlockHeader(ctx, f.Hash())
+	require.NoError(t, err)
+
+	// A failed write of the restamp is backed off too.
+	ba.utxoStore = &failingUtxoStore{Store: items.utxoStore, fail: "MarkTransactionsOnLongestChain"}
+	require.Error(t, ba.restampStaleBranch(ctx, []blockHeaderWithMeta{{header: f, meta: fMeta}}, best))
+	require.True(t, ba.skippedForkReloadPending)
+	require.Equal(t, skippedForkMarkRetryBase, ba.skippedForkMarkWait, "the failed write is backed off")
+
+	ba.utxoStore = items.utxoStore
+	ba.noteSkippedForkMarkSuccess()
+
+	client.fail = "GetBlockHeaderIDs"
+	require.Error(t, ba.restampStaleBranch(ctx, []blockHeaderWithMeta{{header: f, meta: fMeta}}, best))
+
+	require.NotZero(t, unminedSince(t, items, y), "the restamp wrote Y unmined")
+	require.False(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "precondition: the reload did not run")
+	require.True(t, ba.skippedForkReloadPending, "the reload stays owed")
+	require.True(t, ba.skippedForkMarkRan, "the failed reset is the pass's one attempt")
+	require.Equal(t, skippedForkMarkRetryBase, ba.skippedForkMarkWait)
+
+	// The next pass's owed work reloads Y.
+	client.fail = ""
+	ba.skippedForkMarkRan = false
+	ba.runOwedSkippedForkWork(ctx)
+
+	require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the owed reload put Y in the pool")
+	require.False(t, ba.skippedForkWorkOwed())
 }

@@ -170,35 +170,38 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Breaking — behaviour changes on upgrade
 
-- **A reorg no longer re-marks block assembly's whole mempool.** Block assembly marks
-  as not on the longest chain only the transactions it moved back that the new chain
-  does not mine and that are still in block assembly, plus the losing conflicting
+- **A reorg no longer re-marks block assembly's whole mempool.** Block assembly marks as
+  not on the longest chain only the transactions it moved back that the new chain does
+  not mine and that are still in block assembly, plus the losing conflicting
   transactions, instead of every transaction in block assembly. On a large mempool the
   old sweep was a batch write per transaction on every reorg: about 380 million records
   and 8 minutes at scale, with block assembly intake stalled throughout. A tip that was
   overtaken before block assembly moved onto it, which that sweep also caught, is
   covered by the best-tip replay (#2074). When that replay falls back to following the
   best header (a blockchain service that does not serve `BlocksBetterThan` yet during a
-  rolling upgrade, or a replay given up after three failures in a row), and after a
-  reset while the blockchain service does not serve it, block assembly marks as not on
-  the longest chain the transactions of recent fork blocks that no block of the best
-  chain contains and that a block marked mined. A transaction a best-chain block mines by
-  the time the mark is written is marked as mined again. It lists the blocks above its
-  floor that the best chain does not hold, a window of heights at a time
-  (`GetBlockHeadersFromHeight`, bounded by `blockchain_maxBlockHeadersPerRequest`),
-  without computing chain tips' branch lengths, and reads each valid one block validation
-  has finished whose subtree files the subtree retention still keeps. A block it has
-  marked or given up is not read again in this process; one that joined the best chain
-  during the run, could not be read or is not finished yet is read again on a later run.
-  It runs with block assembly on the best tip, or before the reset it follows. The run is recorded as pending under a new blockchain
-  state key, `BlockAssemblerSkippedForkMark`, before block assembly follows the best
-  header, resets without a replay position, or gives the replay's history up; if that
-  write fails, block assembly stays on its tip, refuses the reset or keeps the history,
-  and tries again; a refused reset is retried once the write can succeed, after the
-  back-off below or, for a storage-triggered one, on its usual interval. An older binary ignores the key. A reset still marks every
-  transaction in block assembly. Each failure path counts in
-  `teranode_blockassembly_processing_stuck_total` under `skipped_fork_mark_unfinished`,
-  `skipped_fork_mark_record` or `skipped_fork_subtree_lost`. (#2065)
+  rolling upgrade, a replay position that could not be read or chosen, or a
+  replay given up after three failures in a row), and after a reset without a replay
+  position, block assembly marks as not on the longest chain the transactions of recent
+  fork blocks that no block of the best chain contains and that a block marked mined. A
+  transaction a best-chain block mines by the time the mark is written is marked as
+  mined again. It lists the blocks above its floor that the best chain does not hold, a
+  window of heights at a time (`GetBlockHeadersFromHeight`, bounded by
+  `blockchain_maxBlockHeadersPerRequest`), without computing chain tips' branch lengths,
+  and reads each valid one block validation has finished, from where the subtree
+  validation retention still keeps subtree files; a block above that whose files are
+  gone anyway is given up (below). A block it has marked or given up is not read again
+  in this process; one that joined the best chain during the run, could not be read or
+  is not finished yet is read again on a later run. It runs with block assembly on the
+  best tip, or before the reset it follows. The run is recorded as pending under a new
+  blockchain state key, `BlockAssemblerSkippedForkMark`, before block assembly follows
+  the best header, resets without a replay position, or gives the replay's history up;
+  if that write fails, block assembly stays on its tip, refuses the reset or keeps the
+  history, and tries again; a refused reset is retried once the write can succeed, after
+  the back-off below or, for a storage-triggered one, on its usual interval. An older
+  binary ignores the key. A reset still marks every transaction in block assembly. Each
+  failure path counts in `teranode_blockassembly_processing_stuck_total` under
+  `skipped_fork_mark_unfinished`, `skipped_fork_mark_record` or
+  `skipped_fork_subtree_lost`. (#2065)
     - **Pool reload.** When the mark takes a transaction off the longest chain that the
       pool does not hold and could (one only the skipped block had, not a conflicting
       one), block assembly reloads the pool on its own tip. That is a full reset, as the
@@ -229,7 +232,8 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
       loads the unmined transactions, waiting once for a fork block block validation is
       still finishing. If it cannot, for example because the subtree store cannot be
       reached, block assembly fails to start rather than load a pool without those
-      transactions, and starts once the store answers. Watch for `could not finish, not
+      transactions; it does not retry by itself, and the next restart after the store
+      answers finishes the mark. Watch for `could not finish, not
       loading the unmined transactions` in the logs.
 
 - **`GetLastNBlocks` honours `fromHeight` when orphans are included.** The SQL

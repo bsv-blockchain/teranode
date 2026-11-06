@@ -1590,7 +1590,8 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	// after the move still finishes it at the next start. Without that record block assembly
 	// does not move, and the pending run wakes the next pass after a back-off. With no move the
 	// mark a replay give-up owes is recorded already (followBestTipChanges), and the pass ends
-	// with it (runOwedSkippedForkWork).
+	// with it (runOwedSkippedForkWork), unless a failed reset was the pass's one attempt; the
+	// idle wake then runs it after the back-off.
 	if before == nil || !bestBlockchainBlockHeader.Hash().IsEqual(before.Hash()) {
 		if err = b.saveSkippedForkMark(ctx, true); err != nil {
 			b.skippedForkMarkPending = true
