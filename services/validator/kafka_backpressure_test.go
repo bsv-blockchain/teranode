@@ -1273,6 +1273,40 @@ func TestBackpressure_PausesWhenInMemoryLimitIsFillingAndQueueIsEmpty(t *testing
 	require.Equal(t, 1, consumer.pauseCount(), "and it does not flap")
 }
 
+func TestBackpressure_HeldOnlyPauseOutlastsMaxPauseAndReportsItsDuration(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+
+	base := time.Unix(5000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.True(t, c.paused.Load())
+
+	now = base.Add(31 * time.Second)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load(), "a held-only pause is exempt from MaxPause")
+	require.Equal(t, 0, consumer.resumeCount())
+	require.Equal(t, 31.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the gauge reports the elapsed pause under the held cause")
+
+	now = base.Add(10 * time.Minute)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load())
+	require.Equal(t, 600.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "there is no cap, so the gauge keeps growing")
+
+	reader.setHeld(400, 1000, 0)
+	c.tick(ctx)
+
+	require.False(t, c.paused.Load())
+	require.Equal(t, 0.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the gauge returns to 0 on resume")
+}
+
 func TestBackpressure_HeldPredicateInertWithoutALimit(t *testing.T) {
 	ctx := context.Background()
 	reader := &fakeReader{}

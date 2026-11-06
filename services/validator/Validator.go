@@ -1364,9 +1364,10 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	// function exists to prevent.
 	persistedMeta := txMetaData
 	delivered := !addToBlockAssembly
+	shedInBlock := false
 
 	defer func() {
-		v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered)
+		v.unlockLockedTxOnExit(decoupledCtx, tx, txID, persistedMeta, &err, &delivered, &shedInBlock)
 	}()
 
 	if validationOptions.SkipUtxoCreation {
@@ -1524,6 +1525,7 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					prometheusValidatorShedInBlockDroppedTotal.Inc()
 					v.warnInBlockShed(txID)
 
+					shedInBlock = true
 					err = nil
 				} else {
 					// A shed leaves no trace: the transaction is either fully accepted
@@ -1794,6 +1796,10 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 // route described above (see docs/topics/features/two_phase_commit.md); the signal
 // to watch is the teranode_validator_unlock_failed counter.
 //
+// shedInBlock is true only on the in-block shed, which chose to keep the record Locked outside
+// the template and already warned at a bounded rate. Any other exit without delivery is warned
+// about here, whatever *err holds, so a panic that a caller recovers leaves a log line too.
+//
 // The unlock decision is gated on delivered, not on *err being nil. delivered only
 // becomes true once sendToBlockAssembler has actually returned successfully, so it
 // stays false across a panic unwinding from anywhere in that window - unlike *err,
@@ -1801,7 +1807,7 @@ func (v *Validator) precheckTransaction(tx *bt.Tx, txID string, blockHeight uint
 // *err as the proxy would unlock a tx that was never delivered to block assembly if
 // something panicked in that narrow window, which is the exact state this function
 // exists to prevent.
-func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID string, txMetaData *meta.Data, err *error, delivered *bool) {
+func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID string, txMetaData *meta.Data, err *error, delivered *bool, shedInBlock *bool) {
 	if txMetaData == nil || !txMetaData.Locked {
 		return
 	}
@@ -1809,11 +1815,10 @@ func (v *Validator) unlockLockedTxOnExit(ctx context.Context, tx *bt.Tx, txID st
 	// Not delivered to block assembly - leave it locked for the unmined-transaction
 	// loader to heal. This covers both ordinary error returns and a panic unwinding
 	// through the window between entering the addToBlockAssembly block and
-	// sendToBlockAssembler returning. A clean exit without delivery is the in-block
-	// shed, which chose to keep the record Locked outside the template and already
-	// warned at a bounded rate, so it is not warned about again here.
+	// sendToBlockAssembler returning. The in-block shed already warned at a bounded
+	// rate, so it is not warned about again here.
 	if delivered == nil || !*delivered {
-		if *err != nil {
+		if shedInBlock == nil || !*shedInBlock {
 			v.logger.Warnf("[Validate][%s] tx stays locked, it was not delivered to block assembly", txID)
 		}
 

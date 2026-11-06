@@ -2742,6 +2742,24 @@ func (stp *SubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHead
 // Returns:
 //   - error: Any error encountered during addition
 func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (err error) {
+	_, err = stp.placeNode(node, parents, skipNotification)
+
+	return err
+}
+
+// placeNode adds a new transaction node to the current subtree and reports whether it placed
+// the node. A duplicate already in currentTxMap is skipped without error and reports false, so
+// a caller that counts what it placed does not count it again.
+//
+// Parameters:
+//   - node: Transaction node to add
+//   - parents: Parent references for the node, or nil when currentTxMap already holds them
+//   - skipNotification: Whether to skip notification of new subtrees
+//
+// Returns:
+//   - bool: True if the node was added to a subtree
+//   - error: Any error encountered during addition
+func (stp *SubtreeProcessor) placeNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (placed bool, err error) {
 	// parents can only be set to nil, when they are already in the map
 	if parents == nil {
 		var held bool
@@ -2753,7 +2771,7 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 		}
 
 		if !held {
-			return errors.NewProcessingError("error adding node to subtree: txInpoints not found in currentTxMap for %s", node.Hash.String())
+			return false, errors.NewProcessingError("error adding node to subtree: txInpoints not found in currentTxMap for %s", node.Hash.String())
 		}
 	} else {
 		// SetIfNotExists returns (value, wasSet) where wasSet is true if the key was newly inserted
@@ -2761,7 +2779,7 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 			// Key already existed, this is a duplicate
 			stp.logger.Debugf("[addNode] duplicate transaction ignored %s", node.Hash.String())
 
-			return nil
+			return false, nil
 		}
 	}
 
@@ -2770,29 +2788,29 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 
 		newSubtree, err := stp.newSubtree(itemsPerFile)
 		if err != nil {
-			return err
+			return false, err
 		}
 		stp.currentSubtree.Store(newSubtree)
 
 		// This is the first subtree for this block - we need a coinbase placeholder
 		if err = stp.currentSubtree.Load().AddCoinbaseNode(); err != nil {
-			return err
+			return false, err
 		}
 
 		stp.txCount.Add(1)
 	}
 
 	if err = stp.currentSubtree.Load().AddSubtreeNode(node); err != nil {
-		return errors.NewProcessingError(errAddingNodeToSubtree, err)
+		return false, errors.NewProcessingError(errAddingNodeToSubtree, err)
 	}
 
 	if stp.currentSubtree.Load().IsComplete() {
 		if err = stp.processCompleteSubtree(skipNotification); err != nil {
-			return err
+			return true, err
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // addNodePreValidated adds a node that's already been validated and inserted into currentTxMap.
@@ -7195,9 +7213,10 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 					continue
 				}
 
-				if addErr := stp.addNode(node, txInpoints, skipNotification); addErr != nil {
+				wasPlaced, addErr := stp.placeNode(node, txInpoints, skipNotification)
+				if addErr != nil {
 					stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), addErr)
-				} else {
+				} else if wasPlaced {
 					placed++
 				}
 			}
@@ -7295,8 +7314,8 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 // the chunk. The add comes first: addNode does not add to txCount, so settling before it would
 // leave the placed transactions in none of the queue length, the unsettled count or the
 // subtrees count, and the held total would read low until the drain's final recount. The add is
-// the reported number, not a walk of every chained subtree per chunk; a queued duplicate that
-// addNode skipped is over-counted until the callers' recount after the drain. The settle is
+// the reported number, not a walk of every chained subtree per chunk, so fn must report only the
+// nodes it placed and not a duplicate that placeNode skipped. The settle is
 // deferred so a panic in fn, which runHandlerWithRecover absorbs, cannot leave the chunk counted
 // as unsettled for good.
 func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn func(batches []*TxBatch) (int, error)) (err error) {

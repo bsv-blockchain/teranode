@@ -242,6 +242,32 @@ func TestEnqueueBatchBounded_InBlock_IgnoresHeldLimitButNotQueueBound(t *testing
 	require.Equal(t, int64(10), bounded.length(), "a refused batch leaves no reservation behind")
 }
 
+func TestEnqueueBatchBounded_UnsettledExcessIsTheQueuesRefusal(t *testing.T) {
+	var held atomic.Int64
+
+	held.Store(10)
+
+	q := heldQueue(0, 100, &held)
+
+	require.Equal(t, Admitted, q.enqueueBatchBounded(mkNodes(90), mkInpoints(90), false))
+
+	batch, found := q.dequeueBatch(0)
+	require.True(t, found)
+	require.Len(t, batch.nodes, 90)
+
+	require.Equal(t, RefusedQueue, q.enqueueBatchBounded(mkNodes(10), mkInpoints(10), false),
+		"a drain chunk not yet settled must not make a producer's refusal final while a block has freed room")
+
+	held.Store(100)
+
+	require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false),
+		"placed transactions alone over the limit are the held bound")
+
+	q.settle(90)
+
+	require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false))
+}
+
 func TestHeldTotal_CountsDequeuedItemsUntilSettled(t *testing.T) {
 	var held atomic.Int64
 
@@ -259,7 +285,8 @@ func TestHeldTotal_CountsDequeuedItemsUntilSettled(t *testing.T) {
 	require.Equal(t, int64(0), q.length(), "the queue is empty")
 	require.Equal(t, int64(100), q.heldCount(), "dequeued items stay counted until the subtree count includes them, so the total does not dip")
 	require.False(t, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false) == Admitted, "a producer landing in that window is refused")
-	require.Equal(t, RefusedHeld, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false))
+	require.Equal(t, RefusedQueue, q.enqueueBatchBounded(mkNodes(1), mkInpoints(1), false),
+		"the excess is unsettled items a drain pass is about to place, not what a block must free")
 
 	held.Add(10) // the dispatcher adds the batch to the subtree count
 	q.settle(10)
@@ -688,6 +715,26 @@ func TestSubtreeProcessor_DrainAddsWhatEachChunkReportsWithoutARecount(t *testin
 	require.Equal(t, 3, chunks, "precondition: the drain crossed chunk boundaries")
 	require.Equal(t, before+3, stp.txCount.Load(), "each chunk adds the number its callback reported, not a walk of every chained subtree")
 	require.Equal(t, int64(0), stp.queue.unsettled.Load(), "the chunks are still settled")
+}
+
+func TestSubtreeProcessor_DrainDoesNotCountADuplicateAsPlaced(t *testing.T) {
+	stp := newTestProcessorNoStart(t)
+
+	nodes, inpoints := distinctNodes(3, "drain-duplicate")
+
+	require.NoError(t, stp.addNode(nodes[0], inpoints[0], true), "the first copy is already placed, as the unmined load leaves it")
+
+	before := stp.txCount.Load()
+
+	enqueueAt := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	stp.queue.clock = fixedClock{t: enqueueAt}
+	stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
+	stp.queue.enqueueBatch(nodes[:2], inpoints[:2])
+
+	stp.DrainQueue(map[chainhash.Hash]struct{}{chainhash.HashH([]byte("unrelated-drop")): {}})
+
+	require.Equal(t, int64(0), stp.queue.length(), "precondition: the drain took the batch")
+	require.Equal(t, before+1, stp.txCount.Load(), "only the transaction that was not already placed is added")
 }
 
 func TestSubtreeProcessor_UnminedLoadingEndWithoutStartLeavesTheCountAtZero(t *testing.T) {

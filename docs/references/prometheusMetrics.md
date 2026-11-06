@@ -401,6 +401,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_validator_kafka_backpressure_pause_total`  | Counter | Number of pause transitions made by the backpressure controller               |
 | `teranode_validator_kafka_backpressure_resume_total` | Counter | Number of resume transitions, including fail-open and max-pause resumes       |
 | `teranode_validator_kafka_backpressure_paused_seconds_total` | Counter | Total seconds the tx consumer has spent paused by the controller      |
+| `teranode_validator_kafka_backpressure_pause_seconds` | Gauge   | Seconds the current backpressure pause has run, with a `cause` label of `age`, `fill` or `held`, and 0 once the consumer resumes. A pause caused only by the held transaction count has no upper bound, so alert on a long `held` value |
 | `teranode_validator_kafka_backpressure_read_errors` | Gauge    | Current consecutive queue-stats read-error streak (resets to 0 on a good read) |
 
 ## TxMetaCache Service Metrics

@@ -157,6 +157,16 @@ func (q *LockFreeQueue) heldTotal(queued int64) int64 {
 	return q.heldBase() + held
 }
 
+// placedTotal returns the transactions placed in subtrees plus extra, leaving out the queued
+// and unsettled items that a drain pass is about to place or drop.
+func (q *LockFreeQueue) placedTotal(extra int64) int64 {
+	if q.heldBase == nil {
+		return extra
+	}
+
+	return q.heldBase() + extra
+}
+
 // settle releases n dequeued items from the unsettled count. Every dequeue adds the size of
 // the batch to it, so every caller of dequeueBatch or dequeueBatchUntil must settle what it
 // took once heldBase accounts for it, or once it has dropped it. A dequeue that is never
@@ -410,7 +420,7 @@ func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*
 	// oversize batches cannot grow the holding without bound.
 	queueOversize := q.maxItems > 0 && n > q.maxItems
 	heldOversize := !exemptHeld && q.maxHeld > 0 && n > q.maxHeld
-	heldAtLimit := heldOversize && q.heldTotal(0) >= q.maxHeld
+	heldAtLimit := heldOversize && q.placedTotal(0) >= q.maxHeld
 
 	if after-n == 0 && (queueRoom || queueOversize) && (heldRoom || (heldOversize && !heldAtLimit)) {
 		// Nil-guarded because NewLockFreeQueue* is constructed directly by unit
@@ -427,13 +437,14 @@ func (q *LockFreeQueue) enqueueBatchBounded(nodes []subtree.Node, txInpoints []*
 	q.queueLength.Add(-n) // roll back
 
 	// The total the reservation read counts every queued item, including reservations that
-	// other producers are about to roll back, so it can overstate what the node holds. The held
-	// bound is claimed only when this batch breaks it on top of what is already placed in
-	// subtrees or dequeued, which is the one cause that outlasts the queue. A refusal whose
-	// excess comes from queued items is the queue's and is classified again on a later attempt,
-	// when the dispatcher has placed the real ones.
+	// other producers are about to roll back, and every dequeued item a drain pass has not yet
+	// settled, so it can overstate what the node holds. The held bound is claimed only when this
+	// batch breaks it on top of what is already placed in subtrees, which is the one cause that
+	// outlasts the queue: only a connecting block shrinks it. A refusal whose excess comes from
+	// queued or unsettled items is the queue's and is classified again on a later attempt, when
+	// the dispatcher has placed the real ones or the drain pass has settled.
 	switch {
-	case heldAtLimit, !heldRoom && !heldOversize && q.heldTotal(n) > q.maxHeld:
+	case heldAtLimit, !heldRoom && !heldOversize && q.placedTotal(n) > q.maxHeld:
 		return RefusedHeld
 	case queueOversize || heldOversize:
 		return RefusedOversize
