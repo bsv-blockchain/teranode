@@ -906,16 +906,23 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			// on the next ErrTxNotFound item in this batch. rollbackPartialSpends
 			// does not read this memo at all; it always probes fresh.
 			//
-			// A parent is pruned only once every output is spent, so an existing spender record
+			// A parent is pruned only once every output is spent, so a final spender record
 			// whose parent is gone has had that input taken, by this tx or by a rival. A
 			// rival's take is the same exposure spend-first has, and it is bounded by the
-			// conflict path.
+			// conflict path. A record that is still creating or rolling back is not that
+			// evidence: it is the tentative record of a create-first attempt whose spends
+			// are not yet proven, so ErrTxNotFound stays and the sweep rolls the record back.
 			if !result.spenderChecked {
-				if _, getErr := s.Get(ctx, tx.TxIDChainHash(), fields.Fee); getErr == nil {
-					s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
-
-					result.spenderExists = true
+				if md, getErr := s.Get(ctx, tx.TxIDChainHash(), fields.Fee, fields.Creating, fields.RollingBack); getErr == nil {
 					result.spenderChecked = true
+
+					if md != nil && (md.Creating || md.RollingBack) {
+						s.logger.Debugf("[Validate][%s] parent tx not found and the tx record is still creating or rolling back, which is no evidence of this tx's spend", tx.TxID())
+					} else {
+						s.logger.Warnf("[Validate][%s] parent tx not found, but tx already exists in store, assuming already blessed", tx.TxID())
+
+						result.spenderExists = true
+					}
 				} else if errors.Is(getErr, errors.ErrTxNotFound) {
 					result.spenderChecked = true
 				}

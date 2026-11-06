@@ -269,6 +269,13 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	return err
 }
 
+func (s *Store) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	err := s.store.DeleteRollingBack(ctx, hash)
+	s.logger.Debugf("[UTXOStore][logger][DeleteRollingBack] hash %s err %v : %s", hash.String(), err, caller())
+
+	return err
+}
+
 func (s *Store) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	began, err := s.store.BeginCreateFirstRollback(ctx, hash)
 	s.logger.Debugf("[UTXOStore][logger][BeginCreateFirstRollback] hash %s began %v err %v : %s", hash.String(), began, err, caller())

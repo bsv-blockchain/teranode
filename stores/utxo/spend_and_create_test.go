@@ -113,6 +113,10 @@ func (f *fakeSequentialStore) DeleteComplete(_ context.Context, hash *chainhash.
 	return f.deleteErr
 }
 
+func (f *fakeSequentialStore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	return f.DeleteComplete(ctx, hash)
+}
+
 func (f *fakeSequentialStore) BeginCreateFirstRollback(_ context.Context, _ *chainhash.Hash) (bool, error) {
 	f.beginCalls++
 	f.callSeq = append(f.callSeq, "begin")
@@ -379,6 +383,19 @@ type fakeRollForwarder struct {
 	lastOpts      CreateOptions
 	unspendCalls  int
 	unspentWith   []*Spend
+	spendCalls    int
+	existing      meta.Data
+	getMetaErr    error
+}
+
+func (f *fakeRollForwarder) GetMeta(_ context.Context, _ *chainhash.Hash, data *meta.Data) error {
+	if f.getMetaErr != nil {
+		return f.getMetaErr
+	}
+
+	*data = f.existing
+
+	return nil
 }
 
 func (f *fakeRollForwarder) Unspend(_ context.Context, spends []*Spend, _ ...bool) error {
@@ -394,6 +411,7 @@ func (f *fakeRollForwarder) SpendAndCreate(_ context.Context, _ *bt.Tx, _ uint32
 		opt(&o)
 	}
 	f.lastOpts = o
+	f.spendCalls++
 
 	return nil, f.spends, f.spendErr
 }
@@ -482,6 +500,27 @@ func TestRollForwardCreating(t *testing.T) {
 		require.Equal(t, 1, f.unspendCalls)
 		require.Equal(t, f.spends, f.unspentWith, "the spends this call made are its own to remove")
 		require.Equal(t, f.spends, spends)
+	})
+
+	t.Run("a record that is rolling back is refused before any spend", func(t *testing.T) {
+		f := &fakeRollForwarder{spends: []*Spend{{}, {}}, existing: meta.Data{Creating: true, RollingBack: true}}
+
+		spends, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, 100)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "rolling back")
+		require.Nil(t, spends)
+		require.Equal(t, 0, f.spendCalls, "a rolling back record must not have its parents spent")
+		require.Equal(t, 0, f.finalizeCalls)
+		require.Equal(t, 0, f.unspendCalls)
+	})
+
+	t.Run("an absent record is refused before any spend", func(t *testing.T) {
+		f := &fakeRollForwarder{spends: []*Spend{{}, {}}, getMetaErr: errors.NewTxNotFoundError("gone")}
+
+		_, err := RollForwardCreating(ctx, ulogger.TestLogger{}, f, tx, 100)
+		require.ErrorIs(t, err, errors.ErrTxNotFound)
+		require.Equal(t, 0, f.spendCalls, "an absent record must not have its parents spent")
+		require.Equal(t, 0, f.finalizeCalls)
 	})
 
 	t.Run("a failed spend never unspends", func(t *testing.T) {

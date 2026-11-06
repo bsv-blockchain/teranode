@@ -169,6 +169,12 @@ func (m *MockUtxostore) DeleteComplete(ctx context.Context, hash *chainhash.Hash
 	return args.Error(0)
 }
 
+// DeleteRollingBack mocks deleting a record only while it is rolling back.
+func (m *MockUtxostore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	args := m.Called(ctx, hash)
+	return args.Error(0)
+}
+
 // BeginCreateFirstRollback mocks marking a tentative record as rolling back.
 func (m *MockUtxostore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	args := m.Called(ctx, hash)

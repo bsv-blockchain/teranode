@@ -1004,6 +1004,9 @@ func (m *MockUTXOStore) Get(ctx context.Context, hash *chainhash.Hash, fields ..
 }
 func (m *MockUTXOStore) Delete(ctx context.Context, hash *chainhash.Hash) error         { return nil }
 func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error { return nil }
+func (m *MockUTXOStore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+	return nil
+}
 func (m *MockUTXOStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
 	return false, nil
 }

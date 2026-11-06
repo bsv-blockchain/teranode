@@ -669,13 +669,24 @@ type Store interface {
 	// Delete.
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
 
-	// BeginCreateFirstRollback marks a record that is still creating as rolling back, so no
-	// concurrent roll-forward can finalize it. It reports true when the record is rolling back
-	// after the call, whether this call set the marker or an earlier rollback of the same
-	// transaction did; false when the record is absent or already finalized, and nothing was
-	// written. A store with no tentative state reports false. Used by the create-first
-	// rollback, which then reverses its spends and calls DeleteComplete.
+	// BeginCreateFirstRollback claims the rollback of a record that is still creating, by
+	// marking it as rolling back, so no concurrent roll-forward can finalize it. The claim is
+	// exclusive: it reports true only to the one caller whose write set the marker, and that
+	// caller alone reverses the spends and deletes the record. It reports false, and writes
+	// nothing, when the record is absent, already finalized, or already rolling back under
+	// another caller. A store with no tentative state reports false. Used by the create-first
+	// rollback, which then reverses its spends and calls DeleteRollingBack. The pruner sweep
+	// resumes an abandoned rollback without this call, because the record already carries the
+	// marker.
 	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error)
+
+	// DeleteRollingBack is DeleteComplete for the create-first rollback: it removes the
+	// transaction only while its master record is still marked as rolling back. A record that
+	// is absent, or that is no longer rolling back because a new attempt at the same
+	// transaction created it afresh, is left alone and the call reports success. It is
+	// idempotent in the same way DeleteComplete is. A store with no tentative state treats it
+	// as DeleteComplete, because it is never called for a record that store marked.
+	DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error
 
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error
