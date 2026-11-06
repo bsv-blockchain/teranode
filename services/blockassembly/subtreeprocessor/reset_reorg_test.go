@@ -1677,11 +1677,12 @@ func TestSubtreeProcessor_ReorgThroughRealSubtrees(t *testing.T) {
 	// the expected message, so they run from a table: a fourth mock expectation or
 	// a change of teardown has to be made once, not once per case and missed once.
 	//
-	// All of them pin issue 1425 on the SECOND production consumer of the
-	// .subtreeMeta file. Before the header validation an over-long claimed count
-	// panicked inside the raw deserializer, in an errgroup goroutine with no
-	// recover, so a regression crashes the package binary rather than failing an
-	// assertion.
+	// The torn-meta and foreign-key rows pin issue 1425 on the SECOND production
+	// consumer of the .subtreeMeta file. Before the header validation an over-long
+	// claimed count panicked inside the raw deserializer, in an errgroup goroutine
+	// with no recover, so a regression crashes the package binary rather than
+	// failing an assertion. The zero-parent row pins issue 1638: its header is
+	// correct, and the corrupt entry used to decode cleanly into nil parents.
 	//
 	// Note what they do NOT assert: unlike block validation this path has no meta
 	// regenerator behind it, so a bad file is not repaired. A failed reorg is the

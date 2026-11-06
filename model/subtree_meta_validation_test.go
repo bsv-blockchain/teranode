@@ -513,6 +513,40 @@ func TestZeroParentCountRejected(t *testing.T) {
 		require.Contains(t, err.Error(), "no parents")
 	})
 
+	t.Run("a placeholder at node 0 does not exempt a zero parent count further up", func(t *testing.T) {
+		// The first subtree of every block starts with the placeholder. The
+		// exemption covers node 0 only, so without its position half a corrupt
+		// count anywhere in that subtree would pass.
+		subtree, err := subtreepkg.NewTreeByLeafCount(4)
+		require.NoError(t, err)
+		require.NoError(t, subtree.AddCoinbaseNode())
+
+		for i := byte(1); i < 4; i++ {
+			require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{i, 0xaa}), 1, 0))
+		}
+
+		block := &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+		metaBytes := metaBytesWithEntries(subtree, []metaEntry{nil, oneParent(1), nil, oneParent(3)})
+		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
+
+		_, err = block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "no parents")
+		require.Contains(t, err.Error(), subtree.Nodes[2].Hash.String())
+	})
+
+	t.Run("a count beyond the decoded entries is refused, not indexed", func(t *testing.T) {
+		// The reader's header and decode checks already bound the count, so this
+		// guard is unreachable through it. It is called directly to pin that a
+		// later caller with a looser count gets an error instead of an index panic.
+		subtree, _, _ := buildMetaFixture(t)
+		meta := subtreepkg.NewSubtreeMeta(subtree)
+
+		err := validateSubtreeMetaHasParents(subtree, meta, uint32(len(meta.TxInpoints))+1)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "entries")
+	})
+
 	t.Run("block validation sends the rejected meta to regeneration", func(t *testing.T) {
 		subtree, _, block := buildMetaFixture(t)
 		metaBytes := metaBytesWithEntries(subtree, []metaEntry{oneParent(0), oneParent(1), nil, oneParent(3)})

@@ -199,8 +199,8 @@ func NewSubtreeMetaFromValidatedReader(subtreeHash chainhash.Hash, subtree *subt
 // Failing the read sends block validation to meta regeneration instead. The
 // other two callers have no regenerator: a block assembly move-back fails the
 // reorg before mutating anything, as it does for a torn file (issue 1425), and
-// cmd/filereader reports the file as rejected, naming the bad entry, still
-// dumps its body, and exits non-zero.
+// cmd/filereader reports the file as rejected, naming the bad entry, dumps its
+// body when run with -verbose, and exits non-zero.
 //
 // Meta.Serialize does not enforce this: it refuses nil parents on any node but
 // the first, yet writes an empty non-nil list as a zero count.
