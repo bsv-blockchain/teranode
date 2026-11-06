@@ -381,7 +381,8 @@ func (o *spendBreakerOutcome) recordExpressions(cb *circuitBreaker, success, fai
 // record also re-arms the opposite expression outcome: a Lua success resets
 // the breaker, so a subsequent expression failure must count again (and vice versa).
 // A success reports once per slot, or once without a slot when none is given. A
-// failure reports once, with the first slot.
+// failure reports once for the whole batch, with all its slots; in half-open it
+// trips if any slot is a current-epoch probe.
 func (o *spendBreakerOutcome) record(cb *circuitBreaker, success bool, slots ...breakerSlot) {
 	if success {
 		o.failure = false

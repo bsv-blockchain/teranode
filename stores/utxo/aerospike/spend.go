@@ -110,7 +110,10 @@ type batchSpend struct {
 	// acquire-loading it on the abort path synchronizes-with that write and can
 	// then safely read the slot (see resolveSpendCompletions). completed alone
 	// cannot serve this role: it is set by the CAS, i.e. BEFORE the slot write.
-	published         atomic.Bool
+	published atomic.Bool
+	// done is closed by complete after published is stored. It is nil for items
+	// nobody awaits individually.
+	done              chan struct{}
 	ignoreConflicting bool
 	ignoreLocked      bool
 	// breakerSlot is the half-open probe slot Admit gave the item, if any, so a
@@ -157,6 +160,11 @@ func (b *batchSpend) complete(err error) {
 		b.err = err
 		b.spend.Err = err
 		b.published.Store(true)
+
+		if b.done != nil {
+			close(b.done)
+		}
+
 		b.group.Done()
 	}
 }
@@ -560,6 +568,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			ignoreLocked:        useIgnoreLocked,
 			requireParentOutput: useRequireParentOutputs,
 			requestCtx:          requestCtx,
+			done:                make(chan struct{}),
 		}
 		items[idx] = item
 
@@ -607,6 +616,8 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 				s.releaseBreakerSlot(item)
 			}
 		}
+
+		s.awaitStartedSpends(items)
 		// The group did not complete within budget (context canceled, or the
 		// dispatcher took longer than spendTimeout). Some items may already
 		// have finished before the abort — resolveSpendCompletions(onlyCompleted=true)
@@ -672,6 +683,46 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	prometheusUtxoMapSpend.Add(float64(len(spends)))
 
 	return spends, nil
+}
+
+// spendRollbackBound is the detached time limit for awaiting a late admitted
+// claim and for rolling back partial spends.
+func (s *Store) spendRollbackBound() time.Duration {
+	if d := s.settings.UtxoStore.SpendRollbackTimeout; d > 0 {
+		return d
+	}
+
+	return 120 * time.Second
+}
+
+// awaitStartedSpends waits, up to spendRollbackBound on a context detached from
+// the caller, for every item that a backend part already started and that is not
+// yet published. Its result then reaches resolveSpendCompletions, so a late
+// success is rolled back with the other spends. Items that never started
+// are not awaited. An item still unpublished at the bound stays in the
+// in-flight residual counted by prometheusUtxoSpendAbortInFlight. The caller
+// must have abandoned every queued item first.
+func (s *Store) awaitStartedSpends(items []*batchSpend) {
+	var waitCtx context.Context
+
+	for _, item := range items {
+		if item.published.Load() || !item.admission.Started() {
+			continue
+		}
+
+		if waitCtx == nil {
+			var cancel context.CancelFunc
+
+			waitCtx, cancel = context.WithTimeout(context.Background(), s.spendRollbackBound())
+			defer cancel()
+		}
+
+		select {
+		case <-item.done:
+		case <-waitCtx.Done():
+			return
+		}
+	}
 }
 
 // spendCompletionResult is the outcome of resolveSpendCompletions: which
@@ -875,12 +926,7 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 	// same one. On overrun the loop aborts and every spend past that point
 	// stays applied (a bounded truncation, not a full revert), counted by
 	// utxo_spend_rollback_failed.
-	rbTimeout := s.settings.UtxoStore.SpendRollbackTimeout
-	if rbTimeout <= 0 {
-		rbTimeout = 120 * time.Second
-	}
-
-	rbCtx, cancel := context.WithTimeout(context.Background(), rbTimeout)
+	rbCtx, cancel := context.WithTimeout(context.Background(), s.spendRollbackBound())
 	defer cancel()
 
 	_, getErr := s.Get(rbCtx, tx.TxIDChainHash(), fields.Fee)
@@ -976,7 +1022,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 			// needs attempt identity (#1291) or create-before-spend ordering
 			// (#1355); prometheusUtxoSpendAbortInFlight counts how often the
 			// window is entered at all.
-			if prometheusUtxoSpendAbortInFlight != nil {
+			if prometheusUtxoSpendAbortInFlight != nil && item.admission.Started() {
 				prometheusUtxoSpendAbortInFlight.Inc()
 			}
 
@@ -1126,6 +1172,10 @@ func (s *Store) sendSpendBatchLua(batch []*batchSpend) {
 			return item.spend
 		},
 		Process: func(part []*batchSpend) {
+			if s.beforeSpendPart != nil {
+				s.beforeSpendPart(part)
+			}
+
 			if s.useExpressionSpend() {
 				s.SpendMultiWithExpressions(s.ctx, part, &outcome)
 			} else {
