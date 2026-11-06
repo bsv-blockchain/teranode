@@ -457,7 +457,7 @@ func TestDeleteAtHeight(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, record)
 	assert.Equal(t, map[interface{}]interface{}{
-		txID1.String(): true,
+		txID1.String(): fields.DeletedChildVerified,
 	}, record.Bins[fields.DeletedChildren.String()])
 
 	// Run prune synchronously for height 4
