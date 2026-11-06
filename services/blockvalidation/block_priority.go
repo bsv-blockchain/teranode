@@ -151,7 +151,12 @@ func (pq *BlockPriorityQueue) Add(blockFound processBlockFound, priority BlockPr
 	defer pq.mu.Unlock()
 
 	if existingItem, exists := pq.hashIndex[*blockFound.hash]; exists {
+		// A second waiting caller for the hash is answered with the queued entry's outcome: the
+		// attempt on the first announcer's source, whatever this caller's own source would give.
+		existingItem.blockFound.reply = mergeReply(existingItem.blockFound.reply, blockFound.reply)
+		blockFound.reply = nil
 		existingItem.additionalSources = append(existingItem.additionalSources, blockFound)
+
 		return
 	}
 
