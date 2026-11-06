@@ -2007,7 +2007,7 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 
 	storeID, err := chainhash.NewHash(req.SubmitMiningSolutionRequest.Id)
 	if err != nil {
-		return nil, err
+		return nil, errors.NewInvalidArgumentError("[BlockAssembly][%s] invalid candidate ID", jobID, err)
 	}
 
 	jobItem := ba.jobStore.Get(*storeID)
