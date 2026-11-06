@@ -438,7 +438,9 @@ func TestGapBV056_AddBlockErrorNotStoredKeepsLocalFaultRoute(t *testing.T) {
 
 	require.NoError(t, quickErr)
 	require.True(t, tryNormal, "a block proven not stored takes the local-fault route to normal validation")
-	require.Equal(t, int32(2), chain.probeCalls.Load(), "a not-stored answer must be rechecked once before the sweep")
+	// Two probes from commitBlock (the answer and its recheck), then the local-fault branch's own
+	// check, right before the sweep, that no other route stored the block meanwhile.
+	require.Equal(t, int32(3), chain.probeCalls.Load(), "a not-stored answer must be rechecked once before the sweep")
 
 	stored, err := h.chain.GetBlockExists(h.ctx, block.Hash())
 	require.NoError(t, err)
