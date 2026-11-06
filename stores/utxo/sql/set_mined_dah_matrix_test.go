@@ -53,10 +53,14 @@ func TestSetMinedNotOnLongestChainDAHMatrix(t *testing.T) {
 			wantDAH: func(r uint32) *int64 { v := int64(forkHeight + r); return &v },
 		},
 		{
-			name: "conflicting with a DAH leaves it unchanged", spendAll: true,
-			// Lower than the new DAH, so a generic "bump" arm would change it.
+			name: "conflicting with a DAH above the floor leaves it unchanged", spendAll: true,
+			mutate:  "UPDATE transactions SET conflicting = true, delete_at_height = 5000",
+			wantDAH: func(uint32) *int64 { v := int64(5000); return &v },
+		},
+		{
+			name: "conflicting with a DAH below the floor raises it to the floor", spendAll: true,
 			mutate:  "UPDATE transactions SET conflicting = true, delete_at_height = 5",
-			wantDAH: func(uint32) *int64 { v := int64(5); return &v },
+			wantDAH: func(r uint32) *int64 { v := int64(forkHeight + r); return &v },
 		},
 	}
 

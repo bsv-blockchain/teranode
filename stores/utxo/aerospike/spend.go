@@ -153,7 +153,8 @@ func (b *batchSpend) complete(err error) {
 
 // IncrementSpentRecordsMulti performs a single BatchOperate to increment spent-extra-records for many txids.
 // This avoids enqueueing each increment through the batcher and waiting per-item.
-func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment int, blockHeight uint32) error {
+// A DAHSET or DAHUNSET signal in a response is propagated to the record's child pages.
+func (s *Store) IncrementSpentRecordsMulti(ctx context.Context, txids []*chainhash.Hash, increment int, blockHeight uint32) error {
 	if len(txids) == 0 {
 		return nil
 	}
@@ -218,6 +219,19 @@ func (s *Store) IncrementSpentRecordsMulti(txids []*chainhash.Hash, increment in
 
 		if parsed.Status != LuaStatusOK {
 			aggErr = errors.Join(aggErr, errors.NewProcessingError("[IncrementSpentRecordsMulti][%s] incrementSpentExtraRecs returned %s: %s", describeChainHash(txids[i]), parsed.Status, parsed.Message))
+			continue
+		}
+
+		switch parsed.Signal {
+		case LuaSignalDAHSet:
+			if sigErr := s.handleDAHSetSignal(ctx, txids[i], parsed, blockHeight); sigErr != nil {
+				aggErr = errors.Join(aggErr, sigErr)
+			}
+
+		case LuaSignalDAHUnset:
+			if sigErr := s.setDAHForChildRecordsAt(txids[i], parsed.ChildCount, 0, reportedDAHVersion(parsed)); sigErr != nil {
+				aggErr = errors.Join(aggErr, sigErr)
+			}
 		}
 	}
 
@@ -234,11 +248,23 @@ var (
 
 // SetDAHForChildRecordsMulti expands childCount per tx and performs a single BatchOperate
 // to set/unset DeleteAtHeight across all child pagination records.
+// The writes are unconditional; the store's own follow-ups use setDAHForChildRecordsMultiAt.
 func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	TxID           *chainhash.Hash
 	ChildCount     int
 	DeleteAtHeight uint32
 }) error {
+	versioned := make([]childDAHItem, len(items))
+	for i, it := range items {
+		versioned[i] = childDAHItem{TxID: it.TxID, ChildCount: it.ChildCount, DeleteAtHeight: it.DeleteAtHeight}
+	}
+
+	return s.setDAHForChildRecordsMultiAt(versioned)
+}
+
+// setDAHForChildRecordsMultiAt is SetDAHForChildRecordsMulti with a master version per item. A known
+// version orders each page write the way setDAHForChildRecordsAt does.
+func (s *Store) setDAHForChildRecordsMultiAt(items []childDAHItem) error {
 	// Expand into individual child records
 	total := 0
 	for _, it := range items {
@@ -256,10 +282,18 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 	// a page that does not exist must not be created as an empty record holding only a DAH
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	dahBinName := fields.DeleteAtHeight.String()
+	versionBinName := fields.DAHVersion.String()
 	// Pre-create the "unset" operation since it's identical for all unset cases
 	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
 
+	var versioned []bool // versioned[i] is true when batchRecords[i] carries a master version
+
 	for _, it := range items {
+		pagePolicy := batchWritePolicy
+		if it.Version.known {
+			pagePolicy = versionedPagePolicy(batchWritePolicy, it.Version.value)
+		}
+
 		for i := uint32(1); i <= uint32(it.ChildCount); i++ { // nolint: gosec
 			keySource := uaerospike.CalculateKeySourceInternal(it.TxID, i) // children start at 1
 			key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
@@ -267,12 +301,18 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 				return errors.NewProcessingError("[SetDAHForChildRecordsMulti][%s] failed to create key for pagination record %d: %v", it.TxID.String(), i, err)
 			}
 
+			dahOp := unsetOp
 			if it.DeleteAtHeight > 0 {
-				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(dahBinName, it.DeleteAtHeight))))
-			} else {
-				batchRecords = append(batchRecords, aerospike.NewBatchWrite(batchWritePolicy, key, unsetOp))
+				dahOp = aerospike.PutOp(aerospike.NewBin(dahBinName, it.DeleteAtHeight))
 			}
 
+			if it.Version.known {
+				batchRecords = append(batchRecords, aerospike.NewBatchWrite(pagePolicy, key, dahOp, aerospike.PutOp(aerospike.NewBin(versionBinName, it.Version.value))))
+			} else {
+				batchRecords = append(batchRecords, aerospike.NewBatchWrite(pagePolicy, key, dahOp))
+			}
+
+			versioned = append(versioned, it.Version.known)
 			recordTxIDs = append(recordTxIDs, it.TxID)
 		}
 	}
@@ -296,6 +336,11 @@ func (s *Store) SetDAHForChildRecordsMulti(items []struct {
 					missingTxIDs = append(missingTxIDs, id)
 				}
 
+				continue
+			}
+
+			if versioned[i] && isFilteredOut(recErr) {
+				// the page already carries this master version or a later one
 				continue
 			}
 
@@ -356,11 +401,23 @@ func (b *batchIncrement) complete(res interface{}, err error) {
 	}
 }
 
+// dahVersion is a master's delete-at-height version as a response reported it. The zero value means
+// the response carried none.
+type dahVersion struct {
+	value int64
+	known bool
+}
+
+// childDAHBeforeWrite, when set, runs before SetDAHForChildRecords enqueues its page writes. It is nil
+// outside tests, which use it to hold a page write back while the master changes.
+var childDAHBeforeWrite func()
+
 // batchDAH represents a single DeleteAtHeight write on one (child) record.
 type batchDAH struct {
 	txID           *chainhash.Hash   // Transaction hash
 	childIdx       uint32            // Child record index
 	deleteAtHeight uint32            // DeleteAtHeight (0 = no delete)
+	version        dahVersion        // master version for a page write; the master write (childIdx 0) ignores it
 	group          *completion.Group // nil for fire-and-forget submitters (see complete)
 	completed      atomic.Bool       // guards exactly-once completion (see complete)
 	result         error             // written by the CAS winner, after the CAS and before group.Done()
@@ -1394,7 +1451,7 @@ func (s *Store) processSingleBatchResult(ctx context.Context, batchRecord aerosp
 	markIdempotentSpends(res.Idempotent, batchByKey, batch)
 
 	if res.Signal != "" {
-		s.handleSpendSignal(ctx, res.Signal, txID, res.ChildCount, thisBlockHeight)
+		s.handleSpendSignal(ctx, res, txID, thisBlockHeight)
 	}
 
 	// Process based on status
@@ -1452,8 +1509,10 @@ func (s *Store) handleParseError(batchByKey []aerospike.MapValue, batch []*batch
 }
 
 // handleSpendSignal handles signals from spend operations
-func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *chainhash.Hash, childCount int, thisBlockHeight uint32) {
-	switch signal {
+func (s *Store) handleSpendSignal(ctx context.Context, res *LuaMapResponse, txID *chainhash.Hash, thisBlockHeight uint32) {
+	childCount := res.ChildCount
+
+	switch res.Signal {
 	case LuaSignalAllSpent:
 		if err := s.handleExtraRecords(ctx, txID, 1, thisBlockHeight); err != nil {
 			s.logger.Errorf("Failed to handle extra records: %v", err)
@@ -1462,8 +1521,8 @@ func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *c
 	case LuaSignalDAHSet:
 		// Only set DAH if BlockHeightRetention is configured (> 0)
 		// When retention is 0, it means "don't use automatic retention"
-		if dahHeight, ok := s.deleteAtHeightFor(thisBlockHeight); ok {
-			if err := s.SetDAHForChildRecords(txID, childCount, dahHeight); err != nil {
+		if dahHeight, ok := s.childDeleteAtHeightFor(res, thisBlockHeight); ok {
+			if err := s.setDAHForChildRecordsAt(txID, childCount, dahHeight, reportedDAHVersion(res)); err != nil {
 				s.logger.Errorf("Failed to set DAH for child records: %v", err)
 			}
 			// External store DAH is disabled - lifecycle managed by pruner service
@@ -1472,7 +1531,7 @@ func (s *Store) handleSpendSignal(ctx context.Context, signal LuaSignal, txID *c
 	case LuaSignalDAHUnset:
 		// 0 clears the child DAH bin. This used to pass aerospike.TTLDontExpire (MaxUint32), which
 		// the DAH batcher wrote as a literal deleteAtHeight of 4294967295 instead of clearing it.
-		if err := s.SetDAHForChildRecords(txID, childCount, 0); err != nil {
+		if err := s.setDAHForChildRecordsAt(txID, childCount, 0, reportedDAHVersion(res)); err != nil {
 			s.logger.Errorf("Failed to unset DAH for child records: %v", err)
 		}
 		// External store DAH is disabled - lifecycle managed by pruner service
@@ -1660,8 +1719,20 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 // and a single group.Wait replaces the previous per-child goroutine + timer +
 // channel receive.
 func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah uint32) error {
+	return s.setDAHForChildRecordsAt(txID, childCount, dah, dahVersion{})
+}
+
+// setDAHForChildRecordsAt is SetDAHForChildRecords with the master's delete-at-height version.
+// A known version makes each page write conditional on the page not already carrying a version at
+// or above it, and stamps the version on the page, so an earlier master state cannot overwrite a
+// later one. An unknown version writes unconditionally.
+func (s *Store) setDAHForChildRecordsAt(txID *chainhash.Hash, childCount int, dah uint32, version dahVersion) error {
 	if childCount == 0 {
 		return nil
+	}
+
+	if childDAHBeforeWrite != nil {
+		childDAHBeforeWrite()
 	}
 
 	items := make([]*batchDAH, childCount)
@@ -1672,6 +1743,7 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 			txID:           txID,
 			childIdx:       i + 1, // We want to set DAH for child record i+1
 			deleteAtHeight: dah,
+			version:        version,
 			group:          group,
 		}
 		items[i] = item
@@ -1747,12 +1819,12 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 		if ret.Signal != "" {
 			switch ret.Signal {
 			case LuaSignalDAHSet:
-				if err := s.handleDAHSetSignal(ctx, txID, ret.ChildCount, blockHeight); err != nil {
+				if err := s.handleDAHSetSignal(ctx, txID, ret, blockHeight); err != nil {
 					return err
 				}
 
 			case LuaSignalDAHUnset:
-				if err := s.SetDAHForChildRecords(txID, ret.ChildCount, 0); err != nil {
+				if err := s.setDAHForChildRecordsAt(txID, ret.ChildCount, 0, reportedDAHVersion(ret)); err != nil {
 					return err
 				}
 				// External store DAH is disabled - lifecycle managed by pruner service
@@ -1768,12 +1840,15 @@ func (s *Store) handleExtraRecords(ctx context.Context, txID *chainhash.Hash, in
 // handleDAHSetSignal applies a DAH_SET signal from incrementSpentExtraRecs:
 // verify the children really are all spent (the spentExtraRecs counter can
 // drift after interrupted rollbacks), clear the drifted master DAH when they
-// are not, and otherwise propagate the DAH to the child records. Extracted
-// verbatim from handleExtraRecords.
-func (s *Store) handleDAHSetSignal(ctx context.Context, txID *chainhash.Hash, childCount int, blockHeight uint32) error {
+// are not, and otherwise propagate the DAH to the child records. A conflicting
+// master is prunable whatever its spent state, so a signal reported as
+// conflicting skips the verification and only stamps the children.
+func (s *Store) handleDAHSetSignal(ctx context.Context, txID *chainhash.Hash, res *LuaMapResponse, blockHeight uint32) error {
+	childCount := res.ChildCount
+
 	// Only set DAH if BlockHeightRetention is configured (> 0)
 	// When retention is 0, it means "don't use automatic retention"
-	dah, ok := s.deleteAtHeightFor(blockHeight)
+	dah, ok := s.childDeleteAtHeightFor(res, blockHeight)
 	if !ok {
 		return nil
 	}
@@ -1781,7 +1856,7 @@ func (s *Store) handleDAHSetSignal(ctx context.Context, txID *chainhash.Hash, ch
 	// Sanity check: verify all children are actually spent before
 	// setting DAH. The spentExtraRecs counter can drift due to
 	// interrupted rollbacks, so we don't trust it blindly.
-	if childCount > 0 {
+	if childCount > 0 && !res.Conflicting {
 		allSpent, verifyErr := s.verifyAllChildrenSpent(ctx, txID, childCount)
 		if verifyErr != nil {
 			s.logger.Errorf("[handleExtraRecords][%s] failed to verify children: %v", txID.String(), verifyErr)
@@ -1820,7 +1895,7 @@ func (s *Store) handleDAHSetSignal(ctx context.Context, txID *chainhash.Hash, ch
 	}
 
 	// External store DAH is disabled - lifecycle managed by pruner service
-	return s.SetDAHForChildRecords(txID, childCount, dah)
+	return s.setDAHForChildRecordsAt(txID, childCount, dah, reportedDAHVersion(res))
 }
 
 // verifyAllChildrenSpent batch-reads all child records and checks if every
@@ -2019,6 +2094,20 @@ func (s *Store) sendIncrementBatch(batch []*batchIncrement) {
 	}
 }
 
+// versionedPagePolicy copies base and adds a filter that lets a page write through only when the page
+// has no master version yet or an older one than version.
+func versionedPagePolicy(base *aerospike.BatchWritePolicy, version int64) *aerospike.BatchWritePolicy {
+	policy := *base
+	versionBin := fields.DAHVersion.String()
+
+	policy.FilterExpression = aerospike.ExpCond(
+		aerospike.ExpBinExists(versionBin), aerospike.ExpLess(aerospike.ExpIntBin(versionBin), aerospike.ExpIntVal(version)),
+		aerospike.ExpBoolVal(true),
+	)
+
+	return &policy
+}
+
 func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 	// go-batcher recovers panics in this fn; re-complete every item on panic so a
 	// crash cannot orphan a waiting submitter. complete is CAS-guarded and
@@ -2037,6 +2126,7 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 	// a page that does not exist must not be created as an empty record holding only a DAH
 	batchWritePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	dahBinName := fields.DeleteAtHeight.String()
+	versionBinName := fields.DAHVersion.String()
 	unsetOp := aerospike.PutOp(aerospike.NewBin(dahBinName, nil))
 
 	for i, b := range batch {
@@ -2058,10 +2148,18 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 			continue
 		}
 
+		dahOp := unsetOp
 		if b.deleteAtHeight > 0 {
-			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, aerospike.PutOp(aerospike.NewBin(dahBinName, b.deleteAtHeight)))
-		} else {
-			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, unsetOp)
+			dahOp = aerospike.PutOp(aerospike.NewBin(dahBinName, b.deleteAtHeight))
+		}
+
+		switch {
+		case b.childIdx == 0:
+			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, dahOp, aerospike.AddOp(aerospike.NewBin(versionBinName, 1)))
+		case b.version.known:
+			batchRecords[i] = aerospike.NewBatchWrite(versionedPagePolicy(batchWritePolicy, b.version.value), key, dahOp, aerospike.PutOp(aerospike.NewBin(versionBinName, b.version.value)))
+		default:
+			batchRecords[i] = aerospike.NewBatchWrite(batchWritePolicy, key, dahOp)
 		}
 	}
 
@@ -2091,6 +2189,13 @@ func (s *Store) sendSetDAHBatch(batch []*batchDAH) {
 			if errors.Is(recErr, aerospike.ErrKeyNotFound) {
 				// a page that is gone needs no DAH
 				s.logger.Debugf("[SetDAHBatch][%s] pagination record %d no longer exists, skipped", batch[batchIdx].txID.String(), batch[batchIdx].childIdx)
+				batch[batchIdx].complete(nil)
+
+				continue
+			}
+
+			if batch[batchIdx].version.known && isFilteredOut(recErr) {
+				// the page already carries this master version or a later one
 				batch[batchIdx].complete(nil)
 
 				continue

@@ -1586,6 +1586,43 @@ func (s *Service) hadDAH(br *aerospike.BatchRecord) bool {
 	return false
 }
 
+// masterDAHVersion returns the master's version as the clear read it back, if the write returned it.
+func (s *Service) masterDAHVersion(br *aerospike.BatchRecord) (int64, bool) {
+	if br.Record == nil || br.Record.Bins == nil {
+		return 0, false
+	}
+
+	return readDAHVersion(br.Record.Bins[fields.DAHVersion.String()])
+}
+
+// readDAHVersion reads the master's dahVer from an operate result: an int, or a list whose last element is the final read.
+func readDAHVersion(raw interface{}) (int64, bool) {
+	var list []interface{}
+
+	switch v := raw.(type) {
+	case int:
+		return int64(v), true
+	case aerospike.OpResults:
+		list = []interface{}(v)
+	case []interface{}:
+		list = v
+	}
+
+	if len(list) > 0 {
+		if last, ok := list[len(list)-1].(int); ok {
+			return int64(last), true
+		}
+	}
+
+	return 0, false
+}
+
+func isFilteredOutErr(err error) bool {
+	var asErr aerospike.Error
+
+	return errors.As(err, &asErr) && asErr.Matches(types.FILTERED_OUT)
+}
+
 // maxPageClearBatch bounds one pagination-record write in clearUnminedDAH. It matches the store's
 // maxChildDAHPagesPerBatch (stores/utxo/aerospike), which bounds the same kind of write.
 const maxPageClearBatch = 4096
@@ -1617,6 +1654,14 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 		aerospike.PutOp(aerospike.NewBin(s.fieldDeleteAtHeight, nil)),
 	}
 
+	// the master clear is a write of its deleteAtHeight, so it bumps the version, and the page clear
+	// carries the version read back so an older page write cannot undo it
+	versionBin := fields.DAHVersion.String()
+	masterOps := append(append([]*aerospike.Operation{}, clearOps...),
+		aerospike.AddOp(aerospike.NewBin(versionBin, 1)),
+		aerospike.GetBinOp(versionBin),
+	)
+
 	masterPolicy := aerospike.NewBatchWritePolicy()
 	masterPolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	masterPolicy.FilterExpression = aerospike.ExpAnd(
@@ -1630,16 +1675,13 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 
 	masterBatch := make([]aerospike.BatchRecordIfc, len(clears))
 	for i, c := range clears {
-		masterBatch[i] = aerospike.NewBatchWrite(masterPolicy, c.masterKey, clearOps...)
+		masterBatch[i] = aerospike.NewBatchWrite(masterPolicy, c.masterKey, masterOps...)
 	}
 
 	if err := s.batchOperate(masterBatch); err != nil {
 		s.logger.Errorf("[pruner] failed to clear deleteAtHeight of %d unmined records, retrying next cycle: %v", len(clears), err)
 		return 0
 	}
-
-	pagePolicy := aerospike.NewBatchWritePolicy()
-	pagePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 
 	var pageBatch []aerospike.BatchRecordIfc
 
@@ -1662,8 +1704,20 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 			masters++
 		}
 
+		pagePolicy := aerospike.NewBatchWritePolicy()
+		pagePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+		pageOps := clearOps
+
+		if version, ok := s.masterDAHVersion(br); ok {
+			pagePolicy.FilterExpression = aerospike.ExpCond(
+				aerospike.ExpBinExists(versionBin), aerospike.ExpLess(aerospike.ExpIntBin(versionBin), aerospike.ExpIntVal(version)),
+				aerospike.ExpBoolVal(true),
+			)
+			pageOps = append(append([]*aerospike.Operation{}, clearOps...), aerospike.PutOp(aerospike.NewBin(versionBin, version)))
+		}
+
 		for _, pk := range c.pageKeys {
-			pageBatch = append(pageBatch, aerospike.NewBatchWrite(pagePolicy, pk, clearOps...))
+			pageBatch = append(pageBatch, aerospike.NewBatchWrite(pagePolicy, pk, pageOps...))
 		}
 	}
 
@@ -1686,6 +1740,8 @@ func (s *Service) clearUnminedDAH(ctx context.Context, clears []*dahClear) int {
 			br := r.BatchRec()
 
 			switch {
+			case br.Err != nil && isFilteredOutErr(br.Err):
+				// the page already carries this master version or a later one
 			case br.Err != nil:
 				// a page that is already gone has nothing left to clear and nothing to retry,
 				// but under a still-protected master it is lost data: leave a trace
