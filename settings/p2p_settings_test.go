@@ -292,3 +292,48 @@ func TestP2PAllowedPublisherIDs_LoaderReadsKey(t *testing.T) {
 		require.Equal(t, []string{"12D3KooWA1b2C3", "12D3KooWD4e5F6"}, NewSettings().P2P.AllowedPublisherIDs, "a doubled '|' must not leave an empty entry, or the allowlist fails client construction over a typo")
 	})
 }
+
+// TestP2PConnectionLimitSettings guards the connection manager and resource
+// manager keys. The defaults must all be zero or empty: the p2p service hands
+// them straight to the message bus, where zero means "use the default", so a
+// non-zero default here would change the limits of every node that never set
+// the key. Each override proves the loader reads its key.
+func TestP2PConnectionLimitSettings(t *testing.T) {
+	cases := []struct {
+		key      string
+		override string
+		got      func(s *Settings) any
+		want     any
+		zero     any
+	}{
+		{"p2p_max_connections", "400", func(s *Settings) any { return s.P2P.MaxConnections }, 400, 0},
+		{"p2p_min_connections", "300", func(s *Settings) any { return s.P2P.MinConnections }, 300, 0},
+		{"p2p_connection_grace_period", "45s", func(s *Settings) any { return s.P2P.ConnectionGracePeriod }, 45 * time.Second, time.Duration(0)},
+		{"p2p_rcmgr_conns", "5001", func(s *Settings) any { return s.P2P.RcmgrConns }, 5001, 0},
+		{"p2p_rcmgr_conns_inbound", "4002", func(s *Settings) any { return s.P2P.RcmgrConnsInbound }, 4002, 0},
+		{"p2p_rcmgr_conns_outbound", "1003", func(s *Settings) any { return s.P2P.RcmgrConnsOutbound }, 1003, 0},
+		{"p2p_rcmgr_streams", "20004", func(s *Settings) any { return s.P2P.RcmgrStreams }, 20004, 0},
+		{"p2p_rcmgr_streams_inbound", "10005", func(s *Settings) any { return s.P2P.RcmgrStreamsInbound }, 10005, 0},
+		{"p2p_rcmgr_streams_outbound", "9006", func(s *Settings) any { return s.P2P.RcmgrStreamsOutbound }, 9006, 0},
+		{"p2p_rcmgr_fd", "8007", func(s *Settings) any { return s.P2P.RcmgrFD }, 8007, 0},
+		{"p2p_rcmgr_peer_conns", "17", func(s *Settings) any { return s.P2P.RcmgrPeerConns }, 17, 0},
+		{"p2p_rcmgr_peer_conns_inbound", "9", func(s *Settings) any { return s.P2P.RcmgrPeerConnsInbound }, 9, 0},
+		{"p2p_rcmgr_peer_streams_inbound", "511", func(s *Settings) any { return s.P2P.RcmgrPeerStreamsInbound }, 511, 0},
+		{"p2p_rcmgr_ipv4_subnet_limits", "32:8|24:32", func(s *Settings) any { return s.P2P.RcmgrIPv4SubnetLimits }, []string{"32:8", "24:32"}, []string{}},
+		// Trailing and doubled separators are dropped rather than parsed as
+		// empty entries, which the p2p service would reject at startup.
+		{"p2p_rcmgr_ipv6_subnet_limits", "56:8||48:64|", func(s *Settings) any { return s.P2P.RcmgrIPv6SubnetLimits }, []string{"56:8", "48:64"}, []string{}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			gocore.Config().Set(tc.key, "")
+			require.Equal(t, tc.zero, tc.got(NewSettings()), "%s must default to the library default (zero/empty)", tc.key)
+
+			gocore.Config().Set(tc.key, tc.override)
+			t.Cleanup(func() { gocore.Config().Set(tc.key, "") })
+
+			require.Equal(t, tc.want, tc.got(NewSettings()), "loader must read %s", tc.key)
+		})
+	}
+}

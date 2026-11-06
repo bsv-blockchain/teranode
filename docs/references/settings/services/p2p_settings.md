@@ -37,6 +37,21 @@
 | EnablePeerScoring | bool | true | p2p_enable_peer_scoring | **CRITICAL** - GossipSub peer scoring (Sybil mesh protection); static/bootstrap peers exempt |
 | EnablePeerExchange | bool | true | p2p_enable_peer_exchange | GossipSub peer exchange (PX); requires EnablePeerScoring (startup error otherwise); inbound PX records currently refused |
 | PeerScoreIPColocationThreshold | int | 10 | p2p_peer_score_ip_colocation_threshold | Peers allowed per exact IP before the colocation penalty applies |
+| MaxConnections | int | 0 | p2p_max_connections | Connection manager high water mark; 0 keeps the library default (35) |
+| MinConnections | int | 0 | p2p_min_connections | Connection manager low water mark; 0 keeps the library default (25) |
+| ConnectionGracePeriod | time.Duration | 0s | p2p_connection_grace_period | How long new connections are protected from pruning; 0 keeps the library default (20s) |
+| RcmgrConns | int | 0 | p2p_rcmgr_conns | Resource manager system-wide connection cap; 0 keeps the auto-scaled default |
+| RcmgrConnsInbound | int | 0 | p2p_rcmgr_conns_inbound | Resource manager system-wide inbound connection cap; 0 keeps the auto-scaled default |
+| RcmgrConnsOutbound | int | 0 | p2p_rcmgr_conns_outbound | Resource manager system-wide outbound connection cap; 0 keeps the auto-scaled default |
+| RcmgrStreams | int | 0 | p2p_rcmgr_streams | Resource manager system-wide stream cap; 0 keeps the auto-scaled default |
+| RcmgrStreamsInbound | int | 0 | p2p_rcmgr_streams_inbound | Resource manager system-wide inbound stream cap; 0 keeps the auto-scaled default |
+| RcmgrStreamsOutbound | int | 0 | p2p_rcmgr_streams_outbound | Resource manager system-wide outbound stream cap; 0 keeps the auto-scaled default |
+| RcmgrFD | int | 0 | p2p_rcmgr_fd | Resource manager file-descriptor cap for connections; 0 keeps the auto-scaled default |
+| RcmgrPeerConns | int | 0 | p2p_rcmgr_peer_conns | Connections to or from any single peer; 0 keeps the default |
+| RcmgrPeerConnsInbound | int | 0 | p2p_rcmgr_peer_conns_inbound | Inbound connections from any single peer; 0 keeps the default |
+| RcmgrPeerStreamsInbound | int | 0 | p2p_rcmgr_peer_streams_inbound | Inbound streams from any single peer; 0 keeps the default |
+| RcmgrIPv4SubnetLimits | []string | (empty) | p2p_rcmgr_ipv4_subnet_limits | Per-IPv4-subnet connection caps as pipe-separated `prefix:conns` entries (e.g. `32:8\|24:32`); empty keeps the default of 8 per address |
+| RcmgrIPv6SubnetLimits | []string | (empty) | p2p_rcmgr_ipv6_subnet_limits | Per-IPv6-subnet connection caps as pipe-separated `prefix:conns` entries (e.g. `56:8\|48:64`); empty keeps the defaults of 8 per /56 and 64 per /48 |
 | SyncCoordinatorPeriodicEvaluationInterval | time.Duration | 30s | p2p_sync_coordinator_periodic_evaluation_interval | Sync coordinator evaluation interval |
 | HealthCheckEnabled | bool | true | p2p_health_check_enabled | Enable HTTP availability checking during peer selection |
 | PeerMapMaxSize | int | 10000 | p2p_peer_map_max_size | Maximum entries in peer maps |
@@ -80,6 +95,17 @@
 - `PeerScoreIPColocationThreshold` tunes the local penalty without disabling scoring (lower it on networks with no legitimately colocated operators).
 - With `AllowPrivateIPs` true, loopback, RFC1918, RFC6598, link-local, and IPv6 ULA ranges are whitelisted from the colocation penalty, so local/test multi-node clusters are unaffected.
 - `EnablePeerExchange` (default true) controls emitting PX records in PRUNE messages, and **requires** `EnablePeerScoring` (gossipsub v1.1 pairs PX with scoring) - the service refuses to start with PX on and scoring off. Inbound PX records are currently refused regardless (`AcceptPXThreshold` is set above the maximum attainable score): penalty-only scoring caps every score at 0, so accepting 0-scored records would let an attacker get itself dialed, and dialed peers register as outbound - bypassing gossipsub's Dhi graft refusal and Dout quota. This will be relaxed when positive (per-topic delivery) scoring exists.
+
+### Connection Limits
+
+All connection-limit settings default to 0 (or empty), which keeps the library default; a node that sets none of them runs with exactly the limits it had before they existed. Leave them unset unless you have a reason to change them.
+
+- `MaxConnections` / `MinConnections` / `ConnectionGracePeriod` configure the libp2p connection manager and govern how many peers the node keeps: above the high water mark it prunes low-value connections (DHT routing peers first; topic mesh, static and bootstrap peers are protected) down to the low water mark. The library defaults are 35, 25 and 20s. Each watermark defaults on its own, so moving one past the other's default (e.g. `MaxConnections` below 25) requires setting both, or the service refuses to start.
+- The `Rcmgr*` settings override the libp2p resource manager, which enforces hard caps on connections, streams and file descriptors. Its defaults are auto-scaled to host memory and the process file-descriptor limit; the effective system limits are logged at startup (`Resource manager system limits: conns=... inbound=... fd=...`) and exported as the `libp2p_rcmgr_*` metrics.
+- An inbound or outbound limit must not exceed its total, whether the total is set or auto-scaled. Raising `RcmgrConnsInbound` above the auto-scaled total needs `RcmgrConns` set too; otherwise the P2P service fails to start with an error saying so. `RcmgrConns` must not be below `MaxConnections`.
+- `RcmgrIPv4SubnetLimits` / `RcmgrIPv6SubnetLimits` take pipe-separated `<prefix length>:<connections>` entries matched against the source address. A non-empty list replaces the default for that address family as a whole, so list every prefix you want limited. Loopback is never limited. A malformed entry fails startup with an error naming the setting.
+
+**Bootstrap and DHT server nodes** (`p2p_dht_mode=server`) take heavy inbound churn and can exhaust the auto-scaled inbound connection limit. Raise `RcmgrConnsInbound` (with `RcmgrConns`), and raise `RcmgrFD` with it, since every TCP connection holds a file descriptor (keep it below the process `ulimit -n`). The connection manager watermarks still govern how many peers are kept once connected.
 
 ### Peer Map Management
 
@@ -158,6 +184,22 @@ p2p_dht_mode=off
 
 - Publicly dialable nodes that should strengthen the network with direct connections
 - Required for inclusion in the BSV Association DNS bootstrap pool (contact BSVA)
+
+### Connection Limits for a Bootstrap / DHT Server Node
+
+Illustrative values only; size them to the host. Check the `Resource manager system limits` startup log line for the auto-scaled defaults before raising anything.
+
+```bash
+p2p_dht_mode=server
+# Keep more peers once connected (connection manager watermarks)
+p2p_max_connections=200
+p2p_min_connections=150
+# Accept more inbound connections; the total must cover the inbound limit
+p2p_rcmgr_conns=4096
+p2p_rcmgr_conns_inbound=3072
+# Every TCP connection holds a file descriptor; stay below ulimit -n
+p2p_rcmgr_fd=8192
+```
 - Highest resource usage; pair with explicit `p2p_advertise_addresses` — see [How to Expose the P2P Service Publicly (Kubernetes)](../../../howto/miners/kubernetes/minersHowToExposeP2P.md)
 
 **When to use client mode:**
