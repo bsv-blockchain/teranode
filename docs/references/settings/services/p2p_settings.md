@@ -184,6 +184,19 @@ p2p_dht_mode=off
 
 - Publicly dialable nodes that should strengthen the network with direct connections
 - Required for inclusion in the BSV Association DNS bootstrap pool (contact BSVA)
+- Highest resource usage; pair with explicit `p2p_advertise_addresses` — see [How to Expose the P2P Service Publicly (Kubernetes)](../../../howto/miners/kubernetes/minersHowToExposeP2P.md)
+
+**When to use client mode:**
+
+- Nodes that don't need to be discoverable by others
+- Reduced network overhead and storage requirements
+- Behind restrictive NAT/firewall
+
+**When to use off:**
+
+- Most lightweight: no DHT crawling, no random connections; peer addresses come from bootstrap servers
+- **Recommended for abuse-sensitive hosting providers (e.g. Hetzner, OVH)** — `server` and `client` modes connect to 100+ semi-random IPs, which these providers may flag as network scanning and answer with abuse warnings or suspension
+- The node still participates fully in block and transaction propagation via topics
 
 ### Connection Limits for a Bootstrap / DHT Server Node
 
@@ -200,19 +213,6 @@ p2p_rcmgr_conns_inbound=3072
 # Every TCP connection holds a file descriptor; stay below ulimit -n
 p2p_rcmgr_fd=8192
 ```
-- Highest resource usage; pair with explicit `p2p_advertise_addresses` — see [How to Expose the P2P Service Publicly (Kubernetes)](../../../howto/miners/kubernetes/minersHowToExposeP2P.md)
-
-**When to use client mode:**
-
-- Nodes that don't need to be discoverable by others
-- Reduced network overhead and storage requirements
-- Behind restrictive NAT/firewall
-
-**When to use off:**
-
-- Most lightweight: no DHT crawling, no random connections; peer addresses come from bootstrap servers
-- **Recommended for abuse-sensitive hosting providers (e.g. Hetzner, OVH)** — `server` and `client` modes connect to 100+ semi-random IPs, which these providers may flag as network scanning and answer with abuse warnings or suspension
-- The node still participates fully in block and transaction propagation via topics
 
 ### Peer Registry Configuration
 
