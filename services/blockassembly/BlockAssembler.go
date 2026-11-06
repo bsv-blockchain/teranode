@@ -775,7 +775,9 @@ drain:
 		storageTriggered = storageTriggered || req.StorageTriggered
 	}
 
-	// A reset refused earlier (resetOwed) runs with this one, so it does not run again.
+	// A reset refused earlier (resetOwed) runs with this one, so it does not run again. If this
+	// one then fails before the rotation, the owed options go with it, as a failed reset's own
+	// options always did; nothing asks for them again.
 	owed := b.resetOwed
 	b.resetOwed = nil
 
