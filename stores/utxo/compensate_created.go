@@ -535,8 +535,13 @@ func AnyPrunedReplay(spends []*Spend) bool {
 // spending transaction is invalid, so the inputs the same Spend call did write
 // must be reversed (RollbackSet decides which). An infrastructure error
 // (DEVICE_OVERLOAD, timeout, cancellation) does not: the spend is idempotent for
-// the same spender, so a retry matches the written inputs instead. Both stores
-// use this one predicate, so their rollback decisions cannot drift apart.
+// the same spender, so a retry matches the written inputs instead.
+//
+// Both stores decide with it only for callers that wrote the spender's record
+// themselves (IgnoreFlags.SpenderCreatedByCaller, RequireParentOutputs: the
+// create-first block paths). Every other caller rolls back by the stores' own
+// record-existence probe and transient-window gate, which differ between the
+// stores.
 //
 // A missing parent counts only when spenderCreatedByCaller is set, for the
 // create-first block paths. It is the other pruned-replay answer

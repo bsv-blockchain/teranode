@@ -410,8 +410,9 @@ func (e *pruneStepError) Error() string { return e.step + ": " + e.err.Error() }
 func (e *pruneStepError) Unwrap() error { return e.err }
 
 // deleteTombstonedTx runs one attempt of the pruning transaction: select the
-// candidates, write a replay marker on every parent of every candidate, then
-// delete the candidates. Marker-before-delete is the whole point, so the two
+// candidates, write a replay marker on each parent output that records the
+// candidate as its spender (held-back candidates get none), then delete the
+// candidates. Marker-before-delete is the whole point, so the two
 // must commit together.
 //
 // LIMITATION - the protection is not retroactive. A marker only exists for a

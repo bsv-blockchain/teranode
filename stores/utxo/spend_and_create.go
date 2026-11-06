@@ -344,10 +344,14 @@ func recheckUnknownCreate(ctx context.Context, logger ulogger.Logger, s Sequenti
 	if !removed {
 		logger.Warnf("[SpendAndCreate] %s: create with an unknown outcome over a pruned transaction's marker left no record yet; a write still in flight could land after this", hash.String())
 
-		return MarkCreateOutcomeUnknown(errors.NewUtxoSpendingTxPrunedError("SpendAndCreate: %s is a pruned transaction and its create with an unknown outcome left no record yet", hash.String(), createErr))
+		return MarkCreateOutcomeUnknown(errors.NewUtxoSpendingTxPrunedError("SpendAndCreate: spending transaction %s was pruned", hash.String(), createErr))
 	}
 
-	return MarkCreateOutcomeUnknown(errors.NewUtxoSpendingTxPrunedError("SpendAndCreate: %s recreated a pruned transaction after a create with an unknown outcome and it was removed; a write still in flight could land after this", hash.String(), createErr))
+	// The message is a verdict a submitter may see (publicCauseCodes); the
+	// node-side detail goes to the log.
+	logger.Warnf("[SpendAndCreate] %s: recreated a pruned transaction after a create with an unknown outcome and it was removed; a write still in flight could land after this", hash.String())
+
+	return MarkCreateOutcomeUnknown(errors.NewUtxoSpendingTxPrunedError("SpendAndCreate: spending transaction %s was pruned", hash.String(), createErr))
 }
 
 // removeMarkedRecreation removes the record of a transaction whose spend has

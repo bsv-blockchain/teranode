@@ -500,7 +500,7 @@ func (s *Store) detectNativeTeranodeOpSupport(ctx context.Context) bool {
 		s.nativeReplayProtection.Store(replayProtected)
 
 		if !replayProtected {
-			s.logger.Warnf("[teranode-native-op] native dispatcher does not prove replay protection; spendMulti, spend and addDeletedChildren stay on the UDF path, every other sub-op stays native")
+			s.logger.Warnf("[teranode-native-op] native dispatcher does not prove replay protection; spendMulti, spend and addDeletedChildren stay on the UDF path, every other sub-op keeps its routing (unspend is always UDF)")
 		}
 
 		return true
@@ -738,9 +738,15 @@ func (s *Store) nativeProbeSpend(ctx context.Context, policy *aerospike.WritePol
 //     the same transaction fails; a dispatcher that omits the list makes the
 //     store unspend a confirmed output, which is a double-spend of it.
 //
-// Any failure demotes the store to the UDF path, where both semantics are
-// enforced in-repo. That is the whole point: the native path stays available to
-// a fork build that implements them, rather than being fenced off for everyone.
+// It also proves the marker's two values apart (stage 1b): a legacy marker, the
+// value an older pruner wrote for every deleted child including conflicting
+// losers, must not reject a spend of an output that never named that child.
+//
+// A failure keeps spendMulti, spend and addDeletedChildren on the UDF path,
+// where all of this is enforced in-repo; every other sub-op keeps its routing,
+// and unspend is always UDF. That is the whole point: the native path stays
+// available to a fork build that implements them, rather than being fenced off
+// for everyone.
 func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospike.WritePolicy) bool {
 	const (
 		probeBlockHeight = uint32(1)

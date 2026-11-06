@@ -1207,10 +1207,10 @@ func (s *Service) processRecordChunkCarry(ctx context.Context, blockHeight uint3
 			continue
 		}
 
-		// A probabilistic filter cannot prove a parent record is absent, so every
-		// input gets its marker. Markers are staged per record and only merged
-		// into the chunk-wide map once every input resolved, so a failure here
-		// skips this record alone.
+		// Every input is queued for a marker write on the record that holds its
+		// output; markParentsWith decides which writes land. Markers are staged
+		// per record and only merged into the chunk-wide map once every input
+		// resolved, so a failure here skips this record alone.
 		recordUpdates := make(map[string]*parentUpdateInfo, len(inputs))
 
 		var updateErr error
@@ -2364,10 +2364,11 @@ func spendHolder(utxos []interface{}, offsets []uint32, childHash *chainhash.Has
 // markers on P and Q. Only once both answer is C cleared, and its delete rides
 // chunk 2's batch, next to chunk 2's own marker writes. So a delete never
 // shares a batch with the marker writes it depends on, which is the ordering
-// that keeps a pruned child from being deleted unprotected, and each chunk
-// still costs one batch, as it did when markers and deletes shared one. The
-// deletes left when a worker runs out of chunks go in one more batch
-// (drainCarry).
+// that keeps a pruned child from being deleted unprotected, and in a healthy
+// pass each chunk still costs one batch, as it did when markers and deletes
+// shared one. Draining a carry that deleted paginated masters takes a second
+// batch for their pages, and refused markers add more. The deletes left when a
+// worker runs out of chunks go in one more batch (drainCarry).
 //
 // A master's pages wait the same way: they ride the batch after the one that
 // deleted the master, so a refused master keeps its pages.
