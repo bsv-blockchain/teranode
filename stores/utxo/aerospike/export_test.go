@@ -18,3 +18,9 @@ func (s *Store) ConflictingIndexVerdict() (done, usable bool) {
 func (s *Store) StopConflictingIndexSelfTest() {
 	s.stopConflictingIndexSelfTest()
 }
+
+// SetChildDAHBeforeWrite installs the hook that runs before SetDAHForChildRecords enqueues its page
+// writes, and clears it when given nil.
+func SetChildDAHBeforeWrite(f func()) {
+	childDAHBeforeWrite = f
+}
