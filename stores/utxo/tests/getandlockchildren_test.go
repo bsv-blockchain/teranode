@@ -26,11 +26,13 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -282,4 +284,141 @@ func TestGetAndLockChildren(t *testing.T) {
 		assert.Len(t, children, 0)              // Should return empty slice since there are no children
 		assert.NotContains(t, children, txHash) // Original transaction should not be included
 	})
+}
+
+// A parent's spending data can name a child whose record is gone. GetAndLockChildrenSkippingMissing
+// walks past it, GetAndLockChildren still fails on it.
+func TestGetAndLockChildrenSkippingMissing(t *testing.T) {
+	ctx := context.Background()
+
+	const parentHex = "010000000000000000ef01032e38e9c0a84c6046d687d10556dcacc41d275ec55fc00779ac88fdf357a18700000000" +
+		"8c493046022100c352d3dd993a981beba4a63ad15c209275ca9470abfcd57da93b58e4eb5dce82022100840792bc1f456062819f15d33ee7055cf7b5" +
+		"ee1af1ebcc6028d9cdb1c3af7748014104f46db5e9d61a9dc27b8d64ad23e7383a4e6ca164593c2527c038c0857eb67ee8e825dca65046b82c933158" +
+		"6c82e0fd1f633f25f87c161bc6f8a630121df2b3d3ffffffff00f2052a010000001976a91471d7dd96d9edda09180fe9d57a477b5acc9cad1188ac02" +
+		"00e32321000000001976a914c398efa9c392ba6013c5e04ee729755ef7f58b3288ac000fe208010000001976a914948c765a6914d43f2a7ac177da2c" +
+		"2f6b52de3d7c88ac00000000"
+
+	// parent has two outputs: gone spends the first, kept spends the second, and the record of gone is deleted
+	setup := func(t *testing.T) (store utxo.Store, parent, gone, kept *bt.Tx) {
+		t.Helper()
+
+		store = setupSQLiteMemoryStore(ctx, t)
+
+		parent, err := bt.NewTxFromString(parentHex)
+		require.NoError(t, err)
+
+		_, _, err = store.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		child := func(vout uint32) *bt.Tx {
+			tx := bt.NewTx()
+			require.NoError(t, tx.From(parent.TxIDChainHash().String(), vout, parent.Outputs[vout].LockingScript.String(), parent.Outputs[vout].Satoshis))
+			require.NoError(t, tx.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 50000))
+			tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+			_, _, err := store.SpendAndCreate(ctx, tx, store.GetBlockHeight()+1)
+			require.NoError(t, err)
+
+			return tx
+		}
+
+		gone = child(0)
+		kept = child(1)
+
+		require.NoError(t, store.Delete(ctx, gone.TxIDChainHash()))
+
+		return store, parent, gone, kept
+	}
+
+	t.Run("skips a descendant whose record is gone and reports it", func(t *testing.T) {
+		store, parent, gone, kept := setup(t)
+
+		before := lockWalkMissingCount(t)
+
+		children, missing, err := utxo.GetAndLockChildrenSkippingMissing(ctx, store, *parent.TxIDChainHash())
+		require.NoError(t, err)
+		require.Equal(t, []chainhash.Hash{*kept.TxIDChainHash()}, children)
+		require.Equal(t, []chainhash.Hash{*gone.TxIDChainHash()}, missing)
+		require.Equal(t, before+1, lockWalkMissingCount(t))
+
+		for name, tx := range map[string]*bt.Tx{"parent": parent, "kept": kept} {
+			txMeta, getErr := store.Get(ctx, tx.TxIDChainHash(), fields.Locked)
+			require.NoError(t, getErr)
+			require.True(t, txMeta.Locked, "%s is locked by the walk", name)
+		}
+	})
+
+	// Aerospike reports a missing record from SetLocked itself, where the SQL store only finds out at
+	// Get. The record is still in the SQL store here, so only the failing SetLocked can make it missing.
+	t.Run("skips a descendant that SetLocked reports as not found", func(t *testing.T) {
+		store, parent, gone, kept := setup(t)
+
+		_, _, err := store.SpendAndCreate(ctx, gone, store.GetBlockHeight()+1, utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		wrapped := &setLockedNotFound{Store: store, target: *gone.TxIDChainHash()}
+
+		children, missing, err := utxo.GetAndLockChildrenSkippingMissing(ctx, wrapped, *parent.TxIDChainHash())
+		require.NoError(t, err)
+		require.Equal(t, []chainhash.Hash{*kept.TxIDChainHash()}, children)
+		require.Equal(t, []chainhash.Hash{*gone.TxIDChainHash()}, missing)
+
+		wrapped.target = *parent.TxIDChainHash()
+
+		_, _, err = utxo.GetAndLockChildrenSkippingMissing(ctx, wrapped, *parent.TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "the root is never skipped")
+	})
+
+	t.Run("still fails when the root is absent", func(t *testing.T) {
+		store := setupSQLiteMemoryStore(ctx, t)
+
+		absent := chainhash.HashH([]byte("absent"))
+
+		children, missing, err := utxo.GetAndLockChildrenSkippingMissing(ctx, store, absent)
+		require.ErrorIs(t, err, errors.ErrTxNotFound)
+		require.Nil(t, children)
+		require.Nil(t, missing)
+	})
+
+	t.Run("the strict walk fails on a descendant whose record is gone", func(t *testing.T) {
+		store, parent, _, _ := setup(t)
+
+		_, err := utxo.GetAndLockChildren(ctx, store, *parent.TxIDChainHash())
+		require.ErrorIs(t, err, errors.ErrTxNotFound)
+	})
+}
+
+// setLockedNotFound wraps a real store and fails SetLocked for one hash the way Aerospike does for a
+// record that is not there.
+type setLockedNotFound struct {
+	utxo.Store
+	target chainhash.Hash
+}
+
+func (s *setLockedNotFound) SetLocked(ctx context.Context, txHashes []chainhash.Hash, value bool) error {
+	for i := range txHashes {
+		if txHashes[i] == s.target {
+			return errors.NewTxNotFoundError("transaction not found: %s", txHashes[i].String())
+		}
+	}
+
+	return s.Store.SetLocked(ctx, txHashes, value)
+}
+
+// lockWalkMissingCount reads teranode_utxo_lock_walk_missing_descendants_total from the default registry.
+func lockWalkMissingCount(t *testing.T) float64 {
+	t.Helper()
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	for _, family := range families {
+		if family.GetName() == "teranode_utxo_lock_walk_missing_descendants_total" {
+			return family.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+
+	require.FailNow(t, "metric teranode_utxo_lock_walk_missing_descendants_total is not registered")
+
+	return 0
 }

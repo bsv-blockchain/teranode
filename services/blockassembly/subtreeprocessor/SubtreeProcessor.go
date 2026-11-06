@@ -5815,14 +5815,22 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 
 	// get all child spends of the coinbase, this will lock them in the utxo store
 	// so they cannot be spent while we are processing the reorg
-	childSpendHashes, err := utxostore.GetAndLockChildren(ctx, stp.utxoStore, *block.CoinbaseTx.TxIDChainHash())
+	childSpendHashes, missingHashes, err := utxostore.GetAndLockChildrenSkippingMissing(ctx, stp.utxoStore, *block.CoinbaseTx.TxIDChainHash())
 	if err != nil {
+		// the walk reports ErrTxNotFound only for the coinbase itself: a descendant whose record is
+		// gone is skipped and returned in missingHashes, so it cannot cancel the cleanup
 		if errors.Is(err, errors.ErrTxNotFound) {
 			// coinbase tx not found, nothing to do
 			return nil
 		}
 
 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error getting child spends for coinbase tx %s", block.String(), block.CoinbaseTx.String(), err)
+	}
+
+	// a parent's spending data still names these, but their records are gone, so there is nothing
+	// to save or delete for them
+	for i := range missingHashes {
+		stp.logger.Errorf("[removeCoinbaseUtxos][%s] skipping tx %s, spent from coinbase tx %s but not in the utxo store", block.String(), missingHashes[i].String(), block.CoinbaseTx.TxIDChainHash().String())
 	}
 
 	// save the txs first: if a reorg returns to this block, they are recreated from this copy. The

@@ -1241,6 +1241,21 @@ Upgrading from v0.16.0 changes nothing for them; upgrading from an earlier relea
 
 ### Not breaking, but worth knowing
 
+- **A reorg move-back no longer does nothing when a descendant of the coinbase is
+  missing from the UTXO store, and it says so when a tx drops out of the saved
+  file.** When a block was moved back, the walk that locks the coinbase and the
+  txs that spend it failed on the first descendant whose record was gone (a parent's
+  spending data can still name a child that was pruned or deleted), and the
+  move-back took that for a missing coinbase and returned success without saving or
+  deleting anything, leaving the records the walk had already locked locked. The
+  walk now skips a missing descendant, logs it at error level and carries on. A tx
+  that vanishes between the lock and the save is also logged at error level instead
+  of being dropped silently. Two new counters make both visible:
+  `teranode_utxo_lock_walk_missing_descendants_total` and
+  `teranode_subtreeprocessor_reorg_deleted_txs_vanished_total`. A non-zero value of
+  either means a stale spender reference exists in the UTXO store. Nothing to
+  configure. (part of bsv-blockchain/teranode#1214)
+
 - **Legacy bans now disconnect connected peers, and the ban list no longer leaks
   goroutines.** The legacy service's ban listener only started at shutdown, so a
   ban recorded while the node ran (a misbehaving peer, the feeler's non-BSV bans,

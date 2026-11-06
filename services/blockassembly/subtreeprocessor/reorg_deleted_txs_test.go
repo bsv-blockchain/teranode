@@ -3,6 +3,8 @@ package subtreeprocessor
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -18,7 +20,9 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -1368,4 +1372,178 @@ func TestRemoveCoinbaseUtxosFailsWhenTheCoinbaseCannotBeDeleted(t *testing.T) {
 		_, getErr := realStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)
 		require.ErrorIs(t, getErr, errors.ErrTxNotFound, "the children were deleted before the coinbase failed")
 	}
+}
+
+// errorCapturingLogger records the error-level lines. The processors in these tests use a logger that
+// fails the test on an error line, which is what a move-back that skips a tx is meant to write.
+type errorCapturingLogger struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *errorCapturingLogger) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+
+func (l *errorCapturingLogger) errorLines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.errors...)
+}
+
+func containsAll(line string, parts ...string) bool {
+	for _, part := range parts {
+		if !strings.Contains(line, part) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// A parent's spending data can name a child whose record is gone. The move back must skip that child
+// and still save and delete everything else, not report success and leave the coinbase and its other
+// descendants in the store.
+func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	logger := &errorCapturingLogger{}
+	stp.logger = logger
+
+	require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+
+	spendHeight := block.Height + uint32(stp.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec // small chain constant
+
+	// first spends the coinbase and has two outputs: gone spends the first, kept spends the second
+	first := bt.NewTx()
+	require.NoError(t, first.From(block.CoinbaseTx.TxIDChainHash().String(), 0, block.CoinbaseTx.Outputs[0].LockingScript.String(), block.CoinbaseTx.Outputs[0].Satoshis))
+	require.NoError(t, first.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", block.CoinbaseTx.Outputs[0].Satoshis/4))
+	require.NoError(t, first.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", block.CoinbaseTx.Outputs[0].Satoshis/4))
+	first.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, _, err := stp.utxoStore.SpendAndCreate(ctx, first, spendHeight)
+	require.NoError(t, err)
+
+	gone := spendingTx(t, first, 0, first.Outputs[0].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, gone, spendHeight)
+	require.NoError(t, err)
+
+	kept := spendingTx(t, first, 1, first.Outputs[1].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, kept, spendHeight)
+	require.NoError(t, err)
+
+	// the record of gone is removed, and the output of first that gone spent still names it
+	require.NoError(t, stp.utxoStore.Delete(ctx, gone.TxIDChainHash()))
+
+	firstMeta, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.Utxos)
+	require.NoError(t, err)
+
+	stale := false
+
+	for _, spendingData := range firstMeta.SpendingDatas {
+		if spendingData != nil && spendingData.TxID.IsEqual(gone.TxIDChainHash()) {
+			stale = true
+		}
+	}
+
+	require.True(t, stale, "precondition: the first tx still names the missing tx as the spender of its output")
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	for name, tx := range map[string]*bt.Tx{"coinbase": block.CoinbaseTx, "first": first, "kept": kept} {
+		_, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash())
+		require.ErrorIs(t, getErr, errors.ErrTxNotFound, "%s must be deleted by the move back", name)
+
+		require.True(t, stp.removeMap.Exists(*tx.TxIDChainHash()) || tx == block.CoinbaseTx, "%s must be in the remove map", name)
+	}
+
+	saved, err := stp.readReorgDeletedTxs(ctx, block.Header.Hash())
+	require.NoError(t, err)
+
+	savedHashes := make(map[chainhash.Hash]struct{}, len(saved))
+	for _, entry := range saved {
+		savedHashes[*entry.tx.TxIDChainHash()] = struct{}{}
+	}
+
+	require.Len(t, savedHashes, 2, "the surviving descendants are saved, the missing one is not")
+	require.Contains(t, savedHashes, *first.TxIDChainHash())
+	require.Contains(t, savedHashes, *kept.TxIDChainHash())
+
+	skipLines := 0
+
+	for _, line := range logger.errorLines() {
+		if containsAll(line, "skipping tx", gone.TxIDChainHash().String(), block.CoinbaseTx.TxIDChainHash().String()) {
+			skipLines++
+		}
+	}
+
+	require.Equal(t, 1, skipLines, "the missing descendant is named once in an error line: %v", logger.errorLines())
+}
+
+// When the coinbase itself is not in the store there is nothing to walk from, so the move back has
+// nothing to do and is not an error.
+func TestRemoveCoinbaseUtxosWithAnAbsentCoinbaseDoesNothing(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	logger := &errorCapturingLogger{}
+	stp.logger = logger
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+	require.Empty(t, logger.errorLines())
+
+	blockHash := block.Header.Hash()
+	_, err := stp.subtreeStore.Get(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.ErrorIs(t, err, errors.ErrNotFound, "nothing is saved")
+}
+
+// A tx the walk locked can vanish before it is read back for the save. It cannot be saved and failing
+// would only make a retry hit the same record, so the save goes on without it, and says so.
+func TestKeepReorgDeletedTxsCountsATxThatVanishedAfterItWasLocked(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	logger := &errorCapturingLogger{}
+	stp.logger = logger
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+	blockHash := block.Header.Hash()
+
+	before := testutil.ToFloat64(prometheusReorgDeletedTxsVanished)
+
+	// second vanishes between the lock and the read, first is still there
+	require.NoError(t, stp.utxoStore.Delete(ctx, second.TxIDChainHash()))
+
+	kept, err := stp.keepReorgDeletedTxs(ctx, block, []chainhash.Hash{*first.TxIDChainHash(), *second.TxIDChainHash()})
+	require.NoError(t, err, "a vanished tx must not fail the save")
+	require.Equal(t, []chainhash.Hash{*first.TxIDChainHash()}, kept)
+
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusReorgDeletedTxsVanished))
+
+	vanishedLines := 0
+
+	for _, line := range logger.errorLines() {
+		if containsAll(line, "vanished", second.TxIDChainHash().String(), block.String()) {
+			vanishedLines++
+		}
+	}
+
+	require.Equal(t, 1, vanishedLines, "the vanished tx is named once in an error line: %v", logger.errorLines())
+
+	saved, err := stp.readReorgDeletedTxs(ctx, blockHash)
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+
+	// a tx with a copy in the saved file is not vanished: the copy is kept, and nothing is counted
+	_, err = stp.keepReorgDeletedTxs(ctx, block, []chainhash.Hash{*first.TxIDChainHash()})
+	require.NoError(t, err)
+	require.NoError(t, stp.utxoStore.Delete(ctx, first.TxIDChainHash()))
+
+	kept, err = stp.keepReorgDeletedTxs(ctx, block, []chainhash.Hash{*first.TxIDChainHash()})
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{*first.TxIDChainHash()}, kept)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusReorgDeletedTxsVanished), "a tx with a saved copy is not counted")
 }
