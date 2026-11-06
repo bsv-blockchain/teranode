@@ -3,6 +3,9 @@ package subtreeprocessor
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -18,7 +21,9 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -1367,5 +1372,278 @@ func TestRemoveCoinbaseUtxosFailsWhenTheCoinbaseCannotBeDeleted(t *testing.T) {
 	for _, tx := range []*bt.Tx{first, second} {
 		_, getErr := realStore.Get(ctx, tx.TxIDChainHash(), fields.Tx)
 		require.ErrorIs(t, getErr, errors.ErrTxNotFound, "the children were deleted before the coinbase failed")
+	}
+}
+
+// errorCapturingLogger records the error-level lines. The processors in these tests use a logger that
+// fails the test on an error line, which is what a move-back that skips a tx is meant to write.
+type errorCapturingLogger struct {
+	ulogger.TestLogger
+	mu     sync.Mutex
+	errors []string
+}
+
+func (l *errorCapturingLogger) Errorf(format string, args ...interface{}) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.errors = append(l.errors, fmt.Sprintf(format, args...))
+}
+
+func (l *errorCapturingLogger) errorLines() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.errors...)
+}
+
+func containsAll(line string, parts ...string) bool {
+	for _, part := range parts {
+		if !strings.Contains(line, part) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// A parent's spending data can name a child whose record is gone. The move back must skip that child
+// and still save and delete every descendant the walk reaches through a record that exists, not report
+// success and leave the coinbase and its other descendants in the store. A descendant reachable only
+// through the missing child is not reached in the store, so its record stays. Block assembly can still
+// hold the missing child and its descendants, so the move back takes them all out of the subtrees and
+// marks them for removal, and leaves an unrelated tx in place.
+func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	logger := &errorCapturingLogger{}
+	stp.logger = logger
+
+	require.NoError(t, stp.processCoinbaseUtxos(ctx, block))
+
+	spendHeight := block.Height + uint32(stp.settings.ChainCfgParams.CoinbaseMaturity) //nolint:gosec // small chain constant
+
+	// first spends the coinbase and has two outputs: gone spends the first, kept spends the second
+	first := bt.NewTx()
+	require.NoError(t, first.From(block.CoinbaseTx.TxIDChainHash().String(), 0, block.CoinbaseTx.Outputs[0].LockingScript.String(), block.CoinbaseTx.Outputs[0].Satoshis))
+	require.NoError(t, first.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", block.CoinbaseTx.Outputs[0].Satoshis/4))
+	require.NoError(t, first.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", block.CoinbaseTx.Outputs[0].Satoshis/4))
+	first.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{})
+
+	_, _, err := stp.utxoStore.SpendAndCreate(ctx, first, spendHeight)
+	require.NoError(t, err)
+
+	gone := spendingTx(t, first, 0, first.Outputs[0].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, gone, spendHeight)
+	require.NoError(t, err)
+
+	kept := spendingTx(t, first, 1, first.Outputs[1].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, kept, spendHeight)
+	require.NoError(t, err)
+
+	// only spends gone and has no other parent, grand spends only: neither is reachable in the store
+	// once the record of gone is removed
+	only := spendingTx(t, gone, 0, gone.Outputs[0].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, only, spendHeight)
+	require.NoError(t, err)
+
+	grand := spendingTx(t, only, 0, only.Outputs[0].Satoshis/2)
+	_, _, err = stp.utxoStore.SpendAndCreate(ctx, grand, spendHeight)
+	require.NoError(t, err)
+
+	// unrelated spends a tx outside the coinbase's descendants, so the move back must leave it
+	unrelatedParent := bt.NewTx()
+	require.NoError(t, unrelatedParent.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
+	unrelated := spendingTx(t, unrelatedParent, 0, 500)
+
+	for _, tx := range []*bt.Tx{gone, only, grand, unrelated} {
+		addToAssembly(t, stp, tx)
+		require.True(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "precondition: block assembly holds %s", tx.TxIDChainHash())
+	}
+
+	// the record of gone is removed, and the output of first that gone spent still names it
+	require.NoError(t, stp.utxoStore.Delete(ctx, gone.TxIDChainHash()))
+
+	firstMeta, err := stp.utxoStore.Get(ctx, first.TxIDChainHash(), fields.Utxos)
+	require.NoError(t, err)
+
+	stale := false
+
+	for _, spendingData := range firstMeta.SpendingDatas {
+		if spendingData != nil && spendingData.TxID.IsEqual(gone.TxIDChainHash()) {
+			stale = true
+		}
+	}
+
+	require.True(t, stale, "precondition: the first tx still names the missing tx as the spender of its output")
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	for name, tx := range map[string]*bt.Tx{"coinbase": block.CoinbaseTx, "first": first, "kept": kept} {
+		_, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash())
+		require.ErrorIs(t, getErr, errors.ErrTxNotFound, "%s must be deleted by the move back", name)
+
+		require.True(t, stp.removeMap.Exists(*tx.TxIDChainHash()) || tx == block.CoinbaseTx, "%s must be in the remove map", name)
+	}
+
+	require.False(t, stp.currentTxMap.Exists(*gone.TxIDChainHash()), "the missing tx must be taken out of block assembly")
+	require.True(t, stp.removeMap.Exists(*gone.TxIDChainHash()), "the missing tx must be in the remove map")
+
+	foundIndex, _, _ := stp.locateTxInSubtrees(*gone.TxIDChainHash())
+	require.Equal(t, -1, foundIndex, "the missing tx must not be in any subtree")
+
+	for name, tx := range map[string]*bt.Tx{"only": only, "grand": grand} {
+		require.False(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "%s descends from the missing tx and must be taken out of block assembly", name)
+		require.True(t, stp.removeMap.Exists(*tx.TxIDChainHash()), "%s must be in the remove map", name)
+
+		foundIndex, _, _ = stp.locateTxInSubtrees(*tx.TxIDChainHash())
+		require.Equal(t, -1, foundIndex, "%s must not be in any subtree", name)
+
+		// the walk cannot reach it in the store, so its record stays
+		_, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash())
+		require.NoError(t, getErr, "the record of %s is not reached by the walk", name)
+	}
+
+	require.True(t, stp.currentTxMap.Exists(*unrelated.TxIDChainHash()), "an unrelated tx stays in block assembly")
+	require.False(t, stp.removeMap.Exists(*unrelated.TxIDChainHash()), "an unrelated tx is not marked for removal")
+
+	foundIndex, _, _ = stp.locateTxInSubtrees(*unrelated.TxIDChainHash())
+	require.GreaterOrEqual(t, foundIndex, 0, "an unrelated tx stays in the subtrees")
+
+	saved, err := stp.readReorgDeletedTxs(ctx, block.Header.Hash())
+	require.NoError(t, err)
+
+	savedHashes := make(map[chainhash.Hash]struct{}, len(saved))
+	for _, entry := range saved {
+		savedHashes[*entry.tx.TxIDChainHash()] = struct{}{}
+	}
+
+	require.Len(t, savedHashes, 2, "the surviving descendants are saved, the missing one is not")
+	require.Contains(t, savedHashes, *first.TxIDChainHash())
+	require.Contains(t, savedHashes, *kept.TxIDChainHash())
+
+	skipLines := 0
+
+	for _, line := range logger.errorLines() {
+		if containsAll(line, "skipping tx", gone.TxIDChainHash().String(), block.CoinbaseTx.TxIDChainHash().String()) {
+			skipLines++
+		}
+	}
+
+	require.Equal(t, 1, skipLines, "the missing descendant is named once in an error line: %v", logger.errorLines())
+}
+
+// When the coinbase itself is not in the store there is nothing to walk from, so the move back has
+// nothing to do and is not an error.
+func TestRemoveCoinbaseUtxosWithAnAbsentCoinbaseDoesNothing(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	logger := &errorCapturingLogger{}
+	stp.logger = logger
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+	require.Empty(t, logger.errorLines())
+
+	blockHash := block.Header.Hash()
+	_, err := stp.subtreeStore.Get(ctx, blockHash[:], fileformat.FileTypeReorgDeletedTxs)
+	require.ErrorIs(t, err, errors.ErrNotFound, "nothing is saved")
+}
+
+// A tx the walk locked can vanish before it is read back for the save. It cannot be saved, and failing
+// would gain nothing: a retry would skip the record as missing, so the tx would still be absent from the
+// file. The save goes on without it, and says so.
+func TestKeepReorgDeletedTxsCountsATxThatVanishedAfterItWasLocked(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+	logger := &errorCapturingLogger{}
+	stp.logger = logger
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+	blockHash := block.Header.Hash()
+
+	before := testutil.ToFloat64(prometheusReorgDeletedTxsVanished)
+
+	// second vanishes between the lock and the read, first is still there
+	require.NoError(t, stp.utxoStore.Delete(ctx, second.TxIDChainHash()))
+
+	kept, err := stp.keepReorgDeletedTxs(ctx, block, []chainhash.Hash{*first.TxIDChainHash(), *second.TxIDChainHash()})
+	require.NoError(t, err, "a vanished tx must not fail the save")
+	require.Equal(t, []chainhash.Hash{*first.TxIDChainHash()}, kept)
+
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusReorgDeletedTxsVanished))
+
+	vanishedLines := 0
+
+	for _, line := range logger.errorLines() {
+		if containsAll(line, "vanished", second.TxIDChainHash().String(), block.String()) {
+			vanishedLines++
+		}
+	}
+
+	require.Equal(t, 1, vanishedLines, "the vanished tx is named once in an error line: %v", logger.errorLines())
+
+	saved, err := stp.readReorgDeletedTxs(ctx, blockHash)
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+
+	// a tx with a copy in the saved file is not vanished: the copy is kept, and nothing is counted
+	_, err = stp.keepReorgDeletedTxs(ctx, block, []chainhash.Hash{*first.TxIDChainHash()})
+	require.NoError(t, err)
+	require.NoError(t, stp.utxoStore.Delete(ctx, first.TxIDChainHash()))
+
+	kept, err = stp.keepReorgDeletedTxs(ctx, block, []chainhash.Hash{*first.TxIDChainHash()})
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{*first.TxIDChainHash()}, kept)
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusReorgDeletedTxsVanished), "a tx with a saved copy is not counted")
+}
+
+// vanishOnSaveRead deletes the target record just before the move back reads it back for the save,
+// so it is gone after the walk locked it and before keepReorgDeletedTxs reads its tx.
+type vanishOnSaveRead struct {
+	utxostore.Store
+	target chainhash.Hash
+}
+
+func (s *vanishOnSaveRead) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	if hash.Equal(s.target) && slices.Contains(f, fields.Tx) {
+		if err := s.Store.Delete(ctx, hash); err != nil && !errors.Is(err, errors.ErrTxNotFound) {
+			return nil, err
+		}
+	}
+
+	return s.Store.Get(ctx, hash, f...)
+}
+
+// A tx the walk locked that vanishes before the save is not in the saved file and has no record to
+// delete, but block assembly can still hold it and its descendants. The move back takes them out of
+// the subtrees and marks them for removal, as it does for a missing tx.
+func TestRemoveCoinbaseUtxosTakesAVanishedTxOutOfBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	// third spends second and is only in block assembly, so the walk never reaches it
+	third := spendingTx(t, second, 0, second.Outputs[0].Satoshis/2)
+
+	for _, tx := range []*bt.Tx{first, second, third} {
+		addToAssembly(t, stp, tx)
+		require.True(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "precondition: block assembly holds %s", tx.TxIDChainHash())
+	}
+
+	before := testutil.ToFloat64(prometheusReorgDeletedTxsVanished)
+
+	stp.utxoStore = &vanishOnSaveRead{Store: stp.utxoStore, target: *second.TxIDChainHash()}
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusReorgDeletedTxsVanished), "precondition: second vanished after the lock")
+
+	for name, tx := range map[string]*bt.Tx{"first": first, "second": second, "third": third} {
+		require.False(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "%s must be taken out of block assembly", name)
+		require.True(t, stp.removeMap.Exists(*tx.TxIDChainHash()), "%s must be in the remove map", name)
+
+		foundIndex, _, _ := stp.locateTxInSubtrees(*tx.TxIDChainHash())
+		require.Equal(t, -1, foundIndex, "%s must not be in any subtree", name)
 	}
 }
