@@ -133,8 +133,9 @@ read every section between yours and the target.
 - **Out-of-tree `utxo.Store` implementations must add `SpendAndCreateMulti` and
   `ParentOutputsForValidation`.** `utxo.DefaultSpendAndCreateMulti` provides the first. (#1875)
 - **A replay of a pruned transaction is refused** with `ERR_UTXO_SPENDING_TX_PRUNED` (code 78; HTTP
-  409, gRPC `FailedPrecondition`) where it was accepted before. Upgrade the validator with subtree
-  validation: an older validator drops the new `ignore_locked` field and answers `TX_LOCKED`. (#1702)
+  409, gRPC `FailedPrecondition`) where it was accepted before, and a block above the checkpoint
+  that carries one is marked invalid. Upgrade the validator with subtree validation: an older
+  validator drops the new `ignore_locked` field and answers `TX_LOCKED`. (#1702)
 
 ## [0.16.0] - 2026-10-05
 
