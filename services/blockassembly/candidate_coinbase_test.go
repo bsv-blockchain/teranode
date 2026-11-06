@@ -120,6 +120,22 @@ func missTarget(t *testing.T, issued *model.MiningCandidate, version uint32) uin
 func searchNonce(t *testing.T, issued *model.MiningCandidate, version uint32, meetsTarget bool) uint32 {
 	t.Helper()
 
+	header := candidateHeader(t, issued, version)
+
+	for {
+		if ok, _, _ := header.HasMetTargetDifficulty(); ok == meetsTarget {
+			return header.Nonce
+		}
+
+		header.Nonce++
+	}
+}
+
+// candidateHeader builds the header a miner hashes for the issued candidate under the given
+// version, starting at nonce zero.
+func candidateHeader(t *testing.T, issued *model.MiningCandidate, version uint32) *model.BlockHeader {
+	t.Helper()
+
 	coinbase, err := bt.NewTxFromBytes(issued.CoinbaseTx)
 	require.NoError(t, err)
 
@@ -129,20 +145,12 @@ func searchNonce(t *testing.T, issued *model.MiningCandidate, version uint32, me
 	nBits, err := model.NewNBitFromSlice(issued.NBits)
 	require.NoError(t, err)
 
-	header := &model.BlockHeader{
+	return &model.BlockHeader{
 		Version:        version,
 		HashPrevBlock:  prev,
 		HashMerkleRoot: coinbase.TxIDChainHash(),
 		Timestamp:      issued.Time,
 		Bits:           *nBits,
-	}
-
-	for {
-		if ok, _, _ := header.HasMetTargetDifficulty(); ok == meetsTarget {
-			return header.Nonce
-		}
-
-		header.Nonce++
 	}
 }
 
@@ -183,8 +191,7 @@ func TestSubmitMiningSolution_CoinbaseLessMinesTheIssuedCoinbase(t *testing.T) {
 // TestSubmitMiningSolution_InvalidSolutionKeepsTheIssuedCoinbase pins that a consensus-invalid
 // solution leaves the job, and so its coinbase, in place, as bitcoin-sv leaves a candidate alone
 // after an invalid submitminingsolution. Deleting the job made the next poll for the same id, which
-// every poll in the same second shares, build a coinbase with a new random
-// extranonce, so every other miner still hashing the first one failed the proof-of-work check and
+// every poll with the same candidate time shares, build a coinbase with a new random extranonce, so every other miner still hashing the first one failed the proof-of-work check and
 // deleted the job again. A share that misses the target, the commonest invalid solution, did worse:
 // block.Valid reports a miss as a processing error, so it also reset block assembly. A miner on the
 // original coinbase must still get its block.
@@ -456,26 +463,59 @@ func TestGetMiningCandidate_EmptyBlockPollsKeepTheirOwnTime(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, first.CoinbaseTx)
 
+	firstTime := first.Time
+
 	var later *model.MiningCandidate
 
 	require.Eventually(t, func() bool {
 		later, err = server.GetMiningCandidate(t.Context(), &blockassembly_api.GetMiningCandidateRequest{})
-		require.NoError(t, err)
 
-		return later.Time != first.Time
+		return err == nil && later.Time != firstTime
 	}, 5*time.Second, 50*time.Millisecond, "the candidate time should advance with the clock")
-
+	require.NoError(t, err)
 	require.Equal(t, first.PreviousHash, later.PreviousHash, "both polls must be at the same tip")
-	require.NotEqual(t, first.Id, later.Id, "a poll at a later time must get a job of its own")
 
 	// Mine on the first poll and submit the nonce alone, as a miner that keeps the candidate's
-	// time, version and coinbase may.
+	// time, version and coinbase may. The nonce meets the target at the first poll's time and misses
+	// it at the later poll's, so a header rebuilt with the later time fails every run, not half of
+	// them as an arbitrary regtest nonce would.
+	nonce := mineMissingAt(t, first, first.Version, later.Time)
+
 	resp, err := server.submitMiningSolution(t.Context(), &BlockSubmissionRequest{
 		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{
 			Id:    first.Id,
-			Nonce: mine(t, first, first.Version),
+			Nonce: nonce,
 		},
 	})
 	require.NoError(t, err, "the first poll's job must still hold the time the miner hashed")
 	require.True(t, resp.Ok)
+
+	best, _, err := server.blockchainClient.GetBestBlockHeader(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, first.PreviousHash, best.HashPrevBlock.CloneBytes(), "the block must be stored on the candidate's parent")
+	require.Equal(t, firstTime, best.Timestamp, "the block must carry the time the miner hashed")
+	require.Equal(t, nonce, best.Nonce)
+}
+
+// mineMissingAt finds a nonce whose header, built as in mine, meets the target at the issued
+// candidate's time and misses it at otherTime.
+func mineMissingAt(t *testing.T, issued *model.MiningCandidate, version uint32, otherTime uint32) uint32 {
+	t.Helper()
+
+	header := candidateHeader(t, issued, version)
+	other := *header
+	other.Timestamp = otherTime
+
+	for {
+		other.Nonce = header.Nonce
+
+		ok, _, _ := header.HasMetTargetDifficulty()
+		otherOK, _, _ := other.HasMetTargetDifficulty()
+
+		if ok && !otherOK {
+			return header.Nonce
+		}
+
+		header.Nonce++
+	}
 }

@@ -2751,7 +2751,9 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 	// time it was issued with, and a solution that omits its time is mined with the job's. With an id
 	// from the parent alone every poll at one tip shared a job, each poll overwrote its time, and a
 	// miner still hashing an earlier poll's time submitted a header the node rebuilt with a later one,
-	// which failed the proof-of-work check. A poll in a new second now gets a job of its own.
+	// which failed the proof-of-work check. A poll with a different candidate time now gets a job of
+	// its own. Polls that share a time, in the same second or while the median-time-past floor holds
+	// the time fixed, share a job and that time.
 	timeBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
 	previousHash := bestBlockHeader.Hash()
