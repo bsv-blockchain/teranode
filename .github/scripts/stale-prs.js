@@ -28,6 +28,9 @@ const DEFAULTS = Object.freeze({
   marker: '<!-- stale-prs -->',
   // Marks the close comment, so a failed close is retried without a second comment.
   closeMarker: '<!-- stale-prs:close -->',
+  // The account the job comments as (GITHUB_TOKEN). Only its comments count as
+  // the job's warning or close comment, so nobody can fake one by pasting a marker.
+  jobLogin: 'github-actions',
 });
 
 const TEAM_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
@@ -101,9 +104,8 @@ function headActivityAt(pr, now) {
   return maxTs([committed, pushed === null ? null : Math.min(pushed, now)]);
 }
 
-function isJobComment(c, cfg) {
-  const body = c.body || '';
-  return body.includes(cfg.marker) || body.includes(cfg.closeMarker);
+function isJobComment(c, cfg, marker) {
+  return Boolean(c.author && c.author.isBot && c.author.login === cfg.jobLogin && (c.body || '').includes(marker));
 }
 
 function isActivityEvent(e, cfg) {
@@ -115,12 +117,12 @@ function isActivityEvent(e, cfg) {
 // Counts: PR creation by a human, the head commit's push (headActivityAt),
 // comments, reviews and review comments by User actors, and reopen /
 // force-push / ready-for-review / removal of the stale label by User actors.
-// Bot actors and this job's own comments never count.
+// Bot actors, including this job, never count.
 function lastHumanActivity(pr, cfg, now) {
   const times = [headActivityAt(pr, now)];
   if (isHuman(pr.author)) times.push(ts(pr.createdAt));
   for (const c of pr.comments) {
-    if (isHuman(c.author) && !isJobComment(c, cfg)) times.push(ts(c.createdAt));
+    if (isHuman(c.author)) times.push(ts(c.createdAt));
   }
   for (const r of pr.reviews) {
     if (isHuman(r.author)) times.push(ts(r.submittedAt));
@@ -146,13 +148,13 @@ function staleLabeledAt(pr, cfg) {
 // activity, not the label time.
 function warnedAt(pr, cfg, last) {
   return maxTs(
-    pr.comments.filter((c) => (c.body || '').includes(cfg.marker)).map((c) => ts(c.createdAt)).filter((t) => t !== null && t > last),
+    pr.comments.filter((c) => isJobComment(c, cfg, cfg.marker)).map((c) => ts(c.createdAt)).filter((t) => t !== null && t > last),
   );
 }
 
 // Whether the close comment was already posted at or after `from`.
 function closeCommentPosted(pr, cfg, from) {
-  return pr.comments.some((c) => (c.body || '').includes(cfg.closeMarker) && ts(c.createdAt) !== null && ts(c.createdAt) >= from);
+  return pr.comments.some((c) => isJobComment(c, cfg, cfg.closeMarker) && ts(c.createdAt) !== null && ts(c.createdAt) >= from);
 }
 
 // team | external | exempt, with a reason. Team means the author's

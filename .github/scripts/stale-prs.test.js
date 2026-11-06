@@ -135,12 +135,16 @@ test('bot comment after the label does not un-stale', () => {
   assert.equal(d.action, 'close');
 });
 
-test("the job's own comment does not reset the clock even if posted by a user token", () => {
-  const d = decide(
-    pr({ labels: ['stale'], events: [staleLabel(20)], comments: [comment(user('someone'), 19, `No activity...\n\n${DEFAULTS.marker}`)] }),
-    NOW,
-  );
-  assert.equal(d.action, 'close');
+test("a person's comment containing the job's marker is activity, not a warning", () => {
+  const fake = comment(user('someone'), 19, `No activity...\n\n${DEFAULTS.marker}`);
+  assert.equal(decide(pr({ labels: ['stale'], events: [staleLabel(20)], comments: [fake] }), NOW).action, 'unstale');
+  // Posted before a hand-added label, it does not stand in for the warning.
+  assert.equal(decide(pr({ labels: ['stale'], events: [staleLabel(18, user(REVIEWER))], comments: [fake] }), NOW).action, 'warn');
+});
+
+test("another bot's comment containing the marker is not the job's warning", () => {
+  const fake = comment(bot('renovate'), 19, staleMessage(DEFAULTS));
+  assert.equal(decide(pr({ labels: ['stale'], events: [staleLabel(20)], comments: [fake] }), NOW).action, 'warn');
 });
 
 test('label changes do not count as activity', () => {
@@ -524,9 +528,11 @@ test('a warning from before the last human activity does not count', () => {
   assert.equal(d.action, 'warn');
 });
 
-test('a close comment posted by a user token does not count as activity', () => {
-  const d = decide(pr(staled(20, [comment(user('someone'), 1, closeMessage(DEFAULTS, 110))])), NOW);
+test("another account's comment containing the close marker does not skip the close comment", () => {
+  const d = decide(pr(staled(20, [comment(bot('renovate'), 1, closeMessage(DEFAULTS, 110))])), NOW);
   assert.equal(d.action, 'close');
+  assert.equal(d.closeCommentPosted, false);
+  assert.equal(decide(pr(staled(20, [comment(bot('github-actions'), 1, closeMessage(DEFAULTS, 110))])), NOW).closeCommentPosted, true);
 });
 
 // Cron slack
