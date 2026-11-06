@@ -219,15 +219,9 @@ type Store struct {
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
 
-	// pendingPages holds the masters whose child pages failed to take the master's delete-at-height after the
-	// master committed it, with the master version of the failed write. A later unspend or conflicting call on
-	// such a master rewrites its pages even when no DAHSET or DAHUNSET signal fires. The marks live in process
-	// memory: a restart forgets them.
-	pendingPagesMu sync.Mutex
-	pendingPages   map[chainhash.Hash]dahVersion
-	lockedBatcher  batcherIfc[batchLocked]
-	externalStore  blob.Store
-	utxoBatchSize  int
+	lockedBatcher batcherIfc[batchLocked]
+	externalStore blob.Store
+	utxoBatchSize int
 
 	// externalTxCache caches whatever GetTxFromExternalStore returned for a txid:
 	// the full externally-stored transaction when a .tx blob exists, otherwise the
@@ -785,69 +779,18 @@ func reportedDAHVersion(res *LuaMapResponse) dahVersion {
 	return dahVersion{value: res.DAHVersion, known: true}
 }
 
-// pagesPending reports whether an earlier page write for the master failed in this process and has not been repaired.
-func (s *Store) pagesPending(txID *chainhash.Hash) bool {
-	s.pendingPagesMu.Lock()
-	defer s.pendingPagesMu.Unlock()
-
-	_, pending := s.pendingPages[*txID]
-
-	return pending
-}
-
-// markPagesPending records a failed page write at the given master version. A known version already
-// recorded is kept when this one is unknown or lower, so the mark always names the newest write that
-// still has to land.
-func (s *Store) markPagesPending(txID *chainhash.Hash, version dahVersion) {
-	s.pendingPagesMu.Lock()
-	defer s.pendingPagesMu.Unlock()
-
-	if s.pendingPages == nil {
-		s.pendingPages = make(map[chainhash.Hash]dahVersion)
-	}
-
-	if existing, ok := s.pendingPages[*txID]; ok && existing.known && (!version.known || version.value < existing.value) {
-		return
-	}
-
-	s.pendingPages[*txID] = version
-}
-
-// clearPagesPending drops the mark after a complete page write at the given master version. A write
-// older than the marked failure leaves the mark, since the pages may still lack the newer state, and
-// so does a write of unknown version when the mark has a known one.
-func (s *Store) clearPagesPending(txID *chainhash.Hash, version dahVersion) {
-	s.pendingPagesMu.Lock()
-	defer s.pendingPagesMu.Unlock()
-
-	marked, ok := s.pendingPages[*txID]
-	if !ok {
-		return
-	}
-
-	if !marked.known || (version.known && marked.value <= version.value) {
-		delete(s.pendingPages, *txID)
-	}
-}
-
 // reconcileChildDAH stamps or clears the child pages of a paginated master from the master's
-// delete-at-height as the response reports it. It writes the pages on a DAHSET or DAHUNSET signal,
-// and when an earlier page write for this master failed in this process (the pendingPages mark,
-// which a restart forgets). Without either, the pages already match the master and nothing is
-// written. A crash between the master write and the page write therefore leaves the pages stale
-// until the next transition of that master, because the failure mark is not persisted. An absent
-// stamp clears the pages. A package that reports no stamp is honoured only on a DAHSET signal. The
-// write carries the version the response reported, so a response that is older than a later
-// transition of the master cannot overwrite the pages that transition wrote.
+// delete-at-height as the response reports it. It writes the pages on every response for a master
+// with children, whatever the signal, so the pages are reconciled on every evaluation of the master.
+// A lost response or a crash between the master write and the page write is repaired by the next
+// evaluation of that master. The cost is one filtered round trip per page per evaluation, because
+// the write carries the version the response reported and a page that already holds that version or
+// a newer one refuses it. An absent stamp clears the pages. A package that reports no stamp is
+// honoured only on a DAHSET signal. A response that is older than a later transition of the master
+// cannot overwrite the pages that transition wrote.
 func (s *Store) reconcileChildDAH(txID *chainhash.Hash, res *LuaMapResponse, blockHeight uint32) error {
 	if res.ChildCount <= 0 {
 		return nil
-	}
-
-	if res.Signal != LuaSignalDAHSet && res.Signal != LuaSignalDAHUnset {
-		if !s.pagesPending(txID) {
-			return nil
-		}
 	}
 
 	dah, enabled := s.childDeleteAtHeightFor(res, blockHeight)

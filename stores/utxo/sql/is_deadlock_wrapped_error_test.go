@@ -38,3 +38,17 @@ func TestIsDeadlockSeesThroughAStorageErrorWrapForSQLite(t *testing.T) {
 		})
 	}
 }
+
+// An Unspend that has used its retry budget returns an error whose message still names the deadlock.
+// isDeadlock must report false for it, or a caller that retries on isDeadlock retries again.
+func TestIsDeadlockIsFalseForAnExhaustedRetryError(t *testing.T) {
+	deadlock := &pgconn.PgError{Severity: "ERROR", Code: "40P01", Message: "deadlock detected"}
+	cause := errors.NewStorageError("[setDAH] error locking transaction %d", 7, deadlock)
+	require.True(t, isDeadlock(cause), "setup: the cause alone is a deadlock")
+
+	exhausted := &deadlockRetriesExhaustedError{errors.NewStorageError("[Unspend] deadlock persisted after %d retries", 3, cause)}
+
+	require.Contains(t, exhausted.Error(), "SQLSTATE 40P01", "setup: the message names the deadlock")
+	require.False(t, isDeadlock(exhausted))
+	require.True(t, errors.Is(exhausted, errors.ErrStorageError), "the exhausted error stays a storage error")
+}

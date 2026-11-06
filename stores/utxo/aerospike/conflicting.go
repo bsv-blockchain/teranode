@@ -144,7 +144,7 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 		}
 	}
 
-	if err := s.client.BatchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), batchRecords); err != nil {
 		return nil, nil, errors.NewProcessingError("could not batch write conflicting flag", err)
 	}
 
@@ -156,9 +156,9 @@ func (s *Store) SetConflicting(ctx context.Context, txHashes []chainhash.Hash, s
 }
 
 // propagateConflictingDAHSignals brings the child pages of each record in line with the master's
-// stamp reported by its setConflicting response. It writes pages on a DAHSET or DAHUNSET signal,
-// and for a master whose earlier page write failed in this process, so a retry repairs pages
-// whose write failed after the master already committed. See reconcileChildDAH.
+// stamp reported by its setConflicting response. It writes the pages on every response, so a retry
+// repairs pages whose write failed or whose response was lost after the master already committed.
+// See reconcileChildDAH.
 func (s *Store) propagateConflictingDAHSignals(batchRecords []aerospike.BatchRecordIfc, txHashes []*chainhash.Hash, blockHeight uint32) error {
 	var aggErr error
 

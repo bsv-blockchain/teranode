@@ -486,7 +486,7 @@ Contains complete transaction metadata and first UTXO batch:
 | `spentUtxos` | Number of spent UTXOs in THIS record | Always |
 | `spentExtraRecs` | Number of child records fully spent | If outputs > `utxoBatchSize` |
 | `blockIDs`, `blockHeights`, `subtreeIdxs` | Block references | Always |
-| `dahVer` | Count of the master's `deleteAtHeight` writes and expression evaluations, not only changes: an expression setMined or longest-chain call with no stamp change still bumps it. Every writer bumps it, so page writes can be ordered. Absent means 0 | After the first `deleteAtHeight` write |
+| `dahVer` | Count of the master's `deleteAtHeight` writes and expression evaluations, not only changes: an expression setMined or longest-chain call with no stamp change still bumps it. Every writer bumps it, so page writes can be ordered. Absent means 0 | After the first evaluation of the master's `deleteAtHeight` |
 | `fee`, `sizeInBytes`, `isCoinbase`, etc. | Transaction metadata | Always |
 
 #### Child Records (Index 1+)

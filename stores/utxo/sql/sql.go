@@ -2404,6 +2404,22 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	return spends, nil
 }
 
+// deadlockRetriesExhaustedError is the error a retry loop returns after it gave up on a deadlock. It
+// carries the last deadlock as its cause. isDeadlock reports false for it, so a caller that retries on
+// isDeadlock does not retry an operation that has already used its retry budget, even though the cause
+// in the message still names the deadlock.
+type deadlockRetriesExhaustedError struct {
+	err *errors.Error
+}
+
+func (e *deadlockRetriesExhaustedError) Error() string {
+	return e.err.Error()
+}
+
+func (e *deadlockRetriesExhaustedError) Unwrap() error {
+	return e.err
+}
+
 // isDeadlock reports whether a database error is a lock the spend batch should
 // retry: a PostgreSQL deadlock (SQLSTATE 40P01), or a SQLite BUSY or LOCKED
 // result. The SQLite arm matches the result code, as isLockError below and
@@ -2420,6 +2436,11 @@ func isDeadlock(err error) bool {
 	if err == nil {
 		return false
 	}
+
+	if _, exhausted := err.(*deadlockRetriesExhaustedError); exhausted {
+		return false
+	}
+
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == usql.PgErrDeadlockDetected {
 		return true
@@ -3524,7 +3545,7 @@ func (s *Store) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked 
 		}
 
 		if attempt >= maxRetries {
-			return errors.NewStorageError("[Unspend] deadlock persisted after %d retries", maxRetries)
+			return &deadlockRetriesExhaustedError{errors.NewStorageError("[Unspend] deadlock persisted after %d retries", maxRetries, err)}
 		}
 
 		backoff := time.Duration(100<<attempt) * time.Millisecond

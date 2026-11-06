@@ -829,9 +829,10 @@ func TestUnspendRetryClearsPagesAfterFailedPageWrite(t *testing.T) {
 	floorRequirePagesAt(t, client, store, hash, 0)
 }
 
-// An Unspend that changes nothing on a paginated master writes none of its pages. The control
-// then stamps the master and unspends again: the DAHUNSET signal makes the pages get written.
-func TestUnspendWithoutASignalWritesNoPages(t *testing.T) {
+// An Unspend that changes nothing on a paginated master still reconciles every page, once per page
+// per evaluation, and leaves them as they were. The control then stamps the master and unspends
+// again: the DAHUNSET signal makes the pages get cleared.
+func TestUnspendWithoutASignalReconcilesEveryPage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping Aerospike integration test in short mode")
 	}
@@ -870,13 +871,14 @@ func TestUnspendWithoutASignalWritesNoPages(t *testing.T) {
 	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
 
 	require.NoError(t, store.Unspend(ctx, spends))
-	require.Zero(t, pageWrites.Load(), "an unspend that fires no signal must write no page")
+	require.Equal(t, int64(floorPaginatedOut-1), pageWrites.Load(), "an unspend that fires no signal must still write every page once")
+	floorRequirePagesAt(t, client, store, hash, 0)
 
 	floorSpendFirstOutput(ctx, t, store, parent)
 	floorForceStaleStamps(t, client, store, hash, floorCachedTip+retention, false)
 
 	require.NoError(t, store.Unspend(ctx, spends))
-	require.Equal(t, int64(floorPaginatedOut-1), pageWrites.Load(), "a DAHUNSET signal must write every page once")
+	require.Equal(t, int64(2*(floorPaginatedOut-1)), pageWrites.Load(), "a DAHUNSET signal must write every page once more")
 	floorRequirePagesAt(t, client, store, hash, 0)
 }
 
@@ -982,7 +984,7 @@ func TestUnspendStalePageWriteCannotOverwriteAClearedMaster(t *testing.T) {
 		})
 	})
 
-	t.Run("the unspend rewrites pages because an earlier page write failed", func(t *testing.T) {
+	t.Run("the unspend finds the pages stale after a failed page write", func(t *testing.T) {
 		run(t, 9, func(hash *chainhash.Hash) {
 			floorForceStaleStamps(t, client, store, hash, uint32(stamp), true)
 

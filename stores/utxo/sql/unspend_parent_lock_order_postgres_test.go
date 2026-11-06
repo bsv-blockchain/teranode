@@ -2,6 +2,7 @@ package sql
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -104,9 +105,20 @@ func (l *lockSequence) snapshot() []int {
 	return append([]int(nil), l.ids...)
 }
 
+func parentLocked(ctx context.Context, t *testing.T, store *Store, id int) bool {
+	t.Helper()
+
+	var locked bool
+
+	require.NoError(t, store.db.QueryRowContext(ctx, "SELECT locked FROM transactions WHERE id = $1", id).Scan(&locked))
+
+	return locked
+}
+
 // Unspend must lock each distinct parent once, in ascending id order, whatever order
 // the spends arrive in, so it cannot form a lock cycle with a spend batch that locks
-// the same parents in id order.
+// the same parents in id order. Passing flagAsLocked writes the locked flag on each
+// parent inside that same order.
 func TestUnspendLocksParentsInIDOrderOnce_Postgres(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Postgres integration test in short mode")
@@ -116,57 +128,74 @@ func TestUnspendLocksParentsInIDOrderOnce_Postgres(t *testing.T) {
 
 	require.NoError(t, store.SetBlockHeight(floorCachedTip))
 
-	parentA := createTwoOutputParent(ctx, t, store, "4ff7de8f0b6d5c4a3e2f1d0c9b8a7968574635241302f1e0d9c8b7a695847362")
-	parentB := createTwoOutputParent(ctx, t, store, "5aa7de8f0b6d5c4a3e2f1d0c9b8a7968574635241302f1e0d9c8b7a695847363")
+	for i, tc := range []struct {
+		name       string
+		flags      []bool
+		wantLocked bool
+	}{
+		{name: "no locked flag", flags: nil, wantLocked: false},
+		{name: "flagAsLocked true", flags: []bool{true}, wantLocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parentA := createTwoOutputParent(ctx, t, store, fmt.Sprintf("4ff7de8f0b6d5c4a3e2f1d0c9b8a7968574635241302f1e0d9c8b7a6958473%02d", i))
+			parentB := createTwoOutputParent(ctx, t, store, fmt.Sprintf("5aa7de8f0b6d5c4a3e2f1d0c9b8a7968574635241302f1e0d9c8b7a6958473%02d", i))
 
-	idA := floorRowID(ctx, t, store, *parentA.TxIDChainHash())
-	idB := floorRowID(ctx, t, store, *parentB.TxIDChainHash())
+			idA := floorRowID(ctx, t, store, *parentA.TxIDChainHash())
+			idB := floorRowID(ctx, t, store, *parentB.TxIDChainHash())
 
-	require.Less(t, idA, idB)
+			require.Less(t, idA, idB)
 
-	spends := spendParentOutputs(ctx, t, store, []parentOutput{{parentB, 0}, {parentA, 0}, {parentB, 1}})
+			spends := spendParentOutputs(ctx, t, store, []parentOutput{{parentB, 0}, {parentA, 0}, {parentB, 1}})
 
-	for _, o := range []parentOutput{{parentB, 0}, {parentA, 0}, {parentB, 1}} {
-		require.Zero(t, countUnspent(ctx, t, store, o.parent, o.vout), "setup: the output must be spent")
-	}
+			for _, o := range []parentOutput{{parentB, 0}, {parentA, 0}, {parentB, 1}} {
+				require.Zero(t, countUnspent(ctx, t, store, o.parent, o.vout), "setup: the output must be spent")
+			}
 
-	probe := func(id int) error {
-		txn, err := store.db.BeginTx(ctx, nil)
-		require.NoError(t, err)
+			require.False(t, parentLocked(ctx, t, store, idA), "setup: the first parent starts unlocked")
+			require.False(t, parentLocked(ctx, t, store, idB), "setup: the second parent starts unlocked")
 
-		defer func() { _ = txn.Rollback() }()
+			probe := func(id int) error {
+				txn, err := store.db.BeginTx(ctx, nil)
+				require.NoError(t, err)
 
-		_, err = txn.ExecContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR UPDATE NOWAIT", id)
+				defer func() { _ = txn.Rollback() }()
 
-		return err
-	}
+				_, err = txn.ExecContext(ctx, "SELECT id FROM transactions WHERE id = $1 FOR UPDATE NOWAIT", id)
 
-	seq := &lockSequence{}
+				return err
+			}
 
-	setDAHAfterLock = func(id int) {
-		if seq.record(id) != 1 {
-			return
-		}
+			seq := &lockSequence{}
 
-		err := probe(idA)
-		require.Error(t, err, "the lowest parent must be locked")
+			setDAHAfterLock = func(id int) {
+				if seq.record(id) != 1 {
+					return
+				}
 
-		var pgErr *pgconn.PgError
+				err := probe(idA)
+				require.Error(t, err, "the lowest parent must be locked")
 
-		require.True(t, errors.As(err, &pgErr), "unexpected error type: %v", err)
-		require.Equal(t, pgLockNotAvailable, pgErr.Code)
+				var pgErr *pgconn.PgError
 
-		require.NoError(t, probe(idB), "the higher parent must still be free")
-	}
+				require.True(t, errors.As(err, &pgErr), "unexpected error type: %v", err)
+				require.Equal(t, pgLockNotAvailable, pgErr.Code)
 
-	t.Cleanup(func() { setDAHAfterLock = nil })
+				require.NoError(t, probe(idB), "the higher parent must still be free")
+			}
 
-	require.NoError(t, store.Unspend(ctx, spends))
+			t.Cleanup(func() { setDAHAfterLock = nil })
 
-	require.Equal(t, []int{idA, idB}, seq.snapshot())
+			require.NoError(t, store.Unspend(ctx, spends, tc.flags...))
 
-	for _, o := range []parentOutput{{parentB, 0}, {parentA, 0}, {parentB, 1}} {
-		require.Equal(t, 1, countUnspent(ctx, t, store, o.parent, o.vout))
+			require.Equal(t, []int{idA, idB}, seq.snapshot())
+
+			for _, o := range []parentOutput{{parentB, 0}, {parentA, 0}, {parentB, 1}} {
+				require.Equal(t, 1, countUnspent(ctx, t, store, o.parent, o.vout))
+			}
+
+			require.Equal(t, tc.wantLocked, parentLocked(ctx, t, store, idA), "locked flag of the first parent")
+			require.Equal(t, tc.wantLocked, parentLocked(ctx, t, store, idB), "locked flag of the second parent")
+		})
 	}
 }
 

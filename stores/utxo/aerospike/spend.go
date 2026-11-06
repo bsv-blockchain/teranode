@@ -1524,9 +1524,8 @@ func (s *Store) SetDAHForChildRecords(txID *chainhash.Hash, childCount int, dah 
 // setDAHForChildRecordsAt is SetDAHForChildRecords with the master's delete-at-height version.
 // A known version makes each page write conditional on the page not already carrying a version at
 // or above it, and stamps the version on the page, so an earlier master state cannot overwrite a
-// later one. An unknown version writes unconditionally. A failed write marks the master in
-// pendingPages, and a complete write clears the mark.
-func (s *Store) setDAHForChildRecordsAt(txID *chainhash.Hash, childCount int, dah uint32, version dahVersion) (err error) {
+// later one. An unknown version writes unconditionally.
+func (s *Store) setDAHForChildRecordsAt(txID *chainhash.Hash, childCount int, dah uint32, version dahVersion) error {
 	if childCount == 0 {
 		return nil
 	}
@@ -1534,14 +1533,6 @@ func (s *Store) setDAHForChildRecordsAt(txID *chainhash.Hash, childCount int, da
 	if childDAHBeforeWrite != nil {
 		childDAHBeforeWrite()
 	}
-
-	defer func() {
-		if err != nil {
-			s.markPagesPending(txID, version)
-		} else {
-			s.clearPagesPending(txID, version)
-		}
-	}()
 
 	items := make([]*batchDAH, childCount)
 	group := completion.NewGroup(int32(childCount))
