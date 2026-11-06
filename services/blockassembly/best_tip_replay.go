@@ -787,7 +787,10 @@ func (b *BlockAssembler) goneForkBlocks(ctx context.Context, forkBlocks []blockH
 // the metadata of the pool's transactions, for example while block assembly is not on the best
 // tip yet, or the blockchain or UTXO store does not answer. Which of them to record is known
 // only after that read. A restart before the reorg's whole-pool mark, which ran on every reorg,
-// lost them the same way.
+// lost them the same way. A record that cannot be written does not hold the write back, so
+// they are lost only if their UTXO write fails too and a restart follows before a run writes
+// them; the reorg's whole-pool mark failing on the same UTXO store lost them the same way, as
+// the reset it fell back to, whose own mark fails too, kept them only until a restart.
 // The pool read covers the subtrees, not the intake queue, as the reset's whole-pool mark does.
 func (b *BlockAssembler) repairHeldTxsOfGoneBlocks(ctx context.Context, gone []blockHeaderWithMeta, best *model.BlockHeader) error {
 	if len(gone) > 0 && !b.skippedForkAtStart {
@@ -799,8 +802,11 @@ func (b *BlockAssembler) repairHeldTxsOfGoneBlocks(ctx context.Context, gone []b
 		if len(repair) > 0 {
 			b.addHeldRepair(repair)
 
+			// Without the record a restart could not find them again, so they are written now
+			// anyway: once written, nothing is left to record. A write that fails too keeps
+			// them in memory for the next run.
 			if err = b.saveSkippedForkMark(ctx, true); err != nil {
-				return err
+				b.logger.Errorf("[BlockAssembler] error recording %d held transactions of fork blocks whose subtree is gone, repairing them without the record: %v", len(b.skippedForkHeldRepair), err)
 			}
 		}
 	}

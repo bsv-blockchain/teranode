@@ -3175,18 +3175,76 @@ func TestMarkSkippedForkTxs_HeldRepairOfAGoneForkBlock(t *testing.T) {
 		require.Error(t, ba.repairHeldTxsOfGoneBlocks(ctx, []blockHeaderWithMeta{{header: f2, meta: f2Meta}}, c3))
 	})
 
-	// The record of the held transactions comes before their write: without it nothing is
-	// written, and F2 is not given up.
+	// The pending byte is recorded and the reorg from A2 to C3 completes, but every write of the
+	// record that lists Y fails. Y is written anyway, so once written nothing is left to record,
+	// and a restart loads it.
 	t.Run("the record of the held txs is refused", func(t *testing.T) {
-		items, client, f2, _, y := heldTxReorgSetup(t)
+		items, client, f2, c3, y := heldTxReorgSetup(t)
 		ba := items.blockAssembler
+		ctx := t.Context()
 
 		client.failListSave = true
-		ba.processNewBlockAnnouncement(t.Context())
+		ba.processNewBlockAnnouncement(ctx)
 
-		require.Zero(t, unminedSince(t, items, y), "Y is not written without its record")
+		requireBlockAssemblyTip(t, items, c3)
+		require.NotZero(t, unminedSince(t, items, y), "Y is written without its record")
+		require.Contains(t, ba.skippedForkBlocksMarked, *f2.Hash(), "and F2 given up")
+		require.Empty(t, ba.skippedForkHeldRepair)
+		require.False(t, ba.skippedForkWorkOwed())
+
+		ba.subtreeProcessor.Stop(context.Background())
+
+		restarted, err := startBlockAssembler(t, items, ba.settings, nil)
+		require.NoError(t, err)
+		t.Cleanup(func() { restarted.subtreeProcessor.Stop(context.Background()) })
+
+		require.True(t, restarted.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the restarted pool holds Y")
+	})
+
+	// The record lists Y before its write starts, so a restart during the write repairs Y.
+	t.Run("the record of the held txs comes before their write", func(t *testing.T) {
+		items, _, _, _, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		var atWrite []byte
+
+		ba.utxoStore = &partialWriteUtxoStore{Store: items.utxoStore, succeed: true, beforeWrite: func() {
+			if atWrite == nil {
+				var err error
+				atWrite, err = items.blockchainClient.GetState(ctx, SkippedForkMarkStateKey)
+				require.NoError(t, err)
+			}
+		}}
+		ba.processNewBlockAnnouncement(ctx)
+
+		require.Equal(t, append([]byte{1}, y.TxIDChainHash()[:]...), atWrite, "the record lists Y when its write starts")
+		require.NotZero(t, unminedSince(t, items, y))
+	})
+
+	// The write fails too: Y stays in memory, F2 is not given up, and the next run writes Y.
+	t.Run("the record and the write of the held txs fail", func(t *testing.T) {
+		items, client, f2, c3, y := heldTxReorgSetup(t)
+		ba := items.blockAssembler
+		ctx := t.Context()
+
+		client.failListSave = true
+		ba.utxoStore = &failingUtxoStore{Store: items.utxoStore, fail: "MarkTransactionsOnLongestChain"}
+		ba.processNewBlockAnnouncement(ctx)
+
+		require.Zero(t, unminedSince(t, items, y), "precondition: the write failed")
+		require.Equal(t, []chainhash.Hash{*y.TxIDChainHash()}, ba.skippedForkHeldRepair, "Y is kept for the next run")
 		require.NotContains(t, ba.skippedForkBlocksMarked, *f2.Hash())
 		require.True(t, ba.skippedForkMarkPending)
+
+		ba.utxoStore = items.utxoStore
+		ba.skippedForkMarkRetryAt = time.Time{}
+		ba.processNewBlockAnnouncement(ctx)
+
+		requireBlockAssemblyTip(t, items, c3)
+		require.NotZero(t, unminedSince(t, items, y), "the next run writes Y")
+		require.Contains(t, ba.skippedForkBlocksMarked, *f2.Hash())
+		require.False(t, ba.skippedForkWorkOwed())
 	})
 
 	// Z, which F2 mined but not on the longest chain, is unmined already and not written again;
