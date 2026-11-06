@@ -1716,6 +1716,9 @@ func (b *BlockAssembler) restampStaleBranch(ctx context.Context, branch []blockH
 				b.noteSkippedForkMarkFailure(time.Now())
 			}
 
+			// The failed write is the pass's one attempt, as a failed reset below is.
+			b.skippedForkMarkRan = true
+
 			return errors.NewProcessingError("[restampStaleBranch] error marking %d stale branch transactions as not on the longest chain", len(branchOnly), err)
 		}
 	}

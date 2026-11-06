@@ -4,7 +4,9 @@ import (
 	"context"
 	"io"
 	"runtime"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/ordishs/gocore"
@@ -3584,8 +3587,11 @@ func TestHandleResetRequests_RefusedResetIsRetried(t *testing.T) {
 		ba.requeueRefusedReset()
 		require.NotNil(t, ba.resetOwed, "not retried at once")
 
+		// A mark that keeps failing for another reason pushes its own back-off out; it does not
+		// hold the owed reset back.
 		client.failMarkSave = false
-		ba.skippedForkMarkRetryAt = time.Now().Add(-time.Millisecond)
+		ba.skippedForkMarkRetryAt = time.Now().Add(time.Hour)
+		ba.resetOwedRetryAt = time.Now().Add(-time.Millisecond)
 		ba.requeueRefusedReset()
 
 		var req resetRequest
@@ -3621,21 +3627,62 @@ func TestHandleResetRequests_RefusedResetIsRetried(t *testing.T) {
 		require.True(t, ba.resetOwed.FullReset, "and the other one, with its options")
 	})
 
-	// A second refusal, of a storage-triggered reset alone, keeps the reset owed before it.
+	// A second refusal, of a storage-triggered reset alone, keeps the reset owed before it, and
+	// backs the retry off twice as long.
 	t.Run("a second refusal keeps it", func(t *testing.T) {
 		items, client, _, _ := skippedForkSetup(t, true, true)
 		ba := items.blockAssembler
 		ctx := t.Context()
 		client.failMarkSave = true
 
-		for _, req := range []resetRequest{{FullReset: true}, {StorageTriggered: true}} {
+		for i, req := range []resetRequest{{FullReset: true}, {StorageTriggered: true}} {
 			req.ErrCh = make(chan error, 1)
 			ba.handleResetRequests(ctx, req)
 			require.Error(t, <-req.ErrCh)
+			require.Equal(t, skippedForkMarkRetryBase<<i, ba.resetOwedWait, "refusal %d", i+1)
 		}
 
 		require.NotNil(t, ba.resetOwed)
 		require.True(t, ba.resetOwed.FullReset, "the first refused reset is still owed")
+	})
+
+	// The reset that takes an owed one in runs with its options: a full reset's consistency scan,
+	// and the input validation of the unmined transactions it loads.
+	t.Run("a later reset runs with its options", func(t *testing.T) {
+		for _, owed := range []bool{false, true} {
+			items, client, _, y := skippedForkSetup(t, true, true)
+			ba := items.blockAssembler
+			ctx := t.Context()
+
+			z := replayPoolTx(y.TxIDChainHash(), 50)
+			_, err := items.utxoStore.(*utxosql.Store).Create(ctx, z, 1)
+			require.NoError(t, err)
+
+			if owed {
+				client.failMarkSave = true
+
+				refused := make(chan error, 1)
+				ba.handleResetRequests(ctx, resetRequest{ErrCh: refused, FullReset: true, ValidateInputs: true})
+				require.Error(t, <-refused)
+
+				client.failMarkSave = false
+			}
+
+			store := &resetOptionsStore{Store: items.utxoStore}
+			ba.utxoStore = store
+
+			answer := make(chan error, 1)
+			ba.handleResetRequests(ctx, resetRequest{ErrCh: answer})
+			require.NoError(t, <-answer)
+
+			if owed {
+				require.NotZero(t, store.scans.Load(), "the owed full reset's consistency scan ran")
+				require.NotZero(t, store.inputChecks.Load(), "the owed reset validated inputs")
+			} else {
+				require.Zero(t, store.scans.Load(), "precondition: a plain reset runs no consistency scan")
+				require.Zero(t, store.inputChecks.Load(), "precondition: a plain reset validates no inputs")
+			}
+		}
 	})
 
 	// A reset that runs while one is owed takes it in, so it does not run again.
@@ -3753,6 +3800,7 @@ func TestRestampStaleBranch_FailedResetKeepsTheReloadOwed(t *testing.T) {
 	require.Error(t, ba.restampStaleBranch(ctx, []blockHeaderWithMeta{{header: f, meta: fMeta}}, best))
 	require.True(t, ba.skippedForkReloadPending)
 	require.Equal(t, skippedForkMarkRetryBase, ba.skippedForkMarkWait, "the failed write is backed off")
+	require.True(t, ba.skippedForkMarkRan, "the failed write is the pass's one attempt")
 
 	ba.utxoStore = items.utxoStore
 	ba.noteSkippedForkMarkSuccess()
@@ -3773,4 +3821,25 @@ func TestRestampStaleBranch_FailedResetKeepsTheReloadOwed(t *testing.T) {
 
 	require.True(t, ba.subtreeProcessor.GetCurrentTxMap().Exists(*y.TxIDChainHash()), "the owed reload put Y in the pool")
 	require.False(t, ba.skippedForkWorkOwed())
+}
+
+// resetOptionsStore counts what only a reset's options cause: the consistency scan of a full
+// reset, and the input reads of a reset that validates inputs.
+type resetOptionsStore struct {
+	utxo.Store
+	scans       atomic.Int64
+	inputChecks atomic.Int64
+}
+
+func (s *resetOptionsStore) ScanInconsistentUnminedTxs() (utxo.ConsistencyScanIterator, error) {
+	s.scans.Add(1)
+	return s.Store.ScanInconsistentUnminedTxs()
+}
+
+func (s *resetOptionsStore) Get(ctx context.Context, hash *chainhash.Hash, f ...fields.FieldName) (*meta.Data, error) {
+	if slices.Contains(f, fields.TxInpoints) && slices.Contains(f, fields.Conflicting) {
+		s.inputChecks.Add(1)
+	}
+
+	return s.Store.Get(ctx, hash, f...)
 }

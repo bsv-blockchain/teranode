@@ -229,11 +229,14 @@ type BlockAssembler struct {
 	diskTxMapResetPending bool
 
 	// resetOwed holds the options of a reset that is not storage-triggered (after a failed
-	// queue drain, or a manual one) that handleResetRequests refused because the mark of
-	// skipped fork transactions it would owe could not be recorded. The heartbeat queues it
-	// again once the mark's back-off allows (requeueRefusedReset). Touched only by the main
-	// loop goroutine.
-	resetOwed *resetRequest
+	// queue drain, a ResetBlockAssembly call, or an invalid block block assembly built itself)
+	// that handleResetRequests refused because the mark of skipped fork transactions it would
+	// owe could not be recorded. The heartbeat queues it again once resetOwedRetryAt is past
+	// (requeueRefusedReset); resetOwedWait is the back-off, doubled on each refusal in a row.
+	// Touched only by the main loop goroutine.
+	resetOwed        *resetRequest
+	resetOwedWait    time.Duration
+	resetOwedRetryAt time.Time
 
 	// storageResetMinInterval is the least time between the end of one
 	// storage-triggered reset and the start of the next (zero means
@@ -802,9 +805,9 @@ drain:
 	// and the work owed again: the reset reads the best tip anew, and a block that became the
 	// best tip in between is marked by the run that ends the pass. A run that does not finish
 	// is not run a second time in the pass (runOwedSkippedForkWork).
-	// A refused reset stays owed, since the heartbeat took the request that raised it: a
-	// storage-triggered one as a reset that failed before the rotation (onResetDone), any
-	// other in resetOwed, which the heartbeat queues again after the back-off.
+	// A refused reset stays owed, since nothing else asks for it again: a storage-triggered one
+	// as a reset that failed before the rotation (onResetDone), any other in resetOwed, which
+	// the heartbeat queues again after its own back-off.
 	refuse := func(err error) {
 		b.skippedForkMarkPending = true
 		b.noteSkippedForkMarkFailure(time.Now())
@@ -828,6 +831,18 @@ drain:
 
 			b.resetOwed.FullReset = b.resetOwed.FullReset || req.FullReset
 			b.resetOwed.ValidateInputs = b.resetOwed.ValidateInputs || req.ValidateInputs
+		}
+
+		// Its own back-off, so a mark that keeps failing for another reason, which pushes
+		// skippedForkMarkRetryAt out on every pass, does not hold it back.
+		if b.resetOwed != nil {
+			if owed == nil {
+				b.resetOwedWait = skippedForkMarkRetryBase
+			} else {
+				b.resetOwedWait = retry.CappedExponentialBackoff(b.resetOwedWait, 2, skippedForkMarkRetryMax)
+			}
+
+			b.resetOwedRetryAt = time.Now().Add(b.resetOwedWait)
 		}
 
 		b.drainPendingInvalidations(ctx)
@@ -2602,10 +2617,10 @@ func (b *BlockAssembler) resetAfterDrainFailure() {
 }
 
 // requeueRefusedReset queues again, with its options, a reset handleResetRequests refused
-// (resetOwed), once the back-off of the mark of skipped fork transactions allows, so a record
-// that keeps failing does not refuse one reset after another.
+// (resetOwed), once its back-off is over (resetOwedRetryAt), so a record that keeps failing
+// does not refuse one reset after another.
 func (b *BlockAssembler) requeueRefusedReset() {
-	if b.resetOwed == nil || time.Now().Before(b.skippedForkMarkRetryAt) {
+	if b.resetOwed == nil || time.Now().Before(b.resetOwedRetryAt) {
 		return
 	}
 
