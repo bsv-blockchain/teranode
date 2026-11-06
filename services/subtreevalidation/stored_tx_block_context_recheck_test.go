@@ -4,12 +4,15 @@ package subtreevalidation
 
 import (
 	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-bt/v2/unlocker"
+	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
@@ -20,9 +23,143 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/txmetacache"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
+	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
+	utiltest "github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
+
+// TestKnownDefect_TxSeenBeforeIsNotRecheckedForFinalityInALowerBlock is the plain, step-by-step
+// version of the GAP-BV-047 proof (bitcoin-sv/teranode#5000). Everything is set up inline; the only
+// code called is production code.
+//
+// The rule (bitcoin-sv IsFinalTx): a tx with nLockTime = 101 and a non-final input sequence may go
+// in a block above 101, never in block 101 itself.
+//
+// The story:
+//   - The chain tip is at 100. A tx locked until 101 arrives. The node validates it for block 102,
+//     where it is final, and stores it as valid.
+//   - A competing block at 101 includes that tx. bitcoin-sv rejects the block (bad-txns-nonfinal).
+//   - Teranode finds the tx already validated and does not check finality again, so it accepts it.
+//
+// The first subtest is the control: a tx the node has NOT seen before, with the same lock, is
+// rejected by the very same block check. So the check works; it is skipped only for a tx the
+// node validated earlier at another height.
+func TestKnownDefect_TxSeenBeforeIsNotRecheckedForFinalityInALowerBlock(t *testing.T) {
+	const (
+		tipHeight      = uint32(100) // the node's chain tip
+		lockHeight     = uint32(101) // the tx's nLockTime: final only in blocks ABOVE 101
+		nextHeight     = uint32(102) // the height the node validates a new tx for
+		competingBlock = uint32(101) // the sibling block that includes the tx
+	)
+
+	ctx := t.Context()
+	now := uint32(time.Now().Unix()) //nolint:gosec
+
+	// 1. A node: settings, a real UTXO store (in-memory SQLite) at height 100, a real validator.
+	tSettings := utiltest.CreateBaseTestSettings(t)
+	tSettings.BlockAssembly.Disabled = true
+
+	storeURL, err := url.Parse("sqlitememory:///flat_finality_" + t.Name())
+	require.NoError(t, err)
+
+	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, tSettings, storeURL)
+	require.NoError(t, err)
+	require.NoError(t, utxoStore.SetBlockHeight(tipHeight))
+	require.NoError(t, utxoStore.SetMedianBlockTime(now))
+
+	txValidator, err := validator.New(ctx, ulogger.TestLogger{}, tSettings, utxoStore, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+
+	// The subtree validation server, the component that checks a block's transactions.
+	server := &Server{
+		logger:                ulogger.TestLogger{},
+		settings:              tSettings,
+		utxoStore:             utxoStore,
+		validatorClient:       txValidator,
+		policyRejectedTxCache: newTxPolicyRejectedCache(1024 * 1024),
+	}
+
+	privateKey, err := bec.NewPrivateKey()
+	require.NoError(t, err)
+
+	// newLockedTx stores an ordinary (non-coinbase) funding tx as mined in block 50, and returns a
+	// tx spending it with nLockTime = 101 and input sequence 0, so the lock is enforced. seed makes
+	// each funding tx, and so each locked tx, unique.
+	newLockedTx := func(seed byte) *bt.Tx {
+		const fundingBlock = uint32(50)
+
+		// The funding tx's own input points at a made-up earlier output. WithSkipExtendedInputs
+		// tells the store not to look that output up; only the funding tx's own output matters.
+		funding := bt.NewTx()
+		fundingInput := &bt.Input{PreviousTxOutIndex: 0, SequenceNumber: bt.DefaultSequenceNumber, UnlockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE})}
+		require.NoError(t, fundingInput.PreviousTxIDAdd(&chainhash.Hash{seed}))
+		funding.Inputs = append(funding.Inputs, fundingInput)
+		payToKey, err := bscript.NewP2PKHFromPubKeyBytes(privateKey.PubKey().Compressed())
+		require.NoError(t, err)
+		require.NoError(t, funding.PayTo(payToKey, 100_000))
+
+		_, err = utxoStore.Create(ctx, funding, fundingBlock,
+			utxostore.WithSkipExtendedInputs(true),
+			utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: fundingBlock, BlockHeight: fundingBlock, SubtreeIdx: 0}))
+		require.NoError(t, err)
+
+		tx := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(funding, 0, privateKey),
+			transactions.WithP2PKHOutputs(1, 75_000, privateKey.PubKey()),
+		)
+		tx.LockTime = lockHeight
+		tx.Inputs[0].SequenceNumber = 0
+		require.NoError(t, tx.FillAllInputs(ctx, &unlocker.Getter{PrivateKey: privateKey}))
+
+		// The consensus rule itself, as bitcoin-sv applies it: not final at 101, final at 102.
+		require.Error(t, util.IsTransactionFinal(tx, competingBlock, now), "rule: not final in block 101")
+		require.NoError(t, util.IsTransactionFinal(tx, nextHeight, now), "rule: final in block 102")
+
+		return tx
+	}
+
+	// checkBlock runs a block at blockHeight holding tx through the block path's transaction check
+	// (the one CheckBlockSubtrees uses), and returns its verdict: nil means accepted.
+	checkBlock := func(tx *bt.Tx, blockHeight uint32) error {
+		return server.processTransactionsInLevels(ctx, []*bt.Tx{tx.Clone()}, chainhash.Hash{}, chainhash.Hash{},
+			blockHeight, now, 0, map[uint32]bool{}, false)
+	}
+
+	t.Run("control: a tx the node has not seen is rejected in block 101", func(t *testing.T) {
+		unseenTx := newLockedTx(1)
+
+		err := checkBlock(unseenTx, competingBlock)
+
+		require.True(t, errors.Is(err, errors.ErrTxInvalid), "want TX_INVALID, got: %v", err)
+		require.True(t, errors.Is(err, errors.ErrNonFinal), "want NON_FINAL, got: %v", err)
+	})
+
+	t.Run("a tx the node validated for block 102 is rejected in block 101", func(t *testing.T) {
+		seenTx := newLockedTx(2)
+
+		// The tx arrives while the tip is at 100: the node validates it for block 102, where it
+		// is final, and stores it as valid (not conflicting).
+		_, err := txValidator.Validate(ctx, seenTx.Clone(), nextHeight)
+		require.NoError(t, err)
+
+		stored := &meta.Data{}
+		require.NoError(t, utxoStore.GetMeta(ctx, seenTx.TxIDChainHash(), stored))
+		require.False(t, stored.Conflicting, "stored as an ordinary valid tx")
+
+		// A competing block at 101 includes it.
+		err = checkBlock(seenTx, competingBlock)
+
+		// It is not final at 101, so the block must be rejected, as bitcoin-sv does.
+		require.True(t, errors.Is(err, errors.ErrTxInvalid),
+			"tx %s is locked until %d and was validated for block %d; block %d includes it and must reject it as non-final, got: %v",
+			seenTx.TxIDChainHash(), lockHeight, nextHeight, competingBlock, err)
+		require.True(t, errors.Is(err, errors.ErrNonFinal), "want NON_FINAL, got: %v", err)
+	})
+}
 
 // TestKnownDefect_SiblingBlockAtLockHeight_RejectsTxAcceptedForNextHeight proves that a tx the
 // node already accepted for one height is not re-checked for finality when a sibling block at a
