@@ -13,14 +13,21 @@
 // or close anything.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 const DEFAULTS = Object.freeze({
   staleDays: 90,
   closeDays: 14,
+  // The daily cron can start hours late, so a PR labelled by a delayed run
+  // would otherwise slip to day 15. The close check allows this much slack.
+  closeSlackHours: 6,
   closeCap: 25,
   staleLabel: 'stale',
   keepOpenLabel: 'keep-open',
+  // Marks the stale comment (the warning).
   marker: '<!-- stale-prs -->',
+  // Marks the close comment, so a failed close is retried without a second comment.
+  closeMarker: '<!-- stale-prs:close -->',
 });
 
 const TEAM_ASSOCIATIONS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
@@ -28,16 +35,22 @@ const EXTERNAL_ASSOCIATIONS = new Set(['CONTRIBUTOR', 'FIRST_TIME_CONTRIBUTOR', 
 const TEAM_PERMISSIONS = new Set(['admin', 'maintain', 'write']);
 
 // Timeline events that count as human activity when a User performs them.
-// Label changes are deliberately absent.
+// Of the label changes, only removing the stale label counts (see isActivityEvent).
 const ACTIVITY_EVENTS = new Set(['reopened', 'force_pushed', 'ready_for_review']);
 
 function config(overrides) {
   return { ...DEFAULTS, ...(overrides || {}) };
 }
 
-function staleMessage(cfg) {
+// The warning. idleDays below staleDays means someone added the stale label
+// by hand, so the first sentence must not claim 90 idle days.
+function staleMessage(cfg, idleDays = cfg.staleDays) {
+  const opening =
+    idleDays !== null && idleDays < cfg.staleDays
+      ? `This PR was labelled \`${cfg.staleLabel}\`.`
+      : `No activity on this PR for ${cfg.staleDays} days.`;
   return (
-    `No activity on this PR for ${cfg.staleDays} days. It will be closed in ${cfg.closeDays} days ` +
+    `${opening} It will be closed in ${cfg.closeDays} days ` +
     'unless there is a new commit, comment or review. ' +
     `To exempt it, add the \`${cfg.keepOpenLabel}\` label or ask a maintainer to.\n\n${cfg.marker}`
   );
@@ -49,7 +62,7 @@ function closeMessage(cfg, idleDays = cfg.staleDays + cfg.closeDays) {
   return (
     `Closed after ${idleDays} days without activity. ` +
     'Reopen it when you pick this back up. If the branch was force-pushed since, open a new PR instead.' +
-    `\n\n${cfg.marker}`
+    `\n\n${cfg.closeMarker}`
   );
 }
 
@@ -75,15 +88,39 @@ function maxTs(values) {
   return best;
 }
 
+// When the head commit last moved, as epoch ms. The commit date says when the
+// commit was made, not when it was pushed, so the earliest check suite on the
+// head commit (headPushedAt) stands in for the push time. A commit date in the
+// future is ignored when a push time is known, and otherwise clamped to now,
+// which keeps the PR active (fail safe). With no check suite data this is the
+// commit date.
+function headActivityAt(pr, now) {
+  const committed = ts(pr.headCommitDate);
+  const pushed = ts(pr.headPushedAt);
+  if (committed !== null && committed > now) return pushed !== null ? Math.min(pushed, now) : now;
+  return maxTs([committed, pushed === null ? null : Math.min(pushed, now)]);
+}
+
+function isJobComment(c, cfg) {
+  const body = c.body || '';
+  return body.includes(cfg.marker) || body.includes(cfg.closeMarker);
+}
+
+function isActivityEvent(e, cfg) {
+  if (!isHuman(e.actor)) return false;
+  return ACTIVITY_EVENTS.has(e.type) || (e.type === 'unlabeled' && e.label === cfg.staleLabel);
+}
+
 // Latest human activity on the PR, as epoch ms, or null when there is none.
-// Counts: PR creation by a human, the head commit date, comments, reviews and
-// review comments by User actors, and reopen / force-push / ready-for-review
-// events by User actors. Bot actors and this job's own comments never count.
-function lastHumanActivity(pr, cfg) {
-  const times = [ts(pr.headCommitDate)];
+// Counts: PR creation by a human, the head commit's push (headActivityAt),
+// comments, reviews and review comments by User actors, and reopen /
+// force-push / ready-for-review / removal of the stale label by User actors.
+// Bot actors and this job's own comments never count.
+function lastHumanActivity(pr, cfg, now) {
+  const times = [headActivityAt(pr, now)];
   if (isHuman(pr.author)) times.push(ts(pr.createdAt));
   for (const c of pr.comments) {
-    if (isHuman(c.author) && !(c.body || '').includes(cfg.marker)) times.push(ts(c.createdAt));
+    if (isHuman(c.author) && !isJobComment(c, cfg)) times.push(ts(c.createdAt));
   }
   for (const r of pr.reviews) {
     if (isHuman(r.author)) times.push(ts(r.submittedAt));
@@ -92,14 +129,30 @@ function lastHumanActivity(pr, cfg) {
     if (isHuman(c.author)) times.push(ts(c.createdAt));
   }
   for (const e of pr.events) {
-    if (ACTIVITY_EVENTS.has(e.type) && isHuman(e.actor)) times.push(ts(e.createdAt));
+    if (isActivityEvent(e, cfg)) times.push(ts(e.createdAt));
   }
   return maxTs(times);
 }
 
-// When the stale label was last added, from the timeline. Any actor counts.
+// When the stale label was last added, from the timeline. Any actor counts,
+// so a maintainer can add the label by hand to start the countdown early.
 function staleLabeledAt(pr, cfg) {
   return maxTs(pr.events.filter((e) => e.type === 'labeled' && e.label === cfg.staleLabel).map((e) => ts(e.createdAt)));
+}
+
+// When the job last warned about the current idle stretch: the latest stale
+// comment posted after the last human activity, or null. The job posts its
+// warning just before it adds the label, so this is matched against the
+// activity, not the label time.
+function warnedAt(pr, cfg, last) {
+  return maxTs(
+    pr.comments.filter((c) => (c.body || '').includes(cfg.marker)).map((c) => ts(c.createdAt)).filter((t) => t !== null && t > last),
+  );
+}
+
+// Whether the close comment was already posted at or after `from`.
+function closeCommentPosted(pr, cfg, from) {
+  return pr.comments.some((c) => (c.body || '').includes(cfg.closeMarker) && ts(c.createdAt) !== null && ts(c.createdAt) >= from);
 }
 
 // team | external | exempt, with a reason. Team means the author's
@@ -122,7 +175,7 @@ function classifyAuthor(pr) {
 // For an external PR: is it waiting on its author? True only when changes
 // were requested and the author has not pushed, commented or replied since
 // the latest human CHANGES_REQUESTED review.
-function waitingOnAuthor(pr) {
+function waitingOnAuthor(pr, now) {
   if (pr.reviewDecision !== 'CHANGES_REQUESTED') return { waiting: false, reason: 'waiting on a reviewer' };
   const login = pr.author.login;
   const requestedAt = maxTs(
@@ -133,7 +186,7 @@ function waitingOnAuthor(pr) {
   if (requestedAt === null) return { waiting: false, reason: 'changes requested, but the review was not found' };
   const byAuthor = (a) => isHuman(a) && a.login === login;
   const authorSince = [
-    ts(pr.headCommitDate),
+    headActivityAt(pr, now),
     ...pr.comments.filter((c) => byAuthor(c.author)).map((c) => ts(c.createdAt)),
     ...pr.reviews.filter((r) => byAuthor(r.author)).map((r) => ts(r.submittedAt)),
     ...pr.reviewComments.filter((c) => byAuthor(c.author)).map((c) => ts(c.createdAt)),
@@ -143,14 +196,14 @@ function waitingOnAuthor(pr) {
 }
 
 // Why this PR must never be labelled or closed, or null.
-function exemptionReason(pr, cfg) {
+function exemptionReason(pr, cfg, now) {
   if (pr.error) return `data error: ${pr.error}`;
   if (pr.labels.includes(cfg.keepOpenLabel)) return `\`${cfg.keepOpenLabel}\` label`;
   if (pr.reviewDecision === 'APPROVED') return 'approved';
   const author = classifyAuthor(pr);
   if (author.kind === 'exempt') return author.reason;
   if (author.kind === 'external') {
-    const w = waitingOnAuthor(pr);
+    const w = waitingOnAuthor(pr, now);
     if (!w.waiting) return `external author, ${w.reason}`;
   }
   return null;
@@ -165,14 +218,20 @@ function iso(t) {
 }
 
 // Decide one PR. Actions:
-//   stale   - add the stale label and post the stale comment
+//   stale   - post the stale comment and add the stale label
+//   warn    - labelled by someone else with no warning yet: post the stale comment
 //   close   - post the close comment and close (the branch is never deleted)
 //   unstale - remove the stale label, no comment
-//   wait    - labelled, close not due yet
+//   wait    - labelled and warned, close not due yet
 //   active  - human activity within staleDays
 //   exempt  - never labelled or closed (reason says why)
+//
+// The close countdown runs from the later of the label and the warning, so
+// the warning's "closed in 14 days" holds. closesOn is when the close check
+// first passes: closeDays after that, less the cron slack.
 function decide(pr, now, cfgIn) {
   const cfg = config(cfgIn);
+  const closeAfterMs = cfg.closeDays * DAY_MS - cfg.closeSlackHours * HOUR_MS;
   const author = classifyAuthor(pr);
   const base = {
     number: pr.number,
@@ -186,11 +245,11 @@ function decide(pr, now, cfgIn) {
     isDraft: Boolean(pr.isDraft),
   };
   const hasStale = pr.labels.includes(cfg.staleLabel);
-  const last = lastHumanActivity(pr, cfg);
+  const last = lastHumanActivity(pr, cfg, now);
   const idleDays = last === null ? null : days(now - last);
   const withIdle = { ...base, lastActivity: iso(last), idleDays };
 
-  const exempt = exemptionReason(pr, cfg);
+  const exempt = exemptionReason(pr, cfg, now);
   if (exempt) {
     // A PR that became exempt after it was labelled (keep-open added, approved)
     // loses the label. Data errors leave everything as it is.
@@ -207,10 +266,22 @@ function decide(pr, now, cfgIn) {
     const labeledDays = days(now - labeledAt);
     const out = { ...withIdle, labeledAt: iso(labeledAt), labeledDays };
     if (last > labeledAt) return { ...out, action: 'unstale', reason: 'human activity after the label' };
-    if (now - labeledAt >= cfg.closeDays * DAY_MS) {
-      return { ...out, action: 'close', reason: `labelled ${labeledDays} days ago, no human activity since` };
+    const warned = warnedAt(pr, cfg, last);
+    if (warned === null) {
+      // Labelled by hand (or the warning is gone): warn now and count from here.
+      return { ...out, action: 'warn', reason: 'labelled, but no stale comment yet', closesOn: iso(now + closeAfterMs) };
     }
-    return { ...out, action: 'wait', reason: `labelled ${labeledDays} days ago, closes in ${cfg.closeDays - labeledDays} days` };
+    const from = Math.max(labeledAt, warned);
+    const closing = { ...out, warnedAt: iso(warned), closesOn: iso(from + closeAfterMs) };
+    if (now - from >= closeAfterMs) {
+      return {
+        ...closing,
+        action: 'close',
+        reason: `labelled ${labeledDays} days ago, no human activity since`,
+        closeCommentPosted: closeCommentPosted(pr, cfg, from),
+      };
+    }
+    return { ...closing, action: 'wait', reason: `labelled ${labeledDays} days ago, closes on ${iso(from + closeAfterMs).slice(0, 10)}` };
   }
 
   if (now - last >= cfg.staleDays * DAY_MS) {
@@ -218,9 +289,9 @@ function decide(pr, now, cfgIn) {
       ...withIdle,
       action: 'stale',
       reason: `no human activity for ${idleDays} days`,
-      // Labelled now, it closes closeDays from now if nothing happens. A dry
-      // run never labels, so it reports that date instead of a close.
-      closesOn: iso(now + cfg.closeDays * DAY_MS),
+      // Labelled now, the close check first passes on this date if nothing
+      // happens. A dry run never labels, so it reports that date instead.
+      closesOn: iso(now + closeAfterMs),
       // Already idle for staleDays + closeDays: had the job been running, this
       // PR would be closed by now.
       pastCloseThreshold: now - last >= (cfg.staleDays + cfg.closeDays) * DAY_MS,
@@ -299,10 +370,19 @@ function renderSummary(result, opts) {
         'Author',
         'Last human activity',
         'Idle days',
-        `Closes on, if labelled now and nothing happens`,
+        `Closes on, if labelled today and nothing happens`,
         `Idle ${cfg.staleDays + cfg.closeDays}+ days already`,
       ],
       stale.map((d) => [prRef(d, repo), who(d), date(d.lastActivity), d.idleDays, date(d.closesOn), d.pastCloseThreshold ? 'yes' : 'no']),
+    ),
+  );
+
+  const warn = by('warn');
+  out.push(`### ${live ? 'Warned' : 'Would warn'}: \`${cfg.staleLabel}\` label without a stale comment (${warn.length})\n`);
+  out.push(
+    table(
+      ['PR', 'Author', 'Labelled', 'Idle days', 'Closes on, if nothing happens'],
+      warn.map((d) => [prRef(d, repo), who(d), date(d.labeledAt), d.idleDays, date(d.closesOn)]),
     ),
   );
 
@@ -375,7 +455,7 @@ query($owner: String!, $repo: String!, $after: String) {
         number title isDraft createdAt authorAssociation reviewDecision
         author { ${ACTOR} }
         labels(first: 50) { nodes { name } }
-        commits(last: 1) { nodes { commit { committedDate } } }
+        commits(last: 1) { nodes { commit { committedDate checkSuites(first: 20) { nodes { createdAt } } } } }
         comments(last: 50) { nodes { createdAt body author { ${ACTOR} } } }
         reviews(last: 50) { nodes { state submittedAt author { ${ACTOR} } } }
         reviewThreads(last: 30) { nodes { comments(last: 10) { nodes { createdAt author { ${ACTOR} } } } } }
@@ -411,6 +491,12 @@ function nodes(conn) {
   return (conn && conn.nodes ? conn.nodes : []).filter(Boolean);
 }
 
+function earliest(values) {
+  const valid = values.map((v) => ({ v, t: ts(v) })).filter((x) => x.t !== null);
+  if (valid.length === 0) return null;
+  return valid.reduce((a, b) => (b.t < a.t ? b : a)).v;
+}
+
 // GraphQL PR node -> the shape decide() reads.
 function normalize(node) {
   const head = nodes(node.commits)[0];
@@ -425,6 +511,9 @@ function normalize(node) {
     reviewDecision: node.reviewDecision,
     labels: nodes(node.labels).map((l) => l.name),
     headCommitDate: head && head.commit ? head.commit.committedDate : null,
+    // Every push creates check suites on the head commit, so the earliest one
+    // approximates the push time. null when there are none.
+    headPushedAt: head && head.commit ? earliest(nodes(head.commit.checkSuites).map((s) => s.createdAt)) : null,
     comments: nodes(node.comments).map((c) => ({ createdAt: c.createdAt, body: c.body, author: actor(c.author) })),
     reviews: nodes(node.reviews).map((r) => ({ state: r.state, submittedAt: r.submittedAt, author: actor(r.author) })),
     reviewComments: nodes(node.reviewThreads).flatMap((t) =>
@@ -494,14 +583,23 @@ async function apply(github, owner, repo, d, cfg) {
   const issue_number = d.number;
   const ref = `${owner}/${repo}#${d.number}`;
   if (d.action === 'stale') {
+    // Warn first: if adding the label fails, the next run warns again, which
+    // is harmless. The other order could close a PR whose author was never warned.
+    await github.rest.issues.createComment({ owner, repo, issue_number, body: staleMessage(cfg, d.idleDays) });
     await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [cfg.staleLabel] });
-    await github.rest.issues.createComment({ owner, repo, issue_number, body: staleMessage(cfg) });
     return `labelled ${ref}`;
   }
+  if (d.action === 'warn') {
+    await github.rest.issues.createComment({ owner, repo, issue_number, body: staleMessage(cfg, d.idleDays) });
+    return `warned ${ref}`;
+  }
   if (d.action === 'close') {
-    await github.rest.issues.createComment({ owner, repo, issue_number, body: closeMessage(cfg, d.idleDays) });
+    // A close comment from an earlier run whose close failed is not repeated.
+    if (!d.closeCommentPosted) {
+      await github.rest.issues.createComment({ owner, repo, issue_number, body: closeMessage(cfg, d.idleDays) });
+    }
     await github.rest.pulls.update({ owner, repo, pull_number: d.number, state: 'closed' });
-    return `closed ${ref}`;
+    return d.closeCommentPosted ? `closed ${ref} (close comment already posted)` : `closed ${ref}`;
   }
   if (d.action === 'unstale') {
     await github.rest.issues.removeLabel({ owner, repo, issue_number, name: cfg.staleLabel });
@@ -617,6 +715,7 @@ module.exports = {
   staleMessage,
   closeMessage,
   lastHumanActivity,
+  headActivityAt,
   classifyAuthor,
   waitingOnAuthor,
   decide,

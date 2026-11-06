@@ -33,6 +33,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
+  # checks: read for the head commit's check suites, which date the last push.
+  checks: read
   contents: read
   pull-requests: write
   issues: write

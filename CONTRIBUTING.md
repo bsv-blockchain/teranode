@@ -39,15 +39,22 @@ The commands for this are shown
 
 A daily job labels and closes pull requests that nobody is working on.
 
-* After 90 days without human activity a PR gets the `stale` label and a comment.
+* After 90 days without human activity a PR gets a comment and the `stale` label.
   Drafts are included.
-* 14 days after that, if there is still no activity, it is closed. The branch is
-  not deleted; reopen the PR when you pick the work back up.
-* Activity means a new commit, a comment, a review, a review comment or a
-  reopen by a person. Bot comments and label changes do not count.
+* 14 days after the comment, if there is still no activity, it is closed. The
+  branch is not deleted; reopen the PR when you pick the work back up.
+* Activity means a push, a comment, a review, a review comment, a reopen, or
+  removing the `stale` label, by anyone who isn't a bot. Bot comments and other
+  label changes do not count.
+* To save a labelled PR, push or comment. The next run removes the `stale` label
+  and the 90 days start again. Maintainers can also remove the label by hand.
 * A PR is never labelled or closed if it has the `keep-open` label, or while it
   is approved. Outside contributors can't add labels: ask a maintainer to add
-  `keep-open`. Any comment also restarts the clock.
+  `keep-open`.
+* Maintainers can add the `stale` label by hand to start the countdown early. The
+  next run posts the usual comment, and the PR is closed 14 days after that
+  comment unless there is activity. On an exempt PR (`keep-open`, approved, or an
+  outside PR waiting on a reviewer) the next run removes the label instead.
 * A PR from an outside contributor is only closed when it is waiting on its
   author: changes were requested and the author has not pushed or replied since.
   A PR waiting on a reviewer is never closed.
