@@ -3094,8 +3094,10 @@ func (s *Service) writeVerifiedMarkers(ctx context.Context, updates map[string]*
 // buildVerifiedMarkerRecords builds one UPDATE_ONLY MapPutItems write per
 // queued record, adding every queued child to deletedChildren, under a filter
 // that holds only when each child is named as the spender by at least one of
-// the outputs it claims on that record (markerFilter). It returns the records
-// with the update keys they were built from, index-aligned.
+// the outputs it claims on that record (markerFilter). Each marker carries
+// fields.DeletedChildVerified, not the legacy true, because only a verified
+// marker may be checked against the incoming spender (see teranode.lua). It
+// returns the records with the update keys they were built from, index-aligned.
 func (s *Service) buildVerifiedMarkerRecords(updates map[string]*parentUpdateInfo) ([]aerospike.BatchRecordIfc, []string) {
 	mapPolicy := aerospike.DefaultMapPolicy()
 	batchRecords := make([]aerospike.BatchRecordIfc, 0, len(updates))
@@ -3104,7 +3106,7 @@ func (s *Service) buildVerifiedMarkerRecords(updates map[string]*parentUpdateInf
 	for source, info := range updates {
 		items := make(map[interface{}]interface{}, len(info.childHashes))
 		for _, childHash := range info.childHashes {
-			items[childHash.String()] = true
+			items[childHash.String()] = fields.DeletedChildVerified
 		}
 
 		policy := aerospike.NewBatchWritePolicy()

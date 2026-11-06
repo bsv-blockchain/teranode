@@ -26,6 +26,24 @@ local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
 local BIN_LAST_SPENT_STATE = "lastSpentState"  -- Tracks last signaled state: "ALLSPENT" or "NOTALLSPENT"
 local BIN_DELETED_CHILDREN = "deletedChildren"  -- Tracks which child transactions have already been deleted
 
+-- Values stored in BIN_DELETED_CHILDREN. The key is the pruned child's txid;
+-- the value says which pruner wrote it, and so how far it can be trusted.
+--
+--   true (legacy): written by the pruner before replay markers were verified,
+--   and also by addDeletedChildren. It was written for EVERY deleted child,
+--   conflicting losers included, so it is only proof of a replay when the
+--   output still names that child as its spender. It is honoured only in the
+--   already-spent-with-the-same-data branch, exactly as the old Lua did.
+--
+--   DELETED_CHILD_VERIFIED (2): written by the current pruner under a filter
+--   that held only while an output of this record named the child as its
+--   spender. That makes it proof on its own, so it is checked against the
+--   incoming spender before anything else and survives an unspend.
+--
+-- Older Lua tests the value for truthiness, so a 2 behaves like true there and
+-- a downgrade keeps the old protection.
+local DELETED_CHILD_VERIFIED = 2
+
 -- Status constants
 local STATUS_OK = "OK"
 local STATUS_ERROR = "ERROR"
@@ -361,17 +379,23 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
 
         -- Reject a replay of a transaction the pruner already removed.
         --
-        -- Keyed on the INCOMING spender, not on what this utxo currently
-        -- records, and checked before every other answer: the record-level ones
-        -- above, the utxo lookup and hash check, frozen, and the already-spent
-        -- handling. Nesting it under bytes_equal(existingSpendingData,
-        -- spendingData) let unspend disarm it: unspend resets the utxo to its
-        -- bare hash and deliberately leaves BIN_DELETED_CHILDREN alone, so the
-        -- marker survived but matched nothing. Matching the spender means the
-        -- rejection survives any rollback of the spend it protects.
+        -- A verified marker (DELETED_CHILD_VERIFIED) is keyed on the INCOMING
+        -- spender, not on what this utxo currently records, and checked before
+        -- every other answer: the record-level ones above, the utxo lookup and
+        -- hash check, frozen, and the already-spent handling. Nesting it under
+        -- bytes_equal(existingSpendingData, spendingData) let unspend disarm it:
+        -- unspend resets the utxo to its bare hash and deliberately leaves
+        -- BIN_DELETED_CHILDREN alone, so the marker survived but matched
+        -- nothing. Matching the spender means the rejection survives any
+        -- rollback of the spend it protects.
+        --
+        -- A legacy marker (true) is NOT checked here. The old pruner wrote one
+        -- for conflicting losers too, so keying it on the spender would refuse
+        -- a loser's later, valid spend of an output it never held. It is
+        -- checked in the already-spent branch below instead.
         if deletedChildren ~= nil and spendingData ~= nil then
             local childTxID = spendingDataBytesToTxHex(spendingData)
-            if deletedChildren[childTxID] then
+            if deletedChildren[childTxID] == DELETED_CHILD_VERIFIED then
                 local error = map()
 
                 error[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
@@ -433,7 +457,21 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         if existingSpendingData then
 
             if bytes_equal(existingSpendingData, spendingData) then
-                -- Already spent with same data
+                -- Already spent with same data. A legacy marker for this spender
+                -- is a replay here, because the output names it: the old Lua's
+                -- rule, kept so pre-upgrade markers protect what they did.
+                if deletedChildren ~= nil and deletedChildren[spendingDataBytesToTxHex(existingSpendingData)] then
+                    local error = map()
+
+                    error[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
+                    error[FIELD_MESSAGE] = MSG_INVALID_SPEND
+                    error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(existingSpendingData)
+
+                    errors[idx] = error
+
+                    goto continue
+                end
+
                 list.append(idempotent, idx)
                 goto continue
             elseif isFrozen(existingSpendingData) then
@@ -1226,6 +1264,8 @@ function addDeletedChildren(rec, childHashes)
         deletedChildren = map()
     end
 
+    -- Unverified: nothing here checks that this record's outputs name the
+    -- child, so it writes the legacy value (see DELETED_CHILD_VERIFIED).
     for childHash in list.iterator(childHashes) do
         deletedChildren[childHash] = true
     end

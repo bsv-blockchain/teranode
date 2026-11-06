@@ -169,6 +169,11 @@ func testPrunerReplayProtection(t *testing.T, paginated, markerFailure, ttl, uns
 		require.NoError(t, err)
 		require.Contains(t, pageRecord.Bins[fields.DeletedChildren.String()], child.TxID(), "the spending page must carry replay protection")
 
+		pageMarkers, ok := pageRecord.Bins[fields.DeletedChildren.String()].(map[interface{}]interface{})
+		require.True(t, ok)
+		require.Equal(t, fields.DeletedChildVerified, pageMarkers[child.TxID()],
+			"the pruner writes the verified value, the only one the spend checks against the incoming spender")
+
 		if paginated {
 			masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parent.TxIDChainHash().CloneBytes())
 			require.NoError(t, err)
@@ -427,7 +432,7 @@ func TestPrunedReplayRollbackKeepsSiblingHistoricalSpend(t *testing.T) {
 
 	// P carries C's marker, Q does not, and C is still present.
 	require.NoError(t, client.Put(nil, pKey, aerospike.BinMap{
-		fields.DeletedChildren.String(): map[interface{}]interface{}{c.TxID(): true},
+		fields.DeletedChildren.String(): map[interface{}]interface{}{c.TxID(): fields.DeletedChildVerified},
 	}))
 
 	pRecord, err := client.Get(nil, pKey)

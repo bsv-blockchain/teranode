@@ -2255,7 +2255,8 @@ func TestRespendExpiredChild(t *testing.T) {
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
 
-	// mark the child as deleted
+	// mark the child as deleted, with the legacy value an older pruner wrote:
+	// the output names this spender, so even a legacy marker is a replay here.
 	bin := aerospike.NewBin(fields.DeletedChildren.String(), map[string]bool{
 		spendingTx1.TxIDChainHash().String(): true,
 	})
@@ -2270,6 +2271,106 @@ func TestRespendExpiredChild(t *testing.T) {
 	// on it to roll back the sibling spends of the same transaction.
 	assert.ErrorIs(t, spend[0].Err, errors.ErrUtxoSpendingTxPruned)
 	assert.Contains(t, spend[0].Err.Error(), "spending transaction was pruned")
+}
+
+// TestReplayMarkerVersions pins how the Lua spend reads the two values a
+// deletedChildren marker can hold.
+//
+// The pruner before replay markers were verified wrote true for every deleted
+// child, conflicting losers included, and the old Lua honoured it only when the
+// output still named that child. The current pruner writes
+// fields.DeletedChildVerified, under a filter that held while the output named
+// the child, and that value is checked against the incoming spender. A legacy
+// marker for a loser L must therefore never refuse L's spend of an output L
+// does not hold: doing so turns a block the rest of the network accepts into an
+// invalid one on a node that kept pre-upgrade data.
+func TestReplayMarkerVersions(t *testing.T) {
+	type outputState int
+
+	const (
+		outputUnspent outputState = iota
+		outputSpentByOther
+		outputSpentBySpender
+	)
+
+	cases := []struct {
+		name   string
+		marker interface{}
+		output outputState
+		// wantPruned: the spend answers ErrUtxoSpendingTxPruned; otherwise
+		// wantSpent says whether it answers ErrSpent or succeeds.
+		wantPruned bool
+		wantSpent  bool
+	}{
+		{name: "legacy_marker_loser_output_held_by_other", marker: true, output: outputSpentByOther, wantSpent: true},
+		{name: "legacy_marker_loser_output_unspent", marker: true, output: outputUnspent},
+		{name: "legacy_marker_output_names_spender", marker: true, output: outputSpentBySpender, wantPruned: true},
+		{name: "verified_marker_output_unspent", marker: fields.DeletedChildVerified, output: outputUnspent, wantPruned: true},
+		{name: "verified_marker_output_held_by_other", marker: fields.DeletedChildVerified, output: outputSpentByOther, wantPruned: true},
+		{name: "verified_marker_output_names_spender", marker: fields.DeletedChildVerified, output: outputSpentBySpender, wantPruned: true},
+	}
+
+	for _, mode := range []struct {
+		name        string
+		expressions bool
+	}{{name: "lua"}, {name: "expressions", expressions: true}} {
+		t.Run(mode.name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if mode.expressions {
+				// The expression fast path needs one utxo per record. A marker
+				// hit there is FILTERED_OUT and re-issued through Lua.
+				tSettings.Aerospike.EnableSpendFilterExpressions = true
+				tSettings.UtxoStore.UtxoBatchSize = 1
+			}
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+
+			for i, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					parent := bt.NewTx()
+					require.NoError(t, parent.From("1111111111111111111111111111111111111111111111111111111111111111", uint32(i), "51", 30000))
+					require.NoError(t, parent.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 4000))
+
+					_, err := store.Create(ctx, parent, 0)
+					require.NoError(t, err)
+
+					spender := utxo2.GetSpendingTx(parent, 0)
+					other := utxo2.GetSpendingTx(parent, 0)
+					require.NotEqual(t, spender.TxIDChainHash().String(), other.TxIDChainHash().String())
+
+					switch tc.output {
+					case outputSpentByOther:
+						_, err = store.Spend(ctx, other, 1)
+						require.NoError(t, err)
+					case outputSpentBySpender:
+						_, err = store.Spend(ctx, spender, 1)
+						require.NoError(t, err)
+					}
+
+					key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parent.TxIDChainHash().CloneBytes())
+					require.NoError(t, err)
+					require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.DeletedChildren.String(),
+						map[interface{}]interface{}{spender.TxIDChainHash().String(): tc.marker})))
+
+					_, err = store.Spend(ctx, spender, 1)
+
+					switch {
+					case tc.wantPruned:
+						require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
+					case tc.wantSpent:
+						require.Error(t, err)
+						require.NotErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "a legacy marker for a spender the output never named must not answer as a replay")
+						require.ErrorIs(t, err, errors.ErrSpent)
+					default:
+						require.NoError(t, err, "a legacy marker for a spender the output never named must not refuse its spend")
+					}
+				})
+			}
+		})
+	}
 }
 
 func TestStore_AerospikeTwoPhaseCommit(t *testing.T) {

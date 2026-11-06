@@ -758,8 +758,8 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 	prunedChild := &chainhash.Hash{0x03}
 
 	// Planted with the pruner's own write, so the probe proves the native spend
-	// reads the marker in the key format the pruner writes.
-	if !s.probePlantMarker(ctx, policy, markerKey, prunedChild) {
+	// reads the marker in the key format and value the pruner writes.
+	if !s.probePlantMarker(ctx, policy, markerKey, prunedChild, fields.DeletedChildVerified) {
 		return false
 	}
 
@@ -779,6 +779,36 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 	if !rejectsWith(markerRes, LuaErrorCodeInvalidSpend) {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe: pruned-child spend rejected with the wrong error (%+v), want %s; falling back to UDF path",
 			markerRes, LuaErrorCodeInvalidSpend)
+		return false
+	}
+
+	// Stage 1b: a legacy marker (true) for a child the output never named must
+	// NOT reject that child's spend. The pre-upgrade pruner wrote one for
+	// conflicting losers too, and a dispatcher that keys every marker on the
+	// incoming spender would refuse a loser's later, valid spend, and with it a
+	// block the rest of the network accepts.
+	legacyKey, legacyHashes, legacyCleanup, built := s.buildProbeRecord(policy, "legacy-marker probe", probeBlockHeight, probeVout)
+	if !built {
+		return false
+	}
+
+	defer legacyCleanup()
+
+	legacyChild := &chainhash.Hash{0x05}
+
+	if !s.probePlantMarker(ctx, policy, legacyKey, legacyChild, true) {
+		return false
+	}
+
+	legacyRes, ok := s.nativeProbeSpend(ctx, policy, "legacy-marker probe", legacyKey, legacyHashes[0],
+		spendpkg.NewSpendingData(legacyChild, 0), probeBlockHeight, probeVout)
+	if !ok {
+		return false
+	}
+
+	if legacyRes.Status != LuaStatusOK || len(legacyRes.Errors) != 0 {
+		s.logger.Warnf("[teranode-native-op] legacy-marker probe: a spend of an unspent output by a child with only a legacy marker was refused (%+v); "+
+			"the native dispatcher treats unverified markers as proof of a replay; falling back to UDF path", legacyRes)
 		return false
 	}
 
@@ -823,15 +853,16 @@ func (s *Store) probeNativeReplayProtection(ctx context.Context, policy *aerospi
 
 // probePlantMarker records child as pruned on a probe record with the write the
 // pruner makes (buildVerifiedMarkerRecords): a plain MapPutItems of
-// {child.String(): true} into the deletedChildren bin. The probe then proves the
-// native spend honours the marker in the format the pruner actually writes.
-func (s *Store) probePlantMarker(ctx context.Context, policy *aerospike.WritePolicy, key *aerospike.Key, child *chainhash.Hash) bool {
+// {child.String(): value} into the deletedChildren bin. value is
+// fields.DeletedChildVerified for the marker the pruner writes today, or true
+// for the legacy one an older pruner left behind.
+func (s *Store) probePlantMarker(ctx context.Context, policy *aerospike.WritePolicy, key *aerospike.Key, child *chainhash.Hash, value interface{}) bool {
 	if ctx.Err() != nil {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe aborted by context: %v", ctx.Err())
 		return false
 	}
 
-	items := map[interface{}]interface{}{child.String(): true}
+	items := map[interface{}]interface{}{child.String(): value}
 
 	if _, opErr := s.client.Operate(policy, key, aerospike.MapPutItemsOp(aerospike.DefaultMapPolicy(), fields.DeletedChildren.String(), items)); opErr != nil {
 		s.logger.Warnf("[teranode-native-op] replay-marker probe could not write %q: %v", fields.DeletedChildren.String(), opErr)

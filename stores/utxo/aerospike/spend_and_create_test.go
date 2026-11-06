@@ -97,7 +97,7 @@ func TestSpendAndCreateRecheckRemovesARecreatedPrunedTransaction(t *testing.T) {
 				wrapped.prune = func() {
 					if !tc.parentPruned {
 						require.NoError(t, client.Put(nil, parentKey, aerospike.BinMap{
-							fields.DeletedChildren.String(): map[interface{}]interface{}{child.TxIDChainHash().String(): true},
+							fields.DeletedChildren.String(): map[interface{}]interface{}{child.TxIDChainHash().String(): fields.DeletedChildVerified},
 						}))
 					}
 
@@ -197,7 +197,7 @@ func TestSequentialSpendAndCreate_MarkedReplayCleanup(t *testing.T) {
 
 			parentKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parentHash.CloneBytes())
 			require.NoError(t, err)
-			require.NoError(t, client.PutBins(nil, parentKey, aerospike.NewBin(fields.DeletedChildren.String(), map[string]bool{childHash.String(): true})))
+			require.NoError(t, client.PutBins(nil, parentKey, aerospike.NewBin(fields.DeletedChildren.String(), map[string]int{childHash.String(): fields.DeletedChildVerified})))
 
 			_, _, err = utxo.SequentialSpendAndCreate(ctx, logger, store, child, height)
 			require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is rejected at the spend")
