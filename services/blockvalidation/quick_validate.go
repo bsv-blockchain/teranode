@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -250,6 +251,104 @@ func blockIDToUint32(id uint64, blockHash string) (uint32, error) {
 		return 0, errors.NewProcessingError("[%s] assigned block id %d exceeds uint32", blockHash, id, err)
 	}
 	return v, nil
+}
+
+// setQuickBlockID gives block the id quick validation stamps on its transactions,
+// once per block, from the first batch. firstTx is the block's first non-coinbase
+// transaction. It returns the id when it was recovered from firstTx, and 0 when the
+// id came from AssignBlockID or was already set.
+//
+// A block retried after its transactions were stamped must keep the id they carry,
+// so the id is first read back from firstTx's recorded block ids. The reservation
+// alone cannot be trusted for that: sweepStaleReservations deletes it after an hour,
+// and AssignBlockID would then hand out a new id the stamped transactions do not
+// carry. firstTx is not necessarily this block's alone, though. A fork block holding
+// the same transaction stamps its own id on it, so the recorded ids can belong to
+// other blocks, and StoreBlock refuses an id another block is stored under. Taking
+// the first recorded id regardless used to wedge the block: every retry picked the
+// fork's id again and was refused again. blockIDFromMinedTx picks out the id that
+// can be this block's.
+func (u *BlockValidation) setQuickBlockID(ctx context.Context, block *model.Block, firstTx *bt.Tx, caller string) (uint64, error) {
+	existingMeta, err := u.utxoStore.Get(ctx, firstTx.TxIDChainHash(), fields.BlockIDs)
+	if err == nil && existingMeta != nil && len(existingMeta.BlockIDs) > 0 {
+		id, ok, err := u.blockIDFromMinedTx(ctx, block, firstTx.TxIDChainHash(), existingMeta.BlockIDs, caller)
+		if err != nil {
+			return 0, err
+		}
+
+		if ok {
+			block.ID = id
+			u.logger.Debugf("[%s][%s] reusing BlockID %d from retry", caller, block.Hash().String(), id)
+
+			return uint64(id), nil
+		}
+	}
+
+	if block.ID != 0 {
+		return 0, nil
+	}
+
+	assigned, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
+	if err != nil {
+		return 0, errors.NewProcessingError("[%s][%s] failed to assign block ID", caller, block.Hash().String(), err)
+	}
+
+	block.ID, err = blockIDToUint32(assigned, block.Hash().String())
+	if err != nil {
+		return 0, err
+	}
+
+	return 0, nil
+}
+
+// blockIDFromMinedTx decides which of the block ids recorded on txHash, if any, is
+// block's own. Each id is looked up in the blockchain store:
+//   - stored under block's hash: block is already committed under it, so use it;
+//   - stored under another hash: a fork block that holds the same transaction, so
+//     the id is not block's;
+//   - not stored: still a candidate, since block stamps its id before it commits.
+//
+// Exactly one candidate left is block's id. With none left, the transaction was
+// stamped only by other blocks and block takes its id from AssignBlockID, as on a
+// first attempt. With several left, two unstored blocks have both stamped the
+// transaction and nothing here can tell which id is block's, so it also falls back
+// to AssignBlockID, which returns block's reservation while the reservation exists.
+//
+// A lookup error other than not-found is returned rather than read as "not stored":
+// a transient fault would otherwise make a fork's id look free and recreate the
+// wedge this function exists to prevent.
+func (u *BlockValidation) blockIDFromMinedTx(ctx context.Context, block *model.Block, txHash *chainhash.Hash, recorded []uint32, caller string) (uint32, bool, error) {
+	var candidates []uint32
+
+	for _, id := range recorded {
+		if slices.Contains(candidates, id) {
+			continue
+		}
+
+		stored, err := u.blockchainClient.GetBlockByID(ctx, uint64(id))
+		if err != nil {
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				candidates = append(candidates, id)
+				continue
+			}
+
+			return 0, false, errors.NewProcessingError("[%s][%s] failed to look up block id %d recorded on tx %s", caller, block.Hash().String(), id, txHash.String(), err)
+		}
+
+		if stored.Hash().IsEqual(block.Hash()) {
+			return id, true, nil
+		}
+	}
+
+	switch len(candidates) {
+	case 1:
+		return candidates[0], true, nil
+	case 0:
+		return 0, false, nil
+	default:
+		u.logger.Warnf("[%s][%s] tx %s carries block ids %v and none is stored yet; cannot tell which is this block's, falling back to AssignBlockID", caller, block.Hash().String(), txHash.String(), candidates)
+		return 0, false, nil
+	}
 }
 
 // quickValidateBlock performs optimized validation for blocks below checkpoints.
@@ -800,28 +899,16 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 
 			defer batch.Close()
 
-			// Phase 4: Check for retry and get block ID (only on first batch)
-			// This is specific to quick validation to handle retries gracefully.
-			// batchTxs[0] is the first non-coinbase tx; its recorded mined-in id is
-			// this block's. The legacy quick path (netsync reuseBlockIDFromUTXO) keys
-			// the same recovery on its first non-coinbase tx — keep them in sync.
+			// Phase 4: Check for retry and get block ID (only on first batch).
+			// batchTxs[0] is the first non-coinbase tx; setQuickBlockID recovers this
+			// block's id from it on a retry, or assigns one.
 			if !blockIDSet && len(batch.batchTxs) > 0 {
-				existingMeta, err := u.utxoStore.Get(ctx, batch.batchTxs[0].TxIDChainHash(), fields.BlockIDs)
-				if err == nil && existingMeta != nil && len(existingMeta.BlockIDs) > 0 {
-					existingBlockID = uint64(existingMeta.BlockIDs[0])
-					block.ID = existingMeta.BlockIDs[0]
-					u.logger.Debugf("[processBlockSubtreesSequential][%s] reusing BlockID %d from retry", block.Hash().String(), existingBlockID)
-				} else if block.ID == 0 {
-
-					id, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
-					if err != nil {
-						return errors.NewProcessingError("[processBlockSubtreesSequential][%s] failed to assign block ID", block.Hash().String(), err)
-					}
-					block.ID, err = blockIDToUint32(id, block.Hash().String())
-					if err != nil {
-						return err
-					}
+				id, err := u.setQuickBlockID(ctx, block, batch.batchTxs[0], "processBlockSubtreesSequential")
+				if err != nil {
+					return err
 				}
+
+				existingBlockID = id
 				blockIDSet = true
 
 			}
@@ -1020,22 +1107,12 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 
 				// Block ID check (first batch only)
 				if !blockIDSet && len(batch.batchTxs) > 0 {
-					existingMeta, err := u.utxoStore.Get(gCtx, batch.batchTxs[0].TxIDChainHash(), fields.BlockIDs)
-					if err == nil && existingMeta != nil && len(existingMeta.BlockIDs) > 0 {
-						existingBlockID = uint64(existingMeta.BlockIDs[0])
-						block.ID = existingMeta.BlockIDs[0]
-						u.logger.Debugf("[processBlockSubtreesPipeline][%s] reusing BlockID %d from retry", block.Hash().String(), existingBlockID)
-					} else if block.ID == 0 {
-
-						id, err := u.blockchainClient.AssignBlockID(gCtx, block.Hash())
-						if err != nil {
-							return errors.NewProcessingError("[processBlockSubtreesPipeline][%s] failed to assign block ID", block.Hash().String(), err)
-						}
-						block.ID, err = blockIDToUint32(id, block.Hash().String())
-						if err != nil {
-							return err
-						}
+					id, err := u.setQuickBlockID(gCtx, block, batch.batchTxs[0], "processBlockSubtreesPipeline")
+					if err != nil {
+						return err
 					}
+
+					existingBlockID = id
 					blockIDSet = true
 
 				}
@@ -1160,21 +1237,12 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 
 				// Block ID check (first batch only)
 				if !blockIDSet && len(batch.batchTxs) > 0 {
-					existingMeta, err := u.utxoStore.Get(gCtx, batch.batchTxs[0].TxIDChainHash(), fields.BlockIDs)
-					if err == nil && existingMeta != nil && len(existingMeta.BlockIDs) > 0 {
-						existingBlockID = uint64(existingMeta.BlockIDs[0])
-						block.ID = existingMeta.BlockIDs[0]
-						u.logger.Debugf("[processBlockSubtreesPipelineAsync][%s] reusing BlockID %d from retry", block.Hash().String(), existingBlockID)
-					} else if block.ID == 0 {
-						id, err := u.blockchainClient.AssignBlockID(gCtx, block.Hash())
-						if err != nil {
-							return errors.NewProcessingError("[processBlockSubtreesPipelineAsync][%s] failed to assign block ID", block.Hash().String(), err)
-						}
-						block.ID, err = blockIDToUint32(id, block.Hash().String())
-						if err != nil {
-							return err
-						}
+					id, err := u.setQuickBlockID(gCtx, block, batch.batchTxs[0], "processBlockSubtreesPipelineAsync")
+					if err != nil {
+						return err
 					}
+
+					existingBlockID = id
 					blockIDSet = true
 				}
 
