@@ -640,4 +640,59 @@ func TestLastOnCurrentChain(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+
+	// A failing chain check is our own fault, so every call site of the search must return it as a
+	// ServiceError, which the caller retries without charging the peer. The prefix b1..b5, s6..s9
+	// makes the search call the check at the last header, then the first, then inside the search.
+	sideOffer := concat(mainChain[:5], sideBranch)
+	sideMetas := make([]*model.BlockHeaderMeta, len(sideOffer))
+	for i, h := range sideOffer {
+		_, meta, err := client.GetBlockHeader(ctx, h.Hash())
+		require.NoError(t, err)
+
+		sideMetas[i] = meta
+	}
+
+	for failOn := int64(1); failOn <= 3; failOn++ {
+		failing := &failingChainCheck{ClientI: client, failOn: failOn}
+		failServer := &Server{logger: logger, settings: tSettings, blockchainClient: failing}
+
+		got, err := failServer.lastOnCurrentChain(ctx, catchupCtx, sideOffer, sideMetas, bestMeta)
+		require.Equal(t, -1, got, "call %d", failOn)
+		require.True(t, errors.Is(err, errors.ErrServiceError), "call %d: a failed chain check is a local fault: %v", failOn, err)
+	}
+
+	// findCommonAncestor, driven directly: a stored prefix with nothing on our current chain is the
+	// peer's fault, and a failed chain check is ours.
+	runFind := func(client blockchain.ClientI, headers []*model.BlockHeader) error {
+		s := &Server{logger: logger, settings: tSettings, blockchainClient: client}
+
+		return s.findCommonAncestor(ctx, &CatchupContext{
+			blockUpTo:          &model.Block{Header: mainChain[9]},
+			headersFetchResult: &catchup.Result{Headers: headers},
+		})
+	}
+
+	err = runFind(client, sideBranch)
+	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "an offer with no header on our current chain is a peer fault: %v", err)
+
+	err = runFind(&failingChainCheck{ClientI: client, failOn: 1}, sideOffer)
+	require.True(t, errors.Is(err, errors.ErrServiceError), "a failed chain check is a local fault: %v", err)
+}
+
+// failingChainCheck fails the failOn-th CheckBlockIsInCurrentChain call and passes the rest to the
+// real client.
+type failingChainCheck struct {
+	blockchain.ClientI
+
+	calls  atomic.Int64
+	failOn int64
+}
+
+func (f *failingChainCheck) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	if f.calls.Add(1) == f.failOn {
+		return false, errors.NewServiceError("chain check unavailable")
+	}
+
+	return f.ClientI.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }
