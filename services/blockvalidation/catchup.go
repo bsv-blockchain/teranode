@@ -1129,8 +1129,9 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	}
 
 	if commonAncestorIndex == -1 {
-		// Our locator is built from our current chain, so an honest peer's reply starts on it.
-		return errors.NewNetworkInvalidResponseError("[catchup][%s] no common ancestor on our current chain found in peer headers", catchupCtx.blockUpTo.Hash().String())
+		// Our locator is built from our current chain, so an honest peer's reply starts on it,
+		// unless our own chain reorged during the header fetch.
+		return u.noAncestorOnCurrentChainError(ctx, catchupCtx, bestMeta)
 	}
 
 	commonAncestorMeta = storedMetas[commonAncestorIndex]
@@ -1138,8 +1139,15 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	// The common ancestor's metadata was already fetched during the walk above.
 	commonAncestorHash := peerHeaders[commonAncestorIndex].Hash()
 
-	if commonAncestorMeta.Invalid {
-		return errors.NewBlockInvalidError("[catchup][%s] common ancestor %s at height %d is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height)
+	// The ancestor and the stored headers after it must all be valid. Before the ancestor was
+	// narrowed to our current chain, a stored invalid side block was itself the ancestor and
+	// failed here. Now it sits after the ancestor, and accepting the offer would un-stamp our
+	// blocks above the ancestor (step 9.6) before validation rejected the invalid block again.
+	// Block validation relies on catchup aborting here for the invalid block's descendants.
+	for i := commonAncestorIndex; i < len(storedMetas); i++ {
+		if storedMetas[i].Invalid {
+			return errors.NewBlockInvalidError("[catchup][%s] offered block %s at height %d (common ancestor %s) is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), peerHeaders[i].Hash().String(), storedMetas[i].Height, commonAncestorHash.String())
+		}
 	}
 
 	// The headers after the ancestor must form one chain built on it. Every later step assigns
@@ -1242,6 +1250,43 @@ func (u *Server) lastOnCurrentChain(ctx context.Context, catchupCtx *CatchupCont
 	u.logger.Infof("[catchup][%s] Last stored offered header %s is on a side branch, common ancestor narrowed to %s on our current chain", catchupCtx.blockUpTo.Hash().String(), peerHeaders[last].Hash().String(), peerHeaders[lo].Hash().String())
 
 	return lo, nil
+}
+
+// noAncestorOnCurrentChainError returns the error for an offer whose stored prefix holds no
+// block on our current chain. The block locator is built from one block on our current chain,
+// headersFetchResult.StartHash, so an honest peer's reply starts on that chain. If StartHash is
+// still on our current chain, the reply is the peer's fault. If it is not, our own chain
+// reorged during the header fetch and the offer may be honest, so the error is a ServiceError:
+// the caller retries and the peer is not charged.
+func (u *Server) noAncestorOnCurrentChainError(ctx context.Context, catchupCtx *CatchupContext, bestMeta *model.BlockHeaderMeta) error {
+	target := catchupCtx.blockUpTo.Hash().String()
+	peerFault := errors.NewNetworkInvalidResponseError("[catchup][%s] no common ancestor on our current chain found in peer headers", target)
+
+	if catchupCtx.headersFetchResult == nil || catchupCtx.headersFetchResult.StartHash == nil {
+		return peerFault
+	}
+
+	startHash := catchupCtx.headersFetchResult.StartHash
+
+	_, startMeta, err := u.blockchainClient.GetBlockHeader(ctx, startHash)
+	if err != nil {
+		return errors.NewServiceError("[catchup][%s] failed to read locator start block %s", target, startHash.String(), err)
+	}
+
+	if startMeta.ID == bestMeta.ID {
+		return peerFault
+	}
+
+	onChain, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{startMeta.ID})
+	if err != nil {
+		return errors.NewServiceError("[catchup][%s] failed to check whether locator start block %s is on our current chain", target, startHash.String(), err)
+	}
+
+	if onChain {
+		return peerFault
+	}
+
+	return errors.NewServiceError("[catchup][%s] no common ancestor on our current chain found in peer headers, but our chain reorged away from locator start block %s during the header fetch, retrying", target, startHash.String())
 }
 
 // validateForkDepth ensures the fork doesn't exceed coinbase maturity limits.
