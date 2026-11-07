@@ -796,8 +796,10 @@ func TestLastOnCurrentChain(t *testing.T) {
 
 	// A failed chain check is our own RPC failing, so it must come back as a ServiceError, which
 	// the caller retries without charging the peer. The prefix b1..b5, s6..s9 is probed in the
-	// order s9 (the last), b1 (the first), then b5, s7, s6 in the search. The tip short-circuits
-	// without an RPC, so neither failing block is the tip.
+	// order s9 (the last), b1 (the first), then b5, s7, s6 in the search, so failing s9, b1 and
+	// s7 covers all three call sites. The tip short-circuits without an RPC, so no failing block is
+	// the tip. The injected error is a StorageError, not a ServiceError, so a wrapper that charged
+	// the peer instead would fail here.
 	prefix := concat(mainChain[:5], sideBranch)
 
 	prefixMetas := make([]*model.BlockHeaderMeta, len(prefix))
@@ -813,6 +815,7 @@ func TestLastOnCurrentChain(t *testing.T) {
 		failAt *model.BlockHeaderMeta
 	}{
 		{name: "check_fails_on_first_probe", failAt: prefixMetas[8]},    // s9
+		{name: "check_fails_on_second_probe", failAt: prefixMetas[0]},   // b1
 		{name: "check_fails_inside_the_search", failAt: prefixMetas[6]}, // s7
 	}
 
@@ -829,6 +832,26 @@ func TestLastOnCurrentChain(t *testing.T) {
 			require.False(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a failed chain check must not be charged to the peer: %v", err)
 		})
 	}
+
+	// findCommonAncestor, driven directly: a stored prefix with nothing on our current chain is the
+	// peer's fault, and a failed chain check is ours and comes back unchanged. The fetch result
+	// carries no locator start here, so the no-ancestor case cannot be excused as our own reorg
+	// (TestCatchup_NoAncestorOnCurrentChain covers that).
+	runFind := func(client blockchain.ClientI, headers []*model.BlockHeader) error {
+		s := &Server{logger: logger, settings: tSettings, blockchainClient: client}
+
+		return s.findCommonAncestor(ctx, &CatchupContext{
+			blockUpTo:          &model.Block{Header: mainChain[9]},
+			headersFetchResult: &catchup.Result{Headers: headers},
+		})
+	}
+
+	err = runFind(client, sideBranch)
+	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "an offer with no header on our current chain is a peer fault: %v", err)
+
+	err = runFind(&failingChainCheckClient{ClientI: client, failID: prefixMetas[8].ID}, prefix)
+	require.True(t, errors.Is(err, errors.ErrServiceError), "a failed chain check is a local fault: %v", err)
+	require.False(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a failed chain check must not be charged to the peer: %v", err)
 }
 
 // failingChainCheckClient wraps the real sqlitememory-backed client and fails
