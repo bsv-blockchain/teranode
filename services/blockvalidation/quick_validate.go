@@ -308,11 +308,17 @@ func (u *BlockValidation) setQuickBlockID(ctx context.Context, block *model.Bloc
 //     the id is not block's;
 //   - not stored: still a candidate, since block stamps its id before it commits.
 //
-// Exactly one candidate left is block's id. With none left, the transaction was
-// stamped only by other blocks and block takes its id from AssignBlockID, as on a
-// first attempt. With several left, two unstored blocks have both stamped the
-// transaction and nothing here can tell which id is block's, so it also falls back
-// to AssignBlockID, which returns block's reservation while the reservation exists.
+// A lone candidate is taken as block's id. That is right on a retry, where block
+// stamped the transaction itself on an earlier attempt. On a first attempt it can
+// instead be the reservation of another block that stamped the transaction and has
+// not committed. StoreBlock refuses that id until the other block commits or
+// sweepStaleReservations deletes the reservation, after staleReservationSweepAge.
+//
+// With no candidate left, the transaction was stamped only by other blocks and
+// block takes its id from AssignBlockID, as on a first attempt. With several left,
+// two unstored blocks have both stamped the transaction and nothing here can tell
+// which id is block's, so it also falls back to AssignBlockID, which returns
+// block's reservation while the reservation exists.
 //
 // A lookup error other than not-found is returned rather than read as "not stored":
 // a transient fault would otherwise make a fork's id look free and recreate the
