@@ -2,17 +2,26 @@ package blockvalidation
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/blockvalidation/testhelpers"
+	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/settings"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +44,19 @@ func gap046Block(ctx context.Context, t *testing.T, tSettings *settings.Settings
 func gap046BlockWithCoinbase(ctx context.Context, t *testing.T, tSettings *settings.Settings, bv *BlockValidation, height uint32, cb *bt.Tx) *model.Block {
 	t.Helper()
 
+	block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, height, cb)
+
+	// The header commits to this body: the coinbase-only binding holds.
+	require.NoError(t, block.CheckCoinbaseOnlyBodyBound(), "fixture precondition: the body is bound to the header")
+
+	return block
+}
+
+// gap046BlockWithCoinbaseUnchecked is gap046BlockWithCoinbase without the binding precondition, for
+// a 64-byte coinbase: the header commits to its txid, but the binding refuses 64 bytes.
+func gap046BlockWithCoinbaseUnchecked(ctx context.Context, t *testing.T, tSettings *settings.Settings, bv *BlockValidation, height uint32, cb *bt.Tx) *model.Block {
+	t.Helper()
+
 	timestamp := uint32(time.Now().Unix()) //nolint:gosec
 
 	expected, err := bv.blockchainClient.GetNextWorkRequired(ctx, tSettings.ChainCfgParams.GenesisHash, int64(timestamp))
@@ -44,9 +66,7 @@ func gap046BlockWithCoinbase(ctx context.Context, t *testing.T, tSettings *setti
 
 	block, err := model.NewBlock(hdr, cb, []*chainhash.Hash{}, 1, uint64(cb.Size()), height, 0) //nolint:gosec
 	require.NoError(t, err)
-
-	// The header commits to this body: the coinbase-only binding holds.
-	require.NoError(t, block.CheckCoinbaseOnlyBodyBound(), "fixture precondition: the body is bound to the header")
+	require.True(t, block.Header.HashMerkleRoot.IsEqual(cb.TxIDChainHash()), "fixture precondition: the header commits to cb")
 
 	return block
 }
@@ -69,6 +89,42 @@ func gap046SixtyFourByteCoinbase(t *testing.T) *bt.Tx {
 	require.Equal(t, 64, cb.Size(), "fixture precondition: a 64-byte transaction")
 
 	return cb
+}
+
+// gap046SixtyFourByteSpend builds a one-input transaction spending a non-null outpoint that
+// serialises to exactly 64 bytes: version(4) + 01 input + prevout(36) + 0x04 + script(4) +
+// sequence(4) + 01 output + value(8) + 00 + locktime(4). Two child hashes can take this shape with
+// three constrained bytes (offsets 4, 41 and 59 for the no-output form; a few more for this one),
+// so a header committing to its txid may be an honest multi-transaction block.
+func gap046SixtyFourByteSpend(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	in := &bt.Input{
+		PreviousTxOutIndex: 0,
+		UnlockingScript:    bscript.NewFromBytes([]byte{0x51, 0x51, 0x51, 0x51}),
+		SequenceNumber:     bt.DefaultSequenceNumber,
+	}
+	require.NoError(t, in.PreviousTxIDAdd(&chainhash.Hash{0x01}))
+
+	tx := bt.NewTx()
+	tx.Inputs = append(tx.Inputs, in)
+	tx.AddOutput(&bt.Output{Satoshis: 50 * 100_000_000, LockingScript: bscript.NewFromBytes(nil)})
+	require.Equal(t, 64, tx.Size(), "fixture precondition: a 64-byte transaction")
+	require.False(t, model.IsConsensusCoinbase(tx), "fixture precondition: not coinbase-shaped")
+
+	return tx
+}
+
+// requireCorruptNotCondemned asserts the verdict is ERR_BLOCK_CORRUPT, neither invalid nor
+// incomplete, and that the hash was not stored, so the block is fetched again and the honest hash is
+// never condemned.
+func requireCorruptNotCondemned(ctx context.Context, t *testing.T, client blockchain.ClientI, block *model.Block, err error) {
+	t.Helper()
+
+	require.Error(t, err)
+	require.True(t, errors.IsBlockCorrupt(err), "an ambiguous body is corrupt, got: %v", err)
+	require.False(t, errors.Is(err, errors.ErrBlockInvalid), "must not be ERR_BLOCK_INVALID, got: %v", err)
+	requireNothingPersisted(ctx, t, client, block.Hash())
 }
 
 // gap046SpendShapedCoinbase builds a one-input transaction whose input spends a non-null
@@ -208,10 +264,39 @@ func TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete(t *testing.T
 		tSettings.BlockValidation.OptimisticMining = false
 
 		bv, client := newNoPersistHarness(ctx, t, tSettings)
-		block := gap046BlockWithCoinbase(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
+		block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
 
 		err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
 		requireIncompleteNotCondemned(ctx, t, client, block, err)
+	})
+
+	t.Run("full path, 64-byte one-input non-coinbase bound to the header", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.OptimisticMining = false
+
+		bv, client := newNoPersistHarness(ctx, t, tSettings)
+		block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteSpend(t))
+
+		err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+		requireCorruptNotCondemned(ctx, t, client, block, err)
+	})
+
+	t.Run("full path with optimistic mining, 64-byte one-input non-coinbase bound to the header", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.OptimisticMining = true
+		tSettings.BlockValidation.OptimisticMiningPeerBlocks = true
+
+		bv, client := newNoPersistHarness(ctx, t, tSettings)
+		block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteSpend(t))
+
+		err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+		requireCorruptNotCondemned(ctx, t, client, block, err)
 	})
 
 	t.Run("full path, header does not commit to the coinbase", func(t *testing.T) {
@@ -272,16 +357,15 @@ func TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete(t *testing.T
 		tSettings.BlockValidation.OptimisticMining = false
 
 		bv, client := newNoPersistHarness(ctx, t, tSettings)
-		block := gap046BlockWithCoinbase(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
+		block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
 
 		err := bv.quickValidateBlock(ctx, block, "peer-serving", "http://localhost")
 		requireIncompleteNotCondemned(ctx, t, client, block, err)
 	})
 
-	t.Run("quick path, zero-input coinbase on a body with subtrees", func(t *testing.T) {
-		// A body with subtrees cannot be bound at the precheck, so a zero-input coinbase on it is
-		// missing data. Letting it through would send a stand-in on to subtree binding, where it
-		// fails the merkle check as CORRUPT and the serving peer takes a strike.
+	t.Run("quick path, 64-byte one-input non-coinbase bound to the header", func(t *testing.T) {
+		// The one-input form of the same ambiguity: three bytes across both child hashes. It has an
+		// input, so the precheck lets it through; the binding refuses it as CORRUPT, never INVALID.
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
@@ -289,11 +373,10 @@ func TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete(t *testing.T
 		tSettings.BlockValidation.OptimisticMining = false
 
 		bv, client := newNoPersistHarness(ctx, t, tSettings)
-		block := gap046Block(ctx, t, tSettings, bv, blockHeight)
-		block.Subtrees = []*chainhash.Hash{{0x01}}
+		block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteSpend(t))
 
 		err := bv.quickValidateBlock(ctx, block, "peer-serving", "http://localhost")
-		requireIncompleteNotCondemned(ctx, t, client, block, err)
+		requireCorruptNotCondemned(ctx, t, client, block, err)
 	})
 
 	// quickValidateBlockAsync is the catch-up entry point; it has its own copy of the precheck.
@@ -326,12 +409,28 @@ func TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete(t *testing.T
 		tSettings.BlockValidation.OptimisticMining = false
 
 		bv, client := newNoPersistHarness(ctx, t, tSettings)
-		block := gap046BlockWithCoinbase(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
+		block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
 
 		writeJobsChan := make(chan *SubtreeWriteJob, 16)
 
 		_, _, err := bv.quickValidateBlockAsync(ctx, block, "peer-serving", "http://localhost", writeJobsChan)
 		requireIncompleteNotCondemned(ctx, t, client, block, err)
+	})
+
+	t.Run("async quick path, 64-byte one-input non-coinbase bound to the header", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.OptimisticMining = false
+
+		bv, client := newNoPersistHarness(ctx, t, tSettings)
+		block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteSpend(t))
+
+		writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+		_, _, err := bv.quickValidateBlockAsync(ctx, block, "peer-serving", "http://localhost", writeJobsChan)
+		requireCorruptNotCondemned(ctx, t, client, block, err)
 	})
 
 	t.Run("async quick path, header does not commit to the coinbase", func(t *testing.T) {
@@ -349,5 +448,133 @@ func TestGapBV046_PresentCoinbaseWithNoInputsIsInvalidNotIncomplete(t *testing.T
 
 		_, _, err := bv.quickValidateBlockAsync(ctx, block, "peer-serving", "http://localhost", writeJobsChan)
 		requireIncompleteNotCondemned(ctx, t, client, block, err)
+	})
+}
+
+// subtreeBodyHarness wires a BlockValidation over real stores (sqlitememory blockchain store) with
+// subtree validation mocked to succeed, and returns a block whose body carries one stored subtree
+// and whose header commits to that subtree with committed in the coinbase slot. served is the
+// coinbase the peer hands over; when it differs from committed, the body is not bound.
+func subtreeBodyHarness(ctx context.Context, t *testing.T, optimistic bool, committed, served *bt.Tx) (*BlockValidation, blockchain.ClientI, *model.Block) {
+	t.Helper()
+
+	utxoStore, _, _, txStore, subtreeStore, deferFunc := setup(t)
+	t.Cleanup(deferFunc)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockValidation.OptimisticMining = optimistic
+	tSettings.BlockValidation.OptimisticMiningPeerBlocks = optimistic
+
+	blockChainStore, err := blockchain_store.NewStore(ulogger.TestLogger{}, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+	client, err := blockchain.NewLocalClient(ulogger.TestLogger{}, tSettings, blockChainStore, nil, nil)
+	require.NoError(t, err)
+
+	subtreeVal := &subtreevalidation.MockSubtreeValidation{}
+	subtreeVal.Mock.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Coinbase placeholder plus one node. The node need not be a real transaction: the coinbase
+	// shape check sits straight behind the merkle binding, ahead of the order and fee checks.
+	st, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, st.AddCoinbaseNode())
+	require.NoError(t, st.AddNode(chainhash.Hash{0xAB}, 100, 0))
+
+	stBytes, err := st.Serialize()
+	require.NoError(t, err)
+	require.NoError(t, subtreeStore.Set(ctx, st.RootHash()[:], fileformat.FileTypeSubtree, stBytes))
+
+	committedTree := st.Duplicate()
+	committedTree.ReplaceRootNode(committed.TxIDChainHash(), 0, uint64(committed.Size())) //nolint:gosec
+
+	hdr := minedBIP34Header(t, 4, tSettings.ChainCfgParams.GenesisHash, committedTree.RootHash())
+	block, err := model.NewBlock(hdr, served, []*chainhash.Hash{st.RootHash()}, uint64(st.Length()), uint64(served.Size()), 100, 0) //nolint:gosec
+	require.NoError(t, err)
+
+	bv := NewBlockValidation(ctx, ulogger.TestLogger{}, tSettings, client, subtreeStore, txStore, utxoStore, nil, subtreeVal)
+
+	return bv, client, block
+}
+
+// zeroInputCoinbase is a present coinbase with one output and no inputs.
+func zeroInputCoinbase(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	cb := bt.NewTx()
+	require.NoError(t, cb.AddP2PKHOutputFromAddress("1DkmRkb5iQFkDu4NBysog5bugnsyx7kwtn", 50*100_000_000))
+
+	return cb
+}
+
+// TestCoinbaseNotDelivered_ZeroInputOnSubtreeBody asserts that a coinbase with no inputs on a body
+// that carries subtrees is judged by the merkle binding over those subtrees, not re-fetched
+// forever: committed by the header it is ERR_BLOCK_INVALID and the hash is stored invalid, with or
+// without optimistic mining; not committed (a stand-in) it is ERR_BLOCK_CORRUPT and nothing is
+// stored invalid.
+func TestCoinbaseNotDelivered_ZeroInputOnSubtreeBody(t *testing.T) {
+	initPrometheusMetrics()
+
+	t.Run("precheck lets it through", func(t *testing.T) {
+		block := &model.Block{CoinbaseTx: zeroInputCoinbase(t), Subtrees: []*chainhash.Hash{{0x01}}}
+		require.False(t, coinbaseNotDelivered(block), "a subtree body is bound by its merkle check, not by the precheck")
+	})
+
+	for _, optimistic := range []bool{false, true} {
+		t.Run(fmt.Sprintf("committed by the header, optimistic mining %v", optimistic), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			cb := zeroInputCoinbase(t)
+			bv, client, block := subtreeBodyHarness(ctx, t, optimistic, cb, cb)
+
+			err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+			require.Error(t, err)
+			require.False(t, errors.Is(err, errors.ErrBlockIncomplete), "a committed coinbase was delivered, got: %v", err)
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a committed coinbase with no inputs is invalid, got: %v", err)
+			requireStoredInvalid(ctx, t, client, block)
+		})
+	}
+
+	t.Run("stand-in the header does not commit to", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		committed := coinbaseAtHeight(t, 100)
+		bv, client, block := subtreeBodyHarness(ctx, t, false, committed, zeroInputCoinbase(t))
+
+		err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+		require.Error(t, err)
+		require.True(t, errors.IsBlockCorrupt(err), "an unbound body is corrupt, got: %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "an unbound body must never condemn the hash, got: %v", err)
+
+		_, meta, metaErr := client.GetBlockHeader(ctx, block.Hash())
+		require.False(t, metaErr == nil && meta != nil && meta.Invalid, "an unbound body must not be stored invalid")
+	})
+
+	t.Run("quick route: validateSubtrees condemns it behind the binding", func(t *testing.T) {
+		suite := NewCatchupTestSuite(t)
+		defer suite.Cleanup()
+
+		cb := zeroInputCoinbase(t)
+
+		st, err := subtreepkg.NewTreeByLeafCount(2)
+		require.NoError(t, err)
+		require.NoError(t, st.AddCoinbaseNode())
+		require.NoError(t, st.AddNode(chainhash.HashH([]byte("tx a")), 1, 0))
+
+		block := testhelpers.CreateTestBlocks(t, 1)[0]
+		block.CoinbaseTx = cb
+		block.Subtrees = []*chainhash.Hash{st.RootHash()}
+		block.SubtreeSlices = []*subtreepkg.Subtree{st}
+
+		root, err := st.RootHashWithReplaceRootNode(cb.TxIDChainHash(), 0, uint64(cb.Size())) //nolint:gosec
+		require.NoError(t, err)
+		block.Header.HashMerkleRoot = root
+
+		require.False(t, coinbaseNotDelivered(block), "the quick route's precheck must let it through")
+
+		_, err = suite.Server.blockValidation.validateSubtrees(context.Background(), block, 1)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "the body is bound, so this is invalidity, got: %v", err)
 	})
 }

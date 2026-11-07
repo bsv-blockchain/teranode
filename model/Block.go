@@ -1249,8 +1249,28 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
 	}
 
+	// A 64-byte transaction can be an inner merkle node instead of a leaf. An honest block's merkle
+	// root is the double SHA-256 of its two 32-byte child hashes, and those 64 bytes parse as a
+	// transaction once three of them take the right values: with no inputs, bytes 4, 5 and 14; with
+	// one input and no outputs, bytes 4, 41 and 59. In a two-transaction block both child hashes are
+	// transaction ids the miner chooses, so about 2^24 hashes of grinding finds such a block. Served
+	// as a coinbase-only body, those bytes match the honest header here, and every shape check after
+	// the binding would then condemn a valid block's hash. So a 64-byte coinbase does not bind.
+	//
+	// Except a consensus coinbase. Its null prevout fixes bytes 5 to 40, which spans 27 bytes of the
+	// left child hash, and no miner can grind a hash into that. A 64-byte consensus coinbase (a
+	// four-byte height push and an empty output script is exactly 64 bytes) is the miner's own
+	// single-transaction block, and SV Node has no 64-byte rule, so it must stay acceptable.
+	if b.CoinbaseTx.Size() == innerMerkleNodeSize && !IsConsensusCoinbase(b.CoinbaseTx) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees and its only transaction is 64 bytes and not a coinbase, so it may be an inner merkle node rather than the committed body", b.String())
+	}
+
 	return nil
 }
+
+// innerMerkleNodeSize is the length of two concatenated 32-byte hashes, the preimage of an inner
+// merkle node. A transaction of exactly this length can hash to an honest block's merkle root.
+const innerMerkleNodeSize = 64
 
 // releaseTxMap closes the disk-backed map if that is what b.txMap is, then nils
 // b.txMap so the in-memory map can be collected. Closing the in-memory node

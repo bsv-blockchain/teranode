@@ -1628,7 +1628,6 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 	tests := []struct {
 		name        string
 		coinbaseTx  *bt.Tx
-		subtrees    []*chainhash.Hash
 		expectError string
 	}{
 		{
@@ -1653,16 +1652,9 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 			coinbaseTx:  &bt.Tx{Outputs: []*bt.Output{{Satoshis: 50 * 100_000_000, LockingScript: &bscript.Script{0x51}}}},
 			expectError: "coinbase tx is nil or empty",
 		},
-		{
-			// A body that carries subtrees cannot be bound to the header at the precheck, so a
-			// zero-input coinbase on it is missing data. Letting it through would send a stand-in
-			// coinbase on to subtree binding, where it fails the merkle check as corrupt and the
-			// serving peer takes a strike.
-			name:        "Output-only coinbase on a body with subtrees returns ErrBlockIncomplete",
-			coinbaseTx:  &bt.Tx{Outputs: []*bt.Output{{Satoshis: 50 * 100_000_000, LockingScript: &bscript.Script{0x51}}}},
-			subtrees:    []*chainhash.Hash{{0x01}},
-			expectError: "coinbase tx is nil or empty",
-		},
+		// A zero-input coinbase on a body that carries subtrees is not missing data: the merkle
+		// check over the subtrees judges it. TestCoinbaseNotDelivered_ZeroInputOnSubtreeBody covers
+		// that shape.
 	}
 
 	for _, tt := range tests {
@@ -1711,10 +1703,6 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 				TransactionCount: 1,
 				CoinbaseTx:       tt.coinbaseTx,
 				Subtrees:         []*chainhash.Hash{},
-			}
-
-			if tt.subtrees != nil {
-				block.Subtrees = tt.subtrees
 			}
 
 			err = blockValidator.ValidateBlock(ctx, block, "test")

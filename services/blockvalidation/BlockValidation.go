@@ -2483,15 +2483,15 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 			}
 		}
 
-		// A coinbase-only body whose only transaction is not coinbase-shaped (for instance a
-		// coinbase with no inputs, which the precheck lets through when the header commits to it)
-		// must not be added to the chain before block.Valid runs. Valid condemns it when the header
-		// commits to it and returns corrupt when it does not. Under optimistic mining it would
-		// otherwise be added first: from BIP34 activation the store's coinbase height read fails
-		// AddBlock as a storage error, and below activation the block is published and only
+		// A block whose coinbase is not coinbase-shaped (for instance a coinbase with no inputs,
+		// which the precheck lets through when the header commits to it or the body carries
+		// subtrees) must not be added to the chain before block.Valid runs. Valid condemns it when
+		// the header commits to it and returns corrupt when it does not. Under optimistic mining it
+		// would otherwise be added first: from BIP34 activation the store's coinbase height read
+		// fails AddBlock as a storage error, and below activation the block is published and only
 		// condemned later in the background. Validate it synchronously. This keys on coinbase
 		// shape only; a correctly shaped coinbase whose height the store rejects is not covered.
-		if useOptimisticMining && len(block.Subtrees) == 0 && !model.IsConsensusCoinbase(block.CoinbaseTx) {
+		if useOptimisticMining && !model.IsConsensusCoinbase(block.CoinbaseTx) {
 			useOptimisticMining = false
 		}
 
