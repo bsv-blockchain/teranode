@@ -269,6 +269,10 @@ func (s *Store) unspendLua(ctx context.Context, spend *utxo.Spend) error {
 				return err
 			}
 		}
+
+		if err := s.reconcileChildDAH(spend.TxID, res, s.GetBlockHeight()); err != nil {
+			return err
+		}
 	} else if res.Status == LuaStatusError {
 		prometheusUtxoMapErrors.WithLabelValues("Reset", "error response").Inc()
 
