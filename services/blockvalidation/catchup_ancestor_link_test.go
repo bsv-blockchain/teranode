@@ -95,6 +95,24 @@ func (r *minedSetClearRecorder) ClearBlockMinedSet(ctx context.Context, blockHas
 	return r.ClientI.ClearBlockMinedSet(ctx, blockHash)
 }
 
+// storeSideBlock writes a coinbase-only block for header into the real store without mined_set, as
+// a block this node validated but never adopted.
+func storeSideBlock(ctx context.Context, t *testing.T, store blockchain_store.Store, header *model.BlockHeader, height uint32) {
+	t.Helper()
+
+	coinbaseTx := testhelpers.CreateSimpleCoinbaseTx(height)
+	block := &model.Block{
+		Header:           header,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		SizeInBytes:      uint64(80 + coinbaseTx.Size()), //nolint:gosec // small positive size
+		Height:           height,
+	}
+
+	_, _, err := store.StoreBlock(ctx, block, "test")
+	require.NoError(t, err)
+}
+
 // ancestorLinkRun is what one catchup() run left behind: the error, how many header and /blocks/
 // requests reached the peer, how many local blocks step 9.6 un-stamped, and the real client plus
 // the two header chains, so the caller can read the end state from the store.
@@ -134,6 +152,10 @@ const (
 	// offerWrongBits: h1..h5 linked on b5, where h1 is mined against bits other than its parent's.
 	// Regtest never adjusts difficulty, so the bits every block must carry are its parent's.
 	offerWrongBits
+	// offerThroughStoredSideBranch: s6..s9 built on b5 and already stored, a side branch this node
+	// validated but never adopted, then h10, h11 on s9. Every header up to s9 is stored, but only
+	// b5 is on our current chain.
+	offerThroughStoredSideBranch
 )
 
 // runAncestorLinkCatchup runs catchup() against a real sqlitememory blockchain store holding the
@@ -180,10 +202,6 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 	require.NotEqual(t, mainChain[0].Hash().String(), otherBlockB.Hash().String())
 	storeMinedBlock(ctx, t, store, otherBlockB, 1)
 
-	_, bestMeta, err := store.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint32(10), bestMeta.Height, "b10 must be the local tip")
-
 	ancestor := mainChain[4] // b5
 
 	var offered, served, later []*model.BlockHeader
@@ -202,6 +220,13 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		offered = append([]*model.BlockHeader{h1}, forkHeadersFrom(t, h1, 4, 7, 1000)...)
 	case offerBreakAtSecond:
 		offered = append(forkHeadersFrom(t, ancestor, 1, 6, 1000), forkHeadersFrom(t, otherBlockB, 4, 7, 2000)...)
+	case offerThroughStoredSideBranch:
+		sideBranch := forkHeadersFrom(t, ancestor, 4, 6, 700)
+		for i, h := range sideBranch {
+			storeSideBlock(ctx, t, store, h, uint32(6+i)) //nolint:gosec // i < 4
+		}
+
+		offered = append(sideBranch, forkHeadersFrom(t, sideBranch[len(sideBranch)-1], 2, 10, 700)...)
 	case offerBreakBetweenBatches, offerReplayBetweenBatches:
 		// With b5 in front this is a full batch, so the fetch asks again from h9999.
 		offered = forkHeadersFrom(t, ancestor, maxBlockHeadersPerRequest-1, 6, 1000)
@@ -219,6 +244,10 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		later = append(append([]*model.BlockHeader{}, offered...), fresh[0])
 		unservedTarget = fresh[1]
 	}
+
+	bestHeader, _, err := store.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, mainChain[9].Hash().String(), bestHeader.Hash().String(), "b10 must be the local tip")
 
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
@@ -421,6 +450,23 @@ func TestCatchup_FirstHeaderMustLinkToCommonAncestor(t *testing.T) {
 	})
 }
 
+// TestCatchup_AncestorMustBeOnCurrentChain covers a peer whose offer runs through a side branch we
+// already store, against a real sqlitememory blockchain store. The local chain is b1..b10, and
+// s6..s9 on b5 are stored but never adopted. The peer offers [b5, s6..s9, h10, h11]. Every header
+// up to s9 is stored, so an ancestor walk that keeps the last stored header picks s9, measures a
+// fork depth of 1 and un-stamps only b10, leaving b6..b9 mined while they are reorged out. The
+// common ancestor must be b5, the last offered header on our current chain, so the fork depth is
+// 5 and the clear un-stamps b6..b10.
+//
+// Mutation proof: dropping the lastOnCurrentChain call in findCommonAncestor fails the clear
+// count with 1 instead of 5.
+func TestCatchup_AncestorMustBeOnCurrentChain(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerThroughStoredSideBranch)
+
+	require.Positive(t, run.blocksRequests, "the offer must reach the block fetch, else the clear count is not what the fork depth decided")
+	require.Equal(t, int64(5), run.minedClears, "a fork from b5 must un-stamp b6..b10, not only the blocks above the stored side branch")
+}
+
 // TestCatchup_HeaderBatchMustLinkToPreviousBatch covers a peer whose second header batch does not
 // build on the last header of the first, against a real sqlitememory blockchain store. Every
 // request names one fixed peer tip and the peer serves the path back from it, so an honest peer's
@@ -520,4 +566,78 @@ func TestCatchup_HeaderWithWrongDifficultyIsRejectedBeforeAnyBodyFetch(t *testin
 	require.Contains(t, run.err.Error(), "incorrect difficulty bits")
 	require.Zero(t, run.otherRequests, "nothing but headers may be requested for a rejected offer")
 	requireRejectedWithoutSideEffects(t, run)
+}
+
+// TestLastOnCurrentChain covers the search findCommonAncestor uses to narrow the last stored
+// offered header to the last one on our current chain, against a real sqlitememory blockchain
+// store holding b1..b10 on the current chain and s6..s9, a stored side branch on b5. Each case is a
+// stored prefix as the ancestor walk leaves it, and the want is the index of the header the search
+// must return.
+func TestLastOnCurrentChain(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	store, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+
+	client, err := blockchain.NewLocalClient(logger, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	genesis, _, err := store.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	mainChain := forkHeadersFrom(t, genesis, 10, 1, 0)
+	for i, h := range mainChain {
+		storeMinedBlock(ctx, t, store, h, uint32(i+1)) //nolint:gosec // i < 10
+	}
+
+	sideBranch := forkHeadersFrom(t, mainChain[4], 4, 6, 700)
+	for i, h := range sideBranch {
+		storeSideBlock(ctx, t, store, h, uint32(6+i)) //nolint:gosec // i < 4
+	}
+
+	_, bestMeta, err := client.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	server := &Server{logger: logger, settings: tSettings, blockchainClient: client}
+	catchupCtx := &CatchupContext{blockUpTo: &model.Block{Header: mainChain[9]}}
+
+	concat := func(parts ...[]*model.BlockHeader) []*model.BlockHeader {
+		var out []*model.BlockHeader
+		for _, p := range parts {
+			out = append(out, p...)
+		}
+
+		return out
+	}
+
+	tests := []struct {
+		name    string
+		headers []*model.BlockHeader
+		want    int
+	}{
+		{name: "all_on_chain_up_to_tip", headers: mainChain, want: 9},
+		{name: "all_on_chain_below_tip", headers: mainChain[2:7], want: 4},
+		{name: "one_on_chain_then_side_branch", headers: concat(mainChain[4:5], sideBranch), want: 0},
+		{name: "five_on_chain_then_side_branch", headers: concat(mainChain[:5], sideBranch), want: 4},
+		{name: "three_on_chain_then_one_side_block", headers: concat(mainChain[2:5], sideBranch[:1]), want: 2},
+		{name: "side_branch_only", headers: sideBranch, want: -1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			metas := make([]*model.BlockHeaderMeta, len(tc.headers))
+			for i, h := range tc.headers {
+				_, meta, err := client.GetBlockHeader(ctx, h.Hash())
+				require.NoError(t, err)
+
+				metas[i] = meta
+			}
+
+			got, err := server.lastOnCurrentChain(ctx, catchupCtx, tc.headers, metas, bestMeta)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }

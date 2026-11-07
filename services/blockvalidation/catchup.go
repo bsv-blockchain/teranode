@@ -1080,9 +1080,12 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	catchupCtx.currentHeight = currentHeight
 	catchupCtx.bestBlockMeta = bestMeta
 
-	// Walk through peer's headers (oldest to newest) to find the highest common ancestor
+	// Walk through peer's headers (oldest to newest) to find the last one we store. That is only
+	// a candidate: a stored block can sit on a side branch we validated but never adopted, so
+	// the ancestor is narrowed to our current chain below.
 	commonAncestorIndex := -1
 	var commonAncestorMeta *model.BlockHeaderMeta
+	storedMetas := make([]*model.BlockHeaderMeta, 0, len(peerHeaders))
 	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
 
 	for i, header := range peerHeaders {
@@ -1112,12 +1115,25 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 
 		commonAncestorIndex = i // Keep updating to find the LAST match
 		commonAncestorMeta = meta
+		storedMetas = append(storedMetas, meta)
 		u.logger.Debugf("[catchup][%s] Block %s exists in our chain at height %d (index %d)", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, i)
 	}
 
 	if commonAncestorIndex == -1 {
 		return errors.NewNetworkInvalidResponseError("[catchup][%s] no common ancestor found in peer headers", catchupCtx.blockUpTo.Hash().String())
 	}
+
+	commonAncestorIndex, err = u.lastOnCurrentChain(ctx, catchupCtx, peerHeaders, storedMetas, bestMeta)
+	if err != nil {
+		return err
+	}
+
+	if commonAncestorIndex == -1 {
+		// Our locator is built from our current chain, so an honest peer's reply starts on it.
+		return errors.NewNetworkInvalidResponseError("[catchup][%s] no common ancestor on our current chain found in peer headers", catchupCtx.blockUpTo.Hash().String())
+	}
+
+	commonAncestorMeta = storedMetas[commonAncestorIndex]
 
 	// The common ancestor's metadata was already fetched during the walk above.
 	commonAncestorHash := peerHeaders[commonAncestorIndex].Hash()
@@ -1152,6 +1168,80 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth)
 
 	return nil
+}
+
+// lastOnCurrentChain returns the index of the last header in the stored prefix of peerHeaders
+// that is on our current chain, or -1 if none is. storedMetas[i] is the stored meta of
+// peerHeaders[i].
+//
+// The last stored header is not enough. Take a local chain A0..A10 and a stored side branch
+// S6..S9 on A5 that we validated but never adopted. A peer offering [A5, S6..S9, P10, P11] has
+// every header up to S9 stored, so the walk alone picks S9, measures a fork depth of 1 instead
+// of 5, and the mined_set clear un-stamps only A10 while A6..A9 are reorged out. The header-link
+// checks cannot see it, because the side branch is linked internally.
+//
+// The stored prefix is a run of current-chain blocks followed by side-chain ones. The header
+// fetch rejects a batch that does not link as one chain, and once a header leaves our current
+// chain none of its descendants can rejoin it. So the answer is a binary search over that
+// prefix, which costs about log2(n) chain checks and one in the common case where the last
+// stored header is on our chain. If the prefix were not ordered that way, the search would
+// still return a current-chain header whose successor is off it, and the link check after
+// this call rejects any offer that does not build on what it returns.
+func (u *Server) lastOnCurrentChain(ctx context.Context, catchupCtx *CatchupContext, peerHeaders []*model.BlockHeader, storedMetas []*model.BlockHeaderMeta, bestMeta *model.BlockHeaderMeta) (int, error) {
+	onChain := func(i int) (bool, error) {
+		if storedMetas[i].ID == bestMeta.ID {
+			return true, nil
+		}
+
+		ok, err := u.blockchainClient.CheckBlockIsInCurrentChain(ctx, []uint32{storedMetas[i].ID})
+		if err != nil {
+			// Our own RPC failed, so the caller retries without charging the peer.
+			return false, errors.NewServiceError("[catchup][%s] failed to check whether block %s is on our current chain", catchupCtx.blockUpTo.Hash().String(), peerHeaders[i].Hash().String(), err)
+		}
+
+		return ok, nil
+	}
+
+	last := len(storedMetas) - 1
+
+	ok, err := onChain(last)
+	if err != nil {
+		return -1, err
+	}
+
+	if ok {
+		return last, nil
+	}
+
+	ok, err = onChain(0)
+	if err != nil {
+		return -1, err
+	}
+
+	if !ok {
+		return -1, nil
+	}
+
+	// Invariant: lo is on our current chain, hi is not.
+	lo, hi := 0, last
+	for hi-lo > 1 {
+		mid := lo + (hi-lo)/2
+
+		ok, err := onChain(mid)
+		if err != nil {
+			return -1, err
+		}
+
+		if ok {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+
+	u.logger.Infof("[catchup][%s] Last stored offered header %s is on a side branch, common ancestor narrowed to %s on our current chain", catchupCtx.blockUpTo.Hash().String(), peerHeaders[last].Hash().String(), peerHeaders[lo].Hash().String())
+
+	return lo, nil
 }
 
 // validateForkDepth ensures the fork doesn't exceed coinbase maturity limits.

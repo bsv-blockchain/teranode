@@ -3341,6 +3341,9 @@ func setupTestCatchupServer(t *testing.T) (*Server, *blockchain.Mock, *utxo.Mock
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
 	// Mock GetBlockIsMined for parent block verification during validation
 	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// findCommonAncestor narrows its ancestor to our current chain. These fixtures hold no side
+	// branches, so every stored block they report is on it.
+	mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	// Permissive default for locator capping (blockchain height > UTXO height fallback)
 	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).
 		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
@@ -3459,6 +3462,9 @@ func setupTestCatchupServerWithConfig(t *testing.T, config *testhelpers.TestServ
 	mockBlockchainClient.On("GetNextWorkRequired", mock.Anything, mock.Anything, mock.Anything).Return(defaultNBitsCatchup, nil).Maybe()
 	// Mock GetBlockIsMined for parent block verification during validation
 	mockBlockchainClient.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil).Maybe()
+	// findCommonAncestor narrows its ancestor to our current chain. These fixtures hold no side
+	// branches, so every stored block they report is on it.
+	mockBlockchainClient.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Maybe()
 	// Permissive default for locator capping (blockchain height > UTXO height fallback)
 	mockBlockchainClient.On("GetBlockByHeight", mock.Anything, mock.Anything).
 		Return((*model.Block)(nil), errors.NewServiceError("not mocked")).Maybe()
