@@ -475,6 +475,16 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 }
 
 func BenchmarkStore_Create(b *testing.B) {
+	benchmarkStoreCreate(b)
+}
+
+// BenchmarkStore_CreateLanePosition is BenchmarkStore_Create with a lane
+// position on every create, what every create costs with lane positions on.
+func BenchmarkStore_CreateLanePosition(b *testing.B) {
+	benchmarkStoreCreate(b, utxo.WithLanePosition(lane.Pack(7, 41_000)))
+}
+
+func benchmarkStoreCreate(b *testing.B, opts ...utxo.CreateOption) {
 	teranodeaerospike.InitPrometheusMetrics()
 
 	// read a hex file from os
@@ -498,8 +508,36 @@ func BenchmarkStore_Create(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err = s.Create(context.Background(), tx, 0)
+		_, err = s.Create(context.Background(), tx, 0, opts...)
 		require.NoError(b, err)
+	}
+}
+
+// BenchmarkStore_GetBinsToStoreLanePosition builds a record's bins without and
+// with a lane position: the flag-on cost of the one extra bin.
+func BenchmarkStore_GetBinsToStoreLanePosition(b *testing.B) {
+	txHex, err := os.ReadFile("testdata/fbebcc148e40cb6c05e57c6ad63abd49d5e18b013c82f704601bc4ba567dfb90.hex")
+	require.NoError(b, err)
+
+	tx, err := bt.NewTxFromString(string(txHex))
+	require.NoError(b, err)
+
+	s := &teranodeaerospike.Store{}
+	s.SetUtxoBatchSize(100)
+
+	for _, c := range []struct {
+		name string
+		pos  uint64
+	}{{"off", lane.None}, {"on", lane.Pack(7, 41_000)}} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				if _, err := s.GetBinsToStore(tx, 0, nil, nil, nil, false, tx.TxIDChainHash(), false, false, false, c.pos, nil); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 
