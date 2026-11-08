@@ -21,9 +21,10 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 )
 
-// startWait bounds how long the background start waits for the first range
-// before it logs that none came. The allocator keeps trying after that.
-const startWait = 30 * time.Second
+// startWait bounds how long the first create of a process waits for the first
+// range. The wait happens once per process; after it, the allocator keeps
+// trying in the background and no create waits again.
+const startWait = 5 * time.Second
 
 // Positions hands out lane positions. *lane.Allocator implements it.
 type Positions interface {
@@ -38,8 +39,10 @@ type Positions interface {
 // The allocator starts on the first create, not when the store is built. Most
 // services that hold the UTXO store never create a record (asset, RPC, alert,
 // block persister, pruner), and starting at build time would give each of
-// those processes a lane it never uses. The cost is that the first creates of
-// a process go out without a lane position while the first range is fetched.
+// those processes a lane it never uses. The cost is one wait, on the first
+// create of the process, for the first range: one round trip to the blockchain
+// service, bounded by startWait. Creates that arrive during that wait wait
+// with it.
 type Store struct {
 	utxo.Store
 	positions Positions
@@ -58,14 +61,12 @@ func New(store utxo.Store, positions Positions, logger ulogger.Logger) *Store {
 
 func (s *Store) start() {
 	s.startOnce.Do(func() {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), startWait)
-			defer cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), startWait)
+		defer cancel()
 
-			if err := s.positions.Start(ctx); err != nil {
-				s.logger.Warnf("[lanestamp] new records go out without a lane position until a range arrives: %v", err)
-			}
-		}()
+		if err := s.positions.Start(ctx); err != nil {
+			s.logger.Warnf("[lanestamp] new records go out without a lane position until a range arrives: %v", err)
+		}
 	})
 }
 
