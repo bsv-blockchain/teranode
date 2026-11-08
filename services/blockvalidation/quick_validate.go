@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,7 +20,6 @@ import (
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -254,107 +252,31 @@ func blockIDToUint32(id uint64, blockHash string) (uint32, error) {
 }
 
 // setQuickBlockID gives block the id quick validation stamps on its transactions,
-// once per block, from the first batch. firstTx is the block's first non-coinbase
-// transaction. It returns the id when it was recovered from firstTx, and 0 when the
-// id came from AssignBlockID or was already set.
+// once per block, from the first batch. The id always comes from block's own
+// reservation through AssignBlockID, which returns the same id for the same hash
+// while the reservation exists, so a retry stamps the id its first attempt used.
 //
-// A block retried after its transactions were stamped must keep the id they carry,
-// so the id is first read back from firstTx's recorded block ids. The reservation
-// alone cannot be trusted for that: sweepStaleReservations deletes it after an hour,
-// and AssignBlockID would then hand out a new id the stamped transactions do not
-// carry. firstTx is not necessarily this block's alone, though. A fork block holding
-// the same transaction stamps its own id on it, so the recorded ids can belong to
-// other blocks, and StoreBlock refuses an id another block is stored under. Taking
-// the first recorded id regardless used to wedge the block: every retry picked the
-// fork's id again and was refused again. blockIDFromMinedTx picks out the id that
-// can be this block's.
-func (u *BlockValidation) setQuickBlockID(ctx context.Context, block *model.Block, firstTx *bt.Tx, caller string) (uint64, error) {
-	existingMeta, err := u.utxoStore.Get(ctx, firstTx.TxIDChainHash(), fields.BlockIDs)
-	if err == nil && existingMeta != nil && len(existingMeta.BlockIDs) > 0 {
-		id, ok, err := u.blockIDFromMinedTx(ctx, block, firstTx.TxIDChainHash(), existingMeta.BlockIDs, caller)
-		if err != nil {
-			return 0, err
-		}
-
-		if ok {
-			block.ID = id
-			u.logger.Debugf("[%s][%s] reusing BlockID %d from retry", caller, block.Hash().String(), id)
-
-			return uint64(id), nil
-		}
-	}
-
+// The id is never read back from the transactions. A transaction's recorded ids
+// can belong to other blocks that hold it too, such as a stored fork, and StoreBlock
+// refuses an id another block holds, so taking one of them wedged the block.
+//
+// If sweepStaleReservations has deleted the reservation, a retry gets a new id.
+// The retry restamps every transaction that already exists with it (SetMinedMulti
+// in createAndSpendUTXOsForBatch), so the transactions carry the id the block is
+// stored under, plus the old id, which no block is stored under.
+func (u *BlockValidation) setQuickBlockID(ctx context.Context, block *model.Block, caller string) error {
 	if block.ID != 0 {
-		return 0, nil
+		return nil
 	}
 
 	assigned, err := u.blockchainClient.AssignBlockID(ctx, block.Hash())
 	if err != nil {
-		return 0, errors.NewProcessingError("[%s][%s] failed to assign block ID", caller, block.Hash().String(), err)
+		return errors.NewProcessingError("[%s][%s] failed to assign block ID", caller, block.Hash().String(), err)
 	}
 
 	block.ID, err = blockIDToUint32(assigned, block.Hash().String())
-	if err != nil {
-		return 0, err
-	}
 
-	return 0, nil
-}
-
-// blockIDFromMinedTx decides which of the block ids recorded on txHash, if any, is
-// block's own. Each id is looked up in the blockchain store:
-//   - stored under block's hash: block is already committed under it, so use it;
-//   - stored under another hash: a fork block that holds the same transaction, so
-//     the id is not block's;
-//   - not stored: still a candidate, since block stamps its id before it commits.
-//
-// A lone candidate is taken as block's id. That is right on a retry, where block
-// stamped the transaction itself on an earlier attempt. On a first attempt it can
-// instead be the reservation of another block that stamped the transaction and has
-// not committed. StoreBlock refuses that id until the other block commits or
-// sweepStaleReservations deletes the reservation, after staleReservationSweepAge.
-//
-// With no candidate left, the transaction was stamped only by other blocks and
-// block takes its id from AssignBlockID, as on a first attempt. With several left,
-// two unstored blocks have both stamped the transaction and nothing here can tell
-// which id is block's, so it also falls back to AssignBlockID, which returns
-// block's reservation while the reservation exists.
-//
-// A lookup error other than not-found is returned rather than read as "not stored":
-// a transient fault would otherwise make a fork's id look free and recreate the
-// wedge this function exists to prevent.
-func (u *BlockValidation) blockIDFromMinedTx(ctx context.Context, block *model.Block, txHash *chainhash.Hash, recorded []uint32, caller string) (uint32, bool, error) {
-	var candidates []uint32
-
-	for _, id := range recorded {
-		if slices.Contains(candidates, id) {
-			continue
-		}
-
-		stored, err := u.blockchainClient.GetBlockByID(ctx, uint64(id))
-		if err != nil {
-			if errors.Is(err, errors.ErrBlockNotFound) {
-				candidates = append(candidates, id)
-				continue
-			}
-
-			return 0, false, errors.NewProcessingError("[%s][%s] failed to look up block id %d recorded on tx %s", caller, block.Hash().String(), id, txHash.String(), err)
-		}
-
-		if stored.Hash().IsEqual(block.Hash()) {
-			return id, true, nil
-		}
-	}
-
-	switch len(candidates) {
-	case 1:
-		return candidates[0], true, nil
-	case 0:
-		return 0, false, nil
-	default:
-		u.logger.Warnf("[%s][%s] tx %s carries block ids %v and none is stored yet; cannot tell which is this block's, falling back to AssignBlockID", caller, block.Hash().String(), txHash.String(), candidates)
-		return 0, false, nil
-	}
+	return err
 }
 
 // quickValidateBlock performs optimized validation for blocks below checkpoints.
@@ -866,7 +788,6 @@ func (u *BlockValidation) processBlockSubtrees(ctx context.Context, block *model
 func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, block *model.Block, outpointOnly bool) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
-	var existingBlockID uint64
 
 	// Get block ID first (check for retry using first tx after reading first batch)
 	blockIDSet := false
@@ -905,16 +826,12 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 
 			defer batch.Close()
 
-			// Phase 4: Check for retry and get block ID (only on first batch).
-			// batchTxs[0] is the first non-coinbase tx; setQuickBlockID recovers this
-			// block's id from it on a retry, or assigns one.
+			// Phase 4: Get the block ID (only on first batch).
 			if !blockIDSet && len(batch.batchTxs) > 0 {
-				id, err := u.setQuickBlockID(ctx, block, batch.batchTxs[0], "processBlockSubtreesSequential")
-				if err != nil {
+				if err := u.setQuickBlockID(ctx, block, "processBlockSubtreesSequential"); err != nil {
 					return err
 				}
 
-				existingBlockID = id
 				blockIDSet = true
 
 			}
@@ -931,7 +848,7 @@ func (u *BlockValidation) processBlockSubtreesSequential(ctx context.Context, bl
 		}
 	}
 
-	return u.validateSubtrees(ctx, block, existingBlockID)
+	return u.validateSubtrees(ctx, block, 0)
 }
 
 // startPrefetchAndExtendStages starts the first two stages both pipelined drivers share
@@ -1057,7 +974,6 @@ func (u *BlockValidation) startPrefetchAndExtendStages(gCtx context.Context, g *
 func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, block *model.Block, prefetchDepth int, outpointOnly bool) (uint64, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
-	var existingBlockID uint64
 	blockIDSet := false
 
 	// Channel for prefetched batches (subtrees read, txs not extended)
@@ -1113,12 +1029,10 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 
 				// Block ID check (first batch only)
 				if !blockIDSet && len(batch.batchTxs) > 0 {
-					id, err := u.setQuickBlockID(gCtx, block, batch.batchTxs[0], "processBlockSubtreesPipeline")
-					if err != nil {
+					if err := u.setQuickBlockID(gCtx, block, "processBlockSubtreesPipeline"); err != nil {
 						return err
 					}
 
-					existingBlockID = id
 					blockIDSet = true
 
 				}
@@ -1158,7 +1072,7 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 		return 0, err
 	}
 
-	return u.validateSubtrees(ctx, block, existingBlockID)
+	return u.validateSubtrees(ctx, block, 0)
 }
 
 // processBlockSubtreesPipelineAsync processes subtrees with async file writes across blocks.
@@ -1188,7 +1102,6 @@ func (u *BlockValidation) processBlockSubtreesPipeline(ctx context.Context, bloc
 func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context, block *model.Block, prefetchDepth int, writeJobsChan chan<- *SubtreeWriteJob, outpointOnly bool) (uint64, *subtreeWriteBarrier, map[chainhash.Hash]map[fileformat.FileType]struct{}, error) {
 	numSubtrees := len(block.Subtrees)
 	block.SubtreeSlices = make([]*subtreepkg.Subtree, numSubtrees)
-	var existingBlockID uint64
 	blockIDSet := false
 
 	// Scoped to this one block's call (bitcoin-sv/teranode#4692): wg tracks every write job queued
@@ -1243,12 +1156,10 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 
 				// Block ID check (first batch only)
 				if !blockIDSet && len(batch.batchTxs) > 0 {
-					id, err := u.setQuickBlockID(gCtx, block, batch.batchTxs[0], "processBlockSubtreesPipelineAsync")
-					if err != nil {
+					if err := u.setQuickBlockID(gCtx, block, "processBlockSubtreesPipelineAsync"); err != nil {
 						return err
 					}
 
-					existingBlockID = id
 					blockIDSet = true
 				}
 
@@ -1289,7 +1200,7 @@ func (u *BlockValidation) processBlockSubtreesPipelineAsync(ctx context.Context,
 		return 0, wg, freshness.snapshot(), err
 	}
 
-	resultID, err := u.validateSubtrees(ctx, block, existingBlockID)
+	resultID, err := u.validateSubtrees(ctx, block, 0)
 
 	return resultID, wg, freshness.snapshot(), err
 }
