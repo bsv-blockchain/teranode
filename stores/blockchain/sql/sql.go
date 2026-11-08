@@ -554,6 +554,15 @@ func createPostgresSchema(logger ulogger.Logger, db *usql.DB, withIndexes bool) 
 	})
 }
 
+// blockchainSchemaExpectedTables lists tables the DDL guarantees, so the
+// fast-path probe notices a database that predates one of them. Add every new
+// table here, or an existing database never gets it.
+var blockchainSchemaExpectedTables = []string{
+	"blocks",
+	"block_id_reservations",
+	"lane_handout",
+}
+
 // blockchainSchemaExpectedColumns is the list of columns createPostgresSchemaUnlocked
 // guarantees exist on the blocks table after a successful run. Kept in sync with
 // the CREATE TABLE / ADD COLUMN statements below.
@@ -595,28 +604,20 @@ var (
 // Returns (false, nil) if anything is missing. Returns (false, err) only for
 // transport errors — a missing column / table / index is not an error.
 func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
-	// blocks table present?
-	var hasBlocks bool
-	if err := db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'blocks')`,
-	).Scan(&hasBlocks); err != nil {
-		return false, err
-	}
-	if !hasBlocks {
-		return false, nil
-	}
-
-	// block_id_reservations table present? Added after blocks; an existing
-	// deployment that predates it must re-run the DDL (CREATE TABLE IF NOT EXISTS)
-	// to gain it, so treat its absence as "not current".
-	var hasReservations bool
-	if err := db.QueryRow(
-		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'block_id_reservations')`,
-	).Scan(&hasReservations); err != nil {
-		return false, err
-	}
-	if !hasReservations {
-		return false, nil
+	// Every table the DDL creates must be present. A deployment that predates
+	// one of them must re-run the DDL (CREATE TABLE IF NOT EXISTS) to gain it,
+	// so a missing table means "not current".
+	for _, table := range blockchainSchemaExpectedTables {
+		var exists bool
+		if err := db.QueryRow(
+			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = $1)`,
+			table,
+		).Scan(&exists); err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
 	}
 
 	// peer_id must exist and already be TEXT — otherwise we still need the
@@ -984,6 +985,21 @@ func createPostgresSchemaUnlocked(db *usql.DB, withIndexes bool) error {
 		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
 	}
 
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS lane_handout (
+			lane       SMALLINT    NOT NULL,
+			first      BIGINT      NOT NULL,
+			last       BIGINT      NOT NULL,
+			holder     TEXT        NOT NULL,
+			height     BIGINT      NOT NULL,
+			handed_at  TIMESTAMPTZ NOT NULL,
+			PRIMARY KEY (lane, first)
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create lane_handout table", err)
+	}
+
 	return nil
 }
 
@@ -1264,6 +1280,21 @@ func createSqliteSchema(db *usql.DB) error {
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_scheduled_blob_deletions_height ON scheduled_blob_deletions(delete_at_height ASC, id ASC);`); err != nil {
 		_ = db.Close()
 		return errors.NewStorageError("could not create idx_scheduled_blob_deletions_height index", err)
+	}
+
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS lane_handout (
+			lane       INTEGER   NOT NULL,
+			first      INTEGER   NOT NULL,
+			last       INTEGER   NOT NULL,
+			holder     TEXT      NOT NULL,
+			height     INTEGER   NOT NULL,
+			handed_at  TIMESTAMP NOT NULL,
+			PRIMARY KEY (lane, first)
+		);
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not create lane_handout table", err)
 	}
 
 	return nil

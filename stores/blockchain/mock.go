@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -698,6 +699,10 @@ func (m *MockStore) InvalidateBlock(ctx context.Context, blockHash *chainhash.Ha
 }
 
 func (m *MockStore) RevalidateBlock(ctx context.Context, blockHash *chainhash.Hash) error {
+	panic(implementMe)
+}
+
+func (m *MockStore) ReserveLaneRange(ctx context.Context, req options.LaneRangeRequest) (lane.Range, error) {
 	panic(implementMe)
 }
 

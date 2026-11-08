@@ -19,6 +19,7 @@ func TestBlockchainAuthMethodCoverage(t *testing.T) {
 		"/blockchain_api.BlockchainAPI/GetBlockByID":                         true,
 		"/blockchain_api.BlockchainAPI/GetNextBlockID":                       true,
 		"/blockchain_api.BlockchainAPI/AssignBlockID":                        true,
+		"/blockchain_api.BlockchainAPI/ReserveLaneRange":                     true,
 		"/blockchain_api.BlockchainAPI/GetBlockStats":                        true,
 		"/blockchain_api.BlockchainAPI/GetBlockGraphData":                    true,
 		"/blockchain_api.BlockchainAPI/GetLastNBlocks":                       true,

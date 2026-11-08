@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/storetypes"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -695,6 +696,15 @@ func (s *errorStoreGetBlockHeader) GetBlockHeader(ctx context.Context, h *chainh
 		return nil, nil, args.Error(2)
 	}
 	return args.Get(0).(*model.BlockHeader), args.Get(1).(*model.BlockHeaderMeta), args.Error(2)
+}
+
+// ReserveLaneRange mocks the ReserveLaneRange method
+func (m *Mock) ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
+	args := m.Called(ctx, holder, wantLane, hasLane)
+	if args.Error(1) != nil {
+		return lane.Range{}, args.Error(1)
+	}
+	return args.Get(0).(lane.Range), nil
 }
 
 type emptyStoreGetBlockHeader struct {

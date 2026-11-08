@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,6 +47,7 @@ import (
 	"github.com/bsv-blockchain/teranode/util/health"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -1627,6 +1629,52 @@ func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.Assi
 	}
 
 	return &blockchain_api.AssignBlockIDResponse{BlockId: id}, nil
+}
+
+// ReserveLaneRange hands a record-creating process the next range of positions in a lane.
+func (b *Blockchain) ReserveLaneRange(ctx context.Context, req *blockchain_api.ReserveLaneRangeRequest) (*blockchain_api.ReserveLaneRangeResponse, error) {
+	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "ReserveLaneRange",
+		tracing.WithParentStat(b.stats),
+		tracing.WithLogMessage(b.logger, "[ReserveLaneRange] called by %s", req.GetHolder()),
+	)
+	defer deferFn()
+
+	if req.WantLane > lane.MaxLane {
+		return nil, errors.WrapGRPC(errors.NewInvalidArgumentError("[ReserveLaneRange] lane %d is above %d", req.WantLane, lane.MaxLane))
+	}
+
+	r, err := reserveLaneRange(ctx, b.store, b.settings, req.Holder, uint8(req.WantLane), req.HasLane)
+	if err != nil {
+		return nil, errors.WrapGRPC(err)
+	}
+
+	return &blockchain_api.ReserveLaneRangeResponse{Lane: uint32(r.Lane), First: r.First, Last: r.Last}, nil
+}
+
+// reserveLaneRange fills the range size and idle window from settings and the height from the
+// best block, then asks the store. The Server and the LocalClient share it.
+func reserveLaneRange(ctx context.Context, store blockchain_store.Store, tSettings *settings.Settings, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
+	_, meta, err := store.GetBestBlockHeader(ctx)
+	if err != nil {
+		return lane.Range{}, err
+	}
+
+	r, err := store.ReserveLaneRange(ctx, blockchainoptions.LaneRangeRequest{
+		Holder:    holder,
+		WantLane:  wantLane,
+		HasLane:   hasLane,
+		Size:      tSettings.BlockChain.LaneRangeSize,
+		Height:    meta.Height,
+		FreeAfter: tSettings.BlockChain.LaneFreeAfter,
+		Now:       time.Now(),
+	})
+	if err != nil {
+		return lane.Range{}, err
+	}
+
+	prometheusBlockchainLaneHandouts.WithLabelValues(strconv.Itoa(int(r.Lane))).Inc()
+
+	return r, nil
 }
 
 // GetBlockStats retrieves statistical information about the blockchain.

@@ -62,6 +62,7 @@ const (
 	BlockchainAPI_GetBlocksByHeight_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlocksByHeight"
 	BlockchainAPI_FindBlocksContainingSubtree_FullMethodName          = "/blockchain_api.BlockchainAPI/FindBlocksContainingSubtree"
 	BlockchainAPI_GetBlockHeaderIDs_FullMethodName                    = "/blockchain_api.BlockchainAPI/GetBlockHeaderIDs"
+	BlockchainAPI_ReserveLaneRange_FullMethodName                     = "/blockchain_api.BlockchainAPI/ReserveLaneRange"
 	BlockchainAPI_GetBestBlockHeader_FullMethodName                   = "/blockchain_api.BlockchainAPI/GetBestBlockHeader"
 	BlockchainAPI_CheckBlockIsInCurrentChain_FullMethodName           = "/blockchain_api.BlockchainAPI/CheckBlockIsInCurrentChain"
 	BlockchainAPI_CheckBlockIsAncestorOfBlock_FullMethodName          = "/blockchain_api.BlockchainAPI/CheckBlockIsAncestorOfBlock"
@@ -183,6 +184,9 @@ type BlockchainAPIClient interface {
 	FindBlocksContainingSubtree(ctx context.Context, in *FindBlocksContainingSubtreeRequest, opts ...grpc.CallOption) (*FindBlocksContainingSubtreeResponse, error)
 	// GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
 	GetBlockHeaderIDs(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeaderIDsResponse, error)
+	// ReserveLaneRange hands a record-creating process the next range of positions in a lane.
+	// The service picks the lane when none is asked for or the one asked for is held by someone else.
+	ReserveLaneRange(ctx context.Context, in *ReserveLaneRangeRequest, opts ...grpc.CallOption) (*ReserveLaneRangeResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
@@ -591,6 +595,16 @@ func (c *blockchainAPIClient) GetBlockHeaderIDs(ctx context.Context, in *GetBloc
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetBlockHeaderIDsResponse)
 	err := c.cc.Invoke(ctx, BlockchainAPI_GetBlockHeaderIDs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *blockchainAPIClient) ReserveLaneRange(ctx context.Context, in *ReserveLaneRangeRequest, opts ...grpc.CallOption) (*ReserveLaneRangeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReserveLaneRangeResponse)
+	err := c.cc.Invoke(ctx, BlockchainAPI_ReserveLaneRange_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1085,6 +1099,9 @@ type BlockchainAPIServer interface {
 	FindBlocksContainingSubtree(context.Context, *FindBlocksContainingSubtreeRequest) (*FindBlocksContainingSubtreeResponse, error)
 	// GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
 	GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error)
+	// ReserveLaneRange hands a record-creating process the next range of positions in a lane.
+	// The service picks the lane when none is asked for or the one asked for is held by someone else.
+	ReserveLaneRange(context.Context, *ReserveLaneRangeRequest) (*ReserveLaneRangeResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)
 	// CheckBlockIsInCurrentChain verifies if specified blocks are in the main chain.
@@ -1274,6 +1291,9 @@ func (UnimplementedBlockchainAPIServer) FindBlocksContainingSubtree(context.Cont
 }
 func (UnimplementedBlockchainAPIServer) GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBlockHeaderIDs not implemented")
+}
+func (UnimplementedBlockchainAPIServer) ReserveLaneRange(context.Context, *ReserveLaneRangeRequest) (*ReserveLaneRangeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReserveLaneRange not implemented")
 }
 func (UnimplementedBlockchainAPIServer) GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetBestBlockHeader not implemented")
@@ -1988,6 +2008,24 @@ func _BlockchainAPI_GetBlockHeaderIDs_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(BlockchainAPIServer).GetBlockHeaderIDs(ctx, req.(*GetBlockHeadersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _BlockchainAPI_ReserveLaneRange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReserveLaneRangeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BlockchainAPIServer).ReserveLaneRange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BlockchainAPI_ReserveLaneRange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BlockchainAPIServer).ReserveLaneRange(ctx, req.(*ReserveLaneRangeRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2839,6 +2877,10 @@ var BlockchainAPI_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetBlockHeaderIDs",
 			Handler:    _BlockchainAPI_GetBlockHeaderIDs_Handler,
+		},
+		{
+			MethodName: "ReserveLaneRange",
+			Handler:    _BlockchainAPI_ReserveLaneRange_Handler,
 		},
 		{
 			MethodName: "GetBestBlockHeader",

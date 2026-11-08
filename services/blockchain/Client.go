@@ -24,6 +24,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -482,6 +483,24 @@ func (c *Client) AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (
 		return 0, errors.UnwrapGRPC(err)
 	}
 	return resp.BlockId, nil
+}
+
+// ReserveLaneRange asks the blockchain service for the next range of lane positions.
+func (c *Client) ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
+	resp, err := c.client.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{
+		Holder:   holder,
+		WantLane: uint32(wantLane),
+		HasLane:  hasLane,
+	})
+	if err != nil {
+		return lane.Range{}, errors.UnwrapGRPC(err)
+	}
+
+	if resp.Lane > lane.MaxLane {
+		return lane.Range{}, errors.NewServiceError("blockchain service returned lane %d, above %d", resp.Lane, lane.MaxLane)
+	}
+
+	return lane.Range{Lane: uint8(resp.Lane), First: resp.First, Last: resp.Last}, nil
 }
 
 // blockFromResponse converts a gRPC GetBlockResponse into a model.Block.

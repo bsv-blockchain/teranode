@@ -73,6 +73,7 @@ var (
 	prometheusBlockchainSubscriberPendingFull *prometheus.CounterVec
 	prometheusBlockchainSubscriberSendErrors  *prometheus.CounterVec
 	prometheusBlockchainWatchdogFires         *prometheus.CounterVec
+	prometheusBlockchainLaneHandouts          *prometheus.CounterVec
 
 	// Notifications dropped because the notification channel was full. A drop
 	// means the RPC returned success while the event never reached any
@@ -551,6 +552,16 @@ func _initPrometheusMetrics() {
 			Help:      "Number of times the client-side stream-progress watchdog cancelled a stale gRPC subscription stream (issue #872 zombie-stream detector).",
 		},
 		[]string{"source"},
+	)
+
+	prometheusBlockchainLaneHandouts = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "blockchain",
+			Name:      "lane_handouts_total",
+			Help:      "Number of lane position ranges handed out, by lane.",
+		},
+		[]string{"lane"},
 	)
 }
 
