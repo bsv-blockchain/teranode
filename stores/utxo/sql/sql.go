@@ -72,6 +72,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/batchermetrics"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/tracing"
 	"github.com/bsv-blockchain/teranode/util/usql"
 	"github.com/jackc/pgx/v5"
@@ -543,6 +544,27 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		RETURNING id
 	`
 
+	args := []any{
+		txHash[:],
+		tx.Version,
+		tx.LockTime,
+		txMeta.Fee,
+		txMeta.SizeInBytes,
+		isCoinbase,
+		options.Frozen,
+		options.Conflicting,
+		options.Locked,
+		unminedSince,
+		deleteAtHeight,
+	}
+
+	// A lane position is written in this same INSERT. Without one the statement
+	// and its arguments are exactly what they were before the column existed.
+	if options.LanePosition != lane.None {
+		q = insertTransactionWithLanePositionSQL
+		args = append(args, lane.ToSigned(options.LanePosition))
+	}
+
 	// Create a database transaction
 	txn, err := s.db.Begin()
 	if err != nil {
@@ -555,21 +577,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 
 	var transactionID int
 
-	err = txn.QueryRowContext(
-		ctx,
-		q,
-		txHash[:],
-		tx.Version,
-		tx.LockTime,
-		txMeta.Fee,
-		txMeta.SizeInBytes,
-		isCoinbase,
-		options.Frozen,
-		options.Conflicting,
-		options.Locked,
-		unminedSince,
-		deleteAtHeight,
-	).Scan(&transactionID)
+	err = txn.QueryRowContext(ctx, q, args...).Scan(&transactionID)
 	if err != nil {
 		if pgErr := asPgUniqueViolation(err); pgErr != nil {
 			return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
@@ -619,6 +627,27 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 
 	return txMeta, nil
 }
+
+// insertTransactionWithLanePositionSQL is the plain transaction-row INSERT of
+// createWithRetry with lane_position as $12. It is used only when the caller
+// supplied a lane position; otherwise the original statement runs unchanged.
+const insertTransactionWithLanePositionSQL = `
+	INSERT INTO transactions (
+	 hash
+	,version
+	,lock_time
+	,fee
+	,size_in_bytes
+	,coinbase
+	,frozen
+	,conflicting
+	,locked
+	,unmined_since
+	,delete_at_height
+	,lane_position
+  ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+	RETURNING id
+`
 
 // unspendableMinedTxDAH returns the delete_at_height to assign at creation time
 // for a transaction that is created already-mined and has no spendable outputs
@@ -793,7 +822,8 @@ func (s *Store) createBlockIDsBatched(ctx context.Context, txn *sql.Tx, transact
 // createCTESQL is the single CTE statement that inserts a transaction + all its inputs,
 // outputs, and block_ids in one round-trip. UNNEST with array parameters means the SQL
 // string is always identical regardless of transaction size — perfect for statement caching.
-// Parameters: $1-$10 = transaction scalars, $11-$17 = input arrays, $18-$22 = output arrays, $23-$25 = block_id arrays.
+// Parameters: $1-$10 = transaction scalars, $11-$17 = input arrays, $18-$22 = output arrays,
+// $23-$25 = block_id arrays, $26 = delete_at_height.
 const createCTESQL = `
 WITH new_tx AS (
 	INSERT INTO transactions (hash,version,lock_time,fee,size_in_bytes,coinbase,frozen,conflicting,locked,unmined_since,delete_at_height)
@@ -819,6 +849,33 @@ WITH new_tx AS (
 SELECT id FROM new_tx
 `
 
+// createCTEWithLanePositionSQL is createCTESQL with lane_position as $27. It is
+// used only for a record that carries a lane position; every other record runs
+// createCTESQL unchanged, so the common statement and its argument list do not
+// grow for callers that do not use lane positions.
+var createCTEWithLanePositionSQL = withLanePositionColumn(createCTESQL)
+
+func withLanePositionColumn(stmt string) string {
+	out := strings.Replace(stmt, "unmined_since,delete_at_height)", "unmined_since,delete_at_height,lane_position)", 1)
+	out = strings.Replace(out, "$10,$26)", "$10,$26,$27)", 1)
+
+	if strings.Count(out, "lane_position") != 1 || strings.Count(out, "$27") != 1 {
+		panic("createCTESQL changed shape: cannot add lane_position")
+	}
+
+	return out
+}
+
+// createCTEStatement returns the CTE statement for a record and the extra
+// trailing argument it needs: none without a lane position, $27 with one.
+func createCTEStatement(position uint64) (string, []any) {
+	if position == lane.None {
+		return createCTESQL, nil
+	}
+
+	return createCTEWithLanePositionSQL, []any{lane.ToSigned(position)}
+}
+
 // createCTE executes a single CTE statement with UNNEST arrays to insert a transaction
 // and all its inputs/outputs/block_ids in one network round-trip (postgres only).
 // No explicit transaction needed — a single statement is auto-atomic.
@@ -841,7 +898,8 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 	var inserted bool
 	err = sqlConn.Raw(func(driverConn interface{}) error {
 		pgxConn := driverConn.(*stdlib.Conn).Conn()
-		rows, execErr := pgxConn.Query(ctx, createCTESQL,
+		stmt, extra := createCTEStatement(options.LanePosition)
+		args := append(make([]any, 0, 26+len(extra)),
 			// $1-$10: transaction scalars
 			txHash[:], btTx.Version, btTx.LockTime, txMeta.Fee, txMeta.SizeInBytes,
 			isCoinbase, options.Frozen, options.Conflicting, options.Locked, unminedSince,
@@ -857,6 +915,7 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 			// $26: delete_at_height for a mined tx with no spendable outputs
 			s.unspendableMinedTxDAH(btTx, blockHeight, options),
 		)
+		rows, execErr := pgxConn.Query(ctx, stmt, append(args, extra...)...)
 		if execErr != nil {
 			return execErr
 		}
@@ -1149,7 +1208,8 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		for _, idx := range validIndices {
 			p := &prepared[idx]
 			item := batch[idx]
-			pgxBatch.Queue(createCTESQL,
+			stmt, extra := createCTEStatement(item.options.LanePosition)
+			args := append(make([]any, 0, 26+len(extra)),
 				// $1-$10: transaction scalars
 				p.txHash[:], item.tx.Version, item.tx.LockTime,
 				p.txMeta.Fee, p.txMeta.SizeInBytes,
@@ -1169,6 +1229,7 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 				// $26: delete_at_height for a mined tx with no spendable outputs
 				s.unspendableMinedTxDAH(item.tx, item.blockHeight, item.options),
 			)
+			pgxBatch.Queue(stmt, append(args, extra...)...)
 		}
 
 		br := pgxConn.SendBatch(s.ctx, pgxBatch)
@@ -1614,6 +1675,13 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		WHERE hash = $1
 	`
 
+	// lane_position is read only when the caller names it, so every other Get
+	// runs the statement it always did.
+	wantLanePosition := contains(bins, fields.LanePosition)
+	if wantLanePosition {
+		q = strings.Replace(q, ",inserted_at", ",inserted_at\n\t\t,lane_position", 1)
+	}
+
 	data := &meta.Data{}
 
 	var (
@@ -1628,7 +1696,14 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		insertedAt any
 	)
 
-	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt)
+	dest := []any{&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt}
+
+	var lanePosition sql.NullInt64
+	if wantLanePosition {
+		dest = append(dest, &lanePosition)
+	}
+
+	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(dest...)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.NewTxNotFoundError("transaction %s not found", hash, err)
@@ -1643,6 +1718,10 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		if unminedSince.Int64 >= 0 && unminedSince.Int64 <= maxUint32 {
 			data.UnminedSince = uint32(unminedSince.Int64)
 		}
+	}
+
+	if lanePosition.Valid {
+		data.LanePosition = lane.FromSigned(lanePosition.Int64)
 	}
 
 	// CreatedAt mirrors the aerospike bin: Unix milliseconds, set once at insert.
@@ -4272,7 +4351,14 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 	// Query 1: Bulk fetch from transactions table
 	inClause, inArgs := buildINClause(hashes, 1)
 
-	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, inserted_at FROM transactions WHERE hash IN ` + inClause
+	// lane_position is selected last, and only when the caller names it.
+	wantLanePosition := contains(bins, fields.LanePosition)
+	laneColumn := ""
+	if wantLanePosition {
+		laneColumn = ", lane_position"
+	}
+
+	q := `SELECT hash, id, version, lock_time, fee, size_in_bytes, coinbase, frozen, conflicting, locked, unmined_since, inserted_at` + laneColumn + ` FROM transactions WHERE hash IN ` + inClause
 
 	rows, err := s.db.QueryContext(ctx, q, inArgs...)
 	if err != nil {
@@ -4289,12 +4375,22 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 			hashBytes    []byte
 			unminedSince sql.NullInt64
 			insertedAt   any
+			lanePosition sql.NullInt64
 		)
 
 		row := &batchDecorateTxRow{data: &meta.Data{}}
-		if err := rows.Scan(&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt); err != nil {
+		dest := []any{&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt}
+		if wantLanePosition {
+			dest = append(dest, &lanePosition)
+		}
+
+		if err := rows.Scan(dest...); err != nil {
 			rows.Close()
 			return err
+		}
+
+		if lanePosition.Valid {
+			row.data.LanePosition = lane.FromSigned(lanePosition.Int64)
 		}
 
 		copy(row.hash[:], hashBytes)
@@ -5654,6 +5750,7 @@ func createPostgresSchemaImpl(db DBExecutor) error {
         ,delete_at_height BIGINT
         ,unmined_since    BIGINT
         ,preserve_until   BIGINT
+        ,lane_position    BIGINT
         ,inserted_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -5803,6 +5900,22 @@ func createPostgresSchemaImpl(db DBExecutor) error {
 		return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
 	}
 
+	// Add lane_position column to transactions table if it doesn't exist. The
+	// column is nullable with no default, so on postgres this is a catalog-only
+	// change that does not rewrite the table. NULL means no lane position was
+	// recorded, which is what every pre-existing row reads as.
+	if _, err := db.Exec(`
+		DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'transactions'::regclass AND attname = 'lane_position' AND NOT attisdropped) THEN
+				ALTER TABLE transactions ADD COLUMN lane_position BIGINT;
+			END IF;
+		END $$;
+	`); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not add lane_position column to transactions table - [%+v]", err)
+	}
+
 	// Ensure block_ids FK has ON DELETE CASCADE — only drop+recreate if it exists without CASCADE
 	if _, err := db.Exec(`
 		DO $$
@@ -5897,6 +6010,7 @@ func createSqliteSchema(db *usql.DB) error {
         ,delete_at_height BIGINT
         ,unmined_since    BIGINT
         ,preserve_until   BIGINT
+        ,lane_position    BIGINT
         ,inserted_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 	  );
 	`); err != nil {
@@ -6172,6 +6286,21 @@ func createSqliteSchema(db *usql.DB) error {
 		`); err != nil {
 			_ = db.Close()
 			return errors.NewStorageError("could not add preserve_until column to transactions table - [%+v]", err)
+		}
+	}
+
+	// Add the nullable lane_position column to a database created before it
+	// existed. No default and no backfill: NULL reads as no lane position.
+	var lanePositionColumns int
+	if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info('transactions') WHERE name = 'lane_position'`).Scan(&lanePositionColumns); err != nil {
+		_ = db.Close()
+		return errors.NewStorageError("could not check transactions table for lane_position column - [%+v]", err)
+	}
+
+	if lanePositionColumns == 0 {
+		if _, err := db.Exec(`ALTER TABLE transactions ADD COLUMN lane_position BIGINT`); err != nil {
+			_ = db.Close()
+			return errors.NewStorageError("could not add lane_position column to transactions table - [%+v]", err)
 		}
 	}
 
