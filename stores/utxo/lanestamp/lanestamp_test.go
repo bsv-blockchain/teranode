@@ -13,6 +13,7 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/lanestamp"
+	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -120,4 +121,37 @@ func TestACreateWithNoRangeInHandHasNoLanePosition(t *testing.T) {
 
 	require.Equal(t, lane.None, lanePosition(t, inner, w.Roots[0]))
 	require.Equal(t, lane.None, lanePosition(t, inner, w.Txs[0]))
+}
+
+// BenchmarkSpendAndCreate times what lane positions add to every create in a
+// process: the wrapper's option scan, one allocator Next and one more option.
+// The null store underneath does no work, so the difference is all stamping.
+func BenchmarkSpendAndCreate(b *testing.B) {
+	inner, err := nullstore.NewNullStore()
+	require.NoError(b, err)
+
+	a := lane.NewAllocator(&source{}, "bench", filepath.Join(b.TempDir(), "lane"), nil)
+	b.Cleanup(a.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.NoError(b, a.Start(ctx))
+
+	tx := tests.BuildMultiWorkload(b, 0xe2, 1, 1).Txs[0]
+
+	for _, c := range []struct {
+		name  string
+		store utxostore.Store
+	}{{"off", inner}, {"on", lanestamp.New(inner, a, nil)}} {
+		b.Run(c.name, func(b *testing.B) {
+			b.ReportAllocs()
+
+			for i := 0; i < b.N; i++ {
+				if _, _, err := c.store.SpendAndCreate(context.Background(), tx, 901, utxostore.WithIgnoreLocked(true)); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
