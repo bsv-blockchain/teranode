@@ -298,3 +298,9 @@ func TestAllocatorStartWithTheServiceDownStillRuns(t *testing.T) {
 	require.Eventually(t, func() bool { _, ok := a.Next(); return ok }, 5*time.Second, 5*time.Millisecond,
 		"the allocator keeps trying in the background")
 }
+
+func TestFileNameNeverLeavesTheLaneFolder(t *testing.T) {
+	require.Equal(t, "teranode-1.lane", FileName("teranode-1"))
+	require.Equal(t, "___etc_passwd.lane", FileName("../etc/passwd"))
+	require.Equal(t, "default.lane", FileName(""))
+}

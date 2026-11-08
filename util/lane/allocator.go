@@ -56,6 +56,7 @@ type Allocator struct {
 	wake      chan struct{}
 	ready     chan struct{}
 	readyOnce sync.Once
+	startOnce sync.Once
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -90,13 +91,16 @@ func NewAllocator(src RangeSource, holder, file string, logger ulogger.Logger) *
 
 // Start reads the saved lane and starts fetching ranges in the background. It
 // waits for the first range until ctx ends, and returns an error if none came;
-// the allocator keeps trying either way, so an error here is not fatal.
+// the allocator keeps trying either way, so an error here is not fatal. Calling
+// it again only waits.
 func (a *Allocator) Start(ctx context.Context) error {
-	if l, ok := readLaneFile(a.file); ok {
-		a.lane, a.hasLane = l, true
-	}
+	a.startOnce.Do(func() {
+		if l, ok := readLaneFile(a.file); ok {
+			a.lane, a.hasLane = l, true
+		}
 
-	go a.run()
+		go a.run()
+	})
 
 	select {
 	case <-a.ready:
@@ -110,6 +114,10 @@ func (a *Allocator) Start(ctx context.Context) error {
 // is safe: the service never hands them out again.
 func (a *Allocator) Close() {
 	a.cancel()
+
+	// A never-started allocator has no fetch loop to wait for.
+	a.startOnce.Do(func() { close(a.done) })
+
 	<-a.done
 }
 
@@ -299,4 +307,24 @@ func writeLaneFile(file string, l uint8) error {
 	}
 
 	return os.Rename(tmp, file)
+}
+
+// FileName is the name of the file a process keeps its lane number in, made
+// from its client name with anything but letters, digits, dashes and
+// underscores replaced, so a client name can never escape the lane folder.
+func FileName(clientName string) string {
+	clean := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		default:
+			return '_'
+		}
+	}, clientName)
+
+	if clean == "" {
+		clean = "default"
+	}
+
+	return clean + ".lane"
 }
