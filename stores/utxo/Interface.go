@@ -296,6 +296,14 @@ type CreateOptions struct {
 	Locked             bool
 	SkipExtendedInputs bool
 
+	// LanePosition is the record's lane position (util/lane), written once in
+	// the create write. lane.None (zero) writes nothing: no bin, a NULL column.
+	LanePosition uint64
+	// LanePositions is the list form for SpendAndCreateMulti: one lane position
+	// per transaction of the list, in the same order. ItemOptions copies element
+	// i into LanePosition.
+	LanePositions []uint64
+
 	// SpendAndCreate-specific options.
 	IgnoreFlags IgnoreFlags // spend-phase flags (ignored with CreateOnly)
 	CreateOnly  bool        // skip the spend phase
@@ -354,6 +362,11 @@ func (o *CreateOptions) ItemOptions(i int) *CreateOptions {
 	c.TxIDs = nil
 	c.SubtreeIdxs = nil
 	c.BelowCheckpoint = false
+	c.LanePositions = nil
+
+	if i < len(o.LanePositions) {
+		c.LanePosition = o.LanePositions[i]
+	}
 
 	if o.SubtreeIdxs != nil && i < len(o.SubtreeIdxs) && len(o.MinedBlockInfos) > 0 {
 		c.MinedBlockInfos = make([]MinedBlockInfo, len(o.MinedBlockInfos))
@@ -419,6 +432,24 @@ var (
 func WithTXIDs(txIDs []chainhash.Hash) CreateOption {
 	return func(o *CreateOptions) {
 		o.TxIDs = txIDs
+	}
+}
+
+// WithLanePosition gives the created record its lane position (util/lane).
+// It captures its argument, so unlike the boolean options it allocates once per
+// call; it is only passed when lane positions are switched on.
+func WithLanePosition(position uint64) CreateOption {
+	return func(o *CreateOptions) {
+		o.LanePosition = position
+	}
+}
+
+// WithLanePositions supplies the lane position of each transaction of a
+// SpendAndCreateMulti list, in the same order. It is the list form of
+// WithLanePosition and has no effect on SpendAndCreate.
+func WithLanePositions(positions []uint64) CreateOption {
+	return func(o *CreateOptions) {
+		o.LanePositions = positions
 	}
 }
 

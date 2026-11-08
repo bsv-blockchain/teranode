@@ -70,6 +70,20 @@ type Data struct {
 	// canonical spender that an earlier ProcessConflicting demoted.
 	CreatedAt int64 `json:"createdAt,omitempty"`
 
+	// LanePosition is the record's lane position (util/lane), written once at
+	// create and never updated. Zero (lane.None) means the record has none: it
+	// was created with lane positions off, or before they existed.
+	//
+	// It is deliberately NOT carried by any of the binary encodings on this type
+	// (Bytes/NewDataFromBytes, MetaBytes/MetaBytesInto/NewMetaDataFromBytes).
+	// Bytes ends with an unlengthed run of 4-byte block IDs read to EOF, and the
+	// Meta pair has a fixed header with no version, so eight more bytes would
+	// decode as block IDs or shift fields rather than fail. Carrying it needs a
+	// versioned encoding. The consequence: the txmeta cache does not keep it, so
+	// a GetMeta answered from the cache returns zero. Nothing reads the field
+	// yet; a reader must ask the store with fields.LanePosition.
+	LanePosition uint64 `json:"lanePosition,omitempty"`
+
 	// Frozen is a flag indicating if the transaction is frozen
 	Frozen bool `json:"frozen"`
 

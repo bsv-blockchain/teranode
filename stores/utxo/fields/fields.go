@@ -86,6 +86,10 @@ const (
 	PreserveUntil FieldName = "preserveUntil"
 	// DeletedChildren map of child records that have been deleted
 	DeletedChildren FieldName = "deletedChildren"
+	// LanePosition is the record's lane position (util/lane): written once at
+	// create, never updated. Absent on records created with lane positions off
+	// or before they existed. Not part of utxo.MetaFields: a caller names it.
+	LanePosition FieldName = "lanePos"
 )
 
 // String returns the string representation of the FieldName.
