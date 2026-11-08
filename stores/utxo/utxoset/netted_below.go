@@ -366,13 +366,15 @@ DELETE FROM utxo u USING unnest($1::smallint[], $2::uuid[], $3::bytea[]) AS k(le
 // The returned txids are the transactions this attempt writes.
 const nettedMinedSQL = `
 INSERT INTO tx_mined (txid, mined_height, block_id, subtree_idx, created_height,
-                      size_in_bytes, fee, tx_inpoints, locktime, created_at, flags)
+                      size_in_bytes, fee, tx_inpoints, locktime, created_at, flags,
+                      lane_position)
 SELECT t.txid, t.mined_height, t.block_id, t.subtree_idx, t.created_height,
-       t.size_in_bytes, t.fee, NULL, NULL, t.created_at, t.flags
+       t.size_in_bytes, t.fee, NULL, NULL, t.created_at, t.flags,
+       NULLIF(t.lane_position, 0)
   FROM unnest($1::bytea[], $2::int[], $3::int[], $4::int[], $5::int[], $6::int[],
-              $7::bigint[], $8::bigint[], $9::smallint[])
+              $7::bigint[], $8::bigint[], $9::smallint[], $10::bigint[])
     AS t(txid, mined_height, block_id, subtree_idx, created_height, size_in_bytes,
-         fee, created_at, flags)
+         fee, created_at, flags, lane_position)
 ON CONFLICT (txid, mined_height, block_id) DO NOTHING
 RETURNING txid`
 
@@ -588,7 +590,7 @@ func (s *Store) netBelowClaim(ctx context.Context, dbTx pgx.Tx, p *createPlan) (
 	s.countCreatesAheadOfTip(p)
 
 	rows, err := dbTx.Query(ctx, nettedMinedSQL, p.txids, p.minedHeight, p.blockID, p.subtreeIdx,
-		p.heights, p.sizes, p.fees, p.createdAt, p.txFlags)
+		p.heights, p.sizes, p.fees, p.createdAt, p.txFlags, p.laneArg())
 	if err != nil {
 		return nil, errors.NewStorageError("[utxoset][SpendAndCreateMulti] claim netted chunk", err)
 	}

@@ -395,6 +395,7 @@ CREATE TABLE IF NOT EXISTS tx_mined (
     locktime        INTEGER,
     created_at      BIGINT,
     flags           SMALLINT NOT NULL DEFAULT 0,
+    lane_position   BIGINT,
     CONSTRAINT tx_mined_ck CHECK (length(txid) = 32),
     PRIMARY KEY (txid, mined_height, block_id)
 ) PARTITION BY RANGE (mined_height);
@@ -482,7 +483,8 @@ CREATE TABLE IF NOT EXISTS preserved_parent (
     locktime        INTEGER,
     created_at      BIGINT,
     flags           SMALLINT NOT NULL DEFAULT 0,
-    preserve_until  INTEGER  NOT NULL
+    preserve_until  INTEGER  NOT NULL,
+    lane_position   BIGINT
 );
 
 -- ---------------------------------------------------------------------------
@@ -533,6 +535,7 @@ CREATE TABLE IF NOT EXISTS tx_ident (
     locktime             INTEGER,
     created_at           BIGINT,
     flags                SMALLINT NOT NULL DEFAULT 0,
+    lane_position        BIGINT,              -- util/lane; NULL means none
 
     -- LOAD-BEARING, and not defensive tidiness: this IS the global uniqueness rule.
     --
@@ -548,6 +551,32 @@ CREATE TABLE IF NOT EXISTS tx_ident (
     CONSTRAINT tx_ident_ck CHECK (length(txid) = 32 AND leaf = (get_byte(txid, 0) & 7)),
     PRIMARY KEY (leaf, txid)
 ) PARTITION BY LIST (leaf);
+
+-- lane_position is the record's util/lane position, written once by the create and carried
+-- into tx_mined and preserved_parent with the rest of the payload. NULL means none, which is
+-- every record created with the feature off. It is a nullable column with no default so an
+-- existing database gains it without a rewrite and without a backfill, and it has no index.
+-- It is also in the CREATE TABLEs above, last in each, so a fresh database and an upgraded one
+-- have the same column order. ADD COLUMN on a partitioned parent adds it to every existing
+-- partition, and a partition made later inherits it.
+--
+-- The ALTER is guarded by a catalog read rather than relying on IF NOT EXISTS, because
+-- ALTER TABLE takes ACCESS EXCLUSIVE before it looks, and every process that opens the store
+-- runs this script: a node starting beside a running one would queue behind its long
+-- transactions and stall every query on the table behind it, for no change.
+DO $$
+DECLARE
+    t text;
+BEGIN
+    FOREACH t IN ARRAY ARRAY['tx_ident', 'tx_mined', 'preserved_parent'] LOOP
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = current_schema() AND table_name = t
+                          AND column_name = 'lane_position') THEN
+            EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS lane_position BIGINT', t);
+        END IF;
+    END LOOP;
+END
+$$;
 
 -- ---------------------------------------------------------------------------
 -- THE BODY. Serialized transaction bytes, and nothing else.

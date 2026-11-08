@@ -76,6 +76,19 @@ func wantsBody(fieldNames []fields.FieldName) bool {
 	return false
 }
 
+// wantsLanePosition reports whether the caller named the lane position. Unlike the body, an empty
+// list does not mean yes: the position is only for the few callers that ask for it, and every
+// other read leaves the column out of its answer.
+func wantsLanePosition(fieldNames []fields.FieldName) bool {
+	for _, f := range fieldNames {
+		if f == fields.LanePosition {
+			return true
+		}
+	}
+
+	return false
+}
+
 // wantsConflictingChildren reports whether the caller asked which losing transactions contest
 // this one's UTXOs.
 //

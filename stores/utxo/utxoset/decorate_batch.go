@@ -36,7 +36,8 @@ func (s *Store) BatchDecorate(ctx context.Context, items []*utxo.UnresolvedMetaD
 		hashes = append(hashes, it.Hash)
 	}
 
-	res, err := s.lookupMany(ctx, hashes, wantsConflictingChildren(fieldNames), !wantsBody(fieldNames))
+	res, err := s.lookupManyLane(ctx, hashes, wantsConflictingChildren(fieldNames), !wantsBody(fieldNames),
+		wantsLanePosition(fieldNames))
 	if err != nil {
 		return errors.NewStorageError("[utxoset][BatchDecorate]", err)
 	}

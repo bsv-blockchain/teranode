@@ -94,16 +94,18 @@ WITH t AS (
     SELECT * FROM unnest($1::int[], $2::smallint[], $3::bytea[], $4::int[], $5::int[],
                          $6::int[], $7::bytea[], $8::int[], $9::bigint[],
                          $10::smallint[], $11::bytea[], $12::uuid[], $13::uuid[],
-                         $14::int[], $15::int[], $16::int[], $26::bigint[])
+                         $14::int[], $15::int[], $16::int[], $26::bigint[], $27::bigint[])
         AS t(k, leaf, txid, created_height, off_chain_since, size_in_bytes,
              tx_inpoints, locktime, created_at, flags, raw_tx, lo, hi,
-             mined_height, block_id, subtree_idx, fee)
+             mined_height, block_id, subtree_idx, fee, lane_position)
 ),
 claim AS (
     INSERT INTO tx_ident (leaf, txid, created_height, off_chain_since,
-                          fee, size_in_bytes, tx_inpoints, locktime, created_at, flags)
+                          fee, size_in_bytes, tx_inpoints, locktime, created_at, flags,
+                          lane_position)
     SELECT t.leaf, t.txid, t.created_height, t.off_chain_since,
-           t.fee, t.size_in_bytes, t.tx_inpoints, t.locktime, t.created_at, t.flags
+           t.fee, t.size_in_bytes, t.tx_inpoints, t.locktime, t.created_at, t.flags,
+           NULLIF(t.lane_position, 0)
       FROM t
      WHERE NOT EXISTS (SELECT 1 FROM tx_mined m
                         WHERE m.txid = t.txid
@@ -117,14 +119,17 @@ claim AS (
 ),
 mined AS (
     INSERT INTO tx_mined (txid, mined_height, block_id, subtree_idx, created_height,
-                          size_in_bytes, fee, tx_inpoints, locktime, created_at, flags)
+                          size_in_bytes, fee, tx_inpoints, locktime, created_at, flags,
+                          lane_position)
     SELECT t.txid, t.mined_height, t.block_id, t.subtree_idx,
            COALESCE(i.created_height, t.created_height), t.size_in_bytes,
            COALESCE(i.fee, t.fee), COALESCE(i.tx_inpoints, t.tx_inpoints), COALESCE(i.locktime, t.locktime),
-           COALESCE(i.created_at, t.created_at), COALESCE(i.flags, t.flags)
+           COALESCE(i.created_at, t.created_at), COALESCE(i.flags, t.flags),
+           COALESCE(i.lane_position, NULLIF(t.lane_position, 0))
       FROM t
       LEFT JOIN LATERAL (
-        SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags
+        SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags,
+               i.lane_position
           FROM tx_ident i
          WHERE i.leaf = t.leaf AND i.txid = t.txid
         OFFSET 0 ) AS i ON TRUE
@@ -215,20 +220,23 @@ const createMinedPlanSQL = `
 WITH t AS (
     SELECT * FROM unnest($1::int[], $2::smallint[], $3::bytea[], $4::int[], $5::int[],
                          $6::int[], $7::int[], $8::int[], $9::bigint[], $10::smallint[],
-                         $11::bytea[], $12::uuid[], $13::uuid[], $25::bigint[])
+                         $11::bytea[], $12::uuid[], $13::uuid[], $25::bigint[], $26::bigint[])
         AS t(k, leaf, txid, created_height, mined_height, block_id, subtree_idx,
-             size_in_bytes, created_at, flags, raw_tx, lo, hi, fee)
+             size_in_bytes, created_at, flags, raw_tx, lo, hi, fee, lane_position)
 ),
 mined AS (
     INSERT INTO tx_mined (txid, mined_height, block_id, subtree_idx, created_height,
-                          size_in_bytes, fee, tx_inpoints, locktime, created_at, flags)
+                          size_in_bytes, fee, tx_inpoints, locktime, created_at, flags,
+                          lane_position)
     SELECT t.txid, t.mined_height, t.block_id, t.subtree_idx,
            COALESCE(i.created_height, t.created_height), t.size_in_bytes,
            COALESCE(i.fee, t.fee), i.tx_inpoints, i.locktime,
-           COALESCE(i.created_at, t.created_at), COALESCE(i.flags, t.flags)
+           COALESCE(i.created_at, t.created_at), COALESCE(i.flags, t.flags),
+           COALESCE(i.lane_position, NULLIF(t.lane_position, 0))
       FROM t
       LEFT JOIN LATERAL (
-        SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags
+        SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags,
+               i.lane_position
           FROM tx_ident i
          WHERE i.leaf = t.leaf AND i.txid = t.txid
         OFFSET 0 ) AS i ON TRUE
@@ -347,7 +355,13 @@ type createPlan struct {
 	locktimes []int32
 	createdAt []int64
 	txFlags   []int16
-	bodies    [][]byte
+	// lanes is the lane position of each transaction in its signed form (util/lane), 0 for none,
+	// and anyLane is whether any element is non-zero. When none is, the statements are handed a
+	// NULL array instead of lanes: a multi-array unnest pads a NULL array with NULLs, so the
+	// flag-off path moves no extra bytes and the column is written NULL.
+	lanes   []int64
+	anyLane bool
+	bodies  [][]byte
 	// minedRows is true for a transaction that carries a block at or below the highest
 	// checkpoint, which is what sends it to createMinedPlanSQL instead of createIdentPlanSQL.
 	// The three fields below carry the block for every transaction that carries one, whichever
@@ -462,6 +476,7 @@ func (p *createPlan) sortRows() {
 	p.locktimes = permute(p.locktimes, order)
 	p.createdAt = permute(p.createdAt, order)
 	p.txFlags = permute(p.txFlags, order)
+	p.lanes = permute(p.lanes, order)
 	p.bodies = permute(p.bodies, order)
 	p.minedRows = permute(p.minedRows, order)
 	p.seedRows = permute(p.seedRows, order)
@@ -476,6 +491,16 @@ func (p *createPlan) sortRows() {
 	for k := range p.idx {
 		p.idx[k] = int32(k) //nolint:gosec // bounded by batch size
 	}
+}
+
+// laneArg is the lane positions as a statement argument: the array when any transaction has
+// one, a typed nil (SQL NULL) when none does, which the statements read as all NULL.
+func (p *createPlan) laneArg() []int64 {
+	if !p.anyLane {
+		return nil
+	}
+
+	return p.lanes
 }
 
 // subset projects the plan onto the given transaction rows, carrying each row's UTXOs with it.
@@ -506,6 +531,8 @@ func (p *createPlan) subset(idx []int) *createPlan {
 		q.locktimes = append(q.locktimes, p.locktimes[i])
 		q.createdAt = append(q.createdAt, p.createdAt[i])
 		q.txFlags = append(q.txFlags, p.txFlags[i])
+		q.lanes = append(q.lanes, p.lanes[i])
+		q.anyLane = q.anyLane || p.lanes[i] != 0
 		q.bodies = append(q.bodies, p.bodies[i])
 		q.minedRows = append(q.minedRows, p.minedRows[i])
 		q.seedRows = append(q.seedRows, p.seedRows[i])
@@ -642,7 +669,7 @@ func (s *Store) runIdentPlan(ctx context.Context, q querier, p *createPlan) erro
 		p.inpoints, p.locktimes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.minedHeight, p.blockID, p.subtreeIdx,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoLeaves, p.utxoFlags,
-		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
+		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees, p.laneArg())
 	if err != nil {
 		return errors.NewStorageError("[utxoset][Create] store", err)
 	}
@@ -680,7 +707,7 @@ func (s *Store) runMinedPlan(ctx context.Context, q querier, p *createPlan) erro
 		p.idx, p.leaves, p.txids, p.heights, p.minedHeight, p.blockID, p.subtreeIdx,
 		p.sizes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoMined, p.utxoBlockIDs,
-		p.utxoLeaves, p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
+		p.utxoLeaves, p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees, p.laneArg())
 	if err != nil {
 		return errors.NewStorageError("[utxoset][Create] store mined", err)
 	}

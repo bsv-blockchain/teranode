@@ -21,7 +21,7 @@ import (
 // the table used to carry was read as "the earliest row is the winner" and stamped reorg losers
 // onto UTXOs.
 //
-// The payload -- size, fee, inpoints, locktime, created_at, created_height and flags -- is what
+// The payload -- size, fee, inpoints, locktime, created_at, created_height, flags and lane_position -- is what
 // a lookup needs to answer from the row alone once the identity row is gone, and it is copied
 // from the identity row when there is one. Otherwise it is copied from an existing containment
 // row of the same transaction at or above the lookup floor ($6), which is the coinbase's case on
@@ -41,18 +41,19 @@ import (
 // whole partition.
 const recordMinedSQL = `
 INSERT INTO tx_mined (txid, mined_height, block_id, subtree_idx, created_height,
-                      size_in_bytes, fee, tx_inpoints, locktime, created_at, flags)
+                      size_in_bytes, fee, tx_inpoints, locktime, created_at, flags,
+                      lane_position)
 SELECT k.txid, $3::int, $4::int, $5::int, p.created_height, p.size_in_bytes, p.fee,
-       p.tx_inpoints, p.locktime, p.created_at, p.flags
+       p.tx_inpoints, p.locktime, p.created_at, p.flags, p.lane_position
   FROM unnest($2::bytea[]) AS k(txid)
  CROSS JOIN LATERAL (
    (SELECT 1 AS pri, i.created_height, i.size_in_bytes, i.fee, i.tx_inpoints, i.locktime,
-           i.created_at, i.flags
+           i.created_at, i.flags, i.lane_position
       FROM tx_ident i
      WHERE i.leaf = $1::smallint AND i.txid = k.txid)
    UNION ALL
    (SELECT 2, m.created_height, m.size_in_bytes, m.fee, m.tx_inpoints, m.locktime,
-           m.created_at, m.flags
+           m.created_at, m.flags, m.lane_position
       FROM tx_mined m
      WHERE m.txid = k.txid
        AND m.mined_height >= $6::int
