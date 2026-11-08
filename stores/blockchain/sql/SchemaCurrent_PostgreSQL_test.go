@@ -226,3 +226,33 @@ func TestCreatePostgresSchema_FastPathOnSecondCall(t *testing.T) {
 
 	assert.Equal(t, oidBefore, oidAfter, "fast path must not re-create objects")
 }
+
+func TestIsBlockchainSchemaCurrent_MissingLaneHandoutTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping postgres-backed test in -short mode")
+	}
+
+	dbURL, db := newSchemaTestDB(t)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	s, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close(context.Background()) })
+
+	// A database created before lane_handout existed must not take the DDL
+	// fast path, or it would never gain the table.
+	_, err = db.Exec(`DROP TABLE lane_handout`)
+	require.NoError(t, err)
+
+	current, err := isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	assert.False(t, current, "schema must not be current when lane_handout is missing")
+
+	s2, err := New(ulogger.TestLogger{}, dbURL, tSettings)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s2.Close(context.Background()) })
+
+	current, err = isBlockchainSchemaCurrent(db, true)
+	require.NoError(t, err)
+	assert.True(t, current, "reopening the store must re-create lane_handout")
+}

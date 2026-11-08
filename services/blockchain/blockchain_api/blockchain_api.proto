@@ -123,6 +123,10 @@ service BlockchainAPI {
   // GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
   rpc GetBlockHeaderIDs(GetBlockHeadersRequest) returns (GetBlockHeaderIDsResponse) {}
 
+  // ReserveLaneRange hands a record-creating process the next range of positions in a lane.
+  // The service picks the lane when none is asked for or the one asked for is held by someone else.
+  rpc ReserveLaneRange(ReserveLaneRangeRequest) returns (ReserveLaneRangeResponse) {}
+
   // GetBestBlockHeader retrieves the header of the current best block.
   rpc GetBestBlockHeader(google.protobuf.Empty) returns (GetBlockHeaderResponse) {}
 
@@ -1214,4 +1218,19 @@ message LegacyPeerInfo {
   int32 starting_height = 6;                    // Peer height at handshake
   bool is_sync_peer = 7;                        // The legacy sync manager selected this peer
   google.protobuf.Timestamp time_connected = 8; // When the wire connection opened
+}
+
+// ReserveLaneRangeRequest asks for a range of lane positions.
+message ReserveLaneRangeRequest {
+  string holder = 1;     // Names the process asking; recorded with the hand-out
+  uint32 want_lane = 2;  // The lane the holder had before, 0 to 255; read only when has_lane is true
+  bool has_lane = 3;     // False when the holder has no lane yet
+}
+
+// ReserveLaneRangeResponse is the range handed out. lane is the lane actually given,
+// which differs from the one asked for when that lane was held by someone else.
+message ReserveLaneRangeResponse {
+  uint32 lane = 1;
+  uint64 first = 2;  // First position, inclusive
+  uint64 last = 3;   // Last position, inclusive
 }

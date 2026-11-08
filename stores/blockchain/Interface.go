@@ -37,6 +37,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	"github.com/bsv-blockchain/teranode/util"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/bsv-blockchain/teranode/util/usql"
 )
 
@@ -485,6 +486,10 @@ type Store interface {
 	//   - state: State to set
 	// Returns: Any error encountered
 	SetFSMState(ctx context.Context, state string) error
+
+	// ReserveLaneRange hands out the next range of lane positions and records it.
+	// See options.LaneRangeRequest for the request and the lane choice rule.
+	ReserveLaneRange(ctx context.Context, req options.LaneRangeRequest) (lane.Range, error)
 
 	// LocateBlockHeaders retrieves block headers using a locator and stop hash.
 	// Legacy endpoint.
