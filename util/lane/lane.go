@@ -17,7 +17,10 @@
 // bit for bit; never convert with a range check or a clamp.
 package lane
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 const (
 	// None is the packed value of "no lane position".
@@ -70,4 +73,31 @@ func ToSigned(v uint64) int64 {
 // FromSigned converts the signed form a store keeps back to a lane position.
 func FromSigned(v int64) uint64 {
 	return uint64(v) //nolint:gosec // bit-preserving by design, see the package comment
+}
+
+// Range is a run of positions in one lane that the blockchain service handed
+// to one holder: First to Last inclusive. A range is never handed out twice,
+// and a lane's next range always starts above the highest position ever
+// handed out in that lane.
+type Range struct {
+	Lane  uint8
+	First uint64
+	Last  uint64
+}
+
+// Len is the number of positions in the range.
+func (r Range) Len() uint64 {
+	if r.Last < r.First {
+		return 0
+	}
+
+	return r.Last - r.First + 1
+}
+
+// RangeSource hands out ranges. holder names the process asking, and is
+// recorded with the hand-out. With hasLane false, or when the lane named is
+// held by someone else, the source assigns a free lane; the returned range
+// names the lane actually given. The blockchain client implements it.
+type RangeSource interface {
+	ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (Range, error)
 }
