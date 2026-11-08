@@ -31,6 +31,10 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Blockchain `Store` and `blockchain.ClientI` gain `ReserveLaneRange`.** Out-of-tree blockchain
+  stores and `ClientI` implementations (mocks included) add the method; the blockchain database
+  gains an insert-only `lane_handout` table on startup. (#TBD)
+
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)

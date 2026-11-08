@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 
@@ -20,8 +22,10 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
+	"github.com/bsv-blockchain/teranode/stores/utxo/lanestamp"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 const msgCreateBlockHeightTrackerCh = "could not create block height tracker channel"
@@ -88,7 +92,43 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 		return nil, err
 	}
 
+	if appSettings.UtxoStore.LanePositions {
+		if d.mainUtxoStore, err = d.withLanePositions(ctx, logger, appSettings, d.mainUtxoStore); err != nil {
+			return nil, err
+		}
+	}
+
 	return d.mainUtxoStore, nil
+}
+
+// withLanePositions wraps the process's one UTXO store so every record any
+// service in this process creates gets a lane position from one allocator,
+// which makes one lane per process. The allocator only starts on the first
+// create, so a process that never creates records never takes a lane.
+//
+// The lane number is kept in <dataFolder>/lane/<clientName>.lane. Two
+// processes on one host sharing a data folder and a client name would share
+// that file and so a lane; positions stay unique, because the blockchain
+// service hands each range out once, but give such processes distinct client
+// names to keep one lane each.
+func (d *Stores) withLanePositions(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
+	store utxostore.Store) (utxostore.Store, error) {
+	blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "lane")
+	if err != nil {
+		return nil, err
+	}
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown-host"
+	}
+
+	holder := appSettings.ClientName + "@" + hostname
+	file := filepath.Join(appSettings.DataFolder, "lane", lane.FileName(appSettings.ClientName))
+
+	logger.Infof("[lane] lane positions on: holder %s, lane file %s", holder, file)
+
+	return lanestamp.New(store, lane.NewAllocator(blockchainClient, holder, file, logger), logger), nil
 }
 
 // GetSubtreeValidationClient returns the main subtree validation client instance. If the client
