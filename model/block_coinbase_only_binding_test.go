@@ -96,10 +96,32 @@ func TestCheckCoinbaseOnlyBodyBound(t *testing.T) {
 
 	t.Run("65-byte transaction with one non-null input: bound", func(t *testing.T) {
 		// Only exactly 64 bytes is ambiguous; the shape checks behind the binding judge the rest.
-		tx := sixtyFourByteTx(t, &chainhash.Hash{0x01}, 4)
-		tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01, 0x02, 0x03, 0x04, 0x05})
-		require.Equal(t, 65, tx.Size())
-		require.NoError(t, boundTo(tx).CheckCoinbaseOnlyBodyBound())
+		require.NoError(t, boundTo(sixtyFourByteTxPlusOne(t)).CheckCoinbaseOnlyBodyBound())
+	})
+
+	t.Run("committed non-coinbase with a contradictory count: bound", func(t *testing.T) {
+		// The header commits to this exact transaction and the count is untrusted wire data, so the
+		// count cannot stop the shape checks behind the binding from condemning it.
+		noInputs := bt.NewTx()
+		noInputs.AddOutput(&bt.Output{Satoshis: 1, LockingScript: bscript.NewFromBytes([]byte{0x51})})
+
+		for _, tx := range []*bt.Tx{noInputs, sixtyFourByteTxPlusOne(t)} {
+			body := boundTo(tx)
+			body.TransactionCount = 2
+			require.NoError(t, body.CheckCoinbaseOnlyBodyBound())
+		}
+	})
+
+	t.Run("64 bytes with a contradictory count: still not bound", func(t *testing.T) {
+		for _, tx := range []*bt.Tx{sixtyFourByteTx(t, nil, 45), sixtyFourByteTx(t, &chainhash.Hash{0x01}, 4)} {
+			body := boundTo(tx)
+			body.TransactionCount = 2
+
+			err := body.CheckCoinbaseOnlyBodyBound()
+			require.Error(t, err)
+			require.True(t, errors.IsBlockCorrupt(err), "got: %v", err)
+			require.Contains(t, err.Error(), "may be an inner merkle node")
+		}
 	})
 
 	t.Run("genuine coinbase-only body: bound, no error", func(t *testing.T) {
@@ -107,6 +129,17 @@ func TestCheckCoinbaseOnlyBodyBound(t *testing.T) {
 		// A count of 0 is what an in-memory fixture that never set it carries; it must not be rejected.
 		require.NoError(t, newBody(coinbase.TxIDChainHash(), nil, 0).CheckCoinbaseOnlyBodyBound())
 	})
+}
+
+// sixtyFourByteTxPlusOne is a one-input spend one byte too long to be an inner merkle node.
+func sixtyFourByteTxPlusOne(t *testing.T) *bt.Tx {
+	t.Helper()
+
+	tx := sixtyFourByteTx(t, &chainhash.Hash{0x01}, 4)
+	tx.Inputs[0].UnlockingScript = bscript.NewFromBytes([]byte{0x01, 0x02, 0x03, 0x04, 0x05})
+	require.Equal(t, 65, tx.Size())
+
+	return tx
 }
 
 // sixtyFourByteTx builds a transaction with one output whose locking script is empty or, with no

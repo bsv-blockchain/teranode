@@ -1241,14 +1241,6 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but the header merkle root is not the coinbase txid", b.String())
 	}
 
-	// Defence in depth: a self-contradictory body (no subtrees but a transaction count above one).
-	// This is NOT the bound — TransactionCount is the same untrusted wire varint the emptied subtree
-	// list came from, so an attacker can simply set it to 1 — but it is a free consistency check on
-	// a shape that can never be honest.
-	if b.TransactionCount > 1 {
-		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
-	}
-
 	// A 64-byte transaction can be an inner merkle node instead of a leaf. An honest block's merkle
 	// root is the double SHA-256 of its two 32-byte child hashes, and those 64 bytes parse as a
 	// transaction once three of them take the right values: with no inputs, bytes 4, 5 and 14; with
@@ -1263,6 +1255,19 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 	// single-transaction block, and SV Node has no 64-byte rule, so it must stay acceptable.
 	if b.CoinbaseTx.Size() == innerMerkleNodeSize && !IsConsensusCoinbase(b.CoinbaseTx) {
 		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees and its only transaction is 64 bytes and not a coinbase, so it may be an inner merkle node rather than the committed body", b.String())
+	}
+
+	// Defence in depth: a self-contradictory body (no subtrees but a transaction count above one).
+	// This is NOT the bound — TransactionCount is the same untrusted wire varint the emptied subtree
+	// list came from, so an attacker can simply set it to 1 — but it is a free consistency check on
+	// a shape that can never be honest.
+	//
+	// It applies only to a consensus coinbase. Past the 64-byte check, a txid equal to the root means
+	// the header commits to exactly this transaction, whatever count the peer wrote. A committed
+	// transaction that is not a coinbase must reach the shape checks behind the binding and condemn
+	// the hash, so a peer cannot spare an invalid block by claiming a second transaction.
+	if b.TransactionCount > 1 && IsConsensusCoinbase(b.CoinbaseTx) {
+		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
 	}
 
 	return nil

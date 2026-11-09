@@ -578,3 +578,99 @@ func TestCoinbaseNotDelivered_ZeroInputOnSubtreeBody(t *testing.T) {
 		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "the body is bound, so this is invalidity, got: %v", err)
 	})
 }
+
+// TestCoinbaseNotDelivered_ContradictoryCountDoesNotShieldCommittedCoinbase asserts that the
+// transaction count a peer claims cannot rescue a committed coinbase that is not coinbase-shaped.
+// The count is untrusted wire data the header does not commit to, while the merkle root is proof
+// of work over this exact transaction, so the verdict is ERR_BLOCK_INVALID on every route.
+func TestCoinbaseNotDelivered_ContradictoryCountDoesNotShieldCommittedCoinbase(t *testing.T) {
+	initPrometheusMetrics()
+
+	const blockHeight = uint32(100)
+
+	shapes := []struct {
+		name     string
+		coinbase func(t *testing.T) *bt.Tx
+	}{
+		{name: "zero inputs", coinbase: zeroInputCoinbase},
+		{name: "one input with a non-null prevout", coinbase: gap046SpendShapedCoinbase},
+	}
+
+	requireInvalid := func(t *testing.T, err error) {
+		t.Helper()
+
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a committed malformed coinbase is invalid whatever count the peer claims, got: %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockIncomplete), "must not be fetched again, got: %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockCorrupt), "must not be charged as corrupt, got: %v", err)
+	}
+
+	for _, shape := range shapes {
+		for _, optimistic := range []bool{false, true} {
+			t.Run(fmt.Sprintf("full path, %s, optimistic mining %v", shape.name, optimistic), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+
+				tSettings := test.CreateBaseTestSettings(t)
+				tSettings.BlockValidation.OptimisticMining = optimistic
+				tSettings.BlockValidation.OptimisticMiningPeerBlocks = optimistic
+
+				bv, client := newNoPersistHarness(ctx, t, tSettings)
+				block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, shape.coinbase(t))
+				block.TransactionCount = 2
+
+				err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+				requireInvalid(t, err)
+				requireStoredInvalid(ctx, t, client, block)
+			})
+		}
+
+		t.Run("quick path, "+shape.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockValidation.OptimisticMining = false
+
+			bv, _ := newNoPersistHarness(ctx, t, tSettings)
+			block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, shape.coinbase(t))
+			block.TransactionCount = 2
+
+			requireInvalid(t, bv.quickValidateBlock(ctx, block, "peer-serving", "http://localhost"))
+		})
+
+		t.Run("async quick path, "+shape.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockValidation.OptimisticMining = false
+
+			bv, _ := newNoPersistHarness(ctx, t, tSettings)
+			block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, shape.coinbase(t))
+			block.TransactionCount = 2
+
+			writeJobsChan := make(chan *SubtreeWriteJob, 16)
+
+			_, _, err := bv.quickValidateBlockAsync(ctx, block, "peer-serving", "http://localhost", writeJobsChan)
+			requireInvalid(t, err)
+		})
+	}
+
+	t.Run("64-byte zero-input coinbase stays incomplete", func(t *testing.T) {
+		// The count must not open a way round the 64-byte rule: those bytes may be an honest
+		// block's inner merkle node, so the hash is still never condemned.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockValidation.OptimisticMining = false
+
+		bv, client := newNoPersistHarness(ctx, t, tSettings)
+		block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, gap046SixtyFourByteCoinbase(t))
+		block.TransactionCount = 2
+
+		err := bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+		requireIncompleteNotCondemned(ctx, t, client, block, err)
+	})
+}
