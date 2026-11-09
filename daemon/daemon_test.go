@@ -614,13 +614,21 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 func startDaemonWithService(t *testing.T, svc *mockService, readyCh chan struct{}) (*Daemon, <-chan error) {
 	t.Helper()
 
-	return startDaemon(t, svc.name, svc, []string{"-all=0"}, nil, readyCh)
+	return startDaemon(t, []string{"-all=0"}, nil, readyCh, namedService{svc.name, svc})
 }
 
-// startDaemon is startDaemonWithService with extra command-line args and a
-// hook to adjust the settings before Start runs.
-func startDaemon(t *testing.T, name string, svc servicemanager.Service, args []string, adjust func(*settings.Settings),
-	readyCh chan struct{}) (*Daemon, <-chan error) {
+// namedService is an external service and the name the daemon registers it
+// under.
+type namedService struct {
+	name string
+	svc  servicemanager.Service
+}
+
+// startDaemon is startDaemonWithService with any number of external services
+// (registered and started in order), extra command-line args and a hook to
+// adjust the settings before Start runs.
+func startDaemon(t *testing.T, args []string, adjust func(*settings.Settings), readyCh chan struct{},
+	services ...namedService) (*Daemon, <-chan error) {
 	t.Helper()
 
 	appSettings := settings.NewSettings()
@@ -632,11 +640,18 @@ func startDaemon(t *testing.T, name string, svc servicemanager.Service, args []s
 	}
 
 	d := New(WithLoggerFactory(func(string) ulogger.Logger { return ulogger.TestLogger{} }))
-	d.AddExternalService(name, func() (servicemanager.Service, error) { return svc, nil })
+
+	for _, s := range services {
+		svc := s.svc
+		d.AddExternalService(s.name, func() (servicemanager.Service, error) { return svc, nil })
+	}
 
 	result := make(chan error, 1)
+	returned := make(chan struct{})
 
 	go func() {
+		defer close(returned)
+
 		if readyCh != nil {
 			result <- d.Start(ulogger.TestLogger{}, args, appSettings, readyCh)
 			return
@@ -645,16 +660,35 @@ func startDaemon(t *testing.T, name string, svc servicemanager.Service, args []s
 		result <- d.Start(ulogger.TestLogger{}, args, appSettings)
 	}()
 
+	// Leave nothing running for the next test, whichever way this one ended:
+	// cancel any startup still in progress, wait (bounded) for Start to
+	// return, then shut the health server down. Start's waitErr path leaves
+	// that server serving, because in production the process exits next.
 	t.Cleanup(func() {
+		d.ServiceManager.ForceShutdown()
+
+		select {
+		case <-returned:
+		case <-time.After(30 * time.Second):
+			t.Errorf("Start did not return within 30s of ForceShutdown")
+		}
+
 		select {
 		case <-d.stopCh:
-			// Start ran to the end. Stop shuts the health server down; the
-			// waitErr path leaves it serving because production exits next.
+			// Start ran to the end, so Stop returns at once after shutting
+			// the health server down.
 			_ = d.Stop(true)
 		default:
-			// Start returned before its select (or is still running), so
-			// stopCh is never closed and Stop would wait out its timeout.
-			d.ServiceManager.ForceShutdown()
+			// Start returned early (wait_for_postgres, health listener) and
+			// never closes stopCh, so Stop would sit out its 30s timeout.
+			// Close whatever server exists directly.
+			d.serverMu.Lock()
+			server := d.server
+			d.serverMu.Unlock()
+
+			if server != nil {
+				_ = server.Close()
+			}
 		}
 	})
 
@@ -774,7 +808,7 @@ func (s *cancelDuringInitService) Init(ctx context.Context) error {
 func TestDaemon_Start_CancelDuringInitReturnsNil(t *testing.T) {
 	svc := &cancelDuringInitService{mockService: newMockService("cancel-init"), entered: make(chan struct{})}
 
-	d, result := startDaemon(t, svc.name, svc, []string{"-all=0"}, nil, nil)
+	d, result := startDaemon(t, []string{"-all=0"}, nil, nil, namedService{svc.name, svc})
 
 	select {
 	case <-svc.entered:
@@ -787,6 +821,55 @@ func TestDaemon_Start_CancelDuringInitReturnsNil(t *testing.T) {
 	require.NoError(t, awaitStartResult(t, result))
 }
 
+// TestDaemon_Start_CancelDuringInitKeepsEarlierServiceFailure: a running
+// service fails, and the errgroup's cancellation is what ends a later
+// service's Init. The Init error is only context.Canceled, but the daemon did
+// not stop cleanly: Start must return the running service's failure.
+func TestDaemon_Start_CancelDuringInitKeepsEarlierServiceFailure(t *testing.T) {
+	serviceErr := errors.NewServiceError("failed to start block assembler")
+
+	failing := newMockService("failing")
+	failing.startErr = serviceErr
+
+	blocked := &cancelDuringInitService{mockService: newMockService("cancel-init"), entered: make(chan struct{})}
+
+	_, result := startDaemon(t, []string{"-all=0"}, nil, nil,
+		namedService{failing.name, failing}, namedService{blocked.name, blocked})
+
+	err := awaitStartResult(t, result)
+	require.Error(t, err)
+	require.ErrorIs(t, err, serviceErr)
+}
+
+// TestDaemon_Start_CancelDuringInitKeepsStopFailure: a requested shutdown
+// cancels a later service's Init, and an already running service then fails
+// to stop. The cancellation is clean; the failed Stop is not, and Start must
+// return it.
+func TestDaemon_Start_CancelDuringInitKeepsStopFailure(t *testing.T) {
+	stopErr := errors.NewServiceError("failed to drain")
+
+	running := newMockService("bad-stop")
+	running.blockUntilCancel = true
+	running.stopErr = stopErr
+
+	blocked := &cancelDuringInitService{mockService: newMockService("cancel-init"), entered: make(chan struct{})}
+
+	d, result := startDaemon(t, []string{"-all=0"}, nil, nil,
+		namedService{running.name, running}, namedService{blocked.name, blocked})
+
+	select {
+	case <-blocked.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Init did not begin")
+	}
+
+	d.ServiceManager.ForceShutdown()
+
+	err := awaitStartResult(t, result)
+	require.Error(t, err)
+	require.ErrorIs(t, err, stopErr)
+}
+
 // TestDaemon_Start_PostgresWaitFailureIsReturned: with -wait_for_postgres=1,
 // a database that never comes up must fail Start rather than end it cleanly.
 func TestDaemon_Start_PostgresWaitFailureIsReturned(t *testing.T) {
@@ -797,7 +880,8 @@ func TestDaemon_Start_PostgresWaitFailureIsReturned(t *testing.T) {
 
 	t.Cleanup(func() { waitForPostgres = original })
 
-	_, result := startDaemon(t, "unused", newMockService("unused"), []string{"-all=0", "-wait_for_postgres=1"}, nil, nil)
+	_, result := startDaemon(t, []string{"-all=0", "-wait_for_postgres=1"}, nil, nil,
+		namedService{"unused", newMockService("unused")})
 
 	err := awaitStartResult(t, result)
 	require.Error(t, err)
@@ -813,9 +897,9 @@ func TestDaemon_Start_HealthListenerFailureIsReturned(t *testing.T) {
 
 	t.Cleanup(func() { _ = occupied.Close() })
 
-	_, result := startDaemon(t, "listener", newMockService("listener"), []string{"-all=0"}, func(s *settings.Settings) {
+	_, result := startDaemon(t, []string{"-all=0"}, func(s *settings.Settings) {
 		s.HealthCheckHTTPListenAddress = occupied.Addr().String()
-	}, nil)
+	}, nil, namedService{"listener", newMockService("listener")})
 
 	err = awaitStartResult(t, result)
 	require.Error(t, err)

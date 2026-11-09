@@ -313,13 +313,14 @@ var waitForPostgres = waitForPostgresToStart
 // they have all stopped.
 //
 // It returns nil when the services stopped cleanly, whether because Stop() was
-// called, a SIGINT/SIGTERM arrived (during startup too), or they finished on
+// called, a SIGINT/SIGTERM arrived (during service startup too, though not
+// during the -wait_for_postgres wait, which ignores it), or they finished on
 // their own. It returns an error when the daemon could not start, when a
 // service failed and brought the daemon down, or when a service failed to stop
-// during a requested shutdown. The deferred client and store teardown has run by the time Start
-// returns, so the caller can turn the error into an exit status: a supervisor
-// with an on-failure restart policy only sees a failure if the process exits
-// non-zero.
+// during a requested shutdown. The deferred client and store teardown has run
+// by the time Start returns, so the caller can turn the error into an exit
+// status: a supervisor with an on-failure restart policy only sees a failure
+// if the process exits non-zero.
 func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) error {
 	if d.loggerFactory == nil {
 		d.loggerFactory = func(serviceName string) ulogger.Logger {
@@ -329,7 +330,12 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 	applyPeerURLPolicy(logger, appSettings)
 
-	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
+	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready.
+	//
+	// Known limit: this wait takes no context, so a SIGINT/SIGTERM that arrives
+	// while it polls does not end it. The process keeps polling until the
+	// database answers or the one-minute timeout passes, and the timeout is
+	// reported as a failure (exit 1), not as a requested shutdown.
 	if d.shouldStart("wait_for_postgres", args) {
 		if err := waitForPostgres(logger, appSettings.PostgresCheckAddress); err != nil {
 			logger.Errorf("error waiting for postgres: %v", err)
