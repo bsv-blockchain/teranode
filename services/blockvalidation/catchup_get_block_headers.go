@@ -49,6 +49,14 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	}
 	failedIterations := make([]catchup.IterationError, 0, 10) // Preallocate for up to 10 failed iterations
 
+	// The peer's response time, summed over the header requests that succeeded.
+	// Credited as one average per request at the end, so what reaches the peer's
+	// AvgResponseTimeMs is the latency of a request, not the length of the fetch.
+	var (
+		headerRequestTime  time.Duration
+		headerRequestCount int64
+	)
+
 	// Validate that we have a baseURL for making HTTP requests
 	if baseURL == "" {
 		return catchup.CreateCatchupResult(nil, blockUpTo.Hash(), nil, 0, startTime, baseURL, 0, failedIterations, false, "No baseURL provided"), nil, errors.NewInvalidArgumentError("baseURL is required for fetching headers")
@@ -260,8 +268,13 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 		// dedup at "GetBlockHeadersFromOldest includes the starting block" below). +1 accounts
 		// for that extra header so a well-behaved peer's response is never rejected.
 		maxHeaderBytes := int64(maxBlockHeadersPerRequest+1) * int64(model.BlockHeaderSize)
+		requestStart := time.Now()
 		blockHeadersBytes, err := catchup.FetchHeadersWithRetry(iterCtx, u.logger, requestURL, maxRetries, maxHeaderBytes)
 		iterCancel() // Clean up the iteration context
+		if err == nil {
+			headerRequestTime += time.Since(requestStart)
+			headerRequestCount++
+		}
 		if err != nil {
 			// Check if it's specifically a context deadline exceeded from the iteration timeout
 			// This indicates the peer is too slow to respond within our timeout
@@ -513,8 +526,8 @@ func (u *Server) catchupGetBlockHeaders(ctx context.Context, blockUpTo *model.Bl
 	// (reputation), deliberately NOT a catchup success: the whole catchup records
 	// exactly one attempt (doCatchup) and one outcome, so counting this stage as a
 	// catchup success would let CatchupSuccesses exceed CatchupAttempts.
-	if totalHeadersFetched > 0 {
-		u.reportValidBlockHeaders(ctx, identifier, time.Since(startTime))
+	if totalHeadersFetched > 0 && headerRequestCount > 0 {
+		u.reportValidBlockHeaders(ctx, identifier, headerRequestTime/time.Duration(headerRequestCount))
 	}
 
 	// Set default stop reason if none was set
