@@ -16,7 +16,8 @@ import (
 )
 
 // TestCentralizedPeerRegistry_Persistence_AllFields verifies that Save then Load
-// preserves every PeerInfo field, not just Height and TransportType.
+// preserves every PeerInfo field except the ones Load clears on purpose: the
+// advertised tip (Height, AdvertisedHeight, BlockHash) and IsConnected.
 func TestCentralizedPeerRegistry_Persistence_AllFields(t *testing.T) {
 	store := newTestBlobStore(t)
 	ctx := context.Background()
@@ -80,13 +81,14 @@ func TestCentralizedPeerRegistry_Persistence_AllFields(t *testing.T) {
 	require.Equal(t, "full-peer", got.ID)
 	require.Equal(t, blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL, got.TransportType)
 	require.Equal(t, "test-node/0.1", got.ClientName)
-	require.Equal(t, uint32(12345), got.Height)
 	require.Equal(t, "http://datahub.example.com:8090", got.DataHubURL)
 	require.Equal(t, "192.168.1.100:8333", got.NetworkAddress)
 	require.Equal(t, "aerospike", got.Storage)
 
-	require.NotNil(t, got.BlockHash)
-	require.Equal(t, blockHash.String(), got.BlockHash.String())
+	// The advertised tip is persisted but not restored: it is stale until the
+	// peer's next node_status (see TestCentralizedPeerRegistry_Load_ClearsAdvertisedTip).
+	require.Zero(t, got.Height)
+	require.Nil(t, got.BlockHash)
 
 	require.Equal(t, uint64(999888), got.BytesSent)
 	require.Equal(t, uint64(777666), got.BytesReceived)
@@ -176,8 +178,9 @@ func TestCentralizedPeerRegistry_Persistence_ValidatedProgressRoundTrip(t *testi
 
 	got, ok := r2.Get("p")
 	require.True(t, ok)
-	require.Equal(t, uint32(500), got.Height)
-	require.NotNil(t, got.BlockHash)
+	// The advertised tip is cleared on load; the validated progress survives.
+	require.Zero(t, got.Height)
+	require.Nil(t, got.BlockHash)
 	require.Equal(t, uint32(250), got.ValidatedHeight)
 	require.NotNil(t, got.ValidatedBlockHash)
 	require.Equal(t, validatedHash.String(), got.ValidatedBlockHash.String())
@@ -188,6 +191,44 @@ func TestCentralizedPeerRegistry_Persistence_ValidatedProgressRoundTrip(t *testi
 	require.True(t, ok)
 	require.Equal(t, int64(2), penalized.FullStorageContradictions)
 	require.True(t, penalized.FullStoragePenaltyUntil.Equal(penaltyUntil))
+}
+
+// TestCentralizedPeerRegistry_Load_ClearsAdvertisedTip pins the fix for a
+// restart with a persisted stale peer height. A peer saved at height 900 with an
+// advertised block hash is restored with no advertised tip at all, so nothing
+// reads it as ahead of a node at height 100 until a live node_status says so.
+// A node_status after the load restores the advertised tip as usual.
+func TestCentralizedPeerRegistry_Load_ClearsAdvertisedTip(t *testing.T) {
+	store := newTestBlobStore(t)
+	ctx := context.Background()
+
+	r := NewCentralizedPeerRegistry(DefaultBanConfig())
+	r.Register(&PeerInfo{
+		ID:               "stale",
+		DataHubURL:       "http://stale",
+		Height:           900,
+		AdvertisedHeight: 900,
+		BlockHash:        mustPeerRegistryHash("stale-tip"),
+	})
+	require.NoError(t, r.Save(ctx, store))
+
+	r2 := NewCentralizedPeerRegistry(DefaultBanConfig())
+	require.NoError(t, r2.Load(ctx, store, 24*time.Hour))
+
+	got, ok := r2.Get("stale")
+	require.True(t, ok)
+	require.Equal(t, "http://stale", got.DataHubURL, "the peer itself is restored")
+	require.Zero(t, got.Height, "a persisted height is a stale claim, not evidence the peer is ahead")
+	require.Zero(t, got.AdvertisedHeight)
+	require.Nil(t, got.BlockHash, "no advertised hash means no catchup target until a live node_status")
+
+	freshHash := mustPeerRegistryHash("fresh-tip")
+	r2.Register(&PeerInfo{ID: "stale", Height: 950, AdvertisedHeight: 950, BlockHash: freshHash})
+
+	got, ok = r2.Get("stale")
+	require.True(t, ok)
+	require.Equal(t, uint32(950), got.Height, "a live node_status repopulates the advertised tip")
+	require.Equal(t, freshHash.String(), got.BlockHash.String())
 }
 
 func TestCentralizedPeerRegistry_Persistence_EmptyRegistrySave(t *testing.T) {
