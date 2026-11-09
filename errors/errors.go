@@ -237,18 +237,27 @@ func (e *Error) As(target interface{}) bool {
 
 // SetWrappedErr sets the wrapped error in the error chain.
 func (e *Error) SetWrappedErr(err error) {
+	e.appendWrappedErr(err)
+}
+
+// appendWrappedErr appends err to e's chain. When err is an *Error it returns
+// the node that now heads the appended segment (which may be a copy when the
+// chain had to be spliced around a foreign tail); it returns nil when err is a
+// foreign error or when nothing was appended. Join uses the return value to
+// keep appending to the combined chain.
+func (e *Error) appendWrappedErr(err error) *Error {
 	if e == nil || err == nil {
-		return
+		return nil
 	}
 
 	// Prevent self-referencing
 	if errPtr, ok := err.(*Error); ok && errPtr == e {
-		return
+		return nil
 	}
 
 	// Check if adding err would create a cycle
 	if errPtr, ok := err.(*Error); ok && errPtr.contains(e) {
-		return
+		return nil
 	}
 
 	// find the last wrapper error in the chain and set the new error as the wrapped error
@@ -265,39 +274,136 @@ func (e *Error) SetWrappedErr(err error) {
 			continue
 		}
 
+		// A multi-error (errors.Join, foreignPair) may expose several *Error
+		// branches. Appending inside whichever branch errors.As happens to
+		// find first would not put the new link at the chain's tail, so treat
+		// the whole node as a leaf instead.
+		if isMultiError(lastErr.wrappedErr) {
+			break
+		}
+
 		if errors.As(lastErr.wrappedErr, &lastWrappedErr) {
 			lastErr = lastWrappedErr
 			continue
 		}
 
-		// Foreign leaf: no *Error is reachable through this link, so nothing
-		// below it can carry the new link. A foreign type has no settable
-		// parent, so when the new link is an *Error it is spliced in front of
-		// the leaf — the foreign error stays in the chain (reachable via
-		// Unwrap/errors.As) and the new error becomes the *Error tail. The
-		// historical code instead rebuilt a node from a stale lastWrappedErr,
-		// which could dereference nil and, worse, never attached the appended
-		// error to the chain at all.
-		if errPtr, ok := err.(*Error); ok {
-			foreign := lastErr.wrappedErr
-			lastErr.wrappedErr = errPtr
-			errPtr.wrappedErr = foreign
-			return
+		break
+	}
+
+	// Tail is an *Error with nothing wrapped: attach directly, without touching
+	// err. Appending here only links the existing chain to err's own head.
+	if lastErr.wrappedErr == nil {
+		// Final check: don't add if err already exists in our chain
+		if errPtr, ok := err.(*Error); ok && e.contains(errPtr) {
+			return nil
 		}
 
-		// Appending a second foreign error under an existing foreign leaf is
-		// unreachable from current callers (Join converts foreigns to *Error
-		// first); attach it here, where it still becomes the tail.
 		lastErr.wrappedErr = err
-		return
+		if errPtr, ok := err.(*Error); ok {
+			return errPtr
+		}
+
+		return nil
 	}
 
-	// Final check: don't add if err already exists in our chain
-	if errPtr, ok := err.(*Error); ok && e.contains(errPtr) {
-		return
+	// Foreign leaf: the tail has no settable parent, so the appended error
+	// cannot simply be linked after it. Copy the appended *Error chain instead
+	// of writing into it — the caller may still hold (or share) that error —
+	// and hang the displaced foreign leaf off the copy's tail. Both chains
+	// survive and the argument is left untouched.
+	foreign := lastErr.wrappedErr
+
+	if errPtr, ok := err.(*Error); ok {
+		if e.contains(errPtr) {
+			return nil
+		}
+
+		head, tail := cloneErrorChain(errPtr)
+		tail.wrappedErr = joinForeignTails(tail.wrappedErr, foreign)
+		lastErr.wrappedErr = head
+
+		return head
 	}
 
-	lastErr.wrappedErr = err
+	// Appending a second foreign error under an existing foreign leaf is
+	// unreachable from current callers (Join converts foreigns to *Error
+	// first), but keep both instead of replacing the existing leaf.
+	lastErr.wrappedErr = joinForeignTails(err, foreign)
+
+	return nil
+}
+
+// cloneErrorChain copies the *Error nodes reachable from head, stopping at the
+// first non-*Error link (which is shared, not copied). The returned tail is the
+// last copied node, so its wrappedErr is nil or a foreign error. Data is shared
+// because it is never mutated in place by an append.
+func cloneErrorChain(head *Error) (cloneHead, cloneTail *Error) {
+	for cur := head; cur != nil; {
+		cloned := &Error{
+			code:       cur.code,
+			message:    cur.message,
+			file:       cur.file,
+			line:       cur.line,
+			function:   cur.function,
+			data:       cur.data,
+			wrappedErr: cur.wrappedErr,
+		}
+
+		if cloneHead == nil {
+			cloneHead = cloned
+		} else {
+			cloneTail.wrappedErr = cloned
+		}
+
+		cloneTail = cloned
+
+		next, ok := cur.wrappedErr.(*Error)
+		if !ok {
+			break
+		}
+
+		cur = next
+	}
+
+	return cloneHead, cloneTail
+}
+
+// isMultiError reports whether err exposes several errors through its unwrap
+// methods, as errors.Join does.
+func isMultiError(err error) bool {
+	_, ok := err.(interface{ Unwrap() []error })
+
+	return ok
+}
+
+// foreignPair links two foreign (non-*Error) errors where the chain can hold
+// only one successor. Both stay reachable through errors.Is/errors.As via the
+// multi-error unwrap; Error() keeps the " -> " rendering.
+type foreignPair struct {
+	first  error
+	second error
+}
+
+func (p *foreignPair) Error() string {
+	return p.first.Error() + " -> " + p.second.Error()
+}
+
+func (p *foreignPair) Unwrap() []error {
+	return []error{p.first, p.second}
+}
+
+// joinForeignTails links an existing foreign tail after another foreign error
+// without discarding either.
+func joinForeignTails(first, second error) error {
+	if first == nil {
+		return second
+	}
+
+	if second == nil {
+		return first
+	}
+
+	return &foreignPair{first: first, second: second}
 }
 
 // Unwrap returns the wrapped error if present.
@@ -404,7 +510,19 @@ func New(code ERR, message string, params ...interface{}) *Error {
 			// it into a synthetic *Error. The conversion dropped the original
 			// type, so errors.As could never classify driver errors (e.g.
 			// *pgconn.PgError, *sqlite.Error) wrapped through New.
-			wErr = err
+			//
+			// A gRPC status is the exception: status.FromError walks Unwrap, so
+			// leaving the raw status in the chain makes the outer *Error look
+			// like a gRPC wrapper. isGRPCWrappedError and WrapGRPC would then
+			// replace the whole chain with the inner status, losing the outer
+			// Teranode code. UnwrapGRPC converts the status's details into the
+			// equivalent *Error chain first, so the outer code stays intact.
+			if _, isGRPCStatus := status.FromError(err); isGRPCStatus {
+				wErr = UnwrapGRPC(err)
+			} else {
+				wErr = err
+			}
+
 			params = params[:len(params)-1]
 		}
 	}
@@ -751,12 +869,14 @@ func WrapGRPC(err error) error {
 				}
 
 				// Foreign tail with no *Error reachable beneath it. Serialize
-				// its message as an unknown-code detail — byte-for-byte the
-				// detail New's historical synthetic *Error produced on the wire
-				// — then stop. The loop cannot advance past a non-*Error link:
-				// before foreign errors were preserved in the chain this branch
-				// was unreachable and the missing advance would have spun
-				// forever.
+				// its message as an unknown-code detail — for valid UTF-8 the
+				// same detail New's historical synthetic *Error produced on the
+				// wire (this arm also sanitizes invalid bytes, which the old
+				// one sent raw) — then stop. The loop cannot advance past a
+				// non-*Error link. This branch was already reachable through
+				// SetWrappedErr on an empty chain (e.g. an *exec.ExitError
+				// tail), where the missing advance was a live hang; preserving
+				// foreign errors in New makes it routine.
 				foreignDetails, pbError := anypb.New(&TError{
 					Code:    ERR_UNKNOWN,
 					Message: RemoveInvalidUTF8(currWrappedErr.Error()),
@@ -1252,13 +1372,15 @@ func Join(errs ...error) error {
 
 		for i := 1; i < len(errs); i++ {
 			if errors.As(errs[i], &tErr2) {
-				previousErr.SetWrappedErr(tErr2)
+				if appended := previousErr.appendWrappedErr(tErr2); appended != nil {
+					previousErr = appended
+				}
 			} else {
 				tErr2 = NewError(errs[i].Error())
-				previousErr.SetWrappedErr(tErr2)
+				if appended := previousErr.appendWrappedErr(tErr2); appended != nil {
+					previousErr = appended
+				}
 			}
-
-			previousErr = tErr2
 		}
 
 		return tErr

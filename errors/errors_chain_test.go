@@ -2,13 +2,18 @@
 package errors
 
 import (
+	"context"
+	"database/sql"
 	stderrors "errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // buildChain returns the head of a chain of n+1 *Error links: a head with
@@ -117,9 +122,32 @@ func TestNewPreservesWrappedForeignError(t *testing.T) {
 	require.Equal(t, ERR_TX_CONFLICTING, innerTx.Code())
 }
 
+// TestNewConvertsGRPCStatusCause pins that wrapping a raw gRPC status through
+// New keeps the outer Teranode code. A raw status left in the chain makes
+// status.FromError (which walks Unwrap) classify the outer *Error as a gRPC
+// wrapper, so Is/UserMessage/WrapGRPC all use the inner status and discard it.
+func TestNewConvertsGRPCStatusCause(t *testing.T) {
+	raw := status.Error(codes.Unavailable, "dial 10.0.0.5:9905 refused")
+	err := NewServiceError("p2p call failed", raw)
+
+	require.True(t, Is(err, ErrServiceError), "the outer code must survive a raw gRPC status cause")
+	require.Equal(t, "SERVICE_ERROR (59): p2p call failed", UserMessage(err))
+	require.NotContains(t, UserMessage(err), "10.0.0.5:9905", "UserMessage must not leak the inner chain")
+
+	wrapped := WrapGRPC(err)
+	st, ok := status.FromError(wrapped)
+	require.True(t, ok)
+	require.Equal(t, codes.Internal, st.Code(), "the outer SERVICE_ERROR code decides the status")
+	require.NotEmpty(t, st.Details(), "the chain must still be serialized as details")
+
+	roundTripped := UnwrapGRPC(wrapped)
+	require.True(t, Is(roundTripped, ErrServiceError))
+}
+
 // TestSetWrappedErrForeignTail pins that appending to a chain whose tail is a
-// foreign (non-*Error) error neither panics — the historical code dereferenced
-// a stale nil lastWrappedErr — nor drops the errors already in the chain.
+// foreign (non-*Error) error keeps every link. The historical code rebuilt the
+// cursor from a stale or nil lastWrappedErr, so the appended error landed on a
+// detached node and never reached the chain.
 func TestSetWrappedErrForeignTail(t *testing.T) {
 	head := NewStorageError("outer", fakeDriverError{code: "40001"})
 	head.SetWrappedErr(NewTxConflictingError("appended"))
@@ -135,6 +163,17 @@ func TestSetWrappedErrForeignTail(t *testing.T) {
 	require.Contains(t, head.Error(), "fake driver error 40001")
 }
 
+// TestSetWrappedErrForeignOnForeignTail pins the fallback for appending a
+// foreign error under an existing foreign leaf: both foreign errors survive
+// instead of the new one replacing the old.
+func TestSetWrappedErrForeignOnForeignTail(t *testing.T) {
+	head := NewStorageError("outer", io.ErrUnexpectedEOF)
+	head.SetWrappedErr(context.Canceled)
+
+	require.True(t, stderrors.Is(head, io.ErrUnexpectedEOF))
+	require.True(t, stderrors.Is(head, context.Canceled))
+}
+
 // TestSetWrappedErrDeepChainAppend pins that appending to an already-deep
 // chain terminates quickly. The walk to the tail used errors.As per link
 // (reflection); building a chain by repeated appends was O(N²).
@@ -148,6 +187,72 @@ func TestSetWrappedErrDeepChainAppend(t *testing.T) {
 	require.Less(t, time.Since(start), 2*time.Second)
 
 	require.True(t, Is(head, ErrTxConflicting))
+}
+
+// TestJoinPreservesBothChains pins that Join appends the second error without
+// mutating it or dropping its own wrapped chain when the first chain ends in a
+// foreign (non-*Error) cause. That shape is common now that New keeps driver
+// errors verbatim: a batched spend error wraps an *aerospike.AerospikeError,
+// and Join (or JoinCapped, via the validator) combines many of them.
+func TestJoinPreservesBothChains(t *testing.T) {
+	t.Run("first foreign tail and second nested cause", func(t *testing.T) {
+		a := NewStorageError("a", io.EOF)
+		b := NewProcessingError("b", NewTxNotFoundError("c", sql.ErrNoRows))
+
+		joined := Join(a, b)
+
+		require.True(t, Is(joined, ErrStorageError))
+		require.True(t, Is(joined, ErrProcessing))
+		require.True(t, Is(joined, ErrTxNotFound))
+		require.True(t, stderrors.Is(joined, sql.ErrNoRows), "the second error's nested cause must survive")
+		require.True(t, stderrors.Is(joined, io.EOF), "the first error's foreign tail must survive")
+
+		// Join must not write into its arguments: b keeps its own cause and
+		// must not gain a's foreign tail.
+		require.True(t, Is(b, ErrTxNotFound))
+		require.True(t, stderrors.Is(b, sql.ErrNoRows))
+		require.False(t, stderrors.Is(b, io.EOF))
+		require.NotContains(t, b.Error(), "EOF")
+	})
+
+	t.Run("shared singleton keeps its tail", func(t *testing.T) {
+		joined := Join(NewProcessingError("x", context.Canceled), ErrNotFound)
+
+		require.True(t, Is(joined, ErrNotFound))
+		require.True(t, stderrors.Is(joined, context.Canceled))
+		require.Nil(t, ErrNotFound.WrappedErr(), "Join must not attach a tail to the caller's singleton")
+	})
+
+	t.Run("capped batch keeps every spend cause", func(t *testing.T) {
+		drivers := []error{
+			stderrors.New("driver 0"),
+			stderrors.New("driver 1"),
+			stderrors.New("driver 2"),
+		}
+		spends := []error{
+			NewStorageError("spend 0", drivers[0]),
+			NewStorageError("spend 1", NewTxNotFoundError("spend 1 detail", drivers[1])),
+			NewStorageError("spend 2", drivers[2]),
+		}
+
+		joined := JoinCapped(10, spends...)
+		require.NotNil(t, joined)
+
+		for _, driver := range drivers {
+			require.True(t, stderrors.Is(joined, driver), "every spend's driver cause must survive")
+		}
+
+		// The first error is the join's head, so it necessarily grows. The
+		// later errors are inputs that must be left untouched.
+		for i := 1; i < len(spends); i++ {
+			require.True(t, Is(spends[i], ErrStorageError), "spend %d must keep its own code", i)
+			for j, driver := range drivers {
+				if i != j {
+					require.False(t, stderrors.Is(spends[i], driver), "Join must not write spend %d's cause into spend %d", j, i)
+				}
+			}
+		}
+	})
 }
 
 func TestJoinCapped(t *testing.T) {

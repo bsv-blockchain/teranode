@@ -132,6 +132,9 @@ read every section between yours and the target.
   Count those 429s with `teranode_asset_http_rate_limited_total{scope="global"}`. (#1793)
 - **Out-of-tree `utxo.Store` implementations must add `SpendAndCreateMulti` and
   `ParentOutputsForValidation`.** `utxo.DefaultSpendAndCreateMulti` provides the first. (#1875)
+- **Asset HTTP error bodies no longer include a synthetic `UNKNOWN (0):` link for a wrapped
+  non-Teranode error.** The cause now renders as `-> <message>` and keeps its original type, so
+  clients that match the old text must update. (#1921)
 
 ## [0.16.0] - 2026-10-05
 
