@@ -305,8 +305,18 @@ func applyPeerURLPolicy(logger ulogger.Logger, appSettings *settings.Settings) {
 	}
 }
 
-// Start initializes and starts the Daemon and its services.
-func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) {
+// Start initializes and starts the Daemon and its services, and blocks until
+// they have all stopped.
+//
+// It returns nil when the services stopped cleanly, whether because Stop() was
+// called, a SIGINT/SIGTERM arrived, or they finished on their own. It returns
+// an error when the daemon could not start, when a service failed and brought
+// the daemon down, or when a service failed to stop during a requested
+// shutdown. The deferred client and store teardown has run by the time Start
+// returns, so the caller can turn the error into an exit status: a supervisor
+// with an on-failure restart policy only sees a failure if the process exits
+// non-zero.
+func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settings.Settings, readyChannel ...chan struct{}) error {
 	if d.loggerFactory == nil {
 		d.loggerFactory = func(serviceName string) ulogger.Logger {
 			return ulogger.New(serviceName, ulogger.WithLevel(appSettings.LogLevel))
@@ -319,7 +329,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	if d.shouldStart("wait_for_postgres", args) {
 		if err := waitForPostgresToStart(logger, appSettings.PostgresCheckAddress); err != nil {
 			logger.Errorf("error waiting for postgres: %v", err)
-			return
+			return err
 		}
 	}
 
@@ -337,14 +347,14 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		readyChInternal = readyChannel[0]
 	}
 
-	err := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
+	startErr := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
 
 	d.startErrMu.Lock()
-	d.startErr = err
+	d.startErr = startErr
 	d.startErrMu.Unlock()
 
-	if err != nil {
-		logger.Errorf("error starting services: %v", err)
+	if startErr != nil {
+		logger.Errorf("error starting services: %v", startErr)
 		sm.ForceShutdown()
 		d.closeDoneOnce.Do(func() { close(d.doneCh) })
 	}
@@ -392,7 +402,8 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 		// here, execution would fall through to server.Serve(listener) with a nil
 		// listener and panic. Return so a failed listener never reaches Serve.
 		logger.Fatalf("Failed to get health check listener: %v", err)
-		return
+
+		return errors.NewServiceError("failed to get health check listener", err)
 	}
 
 	server := &http.Server{
@@ -471,6 +482,16 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	}
 
 	d.closeStopOnce.Do(func() { close(d.stopCh) })
+
+	// A startServices failure closes doneCh itself, so the select above takes
+	// the requested-shutdown branch, and sm.Wait() can return nil because the
+	// failing service never reached the errgroup (an Init or constructor
+	// error). Report the start failure, which is the root cause.
+	if startErr != nil {
+		return startErr
+	}
+
+	return err
 }
 
 // clientCloser is the optional close contract the daemon uses to tear down the

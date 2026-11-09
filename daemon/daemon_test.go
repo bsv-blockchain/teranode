@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/servicemanager"
@@ -581,7 +582,7 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	// Don't start p2p or alert service as these require network connectivity and p2p network which is not deterministic.
 
 	go func() {
-		d.Start(logger, []string{
+		_ = d.Start(logger, []string{
 			"-all=1",
 			"-p2p=0",
 			"-alert=0",
@@ -603,6 +604,130 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 	assert.NoError(t, err, "Daemon Stop should not return an error")
 
 	WaitForPortsFree(t, ctx, appSettings)
+}
+
+// startDaemonWithService runs Start with only the given external service
+// enabled and returns the daemon and a channel that receives Start's result.
+// The health listener binds an ephemeral port under a per-test settings
+// context, so these tests do not collide with each other or with a running
+// node.
+func startDaemonWithService(t *testing.T, svc *mockService, readyCh chan struct{}) (*Daemon, <-chan error) {
+	t.Helper()
+
+	appSettings := settings.NewSettings()
+	appSettings.Context = "daemon-exit-" + t.Name()
+	appSettings.HealthCheckHTTPListenAddress = "127.0.0.1:0"
+
+	d := New(WithLoggerFactory(func(string) ulogger.Logger { return ulogger.TestLogger{} }))
+	d.AddExternalService(svc.name, func() (servicemanager.Service, error) { return svc, nil })
+
+	result := make(chan error, 1)
+
+	go func() {
+		if readyCh != nil {
+			result <- d.Start(ulogger.TestLogger{}, []string{"-all=0"}, appSettings, readyCh)
+			return
+		}
+
+		result <- d.Start(ulogger.TestLogger{}, []string{"-all=0"}, appSettings)
+	}()
+
+	// Stop shuts the health server down; the waitErr path in Start leaves it
+	// serving because production exits right after.
+	t.Cleanup(func() { _ = d.Stop(true) })
+
+	return d, result
+}
+
+func awaitStartResult(t *testing.T, result <-chan error) error {
+	t.Helper()
+
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("Start did not return")
+		return nil
+	}
+}
+
+// TestDaemon_Start_ServiceStartErrorIsReturned is the incident path: a
+// service's Start fails after the daemon has handed it to the service manager
+// (block assembly failing its startup storage read). Start must return that
+// error so the process exits non-zero and an on-failure restart policy fires.
+func TestDaemon_Start_ServiceStartErrorIsReturned(t *testing.T) {
+	startErr := errors.NewServiceError("failed to start block assembler")
+
+	svc := newMockService("failing")
+	svc.startErr = startErr
+
+	_, result := startDaemonWithService(t, svc, nil)
+
+	err := awaitStartResult(t, result)
+	require.Error(t, err)
+	require.ErrorIs(t, err, startErr)
+}
+
+// TestDaemon_Start_ServiceInitErrorIsReturned covers a failure inside
+// startServices. That path closes doneCh itself, so Start leaves through the
+// requested-shutdown branch and sm.Wait() returns nil: the service never
+// reached the errgroup. Start must still report the start failure.
+func TestDaemon_Start_ServiceInitErrorIsReturned(t *testing.T) {
+	initErr := errors.NewServiceError("failed to init service")
+
+	svc := newMockService("failing-init")
+	svc.initErr = initErr
+
+	_, result := startDaemonWithService(t, svc, nil)
+
+	err := awaitStartResult(t, result)
+	require.Error(t, err)
+	require.ErrorIs(t, err, initErr)
+}
+
+// TestDaemon_Start_RequestedShutdownReturnsNil checks that Stop() on a healthy
+// daemon still ends Start with success, so a deliberate stop exits 0.
+func TestDaemon_Start_RequestedShutdownReturnsNil(t *testing.T) {
+	svc := newMockService("long-running")
+	svc.blockUntilCancel = true
+
+	readyCh := make(chan struct{})
+	d, result := startDaemonWithService(t, svc, readyCh)
+
+	select {
+	case <-readyCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("service did not become ready")
+	}
+
+	require.NoError(t, d.Stop(true))
+	require.NoError(t, awaitStartResult(t, result))
+}
+
+// TestDaemon_Start_StopErrorDuringRequestedShutdownIsReturned pins the choice
+// that a service failing to stop is still a failure, even when the shutdown
+// itself was requested: the process did not shut down cleanly.
+func TestDaemon_Start_StopErrorDuringRequestedShutdownIsReturned(t *testing.T) {
+	stopErr := errors.NewServiceError("failed to drain")
+
+	svc := newMockService("bad-stop")
+	svc.blockUntilCancel = true
+	svc.stopErr = stopErr
+
+	readyCh := make(chan struct{})
+	d, result := startDaemonWithService(t, svc, readyCh)
+
+	select {
+	case <-readyCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("service did not become ready")
+	}
+
+	require.NoError(t, d.Stop(true))
+
+	err := awaitStartResult(t, result)
+	require.Error(t, err)
+	require.ErrorIs(t, err, stopErr)
 }
 
 // TestWaitForPostgresToStart_Success verifies the happy‑path where the TCP endpoint becomes available.
