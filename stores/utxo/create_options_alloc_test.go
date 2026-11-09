@@ -136,3 +136,5 @@ func TestTakeDoesNotAllocate(t *testing.T) {
 type constantLanePosition struct{}
 
 func (constantLanePosition) Next() (uint64, bool) { return 1, true }
+
+func (constantLanePosition) Prime() {}

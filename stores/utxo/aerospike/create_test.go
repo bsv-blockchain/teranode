@@ -476,7 +476,7 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 }
 
 func BenchmarkStore_Create(b *testing.B) {
-	benchmarkStoreCreate(b)
+	benchmarkStoreCreate(b, nil)
 }
 
 // BatchStoreItem is allocated once per create, so a new field must not make it bigger.
@@ -484,13 +484,20 @@ func TestBatchStoreItemSize(t *testing.T) {
 	require.Equal(t, uintptr(144), unsafe.Sizeof(teranodeaerospike.BatchStoreItem{}))
 }
 
-// BenchmarkStore_CreateLanePosition is BenchmarkStore_Create with a lane
-// position on every create, what every create costs with lane positions on.
+// BenchmarkStore_CreateLanePosition is BenchmarkStore_Create with the store taking a position from
+// a source on every create. The batch send is stubbed, so this holds the option parse, Take and the
+// hand-off to the batcher; the bin's own cost is BenchmarkStore_GetBinsToStoreLanePosition.
 func BenchmarkStore_CreateLanePosition(b *testing.B) {
-	benchmarkStoreCreate(b, utxo.WithLanePosition(lane.Pack(7, 41_000)))
+	benchmarkStoreCreate(b, benchLanePositions{})
 }
 
-func benchmarkStoreCreate(b *testing.B, opts ...utxo.CreateOption) {
+type benchLanePositions struct{}
+
+func (benchLanePositions) Next() (uint64, bool) { return lane.Pack(7, 41_000), true }
+
+func (benchLanePositions) Prime() {}
+
+func benchmarkStoreCreate(b *testing.B, source utxo.LanePositionSource) {
 	teranodeaerospike.InitPrometheusMetrics()
 
 	// read a hex file from os
@@ -510,11 +517,12 @@ func benchmarkStoreCreate(b *testing.B, opts ...utxo.CreateOption) {
 		}
 	}
 	s.SetStoreBatcher(batcher.New(100, 1, sendStoreBatch, true))
+	s.SetLanePositionSource(source)
 
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		_, err = s.Create(context.Background(), tx, 0, opts...)
+		_, err = s.Create(context.Background(), tx, 0)
 		require.NoError(b, err)
 	}
 }
@@ -530,6 +538,7 @@ func BenchmarkStore_GetBinsToStoreLanePosition(b *testing.B) {
 
 	s := &teranodeaerospike.Store{}
 	s.SetUtxoBatchSize(100)
+	s.SetSettings(test.CreateBaseTestSettings(b))
 
 	for _, c := range []struct {
 		name string

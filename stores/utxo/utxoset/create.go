@@ -123,6 +123,9 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		opt(options)
 	}
 
+	// Before any transaction: the create path below takes its position with one open.
+	s.PrimeLanePositions()
+
 	// Batched when configured, which is the normal path. The batcher collects calls arriving
 	// from many goroutines and sends them as one round trip, which is what the other two
 	// implementations of this interface do and what this store was missing.

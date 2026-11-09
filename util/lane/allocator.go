@@ -31,8 +31,10 @@ const (
 // Allocator hands out lane positions to the records one process creates.
 //
 // It holds the range it is handing out and one spare, and fetches the next
-// spare in the background as soon as it starts on the last one, so the create
-// path never waits on the blockchain service: Next is a lock and an add. With
+// spare in the background as soon as it starts on the last one, so after the
+// first range the create path does not wait on the blockchain service: Next is
+// a lock and an add. The first Next or Prime of a process waits once for the
+// first range, at most firstRangeWait, and ignores the caller's context. With
 // the default range of 10 million positions, the spare covers about two
 // minutes of a validator's share at 1.5 million transactions a second, which is
 // how long the blockchain service can be away before records go out without a
@@ -79,7 +81,7 @@ type Allocator struct {
 }
 
 // NewAllocator returns an allocator that asks src for ranges in holder's name
-// and keeps its lane number in file. Call Start before Next.
+// and keeps its lane number in file. It starts itself on the first Next or Prime.
 func NewAllocator(src RangeSource, holder, file string, logger ulogger.Logger) *Allocator {
 	if logger == nil {
 		logger = ulogger.TestLogger{}
@@ -164,6 +166,14 @@ func (a *Allocator) Next() (uint64, bool) {
 	}
 
 	return v, ok
+}
+
+// Prime does the first call's wait without taking a position, so a caller about to open a database
+// transaction can wait first. The wait is bounded and once per process.
+func (a *Allocator) Prime() {
+	if !a.started.Load() {
+		a.startOnFirstUse()
+	}
 }
 
 // startOnFirstUse is why a process that only reads the store never takes a lane: most services that

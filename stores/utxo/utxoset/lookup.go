@@ -270,8 +270,7 @@ type lookupResult struct {
 	// wantLane sends the reads to the statements that also select lane_position, and lanes holds
 	// what they found. Every other read runs the statements it always did, scans what it always
 	// did and pays nothing. Only Get, the get batcher and BatchDecorate set it, when the caller
-	// names fields.LanePosition. A record's copies of the column agree, because it is written once
-	// and copied, so whichever row answers, any copy gives the same value.
+	// names fields.LanePosition.
 	wantLane bool
 	lanes    map[chainhash.Hash]uint64
 }
@@ -486,8 +485,9 @@ func (r *lookupResult) withLaneDest(dest []any) ([]any, **int64) {
 	return append(dest, position), position
 }
 
-// noteLane keeps the lane position a row carried. A row with none leaves a position another copy
-// gave alone, because a thin copy of a record can have none where the full copy has one.
+// noteLane keeps the first lane position a read finds for a record. Reads run identity row first and
+// mined rows lowest height first, so a read that sees more rows cannot change the answer. A row with
+// none leaves a position another copy gave alone, because a thin copy can have none.
 func (r *lookupResult) noteLane(txid []byte, position **int64) {
 	if position == nil || *position == nil {
 		return
@@ -501,7 +501,9 @@ func (r *lookupResult) noteLane(txid []byte, position **int64) {
 		r.lanes = make(map[chainhash.Hash]uint64)
 	}
 
-	r.lanes[hash] = lane.FromSigned(**position)
+	if _, seen := r.lanes[hash]; !seen {
+		r.lanes[hash] = lane.FromSigned(**position)
+	}
 }
 
 // applyLanes puts what the reads found on the records they answered.

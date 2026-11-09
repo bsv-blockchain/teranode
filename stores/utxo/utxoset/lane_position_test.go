@@ -2,11 +2,13 @@ package utxoset
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
@@ -171,8 +173,8 @@ func TestLanePositionIsCopiedFromAnExistingContainmentRow(t *testing.T) {
 
 // TestAnExistingIdentityRowDecidesTheLanePosition: a block-path create of a transaction already
 // stored unmined must not give its containment row a position the identity row does not hold,
-// because Get then answers one way while the identity row lives and another way after. The wrapper
-// issues a new position on every call, so this is every block-path create over an existing record.
+// because Get then answers one way while the identity row lives and another way after. The store
+// takes a new position on every create, so this is every block-path create over an existing record.
 // The identity row's value wins, NULL included, on both create statements.
 func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
 	routes := []struct {
@@ -221,6 +223,150 @@ func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestARefusedCreateCannotGiveARecordASecondLanePosition: a create over a record with no identity row
+// is refused but still writes the new block's mined row, as a coinbase seen in a second block does. The
+// row must carry the position the record has, not the one this refused create took.
+func TestARefusedCreateCannotGiveARecordASecondLanePosition(t *testing.T) {
+	first, second := lane.Pack(200, 4_244), lane.Pack(4, 200)
+
+	requireOneLanePosition := func(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx) {
+		t.Helper()
+
+		rows, err := s.pool.Query(ctx, `SELECT block_id, lane_position FROM tx_mined WHERE txid = $1 ORDER BY block_id`, tx.TxIDChainHash()[:])
+		require.NoError(t, err)
+
+		defer rows.Close()
+
+		seen := 0
+
+		for rows.Next() {
+			var (
+				blockID  int32
+				position *int64
+			)
+
+			require.NoError(t, rows.Scan(&blockID, &position))
+			require.NotNil(t, position, "block %d", blockID)
+			require.Equal(t, lane.ToSigned(first), *position, "block %d", blockID)
+
+			seen++
+		}
+
+		require.NoError(t, rows.Err())
+		require.Equal(t, 2, seen, "each block has its row")
+
+		requireGetLane(t, s, ctx, tx, first, "the record keeps its first position")
+	}
+
+	t.Run("below the checkpoint", func(t *testing.T) {
+		s, ctx := newCheckpointStore(t, false)
+
+		tx := mkTx(t, 3, 5_000)
+
+		_, err := s.Create(ctx, tx, checkpointFloor-2, utxo.WithLanePosition(first),
+			utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 41, BlockHeight: checkpointFloor - 2, OnLongestChain: true}))
+		require.NoError(t, err)
+
+		_, err = s.Create(ctx, tx, checkpointFloor-1, utxo.WithLanePosition(second),
+			utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 42, BlockHeight: checkpointFloor - 1, OnLongestChain: true}))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireOneLanePosition(t, s, ctx, tx)
+	})
+
+	t.Run("after the stamp deleted the identity row", func(t *testing.T) {
+		s, ctx := newTestStore(t)
+
+		tx := mkTx(t, 3, 6_000)
+
+		_, err := s.Create(ctx, tx, 100, utxo.WithLanePosition(first))
+		require.NoError(t, err)
+
+		_, err = s.SetMinedMulti(ctx, hashes(tx), utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+		require.NoError(t, err)
+
+		stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+
+		_, err = s.Create(ctx, tx, 293, utxo.WithLanePosition(second),
+			utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 9, BlockHeight: 293, OnLongestChain: true}))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		requireOneLanePosition(t, s, ctx, tx)
+	})
+}
+
+// primeOrderSource fails a Next that comes before Prime, which is a position taken with the wait still
+// to come, and so possibly with a database transaction open.
+type primeOrderSource struct {
+	primes, nextsBeforePrime atomic.Int64
+}
+
+func (p *primeOrderSource) Prime() { p.primes.Add(1) }
+
+func (p *primeOrderSource) Next() (uint64, bool) {
+	if p.primes.Load() == 0 {
+		p.nextsBeforePrime.Add(1)
+	}
+
+	return lane.None, false
+}
+
+// TestUtxosetPrimesBeforeAnyTransaction: the first-range wait must not run with a Postgres transaction
+// and its locks held, so each entry point that creates primes first. A spend-only call does not,
+// because it takes no position and must not start the allocator.
+func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
+	ctx := t.Context()
+
+	entry := func(t *testing.T, call func(s *Store, w *tests.MultiWorkload) error) *primeOrderSource {
+		t.Helper()
+
+		s, _ := newUncheckpointedStore(t)
+		w := tests.BuildMultiWorkload(t, 0xf4, 1, 1)
+		w.StoreRoots(t, s, 900)
+
+		source := &primeOrderSource{}
+		s.SetLanePositionSource(source)
+		require.NoError(t, call(s, w))
+
+		return source
+	}
+
+	t.Run("Create", func(t *testing.T) {
+		source := entry(t, func(s *Store, w *tests.MultiWorkload) error {
+			_, err := s.Create(ctx, w.Txs[0], 901)
+			return err
+		})
+		require.NotZero(t, source.primes.Load())
+		require.Zero(t, source.nextsBeforePrime.Load())
+	})
+
+	t.Run("SpendAndCreate", func(t *testing.T) {
+		source := entry(t, func(s *Store, w *tests.MultiWorkload) error {
+			_, _, err := s.SpendAndCreate(ctx, w.Txs[0], 901)
+			return err
+		})
+		require.NotZero(t, source.primes.Load())
+		require.Zero(t, source.nextsBeforePrime.Load())
+	})
+
+	t.Run("SpendAndCreateMulti", func(t *testing.T) {
+		source := entry(t, func(s *Store, w *tests.MultiWorkload) error {
+			_, err := s.SpendAndCreateMulti(ctx, w.Txs, 901, utxo.WithIgnoreLocked(true))
+			return err
+		})
+		require.NotZero(t, source.primes.Load())
+		require.Zero(t, source.nextsBeforePrime.Load())
+	})
+
+	t.Run("a spend-only call does not prime", func(t *testing.T) {
+		source := entry(t, func(s *Store, w *tests.MultiWorkload) error {
+			_, _, err := s.SpendAndCreate(ctx, w.Txs[0], 901, utxo.WithSpendOnly())
+			return err
+		})
+		require.Zero(t, source.primes.Load())
+	})
 }
 
 // TestLanePositionOnTheNettedBelowCheckpointWrite is the route quick validation and legacy sync take

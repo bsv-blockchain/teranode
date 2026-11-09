@@ -58,6 +58,12 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 		return nil, nil, errors.NewInvalidArgumentError("[utxoset][SpendAndCreate] no transaction")
 	}
 
+	// Before any transaction: the create path below takes its position with one open. A call that
+	// creates nothing takes no position, so it must not start the allocator.
+	if !options.SpendOnly {
+		s.PrimeLanePositions()
+	}
+
 	// Batched when configured, which is the production path: see spend_and_create_batch.go.
 	// Callers arriving together share one transaction, one spend statement and one create
 	// statement, and each still gets the answer this function alone would have given it.

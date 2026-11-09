@@ -4,6 +4,10 @@ package utxo
 // it has none to give, and the record is then created without one. *lane.Allocator implements it.
 type LanePositionSource interface {
 	Next() (uint64, bool)
+
+	// Prime does the one wait of a process, for its first positions, so a later Next cannot. A store
+	// that takes positions with a database transaction open primes before it opens one.
+	Prime()
 }
 
 // LanePositionTaker is a store that gives each record it creates a position from a source. A
@@ -26,6 +30,13 @@ type LanePositions struct {
 // SetLanePositionSource implements LanePositionTaker.
 func (l *LanePositions) SetLanePositionSource(source LanePositionSource) {
 	l.source = source
+}
+
+// PrimeLanePositions lets the source do its one wait now, before the caller holds anything.
+func (l *LanePositions) PrimeLanePositions() {
+	if l.source != nil {
+		l.source.Prime()
+	}
 }
 
 // Take returns the position for the record that o describes: the caller's own if it named one,

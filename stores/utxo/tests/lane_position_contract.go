@@ -168,6 +168,9 @@ func (s *ScriptedLanePositions) Next() (uint64, bool) {
 	return position, true
 }
 
+// Prime implements utxostore.LanePositionSource. A scripted source has nothing to wait for.
+func (s *ScriptedLanePositions) Prime() {}
+
 // Remaining is how many positions have not been handed out.
 func (s *ScriptedLanePositions) Remaining() int {
 	s.mu.Lock()

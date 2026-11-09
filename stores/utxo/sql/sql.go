@@ -551,33 +551,6 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		RETURNING id
 	`
 
-	// Sized for what this record needs, so a record with no lane position allocates what it always did.
-	argCount := 11
-	if options.LanePosition != lane.None {
-		argCount = 12
-	}
-
-	args := append(make([]any, 0, argCount),
-		txHash[:],
-		tx.Version,
-		tx.LockTime,
-		txMeta.Fee,
-		txMeta.SizeInBytes,
-		isCoinbase,
-		options.Frozen,
-		options.Conflicting,
-		options.Locked,
-		unminedSince,
-		deleteAtHeight,
-	)
-
-	// A lane position is written in this same INSERT. Without one the statement
-	// and its arguments are exactly what they were before the column existed.
-	if options.LanePosition != lane.None {
-		q = insertTransactionWithLanePositionSQL
-		args = append(args, lane.ToSigned(options.LanePosition))
-	}
-
 	// Create a database transaction
 	txn, err := s.db.Begin()
 	if err != nil {
@@ -590,7 +563,19 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 
 	var transactionID int
 
-	err = txn.QueryRowContext(ctx, q, args...).Scan(&transactionID)
+	// A lane position is written in this same INSERT. Without one this is the statement and the call
+	// that ran before the column existed, so a record with none allocates what it always did.
+	if options.LanePosition == lane.None {
+		err = txn.QueryRowContext(ctx, q, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes,
+			isCoinbase, options.Frozen, options.Conflicting, options.Locked, unminedSince, deleteAtHeight,
+		).Scan(&transactionID)
+	} else {
+		err = txn.QueryRowContext(ctx, insertTransactionWithLanePositionSQL, txHash[:], tx.Version, tx.LockTime, txMeta.Fee, txMeta.SizeInBytes,
+			isCoinbase, options.Frozen, options.Conflicting, options.Locked, unminedSince, deleteAtHeight,
+			lane.ToSigned(options.LanePosition),
+		).Scan(&transactionID)
+	}
+
 	if err != nil {
 		if pgErr := asPgUniqueViolation(err); pgErr != nil {
 			return nil, errors.NewTxExistsError("Transaction already exists in postgres store (coinbase=%v):", tx.IsCoinbase(), err)
@@ -642,8 +627,8 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 }
 
 // insertTransactionWithLanePositionSQL is the plain transaction-row INSERT of
-// createWithRetry with lane_position as $12. It is used only when the caller
-// supplied a lane position; otherwise the original statement runs unchanged.
+// createWithRetry with lane_position as $12. It is used only for a record that
+// has a lane position; otherwise the original statement runs unchanged.
 const insertTransactionWithLanePositionSQL = `
 	INSERT INTO transactions (
 	 hash
