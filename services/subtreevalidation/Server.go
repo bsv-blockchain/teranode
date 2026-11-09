@@ -172,6 +172,11 @@ type Server struct {
 	// validation once it is RUNNING again.
 	skippedSubtrees skippedSubtrees
 
+	// failedPeerSubtrees keeps the hash of each peer subtree that failed validation, with the
+	// code of the failure, for subtreevalidation_failedSubtreeNegativeCacheTTL; a re-announcement
+	// in that window is skipped. Nil when the cache is off. See recordFailedPeerSubtree.
+	failedPeerSubtrees *expiringmap.ExpiringMap[chainhash.Hash, string]
+
 	// replaySubtreeFn replaces the validation of a replayed subtree, after its admission, age and
 	// RUNNING checks; nil in production.
 	replaySubtreeFn func(ctx context.Context, hash *chainhash.Hash, baseURL *url.URL, peerID string) error
@@ -236,6 +241,7 @@ func New(
 		txmetaConsumerClient:              txmetaConsumerClient,
 		policyRejectedTxConsumerClient:    policyRejectedTxConsumerClient,
 		invalidSubtreeDeDuplicateMap:      expiringmap.New[string, struct{}](time.Minute * 1),
+		failedPeerSubtrees:                newFailedPeerSubtreeCache(tSettings.SubtreeValidation.FailedSubtreeNegativeCacheTTL),
 		p2pClient:                         p2pClient,
 	}
 
@@ -706,6 +712,10 @@ func (u *Server) Stop(ctx context.Context) error {
 
 	if u.invalidSubtreeDeDuplicateMap != nil {
 		u.invalidSubtreeDeDuplicateMap.Stop()
+	}
+
+	if u.failedPeerSubtrees != nil {
+		u.failedPeerSubtrees.Stop()
 	}
 
 	return nil

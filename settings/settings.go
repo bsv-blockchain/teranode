@@ -740,6 +740,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			ProcessTxMetaUsingCacheConcurrency:        getInt("subtreevalidation_processTxMetaUsingCache_Concurrency", 32, alternativeContext...),
 			PeerSubtreeConcurrency:                    getInt("subtreevalidation_peerSubtreeConcurrency", 32, alternativeContext...),
 			SkippedSubtreeBackfillMax:                 getInt("subtreevalidation_skippedSubtreeBackfillMax", 4096, alternativeContext...),
+			FailedSubtreeNegativeCacheTTL:             getDuration("subtreevalidation_failedSubtreeNegativeCacheTTL", 30*time.Second, alternativeContext...),
 			ProcessTxMetaUsingCacheMissingTxThreshold: getInt("subtreevalidation_processTxMetaUsingCache_MissingTxThreshold", 1, alternativeContext...),
 			SubtreeDAHConcurrency:                     getInt("subtreevalidation_subtreeDAHConcurrency", 8, alternativeContext...),
 			TxMetaCacheEnabled:                        getBool("subtreevalidation_txMetaCacheEnabled", true, alternativeContext...),
