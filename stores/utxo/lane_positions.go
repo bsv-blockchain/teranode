@@ -11,9 +11,10 @@ type LanePositionSource interface {
 }
 
 // LanePositionTaker is a store that gives each record it creates a position from a source. A
-// store's create path calls this once per record, so setting the source costs a create nothing
-// more than a call to Next. There is no wrapper around the store, because a wrapper has to scan
-// and extend the options on every create, and it hides what the wrapped store can do.
+// store's create path calls this once per record, so taking a position costs a create one call to
+// Next. The store also writes the position, and that cost is the store's. There is no wrapper
+// around the store, because a wrapper has to scan and extend the options on every create, and it
+// hides what the wrapped store can do.
 //
 // Find it with As, since the store may sit inside a logging wrapper. Set the source before the
 // first create, because it is not guarded against a concurrent create.

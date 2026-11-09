@@ -1,5 +1,6 @@
-// Package lane defines the lane position, an 8-byte number every new
-// transaction record is given once, in the same store write that creates it.
+// Package lane defines the lane position, an 8-byte number a new transaction
+// record is given once, in the same store write that creates it, when the daemon
+// has lane positions switched on.
 //
 // The high byte is the lane: one per process that creates records, handed out
 // by the blockchain service. The low seven bytes are the position: the record's
@@ -10,8 +11,10 @@
 // blockchain database could reuse positions, which is a listed limit of this phase.
 //
 // Positions start at 1. Lane 0 is a real lane, so the packed value 0 can only
-// mean "no lane position": a record created with the feature off, or before it
-// existed. Stores keep 0 as an absent bin or a NULL column.
+// mean "no lane position": a record created with the feature off, before it
+// existed, with no range in hand, or by a tool that opens its own store. A read
+// also returns 0 for a utxoset record whose row carrying the position has aged
+// out. Stores keep 0 as an absent bin or a NULL column.
 //
 // Every store that holds the value uses a signed 64-bit integer (Aerospike
 // integer bins, Postgres BIGINT, SQLite INTEGER). Lanes 128 to 255 set the top

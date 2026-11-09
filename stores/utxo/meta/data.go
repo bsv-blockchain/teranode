@@ -87,9 +87,12 @@ type Data struct {
 	// Meta pair has a fixed header with no version, so eight more bytes would
 	// decode as block IDs or shift fields rather than fail. Carrying it needs a
 	// versioned encoding. The consequence: the txmeta cache does not keep it, and
-	// utxo.MetaFields does not name it, so GetMeta returns zero on every path, from
-	// the cache or from the store. Nothing reads the field yet; a reader must ask
-	// the store with fields.LanePosition.
+	// utxo.MetaFields does not name it, so GetMeta returns zero, from the cache or
+	// from the store. The one exception is on utxoset, where a GetMeta that shares
+	// a get batch with a read that named the field can get the position, because
+	// the batch reads the column if any item asked, so a non-zero value on a read
+	// that did not name the field is not an answer to it. Nothing reads the field
+	// yet; a reader must ask the store with fields.LanePosition.
 	LanePosition uint64 `json:"lanePosition,omitempty"`
 
 	// Frozen is a flag indicating if the transaction is frozen
