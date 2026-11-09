@@ -181,6 +181,11 @@ func (s *SQL) GetBlockHeadersFromHeight(ctx context.Context, height, limit uint3
 		blockMetas = append(blockMetas, blockHeaderMeta)
 	}
 
+	// An error part way through the rows would otherwise return, and cache, a short list.
+	if err = rows.Err(); err != nil {
+		return nil, nil, errors.NewStorageError("failed to read headers", err)
+	}
+
 	// Cache the result in response cache
 	cacheOp.Set([2]interface{}{blockHeaders, blockMetas}, s.cacheTTL)
 

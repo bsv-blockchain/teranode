@@ -110,7 +110,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				unminedOp,
 			)
 			// +1: the store height trails the block being validated, the allowance the spend path makes
-			ops = append(ops, s.buildDeleteAtHeightOpsFromRecordHeight(currentBlockHeight+1, retention, true)...)
+			ops = append(ops, s.buildDeleteAtHeightOps(currentBlockHeight+1, retention, true)...)
 			ops = append(ops, aerospike.GetBinOp(fields.DeleteAtHeight.String()))
 		} else {
 			ops = []*aerospike.Operation{unminedOp}
