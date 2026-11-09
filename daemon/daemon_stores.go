@@ -85,20 +85,40 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 		return d.mainUtxoStore, nil
 	}
 
-	var err error
-
-	d.mainUtxoStore, err = utxofactory.NewStore(ctx, logger, appSettings, "main")
+	store, err := newMainUtxoStore(ctx, logger, appSettings)
 	if err != nil {
 		return nil, err
 	}
 
 	if appSettings.UtxoStore.LanePositions {
-		if d.mainUtxoStore, err = d.withLanePositions(ctx, logger, appSettings, d.mainUtxoStore); err != nil {
+		wrapped, err := d.withLanePositions(ctx, logger, appSettings, store)
+		if err != nil {
+			// The singleton stays unset, so a retry starts clean, and the store just opened is not leaked.
+			if closeErr := store.Close(ctx); closeErr != nil {
+				logger.Warnf("[lane] could not close the UTXO store after failing to wrap it: %v", closeErr)
+			}
+
 			return nil, err
 		}
+
+		store = wrapped
 	}
 
+	d.mainUtxoStore = store
+
 	return d.mainUtxoStore, nil
+}
+
+// newMainUtxoStore opens the process's UTXO store. A var so a test can open one without a
+// blockchain service, which the factory's block height listener needs.
+var newMainUtxoStore = func(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings) (utxostore.Store, error) {
+	return utxofactory.NewStore(ctx, logger, appSettings, "main")
+}
+
+// laneRangeSource returns what the allocator asks for ranges. A var so a test can answer without
+// a blockchain service.
+var laneRangeSource = func(ctx context.Context, d *Stores, logger ulogger.Logger, appSettings *settings.Settings) (lane.RangeSource, error) {
+	return d.GetBlockchainClient(ctx, logger, appSettings, "lane")
 }
 
 // withLanePositions wraps the process's one UTXO store so every record any
@@ -113,7 +133,7 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 // names to keep one lane each.
 func (d *Stores) withLanePositions(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
 	store utxostore.Store) (utxostore.Store, error) {
-	blockchainClient, err := d.GetBlockchainClient(ctx, logger, appSettings, "lane")
+	source, err := laneRangeSource(ctx, d, logger, appSettings)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +148,7 @@ func (d *Stores) withLanePositions(ctx context.Context, logger ulogger.Logger, a
 
 	logger.Infof("[lane] lane positions on: holder %s, lane file %s", holder, file)
 
-	return lanestamp.New(store, lane.NewAllocator(blockchainClient, holder, file, logger), logger), nil
+	return lanestamp.New(store, lane.NewAllocator(source, holder, file, logger), logger), nil
 }
 
 // GetSubtreeValidationClient returns the main subtree validation client instance. If the client

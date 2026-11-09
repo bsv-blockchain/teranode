@@ -2,12 +2,17 @@ package blockchain
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +45,77 @@ func TestServerReserveLaneRange(t *testing.T) {
 
 	_, err = tc.server.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{Holder: "x", WantLane: 256, HasLane: true})
 	require.Error(t, err)
+}
+
+// A holder is kept for ever in the insert-only hand-out table, so its length is bounded.
+func TestServerReserveLaneRangeRefusesALongHolder(t *testing.T) {
+	tc := setup(t)
+	ctx := context.Background()
+
+	_, err := tc.server.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{Holder: strings.Repeat("h", maxLaneHolderBytes+1)})
+	require.Error(t, err)
+	require.True(t, errors.Is(errors.UnwrapGRPC(err), errors.ErrInvalidArgument), "got %v", err)
+
+	_, err = tc.server.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{Holder: strings.Repeat("h", maxLaneHolderBytes)})
+	require.NoError(t, err, "the limit itself is allowed")
+}
+
+// blockchain_laneFreeAfter has to reach the store. A never-used lane wins before the window is
+// consulted, so this fills all 256 lanes first, and then the setting alone decides the answer.
+func TestServerReserveLaneRangeUsesLaneFreeAfter(t *testing.T) {
+	tc := setup(t)
+	ctx := context.Background()
+
+	tc.server.settings.BlockChain.LaneRangeSize = 10
+	tc.server.settings.BlockChain.LaneFreeAfter = time.Hour
+
+	for l := 0; l <= lane.MaxLane; l++ {
+		_, err := tc.server.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{Holder: "filler", WantLane: uint32(l), HasLane: true}) //nolint:gosec // l is at most 255
+		require.NoError(t, err)
+	}
+
+	_, err := tc.server.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{Holder: "new"})
+	require.Error(t, err, "every lane had a hand-out inside the window")
+	require.Contains(t, err.Error(), "no free lane")
+
+	tc.server.settings.BlockChain.LaneFreeAfter = 0
+
+	r, err := tc.server.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{Holder: "new"})
+	require.NoError(t, err, "with no window every lane is free")
+	require.Equal(t, uint64(11), r.First, "a reused lane carries on above its old positions")
+}
+
+// A LocalClient reaches the shared hand-out code with no Server or gRPC Client built, and those are
+// what register the metrics. In a run where nothing else in the package has registered them yet,
+// this panics on a nil metric without the registration in reserveLaneRange.
+func TestLocalClientReserveLaneRange(t *testing.T) {
+	ctx := context.Background()
+
+	storeURL, err := url.Parse("sqlitememory:///")
+	require.NoError(t, err)
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.BlockChain.LaneRangeSize = 100
+
+	store, err := blockchain_store.NewStore(ulogger.TestLogger{}, storeURL, tSettings)
+	require.NoError(t, err)
+
+	client, err := NewLocalClient(ulogger.TestLogger{}, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	var src lane.RangeSource = client
+
+	r1, err := src.ReserveLaneRange(ctx, "holder-a", 0, false)
+	require.NoError(t, err)
+	require.Equal(t, lane.Range{Lane: 0, First: 1, Last: 100}, r1)
+
+	r2, err := src.ReserveLaneRange(ctx, "holder-a", r1.Lane, true)
+	require.NoError(t, err)
+	require.Equal(t, lane.Range{Lane: 0, First: 101, Last: 200}, r2)
+
+	r3, err := src.ReserveLaneRange(ctx, "holder-b", 0, false)
+	require.NoError(t, err)
+	require.Equal(t, lane.Range{Lane: 1, First: 1, Last: 100}, r3)
 }
 
 // TestClientReserveLaneRangeOverGRPC sends the request through a real gRPC client and server.

@@ -1651,9 +1651,21 @@ func (b *Blockchain) ReserveLaneRange(ctx context.Context, req *blockchain_api.R
 	return &blockchain_api.ReserveLaneRangeResponse{Lane: uint32(r.Lane), First: r.First, Last: r.Last}, nil
 }
 
+// maxLaneHolderBytes is the longest holder name a hand-out accepts. Each hand-out keeps its holder
+// for ever in the insert-only lane_handout table, so the length has to be bounded.
+const maxLaneHolderBytes = 256
+
 // reserveLaneRange fills the range size and idle window from settings and the height from the
 // best block, then asks the store. The Server and the LocalClient share it.
 func reserveLaneRange(ctx context.Context, store blockchain_store.Store, tSettings *settings.Settings, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
+	// A LocalClient reaches this with no Server or gRPC Client built, and neither of those
+	// registers the metrics for it.
+	initPrometheusMetrics()
+
+	if len(holder) > maxLaneHolderBytes {
+		return lane.Range{}, errors.NewInvalidArgumentError("lane range holder is %d bytes, above %d", len(holder), maxLaneHolderBytes)
+	}
+
 	_, meta, err := store.GetBestBlockHeader(ctx)
 	if err != nil {
 		return lane.Range{}, err
