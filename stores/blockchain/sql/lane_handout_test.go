@@ -125,7 +125,7 @@ func TestReserveLaneRange(t *testing.T) {
 		require.Equal(t, lane.Range{Lane: 200, First: 1, Last: laneTestSize}, r)
 	})
 
-	runLaneHandoutTests(t, "reuse after the idle window continues above old positions", func(t *testing.T, s *SQL) {
+	runLaneHandoutTests(t, "a named lane continues above old positions, past or inside the idle window", func(t *testing.T, s *SQL) {
 		a, err := s.ReserveLaneRange(t.Context(), laneReqFor("a", 5, t0))
 		require.NoError(t, err)
 
@@ -134,10 +134,13 @@ func TestReserveLaneRange(t *testing.T) {
 		require.Equal(t, uint8(5), b.Lane)
 		require.Equal(t, a.Last+1, b.First)
 
-		// The window restarts with the new hand-out, so a is turned away again.
+		// The earlier holder asks again inside the window b's hand-out started. Its
+		// lane is still granted, and the range starts above b's, so a and b overlap
+		// in the lane with distinct positions.
 		c, err := s.ReserveLaneRange(t.Context(), laneReqFor("a", 5, t0.Add(laneTestFreeAfter+time.Hour)))
 		require.NoError(t, err)
-		require.NotEqual(t, uint8(5), c.Lane)
+		require.Equal(t, uint8(5), c.Lane)
+		require.Equal(t, b.Last+1, c.First)
 	})
 
 	runLaneHandoutTests(t, "no-lane request fails with no free lane then picks the longest idle lane", func(t *testing.T, s *SQL) {
