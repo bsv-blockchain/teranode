@@ -1416,11 +1416,32 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 	processedValidatorOptions := validator.ProcessOptions(validationOptions...)
 
 	var (
-		errorsFound    = atomic.Uint64{}
-		failures       txFailureTally
-		firstError     error
-		firstErrorOnce sync.Once
+		errorsFound         = atomic.Uint64{}
+		missingParentErrors = atomic.Uint64{}
+		failures            txFailureTally
+		firstError          error
+		firstErrorOnce      sync.Once
 	)
+
+	// One summary line per call, however the call ends. A store-side cause
+	// (circuit breaker open, context canceled) is this node's problem and still
+	// needs to be seen, so it stays at ERROR; a subtree whose only failures are
+	// missing parents is the expected ordering case that the block path resolves,
+	// so that reads at Info. On the peer path the handler logs the returned error
+	// too, so a failed peer subtree logs two lines, not one per transaction.
+	logFailureSummary := func() {
+		failed := failures.count()
+		if failed == 0 {
+			return
+		}
+
+		if failed == missingParentErrors.Load() {
+			u.logger.Infof("[validateSubtree][%s] %d of %d missing txs failed, all missing a parent: %s", subtreeHash.String(), failed, len(missingTxs), failures.String())
+			return
+		}
+
+		u.logger.Errorf("[validateSubtree][%s] %d of %d missing txs failed: %s", subtreeHash.String(), failed, len(missingTxs), failures.String())
+	}
 
 	// txs of a peer subtree kept aside because they conflict with txs this node accepted
 	kept := &keptAsideSet{u: u, txMetaSlice: txMetaSlice, blockHeight: blockHeight, hashes: make(map[chainhash.Hash]struct{})}
@@ -1511,6 +1532,7 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 						// still fails (errorsFound was incremented above); the block path is the
 						// backstop — when the block arrives, Phase-3 sequential revalidation in
 						// CheckBlockSubtrees resolves cross-subtree parents in block order.
+						missingParentErrors.Add(1)
 						u.logger.Debugf("[validateSubtree][%s] transaction %s is missing parent", subtreeHash.String(), tx.TxIDChainHash().String())
 					} else if errors.Is(err, errors.ErrTxInvalid) && !errors.Is(err, errors.ErrTxPolicy) {
 						// Report invalid subtree - contains truly invalid transaction
@@ -1569,15 +1591,17 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 		u.unlockAcceptedTransactions(ctx, subtreeHash, lockedHashes)
 
 		if waitErr != nil {
+			// A truly invalid transaction ends the subtree here. The failures tallied
+			// before it (a store fault on a sibling, say) had their own ERROR lines
+			// before the tally and still need to be seen.
+			logFailureSummary()
+
 			return waitErr
 		}
 	}
 
 	if errorsFound.Load() > 0 {
-		// One summary per subtree: how many failed, by which cause, with an example
-		// txid per cause. A store-side cause (circuit breaker open, context canceled)
-		// is this node's problem and still needs to be seen, so this stays at ERROR.
-		u.logger.Errorf("[validateSubtree][%s] %d of %d missing txs failed: %s", subtreeHash.String(), errorsFound.Load(), len(missingTxs), failures.String())
+		logFailureSummary()
 
 		// If there are errors found, we return here, so that the caller can handle it
 		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree: %s", subtreeHash.String(), errorsFound.Load(), failures.String(), firstError)
