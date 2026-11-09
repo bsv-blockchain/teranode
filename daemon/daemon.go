@@ -359,6 +359,12 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 	startErr := d.startServices(sm.Ctx, logger, appSettings, sm, args, readyChInternal)
 
+	// Whether this process's own context was already cancelled when startup
+	// failed: a signal, Stop(), or the errgroup after a running service
+	// failed. It must be read here, because the ForceShutdown below cancels
+	// sm.Ctx on every start failure.
+	cancelledDuringStart := startErr != nil && sm.Ctx.Err() != nil
+
 	d.startErrMu.Lock()
 	d.startErr = startErr
 	d.startErrMu.Unlock()
@@ -503,7 +509,12 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	// same cancellation as a clean shutdown, so defer to its result here: nil
 	// for a requested stop, or the real error when a running service failed
 	// first and its errgroup cancellation reached the Init.
-	if startErr != nil && !errors.Is(startErr, context.Canceled) {
+	//
+	// It counts only if this process's own context was cancelled when startup
+	// failed. The project errors.Is also matches a gRPC codes.Canceled, which a
+	// remote service returns while it is stopping; an Init that fails on that,
+	// with sm.Ctx still live, is a real start failure and must exit non-zero.
+	if startErr != nil && (!cancelledDuringStart || !errors.Is(startErr, context.Canceled)) {
 		return startErr
 	}
 

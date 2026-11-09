@@ -24,6 +24,8 @@ import (
 	"github.com/ordishs/gocore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // init initializes the test environment for the daemon package.
@@ -819,6 +821,24 @@ func TestDaemon_Start_CancelDuringInitReturnsNil(t *testing.T) {
 	d.ServiceManager.ForceShutdown()
 
 	require.NoError(t, awaitStartResult(t, result))
+}
+
+// TestDaemon_Start_RemoteCancelDuringInitIsReturned: in a split deployment an
+// Init that calls a remote service which is stopping gets a gRPC
+// codes.Canceled. The project errors.Is matches that against
+// context.Canceled, but nothing asked this process to stop, so it is a start
+// failure: Start must return it and the process exit non-zero.
+func TestDaemon_Start_RemoteCancelDuringInitIsReturned(t *testing.T) {
+	svc := newMockService("remote-cancel")
+	svc.initErr = status.Error(codes.Canceled, "remote service is stopping")
+
+	require.True(t, errors.Is(svc.initErr, context.Canceled), "premise: the project errors.Is matches a gRPC Canceled")
+
+	_, result := startDaemonWithService(t, svc, nil)
+
+	err := awaitStartResult(t, result)
+	require.Error(t, err)
+	require.Equal(t, codes.Canceled, status.Code(err))
 }
 
 // TestDaemon_Start_CancelDuringInitKeepsEarlierServiceFailure: a running
