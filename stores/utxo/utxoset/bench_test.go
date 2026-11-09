@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
@@ -208,6 +209,16 @@ func BenchmarkSpend(b *testing.B) {
 // database transaction, so a failed create rolls the spends back rather than needing
 // compensating logic.
 func BenchmarkSpendAndCreate(b *testing.B) {
+	runSpendAndCreateBench(b)
+}
+
+// BenchmarkSpendAndCreateLanePosition is BenchmarkSpendAndCreate with a lane position on every
+// created record: the store's own cost of lane positions being on.
+func BenchmarkSpendAndCreateLanePosition(b *testing.B) {
+	runSpendAndCreateBench(b, utxo.WithLanePosition(lane.Pack(7, 1)))
+}
+
+func runSpendAndCreateBench(b *testing.B, opts ...utxo.CreateOption) {
 	s, ctx := benchStore(b)
 
 	b.ReportAllocs()
@@ -236,7 +247,7 @@ func BenchmarkSpendAndCreate(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if _, _, err := s.SpendAndCreate(ctx, children[i], 700_000); err != nil {
+		if _, _, err := s.SpendAndCreate(ctx, children[i], 700_000, opts...); err != nil {
 			b.Fatalf("spendAndCreate: %v", err)
 		}
 	}
@@ -426,10 +437,16 @@ func BenchmarkCreatePaths(b *testing.B) {
 		b.Run(fmt.Sprintf("Mined/%d", n), func(b *testing.B) {
 			runCreatePathBench(b, s, ctx, n, true)
 		})
+		b.Run(fmt.Sprintf("PlainLane/%d", n), func(b *testing.B) {
+			runCreatePathBench(b, s, ctx, n, false, lane.Pack(7, 1))
+		})
+		b.Run(fmt.Sprintf("MinedLane/%d", n), func(b *testing.B) {
+			runCreatePathBench(b, s, ctx, n, true, lane.Pack(7, 1))
+		})
 	}
 }
 
-func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mined bool) {
+func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mined bool, lanePosition ...uint64) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
@@ -449,6 +466,10 @@ func runCreatePathBench(b *testing.B, s *Store, ctx context.Context, n int, mine
 				opts.MinedBlockInfos = []utxo.MinedBlockInfo{{
 					BlockID: 1, BlockHeight: 1, OnLongestChain: true,
 				}}
+			}
+
+			if len(lanePosition) > 0 {
+				opts.LanePosition = lanePosition[0] + uint64(j) //nolint:gosec // j counts up from 0
 			}
 
 			batch[j] = &createItem{
