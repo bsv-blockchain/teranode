@@ -15,7 +15,7 @@ type LaneRangeRequest struct {
 	Size uint64
 	// Height is the best block height at hand-out, recorded for operators.
 	Height uint32
-	// FreeAfter is how long a lane must be idle before another holder can have it.
+	// FreeAfter is how long a lane must go without a hand-out before it can be assigned to a holder that names no lane.
 	FreeAfter time.Duration
 	// Now is the hand-out time. Injected so tests can move the clock.
 	Now time.Time

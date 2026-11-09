@@ -36,9 +36,8 @@ const (
 //
 // The lane number is kept in a file, so a restart asks for the same lane and
 // carries on above the positions it already used. A missing or unreadable file
-// means asking with no lane. The service may give a different lane than the
-// one asked for, if another holder took it after it sat idle; the file is then
-// rewritten with the new lane.
+// means asking with no lane. The service gives a different lane than the one
+// asked for only when that lane is exhausted; the file is then rewritten.
 type Allocator struct {
 	src    RangeSource
 	holder string
@@ -251,19 +250,8 @@ func (a *Allocator) run() {
 func (a *Allocator) install(r Range) {
 	a.mu.Lock()
 
-	if !a.hasLane || r.Lane != a.lane {
-		if a.hasLane {
-			a.logger.Warnf("[lane] %s asked for lane %d and was given lane %d", a.holder, a.lane, r.Lane)
-		}
-
-		a.lane, a.hasLane = r.Lane, true
-
-		if err := writeLaneFile(a.file, r.Lane); err != nil {
-			// The next start will ask with no lane and get a fresh one, which is
-			// safe: positions are unique whichever lane a process uses.
-			a.logger.Errorf("[lane] could not save lane %d to %s: %v", r.Lane, a.file, err)
-		}
-	}
+	asked, hadLane := a.lane, a.hasLane
+	a.lane, a.hasLane = r.Lane, true
 
 	if a.next == 0 || a.next > a.cur.Last {
 		a.cur, a.next = r, r.First
@@ -272,6 +260,20 @@ func (a *Allocator) install(r Range) {
 	}
 
 	a.mu.Unlock()
+
+	// Outside the lock: Next holds it on the create path, and a create must never
+	// wait on the disk.
+	if !hadLane || r.Lane != asked {
+		if hadLane {
+			a.logger.Warnf("[lane] %s asked for lane %d and was given lane %d", a.holder, asked, r.Lane)
+		}
+
+		if err := writeLaneFile(a.file, r.Lane); err != nil {
+			// The next start will ask with no lane and get a fresh one, which is
+			// safe: positions are unique whichever lane a process uses.
+			a.logger.Errorf("[lane] could not save lane %d to %s: %v", r.Lane, a.file, err)
+		}
+	}
 
 	prometheusLaneCurrent.Set(float64(r.Lane))
 	prometheusLaneRanges.Inc()

@@ -31,9 +31,10 @@ func TestServerReserveLaneRange(t *testing.T) {
 	require.Equal(t, uint64(501), second.First)
 	require.Equal(t, uint64(1000), second.Last)
 
-	other, err := tc.server.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{Holder: "validator-2", WantLane: first.Lane, HasLane: true})
+	// A second holder naming no lane is assigned one that is free.
+	other, err := tc.server.ReserveLaneRange(ctx, &blockchain_api.ReserveLaneRangeRequest{Holder: "validator-2"})
 	require.NoError(t, err)
-	require.NotEqual(t, first.Lane, other.Lane, "a lane held by another holder is not shared")
+	require.NotEqual(t, first.Lane, other.Lane, "a lane with a recent hand-out is not free")
 
 	require.Equal(t, before+2, testutil.ToFloat64(prometheusBlockchainLaneHandouts.WithLabelValues("0")))
 
@@ -64,7 +65,7 @@ func TestClientReserveLaneRangeOverGRPC(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, lane.Range{Lane: 0, First: 101, Last: 200}, r2)
 
-	r3, err := src.ReserveLaneRange(ctx, "holder-b", 0, true)
+	r3, err := src.ReserveLaneRange(ctx, "holder-b", 0, false)
 	require.NoError(t, err)
-	require.NotEqual(t, uint8(0), r3.Lane)
+	require.Equal(t, lane.Range{Lane: 1, First: 1, Last: 100}, r3, "the wire carries no lane as no lane, not as lane 0")
 }

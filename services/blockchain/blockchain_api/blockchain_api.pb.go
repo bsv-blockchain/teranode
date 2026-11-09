@@ -7629,7 +7629,7 @@ func (x *ReserveLaneRangeRequest) GetHasLane() bool {
 }
 
 // ReserveLaneRangeResponse is the range handed out. lane is the lane actually given,
-// which differs from the one asked for when that lane was held by someone else.
+// which differs from the one asked for only when that lane is exhausted.
 type ReserveLaneRangeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Lane          uint32                 `protobuf:"varint,1,opt,name=lane,proto3" json:"lane,omitempty"`

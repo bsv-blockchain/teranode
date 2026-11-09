@@ -24,7 +24,6 @@ var laneHandoutMu sync.Mutex
 type laneState struct {
 	used      bool
 	last      uint64
-	holder    string
 	handedAt  time.Time
 	exhausted bool
 }
@@ -32,11 +31,14 @@ type laneState struct {
 // ReserveLaneRange records and returns the next range of positions in a lane.
 //
 // A lane's range always starts above the highest position ever handed out in it.
-// The requested lane is granted when it was never used, when its latest
-// hand-out went to the same holder, or when it has been idle for FreeAfter.
-// Otherwise a free lane is assigned: never-used lanes first, lowest number
+// A holder that names a lane gets that lane, whoever held it last: that is a
+// process carrying on in the lane it saved, and because each range starts above
+// the highest position ever handed out, two lives of one lane cannot share a
+// position even when they overlap. A holder that names none is assigned a free
+// lane, one with no hand-out in FreeAfter: never-used lanes first, lowest number
 // first, then the lane idle longest (lowest number on a tie). Exhausted lanes
-// are never handed out. The table is insert-only.
+// are never handed out; naming one is treated as naming none. The table is
+// insert-only.
 func (s *SQL) ReserveLaneRange(ctx context.Context, req options.LaneRangeRequest) (lane.Range, error) {
 	if req.Size == 0 {
 		return lane.Range{}, errors.NewInvalidArgumentError("lane range size must be at least 1")
@@ -110,7 +112,7 @@ func chooseLane(ctx context.Context, tx *sql.Tx, req options.LaneRangeRequest) (
 			return 0, err
 		}
 
-		if !st.exhausted && (!st.used || st.holder == req.Holder || !req.Now.Before(st.handedAt.Add(req.FreeAfter))) {
+		if !st.exhausted {
 			return req.WantLane, nil
 		}
 	}
@@ -155,14 +157,13 @@ func chooseLane(ctx context.Context, tx *sql.Tx, req options.LaneRangeRequest) (
 func readLaneState(ctx context.Context, tx *sql.Tx, l uint8) (laneState, error) {
 	var (
 		last     int64
-		holder   string
 		handedAt time.Time
 	)
 
 	err := tx.QueryRowContext(ctx,
-		`SELECT last, holder, handed_at FROM lane_handout WHERE lane = $1 ORDER BY first DESC LIMIT 1`,
+		`SELECT last, handed_at FROM lane_handout WHERE lane = $1 ORDER BY first DESC LIMIT 1`,
 		int(l),
-	).Scan(&last, &holder, &handedAt)
+	).Scan(&last, &handedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return laneState{}, nil
 	}
@@ -173,5 +174,5 @@ func readLaneState(ctx context.Context, tx *sql.Tx, l uint8) (laneState, error) 
 
 	lastPos := lane.FromSigned(last)
 
-	return laneState{used: true, last: lastPos, holder: holder, handedAt: handedAt, exhausted: lastPos >= lane.MaxPosition}, nil
+	return laneState{used: true, last: lastPos, handedAt: handedAt, exhausted: lastPos >= lane.MaxPosition}, nil
 }

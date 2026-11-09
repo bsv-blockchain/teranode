@@ -14,15 +14,17 @@ import (
 
 // fakeSource stands in for the blockchain service at the RangeSource boundary.
 // It follows the service's rules: a lane's next range starts above the highest
-// position ever handed out in it, and a request with no lane gets the lowest
-// lane nobody holds.
+// position ever handed out in it, a named lane is granted unless it is
+// exhausted, and a request with no lane gets the lowest lane nobody holds.
 type fakeSource struct {
 	mu      sync.Mutex
 	size    uint64
 	highest map[uint8]uint64
 	holders map[uint8]string
-	down    bool
-	calls   []fakeCall
+	// exhausted marks lanes whose positions have all been handed out.
+	exhausted map[uint8]bool
+	down      bool
+	calls     []fakeCall
 }
 
 type fakeCall struct {
@@ -32,7 +34,7 @@ type fakeCall struct {
 }
 
 func newFakeSource(size uint64) *fakeSource {
-	return &fakeSource{size: size, highest: map[uint8]uint64{}, holders: map[uint8]string{}}
+	return &fakeSource{size: size, highest: map[uint8]uint64{}, holders: map[uint8]string{}, exhausted: map[uint8]bool{}}
 }
 
 func (f *fakeSource) ReserveLaneRange(_ context.Context, holder string, wantLane uint8, hasLane bool) (Range, error) {
@@ -46,9 +48,9 @@ func (f *fakeSource) ReserveLaneRange(_ context.Context, holder string, wantLane
 	}
 
 	l := wantLane
-	if !hasLane || (f.holders[l] != "" && f.holders[l] != holder) {
+	if !hasLane || f.exhausted[l] {
 		l = 0
-		for f.holders[l] != "" {
+		for f.holders[l] != "" || f.exhausted[l] {
 			l++
 		}
 	}
@@ -183,7 +185,7 @@ func (s *sharedSource) firstOwnCall() fakeCall {
 
 func TestAllocatorMovesToTheLaneTheServiceGivesAndSavesIt(t *testing.T) {
 	src := newFakeSource(1000)
-	src.holders[4] = "someone else"
+	src.exhausted[4] = true
 
 	file := filepath.Join(t.TempDir(), "lane")
 	require.NoError(t, os.WriteFile(file, []byte("4\n"), 0o600))
@@ -191,7 +193,7 @@ func TestAllocatorMovesToTheLaneTheServiceGivesAndSavesIt(t *testing.T) {
 	a := startAllocator(t, src, "pod-3", file)
 
 	require.Equal(t, fakeCall{"pod-3", 4, true}, src.firstCall())
-	require.Equal(t, uint8(0), Lane(next(t, a)), "lane 4 is someone else's, so the service gave lane 0")
+	require.Equal(t, uint8(0), Lane(next(t, a)), "lane 4 is exhausted, so the service gave lane 0")
 
 	saved, err := os.ReadFile(file)
 	require.NoError(t, err)

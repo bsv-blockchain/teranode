@@ -94,14 +94,18 @@ func TestReserveLaneRange(t *testing.T) {
 		require.NotEqual(t, a.Lane, b.Lane)
 	})
 
-	runLaneHandoutTests(t, "lane held by another inside the window is not granted", func(t *testing.T, s *SQL) {
+	// A process that lost its host name but kept its data folder names its saved
+	// lane under a new holder. It keeps the lane, because otherwise every deploy of
+	// such a pod would take another lane until the 256 ran out. The range still
+	// starts above every position handed out, so the two lives cannot share one.
+	runLaneHandoutTests(t, "a named lane is granted whoever held it last", func(t *testing.T, s *SQL) {
 		a, err := s.ReserveLaneRange(t.Context(), laneReq("a", t0))
 		require.NoError(t, err)
 
 		b, err := s.ReserveLaneRange(t.Context(), laneReqFor("b", a.Lane, t0.Add(time.Hour)))
 		require.NoError(t, err)
-		require.NotEqual(t, a.Lane, b.Lane)
-		require.Equal(t, uint64(1), b.First)
+		require.Equal(t, a.Lane, b.Lane)
+		require.Equal(t, a.Last+1, b.First)
 	})
 
 	runLaneHandoutTests(t, "same holder re-asking gets its lane", func(t *testing.T, s *SQL) {

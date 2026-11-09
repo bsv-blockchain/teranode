@@ -185,7 +185,7 @@ type BlockchainAPIClient interface {
 	// GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
 	GetBlockHeaderIDs(ctx context.Context, in *GetBlockHeadersRequest, opts ...grpc.CallOption) (*GetBlockHeaderIDsResponse, error)
 	// ReserveLaneRange hands a record-creating process the next range of positions in a lane.
-	// The service picks the lane when none is asked for or the one asked for is held by someone else.
+	// A holder that names a lane gets it, unless it is exhausted. Otherwise the service assigns a free lane.
 	ReserveLaneRange(ctx context.Context, in *ReserveLaneRangeRequest, opts ...grpc.CallOption) (*ReserveLaneRangeResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetBlockHeaderResponse, error)
@@ -1100,7 +1100,7 @@ type BlockchainAPIServer interface {
 	// GetBlockHeaderIDs retrieves block header IDs for a range of blocks.
 	GetBlockHeaderIDs(context.Context, *GetBlockHeadersRequest) (*GetBlockHeaderIDsResponse, error)
 	// ReserveLaneRange hands a record-creating process the next range of positions in a lane.
-	// The service picks the lane when none is asked for or the one asked for is held by someone else.
+	// A holder that names a lane gets it, unless it is exhausted. Otherwise the service assigns a free lane.
 	ReserveLaneRange(context.Context, *ReserveLaneRangeRequest) (*ReserveLaneRangeResponse, error)
 	// GetBestBlockHeader retrieves the header of the current best block.
 	GetBestBlockHeader(context.Context, *emptypb.Empty) (*GetBlockHeaderResponse, error)

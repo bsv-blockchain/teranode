@@ -105,6 +105,11 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 	return s.Store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
 }
 
+// Unwrap returns the wrapped store, so utxo.As still finds what it can do.
+func (s *Store) Unwrap() utxo.Store {
+	return s.Store
+}
+
 // Close stops the allocator's background fetch, then closes the store.
 func (s *Store) Close(ctx context.Context) error {
 	s.positions.Close()

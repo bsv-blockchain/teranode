@@ -100,8 +100,8 @@ type ClientI interface {
 	AssignBlockID(ctx context.Context, blockHash *chainhash.Hash) (uint64, error)
 
 	// ReserveLaneRange hands the holder the next range of positions in a lane and records it.
-	// With hasLane false, or when wantLane is held by another holder that was active recently,
-	// the service assigns a free lane; the returned range names the lane actually given.
+	// With hasLane true the holder gets wantLane, unless that lane is exhausted. With hasLane false,
+	// or an exhausted lane, the service assigns a free lane; the returned range names the lane given.
 	// It returns an error when no lane is free.
 	ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error)
 

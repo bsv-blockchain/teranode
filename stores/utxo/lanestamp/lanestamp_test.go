@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/lanestamp"
 	"github.com/bsv-blockchain/teranode/stores/utxo/nullstore"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -66,6 +67,18 @@ func newStores(t *testing.T, src lane.RangeSource, start bool) (inner, stamped u
 	}
 
 	return s, lanestamp.New(s, a, nil)
+}
+
+// The pruner service and block assembly find what the real store can do through
+// utxo.As. A wrapper that hides it stops the pruner starting with the flag on.
+func TestTheWrapperDoesNotHideTheWrappedStore(t *testing.T) {
+	_, stamped := newStores(t, &source{}, false)
+
+	_, ok := utxostore.As[pruner.PrunerServiceProvider](stamped)
+	require.True(t, ok, "the pruner service reaches its provider through the wrapper")
+
+	_, ok = utxostore.As[*sql.Store](stamped)
+	require.True(t, ok)
 }
 
 func lanePosition(t *testing.T, db utxostore.Store, tx *bt.Tx) uint64 {

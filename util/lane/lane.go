@@ -95,9 +95,9 @@ func (r Range) Len() uint64 {
 }
 
 // RangeSource hands out ranges. holder names the process asking, and is
-// recorded with the hand-out. With hasLane false, or when the lane named is
-// held by someone else, the source assigns a free lane; the returned range
-// names the lane actually given. The blockchain client implements it.
+// recorded with the hand-out. With hasLane true the holder gets wantLane, unless
+// that lane is exhausted; otherwise the source assigns a free lane. The returned
+// range names the lane actually given. The blockchain client implements it.
 type RangeSource interface {
 	ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (Range, error)
 }
