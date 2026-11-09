@@ -33,7 +33,9 @@ read every section between yours and the target.
 
 - **Blockchain `Store` and `blockchain.ClientI` gain `ReserveLaneRange`.** Out-of-tree blockchain
   stores and `ClientI` implementations (mocks included) add the method; the blockchain database
-  gains an insert-only `lane_handout` table on startup. (#2136)
+  gains an insert-only `lane_handout` table on startup. UTXO stores gain a nullable `lane_position`
+  column at first start, flag on or off; on utxoset each `ALTER` takes `ACCESS EXCLUSIVE` and the
+  store refuses to open if a transaction holds a table for five minutes. (#2136)
 
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the

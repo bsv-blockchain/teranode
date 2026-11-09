@@ -11,10 +11,12 @@ type LanePositionSource interface {
 }
 
 // LanePositionTaker is a store that gives each record it creates a position from a source. A
-// store's create path calls this once per record, so taking a position costs a create one call to
-// Next. The store also writes the position, and that cost is the store's. There is no wrapper
-// around the store, because a wrapper has to scan and extend the options on every create, and it
-// hides what the wrapped store can do.
+// store's create path calls this once per attempt to write a record, so taking a position costs one
+// call to Next per attempt. A store that plans a write again after a rollback, as utxoset does on a
+// deadlock retry or a rolled-back round, takes new positions and burns the old ones, which is
+// harmless at seven bytes a position. The store also writes the position, and that cost is the
+// store's. There is no wrapper around the store, because a wrapper has to scan and extend the
+// options on every create, and it hides what the wrapped store can do.
 //
 // Find it with As, since the store may sit inside a logging wrapper. Set the source before the
 // first create, because it is not guarded against a concurrent create.

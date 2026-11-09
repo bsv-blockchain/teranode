@@ -488,7 +488,8 @@ type Store interface {
 	SetFSMState(ctx context.Context, state string) error
 
 	// ReserveLaneRange hands out the next range of lane positions and records it.
-	// See options.LaneRangeRequest for the request and the lane choice rule.
+	// See options.LaneRangeRequest for the request, and SQL.ReserveLaneRange for the lane choice rule
+	// an implementation must follow.
 	ReserveLaneRange(ctx context.Context, req options.LaneRangeRequest) (lane.Range, error)
 
 	// LocateBlockHeaders retrieves block headers using a locator and stop hash.

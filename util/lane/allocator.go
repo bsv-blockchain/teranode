@@ -46,10 +46,15 @@ const (
 // alternative, holding the create until the service answers, would stall every
 // validator on a blockchain outage.
 //
-// The lane number is kept in a file, so a restart asks for the same lane and
-// carries on above the positions it already used. A missing or unreadable file
-// means asking with no lane. The service gives a different lane than the one
-// asked for only when that lane is exhausted; the file is then rewritten.
+// The lane number is kept in a file under the dataFolder setting, so a restart
+// that keeps that folder asks for the same lane and carries on above the
+// positions it already used. A missing or unreadable file means asking with no
+// lane, which is what a recreated container does when dataFolder is not on
+// persistent storage: it takes a new lane. The service gives a different lane
+// than the one asked for only when that lane is exhausted; the file is then
+// rewritten. If all 256 lanes had a hand-out inside blockchain_laneFreeAfter, a
+// request with no lane gets an error, the fetch loop keeps retrying, and the
+// process creates its records without a lane position until a lane comes free.
 type Allocator struct {
 	src    RangeSource
 	holder string
@@ -148,8 +153,9 @@ func (a *Allocator) Close() error {
 }
 
 // Next returns the next lane position, or false if no range is in hand. A create calls it once per
-// record, so it takes a lock and an add and allocates nothing. The first call of a process starts
-// the allocator and waits for the first range, at most firstRangeWait; no later call waits.
+// attempt to write a record, so it takes a lock and an add and allocates nothing. The first call of
+// a process starts the allocator and waits for the first range, at most firstRangeWait; no later
+// call waits.
 func (a *Allocator) Next() (uint64, bool) {
 	if !a.started.Load() {
 		a.startOnFirstUse()

@@ -9,10 +9,12 @@ import (
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -171,24 +173,25 @@ func TestLanePositionIsCopiedFromAnExistingContainmentRow(t *testing.T) {
 	require.Equal(t, lane.ToSigned(want), v)
 }
 
+// blockPathCreateRoutes are the two create statements a block-carrying create can take.
+var blockPathCreateRoutes = []struct {
+	name   string
+	height uint32
+	store  func(t *testing.T) (*Store, context.Context)
+}{
+	{"identity plan", 901, newUncheckpointedStore},
+	{"mined plan", checkpointFloor - 1, func(t *testing.T) (*Store, context.Context) { return newCheckpointStore(t, false) }},
+}
+
 // TestAnExistingIdentityRowDecidesTheLanePosition: a block-path create of a transaction already
 // stored unmined must not give its containment row a position the identity row does not hold,
 // because Get then answers one way while the identity row lives and another way after. The store
 // takes a new position on every create, so this is every block-path create over an existing record.
 // The identity row's value wins, NULL included, on both create statements.
 func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
-	routes := []struct {
-		name   string
-		height uint32
-		store  func(t *testing.T) (*Store, context.Context)
-	}{
-		{"identity plan", 901, newUncheckpointedStore},
-		{"mined plan", checkpointFloor - 1, func(t *testing.T) (*Store, context.Context) { return newCheckpointStore(t, false) }},
-	}
-
 	offered := lane.Pack(4, 200)
 
-	for _, route := range routes {
+	for _, route := range blockPathCreateRoutes {
 		t.Run(route.name, func(t *testing.T) {
 			s, ctx := route.store(t)
 
@@ -223,6 +226,86 @@ func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestABlockPathCreateWithNoRangeInHandKeepsTheRecordsPosition: a store with lane positions on and no
+// range in hand takes no position for anything in the plan. The containment row must still copy the
+// position the record has, or the stored value would depend on whether a neighbour in the batch got
+// one, and Get would lose the position once the stamp deleted the identity row.
+func TestABlockPathCreateWithNoRangeInHandKeepsTheRecordsPosition(t *testing.T) {
+	want := lane.Pack(4, 100)
+
+	for _, route := range blockPathCreateRoutes {
+		t.Run(route.name, func(t *testing.T) {
+			s, ctx := route.store(t)
+			s.SetLanePositionSource(tests.NewScriptedLanePositions())
+
+			tx := mkTx(t, 1, 5_000)
+
+			_, err := s.Create(ctx, tx, route.height-1, utxo.WithLanePosition(want))
+			require.NoError(t, err)
+
+			_, _ = s.Create(ctx, tx, route.height, minedAt(route.height, 42))
+
+			v, null, ok := storedLane(t, s, ctx, "tx_mined", tx)
+			require.True(t, ok, "the block-path create writes the containment row")
+			require.False(t, null, "the containment row copies the identity row's position")
+			require.Equal(t, lane.ToSigned(want), v)
+		})
+	}
+
+	t.Run("from an existing containment row", func(t *testing.T) {
+		s, ctx := newTestStore(t)
+		s.SetLanePositionSource(tests.NewScriptedLanePositions())
+
+		tx := mkTx(t, 3, 6_000)
+
+		_, err := s.Create(ctx, tx, 100, utxo.WithLanePosition(want))
+		require.NoError(t, err)
+
+		_, err = s.SetMinedMulti(ctx, hashes(tx), utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+		require.NoError(t, err)
+
+		stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+
+		_, err = s.Create(ctx, tx, 293, minedAt(293, 9))
+		require.ErrorIs(t, err, errors.ErrTxExists)
+
+		v, null := storedLaneInBlock(t, s, ctx, tx, 9)
+		require.False(t, null, "the new block's row copies the first block's position")
+		require.Equal(t, lane.ToSigned(want), v)
+	})
+}
+
+// TestALaneReadInABatchWithAReadThatDidNotAsk: the batch reads the column if any item asked, so the
+// lane read gets its position whatever it shares a batch with.
+func TestALaneReadInABatchWithAReadThatDidNotAsk(t *testing.T) {
+	s, ctx := newTestStoreWith(t, func(ts *settings.Settings) {
+		// Two items fill a batch, and the window is long enough that neither flushes alone.
+		ts.UtxoStore.GetBatcherSize = 2
+		ts.UtxoStore.GetBatcherDurationMillis = 5_000
+	})
+	require.NotNil(t, s.getBatcher)
+
+	want := lane.Pack(200, 77)
+
+	feeOnly := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, feeOnly, 100)
+	require.NoError(t, err)
+
+	withLane := mkTx(t, 1, 6_000)
+	_, err = s.Create(ctx, withLane, 100, utxo.WithLanePosition(want))
+	require.NoError(t, err)
+
+	feeRead := make(chan error, 1)
+
+	go func() {
+		_, readErr := s.Get(ctx, feeOnly.TxIDChainHash(), fields.Fee)
+		feeRead <- readErr
+	}()
+
+	requireGetLane(t, s, ctx, withLane, want, "the lane read shares a batch with a fee read")
+	require.NoError(t, <-feeRead)
 }
 
 // TestARefusedCreateCannotGiveARecordASecondLanePosition: a create over a record with no identity row
@@ -297,13 +380,18 @@ func TestARefusedCreateCannotGiveARecordASecondLanePosition(t *testing.T) {
 	})
 }
 
-// primeOrderSource fails a Next that comes before Prime, which is a position taken with the wait still
-// to come, and so possibly with a database transaction open.
+// primeOrderSource records what a transaction would have held when Prime ran: the connections the
+// pool had out, which on this otherwise idle store is the open transaction's. It also fails a Next
+// that comes before Prime, which is a position taken with the wait still to come.
 type primeOrderSource struct {
-	primes, nextsBeforePrime atomic.Int64
+	pool                                   *pgxpool.Pool
+	primes, nextsBeforePrime, connsAtPrime atomic.Int64
 }
 
-func (p *primeOrderSource) Prime() { p.primes.Add(1) }
+func (p *primeOrderSource) Prime() {
+	p.primes.Add(1)
+	p.connsAtPrime.Add(int64(p.pool.Stat().AcquiredConns()))
+}
 
 func (p *primeOrderSource) Next() (uint64, bool) {
 	if p.primes.Load() == 0 {
@@ -326,7 +414,7 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 		w := tests.BuildMultiWorkload(t, 0xf4, 1, 1)
 		w.StoreRoots(t, s, 900)
 
-		source := &primeOrderSource{}
+		source := &primeOrderSource{pool: s.pool}
 		s.SetLanePositionSource(source)
 		require.NoError(t, call(s, w))
 
@@ -340,6 +428,7 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 		})
 		require.NotZero(t, source.primes.Load())
 		require.Zero(t, source.nextsBeforePrime.Load())
+		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
 	})
 
 	t.Run("SpendAndCreate", func(t *testing.T) {
@@ -349,6 +438,7 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 		})
 		require.NotZero(t, source.primes.Load())
 		require.Zero(t, source.nextsBeforePrime.Load())
+		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
 	})
 
 	t.Run("SpendAndCreateMulti", func(t *testing.T) {
@@ -358,6 +448,7 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 		})
 		require.NotZero(t, source.primes.Load())
 		require.Zero(t, source.nextsBeforePrime.Load())
+		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
 	})
 
 	t.Run("a spend-only call does not prime", func(t *testing.T) {
@@ -404,6 +495,12 @@ func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 		require.NoError(t, err)
 
 		got = append(got, md.LanePosition)
+
+		if md.LanePosition == lane.None {
+			_, null, ok := storedLane(t, s, ctx, "tx_mined", tx)
+			require.True(t, ok)
+			require.True(t, null, "a record with no position stores NULL, not 0")
+		}
 	}
 
 	require.ElementsMatch(t, append(given, lane.None), got, "each record its own position, one with none")
@@ -715,26 +812,34 @@ func TestLanePositionMigrationOnAMigratedSchemaTakesNoLock(t *testing.T) {
 // addLane keeps a plan's lanes nil until a row has a position, then fills zeros for the rows before
 // it. Without those zeros the array is shorter than the plan, every position lands on the wrong
 // row and the rows at the end get none. Each statement gets a plan of its own, so the position
-// arrays line up with no help from a projection.
+// arrays line up with no help from a projection. The zeros are the plan's own: the rows with no
+// position must store NULL, in every table the route writes.
 func TestLanePositionsKeepTheirRowsWhenTheFirstRowsHaveNone(t *testing.T) {
 	want := []uint64{lane.None, lane.None, lane.Pack(3, 11), lane.Pack(4, 22)}
 
+	checkpointed := func(t *testing.T) (*Store, context.Context) { return newCheckpointStore(t, false) }
+
+	blockCarrying := func(tx *bt.Tx, position uint64) *createItem {
+		it := minedItem(tx, checkpointFloor-1, 1)
+		it.options.LanePosition = position
+
+		return it
+	}
+
 	for _, route := range []struct {
-		name string
-		item func(tx *bt.Tx, position uint64) *createItem
+		name   string
+		store  func(t *testing.T) (*Store, context.Context)
+		tables []string
+		item   func(tx *bt.Tx, position uint64) *createItem
 	}{
-		{"createIdentPlan", func(tx *bt.Tx, position uint64) *createItem {
+		{"createIdentPlan", checkpointed, []string{"tx_ident"}, func(tx *bt.Tx, position uint64) *createItem {
 			return &createItem{tx: tx, blockHeight: checkpointFloor - 1, options: &utxo.CreateOptions{LanePosition: position}}
 		}},
-		{"createMinedPlan", func(tx *bt.Tx, position uint64) *createItem {
-			it := minedItem(tx, checkpointFloor-1, 1)
-			it.options.LanePosition = position
-
-			return it
-		}},
+		{"createIdentPlan with a block", newUncheckpointedStore, []string{"tx_ident", "tx_mined"}, blockCarrying},
+		{"createMinedPlan", checkpointed, []string{"tx_mined"}, blockCarrying},
 	} {
 		t.Run(route.name, func(t *testing.T) {
-			s, ctx := newCheckpointStore(t, false)
+			s, ctx := route.store(t)
 
 			txs := make([]*bt.Tx, len(want))
 			items := make([]*createItem, len(want))
@@ -748,6 +853,16 @@ func TestLanePositionsKeepTheirRowsWhenTheFirstRowsHaveNone(t *testing.T) {
 
 			for i, tx := range txs {
 				requireGetLane(t, s, ctx, tx, want[i], route.name)
+
+				if want[i] != lane.None {
+					continue
+				}
+
+				for _, table := range route.tables {
+					_, null, ok := storedLane(t, s, ctx, table, tx)
+					require.True(t, ok, "%s holds a row", table)
+					require.True(t, null, "%s stores NULL, not 0", table)
+				}
 			}
 		})
 	}

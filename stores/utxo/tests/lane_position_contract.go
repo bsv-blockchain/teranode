@@ -28,7 +28,7 @@ import (
 // route, because it does not set the options that reach utxoset's netted write.
 // That write has its own test in stores/utxo/utxoset.
 //
-// Each workload here uses its own seed (0xd0 to 0xdf) so the records do not
+// Each workload here uses its own seed (0xd0 to 0xdf, 0xf0 to 0xf3) so the records do not
 // collide with the other contract tests on a store shared between subtests.
 
 // widest is lane 255 at the highest position: every bit set, so a store that

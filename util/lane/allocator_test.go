@@ -407,7 +407,7 @@ func (s *scriptedSource) callCount() int {
 }
 
 // The service is trusted to hand out good ranges, but a bad one must not panic in Pack on the
-// create path, or spin the fetch loop with no backoff.
+// create path or stop the fetch loop. TestAllocatorBacksOffBetweenFailedRequests covers the spacing.
 func TestAllocatorRefusesAnInvalidRangeAndKeepsTrying(t *testing.T) {
 	good := Range{Lane: 4, First: 7, Last: 9}
 
@@ -594,7 +594,7 @@ func TestOnlyTheFirstNextWaitsWhenTheServiceIsDown(t *testing.T) {
 	require.Less(t, time.Since(start), a.firstRangeWait/2, "a later call does not wait")
 }
 
-// Next runs once per record created, so with a range in hand it must allocate nothing.
+// Next runs at least once per record created, so with a range in hand it must allocate nothing.
 func TestNextDoesNotAllocate(t *testing.T) {
 	a := startAllocator(t, newFakeSource(10_000_000), "pod-3", filepath.Join(t.TempDir(), "lane"))
 	next(t, a)
@@ -604,4 +604,113 @@ func TestNextDoesNotAllocate(t *testing.T) {
 			t.Fatal("no range in hand")
 		}
 	}))
+}
+
+// Prime does the first call's wait without taking a position, so the first Next after it gets the
+// first position of the range and does not wait.
+func TestPrimeWaitsForTheFirstRangeAndTakesNoPosition(t *testing.T) {
+	good := Range{Lane: 4, First: 7, Last: 9}
+	src := &scriptedSource{gate: make(chan struct{}), final: good}
+
+	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+	a.firstRangeWait = time.Minute
+
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
+
+	primed := make(chan struct{})
+
+	go func() {
+		a.Prime()
+		close(primed)
+	}()
+
+	require.Never(t, func() bool {
+		select {
+		case <-primed:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, 5*time.Millisecond, "Prime waits for the first range")
+
+	close(src.gate)
+
+	select {
+	case <-primed:
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "Prime did not return once the range came")
+	}
+
+	v, ok := a.Next()
+	require.True(t, ok)
+	require.Equal(t, Pack(good.Lane, good.First), v, "Prime took no position")
+}
+
+// With the service down Prime gives up at the bound, and the Next after it does not wait again.
+func TestPrimeWaitsOnlyToItsBoundWhenTheServiceIsDown(t *testing.T) {
+	src := newFakeSource(1000)
+	src.setDown(true)
+
+	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+	a.firstRangeWait = 200 * time.Millisecond
+
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
+
+	start := time.Now()
+	a.Prime()
+	require.GreaterOrEqual(t, time.Since(start), a.firstRangeWait, "Prime waited")
+
+	start = time.Now()
+	_, ok := a.Next()
+	require.False(t, ok)
+	require.Less(t, time.Since(start), a.firstRangeWait/2, "the Next after it does not wait")
+}
+
+// timedDownSource always fails, and records when each request came.
+type timedDownSource struct {
+	mu    sync.Mutex
+	times []time.Time
+}
+
+func (s *timedDownSource) ReserveLaneRange(context.Context, string, uint8, bool) (Range, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.times = append(s.times, time.Now())
+
+	return Range{}, errors.NewServiceUnavailableError("blockchain service down")
+}
+
+func (s *timedDownSource) requestTimes() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return append([]time.Time(nil), s.times...)
+}
+
+// With the service down the fetch loop must not spin: the wait before each retry doubles from
+// retryMin. Timers only run late, so each gap being at least its backoff holds on a loaded machine.
+func TestAllocatorBacksOffBetweenFailedRequests(t *testing.T) {
+	src := &timedDownSource{}
+
+	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	require.Error(t, a.Start(ctx))
+
+	const requests = 4
+
+	require.Eventually(t, func() bool { return len(src.requestTimes()) >= requests }, 30*time.Second, 5*time.Millisecond)
+
+	times := src.requestTimes()
+	backoff := retryMin
+
+	for i := 1; i < requests; i++ {
+		require.GreaterOrEqual(t, times[i].Sub(times[i-1]), backoff, "the gap before request %d", i)
+
+		backoff *= 2
+	}
 }
