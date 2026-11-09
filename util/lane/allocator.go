@@ -16,6 +16,11 @@ import (
 const (
 	retryMin = 100 * time.Millisecond
 	retryMax = 10 * time.Second
+
+	// attemptTimeout bounds one request for a range. The context the fetch loop owns only ends
+	// at Close, and nothing below it sets a deadline, so without this a call that hangs would
+	// stop the retries and the logging until it returned.
+	attemptTimeout = 10 * time.Second
 )
 
 // Allocator hands out lane positions to the records one process creates.
@@ -43,6 +48,8 @@ type Allocator struct {
 	holder string
 	file   string
 	logger ulogger.Logger
+	// attemptTimeout is the const of that name. A field so a test can shorten it.
+	attemptTimeout time.Duration
 
 	mu       sync.Mutex
 	cur      Range
@@ -80,6 +87,9 @@ func NewAllocator(src RangeSource, holder, file string, logger ulogger.Logger) *
 		holder: holder,
 		file:   file,
 		logger: logger,
+
+		attemptTimeout: attemptTimeout,
+
 		wake:   make(chan struct{}, 1),
 		ready:  make(chan struct{}),
 		ctx:    ctx,
@@ -191,15 +201,16 @@ func (a *Allocator) signal() {
 	}
 }
 
-// needsRange reports whether the allocator is short of a current or a spare
-// range, and which lane to ask for.
+// needsRange reports whether the allocator should fetch, and which lane to ask
+// for. It fetches only with no spare in hand. With a spare held and the current
+// range spent, the next create swaps the spare in and signals, and the fetch
+// happens then. Fetching at that point instead would hand back a newer range
+// ahead of the spare, and positions in the lane would go backwards.
 func (a *Allocator) needsRange() (need bool, wantLane uint8, hasLane bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	curSpent := a.next == 0 || a.next > a.cur.Last
-
-	return curSpent || !a.hasSpare, a.lane, a.hasLane
+	return !a.hasSpare, a.lane, a.hasLane
 }
 
 func (a *Allocator) run() {
@@ -218,7 +229,10 @@ func (a *Allocator) run() {
 			}
 		}
 
-		r, err := a.src.ReserveLaneRange(a.ctx, a.holder, wantLane, hasLane)
+		attemptCtx, cancel := context.WithTimeout(a.ctx, a.attemptTimeout)
+		r, err := a.src.ReserveLaneRange(attemptCtx, a.holder, wantLane, hasLane)
+		cancel()
+
 		if err == nil && (r.Len() == 0 || r.First == 0 || r.Last > MaxPosition) {
 			err = errors.NewProcessingError("[lane] blockchain service handed out an invalid range %d:%d-%d", r.Lane, r.First, r.Last)
 		}
@@ -253,7 +267,7 @@ func (a *Allocator) install(r Range) {
 	asked, hadLane := a.lane, a.hasLane
 	a.lane, a.hasLane = r.Lane, true
 
-	if a.next == 0 || a.next > a.cur.Last {
+	if (a.next == 0 || a.next > a.cur.Last) && !a.hasSpare {
 		a.cur, a.next = r, r.First
 	} else {
 		a.spare, a.hasSpare = r, true

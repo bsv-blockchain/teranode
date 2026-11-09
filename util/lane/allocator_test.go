@@ -301,6 +301,214 @@ func TestAllocatorStartWithTheServiceDownStillRuns(t *testing.T) {
 		"the allocator keeps trying in the background")
 }
 
+// With the current range spent and a spare held, the allocator must not fetch: a newer range
+// would go in ahead of the spare, and positions in the lane would go backwards.
+func TestAllocatorPositionsNeverGoBackwards(t *testing.T) {
+	const rangeSize = 10
+
+	r1 := Range{Lane: 2, First: 1, Last: rangeSize}
+	r2 := Range{Lane: 2, First: rangeSize + 1, Last: 2 * rangeSize}
+	r3 := Range{Lane: 2, First: 2*rangeSize + 1, Last: 3 * rangeSize}
+
+	// Not started: the test delivers the ranges itself, one state at a time.
+	a := NewAllocator(newFakeSource(rangeSize), "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+	t.Cleanup(a.Close)
+
+	a.install(r1)
+	a.install(r2)
+
+	var last uint64
+	for i := uint64(0); i < r1.Len(); i++ {
+		last = next(t, a)
+	}
+
+	need, _, _ := a.needsRange()
+	require.False(t, need, "the current range is spent, but with a spare held there is nothing to fetch")
+
+	// A range delivered in that state still must not go in ahead of what is held.
+	a.install(r3)
+
+	for {
+		v, ok := a.Next()
+		if !ok {
+			break
+		}
+
+		require.Greater(t, v, last, "positions in a lane only increase")
+		last = v
+	}
+}
+
+// The same rule under load: small ranges, so the swap and the fetch happen thousands of times
+// while creates race them. Any one goroutine must see its own positions rise.
+func TestAllocatorPositionsRiseUnderConcurrentCreates(t *testing.T) {
+	src := newFakeSource(3)
+	a := startAllocator(t, src, "pod-3", filepath.Join(t.TempDir(), "lane"))
+
+	const goroutines, each = 8, 2000
+
+	var wg sync.WaitGroup
+
+	failed := make(chan string, goroutines)
+
+	for g := 0; g < goroutines; g++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			var last uint64
+
+			for i := 0; i < each; i++ {
+				v, ok := a.Next()
+				for !ok {
+					time.Sleep(time.Microsecond)
+
+					v, ok = a.Next()
+				}
+
+				if v <= last {
+					failed <- "a goroutine saw its position go backwards"
+					return
+				}
+
+				last = v
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(failed)
+
+	for msg := range failed {
+		require.Fail(t, msg)
+	}
+}
+
+// scriptedSource answers from a script in order, then holds its last answer behind a gate.
+type scriptedSource struct {
+	mu     sync.Mutex
+	script []Range
+	calls  int
+	gate   chan struct{}
+	final  Range
+}
+
+func (s *scriptedSource) ReserveLaneRange(ctx context.Context, _ string, _ uint8, _ bool) (Range, error) {
+	s.mu.Lock()
+	s.calls++
+	calls := s.calls
+	s.mu.Unlock()
+
+	if calls <= len(s.script) {
+		return s.script[calls-1], nil
+	}
+
+	select {
+	case <-s.gate:
+		return s.final, nil
+	case <-ctx.Done():
+		return Range{}, ctx.Err()
+	}
+}
+
+func (s *scriptedSource) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.calls
+}
+
+// The service is trusted to hand out good ranges, but a bad one must not panic in Pack on the
+// create path, or spin the fetch loop with no backoff.
+func TestAllocatorRefusesAnInvalidRangeAndKeepsTrying(t *testing.T) {
+	good := Range{Lane: 4, First: 7, Last: 9}
+
+	src := &scriptedSource{
+		script: []Range{
+			{Lane: 4},                    // the zero range
+			{Lane: 4, First: 0, Last: 5}, // position 0 means "no position"
+			{Lane: 4, First: 9, Last: 3}, // empty, last below first
+			{Lane: 4, First: MaxPosition, Last: MaxPosition + 5}, // does not fit in seven bytes
+		},
+		gate:  make(chan struct{}),
+		final: good,
+	}
+
+	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+	t.Cleanup(a.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	require.Error(t, a.Start(ctx), "no valid range has come yet")
+
+	require.Eventually(t, func() bool { return src.callCount() > len(src.script) }, 10*time.Second, time.Millisecond,
+		"each invalid range is retried")
+
+	_, ok := a.Next()
+	require.False(t, ok, "no invalid range was installed")
+
+	close(src.gate)
+
+	require.Eventually(t, func() bool {
+		v, ok := a.Next()
+		if ok {
+			require.Equal(t, Pack(good.Lane, good.First), v)
+		}
+
+		return ok
+	}, 10*time.Second, time.Millisecond, "the valid range is used once it comes")
+}
+
+// hangingSource hangs its first call until the caller's context ends, then answers normally.
+type hangingSource struct {
+	*fakeSource
+	mu       sync.Mutex
+	hung     bool
+	deadline bool
+}
+
+func (s *hangingSource) ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (Range, error) {
+	s.mu.Lock()
+	first := !s.hung
+	s.hung = true
+
+	if first {
+		_, s.deadline = ctx.Deadline()
+	}
+	s.mu.Unlock()
+
+	if first {
+		<-ctx.Done()
+
+		return Range{}, ctx.Err()
+	}
+
+	return s.fakeSource.ReserveLaneRange(ctx, holder, wantLane, hasLane)
+}
+
+// A hand-out that hangs must become an error and take the log and backoff path. Only Close ends
+// the fetch loop's own context, so with no per-attempt bound this test would never get a range.
+func TestAllocatorGivesUpOnAHungRequestAndRetries(t *testing.T) {
+	src := &hangingSource{fakeSource: newFakeSource(10)}
+
+	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+	a.attemptTimeout = 50 * time.Millisecond
+
+	t.Cleanup(a.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, a.Start(ctx), "the retry after the hung call brings a range")
+
+	src.mu.Lock()
+	defer src.mu.Unlock()
+
+	require.True(t, src.deadline, "each attempt carries its own deadline")
+}
+
 func TestFileNameNeverLeavesTheLaneFolder(t *testing.T) {
 	require.Equal(t, "teranode-1.lane", FileName("teranode-1"))
 	require.Equal(t, "___etc_passwd.lane", FileName("../etc/passwd"))
