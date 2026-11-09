@@ -539,8 +539,11 @@ func Test_processTxMetaUsingStore_provenConflictIsNotACancellation(t *testing.T)
 	}
 
 	t.Run("a TX_INVALID under another code is not a proven conflict", func(t *testing.T) {
-		err := settledError(ctx, errProcessTxMetaSettle, errors.NewProcessingError("not proven", errors.NewTxInvalidError("deeper in the chain")))
-		require.ErrorIs(t, err, errors.ErrContextCanceled, "only TX_INVALID on top is a proven conflict")
+		err := settledError(ctx, errProcessTxMetaSettle, errors.NewStorageError("could not decode", errors.NewTxInvalidError("deeper in the chain")))
+		require.False(t, provenConflict(err), "only TX_INVALID on top is a proven conflict")
+		require.NotErrorIs(t, err, errors.ErrContextCanceled, "a record this node could not decode is a storage fault, not a cancellation")
+		require.ErrorIs(t, err, errors.ErrStorageError, "it leaves under its own code, which every route reads as local")
+		require.ErrorIs(t, err, errors.ErrTxInvalid, "the store's code is still in the chain")
 	})
 
 	t.Run("a store fault whose text names a deadline is not a cancellation while ctx is live", func(t *testing.T) {
