@@ -7571,7 +7571,7 @@ func (x *LegacyPeerInfo) GetTimeConnected() *timestamppb.Timestamp {
 type ReserveLaneRangeRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Holder        string                 `protobuf:"bytes,1,opt,name=holder,proto3" json:"holder,omitempty"`                      // Names the process asking; recorded with the hand-out
-	WantLane      uint32                 `protobuf:"varint,2,opt,name=want_lane,json=wantLane,proto3" json:"want_lane,omitempty"` // The lane the holder had before, 0 to 255; read only when has_lane is true
+	WantLane      uint32                 `protobuf:"varint,2,opt,name=want_lane,json=wantLane,proto3" json:"want_lane,omitempty"` // The lane the holder had before; used only when has_lane is true, and refused above 255 in either case
 	HasLane       bool                   `protobuf:"varint,3,opt,name=has_lane,json=hasLane,proto3" json:"has_lane,omitempty"`    // False when the holder has no lane yet
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

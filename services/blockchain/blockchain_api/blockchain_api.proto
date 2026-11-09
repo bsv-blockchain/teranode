@@ -1223,7 +1223,7 @@ message LegacyPeerInfo {
 // ReserveLaneRangeRequest asks for a range of lane positions.
 message ReserveLaneRangeRequest {
   string holder = 1;     // Names the process asking; recorded with the hand-out
-  uint32 want_lane = 2;  // The lane the holder had before, 0 to 255; read only when has_lane is true
+  uint32 want_lane = 2;  // The lane the holder had before; used only when has_lane is true, and refused above 255 in either case
   bool has_lane = 3;     // False when the holder has no lane yet
 }
 

@@ -604,9 +604,10 @@ var (
 // Returns (false, nil) if anything is missing. Returns (false, err) only for
 // transport errors — a missing column / table / index is not an error.
 func isBlockchainSchemaCurrent(db *usql.DB, withIndexes bool) (bool, error) {
-	// Every table the DDL creates must be present. A deployment that predates
-	// one of them must re-run the DDL (CREATE TABLE IF NOT EXISTS) to gain it,
-	// so a missing table means "not current".
+	// Every table in blockchainSchemaExpectedTables (blocks, block_id_reservations
+	// and lane_handout) must be present. A deployment that predates one of them
+	// must re-run the DDL (CREATE TABLE IF NOT EXISTS) to gain it, so a missing
+	// table means "not current".
 	for _, table := range blockchainSchemaExpectedTables {
 		var exists bool
 		if err := db.QueryRow(

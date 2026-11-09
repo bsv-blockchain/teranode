@@ -4,8 +4,10 @@
 // The high byte is the lane: one per process that creates records, handed out
 // by the blockchain service. The low seven bytes are the position: the record's
 // place in that lane, counting up by one per record. A lane position is unique
-// and never changes, so later work can say which block took a record by keeping
-// a range of positions per lane per block, instead of writing to the record.
+// across the hand-outs recorded in one blockchain database and is written once,
+// so later work can say which block took a record by keeping a range of positions
+// per lane per block, instead of writing to the record. Restoring an older
+// blockchain database could reuse positions, which is a listed limit of this phase.
 //
 // Positions start at 1. Lane 0 is a real lane, so the packed value 0 can only
 // mean "no lane position": a record created with the feature off, or before it

@@ -71,17 +71,23 @@ type Data struct {
 	CreatedAt int64 `json:"createdAt,omitempty"`
 
 	// LanePosition is the record's lane position (util/lane), written once at
-	// create and never updated. Zero (lane.None) means the record has none: it
-	// was created with lane positions off, or before they existed.
+	// create and never updated. Zero (lane.None) means this read has no position:
+	// the field was not named, or the record was created with none (lane positions
+	// off, before they existed, no range in hand at the create, or a tool that opens
+	// its own store rather than going through the daemon), or the store no longer
+	// holds it. On utxoset that last case is a read answered from a live UTXO, an
+	// undo copy or a thin preserved row, once the row is below the lookup floor or
+	// its tx_mined partition has dropped.
 	//
 	// It is deliberately NOT carried by any of the binary encodings on this type
 	// (Bytes/NewDataFromBytes, MetaBytes/MetaBytesInto/NewMetaDataFromBytes).
 	// Bytes ends with an unlengthed run of 4-byte block IDs read to EOF, and the
 	// Meta pair has a fixed header with no version, so eight more bytes would
 	// decode as block IDs or shift fields rather than fail. Carrying it needs a
-	// versioned encoding. The consequence: the txmeta cache does not keep it, so
-	// a GetMeta answered from the cache returns zero. Nothing reads the field
-	// yet; a reader must ask the store with fields.LanePosition.
+	// versioned encoding. The consequence: the txmeta cache does not keep it, and
+	// utxo.MetaFields does not name it, so GetMeta returns zero on every path, from
+	// the cache or from the store. Nothing reads the field yet; a reader must ask
+	// the store with fields.LanePosition.
 	LanePosition uint64 `json:"lanePosition,omitempty"`
 
 	// Frozen is a flag indicating if the transaction is frozen
