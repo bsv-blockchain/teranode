@@ -28,6 +28,7 @@ func TestAerospikeConflictRecovery(t *testing.T) {
 	}{
 		{"WALPendingScan", func(t *testing.T) { conflictWALPendingScan(t, client, store) }},
 		{"WALIndex", func(t *testing.T) { conflictWALIndex(t, client, store) }},
+		{"WALRootWriters", func(t *testing.T) { conflictWALRootWriters(t, client, store) }},
 		{"WideCascade", func(t *testing.T) { tests.ConflictRecoveryWideCascade(t, store) }},
 		{"LateLoserChild", func(t *testing.T) { tests.ConflictRecoveryLateLoserChild(t, store) }},
 		{"LateFreeInputSpender", func(t *testing.T) { tests.ConflictRecoveryLateFreeInputSpender(t, store) }},
@@ -182,18 +183,18 @@ func conflictWALIndex(t *testing.T, client *uaerospike.Client, store *teranode_a
 		aerospike.NewBin("startedAt", int(legacy.StartedAt)),
 	))
 
+	scans := teranode_aerospike.ConflictWALFallbackScans()
+
 	pending, err := store.PendingConflictIntents(ctx)
 	require.NoError(t, err, "without the index the read falls back to a scan of the set")
 	require.Len(t, pending, 1)
 	require.Equal(t, legacyID, pending[0].IntentID())
+	require.Greater(t, teranode_aerospike.ConflictWALFallbackScans(), scans, "without the index the read must scan")
 
 	// The upgrade: the store creates the index, and the server builds it over the existing root.
 	store.EnsureConflictWALIndex()
 
-	require.Eventually(t, func() bool {
-		_, readable, err := store.QueryConflictWALIndex(ctx)
-		return err == nil && readable
-	}, 60*time.Second, 100*time.Millisecond, "the recreated index must become readable")
+	waitConflictWALIndexReadable(t, store)
 
 	forward := utxo.ConflictIntent{
 		Recovery:    &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryPlanning},
@@ -210,9 +211,12 @@ func conflictWALIndex(t *testing.T, client *uaerospike.Client, store *teranode_a
 	require.True(t, readable)
 	require.Equal(t, 2, indexed, "the index must hold the root written before it and the one written after")
 
+	scans = teranode_aerospike.ConflictWALFallbackScans()
+
 	pending, err = store.PendingConflictIntents(ctx)
 	require.NoError(t, err)
 	require.Len(t, pending, 2)
+	require.Equal(t, scans, teranode_aerospike.ConflictWALFallbackScans(), "a readable index must be read without a scan")
 
 	ids := map[chainhash.Hash]bool{}
 	for _, intent := range pending {
@@ -229,4 +233,81 @@ func conflictWALIndex(t *testing.T, client *uaerospike.Client, store *teranode_a
 	require.NoError(t, queryErr)
 	require.True(t, readable)
 	require.Zero(t, indexed, "a completed intent leaves the index")
+}
+
+// waitConflictWALIndexReadable waits until the WAL index answers queries, after a case that
+// dropped and recreated it.
+func waitConflictWALIndexReadable(t *testing.T, store *teranode_aerospike.Store) {
+	t.Helper()
+
+	require.Eventually(t, func() bool {
+		_, readable, err := store.QueryConflictWALIndex(t.Context())
+		return err == nil && readable
+	}, 60*time.Second, 100*time.Millisecond, "the WAL index must become readable")
+}
+
+// The index read sees only roots with an integer startedAt. That holds because only
+// BeginConflictIntent creates a root, and it writes startedAt with the other bins. The later writes
+// to a root update it and never create one, so they cannot leave a root without startedAt. A root
+// without it, from corruption or an out-of-band edit, is not returned: the stated limit of the
+// index read.
+func conflictWALRootWriters(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store) {
+	ctx := t.Context()
+	walSet := store.GetName() + "_conflictwal"
+
+	waitConflictWALIndexReadable(t, store)
+
+	intent := utxo.ConflictIntent{
+		Recovery:    &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryPlanning},
+		Kind:        utxo.ConflictIntentForward,
+		BlockHeight: 21,
+		BlockHash:   chainhash.HashH([]byte("wal-root-writers-block")),
+		TxHashes:    []chainhash.Hash{chainhash.HashH([]byte("wal-root-writers-winner"))},
+		StartedAt:   3,
+	}
+	id := intent.IntentID()
+
+	rootKey, keyErr := aerospike.NewKey(store.GetNamespace(), walSet, id[:])
+	require.NoError(t, keyErr)
+
+	finished := &utxo.ConflictRecovery{
+		Version:      1,
+		Phase:        utxo.ConflictRecoveryFinished,
+		Transactions: []utxo.ConflictTransaction{{Hash: intent.TxHashes[0]}},
+		Winners:      intent.TxHashes,
+	}
+
+	// The writes after Begin never create a root.
+	require.Error(t, store.SaveConflictRecovery(ctx, id, finished), "a checklist needs a begun intent")
+	require.NoError(t, store.CompleteConflictIntent(ctx, id))
+
+	exists, err := client.Exists(nil, rootKey)
+	require.NoError(t, err)
+	require.False(t, exists, "only Begin may create a WAL root")
+
+	// Begin writes startedAt as an integer, and the checklist writes keep it.
+	require.NoError(t, store.BeginConflictIntent(ctx, intent))
+	require.NoError(t, store.SaveConflictRecovery(ctx, id, finished))
+
+	root, err := client.Get(nil, rootKey, "startedAt")
+	require.NoError(t, err)
+	require.Equal(t, int(intent.StartedAt), root.Bins["startedAt"])
+
+	indexed, readable, queryErr := store.QueryConflictWALIndex(ctx)
+	require.NoError(t, queryErr)
+	require.True(t, readable)
+	require.Equal(t, 1, indexed, "a root with its checklist saved is in the index")
+
+	// A root without startedAt is outside the index, so the read does not return it.
+	malformed := chainhash.HashH([]byte("wal-root-without-startedAt"))
+	malformedKey, keyErr := aerospike.NewKey(store.GetNamespace(), walSet, malformed[:])
+	require.NoError(t, keyErr)
+	require.NoError(t, client.PutBins(nil, malformedKey, aerospike.NewBin("kind", string(utxo.ConflictIntentReverse))))
+
+	pending, pendingErr := store.PendingConflictIntents(ctx)
+	require.NoError(t, pendingErr)
+	require.Len(t, pending, 1)
+	require.Equal(t, id, pending[0].IntentID())
+
+	require.NoError(t, store.CompleteConflictIntent(ctx, id))
 }

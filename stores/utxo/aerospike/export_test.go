@@ -1,6 +1,10 @@
 package aerospike
 
-import "context"
+import (
+	"context"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
+)
 
 // ConflictingIndexVerdict reports whether the conflicting index self-test has
 // finished and, if it has, whether it trusted the index.
@@ -42,4 +46,9 @@ func (s *Store) EnsureConflictWALIndex() {
 func (s *Store) QueryConflictWALIndex(ctx context.Context) (int, bool, error) {
 	records, readable, err := s.queryConflictWALIndex(ctx)
 	return len(records), readable, err
+}
+
+// ConflictWALFallbackScans is the number of WAL reads that scanned the set, for this process.
+func ConflictWALFallbackScans() float64 {
+	return testutil.ToFloat64(prometheusConflictWALFallbackScans)
 }

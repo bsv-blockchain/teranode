@@ -74,6 +74,11 @@ read every section between yours and the target.
 - **PostgreSQL UTXO store: stop previous-release processes before upgrading.** One that starts while
   the new `px_transactions_conflicting` index builds blocks all `transactions` reads and writes until
   the build ends. Out-of-tree `utxo.Store` implementations add `ConflictingTxHashes`. (#2110)
+- **The Aerospike UTXO store creates a `<set>_conflictwal_startedAt` secondary index.** Each node
+  reserves at least 16 MiB for it: check the namespace's `indexes-memory-budget` has room before
+  upgrading, or the namespace can go into stop-writes. Without index-create rights, create it with
+  `asinfo -v 'sindex-create:ns=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;indextype=NUMERIC;binname=startedAt'`,
+  or block assembly scans the whole namespace at every start. (#2151)
 - **Script-number overflow is a consensus failure.** Earlier builds accept transactions and blocks
   this one rejects: upgrade all your nodes together. These transactions are no longer published to
   the `kafka_txPolicyRejectedConfig` topic. (#1911)

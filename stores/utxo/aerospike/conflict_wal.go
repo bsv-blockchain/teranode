@@ -240,6 +240,13 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 
 // queryConflictWALIndex reads every WAL root through the WAL index. readable is false when the
 // server reports the index missing or not built on some node.
+//
+// The index holds only roots with an integer startedAt bin, so a root without one is not returned,
+// where a scan would fail on it with a missing-bin error. No supported build writes such a root.
+// Every build since the WAL was introduced creates a root only in BeginConflictIntent, with
+// startedAt as an integer in the same write as its other bins, and every later write to a root
+// (SaveConflictRecovery, the recoveryDone mark) is UPDATE_ONLY and leaves startedAt alone. A root
+// without it can only come from corruption or an out-of-band edit, which this read does not detect.
 func (s *Store) queryConflictWALIndex(ctx context.Context) (records []*aerospike.Record, readable bool, err error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, false, ctxErr
@@ -270,11 +277,14 @@ func (s *Store) queryConflictWALIndex(ctx context.Context) (records []*aerospike
 	return records, true, nil
 }
 
-// scanConflictWAL reads every WAL root with a scan of the set.
+// scanConflictWAL reads every WAL root with a scan of the set. It counts each scan, so a read that
+// should have used the index can be seen.
 func (s *Store) scanConflictWAL(ctx context.Context) ([]*aerospike.Record, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, ctxErr
 	}
+
+	prometheusConflictWALFallbackScans.Inc()
 
 	stmt := aerospike.NewStatement(s.namespace, s.conflictWALSet(), conflictWALBins...)
 

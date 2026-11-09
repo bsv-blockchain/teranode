@@ -935,18 +935,20 @@ func TestConflictRecoveryStartupChecks_NilStore(t *testing.T) {
 
 // failingWALStore wraps a real store and fails its WAL reads, so the startup checks report it.
 // failPendingAt fails that read and every later one, so the startup retries cannot get past it.
+// failOnceAt fails that read alone, as a transient storage error does.
 type failingWALStore struct {
 	utxo.Store
 	failPending   bool
 	failLoad      bool
 	pendingSeen   int
 	failPendingAt int
+	failOnceAt    int
 }
 
 func (s *failingWALStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
 	s.pendingSeen++
 
-	if s.failPending || (s.failPendingAt > 0 && s.pendingSeen >= s.failPendingAt) {
+	if s.failPending || (s.failPendingAt > 0 && s.pendingSeen >= s.failPendingAt) || s.pendingSeen == s.failOnceAt {
 		return nil, errors.NewStorageError("injected WAL read failure")
 	}
 
@@ -1119,4 +1121,79 @@ func TestPendingConflictIntents_StopsOnCancel(t *testing.T) {
 	require.Error(t, err)
 	require.Less(t, time.Since(start), 10*time.Second, "a cancelled ctx must end the backoff")
 	require.Equal(t, 1, spy.pendingCalls)
+}
+
+// The re-read of the WAL after the reverse intents fails once. It must be retried: a failed re-read
+// marks every forward intent failed, and startup then refuses to start.
+func TestReplayPendingConflictIntents_TransientReReadIsRetried(t *testing.T) {
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t)
+	store := items.utxoStore
+	require.NoError(t, store.SetBlockHeight(10))
+
+	parent := createStaleReverseParent(ctx, t, store, 1)
+	txL := createStaleReverseSpender(ctx, t, store, parent, 0, 90000, true)
+	txW := createStaleReverseSpender(ctx, t, store, parent, 0, 80000, false)
+
+	block := chainhash.HashH([]byte("transient-re-read-block"))
+	winners := []chainhash.Hash{*txW.TxIDChainHash()}
+	_, _, err := utxo.ProcessConflicting(ctx, store, 10, block, winners, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
+	require.NoError(t, err)
+
+	reverse := utxo.ConflictIntent{Kind: utxo.ConflictIntentReverse, BlockHeight: 10, BlockHash: block, TxHashes: winners, StartedAt: 1}
+	require.NoError(t, store.BeginConflictIntent(ctx, reverse))
+
+	items.blockAssembler.blockchainClient = blockchainMembershipMock(false, true)
+
+	// Read 1 loads both intents. Read 2 is the re-read after the reverse.
+	wrapped := &failingWALStore{Store: store, failOnceAt: 2}
+	items.blockAssembler.utxoStore = wrapped
+	items.blockAssembler.conflictWALRead = shortConflictWALRead
+
+	replayFailed := items.blockAssembler.replayPendingConflictIntents(ctx)
+	require.Empty(t, replayFailed, "a re-read that fails once must be retried, not fail the forward intents")
+	require.GreaterOrEqual(t, wrapped.pendingSeen, 3)
+
+	pending, err := store.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pending)
+
+	requireConflictOwner(ctx, t, store, txL, txW)
+}
+
+// The WAL read of prepareRecoveredConflictUpdates fails once. It must be retried, and the recovered
+// intent still prepared, rather than stopping startup.
+func TestPrepareRecoveredConflictUpdates_TransientReadIsRetried(t *testing.T) {
+	ctx := t.Context()
+	items := setupBlockAssemblyTest(t)
+	store := items.utxoStore
+	require.NoError(t, store.SetBlockHeight(10))
+
+	addBlockWithMinedSet(ctx, t, items, blockHeader1)
+	items.blockAssembler.setBestBlockHeader(blockHeader1, 1)
+
+	parent := createStaleReverseParent(ctx, t, store, 1)
+	txL := createStaleReverseSpender(ctx, t, store, parent, 0, 90000, true)
+	txW := createStaleReverseSpender(ctx, t, store, parent, 0, 80000, false)
+
+	intent := utxo.ConflictIntent{Kind: utxo.ConflictIntentForward, BlockHeight: 1, BlockHash: *blockHeader1.Hash(), TxHashes: []chainhash.Hash{*txW.TxIDChainHash()}}
+	_, _, err := utxo.ProcessConflicting(ctx, store, intent.BlockHeight, intent.BlockHash, intent.TxHashes, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
+	require.NoError(t, err)
+
+	items.blockAssembler.subtreeProcessor.Stop(ctx)
+
+	mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+	mockStp.On("MarkRecoveredConflicts", mock.Anything, mock.Anything).Return(nil)
+	mockStp.On("Stop", mock.Anything).Return()
+	items.blockAssembler.subtreeProcessor = mockStp
+
+	wrapped := &failingWALStore{Store: store, failOnceAt: 1}
+	items.blockAssembler.utxoStore = wrapped
+	items.blockAssembler.conflictWALRead = shortConflictWALRead
+
+	ids, err := items.blockAssembler.prepareRecoveredConflictUpdates(ctx)
+	require.NoError(t, err, "a read that fails once must be retried")
+	require.Equal(t, []chainhash.Hash{intent.IntentID()}, ids)
+	require.Equal(t, 2, wrapped.pendingSeen)
+	mockStp.AssertCalled(t, "MarkRecoveredConflicts", mock.Anything, []chainhash.Hash{*txL.TxIDChainHash()})
 }
