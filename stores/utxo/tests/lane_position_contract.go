@@ -81,8 +81,8 @@ func LanePositionCreateOnly(t *testing.T, db utxostore.Store) {
 }
 
 // LanePositionWrittenOnce: a second create of the same transaction is refused as
-// already existing, and the position the first one wrote survives. The wrapper
-// issues a new position on every call, so a retry offers a different one.
+// already existing, and the position the first one wrote survives. A store takes
+// a new position on every call, so a retry offers a different one.
 func LanePositionWrittenOnce(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
