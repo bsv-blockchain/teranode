@@ -177,13 +177,17 @@ func (s *Store) conflictingIndexRecords(ctx context.Context, binNames []string, 
 // node goroutine can otherwise block on a full results buffer and the close never finish. When
 // the results end, the node goroutines are done and the close is immediate.
 func readConflictingIndexResults(ctx context.Context, results <-chan *aerospike.Result, closeRecordset func(), visit func(*aerospike.Record) bool) (found, readable bool, err error) {
-	return readQueryResults(ctx, "[ConflictingTxHashes] index query failed", results, closeRecordset, visit)
+	return readQueryResults(ctx, "[ConflictingTxHashes] index query failed", false, results, closeRecordset, visit)
 }
 
 // readQueryResults is readConflictingIndexResults for any query, with failure as the message of a
-// node error.
-func readQueryResults(ctx context.Context, failure string, results <-chan *aerospike.Result, closeRecordset func(), visit func(*aerospike.Record) bool) (found, readable bool, err error) {
-	closeInBackground := func() {
+// node error. With waitOnError, a read that ends on a node error returns only once the recordset
+// has closed, or ctx ends: a caller that retries then never starts a query while the node
+// goroutines of the last one still run.
+func readQueryResults(ctx context.Context, failure string, waitOnError bool, results <-chan *aerospike.Result, closeRecordset func(), visit func(*aerospike.Record) bool) (found, readable bool, err error) {
+	closeInBackground := func() <-chan struct{} {
+		closed := make(chan struct{})
+
 		go func() {
 			go func() {
 				for range results { //nolint:revive // drained until the closing recordset ends them
@@ -191,7 +195,10 @@ func readQueryResults(ctx context.Context, failure string, results <-chan *aeros
 			}()
 
 			closeRecordset()
+			close(closed)
 		}()
+
+		return closed
 	}
 
 	for {
@@ -213,7 +220,14 @@ func readQueryResults(ctx context.Context, failure string, results <-chan *aeros
 		}
 
 		if res.Err != nil {
-			closeInBackground()
+			closed := closeInBackground()
+
+			if waitOnError {
+				select {
+				case <-closed:
+				case <-ctx.Done():
+				}
+			}
 
 			if conflictingIndexNotReadable(res.Err) {
 				return false, false, nil

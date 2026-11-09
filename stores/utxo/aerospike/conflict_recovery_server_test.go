@@ -26,6 +26,8 @@ func TestAerospikeConflictRecovery(t *testing.T) {
 		name string
 		run  func(t *testing.T)
 	}{
+		// Must run first: later cases drop and recreate the index themselves.
+		{"WALIndexFromNew", func(t *testing.T) { conflictWALIndexFromNew(t, store) }},
 		{"WALPendingScan", func(t *testing.T) { conflictWALPendingScan(t, client, store) }},
 		{"WALIndex", func(t *testing.T) { conflictWALIndex(t, client, store) }},
 		{"WALRootWriters", func(t *testing.T) { conflictWALRootWriters(t, client, store) }},
@@ -233,6 +235,26 @@ func conflictWALIndex(t *testing.T, client *uaerospike.Client, store *teranode_a
 	require.NoError(t, queryErr)
 	require.True(t, readable)
 	require.Zero(t, indexed, "a completed intent leaves the index")
+}
+
+// A store fresh from New creates the WAL index itself, and startup reads through it without a
+// scan. This case runs before any case drops or recreates the index, so only New can have made it.
+func conflictWALIndexFromNew(t *testing.T, store *teranode_aerospike.Store) {
+	ctx := t.Context()
+
+	waitConflictWALIndexReadable(t, store)
+
+	intent := utxo.ConflictIntent{Kind: utxo.ConflictIntentReverse, BlockHeight: 41, BlockHash: chainhash.HashH([]byte("index-from-new-block")), StartedAt: 6}
+	require.NoError(t, store.BeginConflictIntent(ctx, intent))
+
+	scans := teranode_aerospike.ConflictWALFallbackScans()
+
+	pending, err := store.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, scans, teranode_aerospike.ConflictWALFallbackScans(), "a store from New must read the WAL through its index")
+
+	require.NoError(t, store.CompleteConflictIntent(ctx, intent.IntentID()))
 }
 
 // waitConflictWALIndexReadable waits until the WAL index answers queries, after a case that

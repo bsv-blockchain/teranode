@@ -136,10 +136,26 @@ func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.H
 	return nil
 }
 
-// conflictWALScanTimeout bounds one fallback scan of the WAL set. Without the WAL index the
-// server walks every record of the namespace to find the few in this set, and sends nothing while
-// it walks other sets' records, so the scan has no socket timeout and only this overall bound.
-const conflictWALScanTimeout = 5 * time.Minute
+// The policy of a fallback scan of the WAL set. Without the WAL index the server walks every record
+// of the namespace to find the few in this set, so the scan is given conflictWALScanTimeout in
+// all, against the 2 minutes the startup read had when it failed. The server reports each finished
+// partition and a retry resumes only the unfinished ones, so the socket timeout bounds a node that
+// stays silent within a partition, not the walk: twice the 30 seconds that a loaded node exceeded.
+const (
+	conflictWALScanTimeout       = 5 * time.Minute
+	conflictWALScanSocketTimeout = time.Minute
+	conflictWALScanMaxRetries    = 2
+)
+
+// conflictWALScanPolicy is the query policy of a fallback scan of the WAL set.
+func conflictWALScanPolicy() *aerospike.QueryPolicy {
+	policy := aerospike.NewQueryPolicy()
+	policy.MaxRetries = conflictWALScanMaxRetries
+	policy.SocketTimeout = conflictWALScanSocketTimeout
+	policy.TotalTimeout = conflictWALScanTimeout
+
+	return policy
+}
 
 // conflictWALIndexName is the secondary index over the startedAt bin of the WAL set. Every intent
 // record has that bin, whichever build wrote it, so the index holds every pending intent. It is
@@ -192,8 +208,10 @@ func (s *Store) ensureConflictWALIndex() {
 //
 // It reads the WAL set through its secondary index, which costs the size of the set. While the
 // index is missing or still building it falls back to a scan of the set, which without a set index
-// walks the whole namespace. Either read is attempted once: an error is returned for the caller to
-// retry.
+// walks the whole namespace. Each call issues the index query and, when the index is not readable,
+// one scan, each with the client's own retries within its policy. An error left after those is
+// returned for the caller to retry; a read that ends on a node error returns only once its node
+// reads have stopped, so a retry never overlaps it.
 func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
 	records, readable, err := s.queryConflictWALIndex(ctx)
 	if err != nil {
@@ -266,7 +284,7 @@ func (s *Store) queryConflictWALIndex(ctx context.Context) (records []*aerospike
 		return nil, false, errors.NewStorageError("[PendingConflictIntents] WAL index query failed", aErr)
 	}
 
-	_, readable, err = readQueryResults(ctx, "[PendingConflictIntents] WAL index query failed", recordset.Results(), func() { _ = recordset.Close() }, func(record *aerospike.Record) bool {
+	_, readable, err = readQueryResults(ctx, "[PendingConflictIntents] WAL index query failed", true, recordset.Results(), func() { _ = recordset.Close() }, func(record *aerospike.Record) bool {
 		records = append(records, record)
 		return false
 	})
@@ -288,19 +306,14 @@ func (s *Store) scanConflictWAL(ctx context.Context) ([]*aerospike.Record, error
 
 	stmt := aerospike.NewStatement(s.namespace, s.conflictWALSet(), conflictWALBins...)
 
-	policy := aerospike.NewQueryPolicy()
-	policy.MaxRetries = 2
-	policy.SocketTimeout = 0
-	policy.TotalTimeout = conflictWALScanTimeout
-
-	recordset, aErr := s.client.Query(policy, stmt)
+	recordset, aErr := s.client.Query(conflictWALScanPolicy(), stmt)
 	if aErr != nil {
 		return nil, errors.NewStorageError("[PendingConflictIntents] failed to scan WAL set", aErr)
 	}
 
 	var records []*aerospike.Record
 
-	_, readable, err := readQueryResults(ctx, "[PendingConflictIntents] error reading WAL record", recordset.Results(), func() { _ = recordset.Close() }, func(record *aerospike.Record) bool {
+	_, readable, err := readQueryResults(ctx, "[PendingConflictIntents] error reading WAL record", true, recordset.Results(), func() { _ = recordset.Close() }, func(record *aerospike.Record) bool {
 		records = append(records, record)
 		return false
 	})

@@ -1059,34 +1059,27 @@ func TestPendingConflictIntents_TransientErrorDoesNotFailStartup(t *testing.T) {
 	require.Equal(t, 3, spy.pendingCalls, "the two failed reads must be retried")
 }
 
-// TestReplayPendingConflictIntents_TransientErrorStillReplays: a WAL read that fails once must not
-// skip replay. Before the retry, replay logged the error and never reached the intent, so it stayed
-// pending and the readiness check refused to start.
+// TestReplayPendingConflictIntents_TransientErrorStillReplays: the first WAL read fails once. It
+// must be retried and replay must still resolve the intents. Before the retry, replay logged the
+// error and replayed nothing, so the intents stayed pending and the readiness check refused to
+// start.
 func TestReplayPendingConflictIntents_TransientErrorStillReplays(t *testing.T) {
-	demoted := chainhash.HashH([]byte("transient-demoted"))
+	ctx := t.Context()
+	items, store, txL, txW := reverseRetiresForwardFixture(t, "transient-first-read-block")
 
-	intent := utxo.ConflictIntent{
-		Kind:        utxo.ConflictIntentReverse,
-		BlockHeight: 500,
-		TxHashes:    []chainhash.Hash{demoted},
-		StartedAt:   1,
-	}
+	wrapped := &failingWALStore{Store: store, failOnceAt: 1}
+	items.blockAssembler.utxoStore = wrapped
+	items.blockAssembler.conflictWALRead = shortConflictWALRead
 
-	mockStore := &utxo.MockUtxostore{}
-	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
-		for _, item := range args.Get(1).([]*utxo.UnresolvedMetaData) {
-			item.Data = &meta.Data{}
-		}
-	}).Return(nil).Maybe()
-	mockStore.On("Get", mock.Anything, &demoted, mock.Anything).Return(&meta.Data{}, nil)
+	replayFailed := items.blockAssembler.replayPendingConflictIntents(ctx)
+	require.Empty(t, replayFailed, "every intent must be replayed after the retried read")
+	require.GreaterOrEqual(t, wrapped.pendingSeen, 2, "the failed read must be retried")
 
-	spy := &replaySpyStore{MockUtxostore: mockStore, pending: []utxo.ConflictIntent{intent}, failFirst: 1}
-	b := newReplayTestAssembler(spy, blockchainMembershipMock(false, true))
+	pending, err := store.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Empty(t, pending, "the replayed intents must be completed")
 
-	b.replayPendingConflictIntents(context.Background())
-
-	mockStore.AssertCalled(t, "Get", mock.Anything, &demoted, mock.Anything)
-	require.GreaterOrEqual(t, spy.pendingCalls, 2, "the failed read must be retried")
+	requireConflictOwner(ctx, t, store, txL, txW)
 }
 
 // TestPendingConflictIntents_GivesUpAfterBudget: a store that keeps failing still stops startup,
@@ -1100,6 +1093,20 @@ func TestPendingConflictIntents_GivesUpAfterBudget(t *testing.T) {
 	require.ErrorContains(t, err, "could not read the conflict WAL")
 	require.ErrorContains(t, err, "TIMEOUT", "the store's error must be kept")
 	require.Greater(t, spy.pendingCalls, 1)
+}
+
+// TestPendingConflictIntents_CancelledDuringRead: a read that fails because startup was cancelled
+// returns its error without a retry.
+func TestPendingConflictIntents_CancelledDuringRead(t *testing.T) {
+	spy := &replaySpyStore{MockUtxostore: &utxo.MockUtxostore{}, failFirst: 1 << 30}
+	b := newReplayTestAssembler(spy, blockchainMembershipMock(false, true))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := b.pendingConflictIntents(ctx)
+	require.ErrorContains(t, err, "TIMEOUT", "the store's error must be returned")
+	require.Equal(t, 1, spy.pendingCalls, "a cancelled read must not be retried")
 }
 
 // TestPendingConflictIntents_StopsOnCancel: a cancelled startup stops retrying at once.
@@ -1123,19 +1130,23 @@ func TestPendingConflictIntents_StopsOnCancel(t *testing.T) {
 	require.Equal(t, 1, spy.pendingCalls)
 }
 
-// The re-read of the WAL after the reverse intents fails once. It must be retried: a failed re-read
-// marks every forward intent failed, and startup then refuses to start.
-func TestReplayPendingConflictIntents_TransientReReadIsRetried(t *testing.T) {
+// reverseRetiresForwardFixture leaves a finished forward intent and a reverse intent of the same
+// block, which is off the chain, as a crash right after the reverse began does. Replay runs the
+// reverse, which retires the forward intent, and clears both. It returns the loser and the winner
+// of the forward intent.
+func reverseRetiresForwardFixture(t *testing.T, blockName string) (items *baTestItems, store utxo.Store, txL, txW *bt.Tx) {
+	t.Helper()
+
 	ctx := t.Context()
-	items := setupBlockAssemblyTest(t)
-	store := items.utxoStore
+	items = setupBlockAssemblyTest(t)
+	store = items.utxoStore
 	require.NoError(t, store.SetBlockHeight(10))
 
 	parent := createStaleReverseParent(ctx, t, store, 1)
-	txL := createStaleReverseSpender(ctx, t, store, parent, 0, 90000, true)
-	txW := createStaleReverseSpender(ctx, t, store, parent, 0, 80000, false)
+	txL = createStaleReverseSpender(ctx, t, store, parent, 0, 90000, true)
+	txW = createStaleReverseSpender(ctx, t, store, parent, 0, 80000, false)
 
-	block := chainhash.HashH([]byte("transient-re-read-block"))
+	block := chainhash.HashH([]byte(blockName))
 	winners := []chainhash.Hash{*txW.TxIDChainHash()}
 	_, _, err := utxo.ProcessConflicting(ctx, store, 10, block, winners, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion())
 	require.NoError(t, err)
@@ -1144,6 +1155,15 @@ func TestReplayPendingConflictIntents_TransientReReadIsRetried(t *testing.T) {
 	require.NoError(t, store.BeginConflictIntent(ctx, reverse))
 
 	items.blockAssembler.blockchainClient = blockchainMembershipMock(false, true)
+
+	return items, store, txL, txW
+}
+
+// The re-read of the WAL after the reverse intents fails once. It must be retried: a failed re-read
+// marks every forward intent failed, and startup then refuses to start.
+func TestReplayPendingConflictIntents_TransientReReadIsRetried(t *testing.T) {
+	ctx := t.Context()
+	items, store, txL, txW := reverseRetiresForwardFixture(t, "transient-re-read-block")
 
 	// Read 1 loads both intents. Read 2 is the re-read after the reverse.
 	wrapped := &failingWALStore{Store: store, failOnceAt: 2}
