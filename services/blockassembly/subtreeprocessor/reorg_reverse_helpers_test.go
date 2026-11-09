@@ -45,16 +45,34 @@ type plainBlob struct{ s *blob_memory.Memory }
 
 func (p plainBlob) blob() *blob_memory.Memory { return p.s }
 
-// TestCollectMoveForwardTxHashes_BuildsTxSet verifies the carry-over filter's
-// tx-extraction helper: every non-coinbase node across every subtree of every
-// moveForward block ends up in the returned set, nil/missing entries are
-// skipped without erroring, and the set survives an empty input.
-func TestCollectMoveForwardTxHashes_BuildsTxSet(t *testing.T) {
+// TestFindReMinedInMoveForward verifies the carry-over filter's lookup helper:
+// it returns exactly the candidates that appear in a moveForward subtree,
+// skips nil/missing entries without erroring, never reports the coinbase
+// placeholder, and does no store reads at all when there is nothing to look up.
+func TestFindReMinedInMoveForward(t *testing.T) {
 	t.Run("nil block list returns empty set, no errors", func(t *testing.T) {
 		store := blob_memory.New()
 		stp := newReverseHelpersStp(t, plainBlob{store})
 
-		got, err := stp.collectMoveForwardTxHashes(t.Context(), nil)
+		got, err := stp.findReMinedInMoveForward(t.Context(), nil, []chainhash.Hash{chainhash.HashH([]byte("x"))})
+		require.NoError(t, err)
+		require.NotNil(t, got)
+		require.Empty(t, got)
+	})
+
+	t.Run("no candidates does no store reads", func(t *testing.T) {
+		store := blob_memory.New()
+		stp := newReverseHelpersStp(t, plainBlob{store})
+
+		// The subtree does not exist, so any read would fail. With no
+		// candidates the helper must return before touching the store: this
+		// is the common case (a moveBack block with no conflicting nodes) and
+		// the moveForward blocks can hold billions of txs.
+		phantom := chainhash.HashH([]byte("no-candidates-phantom"))
+
+		got, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
+			{Subtrees: []*chainhash.Hash{&phantom}},
+		}, nil)
 		require.NoError(t, err)
 		require.NotNil(t, got)
 		require.Empty(t, got)
@@ -64,9 +82,9 @@ func TestCollectMoveForwardTxHashes_BuildsTxSet(t *testing.T) {
 		store := blob_memory.New()
 		stp := newReverseHelpersStp(t, plainBlob{store})
 
-		got, err := stp.collectMoveForwardTxHashes(t.Context(), []*model.Block{
+		got, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
 			{Subtrees: nil},
-		})
+		}, []chainhash.Hash{chainhash.HashH([]byte("x"))})
 		require.NoError(t, err)
 		require.Empty(t, got)
 	})
@@ -75,9 +93,29 @@ func TestCollectMoveForwardTxHashes_BuildsTxSet(t *testing.T) {
 		store := blob_memory.New()
 		stp := newReverseHelpersStp(t, plainBlob{store})
 
-		got, err := stp.collectMoveForwardTxHashes(t.Context(), []*model.Block{nil})
+		got, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{nil}, []chainhash.Hash{chainhash.HashH([]byte("x"))})
 		require.NoError(t, err)
 		require.Empty(t, got)
+	})
+
+	t.Run("returns only the candidates that are re-mined", func(t *testing.T) {
+		store := blob_memory.New()
+		stp := newReverseHelpersStp(t, plainBlob{store})
+
+		s, txs := buildSubtreeWithTxs(t, "carry-over-subset", 4)
+		require.NoError(t, store.Set(t.Context(), s.RootHash()[:], fileformat.FileTypeSubtree, mustSerialize(t, s)))
+
+		notMined := chainhash.HashH([]byte("carry-over-subset-not-mined"))
+
+		got, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
+			{Subtrees: []*chainhash.Hash{s.RootHash()}},
+		}, []chainhash.Hash{txs[1], notMined, txs[3]})
+		require.NoError(t, err)
+		require.Len(t, got, 2)
+		require.Contains(t, got, txs[1])
+		require.Contains(t, got, txs[3])
+		require.NotContains(t, got, notMined)
+		require.NotContains(t, got, txs[0], "txs that were not candidates must not be returned")
 	})
 
 	t.Run("nil subtree-hash entry inside block.Subtrees is skipped", func(t *testing.T) {
@@ -87,51 +125,52 @@ func TestCollectMoveForwardTxHashes_BuildsTxSet(t *testing.T) {
 		s, txs := buildSubtreeWithTxs(t, "carry-over-nil-subtree-hash", 2)
 		require.NoError(t, store.Set(t.Context(), s.RootHash()[:], fileformat.FileTypeSubtree, mustSerialize(t, s)))
 
-		got, err := stp.collectMoveForwardTxHashes(t.Context(), []*model.Block{
+		got, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
 			{Subtrees: []*chainhash.Hash{nil, s.RootHash()}},
-		})
+		}, txs)
 		require.NoError(t, err)
 		for _, txHash := range txs {
 			require.Contains(t, got, txHash)
 		}
 	})
 
-	t.Run("coinbase placeholder is excluded", func(t *testing.T) {
+	t.Run("coinbase placeholder is never reported", func(t *testing.T) {
 		store := blob_memory.New()
 		stp := newReverseHelpersStp(t, plainBlob{store})
 
-		// buildSubtreeWithTxs prepends a coinbase placeholder; it should
-		// not appear in the returned tx set.
+		// buildSubtreeWithTxs prepends a coinbase placeholder; even when it
+		// is asked for, it must not be reported as re-mined.
 		s, txs := buildSubtreeWithTxs(t, "carry-over-coinbase", 2)
 		require.NoError(t, store.Set(t.Context(), s.RootHash()[:], fileformat.FileTypeSubtree, mustSerialize(t, s)))
 
-		got, err := stp.collectMoveForwardTxHashes(t.Context(), []*model.Block{
+		candidates := append([]chainhash.Hash{subtreepkg.CoinbasePlaceholderHashValue}, txs...)
+
+		got, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
 			{Subtrees: []*chainhash.Hash{s.RootHash()}},
-		})
+		}, candidates)
 		require.NoError(t, err)
 		require.Len(t, got, len(txs), "coinbase placeholder must be filtered out")
 		require.NotContains(t, got, subtreepkg.CoinbasePlaceholderHashValue)
-		for _, txHash := range txs {
-			require.Contains(t, got, txHash)
-		}
 	})
 
-	t.Run("multiple blocks dedupe per-tx", func(t *testing.T) {
+	t.Run("matches across multiple blocks and subtrees", func(t *testing.T) {
 		store := blob_memory.New()
 		stp := newReverseHelpersStp(t, plainBlob{store})
 
-		s1, txs := buildSubtreeWithTxs(t, "carry-over-dedup", 3)
-		s2, txs2 := buildSubtreeWithTxs(t, "carry-over-dedup-2", 2)
+		s1, txs := buildSubtreeWithTxs(t, "carry-over-multi", 3)
+		s2, txs2 := buildSubtreeWithTxs(t, "carry-over-multi-2", 2)
 
 		require.NoError(t, store.Set(t.Context(), s1.RootHash()[:], fileformat.FileTypeSubtree, mustSerialize(t, s1)))
 		require.NoError(t, store.Set(t.Context(), s2.RootHash()[:], fileformat.FileTypeSubtree, mustSerialize(t, s2)))
 
-		got, err := stp.collectMoveForwardTxHashes(t.Context(), []*model.Block{
+		got, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
 			{Subtrees: []*chainhash.Hash{s1.RootHash()}},
 			{Subtrees: []*chainhash.Hash{s2.RootHash()}},
-		})
+		}, []chainhash.Hash{txs[0], txs2[1]})
 		require.NoError(t, err)
-		require.Len(t, got, len(txs)+len(txs2))
+		require.Len(t, got, 2)
+		require.Contains(t, got, txs[0])
+		require.Contains(t, got, txs2[1])
 	})
 
 	t.Run("subtreeToCheck fallback used when FileTypeSubtree missing", func(t *testing.T) {
@@ -143,9 +182,9 @@ func TestCollectMoveForwardTxHashes_BuildsTxSet(t *testing.T) {
 		// path in the helper's GetIoReader chain.
 		require.NoError(t, store.Set(t.Context(), s.RootHash()[:], fileformat.FileTypeSubtreeToCheck, mustSerialize(t, s)))
 
-		got, err := stp.collectMoveForwardTxHashes(t.Context(), []*model.Block{
+		got, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
 			{Subtrees: []*chainhash.Hash{s.RootHash()}},
-		})
+		}, txs)
 		require.NoError(t, err)
 		for _, txHash := range txs {
 			require.Contains(t, got, txHash)
@@ -157,9 +196,9 @@ func TestCollectMoveForwardTxHashes_BuildsTxSet(t *testing.T) {
 		stp := newReverseHelpersStp(t, plainBlob{store})
 
 		phantom := chainhash.HashH([]byte("phantom-subtree"))
-		_, err := stp.collectMoveForwardTxHashes(t.Context(), []*model.Block{
+		_, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
 			{Subtrees: []*chainhash.Hash{&phantom}},
-		})
+		}, []chainhash.Hash{chainhash.HashH([]byte("x"))})
 		require.Error(t, err, "absent subtree must fail loudly so the reorg doesn't silently skip carry-over txs")
 	})
 
@@ -171,9 +210,9 @@ func TestCollectMoveForwardTxHashes_BuildsTxSet(t *testing.T) {
 		// Just the file magic and a few bytes; deserialize will fail.
 		require.NoError(t, store.Set(t.Context(), corrupt[:], fileformat.FileTypeSubtree, []byte("S-1.0   \x00\x00")))
 
-		_, err := stp.collectMoveForwardTxHashes(t.Context(), []*model.Block{
+		_, err := stp.findReMinedInMoveForward(t.Context(), []*model.Block{
 			{Subtrees: []*chainhash.Hash{&corrupt}},
-		})
+		}, []chainhash.Hash{chainhash.HashH([]byte("x"))})
 		require.Error(t, err)
 	})
 }
