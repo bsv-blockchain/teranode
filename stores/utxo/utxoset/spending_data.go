@@ -77,8 +77,8 @@ func wantsBody(fieldNames []fields.FieldName) bool {
 }
 
 // wantsLanePosition reports whether the caller named the lane position. Unlike the body, an empty
-// list does not mean yes: the position is only for the few callers that ask for it, and every
-// other read leaves the column out of its answer.
+// list does not mean yes: the position is only for the few callers that ask for it. A read that
+// shares a get batch with one that asked gets the position too, and ignores it.
 func wantsLanePosition(fieldNames []fields.FieldName) bool {
 	for _, f := range fieldNames {
 		if f == fields.LanePosition {

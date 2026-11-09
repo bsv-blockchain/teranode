@@ -268,9 +268,9 @@ type lookupResult struct {
 	noBody bool
 
 	// wantLane sends the reads to the statements that also select lane_position, and lanes holds
-	// what they found. Every other read runs the statements it always did, scans what it always
-	// did and pays nothing. Only Get, the get batcher and BatchDecorate set it, when the caller
-	// names fields.LanePosition.
+	// what they found. A batch with no such read runs the statements it always did, scans what it
+	// always did and pays nothing. Only Get, the get batcher and BatchDecorate set it, when a caller
+	// names fields.LanePosition, and one such read turns it on for its whole get batch.
 	wantLane bool
 	lanes    map[chainhash.Hash]uint64
 }
