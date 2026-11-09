@@ -44,11 +44,12 @@ read every section between yours and the target.
   testnet and stn, clear `alert_genesis_keys`, `alert_protocol_id` and `alert_topic_name` if they
   hold mainnet values. An explicit key list needs 3–10 compressed public keys or startup fails. (#1955)
 - **Block Validation `BlockFound` with `wait_to_complete` returns the block's outcome.** It no
-  longer answers success at enqueue. A rejected block, or one already stored invalid, returns its
-  error (`ERR_BLOCK_INVALID`); a failed fetch returns at once with a retryable error; a block sent to
-  catchup or dropped returns a retryable `ERR_SERVICE_ERROR`; a caller whose context ends gets
-  `ERR_CONTEXT_CANCELED`. Under opt-in optimistic peer-block mining, success means the block was
-  added, not fully validated. gRPC callers that wait must handle these. (#2132)
+  longer answers success at enqueue. A rejected block returns its validation error, whose code
+  varies; one already stored invalid returns `ERR_BLOCK_INVALID`; a failed fetch returns at once with
+  a retryable error; a block sent to catchup or dropped returns a retryable `ERR_SERVICE_ERROR`; a
+  caller whose context ends gets `ERR_CONTEXT_CANCELED`. Under opt-in optimistic peer-block mining,
+  success means the block was added, not fully validated. gRPC callers that wait must handle these.
+  (#2132)
 - **`utxostore_updateTxMinedStatus` is removed.** Nodes that set it to `false` now always run
   mined-tagging and its duplicate-transaction check, with no way to turn them off. Delete the
   key; the loader ignores it. (#2019)
