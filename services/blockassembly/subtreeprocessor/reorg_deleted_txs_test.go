@@ -1456,7 +1456,11 @@ func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
 	require.NoError(t, unrelatedParent.AddP2PKHOutputFromAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
 	unrelated := spendingTx(t, unrelatedParent, 0, 500)
 
-	for _, tx := range []*bt.Tx{gone, only, grand, unrelated} {
+	// lateSpender spends kept but no spend of it reached the store, so the walk cannot name it: only the
+	// assembly's parent links show that the move back deletes its parent
+	lateSpender := spendingTx(t, kept, 0, kept.Outputs[0].Satoshis/2)
+
+	for _, tx := range []*bt.Tx{gone, only, grand, lateSpender, unrelated} {
 		addToAssembly(t, stp, tx)
 		require.True(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "precondition: block assembly holds %s", tx.TxIDChainHash())
 	}
@@ -1503,6 +1507,12 @@ func TestRemoveCoinbaseUtxosSkipsADescendantWhoseRecordIsGone(t *testing.T) {
 		_, getErr := stp.utxoStore.Get(ctx, tx.TxIDChainHash())
 		require.NoError(t, getErr, "the record of %s is not reached by the walk", name)
 	}
+
+	require.False(t, stp.currentTxMap.Exists(*lateSpender.TxIDChainHash()), "a spender of a saved tx must not stay in block assembly with its parent deleted")
+	require.True(t, stp.removeMap.Exists(*lateSpender.TxIDChainHash()), "the spender of a saved tx must be in the remove map")
+
+	foundIndex, _, _ = stp.locateTxInSubtrees(*lateSpender.TxIDChainHash())
+	require.Equal(t, -1, foundIndex, "the spender of a saved tx must not be in any subtree")
 
 	require.True(t, stp.currentTxMap.Exists(*unrelated.TxIDChainHash()), "an unrelated tx stays in block assembly")
 	require.False(t, stp.removeMap.Exists(*unrelated.TxIDChainHash()), "an unrelated tx is not marked for removal")

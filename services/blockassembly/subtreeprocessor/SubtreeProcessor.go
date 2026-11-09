@@ -5903,16 +5903,18 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 
 	// the walk cannot reach a descendant whose only path from the coinbase runs through a missing
 	// record, but block assembly can hold one, and it must not stay there with its parent gone. Find
-	// such descendants, and any of a vanished tx, from the assembly's own parent links. When nothing
-	// is missing or vanished every descendant the walk returned was saved above, so the common
-	// move-back skips this pass over the whole assembly.
+	// such descendants, and any of a vanished tx, from the assembly's own parent links. The saved txs
+	// are roots too: the walk named their spenders, but a spend made with IgnoreLocked can land behind
+	// it, and a tx must not stay in the assembly with its parent deleted. The pass reads the whole
+	// assembly, so a move-back with nothing missing or vanished skips it and leaves such a late spender
+	// to the parent chain check of the next unmined reload.
 	var assemblyDescendants []chainhash.Hash
 
 	if len(goneHashes) > 0 {
 		assemblyDescendants = stp.inAssemblyDescendantsOf(savedHashes, goneHashes)
 
 		for _, descendantHash := range assemblyDescendants {
-			stp.logger.Errorf("[removeCoinbaseUtxos][%s] removing tx %s from block assembly, it descends from a tx missing from the utxo store, its utxo record is left in place", block.String(), descendantHash.String())
+			stp.logger.Errorf("[removeCoinbaseUtxos][%s] removing tx %s from block assembly, it descends from a tx this move-back removed or found missing, its utxo record is left in place", block.String(), descendantHash.String())
 
 			if !stp.removeMap.Exists(descendantHash) {
 				if err = stp.removeMap.Put(descendantHash, 1); err != nil {
