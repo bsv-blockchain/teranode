@@ -1417,6 +1417,7 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 
 	var (
 		errorsFound    = atomic.Uint64{}
+		failures       txFailureTally
 		firstError     error
 		firstErrorOnce sync.Once
 	)
@@ -1492,9 +1493,13 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 				}
 
 				if err != nil {
-					// Log the error, but do not return it, since we want to process all transactions in the subtree
+					// Log the error at Debug only, and do not return it, since we want to process all
+					// transactions in the subtree. The causes are tallied and reported once per subtree
+					// below: a subtree of already-mined transactions fails every input the same way, and
+					// one ERROR line per transaction was a third of a node's log volume (issue 2108).
 					u.logger.Debugf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 					errorsFound.Add(1)
+					failures.add(*tx.TxIDChainHash(), err)
 
 					firstErrorOnce.Do(func() {
 						firstError = errors.NewProcessingError("[validateSubtree][%s] failed to bless missing transaction: %s", subtreeHash.String(), tx.TxIDChainHash().String(), err)
@@ -1512,9 +1517,6 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 						u.publishInvalidSubtree(gCtx, subtreeHash.String(), baseURL, peerID, "contains_invalid_transaction")
 
 						return err
-					} else {
-						// If the error is not a policy error, we log it as a processing error
-						u.logger.Errorf("[validateSubtree][%s] failed to bless missing transaction: %s: %v", subtreeHash.String(), tx.TxIDChainHash().String(), err)
 					}
 
 					return nil
@@ -1569,8 +1571,13 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 	}
 
 	if errorsFound.Load() > 0 {
+		// One summary per subtree: how many failed, by which cause, with an example
+		// txid per cause. A store-side cause (circuit breaker open, context canceled)
+		// is this node's problem and still needs to be seen, so this stays at ERROR.
+		u.logger.Errorf("[validateSubtree][%s] %d of %d missing txs failed: %s", subtreeHash.String(), errorsFound.Load(), len(missingTxs), failures.String())
+
 		// If there are errors found, we return here, so that the caller can handle it
-		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree", subtreeHash.String(), errorsFound.Load(), firstError)
+		return errors.NewProcessingError("[validateSubtree][%s] found %d errors while processing subtree: %s", subtreeHash.String(), errorsFound.Load(), failures.String(), firstError)
 	}
 
 	if missingCount.Load() > 0 {

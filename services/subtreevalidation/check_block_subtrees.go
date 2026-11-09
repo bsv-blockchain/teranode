@@ -1721,9 +1721,12 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 	// Track validation results. firstErr keeps the first swallowed per-tx error so
 	// the summary error below can chain a cause instead of only reporting counts.
+	// failures tallies every swallowed error by cause, so the summary names each
+	// cause with a count and an example txid instead of one ERROR line per tx.
 	var (
 		errorsFound         atomic.Uint64
 		missingParentErrors atomic.Uint64
+		failures            txFailureTally
 		firstErrMu          sync.Mutex
 		firstErr            error
 	)
@@ -1842,6 +1845,7 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 
 					// Count all other errors
 					errorsFound.Add(1)
+					failures.add(*tx.TxIDChainHash(), err)
 
 					if errors.Is(err, errors.ErrTxMissingParent) {
 						// missingParentErrors drives the all-missing-parent deferral below;
@@ -1860,8 +1864,8 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 						u.logger.Errorf("[processTransactionsInLevels] Conflicting-walk limit exceeded for transaction %s: %v", tx.TxIDChainHash().String(), err)
 						return err
 					} else {
-						u.logger.Errorf("[processTransactionsInLevels] Processing error for transaction %s: %v", tx.TxIDChainHash().String(), err)
-
+						// Already logged at Debug above; the cause is tallied and reported once
+						// per block below, with counts and an example per cause (issue 2108).
 						firstErrMu.Lock()
 						if firstErr == nil {
 							firstErr = err
@@ -1912,11 +1916,17 @@ func (u *Server) processTransactionsInLevels(ctx context.Context, allTransaction
 			u.logger.Infof("[processTransactionsInLevels] %d missing-parent errors (deferred to sequential revalidation)", errorsFound.Load())
 			return nil
 		}
+
+		// One summary per block: a store-side cause (circuit breaker open, context
+		// canceled) is this node's problem and still needs to be seen, so this stays
+		// at ERROR, once, with the counts per cause and an example txid each.
+		u.logger.Errorf("[processTransactionsInLevels][%s] %d of %d txs failed (%d missing-parent): %s", blockHash.String(), errorsFound.Load(), totalTxCount, missingParentErrors.Load(), failures.String())
+
 		if firstErr != nil {
-			return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load(), firstErr)
+			return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent): %s", errorsFound.Load(), missingParentErrors.Load(), failures.String(), firstErr)
 		}
 
-		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent)", errorsFound.Load(), missingParentErrors.Load())
+		return errors.NewProcessingError("[processTransactionsInLevels] Completed processing with %d errors (%d missing-parent): %s", errorsFound.Load(), missingParentErrors.Load(), failures.String())
 	}
 
 	u.logger.Debugf("[processTransactionsInLevels] Successfully processed all %d transactions", totalTxCount)
