@@ -118,6 +118,10 @@ func startMainChild(t *testing.T, env ...string) *mainChild {
 	cmd.Env = append(os.Environ(),
 		mainSubprocessArgs+"=-all=0 -blockchain=1",
 		"socketDIR="+sockDir,
+		// The health address is discovered from an INFO line, so the child
+		// must log at INFO whatever level the parent's environment selects.
+		// exec.Cmd uses the last value of a duplicated key.
+		"logLevel=INFO",
 		"health_check_httpListenAddress=127.0.0.1:0",
 		"blockchain_grpcListenAddress=127.0.0.1:0",
 		"blockchain_httpListenAddress=127.0.0.1:0",
