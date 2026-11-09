@@ -322,19 +322,23 @@ func TestValidateBlock_ProvenConflictIsNotACancellation(t *testing.T) {
 		},
 		{
 			// A record that was read but does not decode, which the aerospike
-			// store returns as TX_INVALID (classifyRecordError). ValidateBlock's
-			// invalid-tx branch already returns a corrupt verdict for it, as
-			// before: its infrastructure check looks for context.Canceled, not
-			// the CONTEXT_CANCELED code. The wrap is what keeps the Kafka path
-			// retrying it and catch-up from reporting the peer malicious.
-			name: "a TX_INVALID under another code",
+			// store returns as TX_INVALID (classifyRecordError). The conflict
+			// check wraps its store reads as storage faults, so this is a local
+			// fault on every route: no corrupt verdict, no strike on the peer.
+			name: "a TX_INVALID under another code in the conflict check",
 			build: func(t *testing.T) *conflictBlockFixture {
 				return newFaultyConflictBlockFixture(t, errors.NewTxInvalidError("could not process tx inpoints"), false)
 			},
-			code:         errors.ErrTxInvalid,
-			cancelWrap:   true,
-			corrupt:      true,
-			catchupLabel: "local_context_cancelled",
+			code:         errors.ErrStorageError,
+			catchupLabel: "local_storage_fault",
+		},
+		{
+			name: "a TX_INVALID under another code in a decorate batch",
+			build: func(t *testing.T) *conflictBlockFixture {
+				return newFaultyConflictBlockFixture(t, errors.NewTxInvalidError("could not process tx inpoints"), true)
+			},
+			code:         errors.ErrStorageError,
+			catchupLabel: "local_storage_fault",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

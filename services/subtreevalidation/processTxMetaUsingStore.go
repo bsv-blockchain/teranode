@@ -497,29 +497,26 @@ func prefixed(message string, err error) error {
 //   - ERR_CONTEXT_CANCELED: the failure is already one, from a read that gave up
 //     on a done errgroup ctx.
 //   - ERR_TX_NOT_FOUND: a record this node no longer holds, not the peer's fault.
-//   - ERR_TX_INVALID under another code: a record this node could not decode.
 //
 // Without the wrap, block validation already retries a store fault
 // (ERR_STORAGE_ERROR, or a local service fault), the threshold
 // (ERR_THRESHOLD_EXCEEDED), and a processing error carrying no code it reads as
 // the peer's: the walk limit, a frozen output, an input out of range. The wrap only
-// mislabelled those as cancellations. The last two arms still need it:
+// mislabelled those as cancellations. The last arm still needs it: ValidateBlock
+// turns a missing record into a transient block-incomplete error, a code catch-up
+// reads as the peer's, so without the wrap catch-up would signal a peer failure,
+// which rotates the sync peer, and fetch the block from other peers, for a record
+// this node pruned.
 //
-//   - A missing record (ERR_TX_NOT_FOUND). ValidateBlock turns it into a transient
-//     block-incomplete error, a code catch-up reads as the peer's, so without the
-//     wrap catch-up would signal a peer failure, which rotates the sync peer, and
-//     fetch the block from other peers, for a record this node pruned.
-//   - A TX_INVALID under another code, such as a record the aerospike store read
-//     but could not decode. The wrap keeps the Kafka path retrying the block and
-//     keeps catch-up from charging the peer or reporting it malicious. It does not
-//     keep the peer from being struck: ValidateBlock's infrastructure guard
-//     matches context.Canceled, not ERR_CONTEXT_CANCELED, so the decode fault
-//     still gets a corrupt verdict and penalizeCorruptBlockPeer, on the Kafka
-//     path and in catch-up alike. That is pre-existing, and
-//     TestValidateBlock_ProvenConflictIsNotACancellation pins it.
+// A TX_INVALID under another code, such as a record the aerospike store read but
+// could not decode (classifyRecordError), is not wrapped here. The conflict check
+// and the decorate path wrap their store reads as ERR_STORAGE_ERROR, which every
+// route already reads as this node's own fault. Under the cancellation wrap it
+// was a corrupt verdict and a strike on the announcing peer instead:
+// ValidateBlock's infrastructure guard did not match the CONTEXT_CANCELED code.
+// TestValidateBlock_ProvenConflictIsNotACancellation pins the storage-fault shape.
 func keepsCancellation(ctx context.Context, err error) bool {
 	return ctx.Err() != nil ||
 		errors.Is(err, errors.ErrContextCanceled) ||
-		errors.Is(err, errors.ErrTxNotFound) ||
-		errors.Is(err, errors.ErrTxInvalid)
+		errors.Is(err, errors.ErrTxNotFound)
 }
