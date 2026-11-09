@@ -2,6 +2,7 @@ package utxoset
 
 import (
 	"context"
+	"strings"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -89,8 +90,7 @@ import (
 // to one leaf and a usable primary key, since txid is its second column.
 const identByTxidSQL = `
 SELECT i.txid, i.created_height, i.off_chain_since, i.fee, i.size_in_bytes,
-       i.tx_inpoints, i.locktime, i.created_at, i.flags, b.raw_tx,
-       CASE WHEN $4::boolean THEN i.lane_position END
+       i.tx_inpoints, i.locktime, i.created_at, i.flags, b.raw_tx
   FROM tx_ident i
   LEFT JOIN tx_body b ON $3::boolean AND b.created_height = i.created_height AND b.txid = i.txid
  WHERE i.leaf = $1::smallint
@@ -136,12 +136,11 @@ SELECT i.txid, i.created_height, i.off_chain_since, i.fee, i.size_in_bytes,
 // TestMinedReadsNeverScanEveryBodyWindow pins both fences with nested loops switched off.
 const minedByTxidSQL = `
 SELECT k.txid, m.mined_height, m.block_id, m.subtree_idx, m.size_in_bytes, m.fee,
-       m.tx_inpoints, m.locktime, m.created_at, m.flags, b.raw_tx,
-       CASE WHEN $4::boolean THEN m.lane_position END
+       m.tx_inpoints, m.locktime, m.created_at, m.flags, b.raw_tx
   FROM unnest($1::bytea[]) AS k(txid)
  CROSS JOIN LATERAL (
    SELECT m.mined_height, m.block_id, m.subtree_idx, m.created_height, m.size_in_bytes,
-          m.fee, m.tx_inpoints, m.locktime, m.created_at, m.flags, m.lane_position
+          m.fee, m.tx_inpoints, m.locktime, m.created_at, m.flags
      FROM tx_mined m
     WHERE m.txid = k.txid
       AND m.mined_height >= $2::int
@@ -176,12 +175,11 @@ SELECT k.txid, m.mined_height, m.block_id, m.subtree_idx, m.size_in_bytes, m.fee
 // read is on the validator's parent-resolution path.
 const preservedByTxidSQL = `
 SELECT k.txid, p.mined_height, p.block_id, p.subtree_idx, p.size_in_bytes, p.fee,
-       p.tx_inpoints, p.locktime, p.created_at, p.flags, b.raw_tx,
-       CASE WHEN $3::boolean THEN p.lane_position END
+       p.tx_inpoints, p.locktime, p.created_at, p.flags, b.raw_tx
   FROM unnest($1::bytea[]) AS k(txid)
  CROSS JOIN LATERAL (
    SELECT p.mined_height, p.block_id, p.subtree_idx, p.created_height, p.size_in_bytes,
-          p.fee, p.tx_inpoints, p.locktime, p.created_at, p.flags, p.lane_position
+          p.fee, p.tx_inpoints, p.locktime, p.created_at, p.flags
      FROM preserved_parent p
     WHERE p.txid = k.txid
    OFFSET 0
@@ -269,10 +267,13 @@ type lookupResult struct {
 	// batcher and BatchDecorate set it when the caller names no field held in the body.
 	noBody bool
 
-	// wantLane makes the reads return lane_position. Every statement selects it behind a bind
-	// parameter, so a read that does not ask gets NULL and moves nothing. Only Get, the get
-	// batcher and BatchDecorate set it, when the caller names fields.LanePosition.
+	// wantLane sends the reads to the statements that also select lane_position, and lanes holds
+	// what they found. Every other read runs the statements it always did, scans what it always
+	// did and pays nothing. Only Get, the get batcher and BatchDecorate set it, when the caller
+	// names fields.LanePosition. A record's copies of the column agree, because it is written once
+	// and copied, so whichever row answers, any copy gives the same value.
 	wantLane bool
+	lanes    map[chainhash.Hash]uint64
 }
 
 func newLookupResult(n int) lookupResult {
@@ -459,8 +460,92 @@ func (s *Store) lookupManyLane(ctx context.Context, hashes []chainhash.Hash,
 		}
 	}
 
+	res.applyLanes()
+
 	return res, nil
 }
+
+// statement picks the form of a read: the one that also selects lane_position only if asked.
+func (r *lookupResult) statement(plain, withLane string) string {
+	if r.wantLane {
+		return withLane
+	}
+
+	return plain
+}
+
+// withLaneDest adds a destination for the lane column when the read selects it. The destination is
+// allocated only then, so a read that does not ask allocates what it always did.
+func (r *lookupResult) withLaneDest(dest []any) ([]any, **int64) {
+	if !r.wantLane {
+		return dest, nil
+	}
+
+	position := new(*int64)
+
+	return append(dest, position), position
+}
+
+// noteLane keeps the lane position a row carried. A row with none leaves a position another copy
+// gave alone, because a thin copy of a record can have none where the full copy has one.
+func (r *lookupResult) noteLane(txid []byte, position **int64) {
+	if position == nil || *position == nil {
+		return
+	}
+
+	var hash chainhash.Hash
+
+	copy(hash[:], txid)
+
+	if r.lanes == nil {
+		r.lanes = make(map[chainhash.Hash]uint64)
+	}
+
+	r.lanes[hash] = lane.FromSigned(**position)
+}
+
+// applyLanes puts what the reads found on the records they answered.
+func (r *lookupResult) applyLanes() {
+	for hash, position := range r.lanes {
+		if data, ok := r.found[hash]; ok {
+			data.LanePosition = position
+		}
+	}
+}
+
+// laneStatement returns a read with the lane column added, one replacement per pair. It panics at
+// package init if a read's text has changed shape, because the plain form must stay what it is and
+// a silently unchanged lane form would read no column at all.
+func laneStatement(stmt string, oldNew ...string) string {
+	for i := 0; i < len(oldNew); i += 2 {
+		if strings.Count(stmt, oldNew[i]) != 1 {
+			panic("utxoset: cannot add lane_position to a read: " + oldNew[i])
+		}
+
+		stmt = strings.Replace(stmt, oldNew[i], oldNew[i+1], 1)
+	}
+
+	return stmt
+}
+
+// The reads with lane_position added. Only a caller naming fields.LanePosition runs one.
+var (
+	identByTxidLaneSQL = laneStatement(identByTxidSQL,
+		"i.flags, b.raw_tx\n  FROM tx_ident i", "i.flags, b.raw_tx, i.lane_position\n  FROM tx_ident i")
+
+	minedByTxidLaneSQL = laneStatement(minedByTxidSQL,
+		"m.flags, b.raw_tx\n  FROM unnest", "m.flags, b.raw_tx, m.lane_position\n  FROM unnest",
+		"m.created_at, m.flags\n     FROM tx_mined m", "m.created_at, m.flags, m.lane_position\n     FROM tx_mined m")
+
+	preservedByTxidLaneSQL = laneStatement(preservedByTxidSQL,
+		"p.flags, b.raw_tx\n  FROM unnest", "p.flags, b.raw_tx, p.lane_position\n  FROM unnest",
+		"p.created_at, p.flags\n     FROM preserved_parent p", "p.created_at, p.flags, p.lane_position\n     FROM preserved_parent p")
+
+	tier2LaneSQL = laneStatement(tier2SQL,
+		"m.flags & ~$6::smallint AS flags\n  FROM unnest", "m.flags & ~$6::smallint AS flags,\n       COALESCE(i.lane_position, m.lane_position)\n  FROM unnest",
+		"i.flags, b.raw_tx\n      FROM tx_ident i", "i.flags, b.raw_tx, i.lane_position\n      FROM tx_ident i",
+		"m.created_at, m.flags\n      FROM tx_mined m", "m.created_at, m.flags, m.lane_position\n      FROM tx_mined m")
+)
 
 // without returns hashes with every member of drop removed, order kept.
 func without(hashes, drop []chainhash.Hash) []chainhash.Hash {
@@ -743,7 +828,7 @@ func (s *Store) readIdentRows(ctx context.Context, txids [][]byte, res *lookupRe
 
 // readIdentGroup is one leaf's worth of readIdentRows.
 func (s *Store) readIdentGroup(ctx context.Context, g leafBatch, res *lookupResult) error {
-	rows, err := s.pool.Query(ctx, identByTxidSQL, g.leaf, g.txids, !res.noBody, res.wantLane)
+	rows, err := s.pool.Query(ctx, res.statement(identByTxidSQL, identByTxidLaneSQL), g.leaf, g.txids, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] identity rows", err)
 	}
@@ -756,11 +841,15 @@ func (s *Store) readIdentGroup(ctx context.Context, g leafBatch, res *lookupResu
 			r    metaRow
 		)
 
-		if err := rows.Scan(&txid, &r.createdHeight, &r.offChainSince,
+		dest, lanePosition := res.withLaneDest([]any{&txid, &r.createdHeight, &r.offChainSince,
 			&r.fee, &r.sizeInBytes, &r.txInpoints, &r.locktime, &r.createdAt,
-			&r.flags, &r.rawTx, &r.lanePosition); err != nil {
+			&r.flags, &r.rawTx})
+
+		if err := rows.Scan(dest...); err != nil {
 			return errors.NewStorageError("[utxoset][lookup] identity scan", err)
 		}
+
+		res.noteLane(txid, lanePosition)
 
 		var h chainhash.Hash
 
@@ -800,7 +889,7 @@ func (s *Store) readMinedInto(ctx context.Context, hashes []chainhash.Hash,
 		txids = append(txids, hashes[i][:])
 	}
 
-	rows, err := s.pool.Query(ctx, minedByTxidSQL, txids, floor, !res.noBody, res.wantLane)
+	rows, err := s.pool.Query(ctx, res.statement(minedByTxidSQL, minedByTxidLaneSQL), txids, floor, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] membership rows", err)
 	}
@@ -813,11 +902,15 @@ func (s *Store) readMinedInto(ctx context.Context, hashes []chainhash.Hash,
 			r    minedRow
 		)
 
-		if err := rows.Scan(&txid, &r.minedHeight, &r.blockID, &r.subtreeIdx,
+		dest, lanePosition := res.withLaneDest([]any{&txid, &r.minedHeight, &r.blockID, &r.subtreeIdx,
 			&r.sizeInBytes, &r.fee, &r.txInpoints, &r.locktime, &r.createdAt,
-			&r.flags, &r.rawTx, &r.lanePosition); err != nil {
+			&r.flags, &r.rawTx})
+
+		if err := rows.Scan(dest...); err != nil {
 			return errors.NewStorageError("[utxoset][lookup] membership scan", err)
 		}
+
+		res.noteLane(txid, lanePosition)
 
 		var h chainhash.Hash
 
@@ -880,8 +973,6 @@ type minedRow struct {
 	createdAt   *int64
 	flags       int16
 	rawTx       []byte
-	// lanePosition is NULL unless the read asked for it, and for every record created without one.
-	lanePosition *int64
 }
 
 // toMeta builds the record for a transaction from one row: the scalars that describe the
@@ -909,10 +1000,6 @@ func (r *minedRow) toMeta(hash *chainhash.Hash) (*meta.Data, error) {
 
 	if r.createdAt != nil {
 		data.CreatedAt = *r.createdAt
-	}
-
-	if r.lanePosition != nil {
-		data.LanePosition = lane.FromSigned(*r.lanePosition)
 	}
 
 	if len(r.txInpoints) > 0 {
@@ -976,7 +1063,7 @@ func (s *Store) readPreserved(ctx context.Context, hashes []chainhash.Hash,
 		txids = append(txids, hashes[i][:])
 	}
 
-	rows, err := s.pool.Query(ctx, preservedByTxidSQL, txids, !res.noBody, res.wantLane)
+	rows, err := s.pool.Query(ctx, res.statement(preservedByTxidSQL, preservedByTxidLaneSQL), txids, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] preserved parents", err)
 	}
@@ -989,11 +1076,15 @@ func (s *Store) readPreserved(ctx context.Context, hashes []chainhash.Hash,
 			r    minedRow
 		)
 
-		if err := rows.Scan(&txid, &r.minedHeight, &r.blockID, &r.subtreeIdx,
+		dest, lanePosition := res.withLaneDest([]any{&txid, &r.minedHeight, &r.blockID, &r.subtreeIdx,
 			&r.sizeInBytes, &r.fee, &r.txInpoints, &r.locktime, &r.createdAt,
-			&r.flags, &r.rawTx, &r.lanePosition); err != nil {
+			&r.flags, &r.rawTx})
+
+		if err := rows.Scan(dest...); err != nil {
 			return errors.NewStorageError("[utxoset][lookup] preserved parent scan", err)
 		}
+
+		res.noteLane(txid, lanePosition)
 
 		var h chainhash.Hash
 
@@ -1229,14 +1320,11 @@ SELECT k.txid,
        jz.hit IS NOT NULL AS undo_zero,
        m.mined_height, m.block_id, m.subtree_idx, m.created_height, m.size_in_bytes,
        m.fee, m.tx_inpoints, m.locktime, m.created_at,
-       m.flags & ~$6::smallint AS flags,
-       CASE WHEN $8::boolean THEN i.lane_position END AS ident_lane_position,
-       CASE WHEN $8::boolean THEN m.lane_position END AS lane_position
+       m.flags & ~$6::smallint AS flags
   FROM unnest($2::bytea[], $3::uuid[], $4::uuid[]) AS k(txid, lo, hi)
   LEFT JOIN LATERAL (
     SELECT TRUE AS ident_found, i.created_height, i.off_chain_since, i.fee,
-           i.size_in_bytes, i.tx_inpoints, i.locktime, i.created_at, i.flags, b.raw_tx,
-           i.lane_position
+           i.size_in_bytes, i.tx_inpoints, i.locktime, i.created_at, i.flags, b.raw_tx
       FROM tx_ident i
       LEFT JOIN tx_body b ON $7::boolean AND b.created_height = i.created_height AND b.txid = i.txid
      WHERE i.leaf = $1::smallint AND i.txid = k.txid
@@ -1252,7 +1340,7 @@ SELECT k.txid,
      ORDER BY j.ukey LIMIT 1 OFFSET 0 ) AS jz ON TRUE
   LEFT JOIN LATERAL (
     SELECT m.mined_height, m.block_id, m.subtree_idx, m.created_height, m.size_in_bytes,
-           m.fee, m.tx_inpoints, m.locktime, m.created_at, m.flags, m.lane_position
+           m.fee, m.tx_inpoints, m.locktime, m.created_at, m.flags
       FROM tx_mined m
      WHERE m.txid = k.txid
        AND m.mined_height >= $5::int
@@ -1304,7 +1392,7 @@ type tier2Row struct {
 func (s *Store) readTier2Group(ctx context.Context, g leafBatch, droppedFloor int32, res *lookupResult) error {
 	_, ids, los, his := liveUTXOArgs(g.txids)
 
-	rows, err := s.pool.Query(ctx, tier2SQL, g.leaf, ids, los, his, droppedFloor, FlagLocked, !res.noBody, res.wantLane)
+	rows, err := s.pool.Query(ctx, res.statement(tier2SQL, tier2LaneSQL), g.leaf, ids, los, his, droppedFloor, FlagLocked, !res.noBody)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][lookup] second tier", err)
 	}
@@ -1330,19 +1418,22 @@ func (s *Store) readTier2Group(ctx context.Context, g leafBatch, droppedFloor in
 			locktime       *int32
 			createdAt      *int64
 			flags          *int16
-			lanePosition   *int64
 		)
 
 		// Every identity column is NULL when there is no identity row, so the two NOT NULL
 		// columns of that table are scanned through pointers here.
-		if err := rows.Scan(&txid, &r.identFound, &identCreatedAt, &r.ident.offChainSince, &r.ident.fee,
+		dest, lanePosition := res.withLaneDest([]any{&txid, &r.identFound, &identCreatedAt, &r.ident.offChainSince, &r.ident.fee,
 			&r.ident.sizeInBytes, &r.ident.txInpoints, &r.ident.locktime, &r.ident.createdAt, &identFlags,
 			&r.ident.rawTx,
 			&r.utxoZero, &r.undoZero,
 			&minedHeight, &blockID, &subtreeIdx, &createdHeight, &sizeInBytes, &fee, &txInpoints,
-			&locktime, &createdAt, &flags, &r.ident.lanePosition, &lanePosition); err != nil {
+			&locktime, &createdAt, &flags})
+
+		if err := rows.Scan(dest...); err != nil {
 			return errors.NewStorageError("[utxoset][lookup] second tier scan", err)
 		}
+
+		res.noteLane(txid, lanePosition)
 
 		if identCreatedAt != nil {
 			r.ident.createdHeight = *identCreatedAt
@@ -1354,8 +1445,7 @@ func (s *Store) readTier2Group(ctx context.Context, g leafBatch, droppedFloor in
 
 		if minedHeight != nil && blockID != nil {
 			m := &minedRow{minedHeight: *minedHeight, blockID: *blockID, sizeInBytes: sizeInBytes,
-				fee: fee, txInpoints: txInpoints, locktime: locktime, createdAt: createdAt,
-				lanePosition: lanePosition}
+				fee: fee, txInpoints: txInpoints, locktime: locktime, createdAt: createdAt}
 
 			if subtreeIdx != nil {
 				m.subtreeIdx = *subtreeIdx

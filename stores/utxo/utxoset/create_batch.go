@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -355,13 +356,11 @@ type createPlan struct {
 	locktimes []int32
 	createdAt []int64
 	txFlags   []int16
-	// lanes is the lane position of each transaction in its signed form (util/lane), 0 for none,
-	// and anyLane is whether any element is non-zero. When none is, the statements are handed a
-	// NULL array instead of lanes: a multi-array unnest pads a NULL array with NULLs, so the
-	// flag-off path moves no extra bytes and the column is written NULL.
-	lanes   []int64
-	anyLane bool
-	bodies  [][]byte
+	// lanes is the lane position of each transaction in its signed form (util/lane), 0 for none.
+	// It stays nil until a transaction in the plan has one, so a plan with none costs nothing and
+	// its statements get SQL NULL, which a multi-array unnest pads with NULLs.
+	lanes  []int64
+	bodies [][]byte
 	// minedRows is true for a transaction that carries a block at or below the highest
 	// checkpoint, which is what sends it to createMinedPlanSQL instead of createIdentPlanSQL.
 	// The three fields below carry the block for every transaction that carries one, whichever
@@ -476,7 +475,10 @@ func (p *createPlan) sortRows() {
 	p.locktimes = permute(p.locktimes, order)
 	p.createdAt = permute(p.createdAt, order)
 	p.txFlags = permute(p.txFlags, order)
-	p.lanes = permute(p.lanes, order)
+	if p.lanes != nil {
+		p.lanes = permute(p.lanes, order)
+	}
+
 	p.bodies = permute(p.bodies, order)
 	p.minedRows = permute(p.minedRows, order)
 	p.seedRows = permute(p.seedRows, order)
@@ -493,14 +495,16 @@ func (p *createPlan) sortRows() {
 	}
 }
 
-// laneArg is the lane positions as a statement argument: the array when any transaction has
-// one, a typed nil (SQL NULL) when none does, which the statements read as all NULL.
-func (p *createPlan) laneArg() []int64 {
-	if !p.anyLane {
-		return nil
+// addLane records the lane position of the row appendCreate is adding, whose txFlags are already in.
+// Rows before the first position get zeros, which the statements write as NULL.
+func (p *createPlan) addLane(position uint64) {
+	switch {
+	case p.lanes != nil:
+		p.lanes = append(p.lanes, lane.ToSigned(position))
+	case position != lane.None:
+		p.lanes = make([]int64, len(p.txFlags)-1, cap(p.txFlags))
+		p.lanes = append(p.lanes, lane.ToSigned(position))
 	}
-
-	return p.lanes
 }
 
 // subset projects the plan onto the given transaction rows, carrying each row's UTXOs with it.
@@ -531,8 +535,10 @@ func (p *createPlan) subset(idx []int) *createPlan {
 		q.locktimes = append(q.locktimes, p.locktimes[i])
 		q.createdAt = append(q.createdAt, p.createdAt[i])
 		q.txFlags = append(q.txFlags, p.txFlags[i])
-		q.lanes = append(q.lanes, p.lanes[i])
-		q.anyLane = q.anyLane || p.lanes[i] != 0
+		if p.lanes != nil {
+			q.lanes = append(q.lanes, p.lanes[i])
+		}
+
 		q.bodies = append(q.bodies, p.bodies[i])
 		q.minedRows = append(q.minedRows, p.minedRows[i])
 		q.seedRows = append(q.seedRows, p.seedRows[i])
@@ -669,7 +675,7 @@ func (s *Store) runIdentPlan(ctx context.Context, q querier, p *createPlan) erro
 		p.inpoints, p.locktimes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.minedHeight, p.blockID, p.subtreeIdx,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoLeaves, p.utxoFlags,
-		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees, p.laneArg())
+		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees, p.lanes)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][Create] store", err)
 	}
@@ -707,7 +713,7 @@ func (s *Store) runMinedPlan(ctx context.Context, q querier, p *createPlan) erro
 		p.idx, p.leaves, p.txids, p.heights, p.minedHeight, p.blockID, p.subtreeIdx,
 		p.sizes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoMined, p.utxoBlockIDs,
-		p.utxoLeaves, p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees, p.laneArg())
+		p.utxoLeaves, p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees, p.lanes)
 	if err != nil {
 		return errors.NewStorageError("[utxoset][Create] store mined", err)
 	}

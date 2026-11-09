@@ -590,7 +590,7 @@ func (s *Store) netBelowClaim(ctx context.Context, dbTx pgx.Tx, p *createPlan) (
 	s.countCreatesAheadOfTip(p)
 
 	rows, err := dbTx.Query(ctx, nettedMinedSQL, p.txids, p.minedHeight, p.blockID, p.subtreeIdx,
-		p.heights, p.sizes, p.fees, p.createdAt, p.txFlags, p.laneArg())
+		p.heights, p.sizes, p.fees, p.createdAt, p.txFlags, p.lanes)
 	if err != nil {
 		return nil, errors.NewStorageError("[utxoset][SpendAndCreateMulti] claim netted chunk", err)
 	}

@@ -71,7 +71,9 @@ type Data struct {
 	CreatedAt int64 `json:"createdAt,omitempty"`
 
 	// LanePosition is the record's lane position (util/lane), written once at
-	// create and never updated. Zero (lane.None) means this read has no position:
+	// create and never updated. It fits in the padding that grouping the bools
+	// below freed, so this struct, allocated per record read, stays the size it
+	// was. TestDataSize holds it. Zero (lane.None) means this read has no position:
 	// the field was not named, or the record was created with none (lane positions
 	// off, before they existed, no range in hand at the create, or a tool that opens
 	// its own store rather than going through the daemon), or the store no longer
@@ -96,9 +98,6 @@ type Data struct {
 	// Conflicting is a flag indicating if the transaction is conflicting
 	Conflicting bool `json:"conflicting"`
 
-	// ConflictingChildren contains the transaction IDs of all transactions that tried to spend this conflicting transaction
-	ConflictingChildren []chainhash.Hash `json:"conflictingChildren"`
-
 	// Locked is a flag indicating if the transaction is locked and not spendable
 	Locked bool `json:"locked"`
 
@@ -112,6 +111,9 @@ type Data struct {
 	// Creating indicates the transaction is still being created (multi-record 2-phase commit)
 	// When true, the transaction is incomplete and should trigger re-processing for auto-recovery
 	Creating bool `json:"creating"`
+
+	// ConflictingChildren contains the transaction IDs of all transactions that tried to spend this conflicting transaction
+	ConflictingChildren []chainhash.Hash `json:"conflictingChildren"`
 
 	// SpendingDatas is the transaction ID of the transaction that spent the given tx output idx
 	SpendingDatas []*spendpkg.SpendingData `json:"spendingDatas"`

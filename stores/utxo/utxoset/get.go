@@ -9,7 +9,6 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
-	"github.com/bsv-blockchain/teranode/util/lane"
 )
 
 // Get returns everything the store holds about one transaction.
@@ -135,7 +134,6 @@ type metaRow struct {
 	locktime      *int32
 	createdAt     *int64
 	flags         int16
-	lanePosition  *int64
 	rawTx         []byte
 }
 
@@ -171,10 +169,6 @@ func (r *metaRow) toMeta(hash *chainhash.Hash) (*meta.Data, error) {
 
 	if r.createdAt != nil {
 		data.CreatedAt = *r.createdAt
-	}
-
-	if r.lanePosition != nil {
-		data.LanePosition = lane.FromSigned(*r.lanePosition)
 	}
 
 	if len(r.txInpoints) > 0 {

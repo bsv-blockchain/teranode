@@ -1,7 +1,6 @@
 package smoke
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/bsv-blockchain/teranode/stores/utxo/lanestamp"
 	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -94,18 +92,18 @@ func TestLanePositionsOnNewRecords(t *testing.T) {
 	require.NoError(t, err)
 
 	alloc := lane.NewAllocator(td.BlockchainClient, "second-process@test", filepath.Join(t.TempDir(), "lane"), td.Logger)
-	defer alloc.Close()
+	defer func() { require.NoError(t, alloc.Close()) }()
 
-	startCtx, cancel := context.WithTimeout(td.Ctx, 10*time.Second)
-	require.NoError(t, alloc.Start(startCtx))
-	cancel()
+	taker, ok := utxo.As[utxo.LanePositionTaker](other)
+	require.True(t, ok)
+	taker.SetLanePositionSource(alloc)
 
 	otherTx := td.CreateTransactionWithOptions(t,
 		transactions.WithInput(block2.CoinbaseTx, 0),
 		transactions.WithP2PKHOutputs(1, 100_000),
 	)
 
-	_, _, err = lanestamp.New(other, alloc, td.Logger).SpendAndCreate(td.Ctx, otherTx, 5, utxo.WithIgnoreLocked(true))
+	_, _, err = other.SpendAndCreate(td.Ctx, otherTx, 5, utxo.WithIgnoreLocked(true))
 	require.NoError(t, err)
 
 	otherLane, otherPos := lane.Unpack(lanePosition(td, otherTx))

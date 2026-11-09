@@ -91,7 +91,7 @@ func startAllocator(t *testing.T, src RangeSource, holder, file string) *Allocat
 	defer cancel()
 
 	require.NoError(t, a.Start(ctx))
-	t.Cleanup(a.Close)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
 
 	return a
 }
@@ -142,7 +142,7 @@ func TestAllocatorAsksForItsSavedLaneAfterARestart(t *testing.T) {
 		last = next(t, first)
 	}
 
-	first.Close()
+	require.NoError(t, first.Close())
 
 	restarted := newFakeSourceSharing(src)
 	second := startAllocator(t, restarted, "pod-3", file)
@@ -264,22 +264,6 @@ func TestAllocatorNeverHandsOutAPositionTwice(t *testing.T) {
 	require.Len(t, seen, goroutines*each)
 }
 
-func TestAllocatorFillFillsAsManyAsItHas(t *testing.T) {
-	src := newFakeSource(4)
-	a := startAllocator(t, src, "pod-3", filepath.Join(t.TempDir(), "lane"))
-
-	require.Eventually(t, func() bool { return src.callCount() == 2 }, 2*time.Second, time.Millisecond)
-	src.setDown(true)
-
-	dst := make([]uint64, 6)
-	require.Equal(t, 6, a.Fill(dst))
-	require.Equal(t, []uint64{Pack(0, 1), Pack(0, 2), Pack(0, 3), Pack(0, 4), Pack(0, 5), Pack(0, 6)}, dst)
-
-	dst = make([]uint64, 6)
-	require.Equal(t, 2, a.Fill(dst), "two positions were left")
-	require.Equal(t, []uint64{Pack(0, 7), Pack(0, 8), None, None, None, None}, dst)
-}
-
 func TestAllocatorStartWithTheServiceDownStillRuns(t *testing.T) {
 	src := newFakeSource(10)
 	src.setDown(true)
@@ -290,7 +274,7 @@ func TestAllocatorStartWithTheServiceDownStillRuns(t *testing.T) {
 	defer cancel()
 
 	require.Error(t, a.Start(ctx), "Start reports that no range came")
-	t.Cleanup(a.Close)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
 
 	_, ok := a.Next()
 	require.False(t, ok)
@@ -310,9 +294,11 @@ func TestAllocatorPositionsNeverGoBackwards(t *testing.T) {
 	r2 := Range{Lane: 2, First: rangeSize + 1, Last: 2 * rangeSize}
 	r3 := Range{Lane: 2, First: 2*rangeSize + 1, Last: 3 * rangeSize}
 
-	// Not started: the test delivers the ranges itself, one state at a time.
+	// Held as not needing a start: the test delivers the ranges itself, one state at a time, and a
+	// running fetch loop would deliver its own.
 	a := NewAllocator(newFakeSource(rangeSize), "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
-	t.Cleanup(a.Close)
+	a.started.Store(true)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
 
 	a.install(r1)
 	a.install(r2)
@@ -436,7 +422,7 @@ func TestAllocatorRefusesAnInvalidRangeAndKeepsTrying(t *testing.T) {
 	}
 
 	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
-	t.Cleanup(a.Close)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -496,7 +482,7 @@ func TestAllocatorGivesUpOnAHungRequestAndRetries(t *testing.T) {
 	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
 	a.attemptTimeout = 50 * time.Millisecond
 
-	t.Cleanup(a.Close)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -513,4 +499,51 @@ func TestFileNameNeverLeavesTheLaneFolder(t *testing.T) {
 	require.Equal(t, "teranode-1.lane", FileName("teranode-1"))
 	require.Equal(t, "___etc_passwd.lane", FileName("../etc/passwd"))
 	require.Equal(t, "default.lane", FileName(""))
+}
+
+// The first call of a process starts the allocator, so nothing has to and a process that only reads
+// the store never takes a lane.
+func TestTheFirstNextStartsTheAllocatorAndGetsAPosition(t *testing.T) {
+	src := newFakeSource(1000)
+	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
+
+	require.Zero(t, src.callCount(), "building an allocator asks for nothing")
+
+	v, ok := a.Next()
+	require.True(t, ok, "the first call waits for the first range")
+	require.Equal(t, Pack(0, 1), v)
+}
+
+// With the service down the first call waits, once, and every later call answers at once. Without the
+// once, every create would wait the full bound for as long as the outage lasted.
+func TestOnlyTheFirstNextWaitsWhenTheServiceIsDown(t *testing.T) {
+	src := newFakeSource(1000)
+	src.setDown(true)
+
+	a := NewAllocator(src, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+	a.firstRangeWait = 200 * time.Millisecond
+	t.Cleanup(func() { require.NoError(t, a.Close()) })
+
+	start := time.Now()
+	_, ok := a.Next()
+	require.False(t, ok)
+	require.GreaterOrEqual(t, time.Since(start), a.firstRangeWait, "the first call waited")
+
+	start = time.Now()
+	_, ok = a.Next()
+	require.False(t, ok)
+	require.Less(t, time.Since(start), a.firstRangeWait/2, "a later call does not wait")
+}
+
+// Next runs once per record created, so with a range in hand it must allocate nothing.
+func TestNextDoesNotAllocate(t *testing.T) {
+	a := startAllocator(t, newFakeSource(10_000_000), "pod-3", filepath.Join(t.TempDir(), "lane"))
+	next(t, a)
+
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		if _, ok := a.Next(); !ok {
+			t.Fatal("no range in hand")
+		}
+	}))
 }

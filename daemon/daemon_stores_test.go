@@ -10,7 +10,6 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
-	"github.com/bsv-blockchain/teranode/stores/utxo/lanestamp"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -33,6 +32,11 @@ func (s *laneSource) ReserveLaneRange(context.Context, string, uint8, bool) (lan
 type closeCountingStore struct {
 	utxostore.Store
 	closes atomic.Int64
+}
+
+// Unwrap lets utxostore.As find the real store's lane position hook.
+func (s *closeCountingStore) Unwrap() utxostore.Store {
+	return s.Store
 }
 
 func (s *closeCountingStore) Close(ctx context.Context) error {
@@ -75,9 +79,9 @@ func laneStoreFixture(t *testing.T, name string, lanePositions bool, source func
 	return appSettings, opened
 }
 
-// With the flag off nothing about lane positions runs: no range source is asked for, and the
-// store comes back unwrapped.
-func TestGetUtxoStoreWithLanePositionsOffDoesNotWrap(t *testing.T) {
+// With the flag off nothing about lane positions runs: no range source is asked for, and a create
+// writes no position.
+func TestGetUtxoStoreWithLanePositionsOffGivesNoSource(t *testing.T) {
 	appSettings, opened := laneStoreFixture(t, "lane_off", false, func() (lane.RangeSource, error) {
 		require.Fail(t, "with the flag off nothing asks for a range source")
 
@@ -90,12 +94,18 @@ func TestGetUtxoStoreWithLanePositionsOffDoesNotWrap(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, opened, store)
 
-	_, wrapped := utxostore.As[*lanestamp.Store](store)
-	require.False(t, wrapped)
+	root := tests.BuildMultiWorkload(t, 0xe5, 1, 1).Roots[0]
+
+	_, _, err = store.SpendAndCreate(context.Background(), root, 900, utxostore.WithCreateOnly())
+	require.NoError(t, err)
+
+	md, err := opened.Get(context.Background(), root.TxIDChainHash(), fields.LanePosition)
+	require.NoError(t, err)
+	require.Equal(t, lane.None, md.LanePosition)
 }
 
-// With the flag on the process's one store is wrapped once, and a create takes a position.
-func TestGetUtxoStoreWithLanePositionsOnWrapsOnce(t *testing.T) {
+// With the flag on the process's one store gets one source, and a create takes a position.
+func TestGetUtxoStoreWithLanePositionsOnGivesTheStoreASource(t *testing.T) {
 	ctx := context.Background()
 
 	appSettings, opened := laneStoreFixture(t, "lane_on", true, func() (lane.RangeSource, error) {
@@ -108,9 +118,6 @@ func TestGetUtxoStoreWithLanePositionsOnWrapsOnce(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() { require.NoError(t, store.Close(ctx)) })
-
-	_, wrapped := utxostore.As[*lanestamp.Store](store)
-	require.True(t, wrapped, "the wrapper is on the store every service gets")
 
 	again, err := d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
 	require.NoError(t, err)
@@ -126,9 +133,9 @@ func TestGetUtxoStoreWithLanePositionsOnWrapsOnce(t *testing.T) {
 	require.Equal(t, lane.Pack(9, 1), md.LanePosition)
 }
 
-// A wrap that fails must close the store it opened and leave the singleton unset, so a retry
+// A failure to get a range source must close the store it opened and leave the singleton unset, so a retry
 // starts clean rather than returning a nil store or leaking the first one.
-func TestGetUtxoStoreClosesTheStoreWhenTheWrapFails(t *testing.T) {
+func TestGetUtxoStoreClosesTheStoreWhenTheSourceFails(t *testing.T) {
 	ctx := context.Background()
 
 	failing := true
@@ -146,7 +153,7 @@ func TestGetUtxoStoreClosesTheStoreWhenTheWrapFails(t *testing.T) {
 	store, err := d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
 	require.Error(t, err)
 	require.Nil(t, store)
-	require.Nil(t, d.mainUtxoStore, "a failed wrap leaves the singleton unset")
+	require.Nil(t, d.mainUtxoStore, "a failure leaves the singleton unset")
 	require.Equal(t, int64(1), opened.closes.Load(), "the store just opened is closed")
 
 	failing = false
@@ -154,7 +161,4 @@ func TestGetUtxoStoreClosesTheStoreWhenTheWrapFails(t *testing.T) {
 	store, err = d.GetUtxoStore(ctx, ulogger.TestLogger{}, appSettings)
 	require.NoError(t, err, "a retry starts clean")
 	require.NotNil(t, store)
-
-	_, wrapped := utxostore.As[*lanestamp.Store](store)
-	require.True(t, wrapped)
 }

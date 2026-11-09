@@ -13,7 +13,6 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/util"
-	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -396,8 +395,7 @@ func (s *Store) appendCreate(p *createPlan, item int, tx *bt.Tx, blockHeight uin
 	p.locktimes = append(p.locktimes, int32(tx.LockTime))
 	p.createdAt = append(p.createdAt, time.Now().UnixMilli())
 	p.txFlags = append(p.txFlags, flags)
-	p.lanes = append(p.lanes, lane.ToSigned(options.LanePosition))
-	p.anyLane = p.anyLane || options.LanePosition != lane.None
+	p.addLane(s.Take(options))
 	p.bodies = append(p.bodies, body)
 	p.minedRows = append(p.minedRows, atBirth)
 	p.seedRows = append(p.seedRows, s.seedingCreate(options))

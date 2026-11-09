@@ -5,11 +5,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/teranode/stores/utxo"
-	"github.com/bsv-blockchain/teranode/stores/utxo/lanestamp"
-	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
@@ -32,18 +29,16 @@ func (s *benchRangeSource) ReserveLaneRange(context.Context, string, uint8, bool
 }
 
 // BenchmarkValidateNewTxLanePosition is BenchmarkValidateNewTx with lane positions
-// on: the wrapper the daemon installs between the validator and the store, and the
-// allocator behind it.
+// on: the store takes its positions from an allocator, as the daemon sets it up.
 func BenchmarkValidateNewTxLanePosition(b *testing.B) {
 	runValidateNewTxBench(b, func(s utxo.Store) utxo.Store {
 		a := lane.NewAllocator(&benchRangeSource{}, "bench", filepath.Join(b.TempDir(), "lane"), nil)
-		b.Cleanup(a.Close)
+		b.Cleanup(func() { require.NoError(b, a.Close()) })
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		taker, ok := utxo.As[utxo.LanePositionTaker](s)
+		require.True(b, ok)
+		taker.SetLanePositionSource(a)
 
-		require.NoError(b, a.Start(ctx))
-
-		return lanestamp.New(s, a, ulogger.TestLogger{})
+		return s
 	})
 }

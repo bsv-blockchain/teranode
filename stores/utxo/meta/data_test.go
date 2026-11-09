@@ -2,6 +2,7 @@ package meta
 
 import (
 	"testing"
+	"unsafe"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -278,4 +279,9 @@ func Benchmark_MetaBytes(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _ = data.MetaBytes()
 	}
+}
+
+// Data is allocated once per record read, so a new field must not move it up a size class.
+func TestDataSize(t *testing.T) {
+	require.Equal(t, uintptr(240), unsafe.Sizeof(Data{}))
 }

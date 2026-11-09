@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -140,11 +141,135 @@ func LanePositionMinedCreate(t *testing.T, db utxostore.Store) {
 	}
 }
 
-// LanePositionMulti: SpendAndCreateMulti gives each transaction of the list
-// its own lane position, on the unmined path subtree validation uses, on the
-// mined path block validation uses above the checkpoint, and on the
-// below-checkpoint path. A list with the wrong number of lane positions is
-// refused before any write.
+// ScriptedLanePositions is a LanePositionSource for tests: it hands out left in order, then reports
+// that it has none. It is safe to call from a store's concurrent writers.
+type ScriptedLanePositions struct {
+	mu   sync.Mutex
+	left []uint64
+}
+
+// NewScriptedLanePositions returns a source that hands out positions in order.
+func NewScriptedLanePositions(positions ...uint64) *ScriptedLanePositions {
+	return &ScriptedLanePositions{left: positions}
+}
+
+// Next implements utxostore.LanePositionSource.
+func (s *ScriptedLanePositions) Next() (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.left) == 0 {
+		return lane.None, false
+	}
+
+	position := s.left[0]
+	s.left = s.left[1:]
+
+	return position, true
+}
+
+// Remaining is how many positions have not been handed out.
+func (s *ScriptedLanePositions) Remaining() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.left)
+}
+
+// useLanePositionSource gives db a source for the rest of the test. These tests run on a store shared
+// between subtests, so the source comes off again when the test ends.
+func useLanePositionSource(t *testing.T, db utxostore.Store, source utxostore.LanePositionSource) {
+	t.Helper()
+
+	taker, ok := utxostore.As[utxostore.LanePositionTaker](db)
+	require.True(t, ok, "the store takes its lane positions from a source")
+
+	taker.SetLanePositionSource(source)
+	t.Cleanup(func() { taker.SetLanePositionSource(nil) })
+}
+
+// lanePositionsFrom makes count positions of one lane.
+func lanePositionsFrom(laneNumber uint8, count int) []uint64 {
+	positions := make([]uint64, count)
+	for i := range positions {
+		positions[i] = lane.Pack(laneNumber, uint64(i)+1) //nolint:gosec // i counts up from 0
+	}
+
+	return positions
+}
+
+// LanePositionFromSource: a store with a source gives each record it creates the next position, on
+// the create-only path, the spend-and-create path and the mined path. A spend-only call creates no
+// record, so it takes none. A position the caller names wins, and costs the source nothing. A source
+// with nothing to give leaves the record with no position, and the create still succeeds.
+func LanePositionFromSource(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	t.Run("every create takes the next position", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xf0, 1, 2)
+		source := NewScriptedLanePositions(lanePositionsFrom(11, 4)...)
+		useLanePositionSource(t, db, source)
+
+		_, _, err := db.SpendAndCreate(ctx, w.Roots[0], 930, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		_, _, err = db.SpendAndCreate(ctx, w.Roots[1], 930, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+
+		_, _, err = db.SpendAndCreate(ctx, w.Txs[0], 931)
+		require.NoError(t, err)
+
+		_, _, err = db.SpendAndCreate(ctx, w.Txs[1], 931, utxostore.WithIgnoreLocked(true),
+			utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 34, BlockHeight: 931, SubtreeIdx: 0}))
+		require.NoError(t, err)
+
+		requireLanePosition(t, db, w.Roots[0], lane.Pack(11, 1), "first create")
+		requireLanePosition(t, db, w.Roots[1], lane.Pack(11, 2), "second create")
+		requireLanePosition(t, db, w.Txs[0], lane.Pack(11, 3), "spend and create")
+		requireLanePosition(t, db, w.Txs[1], lane.Pack(11, 4), "mined create")
+		require.Zero(t, source.Remaining())
+	})
+
+	t.Run("a spend-only call takes none", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xf1, 1, 1)
+		w.StoreRoots(t, db, 930)
+
+		source := NewScriptedLanePositions(lanePositionsFrom(12, 2)...)
+		useLanePositionSource(t, db, source)
+
+		_, _, err := db.SpendAndCreate(ctx, w.Txs[0], 931, utxostore.WithSpendOnly())
+		require.NoError(t, err)
+		require.Equal(t, 2, source.Remaining(), "a call that creates no record takes no position")
+	})
+
+	t.Run("a named position wins", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xf2, 1, 1)
+		source := NewScriptedLanePositions(lanePositionsFrom(13, 1)...)
+		useLanePositionSource(t, db, source)
+
+		_, _, err := db.SpendAndCreate(ctx, w.Roots[0], 930, utxostore.WithCreateOnly(), utxostore.WithLanePosition(widest))
+		require.NoError(t, err)
+
+		requireLanePosition(t, db, w.Roots[0], widest)
+		require.Equal(t, 1, source.Remaining(), "the source is not asked")
+	})
+
+	t.Run("a source with nothing to give leaves none", func(t *testing.T) {
+		w := BuildMultiWorkload(t, 0xf3, 1, 1)
+		useLanePositionSource(t, db, NewScriptedLanePositions())
+
+		_, _, err := db.SpendAndCreate(ctx, w.Roots[0], 930, utxostore.WithCreateOnly())
+		require.NoError(t, err, "a create never fails for want of a position")
+
+		requireLanePosition(t, db, w.Roots[0], lane.None)
+	})
+}
+
+// LanePositionMulti: SpendAndCreateMulti gives each transaction of the list its own position from the
+// source, on the unmined path subtree validation uses, on the mined path block validation uses above
+// the checkpoint, and on the below-checkpoint path. A store is free to write a list in any order, so
+// the test holds the set of positions, not which record has which. A list naming one position for
+// the whole list is refused before any write.
 func LanePositionMulti(t *testing.T, db utxostore.Store) {
 	ctx := context.Background()
 
@@ -170,29 +295,33 @@ func LanePositionMulti(t *testing.T, db utxostore.Store) {
 			w := BuildMultiWorkload(t, c.seed, 3, 3)
 			w.StoreRoots(t, db, 910)
 
-			want := make([]uint64, len(w.Txs))
-			for i := range want {
-				want[i] = lane.Pack(uint8(250+i%6), 1_000_000+uint64(i)) //nolint:gosec // test data
-			}
+			// More than the list needs, because a store that retries a write can take again.
+			source := NewScriptedLanePositions(append(lanePositionsFrom(250, 4*len(w.Txs)), widest)...)
+			useLanePositionSource(t, db, source)
 
-			want[len(want)-1] = widest
-
-			results, err := db.SpendAndCreateMulti(ctx, w.Txs, 911, append(c.opts, utxostore.WithLanePositions(want))...)
+			results, err := db.SpendAndCreateMulti(ctx, w.Txs, 911, c.opts...)
 			require.NoError(t, err)
 			requireAllStatus(t, results, utxostore.MultiTxCreated)
 
+			seen := make(map[uint64]bool, len(w.Txs))
+
 			for i, tx := range w.Txs {
-				requireLanePosition(t, db, tx, want[i], "tx %d", i)
+				md, err := db.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+				require.NoError(t, err, "tx %d", i)
+				require.True(t, lane.Valid(md.LanePosition), "tx %d has a position", i)
+				require.False(t, seen[md.LanePosition], "tx %d has its own position", i)
+
+				seen[md.LanePosition] = true
 			}
 		})
 	}
 
-	t.Run("refused with the wrong count", func(t *testing.T) {
+	t.Run("refused when it names one position", func(t *testing.T) {
 		w := BuildMultiWorkload(t, 0xd6, 1, 2)
 		w.StoreRoots(t, db, 910)
 
-		_, err := db.SpendAndCreateMulti(ctx, w.Txs, 911, utxostore.WithLanePositions([]uint64{lane.Pack(1, 1)}))
-		require.True(t, utxostore.IsSpendAndCreateMultiRefused(err), "one lane position for two transactions: %v", err)
+		_, err := db.SpendAndCreateMulti(ctx, w.Txs, 911, utxostore.WithLanePosition(lane.Pack(1, 1)))
+		require.True(t, utxostore.IsSpendAndCreateMultiRefused(err), "one position for two transactions: %v", err)
 
 		requireNotStored(t, db, w.Txs...)
 	})
@@ -225,6 +354,7 @@ func LanePositionContract(t *testing.T, db utxostore.Store) {
 	t.Run("written once", func(t *testing.T) { LanePositionWrittenOnce(t, db) })
 	t.Run("spend and create", func(t *testing.T) { LanePositionSpendAndCreate(t, db) })
 	t.Run("mined create", func(t *testing.T) { LanePositionMinedCreate(t, db) })
+	t.Run("from a source", func(t *testing.T) { LanePositionFromSource(t, db) })
 	t.Run("multi", func(t *testing.T) { LanePositionMulti(t, db) })
 	t.Run("absent without the option", func(t *testing.T) { LanePositionAbsentWithoutOption(t, db) })
 }

@@ -225,8 +225,8 @@ func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
 
 // TestLanePositionOnTheNettedBelowCheckpointWrite is the route quick validation and legacy sync take
 // below the checkpoint. It is its own statement, so the contract's below-the-checkpoint case, which
-// does not set the options that reach it, proves nothing about it. The list includes a transaction
-// with no position, which is what the wrapper sends when a range runs out partway through a list.
+// does not set the options that reach it, proves nothing about it. The source runs out partway through
+// the list, so one record goes without a position beside the others that have theirs.
 func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 	s := newBodySkipStore(t)
 	ctx := t.Context()
@@ -237,11 +237,12 @@ func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 	w.StoreRoots(t, s, height-1)
 
 	list := outpointOnly(nettedFamily(t, w))
+	require.Len(t, list, 4)
 
-	want := []uint64{lane.Pack(200, 1), lane.Pack(200, 2), lane.None, lane.MaxPosition}
-	require.Len(t, want, len(list))
+	given := []uint64{lane.Pack(200, 1), lane.Pack(200, 2), lane.MaxPosition}
+	s.SetLanePositionSource(tests.NewScriptedLanePositions(given...))
 
-	results, err := s.SpendAndCreateMulti(ctx, list, height, append(belowCheckpointOptions(height), utxo.WithLanePositions(want))...)
+	results, err := s.SpendAndCreateMulti(ctx, list, height, belowCheckpointOptions(height)...)
 	require.NoError(t, err)
 
 	for i, r := range results {
@@ -250,9 +251,16 @@ func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 
 	require.Zero(t, readNetState(t, s, ctx, w.Roots, list, height).journal, "this went through the netted write")
 
-	for i, tx := range list {
-		requireGetLane(t, s, ctx, tx, want[i], "tx in the netted list")
+	got := make([]uint64, 0, len(list))
+
+	for _, tx := range list {
+		md, err := s.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+		require.NoError(t, err)
+
+		got = append(got, md.LanePosition)
 	}
+
+	require.ElementsMatch(t, append(given, lane.None), got, "each record its own position, one with none")
 }
 
 // TestLanePositionInABatchMixingMinedAndUnmined: one flush can carry both create statements, which
@@ -325,6 +333,7 @@ func TestLanePositionThroughTheSecondTier(t *testing.T) {
 		res.wantLane = true
 
 		require.NoError(t, s.readTier2(ctx, []chainhash.Hash{h}, &res))
+		res.applyLanes()
 
 		got, ok := res.found[h]
 		require.True(t, ok)

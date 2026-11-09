@@ -103,6 +103,8 @@ type batchSpend struct {
 
 // Store implements the UTXO store interface using a SQL database backend.
 type Store struct {
+	utxo.LanePositions
+
 	logger ulogger.Logger
 	// parentOutputsReadHook, when set by a test, runs before each parent-output chunk read
 	// and fails the read with its error. Always nil in production.
@@ -411,6 +413,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		opt(options)
 	}
 
+	options.LanePosition = s.Take(options)
+
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "sql:Create")
 	defer deferFn()
 
@@ -547,8 +551,13 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		RETURNING id
 	`
 
-	// Capacity for the lane position's argument below, so adding it does not regrow the slice.
-	args := append(make([]any, 0, 12),
+	// Sized for what this record needs, so a record with no lane position allocates what it always did.
+	argCount := 11
+	if options.LanePosition != lane.None {
+		argCount = 12
+	}
+
+	args := append(make([]any, 0, argCount),
 		txHash[:],
 		tx.Version,
 		tx.LockTime,
@@ -1702,9 +1711,11 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 
 	dest := []any{&id, &version, &lockTime, &data.Fee, &data.SizeInBytes, &data.IsCoinbase, &data.Frozen, &data.Conflicting, &data.Locked, &unminedSince, &insertedAt}
 
-	var lanePosition sql.NullInt64
+	// Allocated only when asked for, so every other Get allocates what it always did.
+	var lanePosition *sql.NullInt64
 	if wantLanePosition {
-		dest = append(dest, &lanePosition)
+		lanePosition = new(sql.NullInt64)
+		dest = append(dest, lanePosition)
 	}
 
 	err := s.db.QueryRowContext(ctx, q, hash[:]).Scan(dest...)
@@ -1724,7 +1735,7 @@ func (s *Store) getUnbatched(ctx context.Context, hash *chainhash.Hash, bins []f
 		}
 	}
 
-	if lanePosition.Valid {
+	if lanePosition != nil && lanePosition.Valid {
 		data.LanePosition = lane.FromSigned(lanePosition.Int64)
 	}
 
@@ -4475,13 +4486,15 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 			hashBytes    []byte
 			unminedSince sql.NullInt64
 			insertedAt   any
-			lanePosition sql.NullInt64
 		)
 
 		row := &batchDecorateTxRow{data: &meta.Data{}}
 		dest := []any{&hashBytes, &row.id, &row.version, &row.lockTime, &row.data.Fee, &row.data.SizeInBytes, &row.data.IsCoinbase, &row.data.Frozen, &row.data.Conflicting, &row.data.Locked, &unminedSince, &insertedAt}
+
+		var lanePosition *sql.NullInt64
 		if wantLanePosition {
-			dest = append(dest, &lanePosition)
+			lanePosition = new(sql.NullInt64)
+			dest = append(dest, lanePosition)
 		}
 
 		if err := rows.Scan(dest...); err != nil {
@@ -4489,7 +4502,7 @@ func (s *Store) batchDecorateChunk(ctx context.Context, items []*utxo.Unresolved
 			return err
 		}
 
-		if lanePosition.Valid {
+		if lanePosition != nil && lanePosition.Valid {
 			row.data.LanePosition = lane.FromSigned(lanePosition.Int64)
 		}
 

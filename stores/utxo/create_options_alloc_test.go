@@ -2,6 +2,7 @@ package utxo
 
 import (
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 )
@@ -110,3 +111,28 @@ func TestCreateOptionsStillSetWhatTheySay(t *testing.T) {
 	WithSpendOnly()(&o)
 	require.True(t, o.SpendOnly)
 }
+
+// CreateOptions is allocated once per create, so a new field must not move it up a size class.
+func TestCreateOptionsSize(t *testing.T) {
+	require.Equal(t, uintptr(112), unsafe.Sizeof(CreateOptions{}))
+}
+
+// TestTakeDoesNotAllocate holds the point of taking lane positions in the store: with a source set,
+// a create pays for the source's Next and nothing else.
+func TestTakeDoesNotAllocate(t *testing.T) {
+	var positions LanePositions
+
+	positions.SetLanePositionSource(constantLanePosition{})
+
+	options := &CreateOptions{}
+
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		if positions.Take(options) == 0 {
+			t.Fatal("no position")
+		}
+	}))
+}
+
+type constantLanePosition struct{}
+
+func (constantLanePosition) Next() (uint64, bool) { return 1, true }

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
@@ -21,6 +22,10 @@ const (
 	// at Close, and nothing below it sets a deadline, so without this a call that hangs would
 	// stop the retries and the logging until it returned.
 	attemptTimeout = 10 * time.Second
+
+	// defaultFirstRangeWait bounds the one wait of a process, on its first create, for its first
+	// range: one round trip to the blockchain service when that service is up.
+	defaultFirstRangeWait = 5 * time.Second
 )
 
 // Allocator hands out lane positions to the records one process creates.
@@ -64,6 +69,10 @@ type Allocator struct {
 	readyOnce sync.Once
 	startOnce sync.Once
 
+	firstUse       sync.Once
+	started        atomic.Bool
+	firstRangeWait time.Duration
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -90,11 +99,12 @@ func NewAllocator(src RangeSource, holder, file string, logger ulogger.Logger) *
 
 		attemptTimeout: attemptTimeout,
 
-		wake:   make(chan struct{}, 1),
-		ready:  make(chan struct{}),
-		ctx:    ctx,
-		cancel: cancel,
-		done:   make(chan struct{}),
+		firstRangeWait: defaultFirstRangeWait,
+		wake:           make(chan struct{}, 1),
+		ready:          make(chan struct{}),
+		ctx:            ctx,
+		cancel:         cancel,
+		done:           make(chan struct{}),
 	}
 }
 
@@ -103,6 +113,9 @@ func NewAllocator(src RangeSource, holder, file string, logger ulogger.Logger) *
 // the allocator keeps trying either way, so an error here is not fatal. Calling
 // it again only waits.
 func (a *Allocator) Start(ctx context.Context) error {
+	// Whatever this wait ends in, no later Next waits: the fetch loop carries on regardless.
+	defer a.started.Store(true)
+
 	a.startOnce.Do(func() {
 		if l, ok := readLaneFile(a.file); ok {
 			a.lane, a.hasLane = l, true
@@ -121,17 +134,25 @@ func (a *Allocator) Start(ctx context.Context) error {
 
 // Close stops the background fetch. Positions not handed out are lost, which
 // is safe: the service never hands them out again.
-func (a *Allocator) Close() {
+func (a *Allocator) Close() error {
 	a.cancel()
 
 	// A never-started allocator has no fetch loop to wait for.
 	a.startOnce.Do(func() { close(a.done) })
 
 	<-a.done
+
+	return nil
 }
 
-// Next returns the next lane position, or false if no range is in hand.
+// Next returns the next lane position, or false if no range is in hand. A create calls it once per
+// record, so it takes a lock and an add and allocates nothing. The first call of a process starts
+// the allocator and waits for the first range, at most firstRangeWait; no later call waits.
 func (a *Allocator) Next() (uint64, bool) {
+	if !a.started.Load() {
+		a.startOnFirstUse()
+	}
+
 	a.mu.Lock()
 	v, ok := a.nextLocked()
 	a.mu.Unlock()
@@ -145,37 +166,17 @@ func (a *Allocator) Next() (uint64, bool) {
 	return v, ok
 }
 
-// Fill writes the next lane positions into dst, in order, and returns how many
-// it wrote. The rest of dst is set to None, which the stores write as no lane
-// position.
-func (a *Allocator) Fill(dst []uint64) int {
-	n := 0
+// startOnFirstUse is why a process that only reads the store never takes a lane: most services that
+// hold the UTXO store never create a record. Callers that arrive during the wait wait with it.
+func (a *Allocator) startOnFirstUse() {
+	a.firstUse.Do(func() {
+		ctx, cancel := context.WithTimeout(a.ctx, a.firstRangeWait)
+		defer cancel()
 
-	a.mu.Lock()
-
-	for n < len(dst) {
-		v, ok := a.nextLocked()
-		if !ok {
-			break
+		if err := a.Start(ctx); err != nil {
+			a.logger.Warnf("[lane] new records go out without a lane position until a range arrives: %v", err)
 		}
-
-		dst[n] = v
-		n++
-	}
-
-	a.mu.Unlock()
-
-	for i := n; i < len(dst); i++ {
-		dst[i] = None
-	}
-
-	prometheusLanePositions.Add(float64(n))
-
-	if n < len(dst) {
-		prometheusLaneExhausted.Add(float64(len(dst) - n))
-	}
-
-	return n
+	})
 }
 
 func (a *Allocator) nextLocked() (uint64, bool) {

@@ -106,14 +106,13 @@ type BatchStoreItem struct {
 	// TxHash is the transaction ID
 	txHash *chainhash.Hash
 
-	// IsCoinbase indicates if this is a coinbase transaction
-	isCoinbase bool
-
 	// Tx contains the full transaction data
 	tx *bt.Tx
 
 	// BlockHeight is the height where this transaction appears
 	blockHeight uint32
+	// IsCoinbase indicates if this is a coinbase transaction
+	isCoinbase bool
 
 	// BlockIDs contains all blocks where this transaction appears
 	blockIDs []uint32
@@ -134,7 +133,8 @@ type BatchStoreItem struct {
 	locked bool
 
 	// lanePosition is the lane position (util/lane) written to the master record.
-	// lane.None writes no bin.
+	// lane.None writes no bin. It fits in padding, because isCoinbase shares the word
+	// beside blockHeight, so a create allocates no more than it did.
 	lanePosition uint64
 
 	// group signals completion of the whole batch; the producer waits on it
@@ -257,7 +257,7 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		subtreeIdxs:  subtreeIdxs,
 		conflicting:  createOptions.Conflicting,
 		locked:       createOptions.Locked,
-		lanePosition: createOptions.LanePosition,
+		lanePosition: s.Take(createOptions),
 		group:        group,
 	}
 

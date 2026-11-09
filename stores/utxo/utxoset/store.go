@@ -36,6 +36,8 @@ type querier interface {
 // so the store-agnostic conformance suite in stores/utxo/tests applies to it unchanged.
 // That suite is the specification: M1 is complete when it passes.
 type Store struct {
+	utxo.LanePositions
+
 	logger   ulogger.Logger
 	settings *settings.Settings
 	pool     *pgxpool.Pool

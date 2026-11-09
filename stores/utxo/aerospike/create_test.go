@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
 	"github.com/bsv-blockchain/go-batcher/v2"
@@ -476,6 +477,11 @@ func TestStore_StorePartialTransactionExternally(t *testing.T) {
 
 func BenchmarkStore_Create(b *testing.B) {
 	benchmarkStoreCreate(b)
+}
+
+// BatchStoreItem is allocated once per create, so a new field must not make it bigger.
+func TestBatchStoreItemSize(t *testing.T) {
+	require.Equal(t, uintptr(144), unsafe.Sizeof(teranodeaerospike.BatchStoreItem{}))
 }
 
 // BenchmarkStore_CreateLanePosition is BenchmarkStore_Create with a lane

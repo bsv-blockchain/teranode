@@ -22,7 +22,6 @@ import (
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
-	"github.com/bsv-blockchain/teranode/stores/utxo/lanestamp"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -91,17 +90,14 @@ func (d *Stores) GetUtxoStore(ctx context.Context, logger ulogger.Logger,
 	}
 
 	if appSettings.UtxoStore.LanePositions {
-		wrapped, err := d.withLanePositions(ctx, logger, appSettings, store)
-		if err != nil {
+		if err := d.giveLanePositions(ctx, logger, appSettings, store); err != nil {
 			// The singleton stays unset, so a retry starts clean, and the store just opened is not leaked.
 			if closeErr := store.Close(ctx); closeErr != nil {
-				logger.Warnf("[lane] could not close the UTXO store after failing to wrap it: %v", closeErr)
+				logger.Warnf("[lane] could not close the UTXO store after failing to give it lane positions: %v", closeErr)
 			}
 
 			return nil, err
 		}
-
-		store = wrapped
 	}
 
 	d.mainUtxoStore = store
@@ -121,21 +117,29 @@ var laneRangeSource = func(ctx context.Context, d *Stores, logger ulogger.Logger
 	return d.GetBlockchainClient(ctx, logger, appSettings, "lane")
 }
 
-// withLanePositions wraps the process's one UTXO store so every record any
-// service in this process creates gets a lane position from one allocator,
-// which makes one lane per process. The allocator only starts on the first
-// create, so a process that never creates records never takes a lane.
+// giveLanePositions hands the process's one UTXO store its lane position source. Every service in
+// the process creates records through that store, so that is one allocator and one lane per
+// process, with no change at any call site. The allocator only starts on the first create, so a
+// process that never creates records never takes a lane. A store that cannot write lane positions,
+// such as the null store, gets none.
 //
 // The lane number is kept in <dataFolder>/lane/<clientName>.lane. Two
 // processes on one host sharing a data folder and a client name would share
 // that file and so a lane; positions stay unique, because the blockchain
 // service hands each range out once, but give such processes distinct client
 // names to keep one lane each.
-func (d *Stores) withLanePositions(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
-	store utxostore.Store) (utxostore.Store, error) {
+func (d *Stores) giveLanePositions(ctx context.Context, logger ulogger.Logger, appSettings *settings.Settings,
+	store utxostore.Store) error {
+	taker, ok := utxostore.As[utxostore.LanePositionTaker](store)
+	if !ok {
+		logger.Warnf("[lane] lane positions are on, but this UTXO store cannot write them")
+
+		return nil
+	}
+
 	source, err := laneRangeSource(ctx, d, logger, appSettings)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	hostname, err := os.Hostname()
@@ -148,7 +152,11 @@ func (d *Stores) withLanePositions(ctx context.Context, logger ulogger.Logger, a
 
 	logger.Infof("[lane] lane positions on: holder %s, lane file %s", holder, file)
 
-	return lanestamp.New(store, lane.NewAllocator(source, holder, file, logger), logger), nil
+	allocator := lane.NewAllocator(source, holder, file, logger)
+	d.retainClient(allocator)
+	taker.SetLanePositionSource(allocator)
+
+	return nil
 }
 
 // GetSubtreeValidationClient returns the main subtree validation client instance. If the client

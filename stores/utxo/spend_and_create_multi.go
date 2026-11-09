@@ -516,13 +516,8 @@ func (l *listItems) option(i int) CreateOption {
 		*o = *l.base
 		o.TxIDs = nil
 		o.SubtreeIdxs = nil
-		o.LanePositions = nil
 		o.BelowCheckpoint = false
 		o.TxID = &l.txids[i]
-
-		if i < len(l.base.LanePositions) {
-			o.LanePosition = l.base.LanePositions[i]
-		}
 		o.MinedBlockInfos = l.base.MinedBlockInfos[:l.k:l.k]
 
 		if l.infos != nil && i < len(l.base.SubtreeIdxs) {
@@ -607,8 +602,8 @@ func PrepareSpendAndCreateMulti(txs []*bt.Tx, opts ...CreateOption) (*SpendAndCr
 		return nil, newSpendAndCreateMultiRefusedError("WithTXIDs has %d txids for %d transactions", len(options.TxIDs), len(txs))
 	}
 
-	if options.LanePositions != nil && len(options.LanePositions) != len(txs) {
-		return nil, newSpendAndCreateMultiRefusedError("WithLanePositions has %d lane positions for %d transactions", len(options.LanePositions), len(txs))
+	if options.LanePosition != 0 {
+		return nil, newSpendAndCreateMultiRefusedError("WithLanePosition describes one record; a list takes its positions from the store's source")
 	}
 
 	if options.SubtreeIdxs != nil {
