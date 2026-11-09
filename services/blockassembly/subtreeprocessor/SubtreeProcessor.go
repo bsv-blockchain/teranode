@@ -7380,13 +7380,14 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	// clean out the transactions from the old current subtree that were in the block
 	// and add the remainderSubtreeNodes to the new current subtree, in order.
 	//
-	// Pack 3 boolean flags per element into a single byte array:
-	// bit 0 = existedInTxMap, bit 1 = existsInLosingMap, bit 2 = isRemoveMap
-	// Saves ~66% memory vs three separate []bool arrays
+	// Pack the flags per element into a single byte array:
+	// bit 0 = existedInTxMap, bit 1 = existsInLosingMap, bit 2 = isRemoveMap,
+	// bit 3 = coinbase placeholder. A node remains exactly when its byte is 0.
 	const (
 		flagExistedInTxMap    = 1 << 0
 		flagExistsInLosingMap = 1 << 1
 		flagIsRemoveMap       = 1 << 2
+		flagIsCoinbase        = 1 << 3
 
 		// lookupChunk is how many nodes one lookup task covers: big enough to
 		// keep task overhead negligible, small enough to spread a few large
@@ -7397,10 +7398,18 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 	workers := remainderWorkers(stp.settings.BlockAssembly.ProcessRemainderTxHashesConcurrency)
 	removeMapLength := stp.removeMap.Length()
 
-	// Phase 1: parallel lookups, flagging each node. All subtrees' chunks go
-	// through one pool of workers goroutines; errgroup.Go blocks once the
-	// limit is reached, so no more than that ever exist.
+	// Phase 1: parallel lookups, flagging each node and counting the nodes
+	// that remain. All subtrees' chunks go through one pool of workers
+	// goroutines; errgroup.Go blocks once the limit is reached, so no more
+	// than that ever exist. Each chunk writes its count to its own slot.
 	nodeFlags := make([][]byte, len(chainedSubtrees))
+	chunkFirst := make([]int, len(chainedSubtrees)+1)
+
+	for idx, st := range chainedSubtrees {
+		chunkFirst[idx+1] = chunkFirst[idx] + (len(st.Nodes)+lookupChunk-1)/lookupChunk
+	}
+
+	chunkRemaining := make([]int, chunkFirst[len(chainedSubtrees)])
 
 	g, _ := errgroup.WithContext(ctx)
 	g.SetLimit(workers)
@@ -7412,11 +7421,15 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 
 		for start := 0; start < len(nodes); start += lookupChunk {
 			end := min(start+lookupChunk, len(nodes))
+			slot := chunkFirst[idx] + start/lookupChunk
 
 			g.Go(func() error {
+				remaining := 0
+
 				for i := start; i < end; i++ {
 					node := nodes[i]
 					if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+						flags[i] = flagIsCoinbase
 						continue
 					}
 
@@ -7429,8 +7442,12 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 						flags[i] = flagExistedInTxMap
 					} else if losingTxHashesMap != nil && losingTxHashesMap.Exists(node.Hash) {
 						flags[i] = flagExistsInLosingMap
+					} else {
+						remaining++
 					}
 				}
+
+				chunkRemaining[slot] = remaining
 
 				return nil
 			})
@@ -7441,35 +7458,56 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		return errors.NewProcessingError("error getting remainder tx difference", err)
 	}
 
-	// Phase 2: collect each subtree's remainder in order, subtrees in
-	// parallel on the same bound.
+	// Phase 2: copy each subtree's remainder, in order, into its own range of
+	// one slice sized exactly to the total, subtrees in parallel on the same
+	// bound. Sizing once matters in a reorg, where most nodes remain: a
+	// per-subtree slice grown by append allocated about five times what it
+	// kept, and a second full copy flattened them for the insert.
+	// remainderSubtrees[idx] is a view of subtree idx's range, capped at its
+	// end, so nothing written through it can reach the next range.
+	offsets := make([]int, len(chainedSubtrees)+1)
+
+	for idx := range chainedSubtrees {
+		remaining := 0
+		for _, n := range chunkRemaining[chunkFirst[idx]:chunkFirst[idx+1]] {
+			remaining += n
+		}
+
+		offsets[idx+1] = offsets[idx] + remaining
+	}
+
+	remainder := make([]subtreepkg.Node, offsets[len(chainedSubtrees)])
 	remainderSubtrees := make([][]subtreepkg.Node, len(chainedSubtrees))
 
 	g, _ = errgroup.WithContext(ctx)
 	g.SetLimit(workers)
 
 	for idx, st := range chainedSubtrees {
+		view := remainder[offsets[idx]:offsets[idx+1]:offsets[idx+1]]
+		remainderSubtrees[idx] = view
+
+		// Run even when the view is empty: removeMap entries are deleted here.
 		g.Go(func() error {
 			nodes, flags := st.Nodes, nodeFlags[idx]
-			remainder := make([]subtreepkg.Node, 0, len(nodes)/10)
+			pos := 0
 
 			for i, node := range nodes {
-				if node.Hash.Equal(*subtreepkg.CoinbasePlaceholderHash) {
+				f := flags[i]
+				if f == 0 {
+					view[pos] = node
+					pos++
+
 					continue
 				}
 
-				f := flags[i]
 				if f&flagIsRemoveMap != 0 {
 					_ = stp.removeMap.Delete(node.Hash)
-					continue
-				}
-
-				if f&(flagExistedInTxMap|flagExistsInLosingMap) == 0 {
-					remainder = append(remainder, node)
 				}
 			}
 
-			remainderSubtrees[idx] = remainder
+			if pos != len(view) {
+				return errors.NewProcessingError("[processRemainderTxHashes] subtree %d kept %d nodes, counted %d", idx, pos, len(view))
+			}
 
 			return nil
 		})
@@ -7483,22 +7521,30 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 		if err := dropConflictingDescendants(ctx, remainderSubtrees, conflictingHashes, currentTxMap, workers); err != nil {
 			return err
 		}
+
+		// dropConflictingDescendants shrank each view in place, leaving a gap
+		// after each one. Move the views down, in order, so the remainder is
+		// one contiguous prefix again. A view never moves past its old start,
+		// and copy handles the overlap.
+		end := 0
+
+		for idx, nodes := range remainderSubtrees {
+			n := copy(remainder[end:], nodes)
+			remainderSubtrees[idx] = remainder[end : end+n : end+n]
+			end += n
+		}
+
+		remainder = remainder[:end]
 	}
 
-	// Calculate total nodes for threshold check
-	totalNodes := 0
-	for _, subtreeNodes := range remainderSubtrees {
-		totalNodes += len(subtreeNodes)
-	}
+	totalNodes := len(remainder)
 
 	parallelThreshold := stp.settings.BlockAssembly.ParallelSetIfNotExistsThreshold
 
 	if totalNodes >= parallelThreshold {
-		// Parallel path: flatten to single slice, process in parallel, then add sequentially
-		flatNodes := make([]subtreepkg.Node, 0, totalNodes)
-		for _, subtreeNodes := range remainderSubtrees {
-			flatNodes = append(flatNodes, subtreeNodes...)
-		}
+		// Parallel path: the remainder is already one slice in subtree order,
+		// so process it in parallel, then add sequentially.
+		flatNodes := remainder
 
 		wasInserted := make([]bool, len(flatNodes))
 
