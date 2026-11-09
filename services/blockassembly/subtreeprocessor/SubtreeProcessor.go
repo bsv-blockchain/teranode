@@ -5395,17 +5395,26 @@ func (stp *SubtreeProcessor) losersMinedInForwardBlocks(ctx context.Context, los
 
 	for _, subtreeHash := range stp.reorgForwardTxMapSubtrees {
 		g.Go(func() error {
-			subtree, err := stp.readBoundSubtree(gCtx, &subtreeHash)
+			reader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtree)
 			if err != nil {
-				return errors.NewProcessingError("[losersMinedInForwardBlocks] error reading subtree", err)
+				if reader, err = stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeToCheck); err != nil {
+					return errors.NewProcessingError("[losersMinedInForwardBlocks] error getting subtree %s", subtreeHash.String(), err)
+				}
 			}
 
-			for i := range subtree.Nodes {
-				if _, ok := wanted[subtree.Nodes[i].Hash]; ok {
+			defer func() {
+				_ = reader.Close()
+			}()
+
+			err = forEachSubtreeLeafHash(reader, stp.settings.SubtreeValidation.MaxIncomingSubtreeBytes, func(hash chainhash.Hash) {
+				if _, ok := wanted[hash]; ok {
 					foundMu.Lock()
-					found[subtree.Nodes[i].Hash] = struct{}{}
+					found[hash] = struct{}{}
 					foundMu.Unlock()
 				}
+			})
+			if err != nil {
+				return errors.NewProcessingError("[losersMinedInForwardBlocks] error reading subtree %s", subtreeHash.String(), err)
 			}
 
 			return nil
@@ -5417,6 +5426,53 @@ func (stp *SubtreeProcessor) losersMinedInForwardBlocks(ctx context.Context, los
 	}
 
 	return found, nil
+}
+
+// subtreeLeafScanBufferBytes is the read buffer forEachSubtreeLeafHash streams a subtree's
+// leaves through: 1,365 leaf records of 48 bytes, rather than the whole leaf section.
+const subtreeLeafScanBufferBytes = 64 * 1024
+
+// forEachSubtreeLeafHash calls fn with the hash of each leaf in the serialized subtree that
+// reader holds, in order, and keeps only one read buffer. It reads the same bytes as the
+// transaction-map build (deserializeHashesIntoBuckets) and, like it, does not check that the
+// leaves hash to the subtree's key. A header that claims more leaves than maxSubtreeBodyBytes
+// can hold, or a file that ends before its last leaf, is an error. It stops after the leaves
+// and does not read the conflicting-node trailer.
+func forEachSubtreeLeafHash(reader io.Reader, maxSubtreeBodyBytes int64, fn func(chainhash.Hash)) error {
+	if maxSubtreeBodyBytes < subtreeHeaderAndCountSize+subtreeCountFieldBytes {
+		return errors.NewProcessingError("invalid maxSubtreeBodyBytes %d: too small to hold an empty subtree", maxSubtreeBodyBytes)
+	}
+
+	var hdr [subtreeHeaderAndCountSize]byte
+	if _, err := io.ReadFull(reader, hdr[:]); err != nil {
+		return errors.NewProcessingError("unable to read header+leaf count", err)
+	}
+
+	numLeaves := binary.LittleEndian.Uint64(hdr[subtreeHeaderBytes:])
+
+	maxLeaves := uint64(maxSubtreeBodyBytes-subtreeHeaderAndCountSize-subtreeCountFieldBytes) / subtreeLeafBytes // nolint: gosec // positive, checked above
+	if numLeaves > maxLeaves {
+		return errors.NewProcessingError("subtree header claims %d leaves, more than a %d-byte subtree can hold", numLeaves, maxSubtreeBodyBytes)
+	}
+
+	buf := make([]byte, subtreeLeafScanBufferBytes-subtreeLeafScanBufferBytes%subtreeLeafBytes)
+
+	for remaining := numLeaves; remaining > 0; {
+		chunk := min(remaining, uint64(len(buf)/subtreeLeafBytes))
+		records := buf[:chunk*subtreeLeafBytes]
+
+		if _, err := io.ReadFull(reader, records); err != nil {
+			return errors.NewProcessingError("unable to read leaves", err)
+		}
+
+		for off := 0; off < len(records); off += subtreeLeafBytes {
+			fn(chainhash.Hash(records[off : off+subtreeHashBytes]))
+		}
+
+		remaining -= chunk
+	}
+
+	return nil
 }
 
 // partitionLongestChainMarks splits transactions into the two disjoint sets used by the

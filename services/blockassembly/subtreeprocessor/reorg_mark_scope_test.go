@@ -656,6 +656,7 @@ func TestReorgBlocks_LoserFilterSubtreeFailureFailsReorg(t *testing.T) {
 			require.Zero(t, store.markFalseCount(), "the reorg must fail before it writes any mark")
 			require.False(t, store.markedTrue(*loserTx.TxIDChainHash()))
 			require.False(t, store.markedTrue(*winnerTx.TxIDChainHash()))
+			require.Nil(t, stp.reorgForwardTxMapSubtrees, "a failed reorg must stop recording")
 		})
 	}
 }
