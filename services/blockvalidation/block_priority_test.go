@@ -11,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockBlockProcessor is a test implementation that always allows block processing
@@ -407,4 +408,28 @@ func TestForkManager(t *testing.T) {
 		_, exists = fm.GetForkForBlock(blockHash)
 		assert.False(t, exists)
 	})
+}
+
+// TestBlockPriorityQueue_DuplicateAnnouncementJoinsWaitingCaller: a second announcement of a
+// queued hash becomes an additional source, not a second entry. If a caller waits on it, the
+// caller must be answered with the queued entry's outcome; the source alone is dropped once a
+// worker takes the entry, so a reply left on it would never be answered.
+func TestBlockPriorityQueue_DuplicateAnnouncementJoinsWaitingCaller(t *testing.T) {
+	pq := NewBlockPriorityQueue(ulogger.TestLogger{})
+	hash := &chainhash.Hash{7}
+
+	first := newBlockFoundReply()
+	second := newBlockFoundReply()
+
+	pq.Add(processBlockFound{hash: hash, baseURL: "http://a", reply: first}, PriorityChainExtending, 5)
+	pq.Add(processBlockFound{hash: hash, baseURL: "http://b", reply: second}, PriorityChainExtending, 5)
+	require.Equal(t, 1, pq.Size())
+
+	taken, status := pq.Get(context.Background(), &mockBlockProcessor{})
+	require.Equal(t, GetOK, status)
+
+	taken.reply.answer(nil)
+
+	require.NoError(t, <-first.ch)
+	require.NoError(t, <-second.ch)
 }
