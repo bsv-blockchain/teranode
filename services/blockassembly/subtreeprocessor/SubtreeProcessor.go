@@ -439,6 +439,11 @@ type SubtreeProcessor struct {
 	// DiskTxMap entries already carry their subtree index.
 	subtreeIndexesPredicted atomic.Bool
 
+	// reorgForwardTxMapSubtrees lists the subtrees behind each moveForward block's transaction map.
+	// It is non-nil only while reorgBlocks moves its forward blocks, so no other block move records
+	// anything. Only the processor goroutine touches it.
+	reorgForwardTxMapSubtrees []chainhash.Hash
+
 	// diskTxMapShadow is the inactive half of the double-buffered disk-backed
 	// currentTxMap, mirroring currentTxMapShadow for the in-memory path. It is
 	// always empty while inactive: resetSubtreeState swaps it in, and the commit
@@ -4934,7 +4939,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// movedBackBlockTxMap keeps track of all the transactions that were in the blocks we moved back
 	// this is used to determine which transactions need to be marked as on the longest chain when moving forward
 	// if a transaction was in a block we moved back, it means it was on the longest chain before the reorg
-	movedBackBlockTxMap := make(map[chainhash.Hash]struct{}) // keeps track of all the transactions that were in the blocks we moved back
+	// the value is true once a moveForward block has mined the transaction
+	movedBackBlockTxMap := make(map[chainhash.Hash]bool)
 
 	// reverseCascadedConflictingSet collects every tx whose Conflicting flag
 	// ReverseProcessConflicting flipped to true during the moveBack loop —
@@ -5117,7 +5123,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		for _, subtreeNodes := range subtreesNodes {
 			for _, node := range subtreeNodes {
 				if !node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-					movedBackBlockTxMap[node.Hash] = struct{}{}
+					movedBackBlockTxMap[node.Hash] = false
 				}
 			}
 		}
@@ -5146,9 +5152,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		transactionMap     *SortedHashSet
 		losingTxHashesMap  txmap.TxMap
 		markOnLongestChain = make([]chainhash.Hash, 0, 1024)
-		winningTxSet       = make(map[chainhash.Hash]struct{})
 		rawLosingTxHashes  = make([]chainhash.Hash, 0, 1024)
 	)
+
+	stp.reorgForwardTxMapSubtrees = []chainhash.Hash{}
+	defer func() { stp.reorgForwardTxMapSubtrees = nil }()
 
 	for blockIdx, block := range moveForwardBlocks {
 		stp.reportProgressUnlessDone(ctx)
@@ -5163,8 +5171,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		if transactionMap != nil {
 			transactionMap.Iter(func(hash chainhash.Hash) bool {
 				if !hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
-					winningTxSet[hash] = struct{}{}
-					if _, ok := movedBackBlockTxMap[hash]; !ok {
+					if _, ok := movedBackBlockTxMap[hash]; ok {
+						movedBackBlockTxMap[hash] = true
+					} else {
 						markOnLongestChain = append(markOnLongestChain, hash)
 					}
 				}
@@ -5204,10 +5213,15 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		return errors.NewStorageError("[reorgBlocks] disk tx map storage error before committing reorg", mapErr)
 	}
 
+	losersMinedForward, err := stp.losersMinedInForwardBlocks(ctx, rawLosingTxHashes)
+	if err != nil {
+		return err
+	}
+
 	losingTxSet := make(map[chainhash.Hash]struct{})
 	allLosingTxHashes := make([]chainhash.Hash, 0, len(rawLosingTxHashes))
 	for _, hash := range rawLosingTxHashes {
-		if _, ok := winningTxSet[hash]; ok {
+		if _, ok := losersMinedForward[hash]; ok {
 			continue
 		}
 		if _, ok := losingTxSet[hash]; ok {
@@ -5255,7 +5269,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// the original spend — a one-block fork opened a
 	// blockHeightRetention-unminedTxRetention window in which parents were pruned from
 	// under live children.
-	movedBackAssemblyHashes := movedBackStillInAssembly(movedBackBlockTxMap, winningTxSet, stp.currentTxMap)
+	movedBackAssemblyHashes := movedBackStillInAssembly(movedBackBlockTxMap, stp.currentTxMap)
 
 	movedBackBlockTxMap = nil // free up memory
 
@@ -5340,12 +5354,13 @@ func appendAllTxHashes(dst []chainhash.Hash, m txmap.TxMap) []chainhash.Hash {
 // movedBackStillInAssembly returns the moved-back transactions that no moveForward block mines
 // and that block assembly still holds. Its tx map holds exactly the transactions in its
 // subtrees, so it answers with one probe per moved-back transaction, rather than one per
-// transaction in block assembly. Coinbase placeholders are never in movedBack.
-func movedBackStillInAssembly(movedBack, winning map[chainhash.Hash]struct{}, txMap interface{ Exists(chainhash.Hash) bool }) []chainhash.Hash {
+// transaction in block assembly. A value of true in movedBack means a moveForward block mined
+// the transaction. Coinbase placeholders are never in movedBack.
+func movedBackStillInAssembly(movedBack map[chainhash.Hash]bool, txMap interface{ Exists(chainhash.Hash) bool }) []chainhash.Hash {
 	hashes := make([]chainhash.Hash, 0, len(movedBack))
 
-	for hash := range movedBack {
-		if _, won := winning[hash]; won {
+	for hash, minedForward := range movedBack {
+		if minedForward {
 			continue
 		}
 
@@ -5357,6 +5372,53 @@ func movedBackStillInAssembly(movedBack, winning map[chainhash.Hash]struct{}, tx
 	return hashes
 }
 
+// losersMinedInForwardBlocks returns the hashes in losers that a moveForward block of this reorg
+// also mined, by reading the subtrees behind those blocks' transaction maps. It reads nothing if
+// there are no losers, which is the normal case. A subtree this node held as a chained subtree is
+// left out of its block's transaction map (see processBlockSubtrees), so a loser that is only in
+// such a subtree is not returned and stays a loser.
+func (stp *SubtreeProcessor) losersMinedInForwardBlocks(ctx context.Context, losers []chainhash.Hash) (map[chainhash.Hash]struct{}, error) {
+	if len(losers) == 0 {
+		return nil, nil
+	}
+
+	wanted := make(map[chainhash.Hash]struct{}, len(losers))
+	for _, hash := range losers {
+		wanted[hash] = struct{}{}
+	}
+
+	found := make(map[chainhash.Hash]struct{})
+	foundMu := sync.Mutex{}
+
+	g, gCtx := errgroup.WithContext(ctx)
+	util.SafeSetLimit(stp.logger, g, stp.settings.BlockAssembly.MoveBackBlockConcurrency)
+
+	for _, subtreeHash := range stp.reorgForwardTxMapSubtrees {
+		g.Go(func() error {
+			subtree, err := stp.readBoundSubtree(gCtx, &subtreeHash)
+			if err != nil {
+				return errors.NewProcessingError("[losersMinedInForwardBlocks] error reading subtree", err)
+			}
+
+			for i := range subtree.Nodes {
+				if _, ok := wanted[subtree.Nodes[i].Hash]; ok {
+					foundMu.Lock()
+					found[subtree.Nodes[i].Hash] = struct{}{}
+					foundMu.Unlock()
+				}
+			}
+
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return found, nil
+}
+
 // partitionLongestChainMarks splits transactions into the two disjoint sets used by the
 // concurrent MarkTransactionsOnLongestChain calls during a reorg:
 //
@@ -5365,7 +5427,7 @@ func movedBackStillInAssembly(movedBack, winning map[chainhash.Hash]struct{}, tx
 //     the moved-back txs that are not in a moveForward block and are still in block
 //     assembly).
 //
-// losingTxHashes is expected to already be deduped (against the winning set and itself);
+// losingTxHashes is expected to already be deduped (against the moveForward blocks' txs and itself);
 // assemblyHashes are the moved-back transactions still in block assembly. A coinbase
 // placeholder or a duplicate in either is dropped. The returned slices are guaranteed to be:
 //
@@ -6731,6 +6793,12 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	transactionMap, conflictingNodes, err = stp.createTransactionMapIfNeeded(ctx, block, blockSubtreesMap)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+
+	if stp.reorgForwardTxMapSubtrees != nil {
+		for subtreeHash := range blockSubtreesMap {
+			stp.reorgForwardTxMapSubtrees = append(stp.reorgForwardTxMapSubtrees, subtreeHash)
+		}
 	}
 
 	// Process conflicting transactions
