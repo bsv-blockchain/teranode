@@ -2,9 +2,11 @@ package aerospike_test
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -78,9 +80,8 @@ func TestLanePositionBin(t *testing.T) {
 		require.Greater(t, len(tx.ExtendedBytes()), teranodeaerospike.MaxTxSizeInStoreInBytes, "pre-condition: the tx must be too big to store in the record")
 		require.Less(t, len(tx.Outputs), tSettings.UtxoStore.UtxoBatchSize, "pre-condition: the tx must fit one record's outputs")
 
-		md, err := store.Create(ctx, tx, 100, utxo.WithLanePosition(position))
+		_, err := store.Create(ctx, tx, 100, utxo.WithLanePosition(position))
 		require.NoError(t, err)
-		require.Equal(t, position, md.LanePosition)
 
 		v, ok := rawBin(t, tx, 0)
 		require.True(t, ok, "the master record must carry the lane position bin")
@@ -105,6 +106,43 @@ func TestLanePositionBin(t *testing.T) {
 
 		_, ok = rawBin(t, tx, 1)
 		require.False(t, ok, "a pagination record must not carry the lane position bin")
+
+		got, err := store.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
+		require.NoError(t, err)
+		require.Equal(t, position, got.LanePosition)
+	})
+
+	// The size limits above are the store's own. This is the server's: a record under them that
+	// the namespace still refuses is rebuilt as external by a separate call, which must pass the
+	// lane position again. No configuration in the repo makes the server refuse one, so the batch
+	// answers RECORD_TOO_BIG once and the rebuild then runs against the real server.
+	t.Run("a record the server refuses as too big keeps the bin when it is rebuilt", func(t *testing.T) {
+		cleanDB(t, client)
+
+		tx := createTransactionWithOutputs(3)
+
+		var refused atomic.Bool
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if !refused.Swap(true) {
+				for _, record := range records {
+					record.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.RECORD_TOO_BIG}
+				}
+
+				return nil
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+		t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+		_, err := store.Create(ctx, tx, 100, utxo.WithLanePosition(position))
+		require.NoError(t, err)
+		require.True(t, refused.Load(), "the create went through the refusal")
+
+		v, ok := rawBin(t, tx, 0)
+		require.True(t, ok, "the rebuilt master record must carry the lane position bin")
+		require.Equal(t, int(lane.ToSigned(position)), v)
 
 		got, err := store.Get(ctx, tx.TxIDChainHash(), fields.LanePosition)
 		require.NoError(t, err)

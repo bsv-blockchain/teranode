@@ -246,7 +246,7 @@ func TestIsBlockchainSchemaCurrent_MissingLaneHandoutTable(t *testing.T) {
 
 	current, err := isBlockchainSchemaCurrent(db, true)
 	require.NoError(t, err)
-	assert.False(t, current, "schema must not be current when lane_handout is missing")
+	require.False(t, current, "schema must not be current when lane_handout is missing")
 
 	s2, err := New(ulogger.TestLogger{}, dbURL, tSettings)
 	require.NoError(t, err)
@@ -254,5 +254,5 @@ func TestIsBlockchainSchemaCurrent_MissingLaneHandoutTable(t *testing.T) {
 
 	current, err = isBlockchainSchemaCurrent(db, true)
 	require.NoError(t, err)
-	assert.True(t, current, "reopening the store must re-create lane_handout")
+	require.True(t, current, "reopening the store must re-create lane_handout")
 }

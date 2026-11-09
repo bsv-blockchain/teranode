@@ -162,6 +162,46 @@ func TestReserveLaneRange(t *testing.T) {
 		require.Equal(t, uint64(laneTestSize+1), r.First)
 	})
 
+	// Lanes are handed out in reverse, so the longest idle lane is the highest number, not the
+	// lowest. A scan that took the first free lane would get this wrong.
+	runLaneHandoutTests(t, "a no-lane request takes the longest idle lane, not the lowest number", func(t *testing.T, s *SQL) {
+		for l := lane.MaxLane; l >= 0; l-- {
+			at := t0.Add(time.Duration(lane.MaxLane-l) * time.Second)
+
+			_, err := s.ReserveLaneRange(t.Context(), laneReqFor("h", uint8(l), at)) //nolint:gosec // l is at most 255
+			require.NoError(t, err)
+		}
+
+		// Only lanes 255 and 254 are idle past the window, and 255 has been idle longest.
+		r, err := s.ReserveLaneRange(t.Context(), laneReq("new", t0.Add(laneTestFreeAfter+time.Second+500*time.Millisecond)))
+		require.NoError(t, err)
+		require.Equal(t, uint8(lane.MaxLane), r.Lane)
+	})
+
+	// With every lane used, the free-lane scan does reach an exhausted lane. Handing it out would
+	// give a first position that does not fit in seven bytes.
+	runLaneHandoutTests(t, "the free-lane scan skips an exhausted lane that is idle longest", func(t *testing.T, s *SQL) {
+		exhaust := laneReqFor("a", 3, t0)
+		exhaust.Size = lane.MaxPosition
+		_, err := s.ReserveLaneRange(t.Context(), exhaust)
+		require.NoError(t, err)
+
+		// Every other lane is used later, lane 0 first, so lane 3 is the longest idle of all.
+		for l := 0; l <= lane.MaxLane; l++ {
+			if l == 3 {
+				continue
+			}
+
+			_, err = s.ReserveLaneRange(t.Context(), laneReqFor("h", uint8(l), t0.Add(time.Hour+time.Duration(l)*time.Second))) //nolint:gosec // l is at most 255
+			require.NoError(t, err)
+		}
+
+		r, err := s.ReserveLaneRange(t.Context(), laneReq("new", t0.Add(laneTestFreeAfter+2*time.Hour)))
+		require.NoError(t, err)
+		require.Equal(t, uint8(0), r.Lane, "lane 0 is the longest idle lane that is not exhausted")
+		require.LessOrEqual(t, r.Last, lane.MaxPosition)
+	})
+
 	runLaneHandoutTests(t, "an exhausted lane is never handed out again", func(t *testing.T, s *SQL) {
 		req := laneReqFor("a", 3, t0)
 		req.Size = lane.MaxPosition

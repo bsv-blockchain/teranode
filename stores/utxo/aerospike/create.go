@@ -206,8 +206,6 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	txMeta.Locked = createOptions.Locked
 
-	txMeta.LanePosition = createOptions.LanePosition
-
 	// when creating conflicting transactions, we must set the conflictingChildren in all the parents
 	// we should do this before we store the transaction, so we are sure the parents have been updated properly
 	if txMeta.Conflicting {

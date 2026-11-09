@@ -547,7 +547,8 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		RETURNING id
 	`
 
-	args := []any{
+	// Capacity for the lane position's argument below, so adding it does not regrow the slice.
+	args := append(make([]any, 0, 12),
 		txHash[:],
 		tx.Version,
 		tx.LockTime,
@@ -559,7 +560,7 @@ func (s *Store) createWithRetry(ctx context.Context, tx *bt.Tx, blockHeight uint
 		options.Locked,
 		unminedSince,
 		deleteAtHeight,
-	}
+	)
 
 	// A lane position is written in this same INSERT. Without one the statement
 	// and its arguments are exactly what they were before the column existed.
