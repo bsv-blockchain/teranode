@@ -251,6 +251,16 @@ func (r *CentralizedPeerRegistry) Load(ctx context.Context, store blob.Store, tt
 		// would report phantom connections and exempt the entries from
 		// cleanup until the first sweep.
 		entry.IsConnected = false
+		// The advertised tip is the peer's own claim from before the restart.
+		// Consumed as-is it drives isCaughtUp and sync selection before any live
+		// node_status arrives, so a stale-high height starts a catchup toward a
+		// hash the peer may no longer serve and charges the miss to an honest
+		// peer. Clear it; the next node_status repopulates it. The validated
+		// fields stay: they record what this node itself validated from the
+		// peer, which a restart does not invalidate.
+		entry.Height = 0
+		entry.AdvertisedHeight = 0
+		entry.BlockHash = nil
 		r.peers[entry.ID] = &entry
 	}
 

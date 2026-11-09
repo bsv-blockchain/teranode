@@ -217,7 +217,7 @@ func TestCentralizedPeerRegistry_Persistence(t *testing.T) {
 
 	p1, ok := r2.Get("peer-1")
 	require.True(t, ok)
-	require.Equal(t, uint32(42), p1.Height)
+	require.Zero(t, p1.Height, "the advertised height is stale across a restart and is not restored")
 	require.Equal(t, blockchain_api.TransportType_TRANSPORT_WIRE_PROTOCOL, p1.TransportType)
 }
 
