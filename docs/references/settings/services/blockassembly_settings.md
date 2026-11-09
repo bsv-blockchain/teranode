@@ -79,6 +79,10 @@ A validator polls block assembly's held count and limit with the same queue-stat
 
 Upgrade every validator and subtree-validation pod to a build that sends the `InBlock` flag before you set `blockassembly_maxTransactionsInMemory` on block assembly, and keep the default 0 until then. Block assembly cannot tell an old validator from a mempool batch. A validator that never sends `InBlock` has its block transactions refused as held, and its in-block shed arm then accepts them and unlocks them without a template entry. A block transaction is then outside the template with nothing holding its children back, which peers reject as an invalid block.
 
+The limit assumes trusted gRPC callers. It does not refuse a transaction flagged `inBlock`, and the validator and block assembly gRPC APIs take that flag from the caller. The shipped profile has no gRPC authentication (`security_level_grpc=0`), so a client that can reach those ports can flag mempool transactions `inBlock` and bypass the limit. The HTTP listeners reject the flag. Restrict access to the gRPC ports, or enable gRPC authentication, where that matters.
+
+A Kafka pause caused only by the held count ends at the retention of the validator transaction topic (the `retention` parameter of `kafka_validatortxsConfig`, ten minutes when absent), because past that the broker has dropped the backlog it holds back.
+
 ### Block transactions kept Locked
 
 When block assembly refuses a block transaction on the ingest queue bound (`blockassembly_maxQueueItems`), the validator accepts the transaction and keeps its record Locked, so an ordinary child cannot enter the template without it. `teranode_validator_shed_inblock_dropped_total` counts these, and a rising value is the signal to act. The lock clears when the block's `setMined` runs. A block that validates and never connects leaves the record Locked, and an ordinary child of it is refused as locked. A block assembly reset, or a restart, runs the unmined reload. It reads every unmined record, including Locked ones, adds them to the template and unlocks them.

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -400,11 +401,35 @@ type recoveryBAStore struct {
 	// without it it reports the cancellation instead, which is what used to skip the
 	// unwind entirely.
 	cancelCaller func()
+
+	// onStore, when set, runs at the start of the first hand-off only, so a test can hold that
+	// hand-off open while another validation of the same transaction starts.
+	onStore     func()
+	onStoreOnce sync.Once
+
+	resets    atomic.Int32
+	resetErrs atomic.Int32
+}
+
+func (f *recoveryBAStore) ResetBlockAssembly(_ context.Context) error {
+	f.resets.Add(1)
+
+	if f.resetErrs.Load() > 0 {
+		f.resetErrs.Add(-1)
+
+		return errors.NewServiceError("reset failed")
+	}
+
+	return nil
 }
 
 var _ blockassembly.Store = (*recoveryBAStore)(nil)
 
 func (f *recoveryBAStore) Store(ctx context.Context, _ *chainhash.Hash, _, _ uint64, _ subtree.TxInpoints) (bool, error) {
+	if f.onStore != nil {
+		f.onStoreOnce.Do(f.onStore)
+	}
+
 	f.calls++
 	f.inBlockSeen = append(f.inBlockSeen, blockassembly.InBlockFromContext(ctx))
 
@@ -2040,31 +2065,23 @@ func TestValidate_ShedUnwindAbortsWhenRecordReappearedBeforeUnspend(t *testing.T
 	require.Contains(t, logger.joined(), outpointOf(parentTx, 0), "and the outpoints left spent")
 }
 
-// This test PINS CURRENT BEHAVIOUR, NOT DESIRED BEHAVIOUR.
-//
 // A submits a transaction; while A sits between its SpendAndCreate and its hand-off, B
-// submits the same txid. B finds the record present, takes the already-exists early
-// return in Validate and is answered SUCCESS without performing a hand-off of its own.
-// A's hand-off is then shed and its unwind deletes the record B was told about. Nothing
-// resubmits it.
+// submits the same txid in the same validator process. B used to find the record present,
+// take the already-exists early return and be answered SUCCESS without a hand-off of its
+// own, and A's shed unwind then deleted the record B was told about.
 //
-// Both halves of that residual are asserted, because either one alone reads as benign:
-// B got a nil error, AND the record is gone from the store afterwards.
+// The per-id lock now makes B wait for A's unwind. B then creates the record itself and
+// takes its own shed, so the caller is never told a transaction was accepted whose record
+// is then deleted. B is started from the unwind's own delete, which is when A's record is
+// still present and the unwind is committed to removing it.
 //
-// It stays open deliberately. Refusing B's resubmit is the wrong trade — a locked,
-// unmined record has causes indistinguishable from this one, including an in-flight
-// conflict resolution locking an honest losing parent, so failing on it would turn
-// ordinary resubmits into errors during every conflict resolution. Closing it properly
-// needs per-txid serialisation of create, hand-off and unwind. An in-process marker
-// would close only the single-pod case on a horizontally scaled service, which is worse
-// than nothing because it hides the rest.
-//
-// The deferral is instrumented rather than blind, which the counter assertion pins:
-// A's record is Locked and unmined when B reads it, so B increments
-// teranode_validator_existing_tx_locked_unmined_total. That is the field signal for how
-// often this shape actually occurs. A shed is also required, so it needs
-// blockassembly_maxQueueItems > 0 and the default deployment is not exposed.
-func TestValidate_ShedUnwindRemovesARecordAConcurrentDuplicateWasToldAbout(t *testing.T) {
+// The lock is per process. A duplicate that reaches a different validator pod is not
+// serialised against this unwind, and that residual stays open: a locked, unmined record
+// has causes indistinguishable from it, including an in-flight conflict resolution, so
+// refusing the resubmit would turn ordinary resubmits into errors. It is measured by
+// teranode_validator_existing_tx_locked_unmined_total. A shed is also required, so it needs
+// blockassembly_maxQueueItems > 0 or a held limit, and the default deployment is not exposed.
+func TestValidate_ShedUnwindDoesNotRemoveARecordAConcurrentDuplicateWasToldAbout(t *testing.T) {
 	ctx := context.Background()
 	v, spy, baStore, realStore, childTx, _ := recoverySetup(t, "queue_shed_unwind_duplicate_race")
 
@@ -2075,35 +2092,41 @@ func TestValidate_ShedUnwindRemovesARecordAConcurrentDuplicateWasToldAbout(t *te
 	lockedUnminedBefore := testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined)
 
 	var (
-		duplicateRan  bool
-		duplicateMeta *meta.Data
-		duplicateErr  error
+		duplicateStarted sync.Once
+		duplicateDone    = make(chan struct{})
+		duplicateErr     error
 	)
 
-	// Driving B from the unwind's own delete is what makes the interleaving
-	// deterministic: at that instant A's record still exists, is Locked and unmined,
-	// and the unwind is already committed to removing it.
 	spy.beforeDeleteComplete = func() {
-		if duplicateRan {
-			return
-		}
+		duplicateStarted.Do(func() {
+			go func() {
+				defer close(duplicateDone)
 
-		duplicateRan = true
-		duplicateMeta, duplicateErr = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+				_, duplicateErr = v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+			}()
+
+			select {
+			case <-duplicateDone:
+				t.Error("the duplicate must wait for the unwind that is deleting the record")
+			case <-time.After(300 * time.Millisecond):
+			}
+		})
 	}
 
 	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
 	require.ErrorIs(t, err, errors.ErrThresholdExceeded, "the submitter that was shed still sees the shed")
 
-	require.True(t, duplicateRan, "precondition: the duplicate has to run inside the shed's window for this to test anything")
+	select {
+	case <-duplicateDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the duplicate never ran: the unwind did not release the per-id lock")
+	}
 
-	require.NoError(t, duplicateErr, "the duplicate was told the transaction was accepted")
-	require.NotNil(t, duplicateMeta, "and was given its metadata")
-
+	require.ErrorIs(t, duplicateErr, errors.ErrThresholdExceeded, "the duplicate is shed on its own, not told it was accepted")
 	requireTxAbsent(t, realStore, childTx.TxIDChainHash())
 
-	require.Equal(t, lockedUnminedBefore+1, testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined),
-		"the duplicate's read of a locked, unmined record is the field signal for this shape; the deferral is instrumented, not blind")
+	require.Equal(t, lockedUnminedBefore, testutil.ToFloat64(prometheusValidatorExistingTxLockedUnmined),
+		"the duplicate never read a locked, unmined record")
 }
 
 // The negative: with no reappearance the re-check must not become an
@@ -2563,6 +2586,59 @@ func TestValidate_InBlockShedDoesNotWarnPerTransactionAboutTheKeptLock(t *testin
 	require.NotContains(t, logged, "tx stays locked, it was not delivered", "the kept lock is deliberate, not an undelivered error")
 }
 
+func TestValidate_InBlockShedStillLockedLaterResetsBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, realStore, childTx, _ := recoverySetup(t, "inblock_shed_recovery_reset")
+	v.inBlockShedRecoveryDelay = 50 * time.Millisecond
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	initPrometheusMetrics()
+
+	resetsBefore := testutil.ToFloat64(prometheusValidatorShedInBlockRecoveryResets)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err)
+
+	data := &meta.Data{}
+	require.NoError(t, realStore.GetMeta(ctx, childTx.TxIDChainHash(), data))
+	require.True(t, data.Locked, "the in-block shed keeps the record Locked")
+
+	require.Eventually(t, func() bool { return baStore.resets.Load() == 1 }, 5*time.Second, 10*time.Millisecond,
+		"a record no block unlocked makes the validator reset block assembly")
+	require.Equal(t, resetsBefore+1, testutil.ToFloat64(prometheusValidatorShedInBlockRecoveryResets))
+}
+
+func TestValidate_InBlockShedUnlockedByABlockDoesNotResetBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, realStore, childTx, _ := recoverySetup(t, "inblock_shed_recovery_unlocked")
+	v.inBlockShedRecoveryDelay = 300 * time.Millisecond
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err)
+
+	require.NoError(t, realStore.SetLocked(ctx, []chainhash.Hash{*childTx.TxIDChainHash()}, false), "stands in for the block's setMined clearing the lock")
+
+	time.Sleep(900 * time.Millisecond)
+
+	require.Equal(t, int32(0), baStore.resets.Load(), "nothing is left outside the template, so no reset")
+	require.Zero(t, v.shedRecovery.pending(), "the tracked ids are cleared once checked")
+}
+
+func TestValidate_FailedRecoveryResetIsRetried(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, _, childTx, _ := recoverySetup(t, "inblock_shed_recovery_retry")
+	v.inBlockShedRecoveryDelay = 50 * time.Millisecond
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+	baStore.resetErrs.Store(1)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool { return baStore.resets.Load() >= 2 }, 5*time.Second, 10*time.Millisecond,
+		"a failed reset puts the ids back and the check runs again")
+}
+
 func atLimitGate(t *testing.T) *heldLimitGate {
 	t.Helper()
 
@@ -2602,6 +2678,75 @@ func TestValidate_AtTheHeldLimitAnIngestTxIsShedBeforeTheUtxoStore(t *testing.T)
 	require.Equal(t, 0, baStore.calls, "block assembly was not called")
 	require.Equal(t, unwindBefore, testutil.ToFloat64(prometheusValidatorShedUnwindTotal), "nothing was created, so nothing is unwound")
 	require.Equal(t, heldBefore, testutil.ToFloat64(prometheusHeldLimitShedTransactions), "the validator does not count it, the caller counts a held shed once")
+}
+
+func TestValidate_AtTheHeldLimitAResubmitOfAStoredTxIsIdempotentSuccess(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, realStore, childTx, _ := recoverySetup(t, "early_held_shed_resubmit")
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+	require.NoError(t, err)
+	require.Equal(t, 1, baStore.calls)
+
+	v.heldGate = atLimitGate(t)
+
+	initPrometheusMetrics()
+
+	droppedBefore := testutil.ToFloat64(prometheusValidatorShedDroppedTotal)
+
+	data, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithWaitForBlockAssembly(true))
+
+	require.NoError(t, err, "a transaction the store already holds is not refused for the limit")
+	require.NotNil(t, data)
+	require.False(t, blockassembly.IsHeldLimitShed(err))
+	require.Equal(t, 1, baStore.calls, "a resubmit does not hand the transaction off again")
+	require.Equal(t, droppedBefore, testutil.ToFloat64(prometheusValidatorShedDroppedTotal), "nothing was dropped")
+	require.NoError(t, realStore.GetMeta(ctx, childTx.TxIDChainHash(), &meta.Data{}), "the stored record is untouched")
+}
+
+func TestValidate_InBlockValidationWaitsForAShedUnwindOfTheSameTx(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, realStore, childTx, _ := recoverySetup(t, "shed_unwind_serialised")
+	baStore.shedFirst = 1
+
+	inHandoff := make(chan struct{})
+	releaseHandoff := make(chan struct{})
+
+	baStore.onStore = func() {
+		close(inHandoff)
+		<-releaseHandoff
+	}
+
+	shedErr := make(chan error, 1)
+
+	go func() {
+		_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true))
+		shedErr <- err
+	}()
+
+	<-inHandoff
+
+	blockErr := make(chan error, 1)
+
+	go func() {
+		_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+		blockErr <- err
+	}()
+
+	select {
+	case err := <-blockErr:
+		t.Fatalf("the block validation must wait for the shed's unwind, but returned %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(releaseHandoff)
+
+	require.ErrorIs(t, <-shedErr, errors.ErrThresholdExceeded)
+	require.NoError(t, <-blockErr, "the block validation creates the record once the unwind has finished")
+
+	require.NoError(t, realStore.GetMeta(ctx, childTx.TxIDChainHash(), &meta.Data{}), "the block's record survives the unwind")
+	require.Equal(t, 2, baStore.calls, "the shed hand-off and the block's own hand-off")
+	require.Equal(t, []bool{false, true}, baStore.inBlockSeen)
 }
 
 func TestValidate_EarlyHeldShedOfAKafkaTxIsWarnedAtTheBoundedRate(t *testing.T) {
@@ -2664,4 +2809,11 @@ func TestValidate_BelowTheHeldLimitAnIngestTxIsNotGated(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 1, baStore.calls)
+}
+
+func (r *shedRecovery) pending() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return len(r.hashes)
 }

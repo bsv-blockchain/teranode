@@ -339,6 +339,15 @@ type Validator struct {
 	// heldGate is the validator's view of block assembly's in-memory transaction limit, or nil
 	// when there is no block-assembly client that reports queue stats.
 	heldGate *heldLimitGate
+
+	// txLocks serialises the create, hand-off and unwind of one transaction id between a mempool
+	// submission that can be shed and a block's InBlock validation of the same transaction.
+	txLocks txidLocks
+
+	// shedRecovery tracks the transactions an in-block shed kept Locked outside the template, and
+	// inBlockShedRecoveryDelay overrides inBlockShedRecoveryDelay for tests; zero means the default.
+	shedRecovery             shedRecovery
+	inBlockShedRecoveryDelay time.Duration
 }
 
 // mtpLoadWindow is a half-open height range [From, To) that an in-flight
@@ -1116,11 +1125,20 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 	blockAssemblyEnabled := !v.settings.BlockAssembly.Disabled
 	addToBlockAssembly := blockAssemblyEnabled && validationOptions.AddTXToBlockAssembly
 
-	if v.shedAtHeldLimit(txID, validationOptions) {
+	if v.shedAtHeldLimit(decoupledCtx, tx, txID, validationOptions) {
 		err = blockassembly.NewHeldLimitShedError(v.heldGate.held())
 		span.RecordError(err)
 
 		return nil, err
+	}
+
+	// A shed unwinds the record this call creates, and a block's InBlock validation of the same
+	// transaction must not read that record in between and take it for its own: it would return
+	// idempotent success and the unwind would then delete it. Both sides hold the per-id lock from
+	// the create to the end of the call, so the block validation waits for the unwind and then
+	// creates the record itself.
+	if addToBlockAssembly || validationOptions.InBlock {
+		defer v.txLocks.lock(tx.TxIDChainHash())()
 	}
 
 	// spend the tx's inputs and create its outputs + metadata in one store
@@ -1148,8 +1166,9 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// True but incomplete: reaching here DURING another submission's shed
 			// window means the success returned below can later be undone by that
 			// shed's unwind, which deletes the very record this call just read. That
-			// is the residual named in unwindShed's preconditions; it needs per-txid
-			// serialisation to close and is measured by the counter incremented below.
+			// is the residual named in unwindShed's preconditions. The per-id lock held from the
+			// create to the end of the call closes it between the callers that hold it, and the
+			// counter incremented below measures what remains.
 			// A record that IS locked and unmined here belongs to something a
 			// resubmit must not touch: an in-flight conflict resolution, which
 			// locks honest losing parents without marking them conflicting; or a
@@ -1540,10 +1559,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					// descendant in the same block spends through IgnoreLocked and is
 					// handed off on its own. The unmined reload recovers a record that
 					// stays outside the template.
-					// prometheusValidatorShedInBlockDroppedTotal counts this; a block assembly
-					// reset or restart runs the unmined reload, which restores the record.
+					// prometheusValidatorShedInBlockDroppedTotal counts this. trackInBlockShed schedules
+					// a check that resets block assembly if no block has unlocked the record by
+					// then, and the reset's unmined reload restores it.
 					prometheusValidatorShedInBlockDroppedTotal.Inc()
 					v.warnInBlockShed(txID)
+					v.trackInBlockShed(tx.TxIDChainHash())
 
 					shedInBlock = true
 					err = nil
@@ -1620,10 +1641,11 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 			// was reached between two polls of the gate, and there the subtree fails and
 			// the work is repeated with InBlock set when the block arrives.
 			//
-			// Residual: a block that validates on a side chain and never connects leaves
-			// its shed transactions Locked until the next unmined reload, and an ordinary
-			// child of one is refused with TX_LOCKED for that whole time. A block's
-			// setMined clears the lock only for transactions that a block actually mines.
+			// Residual: setMined runs for every validated block, including one on a side
+			// chain, and clears the lock whatever the chain. A block that fails validation
+			// before setMined runs never clears it, so its shed transactions stay Locked
+			// until the next unmined reload, and an ordinary child of one is refused with
+			// TX_LOCKED for that whole time.
 			if err != nil {
 				span.RecordError(err)
 
@@ -1693,8 +1715,16 @@ func (v *Validator) observeQueueStats(stats blockassembly.QueueStats) {
 //
 // The caller counts the shed once, in the Kafka handler. Here an ingest transaction is counted as
 // dropped and warned at the bounded rate, as the late shed does.
-func (v *Validator) shedAtHeldLimit(txID string, validationOptions *Options) bool {
+func (v *Validator) shedAtHeldLimit(ctx context.Context, tx *bt.Tx, txID string, validationOptions *Options) bool {
 	if validationOptions.InBlock || !validationOptions.AddTXToBlockAssembly || v.settings.BlockAssembly.Disabled || !v.heldGate.atLimit() {
+		return false
+	}
+
+	// A transaction the store already holds is not shed. Its resubmit reaches the exists arm
+	// and returns idempotent success without any hand-off to block assembly, as it did before
+	// the limit existed, so a direct caller is not told to retry a transaction this node has
+	// accepted. The read costs one store lookup per ingest transaction at the limit.
+	if v.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), &meta.Data{}) == nil {
 		return false
 	}
 

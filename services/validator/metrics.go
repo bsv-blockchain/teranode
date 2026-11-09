@@ -218,11 +218,15 @@ var (
 	// prometheusValidatorShedInBlockDroppedTotal counts block-context transactions
 	// kept Locked outside the block-assembly template because the ingest queue was
 	// full. The transaction is valid and stays Locked; it is simply not
-	// mineable by this node until the next unmined reload, which nothing schedules,
-	// so a rising value is the signal that a block-assembly reset would recover
-	// template entries this node is otherwise missing. The reload reads Locked
+	// mineable by this node until the next unmined reload. The validator schedules a
+	// check for each burst of them and resets block assembly if no block has unlocked
+	// them (prometheusValidatorShedInBlockRecoveryResets). The reload reads Locked
 	// unmined records, adds them to the template and unlocks them.
 	prometheusValidatorShedInBlockDroppedTotal prometheus.Counter
+
+	// prometheusValidatorShedInBlockRecoveryResets counts the block assembly resets the
+	// validator requested to recover transactions an in-block shed kept Locked.
+	prometheusValidatorShedInBlockRecoveryResets prometheus.Counter
 
 	// prometheusValidatorShedUnwindReappeared counts shed unwinds aborted because the
 	// record was CONCLUSIVELY readable again immediately before the unspend: another
@@ -612,6 +616,15 @@ func _initPrometheusMetrics() {
 			Subsystem: "validator",
 			Name:      "shed_inblock_dropped_total",
 			Help:      "Number of block-context transactions kept Locked outside the block-assembly template because the ingest queue was full; a block assembly reset or restart restores them",
+		},
+	)
+
+	prometheusValidatorShedInBlockRecoveryResets = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "shed_inblock_recovery_resets_total",
+			Help:      "Number of block assembly resets the validator requested because transactions an in-block shed kept Locked were still outside the template",
 		},
 	)
 

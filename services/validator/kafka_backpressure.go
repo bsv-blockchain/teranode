@@ -3,12 +3,14 @@ package validator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/services/blockassembly"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 )
 
 // cooldownDutyDivisor sets how much of the pause that preceded a fail-open
@@ -128,6 +130,12 @@ type kafkaBackpressureController struct {
 
 	// pauseCause is the label of the predicate that started the current pause: age, fill or held.
 	pauseCause string
+
+	// heldMaxPause is the hard cap on a pause held up by the held count alone, which MaxPause does
+	// not bound. It is the retention of the Kafka topic the consumer reads: past it the broker
+	// has already dropped what the pause is holding back, so waiting longer saves nothing. Zero
+	// means no cap.
+	heldMaxPause time.Duration
 
 	// failOpenResumeAt is when the last fail-open resume happened, and
 	// failOpenCooldown is how long a new pause stays suppressed from that
@@ -522,10 +530,18 @@ func (c *kafkaBackpressureController) evaluate(age time.Duration) {
 		// held count clears only when a block connects, so resuming earlier does not relieve it:
 		// the consumer would pull at line rate and every transaction would be refused, unwound and
 		// dropped until then. Waiting in Kafka is the better outcome. A queue or age pause, or a
-		// stale signal, still fails open. The pause has no upper bound, so on a node that mines no
-		// block for longer than the Kafka topic retention the backlog expires unseen. The operator's
-		// signal is the gauge teranode_validator_kafka_backpressure_pause_seconds with cause held.
-		if hotByHeld && !hotByQueue && effectiveAge < c.cfg.PauseQueueAge {
+		// stale signal, still fails open. The pause is bounded by heldMaxPause, the topic retention:
+		// past it the broker has dropped the backlog the pause holds back, so it fails open like the
+		// others. Before that, the operator's signal is the gauge
+		// teranode_validator_kafka_backpressure_pause_seconds with cause held.
+		heldOnly := hotByHeld && !hotByQueue && effectiveAge < c.cfg.PauseQueueAge
+		heldCapReached := c.heldMaxPause > 0 && pausedFor >= c.heldMaxPause
+
+		if heldOnly && heldCapReached {
+			c.logger.Errorf("[Validator] kafka backpressure: held pause reached the topic retention %s with %d/%d transactions still held, so the broker is dropping the backlog this pause holds back; resuming", c.heldMaxPause, c.heldCount, c.maxHeld)
+		}
+
+		if heldOnly && !heldCapReached {
 			if c.pauseCause != "held" {
 				prometheusKafkaBackpressurePauseSeconds.WithLabelValues(c.pauseCause).Set(0)
 
@@ -655,7 +671,27 @@ func (v *Server) startKafkaBackpressure(ctx context.Context) {
 		controller.onStats = observer.observeQueueStats
 	}
 
+	controller.heldMaxPause = v.kafkaTopicRetention()
+
 	go controller.run(controllerCtx)
+}
+
+// kafkaTopicRetention returns the retention of the validator transaction topic, read from the
+// retention query parameter of the topic URL in milliseconds, with the producer's default of ten
+// minutes when it is absent. It returns zero when the value does not parse as a positive number.
+func (v *Server) kafkaTopicRetention() time.Duration {
+	retentionMs := int64(600000)
+
+	if u := v.settings.Kafka.ValidatorTxsConfig; u != nil {
+		parsed, err := strconv.ParseInt(util.GetQueryParam(u, "retention", "600000"), 10, 64)
+		if err != nil || parsed <= 0 {
+			return 0
+		}
+
+		retentionMs = parsed
+	}
+
+	return time.Duration(retentionMs) * time.Millisecond
 }
 
 // warnBackpressureOffWithLimit logs once per process that Kafka backpressure is off while block

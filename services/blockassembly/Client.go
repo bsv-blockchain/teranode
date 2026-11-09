@@ -365,7 +365,7 @@ func (s *Client) Store(ctx context.Context, hash *chainhash.Hash, fee, size uint
 		InBlock:    inBlock,
 	}
 
-	if s.batchSize == 0 {
+	if s.batchSize <= 0 {
 		if _, err := s.client.AddTx(ctx, req); err != nil {
 			return false, errors.UnwrapGRPC(err)
 		}

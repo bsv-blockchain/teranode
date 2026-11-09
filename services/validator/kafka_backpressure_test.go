@@ -1308,6 +1308,56 @@ func TestBackpressure_HeldOnlyPauseOutlastsMaxPauseAndReportsItsDuration(t *test
 	require.Equal(t, 0.0, testutil.ToFloat64(prometheusKafkaBackpressurePauseSeconds.WithLabelValues("held")), "the gauge returns to 0 on resume")
 }
 
+func TestBackpressure_HeldOnlyPauseFailsOpenAtTheTopicRetention(t *testing.T) {
+	ctx := context.Background()
+	reader := &fakeReader{}
+	consumer := &fakeConsumer{}
+	c := newFillController(reader, consumer, 90)
+	c.heldMaxPause = 10 * time.Minute
+
+	base := time.Unix(5000, 0)
+	now := base
+	c.now = func() time.Time { return now }
+
+	reader.setHeld(950, 1000, 0)
+	c.tick(ctx)
+	require.True(t, c.paused.Load())
+
+	now = base.Add(10*time.Minute - time.Second)
+	c.tick(ctx)
+
+	require.True(t, c.paused.Load(), "a held-only pause holds until the topic retention")
+	require.Equal(t, 0, consumer.resumeCount())
+
+	now = base.Add(10 * time.Minute)
+	c.tick(ctx)
+
+	require.False(t, c.paused.Load(), "at the topic retention the broker has dropped the backlog, so the pause ends")
+	require.Equal(t, 1, consumer.resumeCount())
+	require.False(t, c.failOpenResumeAt.IsZero(), "the forced resume arms the cooldown so the next tick does not re-pause")
+}
+
+func TestKafkaTopicRetention(t *testing.T) {
+	tSettings := settings.NewSettings()
+	v := &Server{settings: tSettings}
+
+	tSettings.Kafka.ValidatorTxsConfig = nil
+	require.Equal(t, 10*time.Minute, v.kafkaTopicRetention(), "no topic URL uses the producer default")
+
+	for raw, want := range map[string]time.Duration{
+		"kafka://localhost:9092/txs?partitions=1":                 10 * time.Minute,
+		"kafka://localhost:9092/txs?partitions=1&retention=60000": time.Minute,
+		"kafka://localhost:9092/txs?retention=abc":                0,
+		"kafka://localhost:9092/txs?retention=-5":                 0,
+	} {
+		u, err := url.Parse(raw)
+		require.NoError(t, err)
+
+		tSettings.Kafka.ValidatorTxsConfig = u
+		require.Equal(t, want, v.kafkaTopicRetention(), raw)
+	}
+}
+
 func TestBackpressure_HeldPredicateInertWithoutALimit(t *testing.T) {
 	ctx := context.Background()
 	reader := &fakeReader{}
