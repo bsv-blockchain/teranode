@@ -483,6 +483,18 @@ type SubtreeProcessor struct {
 	lastResetStorageFailed atomic.Bool
 	lastResetRotated       atomic.Bool
 
+	// failedForkReorgNeedsReset is set when a fork reorg (one with moved-back
+	// blocks) fails or panics, and cleared only by a reset that gets past its
+	// tx map rotation. While it is set, Reorg and MoveForwardBlock are refused
+	// with ErrResetRequired. A failed fork reorg leaves subtrees and tx map
+	// that disagree: the rollback puts back the pre-reorg subtrees, but the
+	// map is the object the move-back already wrote its transactions into.
+	// A reorg or move-forward run on that state drops the moved-back
+	// transactions from block assembly without marking them unmined, so only
+	// a reset may run on it. The forward-only catch-up branch never sets it:
+	// its rollback is complete and block assembly does not reset after it.
+	failedForkReorgNeedsReset atomic.Bool
+
 	// currentTxMapShadow is the inactive half of a double-buffered currentTxMap
 	// used to avoid per-block 4096-shard SyncedMap allocations in
 	// resetSubtreeState. nil when diskTxMap is in use — that path double-buffers
@@ -1730,6 +1742,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 
 	stp.diskTxMapResetRequested.Store(false)
 	stp.lastResetRotated.Store(true)
+
+	// The map is empty and the subtrees go next, so nothing a failed fork
+	// reorg left behind can reach a later reorg or move-forward.
+	stp.failedForkReorgNeedsReset.Store(false)
 
 	stp.closeChainedSubtrees()
 	stp.closeRetiredSubtrees()
@@ -4468,6 +4484,11 @@ func (stp *SubtreeProcessor) handleMoveForwardRequest(processorCtx context.Conte
 	moveForwardReq.errChan <- stp.runHandlerWithRecover("moveForwardBlock", func() error {
 		stp.setCurrentRunningState(StateMoveForwardBlock)
 
+		// Refused before the snapshot below, so a refusal changes nothing.
+		if err := stp.refuseUntilReset("moveForwardBlock"); err != nil {
+			return err
+		}
+
 		// Snapshot + defer registration BEFORE any user-input deref (e.g.
 		// the block.String() in the log line below) so that a panic on
 		// nil/malformed input still unwinds via the rollback defer rather
@@ -4735,6 +4756,43 @@ func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlo
 	}
 }
 
+// ResetRequiredError is what Reorg and MoveForwardBlock return, unwrapped, while a
+// failed fork reorg waits for a reset (failedForkReorgNeedsReset). The refused call
+// changed nothing. The caller must reset block assembly: the same call is refused
+// until a reset has rotated the state the failed reorg left behind.
+//
+// It is a plain Go type, not a teranode *Error, because teranode errors match on
+// their code alone, so a ProcessingError sentinel would match every processing
+// error. Test it with IsResetRequired on the error as returned.
+type ResetRequiredError struct {
+	// Op names the refused call.
+	Op string
+}
+
+// Error implements the error interface.
+func (e *ResetRequiredError) Error() string {
+	return "[SubtreeProcessor][" + e.Op + "] refused: a failed fork reorg left block assembly in a state only a reset may move from"
+}
+
+// IsResetRequired reports whether err is, or wraps, a ResetRequiredError.
+func IsResetRequired(err error) bool {
+	var target *ResetRequiredError
+
+	return errors.As(err, &target)
+}
+
+// refuseUntilReset returns a ResetRequiredError for op while a failed fork reorg
+// waits for a reset, and nil otherwise.
+func (stp *SubtreeProcessor) refuseUntilReset(op string) error {
+	if !stp.failedForkReorgNeedsReset.Load() {
+		return nil
+	}
+
+	stp.logger.Warnf("[SubtreeProcessor][%s] refused until a reset: the last fork reorg failed and no reset has rotated its state since", op)
+
+	return &ResetRequiredError{Op: op}
+}
+
 // reorgBlocks performs an incremental blockchain reorganization by processing blocks efficiently.
 //
 // This is the optimized path for handling small to medium-sized blockchain reorganizations
@@ -4768,6 +4826,13 @@ func (stp *SubtreeProcessor) Reorg(moveBackBlocks []*model.Block, moveForwardBlo
 // Returns:
 //   - error: Any error encountered during reorg (triggers fallback to reset())
 func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*model.Block, moveForwardBlocks []*model.Block) (err error) {
+	// Refused before any defer below is registered, so a refusal drains no
+	// disk tx map error and closes no map: it leaves the state as it found it.
+	// The catch-up shape is refused too, since it moves forward on that state.
+	if err = stp.refuseUntilReset("reorgBlocks"); err != nil {
+		return err
+	}
+
 	// reorgBlocks captures originalCurrentTxMap once and expects the pointer
 	// to remain valid (pointing at unchanged pre-reorg data) for the entire
 	// loop so that rollback can restore it. The double-buffer swap pattern
@@ -4800,6 +4865,9 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		tracing.WithLogMessage(stp.logger, "[SubtreeProcessor][reorgBlocks] starting reorg with %d moveBackBlocks and %d moveForwardBlocks", len(moveBackBlocks), len(moveForwardBlocks)),
 	)
 	defer deferFn()
+
+	// set by the fork branch's final return, read by its defer below
+	forkReorgSucceeded := false
 
 	if len(moveForwardBlocks) > 0 && len(moveBackBlocks) == 0 {
 		// wait for the last block to be processed first, mined_set etc.
@@ -4892,6 +4960,16 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		return nil
 
 	} else {
+		// A fork reorg that does not return success, whether it fails or
+		// panics, leaves only a reset safe to run (failedForkReorgNeedsReset).
+		// Keyed on reaching the final return, not on err: err stays nil while
+		// a panic unwinds, and this defer still runs then.
+		defer func() {
+			if !forkReorgSucceeded {
+				stp.failedForkReorgNeedsReset.Store(true)
+			}
+		}()
+
 		// other operation, wait for all blocks to be processed first, mined_set etc.
 		if err = stp.WaitForPendingBlocks(ctx); err != nil {
 			return errors.NewProcessingError("[reorgBlocks] error waiting for blocks being mined", err)
@@ -5321,6 +5399,8 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// subtree announcements, SetBlockProcessedAt, finalizeBlockProcessing all
 	// ran): log and count, don't fail an already-successful reorg.
 	stp.drainAndLogDiskTxMapErr("reorgBlocks_commit")
+
+	forkReorgSucceeded = true
 
 	return nil
 }
