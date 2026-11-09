@@ -620,7 +620,8 @@ func (u *BlockValidation) checkQuickValidationCoinbase(block *model.Block, calle
 		return errors.NewBlockInvalidError("[%s][%s] coinbase is not final: %s", caller, block.Hash().String(), reason)
 	}
 
-	return nil
+	// Last, so a claimed count cannot spare a body one of the rules above condemns.
+	return block.CheckCoinbaseOnlyBodyCount()
 }
 
 // commitBlock performs the shared final commit for the quick-validation path:

@@ -2491,7 +2491,10 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 		// fails AddBlock as a storage error, and below activation the block is published and only
 		// condemned later in the background. Validate it synchronously. This keys on coinbase
 		// shape only; a correctly shaped coinbase whose height the store rejects is not covered.
-		if useOptimisticMining && !model.IsConsensusCoinbase(block.CoinbaseTx) {
+		//
+		// The same goes for a coinbase-only body claiming more than one transaction, because Valid
+		// checks the count last: a peer's count must not turn a condemnable body into a corrupt one.
+		if useOptimisticMining && (!model.IsConsensusCoinbase(block.CoinbaseTx) || block.CheckCoinbaseOnlyBodyCount() != nil) {
 			useOptimisticMining = false
 		}
 

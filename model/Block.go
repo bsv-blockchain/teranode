@@ -1144,6 +1144,10 @@ func (b *Block) ValidWithBinding(ctx context.Context, logger ulogger.Logger, sub
 		}
 	}
 
+	if err = b.CheckCoinbaseOnlyBodyCount(); err != nil {
+		return false, merkleRootChecked, err
+	}
+
 	return true, merkleRootChecked, nil
 }
 
@@ -1257,16 +1261,19 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees and its only transaction is 64 bytes and not a coinbase, so it may be an inner merkle node rather than the committed body", b.String())
 	}
 
-	// Defence in depth: a self-contradictory body (no subtrees but a transaction count above one).
-	// This is NOT the bound — TransactionCount is the same untrusted wire varint the emptied subtree
-	// list came from, so an attacker can simply set it to 1 — but it is a free consistency check on
-	// a shape that can never be honest.
-	//
-	// It applies only to a consensus coinbase. Past the 64-byte check, a txid equal to the root means
-	// the header commits to exactly this transaction, whatever count the peer wrote. A committed
-	// transaction that is not a coinbase must reach the shape checks behind the binding and condemn
-	// the hash, so a peer cannot spare an invalid block by claiming a second transaction.
-	if b.TransactionCount > 1 && IsConsensusCoinbase(b.CoinbaseTx) {
+	return nil
+}
+
+// CheckCoinbaseOnlyBodyCount rejects a body with no subtrees that claims more than one transaction.
+// It is a no-op for a body that carries subtrees.
+//
+// This is a consistency check, not part of the binding. TransactionCount is untrusted wire data the
+// header does not commit to, so it says nothing about what the miner committed. Callers run it last,
+// after every consensus check, so a peer cannot spare an invalid block by writing a count above one.
+// It only stops a body that is otherwise valid from being stored with a false count. Corrupt, so the
+// block is fetched again and the serving peer takes a strike.
+func (b *Block) CheckCoinbaseOnlyBodyCount() error {
+	if len(b.Subtrees) == 0 && b.TransactionCount > 1 {
 		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
 	}
 

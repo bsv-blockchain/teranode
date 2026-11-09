@@ -12,12 +12,10 @@ import (
 
 // TestCheckCoinbaseOnlyBodyBound covers the single definition of the coinbase-only binding
 // (bitcoin-sv/teranode#4692), which Valid and both quick-validation entry points now share. Each
-// clause is exercised directly, because the merkle comparison returns first: any fixture whose
-// header root does not equal the coinbase txid never reaches the transaction-count check, so the
-// count clause is unreachable through the merkle-mismatch fixtures the callers' own tests use.
+// clause is exercised directly.
 //
-// Mutation proof: dropping the TransactionCount clause reddens the third case; dropping the merkle
-// comparison reddens the second; returning an error unconditionally reddens the first and fourth.
+// Mutation proof: dropping the merkle comparison reddens the second case; returning an error
+// unconditionally reddens the first and the bound cases.
 func TestCheckCoinbaseOnlyBodyBound(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
@@ -48,13 +46,9 @@ func TestCheckCoinbaseOnlyBodyBound(t *testing.T) {
 		require.Contains(t, err.Error(), "the header merkle root is not the coinbase txid")
 	})
 
-	t.Run("no subtrees, root matches, but the body claims more than one transaction: corrupt", func(t *testing.T) {
-		// The only fixture that reaches the consistency clause: the merkle comparison must PASS for
-		// the count to be looked at, which is why it is built here rather than in the quick-path test.
-		err := newBody(coinbase.TxIDChainHash(), nil, 2).CheckCoinbaseOnlyBodyBound()
-		require.Error(t, err)
-		require.True(t, errors.IsBlockCorrupt(err), "a self-contradictory body shape is corrupt, got: %v", err)
-		require.Contains(t, err.Error(), "claims 2 transactions")
+	t.Run("no subtrees, root matches, a contradictory count: still bound", func(t *testing.T) {
+		// The count is the peer's, not the miner's, so it has no say in the binding.
+		require.NoError(t, newBody(coinbase.TxIDChainHash(), nil, 2).CheckCoinbaseOnlyBodyBound())
 	})
 
 	// A body whose only transaction is tx and whose header commits to tx's txid.
@@ -128,6 +122,39 @@ func TestCheckCoinbaseOnlyBodyBound(t *testing.T) {
 		require.NoError(t, newBody(coinbase.TxIDChainHash(), nil, 1).CheckCoinbaseOnlyBodyBound())
 		// A count of 0 is what an in-memory fixture that never set it carries; it must not be rejected.
 		require.NoError(t, newBody(coinbase.TxIDChainHash(), nil, 0).CheckCoinbaseOnlyBodyBound())
+	})
+}
+
+// TestCheckCoinbaseOnlyBodyCount covers the consistency check callers run after every consensus check.
+func TestCheckCoinbaseOnlyBodyCount(t *testing.T) {
+	coinbase, err := bt.NewTxFromString(CoinbaseHex)
+	require.NoError(t, err)
+
+	newBody := func(subtrees []*chainhash.Hash, txCount uint64) *Block {
+		return &Block{
+			Header:           &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: coinbase.TxIDChainHash()},
+			CoinbaseTx:       coinbase,
+			Subtrees:         subtrees,
+			TransactionCount: txCount,
+		}
+	}
+
+	t.Run("no subtrees, more than one transaction claimed: corrupt", func(t *testing.T) {
+		err := newBody(nil, 2).CheckCoinbaseOnlyBodyCount()
+		require.Error(t, err)
+		require.True(t, errors.IsBlockCorrupt(err), "a false count is a corrupt body, got: %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a false count must never condemn the hash")
+		require.Contains(t, err.Error(), "claims 2 transactions")
+	})
+
+	t.Run("no subtrees, zero or one transaction claimed: fine", func(t *testing.T) {
+		// A count of 0 is what an in-memory fixture that never set it carries.
+		require.NoError(t, newBody(nil, 1).CheckCoinbaseOnlyBodyCount())
+		require.NoError(t, newBody(nil, 0).CheckCoinbaseOnlyBodyCount())
+	})
+
+	t.Run("subtrees present: no-op", func(t *testing.T) {
+		require.NoError(t, newBody([]*chainhash.Hash{{0x01}}, 99).CheckCoinbaseOnlyBodyCount())
 	})
 }
 

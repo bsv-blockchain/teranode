@@ -674,3 +674,76 @@ func TestCoinbaseNotDelivered_ContradictoryCountDoesNotShieldCommittedCoinbase(t
 		requireIncompleteNotCondemned(ctx, t, client, block, err)
 	})
 }
+
+// TestCoinbaseOnlyBodyCount_CheckedAfterConsensusRules asserts where the claimed-count check sits on
+// each route. A correctly shaped coinbase that breaks a later rule is condemned whatever count the
+// peer claims. One that breaks nothing is corrupt, so it is never stored with a false count.
+func TestCoinbaseOnlyBodyCount_CheckedAfterConsensusRules(t *testing.T) {
+	initPrometheusMetrics()
+
+	const blockHeight = uint32(100)
+
+	routes := []struct {
+		name       string
+		optimistic bool
+		full       bool
+		validate   func(ctx context.Context, bv *BlockValidation, block *model.Block) error
+	}{
+		{"full path", false, true, func(ctx context.Context, bv *BlockValidation, block *model.Block) error {
+			return bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+		}},
+		{"full path with optimistic mining", true, true, func(ctx context.Context, bv *BlockValidation, block *model.Block) error {
+			return bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
+		}},
+		{"quick path", false, false, func(ctx context.Context, bv *BlockValidation, block *model.Block) error {
+			return bv.quickValidateBlock(ctx, block, "peer-serving", "http://localhost")
+		}},
+		{"async quick path", false, false, func(ctx context.Context, bv *BlockValidation, block *model.Block) error {
+			_, _, err := bv.quickValidateBlockAsync(ctx, block, "peer-serving", "http://localhost", make(chan *SubtreeWriteJob, 16))
+			return err
+		}},
+	}
+
+	for _, route := range routes {
+		settingsFor := func(t *testing.T) *settings.Settings {
+			tSettings := test.CreateBaseTestSettings(t)
+			tSettings.BlockValidation.OptimisticMining = route.optimistic
+			tSettings.BlockValidation.OptimisticMiningPeerBlocks = route.optimistic
+
+			return tSettings
+		}
+
+		t.Run(route.name+", coinbase breaks a later rule: invalid", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			tSettings := settingsFor(t)
+			bv, client := newNoPersistHarness(ctx, t, tSettings)
+			block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, shortScriptSigCoinbaseForService(t))
+			block.TransactionCount = 2
+
+			err := route.validate(ctx, bv, block)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a committed coinbase breaking a rule is invalid whatever the count, got: %v", err)
+			require.False(t, errors.IsBlockCorrupt(err), "must not be corrupt, got: %v", err)
+
+			if route.full {
+				requireStoredInvalid(ctx, t, client, block)
+			}
+		})
+
+		t.Run(route.name+", coinbase breaks nothing: corrupt", func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			tSettings := settingsFor(t)
+			bv, client := newNoPersistHarness(ctx, t, tSettings)
+			block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, coinbaseAtHeight(t, blockHeight))
+			block.TransactionCount = 2
+
+			err := route.validate(ctx, bv, block)
+			requireCorruptNotCondemned(ctx, t, client, block, err)
+			require.Contains(t, err.Error(), "claims 2 transactions")
+		})
+	}
+}
