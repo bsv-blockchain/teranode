@@ -3,6 +3,7 @@ package utxoset
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -10,6 +11,7 @@ import (
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/util/lane"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -123,6 +125,213 @@ func TestLanePositionSurvivesEveryCopyOfTheRow(t *testing.T) {
 	requireGetLane(t, s, ctx, parent, want, "answered from preserved_parent alone")
 }
 
+// storedLaneInBlock reads the raw lane_position of one transaction's containment row in one block.
+// null is true when the column is NULL.
+func storedLaneInBlock(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx, blockID int32) (value int64, null bool) {
+	t.Helper()
+
+	var v *int64
+
+	require.NoError(t, s.pool.QueryRow(ctx, `SELECT lane_position FROM tx_mined WHERE txid = $1 AND block_id = $2`,
+		hashBytes(tx), blockID).Scan(&v))
+
+	if v == nil {
+		return 0, true
+	}
+
+	return *v, false
+}
+
+// TestLanePositionIsCopiedFromAnExistingContainmentRow: once the stamp has deleted the identity row,
+// a rival block's containment row takes its payload from the existing containment row.
+// TestLanePositionSurvivesEveryCopyOfTheRow only copies from the identity row. The rival is above
+// the stamp fence, or the write is fenced out and this checks nothing.
+func TestLanePositionIsCopiedFromAnExistingContainmentRow(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	want := lane.Pack(200, 4_243)
+
+	tx := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, tx, 100, utxo.WithLanePosition(want))
+	require.NoError(t, err)
+
+	_, err = s.SetMinedMulti(ctx, hashes(tx), utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+	require.NoError(t, err)
+
+	stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+	require.False(t, identExists(t, s, ctx, tx), "the stamp deletes the identity row")
+
+	_, err = s.SetMinedMulti(ctx, hashes(tx), utxo.MinedBlockInfo{BlockID: 9, BlockHeight: 293})
+	require.NoError(t, err)
+
+	v, null := storedLaneInBlock(t, s, ctx, tx, 9)
+	require.False(t, null, "the rival block's row copies the existing row's lane position")
+	require.Equal(t, lane.ToSigned(want), v)
+}
+
+// TestAnExistingIdentityRowDecidesTheLanePosition: a block-path create of a transaction already
+// stored unmined must not give its containment row a position the identity row does not hold,
+// because Get then answers one way while the identity row lives and another way after. The wrapper
+// issues a new position on every call, so this is every block-path create over an existing record.
+// The identity row's value wins, NULL included, on both create statements.
+func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
+	routes := []struct {
+		name   string
+		height uint32
+		store  func(t *testing.T) (*Store, context.Context)
+	}{
+		{"identity plan", 901, newUncheckpointedStore},
+		{"mined plan", checkpointFloor - 1, func(t *testing.T) (*Store, context.Context) { return newCheckpointStore(t, false) }},
+	}
+
+	offered := lane.Pack(4, 200)
+
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			s, ctx := route.store(t)
+
+			for _, c := range []struct {
+				name  string
+				first uint64
+				vout  int
+			}{{"first create had a position", lane.Pack(4, 100), 1}, {"first create had none", lane.None, 2}} {
+				tx := mkTx(t, c.vout, 5_000)
+
+				var opts []utxo.CreateOption
+				if c.first != lane.None {
+					opts = append(opts, utxo.WithLanePosition(c.first))
+				}
+
+				_, err := s.Create(ctx, tx, route.height-1, opts...)
+				require.NoError(t, err, c.name)
+
+				_, _ = s.Create(ctx, tx, route.height, minedAt(route.height, 42), utxo.WithLanePosition(offered))
+
+				v, null, ok := storedLane(t, s, ctx, "tx_mined", tx)
+				require.True(t, ok, "%s: the block-path create writes the containment row", c.name)
+
+				if c.first == lane.None {
+					require.True(t, null, "%s: tx_mined must not hold a position tx_ident does not", c.name)
+				} else {
+					require.False(t, null, c.name)
+					require.Equal(t, lane.ToSigned(c.first), v, c.name)
+				}
+
+				requireGetLane(t, s, ctx, tx, c.first, c.name)
+			}
+		})
+	}
+}
+
+// TestLanePositionOnTheNettedBelowCheckpointWrite is the route quick validation and legacy sync take
+// below the checkpoint. It is its own statement, so the contract's below-the-checkpoint case, which
+// does not set the options that reach it, proves nothing about it. The list includes a transaction
+// with no position, which is what the wrapper sends when a range runs out partway through a list.
+func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
+	s := newBodySkipStore(t)
+	ctx := t.Context()
+
+	const height = 831
+
+	w := tests.BuildMultiWorkload(t, 0xd9, 1, 1)
+	w.StoreRoots(t, s, height-1)
+
+	list := outpointOnly(nettedFamily(t, w))
+
+	want := []uint64{lane.Pack(200, 1), lane.Pack(200, 2), lane.None, lane.MaxPosition}
+	require.Len(t, want, len(list))
+
+	results, err := s.SpendAndCreateMulti(ctx, list, height, append(belowCheckpointOptions(height), utxo.WithLanePositions(want))...)
+	require.NoError(t, err)
+
+	for i, r := range results {
+		require.Equal(t, utxo.MultiTxCreated, r.Status, "tx %d: %v", i, r.Err)
+	}
+
+	require.Zero(t, readNetState(t, s, ctx, w.Roots, list, height).journal, "this went through the netted write")
+
+	for i, tx := range list {
+		requireGetLane(t, s, ctx, tx, want[i], "tx in the netted list")
+	}
+}
+
+// TestLanePositionInABatchMixingMinedAndUnmined: one flush can carry both create statements, which
+// makes each half a projection of the plan. Each half must keep its own positions.
+func TestLanePositionInABatchMixingMinedAndUnmined(t *testing.T) {
+	s, ctx := newCheckpointStore(t, false)
+
+	mined := mkTx(t, 1, 5_000)
+	unmined := mkTx(t, 1, 6_000)
+
+	wantMined, wantUnmined := lane.Pack(3, 11), lane.Pack(4, 22)
+
+	minedOne := minedItem(mined, checkpointFloor-1, 1)
+	minedOne.options.LanePosition = wantMined
+
+	createBatchDirect(t, s, ctx, []*createItem{
+		minedOne,
+		{tx: unmined, blockHeight: checkpointFloor - 1, options: &utxo.CreateOptions{LanePosition: wantUnmined}},
+	})
+
+	requireGetLane(t, s, ctx, mined, wantMined, "the mined half")
+	requireGetLane(t, s, ctx, unmined, wantUnmined, "the unmined half")
+
+	v, null, ok := storedLane(t, s, ctx, "tx_mined", mined)
+	require.True(t, ok)
+	require.False(t, null)
+	require.Equal(t, lane.ToSigned(wantMined), v)
+}
+
+// TestLanePositionThroughTheSecondTier: a read answered by the second tier returns the position,
+// from either of its two sources. The containment row is the deterministic case: a parent spent
+// before the stamp reached it, whose partition is below the lookup floor. The identity row only
+// answers there in the create race, so that half runs the tier alone on a fresh result, as
+// TestTier2BuildsAnUnminedRecordWithItsMarkerAndBody does.
+func TestLanePositionThroughTheSecondTier(t *testing.T) {
+	t.Run("from the containment row", func(t *testing.T) {
+		s, ctx := newTestStore(t)
+
+		want := lane.Pack(200, 9)
+
+		parent := mkTx(t, 1, 5_000)
+		_, err := s.Create(ctx, parent, 99, utxo.WithLanePosition(want))
+		require.NoError(t, err)
+
+		_, err = s.SetMinedMulti(ctx, hashes(parent), utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+		require.NoError(t, err)
+
+		spendOneOutput(t, s, ctx, parent, 0, 101)
+		stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+		require.NoError(t, s.SetBlockHeight(1727))
+		require.Equal(t, int32(864), s.lookupFloor(), "the partition is out of the first tier")
+
+		before := testutil.ToFloat64(lookupTier2Keys.WithLabelValues("undo_zero"))
+
+		requireGetLane(t, s, ctx, parent, want, "answered by the second tier")
+		require.Equal(t, before+1, testutil.ToFloat64(lookupTier2Keys.WithLabelValues("undo_zero")), "through the second tier")
+	})
+
+	t.Run("from the identity row", func(t *testing.T) {
+		s, ctx := newTestStore(t)
+
+		want := lane.Pack(201, 10)
+
+		parent := mkTx(t, 2, 5_000)
+		_, err := s.Create(ctx, parent, 100, utxo.WithLanePosition(want))
+		require.NoError(t, err)
+
+		h := *parent.TxIDChainHash()
+		res := newLookupResult(1)
+		res.wantLane = true
+
+		require.NoError(t, s.readTier2(ctx, []chainhash.Hash{h}, &res))
+
+		got, ok := res.found[h]
+		require.True(t, ok)
+		require.Equal(t, want, got.LanePosition)
+	})
+}
+
 // TestLanePositionAbsentIsNullInEveryTable pins that a create made without a lane position,
 // which is every create with the feature off, writes NULL on the identity and containment rows
 // and reads back as lane.None.
@@ -162,6 +371,10 @@ func TestLanePositionAbsentIsNullInEveryTable(t *testing.T) {
 // second pass changes nothing.
 func TestLanePositionColumnsAreAddedToAnExistingSchema(t *testing.T) {
 	s, ctx := newTestStore(t)
+
+	for _, table := range laneColumnTables {
+		require.True(t, hasLaneColumn(t, s, ctx, table), "a fresh schema has %s.lane_position from its CREATE TABLE", table)
+	}
 
 	// Put one containment partition in place first, so there is an attached tx_mined partition
 	// for the migration to reach as well as the parents.
@@ -221,6 +434,60 @@ func TestLanePositionColumnsAreAddedToAnExistingSchema(t *testing.T) {
 	// Running the schema again is a no-op.
 	require.NoError(t, CreateSchema(ctx, s.pool))
 	requireGetLane(t, s, ctx, fresh, want, "after a second schema pass")
+}
+
+// TestLanePositionMigrationHoldsOneTableAtATime is why the migration is not in schemaSQL. With a
+// transaction open on tx_mined, the migration waits for it, and while it waits tx_ident has been
+// altered and committed and answers queries, so no table is held while waiting on another.
+func TestLanePositionMigrationHoldsOneTableAtATime(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	for _, table := range laneColumnTables {
+		_, err := s.pool.Exec(ctx, `ALTER TABLE `+table+` DROP COLUMN lane_position`)
+		require.NoError(t, err)
+	}
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = blocker.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM tx_mined`).Scan(&n))
+
+	migrated := make(chan error, 1)
+
+	go func() { migrated <- CreateSchema(ctx, s.pool) }()
+
+	altered := false
+
+	for give := time.Now().Add(time.Minute); time.Now().Before(give); time.Sleep(10 * time.Millisecond) {
+		if altered = hasLaneColumn(t, s, ctx, "tx_ident"); altered {
+			break
+		}
+	}
+
+	require.True(t, altered, "tx_ident is altered without waiting for tx_mined")
+
+	// A second tx_mined check, after a read of tx_ident, so it sees the migration still waiting.
+	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	require.NoError(t, s.pool.QueryRow(readCtx, `SELECT count(*) FROM tx_ident`).Scan(&n), "tx_ident is not held while the migration waits for tx_mined")
+	require.False(t, hasLaneColumn(t, s, ctx, "tx_mined"), "the open transaction is still holding the migration off tx_mined")
+
+	require.NoError(t, blocker.Commit(ctx))
+
+	select {
+	case err := <-migrated:
+		require.NoError(t, err)
+	case <-time.After(time.Minute):
+		require.Fail(t, "the migration did not finish once the transaction ended")
+	}
+
+	for _, table := range laneColumnTables {
+		require.True(t, hasLaneColumn(t, s, ctx, table), "%s gains lane_position", table)
+	}
 }
 
 func hasLaneColumn(t *testing.T, s *Store, ctx context.Context, table string) bool {

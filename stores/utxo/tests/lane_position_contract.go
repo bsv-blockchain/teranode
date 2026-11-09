@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/util/lane"
@@ -13,8 +14,18 @@ import (
 
 // These are the lane position's contract tests on a real store. Every create
 // path writes the lane position it is given in the same write that creates the
-// record, and Get returns it when the caller names fields.LanePosition. A
-// record created without one reads back as lane.None.
+// record, and Get and BatchDecorate return it when the caller names
+// fields.LanePosition. A record created without one reads back as lane.None.
+//
+// On utxoset the position lives on tx_ident, tx_mined and full preserved_parent
+// rows only. Once a record's row is below the lookup floor or its tx_mined
+// partition has dropped, a read answered from a live UTXO, an undo copy or a thin
+// preserved row returns lane.None. These tests do not reach that state. A later
+// phase that relies on the field must put it on those rows or read it elsewhere.
+//
+// The "below the checkpoint" case of LanePositionMulti takes the ordinary list
+// route, because it does not set the options that reach utxoset's netted write.
+// That write has its own test in stores/utxo/utxoset.
 //
 // Each workload here uses its own seed (0xd0 to 0xdf) so the records do not
 // collide with the other contract tests on a store shared between subtests.
@@ -54,6 +65,36 @@ func LanePositionCreateOnly(t *testing.T, db utxostore.Store) {
 	for i, root := range w.Roots {
 		requireLanePosition(t, db, root, positions[i], "root %d", i)
 	}
+
+	items := make([]*utxostore.UnresolvedMetaData, len(w.Roots))
+	for i, root := range w.Roots {
+		items[i] = &utxostore.UnresolvedMetaData{Hash: *root.TxIDChainHash(), Idx: i}
+	}
+
+	require.NoError(t, db.BatchDecorate(ctx, items, fields.LanePosition))
+
+	for i, item := range items {
+		require.NoError(t, item.Err, "root %d", i)
+		require.Equal(t, positions[i], item.Data.LanePosition, "BatchDecorate of root %d", i)
+	}
+}
+
+// LanePositionWrittenOnce: a second create of the same transaction is refused as
+// already existing, and the position the first one wrote survives. The wrapper
+// issues a new position on every call, so a retry offers a different one.
+func LanePositionWrittenOnce(t *testing.T, db utxostore.Store) {
+	ctx := context.Background()
+
+	root := BuildMultiWorkload(t, 0xd8, 1, 1).Roots[0]
+	first, second := lane.Pack(4, 100), lane.Pack(4, 200)
+
+	_, _, err := db.SpendAndCreate(ctx, root, 900, utxostore.WithCreateOnly(), utxostore.WithLanePosition(first))
+	require.NoError(t, err)
+
+	_, _, err = db.SpendAndCreate(ctx, root, 900, utxostore.WithCreateOnly(), utxostore.WithLanePosition(second))
+	require.True(t, errors.Is(err, errors.ErrTxExists), "the second create is refused: %v", err)
+
+	requireLanePosition(t, db, root, first)
 }
 
 // LanePositionSpendAndCreate: the combined spend and create, the validator's
@@ -181,6 +222,7 @@ func LanePositionAbsentWithoutOption(t *testing.T, db utxostore.Store) {
 // LanePositionContract runs every lane position contract test against db.
 func LanePositionContract(t *testing.T, db utxostore.Store) {
 	t.Run("create only", func(t *testing.T) { LanePositionCreateOnly(t, db) })
+	t.Run("written once", func(t *testing.T) { LanePositionWrittenOnce(t, db) })
 	t.Run("spend and create", func(t *testing.T) { LanePositionSpendAndCreate(t, db) })
 	t.Run("mined create", func(t *testing.T) { LanePositionMinedCreate(t, db) })
 	t.Run("multi", func(t *testing.T) { LanePositionMulti(t, db) })

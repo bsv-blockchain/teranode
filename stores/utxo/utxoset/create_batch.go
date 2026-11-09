@@ -125,7 +125,7 @@ mined AS (
            COALESCE(i.created_height, t.created_height), t.size_in_bytes,
            COALESCE(i.fee, t.fee), COALESCE(i.tx_inpoints, t.tx_inpoints), COALESCE(i.locktime, t.locktime),
            COALESCE(i.created_at, t.created_at), COALESCE(i.flags, t.flags),
-           COALESCE(i.lane_position, NULLIF(t.lane_position, 0))
+           CASE WHEN i.created_height IS NULL THEN NULLIF(t.lane_position, 0) ELSE i.lane_position END
       FROM t
       LEFT JOIN LATERAL (
         SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags,
@@ -232,7 +232,7 @@ mined AS (
            COALESCE(i.created_height, t.created_height), t.size_in_bytes,
            COALESCE(i.fee, t.fee), i.tx_inpoints, i.locktime,
            COALESCE(i.created_at, t.created_at), COALESCE(i.flags, t.flags),
-           COALESCE(i.lane_position, NULLIF(t.lane_position, 0))
+           CASE WHEN i.created_height IS NULL THEN NULLIF(t.lane_position, 0) ELSE i.lane_position END
       FROM t
       LEFT JOIN LATERAL (
         SELECT i.created_height, i.fee, i.tx_inpoints, i.locktime, i.created_at, i.flags,

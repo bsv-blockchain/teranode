@@ -54,6 +54,7 @@ package utxoset
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/jackc/pgx/v5"
@@ -554,29 +555,8 @@ CREATE TABLE IF NOT EXISTS tx_ident (
 
 -- lane_position is the record's util/lane position, written once by the create and carried
 -- into tx_mined and preserved_parent with the rest of the payload. NULL means none, which is
--- every record created with the feature off. It is a nullable column with no default so an
--- existing database gains it without a rewrite and without a backfill, and it has no index.
--- It is also in the CREATE TABLEs above, last in each, so a fresh database and an upgraded one
--- have the same column order. ADD COLUMN on a partitioned parent adds it to every existing
--- partition, and a partition made later inherits it.
---
--- The ALTER is guarded by a catalog read rather than relying on IF NOT EXISTS, because
--- ALTER TABLE takes ACCESS EXCLUSIVE before it looks, and every process that opens the store
--- runs this script: a node starting beside a running one would queue behind its long
--- transactions and stall every query on the table behind it, for no change.
-DO $$
-DECLARE
-    t text;
-BEGIN
-    FOREACH t IN ARRAY ARRAY['tx_ident', 'tx_mined', 'preserved_parent'] LOOP
-        IF NOT EXISTS (SELECT 1 FROM information_schema.columns
-                        WHERE table_schema = current_schema() AND table_name = t
-                          AND column_name = 'lane_position') THEN
-            EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS lane_position BIGINT', t);
-        END IF;
-    END LOOP;
-END
-$$;
+-- every record created with the feature off. It has no index. A database from before the column
+-- gains it in addLanePositionColumns, not in this script: see there for why.
 
 -- ---------------------------------------------------------------------------
 -- THE BODY. Serialized transaction bytes, and nothing else.
@@ -746,7 +726,90 @@ func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	return assertSchemaShape(ctx, pool)
+	if err := assertSchemaShape(ctx, pool); err != nil {
+		return err
+	}
+
+	return addLanePositionColumns(ctx, pool)
+}
+
+// laneColumnTables are the tables that carry lane_position.
+var laneColumnTables = []string{"tx_ident", "tx_mined", "preserved_parent"}
+
+// laneColumnMigrationLimit is how long addLanePositionColumns keeps retrying one table before the
+// store refuses to open with the error. It only matters on the first start of this build, beside
+// another process that keeps a transaction open on that table for all of this time.
+const laneColumnMigrationLimit = 5 * time.Minute
+
+// addLanePositionColumns gives a database from before lane_position the nullable column, with no
+// default, no rewrite and no backfill. A fresh database has it from the CREATE TABLEs, last in each,
+// so both have the same column order. ADD COLUMN on a partitioned parent adds it to every existing
+// partition, and a partition made later inherits it.
+//
+// It does not live in schemaSQL because that script runs as one implicit transaction, and a lock
+// taken there is held to its end. Altering the three tables in it holds ACCESS EXCLUSIVE on
+// tx_ident while waiting for tx_mined, so a node starting beside a running one stalls every query
+// on tx_ident behind the longest transaction on tx_mined, and deadlocks against unMine, which takes
+// those two tables in the other order. Here each table is its own transaction with a lock_timeout,
+// so no table is held while waiting on another, and a query queued behind the ALTER waits at most
+// the timeout for each lock it takes.
+//
+// The catalog check comes first because ALTER TABLE takes its lock before it looks, and every
+// process that opens the store runs this. Once the columns exist this is three catalog reads and
+// no lock.
+func addLanePositionColumns(ctx context.Context, pool *pgxpool.Pool) error {
+	for _, table := range laneColumnTables {
+		if err := addLanePositionColumn(ctx, pool, table); err != nil {
+			return errors.NewStorageError("[utxoset] add lane_position to %s", table, err)
+		}
+	}
+
+	return nil
+}
+
+func addLanePositionColumn(ctx context.Context, pool *pgxpool.Pool, table string) error {
+	deadline := time.Now().Add(laneColumnMigrationLimit)
+	backoff := fenceRetryBackoffMin
+
+	for {
+		found, err := schemaHas(ctx, pool, table, "lane_position")
+		if err != nil || found {
+			return err
+		}
+
+		err = tryAddLanePositionColumn(ctx, pool, table)
+		if err == nil || !isLockTimeout(err) || time.Now().After(deadline) {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff = min(2*backoff, fenceRetryBackoffMax)
+	}
+}
+
+// tryAddLanePositionColumn is one attempt, in a transaction of its own.
+func tryAddLanePositionColumn(ctx context.Context, pool *pgxpool.Pool, table string) error {
+	dbTx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = dbTx.Rollback(ctx) }()
+
+	if _, err := dbTx.Exec(ctx, fmt.Sprintf(`SET LOCAL lock_timeout = '%dms'`, fenceLockTimeout.Milliseconds())); err != nil {
+		return err
+	}
+
+	if _, err := dbTx.Exec(ctx, `ALTER TABLE `+table+` ADD COLUMN IF NOT EXISTS lane_position BIGINT`); err != nil {
+		return err
+	}
+
+	return dbTx.Commit(ctx)
 }
 
 // spendJournalTablesMissingVinSQL names every spend-journal table that has no spending_vin

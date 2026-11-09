@@ -150,6 +150,11 @@ func TestMinedReadsNeverScanEveryBodyWindow(t *testing.T) {
 		require.True(t, assertFenced(t, root), "this read joins the body, so its plan must name tx_body")
 	})
 
+	t.Run("minedByTxidSQL naming the lane position", func(t *testing.T) {
+		root := explainUnderNoNestloop(t, s, ctx, minedByTxidSQL, keys, int32(0), true, true)
+		require.True(t, assertFenced(t, root), "this read joins the body, so its plan must name tx_body")
+	})
+
 	t.Run("minedIDsByTxidSQL", func(t *testing.T) {
 		root := explainUnderNoNestloop(t, s, ctx, minedIDsByTxidSQL, keys, int32(0))
 		require.False(t, assertFenced(t, root), "the block-id read-back must never touch tx_body")
