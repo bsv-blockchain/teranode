@@ -33,7 +33,7 @@ func TestFinalizeTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Finalize clears the creating state...
-	require.NoError(t, store.FinalizeTransaction(ctx, tx))
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 	got := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
@@ -45,10 +45,10 @@ func TestFinalizeTransaction(t *testing.T) {
 	require.NoError(t, err)
 
 	// Idempotent: finalizing again is a no-op success.
-	require.NoError(t, store.FinalizeTransaction(ctx, tx))
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 	// Finalizing a tx that was never created in the creating state is also a no-op.
-	require.NoError(t, store.FinalizeTransaction(ctx, tests.ParentTx))
+	require.NoError(t, store.FinalizeTransaction(ctx, tests.ParentTx, nil))
 }
 
 // cancelledAfterStartContext reports itself cancelled through Err but never closes Done, so a
@@ -83,7 +83,7 @@ func TestFinalizeTransaction_ContextCancellation(t *testing.T) {
 		cancelledCtx, cancel := context.WithCancel(ctx)
 		cancel()
 
-		err = store.FinalizeTransaction(cancelledCtx, tx)
+		err = store.FinalizeTransaction(cancelledCtx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()))
 		require.ErrorIs(t, err, context.Canceled)
 	})
 
@@ -96,7 +96,7 @@ func TestFinalizeTransaction_ContextCancellation(t *testing.T) {
 		_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		err = store.FinalizeTransaction(cancelledAfterStartContext{Context: ctx}, tx)
+		err = store.FinalizeTransaction(cancelledAfterStartContext{Context: ctx}, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()))
 		require.NoError(t, err, "a finalize that landed must not be reported as failed")
 
 		got := &meta.Data{}
@@ -121,7 +121,7 @@ func TestFinalizeTransaction_MultiRecord(t *testing.T) {
 	_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 	require.NoError(t, err)
 
-	require.NoError(t, store.FinalizeTransaction(ctx, tx))
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 	got := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
@@ -155,11 +155,11 @@ func TestFinalizeTransaction_RollingBack(t *testing.T) {
 			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 			require.NoError(t, err)
 
-			began, err := store.BeginCreateFirstRollback(ctx, tx.TxIDChainHash())
+			began, err := store.BeginCreateFirstRollback(ctx, tx.TxIDChainHash(), attemptOf(t, ctx, store, tx.TxIDChainHash()))
 			require.NoError(t, err)
 			require.True(t, began)
 
-			err = store.FinalizeTransaction(ctx, tx)
+			err = store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash()))
 			require.ErrorIs(t, err, errors.ErrTxNotFound, "a rolling-back record must not be finalized")
 			require.Contains(t, err.Error(), "rolling back")
 
@@ -264,7 +264,7 @@ func TestCreatingRecordWithMinedBlockInfo_UnminedSinceLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			require.Contains(t, stale, *tx.TxIDChainHash())
 
-			require.NoError(t, store.FinalizeTransaction(ctx, tx))
+			require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 			_, unminedSince = readMasterBins(t, client, store.GetNamespace(), store.GetName(), tx.TxIDChainHash())
 			require.Nil(t, unminedSince, "finalize removes unminedSince from a record that has block IDs")
@@ -308,7 +308,7 @@ func TestFinalizeTransaction_KeepsUnminedSinceWithoutBlockIDs(t *testing.T) {
 			_, err = store.Create(ctx, tx, 100, utxo.WithCreating(true))
 			require.NoError(t, err)
 
-			require.NoError(t, store.FinalizeTransaction(ctx, tx))
+			require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 			_, unminedSince := readMasterBins(t, client, store.GetNamespace(), store.GetName(), tx.TxIDChainHash())
 			require.Equal(t, 100, unminedSince)
@@ -317,5 +317,115 @@ func TestFinalizeTransaction_KeepsUnminedSinceWithoutBlockIDs(t *testing.T) {
 			require.NoError(t, store.GetMeta(ctx, tx.TxIDChainHash(), got))
 			require.False(t, got.Creating)
 		})
+	}
+}
+
+// TestFinalizeTransaction_StaleAttemptIsRefused pins that a finalize carries the token of the
+// attempt it recovers: one queued from an earlier attempt of the same txid is refused on the later
+// attempt's record, on the master and on every pagination child, so the later attempt's creating
+// bin stays until its own spends are made and it finalizes with its own token.
+func TestFinalizeTransaction_StaleAttemptIsRefused(t *testing.T) {
+	for name, batchSize := range map[string]int{"single record": 0, "multi record": 2} {
+		t.Run(name, func(t *testing.T) {
+			logger := ulogger.NewErrorTestLogger(t)
+			tSettings := test.CreateBaseTestSettings(t)
+
+			if batchSize > 0 {
+				tSettings.UtxoStore.UtxoBatchSize = batchSize // tx has 6 outputs → multiple records
+			}
+
+			client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+			t.Cleanup(deferFn)
+			cleanDB(t, client)
+
+			_, err := store.Create(ctx, tests.ParentTx, 100)
+			require.NoError(t, err)
+
+			hash := tx.TxIDChainHash()
+
+			first, err := store.Create(ctx, tx, 100, utxo.WithCreating(true))
+			require.NoError(t, err)
+
+			began, err := store.BeginCreateFirstRollback(ctx, hash, first.Attempt)
+			require.NoError(t, err)
+			require.True(t, began)
+			require.NoError(t, store.EndCreateFirstRollback(ctx, hash, first.Attempt))
+
+			cleared, err := store.ClearCreateFirstHold(ctx, hash, true)
+			require.NoError(t, err)
+			require.True(t, cleared)
+
+			second, err := store.Create(ctx, tx, 100, utxo.WithCreating(true))
+			require.NoError(t, err)
+			require.NotEqual(t, first.Attempt, second.Attempt, "every attempt draws its own token")
+
+			err = store.FinalizeTransaction(ctx, tx, first.Attempt)
+			require.ErrorIs(t, err, errors.ErrTxNotFound, "a finalize of the earlier attempt must be refused on the later attempt's record")
+			require.Contains(t, err.Error(), "another attempt")
+
+			require.ErrorIs(t, store.FinalizeTransaction(ctx, tx, nil), errors.ErrTxNotFound, "a finalize with no token is not the later attempt's either")
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.True(t, got.Creating, "the later attempt's creating bin must survive the stale finalize")
+			require.False(t, got.RollingBack)
+			require.Equal(t, second.Attempt, got.Attempt)
+
+			if batchSize > 0 {
+				for idx := uint32(1); idx < 3; idx++ {
+					bins := recordBins(t, client, store, hash, idx, fields.Creating, fields.Attempt)
+					require.Equal(t, true, bins[fields.Creating.String()], "child record %d must keep creating through the stale finalize", idx)
+					require.Equal(t, second.Attempt, bins[fields.Attempt.String()], "child record %d carries the later attempt's token", idx)
+				}
+			}
+
+			require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt), "the later attempt finalizes with its own token")
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.False(t, got.Creating)
+
+			if batchSize > 0 {
+				for idx := uint32(1); idx < 3; idx++ {
+					bins := recordBins(t, client, store, hash, idx, fields.Creating)
+					require.NotContains(t, bins, fields.Creating.String(), "child record %d is cleared by the finalize of its own attempt", idx)
+				}
+			}
+		})
+	}
+}
+
+// TestFinalizeTransaction_AdoptsSurvivingChildren pins that a create which writes the master of a
+// multi-record transaction afresh gives the pagination children an earlier attempt left behind its
+// own token, so its finalize, which is filtered on that token, clears them too instead of leaving
+// them creating for good.
+func TestFinalizeTransaction_AdoptsSurvivingChildren(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UtxoBatchSize = 2 // tx has 6 outputs → multiple records
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	hash := tx.TxIDChainHash()
+
+	first, err := store.Create(ctx, tx, 100, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	deleteMasterRecordByHand(t, client, store, hash)
+
+	second, err := store.Create(ctx, tx, 100, utxo.WithCreating(true))
+	require.NoError(t, err, "the master is created afresh and the children are already there")
+	require.NotEqual(t, first.Attempt, second.Attempt)
+
+	for idx := uint32(1); idx < 3; idx++ {
+		bins := recordBins(t, client, store, hash, idx, fields.Attempt)
+		require.Equal(t, second.Attempt, bins[fields.Attempt.String()], "child record %d is adopted by the new master's attempt", idx)
+	}
+
+	require.NoError(t, store.FinalizeTransaction(ctx, tx, second.Attempt))
+
+	for idx := uint32(1); idx < 3; idx++ {
+		bins := recordBins(t, client, store, hash, idx, fields.Creating)
+		require.NotContains(t, bins, fields.Creating.String(), "child record %d is cleared by the finalize", idx)
 	}
 }

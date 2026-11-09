@@ -121,6 +121,14 @@ type Data struct {
 	// it, so finalize and roll-forward refuse a record in this state. Always accompanies Creating.
 	RollingBack bool `json:"rollingBack"`
 
+	// Attempt is the token of the create-first attempt that wrote a creating record. It is nil for a
+	// record that is not creating or that predates the token. Not part of the serialized form.
+	Attempt []byte `json:"attempt,omitempty"`
+
+	// Hold marks the placeholder a rolled-back create-first attempt leaves for its txid. It carries no
+	// transaction data. Always accompanies Creating and RollingBack. Not part of the serialized form.
+	Hold bool `json:"hold,omitempty"`
+
 	// ConflictingChildren contains the transaction IDs of all transactions that tried to spend this conflicting transaction
 	ConflictingChildren []chainhash.Hash `json:"conflictingChildren"`
 
