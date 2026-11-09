@@ -135,7 +135,7 @@ func TestGetBlockByHeight(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "INVALID_ARGUMENT (1): invalid height parameter -> UNKNOWN (0): strconv.ParseUint: parsing \"invalid\": invalid syntax", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid height parameter -> strconv.ParseUint: parsing \"invalid\": invalid syntax", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
@@ -354,7 +354,7 @@ func TestGetBlockByHash(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, echoErr.Code)
 
 		// Check response body
-		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash string -> UNKNOWN (0): encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
+		assert.Equal(t, "INVALID_ARGUMENT (1): invalid hash string -> encoding/hex: invalid byte: U+0073 's'", echoErr.Message)
 	})
 
 	t.Run("Repository error", func(t *testing.T) {
