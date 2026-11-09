@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -493,6 +494,63 @@ func TestAllocatorGivesUpOnAHungRequestAndRetries(t *testing.T) {
 	defer src.mu.Unlock()
 
 	require.True(t, src.deadline, "each attempt carries its own deadline")
+}
+
+// The per-process metrics are the operator's only view of the allocator, and unstamped_total is the
+// PR's stated signal for records going out without a position.
+func TestAllocatorMetrics(t *testing.T) {
+	initPrometheusMetrics()
+
+	ranges := testutil.ToFloat64(prometheusLaneRanges)
+	positions := testutil.ToFloat64(prometheusLanePositions)
+	unstamped := testutil.ToFloat64(prometheusLaneExhausted)
+
+	src := newFakeSource(2)
+	src.holders[0] = "someone else" // so the lane is 1, not the zero an unset gauge reads
+
+	a := startAllocator(t, src, "pod-3", filepath.Join(t.TempDir(), "lane"))
+
+	require.Eventually(t, func() bool { return testutil.ToFloat64(prometheusLaneRanges) == ranges+2 }, 2*time.Second, time.Millisecond,
+		"one for the range in use and one for the spare")
+
+	src.setDown(true)
+
+	require.Equal(t, float64(1), testutil.ToFloat64(prometheusLaneCurrent), "the lane the service gave")
+
+	for range 4 {
+		next(t, a)
+	}
+
+	require.Equal(t, positions+4, testutil.ToFloat64(prometheusLanePositions))
+	require.Equal(t, unstamped, testutil.ToFloat64(prometheusLaneExhausted), "every create so far had a position")
+
+	_, ok := a.Next()
+	require.False(t, ok)
+
+	require.Equal(t, unstamped+1, testutil.ToFloat64(prometheusLaneExhausted), "this create goes out without a position")
+	require.Equal(t, positions+4, testutil.ToFloat64(prometheusLanePositions), "and it took none")
+	require.Equal(t, ranges+2, testutil.ToFloat64(prometheusLaneRanges), "the service is down, so no range came")
+}
+
+// A lane file that does not hold a lane number means asking with no lane, not failing and not
+// asking for whatever it parsed to.
+func TestAllocatorIgnoresALaneFileItCannotRead(t *testing.T) {
+	for name, content := range map[string]string{
+		"above the highest lane": "300\n",
+		"negative":               "-1\n",
+		"not a number":           "abc\n",
+		"empty":                  "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "lane")
+			require.NoError(t, os.WriteFile(file, []byte(content), 0o600))
+
+			src := newFakeSource(10)
+			startAllocator(t, src, "pod-3", file)
+
+			require.False(t, src.firstCall().hasLane, "the file holds %q", content)
+		})
+	}
 }
 
 func TestFileNameNeverLeavesTheLaneFolder(t *testing.T) {

@@ -3,11 +3,14 @@ package blockchain
 import (
 	"context"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -116,6 +119,44 @@ func TestLocalClientReserveLaneRange(t *testing.T) {
 	r3, err := src.ReserveLaneRange(ctx, "holder-b", 0, false)
 	require.NoError(t, err)
 	require.Equal(t, lane.Range{Lane: 1, First: 1, Last: 100}, r3)
+}
+
+// TestLocalClientReserveLaneRange cannot guard the metric registration in a normal package run,
+// because another test has usually run the sync.Once by then. A process running only that test
+// starts with the metrics unregistered, and panics on a nil metric without the registration.
+func TestLocalClientRegistersTheMetricsInAFreshProcess(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestLocalClientReserveLaneRange$", "-test.count=1", "-test.v") //nolint:gosec // re-runs this test binary
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	require.Contains(t, string(output), "--- PASS: TestLocalClientReserveLaneRange", "the test ran in the child process")
+}
+
+// bestHeightStore answers with a best block at a chosen height, so the height a hand-out records
+// is not the zero a fresh store would give anyway.
+type bestHeightStore struct {
+	blockchain_store.Store
+	height uint32
+}
+
+func (s *bestHeightStore) GetBestBlockHeader(context.Context) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return nil, &model.BlockHeaderMeta{Height: s.height}, nil
+}
+
+// The hand-out's row records the best block's height at the time.
+func TestServerReserveLaneRangeRecordsTheBestBlockHeight(t *testing.T) {
+	tc := setup(t)
+
+	store := tc.server.store
+	tc.server.store = &bestHeightStore{Store: store, height: 812_345}
+
+	r, err := tc.server.ReserveLaneRange(context.Background(), &blockchain_api.ReserveLaneRangeRequest{Holder: "validator-1"})
+	require.NoError(t, err)
+
+	var height int64
+
+	require.NoError(t, store.GetDB().QueryRow(`SELECT height FROM lane_handout WHERE lane = $1 AND first = $2`,
+		int(r.Lane), lane.ToSigned(r.First)).Scan(&height))
+	require.Equal(t, int64(812_345), height)
 }
 
 // TestClientReserveLaneRangeOverGRPC sends the request through a real gRPC client and server.

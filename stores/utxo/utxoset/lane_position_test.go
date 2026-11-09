@@ -519,6 +519,14 @@ func TestLanePositionAbsentIsNullInEveryTable(t *testing.T) {
 	got, err := s.Get(ctx, withLane.TxIDChainHash(), fields.Fee)
 	require.NoError(t, err)
 	require.Equal(t, lane.None, got.LanePosition)
+
+	// The third table. A full preserved copy is taken from a stamped partition.
+	stampThrough(t, s, ctx, 0, map[uint32]uint32{100: 7})
+	require.NoError(t, s.PreserveTransactions(ctx, []chainhash.Hash{*tx.TxIDChainHash()}, 5_000))
+
+	_, null, ok = storedLane(t, s, ctx, "preserved_parent", tx)
+	require.True(t, ok, "the preserved copy exists")
+	require.True(t, null, "the preserved copy takes the NULL")
 }
 
 // TestLanePositionColumnsAreAddedToAnExistingSchema is the migration: a database made before the
@@ -624,11 +632,16 @@ func TestLanePositionMigrationHoldsOneTableAtATime(t *testing.T) {
 
 	require.True(t, altered, "tx_ident is altered without waiting for tx_mined")
 
-	// A second tx_mined check, after a read of tx_ident, so it sees the migration still waiting.
-	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Give the migration time to queue for tx_mined. A query that arrives while the ALTER is queued
+	// queues behind it, so without the lock_timeout this read waits for the open transaction, which
+	// does not end until after it.
+	time.Sleep(100 * time.Millisecond)
+
+	readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	require.NoError(t, s.pool.QueryRow(readCtx, `SELECT count(*) FROM tx_ident`).Scan(&n), "tx_ident is not held while the migration waits for tx_mined")
+	require.NoError(t, s.pool.QueryRow(readCtx, `SELECT count(*) FROM tx_mined`).Scan(&n), "a query on the table the migration is waiting for gets through")
 	require.False(t, hasLaneColumn(t, s, ctx, "tx_mined"), "the open transaction is still holding the migration off tx_mined")
 
 	require.NoError(t, blocker.Commit(ctx))
@@ -642,6 +655,101 @@ func TestLanePositionMigrationHoldsOneTableAtATime(t *testing.T) {
 
 	for _, table := range laneColumnTables {
 		require.True(t, hasLaneColumn(t, s, ctx, table), "%s gains lane_position", table)
+	}
+}
+
+// If another process keeps a transaction open past the retry limit, the store refuses to open with
+// the lock timeout error, and the next start tries again.
+func TestLanePositionMigrationGivesUpAtItsLimit(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	for _, table := range laneColumnTables {
+		_, err := s.pool.Exec(ctx, `ALTER TABLE `+table+` DROP COLUMN lane_position`)
+		require.NoError(t, err)
+	}
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = blocker.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM tx_mined`).Scan(&n))
+
+	err = createSchema(ctx, s.pool, time.Millisecond)
+	require.Error(t, err, "the transaction is still open at the limit")
+	require.Contains(t, err.Error(), "lock timeout", "the error says why")
+	require.Contains(t, err.Error(), "tx_mined", "the error names the table")
+
+	require.NoError(t, blocker.Rollback(ctx))
+	require.NoError(t, createSchema(ctx, s.pool, time.Millisecond), "the next start tries again")
+
+	for _, table := range laneColumnTables {
+		require.True(t, hasLaneColumn(t, s, ctx, table), "%s gains lane_position", table)
+	}
+}
+
+// Every process that opens the store runs the migration. On a schema that already has the columns
+// it must look first and not ask for the lock, or every start would queue behind the longest open
+// transaction on these tables.
+func TestLanePositionMigrationOnAMigratedSchemaTakesNoLock(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	blocker, err := s.pool.Begin(ctx)
+	require.NoError(t, err)
+
+	defer func() { _ = blocker.Rollback(ctx) }()
+
+	var n int64
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM tx_mined`).Scan(&n))
+
+	// Without the catalog check this retries until the context ends, because the transaction stays
+	// open throughout.
+	schemaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	require.NoError(t, CreateSchema(schemaCtx, s.pool))
+	require.NoError(t, blocker.QueryRow(ctx, `SELECT 1`).Scan(&n), "the transaction was open throughout")
+}
+
+// addLane keeps a plan's lanes nil until a row has a position, then fills zeros for the rows before
+// it. Without those zeros the array is shorter than the plan, every position lands on the wrong
+// row and the rows at the end get none. Each statement gets a plan of its own, so the position
+// arrays line up with no help from a projection.
+func TestLanePositionsKeepTheirRowsWhenTheFirstRowsHaveNone(t *testing.T) {
+	want := []uint64{lane.None, lane.None, lane.Pack(3, 11), lane.Pack(4, 22)}
+
+	for _, route := range []struct {
+		name string
+		item func(tx *bt.Tx, position uint64) *createItem
+	}{
+		{"createIdentPlan", func(tx *bt.Tx, position uint64) *createItem {
+			return &createItem{tx: tx, blockHeight: checkpointFloor - 1, options: &utxo.CreateOptions{LanePosition: position}}
+		}},
+		{"createMinedPlan", func(tx *bt.Tx, position uint64) *createItem {
+			it := minedItem(tx, checkpointFloor-1, 1)
+			it.options.LanePosition = position
+
+			return it
+		}},
+	} {
+		t.Run(route.name, func(t *testing.T) {
+			s, ctx := newCheckpointStore(t, false)
+
+			txs := make([]*bt.Tx, len(want))
+			items := make([]*createItem, len(want))
+
+			for i, position := range want {
+				txs[i] = mkTx(t, 1, uint64(5_000+i)) //nolint:gosec // test data
+				items[i] = route.item(txs[i], position)
+			}
+
+			createBatchDirect(t, s, ctx, items)
+
+			for i, tx := range txs {
+				requireGetLane(t, s, ctx, tx, want[i], route.name)
+			}
+		})
 	}
 }
 

@@ -86,6 +86,29 @@ func TestReserveLaneRange(t *testing.T) {
 		require.Equal(t, lane.Range{Lane: 0, First: laneTestSize + 1, Last: 2 * laneTestSize}, r2)
 	})
 
+	// The row is kept for ever, for operators, and no code path reads these columns back.
+	runLaneHandoutTests(t, "a hand-out's row keeps its holder, height and time", func(t *testing.T, s *SQL) {
+		req := laneReq("pod-3@host", t0)
+		req.Height = 812_345
+
+		r, err := s.ReserveLaneRange(t.Context(), req)
+		require.NoError(t, err)
+
+		var (
+			holder   string
+			height   int64
+			handedAt time.Time
+		)
+
+		require.NoError(t, s.db.QueryRowContext(t.Context(),
+			`SELECT holder, height, handed_at FROM lane_handout WHERE lane = $1 AND first = $2`,
+			int(r.Lane), lane.ToSigned(r.First)).Scan(&holder, &height, &handedAt))
+
+		require.Equal(t, "pod-3@host", holder)
+		require.Equal(t, int64(812_345), height)
+		require.True(t, t0.Equal(handedAt), "handed_at is the request's time, got %s", handedAt)
+	})
+
 	runLaneHandoutTests(t, "two holders get different lanes", func(t *testing.T, s *SQL) {
 		a, err := s.ReserveLaneRange(t.Context(), laneReq("a", t0))
 		require.NoError(t, err)

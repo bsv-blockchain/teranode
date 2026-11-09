@@ -710,6 +710,12 @@ CREATE INDEX IF NOT EXISTS tx_ident_off_chain_idx ON tx_ident (off_chain_since)
 
 // CreateSchema installs the M1 schema. Idempotent.
 func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	return createSchema(ctx, pool, laneColumnMigrationLimit)
+}
+
+// createSchema is CreateSchema with the lane column retry limit as an argument, so a test can reach
+// the limit without waiting five minutes.
+func createSchema(ctx context.Context, pool *pgxpool.Pool, laneColumnLimit time.Duration) error {
 	if _, err := pool.Exec(ctx, schemaSQL); err != nil {
 		return err
 	}
@@ -730,7 +736,7 @@ func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	return addLanePositionColumns(ctx, pool)
+	return addLanePositionColumns(ctx, pool, laneColumnLimit)
 }
 
 // laneColumnTables are the tables that carry lane_position.
@@ -757,9 +763,9 @@ const laneColumnMigrationLimit = 5 * time.Minute
 // The catalog check comes first because ALTER TABLE takes its lock before it looks, and every
 // process that opens the store runs this. Once the columns exist this is three catalog reads and
 // no lock.
-func addLanePositionColumns(ctx context.Context, pool *pgxpool.Pool) error {
+func addLanePositionColumns(ctx context.Context, pool *pgxpool.Pool, limit time.Duration) error {
 	for _, table := range laneColumnTables {
-		if err := addLanePositionColumn(ctx, pool, table); err != nil {
+		if err := addLanePositionColumn(ctx, pool, table, limit); err != nil {
 			return errors.NewStorageError("[utxoset] add lane_position to %s", table, err)
 		}
 	}
@@ -767,8 +773,8 @@ func addLanePositionColumns(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-func addLanePositionColumn(ctx context.Context, pool *pgxpool.Pool, table string) error {
-	deadline := time.Now().Add(laneColumnMigrationLimit)
+func addLanePositionColumn(ctx context.Context, pool *pgxpool.Pool, table string, limit time.Duration) error {
+	deadline := time.Now().Add(limit)
 	backoff := fenceRetryBackoffMin
 
 	for {
