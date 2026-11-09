@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	blobfile "github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
@@ -102,4 +104,63 @@ func TestProcessSubtreeDataStream_ARacingWriterOfTheSameSubtreeIsNotAFailure(t *
 	got, err := plain.Get(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData)
 	require.NoError(t, err)
 	require.Equal(t, subtreeData, got, "the file holds the subtree's transactions")
+}
+
+// TestProcessSubtreeDataStream_ParseFailureAttribution pins who a parse failure is charged to. The
+// tee hands every byte to the store before the parser sees it, so a store that refuses the key up
+// front closes the pipe and fails the parse, and so does a cancelled context. Neither is the peer's
+// doing, so neither may carry a peer code. Bytes the peer got wrong still do.
+func TestProcessSubtreeDataStream_ParseFailureAttribution(t *testing.T) {
+	tx1, err := createTestTransaction("fff2525b8931402dd09222c50775608f75787bd2b87e56995a7bdd30f79702c4")
+	require.NoError(t, err)
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+	require.NoError(t, subtree.AddNode(*tx1.TxIDChainHash(), 1, 1))
+	require.NoError(t, subtree.AddNode(chainhash.HashH([]byte("second")), 1, 2))
+
+	t.Run("store refused the key up front", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		require.NoError(t, server.subtreeStore.Set(context.Background(), subtree.RootHash()[:], fileformat.FileTypeSubtreeData, []byte("theirs")))
+
+		var allTransactions []*bt.Tx
+		err := server.processSubtreeDataStream(context.Background(), subtree, io.NopCloser(bytes.NewReader(tx1.Bytes())), &allTransactions, 100, nil)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "our store refusing the write is not the peer's fault")
+	})
+
+	t.Run("context cancelled", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		var allTransactions []*bt.Tx
+		err := server.processSubtreeDataStream(ctx, subtree, io.NopCloser(&cancelledReader{ctx: ctx}), &allTransactions, 100, nil)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a cancelled context is not the peer's fault")
+	})
+
+	t.Run("peer served bad bytes", func(t *testing.T) {
+		server, cleanup := setupTestServer(t)
+		defer cleanup()
+
+		var allTransactions []*bt.Tx
+		err := server.processSubtreeDataStream(context.Background(), subtree, io.NopCloser(bytes.NewReader([]byte{0x01, 0x02, 0x03})), &allTransactions, 100, nil)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse))
+	})
+}
+
+// cancelledReader fails every read with its context's error, the way an HTTP body does once the
+// request context is cancelled.
+type cancelledReader struct {
+	ctx context.Context
+}
+
+func (r *cancelledReader) Read([]byte) (int, error) {
+	return 0, r.ctx.Err()
 }

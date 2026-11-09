@@ -665,6 +665,15 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		}
 	}
 
+	// When the daemon runs its own BlockValidation service, that service sets the
+	// mined status of blocks; a second setMined worker on the same stores races
+	// it and can leave an invalidated block's transactions marked mined. Without
+	// the service, this instance is the only one and keeps its worker.
+	blockValidationOpts := []interface{}{p2pClient}
+	if _, err = d.ServiceManager.GetService("BlockValidation"); err == nil {
+		blockValidationOpts = append(blockValidationOpts, blockvalidation.NoSetMined{})
+	}
+
 	blockValidation := blockvalidation.NewBlockValidation(
 		d.Ctx,
 		logger,
@@ -675,7 +684,7 @@ func NewTestDaemon(t *testing.T, opts TestOptions) *TestDaemon {
 		utxoStore,
 		validatorClient,
 		subtreeValidationClient,
-		p2pClient,
+		blockValidationOpts...,
 	)
 
 	assert.NotNil(t, blockchainClient)
@@ -1217,6 +1226,18 @@ func (td *TestDaemon) checkTransactionsInMiningCandidate(txs ...*bt.Tx) (map[cha
 	}
 
 	return txFoundMap, nil
+}
+
+// CountInBlockAssembly returns how many times tx appears in the subtrees of a fresh mining
+// candidate. A candidate asked for while block assembly is processing a block or a reset is
+// empty, so a caller polling this sees 0 until that work is done.
+func (td *TestDaemon) CountInBlockAssembly(tx *bt.Tx) (int, error) {
+	txFoundMap, err := td.checkTransactionsInMiningCandidate(tx)
+	if err != nil {
+		return 0, err
+	}
+
+	return txFoundMap[*tx.TxIDChainHash()], nil
 }
 
 // VerifyInBlockAssembly checks that the given transactions are present in the block assembly candidate's subtrees exactly once.

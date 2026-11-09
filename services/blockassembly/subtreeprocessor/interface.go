@@ -463,6 +463,11 @@ type Interface interface {
 	//   - error: Any error encountered while waiting
 	WaitForPendingBlocks(ctx context.Context) error
 
+	// RequestBlockMaxSizeCheck asks the processing goroutine to check the first queued
+	// subtree against blockmaxsize on its next iteration, resizing the queued subtrees if
+	// it no longer fits. Used after subtrees were built outside the processing loop.
+	RequestBlockMaxSizeCheck()
+
 	// Stop gracefully shuts down the SubtreeProcessor.
 	// This method cancels the processor's internal context, which triggers the main
 	// processing goroutine to stop and clean up resources (such as the announcement ticker).
@@ -486,6 +491,19 @@ type Interface interface {
 	// Returns:
 	//   - error: The first error encountered creating a gap block's coinbase, if any
 	ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error
+
+	// MarkRecoveredConflicts marks the given transactions as conflicting nodes in
+	// the stored subtrees of the blocks that mined them, and saves those subtrees
+	// again. Block assembly calls it at startup for the losers of a recovered
+	// conflict intent, before it drains its input queue and completes the intent.
+	//
+	// Parameters:
+	//   - ctx: Context for cancellation of the block and subtree store calls
+	//   - hashes: Hashes of the losing transactions to mark as conflicting
+	//
+	// Returns:
+	//   - error: Any error encountered while reading or saving a subtree
+	MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error
 }
 
 // TxInpointsMap defines the interface for transaction inpoints storage with hash keys.

@@ -3,7 +3,6 @@ package netsync
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/go-chaincfg"
@@ -14,7 +13,6 @@ import (
 	blockchain2 "github.com/bsv-blockchain/teranode/services/blockchain"
 	peerpkg "github.com/bsv-blockchain/teranode/services/legacy/peer"
 	"github.com/bsv-blockchain/teranode/ulogger"
-	"github.com/bsv-blockchain/teranode/util/expiringmap"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -66,9 +64,7 @@ func registerSyncPeerChangePeer(t *testing.T, sm *SyncManager, p *peerpkg.Peer, 
 
 	state := &peerSyncState{
 		syncCandidate: candidate,
-		requestedTxns: expiringmap.New[chainhash.Hash, struct{}](10 * time.Second),
 	}
-	t.Cleanup(state.requestedTxns.Stop)
 
 	sm.peerStates.Set(p, state)
 }

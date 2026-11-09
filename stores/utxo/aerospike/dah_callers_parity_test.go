@@ -41,8 +41,8 @@ func TestSpendDAHParity(t *testing.T) {
 	cases := []spendCase{
 		{name: "mined, fully spent by this spend, existing higher DAH -> kept", mined: true, dah: dahParityInt(dahParityHighDAH),
 			wantDAH: func(int) *int { return dahParityInt(dahParityHighDAH) }},
-		{name: "mined, fully spent by this spend, no DAH -> set", mined: true,
-			wantDAH: func(r int) *int { return dahParityInt(dahParitySpendHeight + r) }},
+		{name: "mined at 500, fully spent at a lower height, no DAH -> floored at mined height + retention", mined: true,
+			wantDAH: func(r int) *int { return dahParityInt(500 + r) }},
 		{name: "blockIDs bin missing, fully spent, stale DAH -> cleared", mined: true, noBlockIDs: true, dah: dahParityInt(5),
 			wantDAH: func(int) *int { return nil }},
 		{name: "unmined, fully spent, stale DAH -> cleared", mined: false, dah: dahParityInt(5),

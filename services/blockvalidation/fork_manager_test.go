@@ -161,24 +161,24 @@ func TestForkManager_BlockProcessing(t *testing.T) {
 		hash2, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000002")
 
 		// Should be able to process first two blocks
-		canProcess, err := fm.CanProcessBlock(ctx, hash1)
+		canProcess, err := fm.CanProcessBlock(ctx, hash1, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash1))
+		assert.True(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
 		assert.Equal(t, 1, fm.GetParallelProcessingCount())
 
-		canProcess, err = fm.CanProcessBlock(ctx, hash2)
+		canProcess, err = fm.CanProcessBlock(ctx, hash2, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash2))
+		assert.True(t, fm.StartProcessingBlock(hash2, PriorityChainExtending))
 		assert.Equal(t, 2, fm.GetParallelProcessingCount())
 
 		// Should not be able to process third block (limit reached)
 		hash3, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000003")
-		canProcess, err = fm.CanProcessBlock(ctx, hash3)
+		canProcess, err = fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.False(t, canProcess)
-		assert.False(t, fm.StartProcessingBlock(hash3))
+		assert.False(t, fm.StartProcessingBlock(hash3, PriorityChainExtending))
 		assert.Equal(t, 2, fm.GetParallelProcessingCount())
 
 		// Finish processing first block
@@ -186,10 +186,10 @@ func TestForkManager_BlockProcessing(t *testing.T) {
 		assert.Equal(t, 1, fm.GetParallelProcessingCount())
 
 		// Now should be able to process third block
-		canProcess, err = fm.CanProcessBlock(ctx, hash3)
+		canProcess, err = fm.CanProcessBlock(ctx, hash3, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.True(t, canProcess)
-		assert.True(t, fm.StartProcessingBlock(hash3))
+		assert.True(t, fm.StartProcessingBlock(hash3, PriorityChainExtending))
 		assert.Equal(t, 2, fm.GetParallelProcessingCount())
 	})
 
@@ -200,10 +200,10 @@ func TestForkManager_BlockProcessing(t *testing.T) {
 
 		hash1, _ := chainhash.NewHashFromStr("0000000000000000000000000000000000000000000000000000000000000001")
 
-		assert.True(t, fm.StartProcessingBlock(hash1))
+		assert.True(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
 		// Should not be able to start processing same block again
-		assert.False(t, fm.StartProcessingBlock(hash1))
-		canProcess, err := fm.CanProcessBlock(ctx, hash1)
+		assert.False(t, fm.StartProcessingBlock(hash1, PriorityChainExtending))
+		canProcess, err := fm.CanProcessBlock(ctx, hash1, PriorityChainExtending)
 		assert.NoError(t, err)
 		assert.False(t, canProcess)
 	})
@@ -355,9 +355,9 @@ func TestForkManager_ConcurrentAccess(t *testing.T) {
 				case <-ctx.Done():
 					return
 				default:
-					canProcess, err := fm.CanProcessBlock(ctx, &hash)
+					canProcess, err := fm.CanProcessBlock(ctx, &hash, PriorityChainExtending)
 					if err == nil && canProcess {
-						fm.StartProcessingBlock(&hash)
+						fm.StartProcessingBlock(&hash, PriorityChainExtending)
 						time.Sleep(time.Millisecond)
 						fm.FinishProcessingBlock(&hash)
 					}

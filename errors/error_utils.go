@@ -86,6 +86,25 @@ func IsTransientLocalError(err error) bool {
 		errors.Is(err, ErrStorageUnavailable)
 }
 
+// IsBlockSpendRuleViolation reports whether err carries a code the validator or UTXO
+// store puts on a spend that breaks a consensus rule: an immature coinbase or a
+// non-final transaction. When a block is validated, maturity is checked at the block's
+// height and finality against its parent, so either is a verdict on the block.
+// Elsewhere maturity is checked at tip+1 and finality against the tip's median time,
+// so neither is.
+//
+// ErrFrozen is absent: it depends on this node's alert-system state. ErrUtxoHashMismatch
+// is absent: the validator re-derives every input's parent output data from this
+// node's store, so a mismatch is the store disagreeing with itself. ErrSpent is absent
+// too: a double spend is a conflict, not a broken rule.
+func IsBlockSpendRuleViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	return errors.Is(err, ErrTxCoinbaseImmature) || errors.Is(err, ErrNonFinal)
+}
+
 // IsNetworkError determines if an error is network-related.
 // This includes timeouts, connection failures, and invalid responses.
 //

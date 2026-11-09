@@ -94,7 +94,7 @@ func TestGetSubtreeMissingTxs_ALostPublishRaceReadsTheOtherWritersFile(t *testin
 		blockchainClient: blockchainClient,
 	}
 
-	missingTxs, err := s.getSubtreeMissingTxs(context.Background(), *subtree.RootHash(), subtree, unresolved, allTxs, testPeerURL, "")
+	missingTxs, err := s.getSubtreeMissingTxs(context.Background(), *subtree.RootHash(), subtree, unresolved, allTxs, testPeerURL, "", true)
 	require.NoError(t, competeErr, "the other writer's publish must succeed")
 	require.NoError(t, err, "losing the publish to a writer of the same key is not a failure")
 

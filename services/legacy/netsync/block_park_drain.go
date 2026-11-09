@@ -271,6 +271,10 @@ func (sm *SyncManager) parkedBlockCommitted(entry parkedBlock, isCheckpointBlock
 		sm.recentlyFailedBlocks.Delete(entry.hash)
 	}
 
+	if sm.sinkPanics != nil {
+		sm.sinkPanics.Delete(entry.hash)
+	}
+
 	sm.noteCommittedParkedBlock(entry)
 
 	if isCheckpointBlock {

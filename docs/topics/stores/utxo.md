@@ -328,6 +328,23 @@ On the other hand, we can see the process for unspending an UTXO here:
 
 To know more about the Transaction Validator, please check its specific service documentation.
 
+#### When a spend with several inputs fails
+
+A transaction usually spends several parents. If one input fails, for example because its parent is locked, the stores do not leave the same state behind. The difference is deliberate, and the conformance test `PartialSpendRollback` in `stores/utxo/tests/tests.go` holds each store to its own model (`SpendModel`).
+
+**Aerospike and Sql (per-input spends).** Each parent's spend is a separate write. When one input fails, the inputs before it are already spent, so the store must undo them afterwards. A spend records only the spender's txid and input index, not which attempt wrote it. The undo therefore cannot tell its own spend from the spend of a concurrent attempt at the same transaction that is succeeding at the same time. When the failure is temporary (`ErrTxLocked`: the parent is between its create and its block assembly acknowledgement), such an attempt is possible, and undoing its spend can let the node mine a double spend. So these stores keep the spend of the good parent in that case, and accept a parent that names a spender with no record (issue 1214) as the smaller harm. Creating the record before the spend (issue 1355) covers it.
+
+**Utxoset (atomic spends).** For `SpendAndCreate`, all the inputs of one transaction are spent in one PostgreSQL transaction, together with the create: every input is spent, or none is. When one input fails, the spend of the good parent is never committed. No other attempt can see a partial spend, so there is nothing to undo and no parent is left naming a missing spender. The unit is one transaction, not a batch: a batch that carries many transactions rejects only the one that failed and commits the others.
+
+`SpendAndCreateMulti`, the block and subtree path, writes the list in chunks, and each chunk is one PostgreSQL transaction that spends the chunk's outside coins and stores its transactions together. A transaction is stored if and only if its spends are made, so a failure, a cancelled context or a crash leaves each chunk committed whole or not there at all. There is nothing to undo and no parent is left naming a spender that has no record. The aerospike and sql stores still spend before they create, so a crash between the two leaves the spends until the same block is written again, and issue 1976 tracks it.
+
+The two models also answer differently when a transaction that is already stored is validated again after one of its parents was locked or marked conflicting:
+
+- Aerospike and Sql check the parent's flags first, and return `ErrTxLocked` or `ErrTxConflicting`.
+- Utxoset sees that the same transaction already spent each input, and returns success. The spends exist and nothing changed, so success is the accurate answer. Callers read `ErrTxLocked` as "try again later": the validator retries, propagation answers HTTP 409, and legacy sync parks the transaction.
+
+In both models, the parents stay spent by that transaction.
+
 ### 4.7. UTXO Batch Processing and External Storage mode
 
 Aerospike is the primary datastore for the UTXO store. However, to overcome Aerospike's record size limitation, the system implements an external storage mechanism for large transactions.
@@ -445,7 +462,7 @@ The following datastores are supported (either in development / experimental or 
     - A high-performance, NoSQL distributed database.
     - Suitable for environments requiring high throughput and low latency.
     - Handles large volumes of UTXO data with fast read/write capabilities.
-    - Aerospike is the reference datastore. Teranode has been guaranteed to process 1 million tps with Aerospike.
+    - Aerospike is the reference datastore. Teranode's scaled-out design target of 1 million tps assumes Aerospike.
     - Aerospike records can contain up to 1MB.
    ![AerospikeRecord.png](../services/img/AerospikeRecord.png)
     - For more information, please refer to the official Aerospike documentation: <https://aerospike.com>.
@@ -462,7 +479,13 @@ The following datastores are supported (either in development / experimental or 
     - Provides a balance of performance and persistence, suitable for medium to large-scale applications.
     - Offers the ability to query and analyze UTXO data using SQL.
 
-4. **Nullstore**:
+4. **Utxoset**:
+
+    - A PostgreSQL store that keeps only the unspent outputs: a spend deletes the output's row, and an undo copy goes to a spend journal for reorgs.
+    - Selected with the `utxoset://` URL scheme.
+    - Spends all the inputs of one transaction atomically. See [When a spend with several inputs fails](#when-a-spend-with-several-inputs-fails) for how that differs from Aerospike and Sql.
+
+5. **Nullstore**:
 
     - A dummy or placeholder implementation, used for testing (when no actual storage is needed).
     - Can be used to mock UTXO store functionality in a development or test environment.
@@ -633,7 +656,7 @@ The current writers, re-derived directly from the code (not from the settings/de
 |---|---|---|---|
 | **Validator** | `services/validator/Validator.go` | `SpendAndCreate` (creates the tx's outputs, spends its inputs), `SetLocked` | Core transaction validation: on accepting a new transaction it atomically creates its UTXOs and spends the ones it consumes. `SetLocked` completes a two-phase commit on the tx's own hash: when the tx is queued for block assembly its outputs are created locked (`WithLocked(true)`), and unlocked only once it has been added successfully (`twoPhaseCommitTransaction`) — a crash in between leaves them unspendable rather than spendable. |
 | **Block Validation** | `services/blockvalidation/BlockValidation.go`, `services/blockvalidation/quick_validate.go` | `SpendAndCreate` (`WithCreateOnly`/`WithSpendOnly`, quick-validate replay), `SetMinedMulti` (steady state, via `model.UpdateTxMinedStatus` in `setTxMined`), `utxo.SetMinedMultiChunked` (→ `SetMinedMulti`, quick-validate replay), `SetLocked` | Validates incoming blocks: creates/spends UTXOs for transactions not already known, marks the block's transactions as mined (records `BlockID`/`SubtreeIdx`), then — unless `quickValidateSkipsUtxoLock` applies to this block — unlocks the block's own subtree transactions at the end of quick-validate (`unlockSubtreeTransactions`). |
-| **Block Assembly** | `services/blockassembly/BlockAssembler.go`, `services/blockassembly/subtreeprocessor/SubtreeProcessor.go` | `SpendAndCreate` (`WithCreateOnly` — creates the coinbase UTXOs, `processCoinbaseUtxos`), `Delete` (coinbase and its child spends on reorg, `removeCoinbaseUtxos` — Block Assembly is the only service that calls `Delete` directly), `MarkTransactionsOnLongestChain`, `SetLocked` (unlocks unmined transactions reloaded at startup; unlocks conflict-locked parents when healing a stale conflict intent), `utxo.ProcessConflicting` / `utxo.ReverseProcessConflicting` (→ `SetConflicting`, `Unspend`, `SpendAndCreate`, `BeginConflictIntent`/`CompleteConflictIntent`) | Owns chain-tip bookkeeping during block building and reorgs: creates the coinbase UTXO and deletes it (with its child spends) on reorg, flags which transactions sit on the currently-longest chain, unlocks unmined transactions reloaded at startup and conflict-locked parents when healing a stale intent, and drives the conflicting-transaction state machine (marking/unmarking double-spends and reversing that on reorg). |
+| **Block Assembly** | `services/blockassembly/BlockAssembler.go`, `services/blockassembly/subtreeprocessor/SubtreeProcessor.go` | `SpendAndCreate` (`WithCreateOnly` — creates the coinbase UTXOs, `processCoinbaseUtxos`), `Delete` (coinbase and its child spends on reorg, `removeCoinbaseUtxos` — Block Assembly is the only service that calls `Delete` directly), `MarkTransactionsOnLongestChain`, `SetLocked` (unlocks unmined transactions reloaded at startup; unlocks conflict-locked parents when healing a stale conflict intent), `utxo.ProcessConflicting` / `utxo.ReverseProcessConflicting` (→ `SetConflicting`, `Unspend`, `SpendAndCreate`, `BeginConflictIntent`/`CompleteConflictIntent`) | Owns chain-tip bookkeeping during block building and reorgs: creates the coinbase UTXO and deletes it (with its child spends) on reorg, flags which transactions sit on the currently-longest chain (on a reorg, only the transactions it moved, not its whole mempool), unlocks unmined transactions reloaded at startup and conflict-locked parents when healing a stale intent, and drives the conflicting-transaction state machine (marking/unmarking double-spends and reversing that on reorg). |
 | **Legacy (p2p sync)** | `services/legacy/netsync/handle_block.go` | `SpendAndCreate`, `utxo.SetMinedMultiChunked` (→ `SetMinedMulti`) | The legacy Bitcoin-protocol block-sync path validates and applies blocks received from legacy peers the same way Block Validation does for the native protocol — same create/spend/set-mined writes, different ingestion path. |
 | **Alert System** | `services/alert/node.go` | `FreezeUTXOs`, `UnFreezeUTXOs`, `ReAssignUTXO` | Executes alert-network directives (court orders / network alerts) to freeze, unfreeze, or reassign specific UTXOs. |
 | **RPC** | `services/rpc/handlers.go` | `FreezeUTXOs`, `UnFreezeUTXOs`, `ReAssignUTXO` | Exposes the same freeze/unfreeze/reassign operations as operator-facing RPC calls (e.g. for manual intervention), independent of the Alert System's automated path. |

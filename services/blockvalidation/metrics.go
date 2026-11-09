@@ -401,12 +401,13 @@ func _initPrometheusMetrics() {
 			Namespace: "teranode",
 			Subsystem: "blockvalidation",
 			Name:      "recovered_panics_total",
-			Help:      "Total number of panics recovered in block validation, by path: worker (priority-queue block worker), catchup (catchup consumer), kafka (Kafka block message handler) or block_found (blockFoundCh worker). Each one is a bug in this node. The node continues to run, and the block hash and stack are in the PANIC log line.",
+			Help:      "Total number of panics recovered in block validation, by path: worker (priority-queue block worker), catchup (catchup consumer), kafka (Kafka block message handler), block_found (blockFoundCh worker), or one of three paths for goroutines that those start: catchup_fetch (catchup fetch and validate pipeline), block_validation (parallel work inside one block validation) or service (service start and startup sweeps). Each one is a bug in this node. The node continues to run, and the block hash and stack are in the PANIC log line.",
 		},
 		[]string{"path"},
 	)
 
-	for _, path := range []string{recoveredPanicPathWorker, recoveredPanicPathCatchup, recoveredPanicPathKafka, recoveredPanicPathBlockFound} {
+	for _, path := range []string{recoveredPanicPathWorker, recoveredPanicPathCatchup, recoveredPanicPathKafka, recoveredPanicPathBlockFound,
+		recoveredPanicPathCatchupFetch, recoveredPanicPathBlockValidation, recoveredPanicPathService} {
 		prometheusRecoveredPanics.WithLabelValues(path)
 	}
 

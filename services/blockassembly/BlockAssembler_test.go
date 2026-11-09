@@ -321,6 +321,9 @@ func TestBlockAssembly_Start(t *testing.T) {
 		stateBytes := make([]byte, 84)
 		binary.LittleEndian.PutUint32(stateBytes[:4], 1) // height = 1
 		copy(stateBytes[4:], bestBlockHeader.Bytes())
+		// No mark of skipped fork transactions is pending; a record that is not the byte 0
+		// would read as pending.
+		blockchainClient.On("GetState", mock.Anything, SkippedForkMarkStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
 		blockchainClient.On("GetState", mock.Anything, mock.Anything).Return(stateBytes, nil)
 		blockchainClient.On("GetBestBlockHeader", mock.Anything).Return(bestBlockHeader, &model.BlockHeaderMeta{Height: 1}, nil)
 		blockchainClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return([]*model.BlockHeader{model.GenesisBlockHeader}, []*model.BlockHeaderMeta{{Height: 0}}, nil)
@@ -727,10 +730,11 @@ func TestBlockAssemblerGetReorgBlockHeaders(t *testing.T) {
 //
 // Parameters:
 //   - t: Testing instance
+//   - opts: Settings adjustments, applied before the subtree processor starts reading them
 //
 // Returns:
 //   - *baTestItems: Test fixtures and utilities
-func setupBlockAssemblyTest(t *testing.T) *baTestItems {
+func setupBlockAssemblyTest(t *testing.T, opts ...func(*settings.Settings)) *baTestItems {
 	items := baTestItems{}
 
 	items.blobStore = memory.New() // blob memory store
@@ -745,6 +749,9 @@ func setupBlockAssemblyTest(t *testing.T) *baTestItems {
 	require.NoError(t, err)
 
 	tSettings := createTestSettings(t)
+	for _, opt := range opts {
+		opt(tSettings)
+	}
 
 	utxoStore, err := utxostoresql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
@@ -1046,9 +1053,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		testItems := setupBlockAssemblyTest(t)
+		testItems := setupBlockAssemblyTest(t, func(s *settings.Settings) { s.Policy.BlockMaxSize = 15000*4 + 1000 })
 		require.NotNil(t, testItems)
-		testItems.blockAssembler.settings.Policy.BlockMaxSize = 15000*4 + 1000
 
 		// Set up mock blockchain client
 		_, _, genesisBlock := setupBlockchainClient(t, testItems)
@@ -1151,9 +1157,8 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 		initPrometheusMetrics()
 
 		ctx := t.Context()
-		testItems := setupBlockAssemblyTest(t)
+		testItems := setupBlockAssemblyTest(t, func(s *settings.Settings) { s.Policy.BlockMaxSize = 430000 })
 		require.NotNil(t, testItems)
-		testItems.blockAssembler.settings.Policy.BlockMaxSize = 430000
 
 		// Set up mock blockchain client
 		_, _, _ = setupBlockchainClient(t, testItems)
@@ -1180,6 +1185,18 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 			}
 
 			wg.Done()
+
+			// acknowledge the subtrees stored and announced by the blockmaxsize resize
+			for {
+				select {
+				case req := <-testItems.newSubtreeChan:
+					if req.ErrChan != nil {
+						req.ErrChan <- nil
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
 		}()
 
 		for i := 1; i < 4; i++ {
@@ -1193,16 +1210,20 @@ func TestBlockAssembly_GetMiningCandidate_MaxBlockSize_LessThanSubtreeSize(t *te
 
 		wg.Wait()
 
-		// Retry GetMiningCandidate until the subtree processor has precomputed
-		// the mining data. Without this, the call may return an empty block
-		// template (no error) because precomputed data is not yet available.
-		var err error
-		require.Eventually(t, func() bool {
-			_, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
-			return err != nil
-		}, 5*time.Second, 100*time.Millisecond, "expected GetMiningCandidate to return an error when subtree exceeds max block size")
+		// The 450000-byte subtree exceeds blockmaxsize, so the subtree processor must
+		// re-chunk it into smaller subtrees instead of stalling mining (issue 1835).
+		var (
+			candidate *model.MiningCandidate
+			err       error
+		)
 
-		assert.Equal(t, "PROCESSING (4): max block size is less than the size of the subtree", err.Error())
+		require.Eventually(t, func() bool {
+			candidate, _, err = testItems.blockAssembler.GetMiningCandidate(ctx)
+			return err == nil && candidate.NumTxs > 0
+		}, 5*time.Second, 100*time.Millisecond, "expected a non-empty mining candidate after the oversized subtree is resized")
+
+		require.LessOrEqual(t, candidate.SizeWithoutCoinbase, uint64(430000))
+		require.Equal(t, uint32(1), candidate.NumTxs, "only the first 2-item subtree (placeholder + 1 tx) fits")
 	})
 }
 
@@ -1897,6 +1918,7 @@ func TestBlockAssembly_Start_InitStateFailures(t *testing.T) {
 
 		// Create a simple mock iterator that returns no transactions
 		mockIterator := &utxoStore.MockUnminedTxIterator{}
+		mockIterator.On("Close").Return(nil).Maybe()
 		mockIterator.On("Next", mock.Anything, mock.Anything).Return([]*utxoStore.UnminedTransaction{}, nil)
 
 		mockUtxoStore.On("GetUnminedTxIterator").Return(mockIterator, nil)
@@ -3060,6 +3082,17 @@ func TestReset_ConflictDetectionViaValidateInputs(t *testing.T) {
 	hashes := items.blockAssembler.subtreeProcessor.GetTransactionHashes(ctx)
 	require.False(t, containsHash(hashes, *txAHash),
 		"after reset(validateInputs=true), a tx whose input is spent by another tx must NOT be in block assembly")
+
+	// Absence alone does not prove WHY txA was dropped, and for a long time it was
+	// dropped for the wrong reason: on a SQL store validateUnminedTxInputs asked
+	// for fields.Inputs and bailed on a nil txMeta.Tx, which that store only
+	// populates for fields.Tx, so every unmined transaction was discarded before
+	// any input was examined. This test passed throughout. Assert the conflict was
+	// actually detected, which is the only outcome that also marks the record.
+	txAMeta, getErr := items.utxoStore.Get(ctx, txAHash, utxofields.Conflicting)
+	require.NoError(t, getErr)
+	require.True(t, txAMeta.Conflicting,
+		"txA must be dropped by conflict detection, which marks it conflicting -- not by a read that failed before looking")
 }
 
 // TestTriggerReconcile verifies that triggerReconcile is non-blocking and
@@ -3124,6 +3157,8 @@ func TestStart_TriggersReconcileOnStartup(t *testing.T) {
 	var getBestCalls atomic.Int32
 
 	bc := &blockchain.Mock{}
+	// No mark of skipped fork transactions is pending.
+	bc.On("GetState", mock.Anything, SkippedForkMarkStateKey).Return([]byte(nil), errors.NewNotFoundError("no record"))
 	bc.On("GetState", mock.Anything, mock.Anything).Return(checkpointBytes, nil)
 	bc.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	bc.On("GetBestBlockHeader", mock.Anything).

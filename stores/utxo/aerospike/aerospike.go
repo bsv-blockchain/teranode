@@ -72,6 +72,7 @@ import (
 	"github.com/bsv-blockchain/go-batcher/v2"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob"
@@ -217,9 +218,10 @@ type Store struct {
 	outpointBatcher     batcherIfc[batchOutpoint]
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
-	lockedBatcher       batcherIfc[batchLocked]
-	externalStore       blob.Store
-	utxoBatchSize       int
+
+	lockedBatcher batcherIfc[batchLocked]
+	externalStore blob.Store
+	utxoBatchSize int
 
 	// externalTxCache caches whatever GetTxFromExternalStore returned for a txid:
 	// the full externally-stored transaction when a .tx blob exists, otherwise the
@@ -250,6 +252,17 @@ type Store struct {
 	// runtime PARAMETER_ERROR demotes it back to false while batch goroutines
 	// read it concurrently (see demoteNativeOnUnsupported in native_op.go).
 	useNativeTeranodeOps atomic.Bool
+
+	// conflictingIndexState is whether this process trusts the conflicting index
+	// (conflictingIndexUnchecked/Usable/Unusable); see conflicting_index.go.
+	// conflictingIndexCancel and conflictingIndexDone stop and await the
+	// background self-test that sets it.
+	conflictingIndexState  atomic.Int32
+	conflictingIndexCancel context.CancelFunc
+	conflictingIndexDone   chan struct{}
+	// conflictingIndexProbeMisses counts probes in a row the index failed;
+	// only the self-test goroutine touches it.
+	conflictingIndexProbeMisses int
 
 	// utxo.BlockStateFields supplies the chain-tip height and median block time
 	// as one atomic snapshot, and with them the Store interface's six
@@ -459,6 +472,21 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 						s.logger.Errorf("Failed to create preserveUntilIndex: %v", err)
 					}
 				}
+
+				// Read by ConflictingTxHashes. A server that cannot hold an
+				// expression index (before 8.1) leaves block validation on its
+				// per-transaction fallback, which is correct but slow.
+				exists, err = s.indexExists(conflictingIndexName)
+				if err != nil {
+					s.logger.Errorf("Failed to check %s existence: %v", conflictingIndexName, err)
+					return
+				}
+
+				if !exists {
+					if err := s.createExpressionIndexIfNotExists(conflictingIndexName, conflictingIndexExpression()); err != nil {
+						s.logger.Warnf("Failed to create %s (expression indexes need Aerospike 8.1 or later); block validation will read every transaction of an already-validated subtree: %v", conflictingIndexName, err)
+					}
+				}
 			}
 		})
 	}
@@ -629,6 +657,11 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 
 	logger.Infof("[Aerospike] map txmeta store initialised with namespace: %s, set: %s", namespace, setName)
 
+	// Every process checks the conflicting index itself, whichever process
+	// created it. It starts last: the probe needs the Lua module registered
+	// above, and a failed New must not leave it running.
+	s.startConflictingIndexSelfTest(ctx)
+
 	return s, nil
 }
 
@@ -704,6 +737,74 @@ func (s *Store) deleteAtHeightFor(blockHeight uint32) (uint32, bool) {
 	return s.effectiveBlockHeight(blockHeight) + retention, true
 }
 
+// reportedDeleteAtHeight returns the master record's stamped DAH when the Lua package
+// reported it with a DAHSET signal. The master's stamp is floored at its mined height,
+// so child records must take it rather than a height derived from the caller's tip. A
+// Lua package that does not report it (mixed deployment) yields false.
+func reportedDeleteAtHeight(res *LuaMapResponse) (uint32, bool) {
+	if res == nil || !res.HasDeleteAtHeight || res.DeleteAtHeight <= 0 {
+		return 0, false
+	}
+
+	dah, err := safeconversion.IntToUint32(res.DeleteAtHeight)
+	if err != nil {
+		return 0, false
+	}
+
+	return dah, true
+}
+
+// childDeleteAtHeightFor returns the DAH to stamp on a paginated tx's child records
+// after a DAHSET signal: the master's reported stamp, else deleteAtHeightFor(blockHeight).
+func (s *Store) childDeleteAtHeightFor(res *LuaMapResponse, blockHeight uint32) (uint32, bool) {
+	dah, enabled := s.deleteAtHeightFor(blockHeight)
+	if !enabled {
+		return 0, false
+	}
+
+	if reported, ok := reportedDeleteAtHeight(res); ok {
+		return reported, true
+	}
+
+	return dah, true
+}
+
+// reportedDAHVersion returns the master's delete-at-height version as the response reports it. A Lua
+// package that does not report it yields an unversioned, unconditional page write.
+func reportedDAHVersion(res *LuaMapResponse) dahVersion {
+	if res == nil || !res.HasDAHVersion {
+		return dahVersion{}
+	}
+
+	return dahVersion{value: res.DAHVersion, known: true}
+}
+
+// reconcileChildDAH stamps or clears the child pages of a paginated master from the master's
+// delete-at-height as the response reports it. It writes the pages on every response for a master
+// with children, whatever the signal, so the pages are reconciled on every evaluation of the master.
+// A lost response or a crash between the master write and the page write is repaired by the next
+// evaluation of that master. The cost is one filtered round trip per page per evaluation, because
+// the write carries the version the response reported and a page that already holds that version or
+// a newer one refuses it. An absent stamp clears the pages. A package that reports no stamp is
+// honoured only on a DAHSET signal. A response that is older than a later transition of the master
+// cannot overwrite the pages that transition wrote.
+func (s *Store) reconcileChildDAH(txID *chainhash.Hash, res *LuaMapResponse, blockHeight uint32) error {
+	if res.ChildCount <= 0 {
+		return nil
+	}
+
+	dah, enabled := s.childDeleteAtHeightFor(res, blockHeight)
+	if !enabled {
+		return nil
+	}
+
+	if res.Signal != LuaSignalDAHSet && !res.HasDeleteAtHeight {
+		dah = 0
+	}
+
+	return s.setDAHForChildRecordsAt(txID, res.ChildCount, dah, reportedDAHVersion(res))
+}
+
 func (s *Store) SetMedianBlockTime(medianTime uint32) error {
 	s.logger.Debugf("setting median block time to %d", medianTime)
 
@@ -752,6 +853,7 @@ func (s *Store) Close(ctx context.Context) error {
 
 	go func() {
 		defer close(done)
+
 		// Order is dependency-driven: a batcher whose drain callback enqueues
 		// into another batcher MUST be closed before that downstream batcher,
 		// otherwise the drain Puts into an already-closed input channel and
@@ -803,6 +905,10 @@ func (s *Store) Close(ctx context.Context) error {
 		// later store for the same host (e.g. an in-process daemon restart)
 		// would reuse it and fail with INVALID_NODE_ERROR. Done inside the
 		// goroutine so it still runs even when ctx has already expired.
+		// The self-test uses the client, so it stops before the client closes,
+		// and after the drains so a probe in flight cannot delay them.
+		s.stopConflictingIndexSelfTest()
+
 		if s.client != nil {
 			util.CloseAerospikeClient(s.url.Host)
 		}
@@ -1204,7 +1310,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	var skippedCount int
 
 	// external masters that were preserved: their pagination records need their DAH cleared too
-	var preservedExternal []chainhash.Hash
+	var preservedExternal []preservedMaster
 
 	for i, record := range batchRecords {
 		if record == nil {
@@ -1260,7 +1366,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 				// Not gated on LuaSignalPreserve: the follow-up reads External itself, so this does
 				// not depend on the native op emitting the same signal as the UDF.
-				preservedExternal = append(preservedExternal, recordTxIDs[i])
+				preservedExternal = append(preservedExternal, preservedMaster{txID: recordTxIDs[i], version: reportedDAHVersion(res)})
 			case LuaStatusError:
 				if res.ErrorCode != LuaErrorCodeTxNotFound {
 					luaErrors++
@@ -1288,31 +1394,43 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 	return nil
 }
 
+// preservedMaster is a master PreserveTransactions preserved on the Lua path, with the dahVer its
+// preserveUntil response reported (unknown from a native op, which does not report it).
+type preservedMaster struct {
+	txID    chainhash.Hash
+	version dahVersion
+}
+
 // clearPreservedPagesDAH clears the deleteAtHeight of the pagination records of external masters
 // that PreserveTransactions just preserved, on the Lua path. txIDs are all the masters preserved;
 // the read of External and TotalExtraRecs picks the external ones.
 //
 // preserveUntil (teranode.lua, and the native op) clears only the master's DAH and signals PRESERVE
 // without a child count, so the count is read here, in one batch, and only for the external masters.
-// Doing it from Go leaves the Lua module untouched (no LuaPackage bump is needed) and behaves the
-// same under the UDF and native paths. The expressions path reads the count in the preserve write
-// itself. Both then use the shared child follow-up (unset, chunked, retried once).
+// The Lua package reports the master's dahVer in the same response, so the page clear carries the
+// version of the write it follows; a native op reports none and its page clear is unversioned. The
+// expressions path reads the count and the version in the preserve write itself. Both then use the
+// shared child follow-up (unset, chunked, retried once).
 //
 // Failures are returned. The pruner skips its deletion phase when preservation fails, and it
 // selects pages by their own DAH, so a page left with its DAH would otherwise be deleted in the
-// same cycle that preserved its master. The follow-up is unconditional, so the next run heals it.
-func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Hash) error {
-	if len(txIDs) == 0 {
+// same cycle that preserved its master. The follow-up is versioned and each preserve bumps the master's
+// version, so the next run still heals it.
+func (s *Store) clearPreservedPagesDAH(ctx context.Context, preserved []preservedMaster) error {
+	if len(preserved) == 0 {
 		return nil
 	}
 
 	var readErr error
 
 	readPolicy := aerospike.NewBatchReadPolicy()
-	records := make([]aerospike.BatchRecordIfc, 0, len(txIDs))
-	ids := make([]chainhash.Hash, 0, len(txIDs))
+	records := make([]aerospike.BatchRecordIfc, 0, len(preserved))
+	ids := make([]chainhash.Hash, 0, len(preserved))
+	versions := make([]dahVersion, 0, len(preserved))
 
-	for _, txID := range txIDs {
+	for _, p := range preserved {
+		txID := p.txID
+
 		key, err := aerospike.NewKey(s.namespace, s.setName, txID[:])
 		if err != nil {
 			readErr = errors.JoinCapped(10, readErr, errors.NewProcessingError("[PreserveTransactions][%s] failed to create key", txID.String(), err))
@@ -1321,6 +1439,7 @@ func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Ha
 
 		records = append(records, aerospike.NewBatchRead(readPolicy, key, []string{fields.External.String(), fields.TotalExtraRecs.String()}))
 		ids = append(ids, txID)
+		versions = append(versions, p.version)
 	}
 
 	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
@@ -1346,6 +1465,7 @@ func (s *Store) clearPreservedPagesDAH(ctx context.Context, txIDs []chainhash.Ha
 			continue
 		}
 
+		state.DAHVersion = versions[i]
 		childDAH.collectPreserved(&ids[i], state)
 	}
 

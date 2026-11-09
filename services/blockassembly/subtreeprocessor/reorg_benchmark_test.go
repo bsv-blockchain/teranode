@@ -687,7 +687,7 @@ func BenchmarkProcessRemainderTxHashes(b *testing.B) {
 
 				b.StartTimer()
 
-				err = stp.processRemainderTxHashes(ctx, chainedSubtrees, transactionMap, nil, currentTxMap, true)
+				err = stp.processRemainderTxHashes(ctx, chainedSubtrees, transactionMap, nil, nil, currentTxMap, true)
 				if err != nil {
 					b.Fatalf("processRemainderTxHashes failed: %v", err)
 				}

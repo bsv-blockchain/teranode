@@ -2,7 +2,25 @@ module github.com/bsv-blockchain/teranode
 
 go 1.27.0
 
+// Keep Multipath TCP off on listen sockets (default-on since Go 1.24) as interim
+// hardening for CVE-2026-98432. Operators can override at runtime with
+// GODEBUG=multipathtcp=<value>. See https://go.dev/issue/82717.
+godebug multipathtcp=0
+
 replace github.com/in-toto/in-toto-golang => github.com/in-toto/in-toto-golang v0.9.0
+
+// go-libp2p v0.51.0 plus the inbound resource-scope leak fix from
+// libp2p/go-libp2p#3565 (issue libp2p/go-libp2p#3564): listener.Accept skipped
+// connections the remote had already closed without closing them, so their
+// resource-manager scope was never released and a long-running node ran out of
+// inbound connection slots (bsv-blockchain/teranode#2121). The fork branch is
+// bsv/v0.51.0-inbound-scope-leak on github.com/bsv-blockchain/go-libp2p.
+// The replace has no version on the left, so it pins this build regardless of
+// the go-libp2p version go.mod requires. Whenever that required version changes
+// (e.g. a go-p2p-message-bus bump that needs v0.52.x), move the replace to a
+// fork branch carrying the same fix on top of the newly required version.
+// Remove this replace once a go-libp2p release contains the fix.
+replace github.com/libp2p/go-libp2p => github.com/bsv-blockchain/go-libp2p v0.51.1-0.20261105140325-08b4a4af773a
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -272,7 +290,7 @@ require (
 	github.com/prometheus/common v0.72.0 // indirect
 	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	github.com/quic-go/quic-go v0.63.0 // indirect
+	github.com/quic-go/quic-go v0.64.1 // indirect
 	github.com/quic-go/webtransport-go v0.13.0 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9 // indirect
 	github.com/redis/rueidis v1.0.43 // indirect
@@ -347,7 +365,7 @@ require (
 	go.yaml.in/yaml/v4 v4.0.0-rc.4 // indirect
 	golang.org/x/exp v0.0.0-20261007192929-f45ad48fbe92 // indirect
 	golang.org/x/mod v0.41.0 // indirect
-	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
 	golang.org/x/tools v0.51.0 // indirect
@@ -394,12 +412,12 @@ require (
 	github.com/bsv-blockchain/go-bt/v2 v2.7.4
 	github.com/bsv-blockchain/go-chaincfg v1.6.2
 	github.com/bsv-blockchain/go-lockfree-queue v1.0.0
-	github.com/bsv-blockchain/go-p2p-message-bus v0.1.28
+	github.com/bsv-blockchain/go-p2p-message-bus v0.3.0
 	github.com/bsv-blockchain/go-safe-conversion v1.2.0
-	github.com/bsv-blockchain/go-sdk v1.7.2
+	github.com/bsv-blockchain/go-sdk v1.7.3
 	github.com/bsv-blockchain/go-subtree v1.6.3
 	github.com/bsv-blockchain/go-tx-map v1.5.1
-	github.com/bsv-blockchain/go-wire v1.4.0
+	github.com/bsv-blockchain/go-wire v1.5.0
 	github.com/bsv-blockchain/testcontainers-aerospike-go v0.4.0
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/btcsuite/goleveldb v1.0.0
@@ -426,8 +444,8 @@ require (
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/labstack/gommon v0.4.2
 	github.com/lib/pq v1.10.9
-	github.com/libp2p/go-libp2p v0.50.0
-	github.com/libp2p/go-libp2p-pubsub v0.18.0
+	github.com/libp2p/go-libp2p v0.51.0
+	github.com/libp2p/go-libp2p-pubsub v0.19.0
 	github.com/looplab/fsm v1.0.2
 	github.com/moby/moby/api v1.54.2
 	github.com/mrz1836/go-datastore v1.4.3

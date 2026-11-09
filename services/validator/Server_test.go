@@ -14,6 +14,7 @@ import (
 	"github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/services/validator/validator_api"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -495,4 +496,79 @@ func TestHandleSingleTxAttachesVerdictHeader(t *testing.T) {
 	// behaves exactly as before.
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
 	require.Contains(t, rec.Body.String(), "[handleSingleTx] Failed to process transaction: ")
+}
+
+// TestHandleKafkaTxMessage_RefusedWhileSyncing pins issue 2003 on the validator
+// Kafka consumer: in CATCHINGBLOCKS the message is dropped and committed
+// without the validator, the only thing that writes the UTXO store, ever
+// seeing it. RUNNING and a cached IDLE both validate. The gRPC and HTTP
+// endpoints are left ungated on purpose, because block and subtree validation
+// use them during catch-up.
+func TestHandleKafkaTxMessage_RefusedWhileSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	for _, tt := range []struct {
+		state   blockchain.FSMStateType
+		refuses bool
+	}{
+		{blockchain.FSMStateCATCHINGBLOCKS, true},
+		{blockchain.FSMStateRUNNING, false},
+		{blockchain.FSMStateIDLE, false},
+	} {
+		t.Run(tt.state.String(), func(t *testing.T) {
+			state := tt.state
+			blockchainClient := &blockchain.Mock{}
+			blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+			// NewServer builds the gate, so this also checks the wiring.
+			server := NewServer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil, blockchainClient, nil, nil, nil, nil, nil)
+
+			validated := 0
+			server.validator = &MockValidator{
+				ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+					validated++
+					return &meta.Data{}, nil
+				},
+			}
+
+			refusedBefore := server.unminedTxGate.RefusedTotal()
+
+			require.NoError(t, server.handleKafkaTxMessage(context.Background(), kafkaTxMessage(t)))
+
+			if tt.refuses {
+				require.Equal(t, 0, validated, "a refused tx must not reach the validator or the UTXO store")
+				require.InDelta(t, refusedBefore+1, server.unminedTxGate.RefusedTotal(), 0)
+
+				return
+			}
+
+			require.Equal(t, 1, validated)
+			require.InDelta(t, refusedBefore, server.unminedTxGate.RefusedTotal(), 0)
+		})
+	}
+}
+
+// TestValidateTransaction_NotRefusedWhileSyncing is the other half of issue
+// 2003: subtree and block validation call this endpoint during catch-up to
+// check a block's own transactions, so CATCHINGBLOCKS must not refuse here.
+func TestValidateTransaction_NotRefusedWhileSyncing(t *testing.T) {
+	initPrometheusMetrics()
+
+	state := blockchain.FSMStateCATCHINGBLOCKS
+	blockchainClient := &blockchain.Mock{}
+	blockchainClient.On("GetFSMCurrentState", mock.Anything).Return(&state, nil)
+
+	server := NewServer(ulogger.TestLogger{}, test.CreateBaseTestSettings(t), nil, blockchainClient, nil, nil, nil, nil, nil)
+
+	validated := 0
+	server.validator = &MockValidator{
+		ValidateFunc: func(context.Context, *bt.Tx) (*meta.Data, error) {
+			validated++
+			return &meta.Data{}, nil
+		},
+	}
+
+	_, err := server.ValidateTransaction(context.Background(), &validator_api.ValidateTransactionRequest{TransactionData: sampleTx, BlockHeight: 100})
+	require.NoError(t, err)
+	require.Equal(t, 1, validated)
 }

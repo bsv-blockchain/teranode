@@ -93,7 +93,8 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockassembly_queue_wait_seconds`                               | Histogram    | Time an ingest handler waited for queue room before the batch was accepted or shed |
 | `teranode_blockassembly_queue_head_age_seconds`                           | Gauge        | How long the oldest queued batch has been waiting (0 when the queue is empty). The signal the validator's Kafka backpressure controller reads |
 | `teranode_blockassembly_tip_lag_blocks`                                   | Gauge        | Number of blocks block assembly is behind the blockchain tip, recomputed on each new-block announcement and reset to 0 on a successful advance. Two caveats for alert authors: it reads 0 for an equal-height reorg stall (tip hash differs but height matches), and it holds its last value if announcements stop arriving — pair it with `teranode_blockassembly_processing_stuck_total` for stall alerting |
-| `teranode_blockassembly_processing_stuck_total`                            | CounterVec   | Count of block-assembly failures that left the assembler behind the tip. `reason` is one of `reorg_blocks_fetch` (fetching the blocks for the reorg/catch-up decision failed), `catchup` (forward-only catch-up failed), `reorg` (reorg failed; an expected `ErrBlockAssemblyReset` is logged as a warning and deliberately not counted), `get_block` (fetching the announced block failed), `moveforward` (subtree processor `MoveForwardBlock` failed) |
+| `teranode_blockassembly_stale_tip_candidates_total`                        | Counter      | Mining candidates answered with an empty block on the blockchain tip because block assembly stayed on an older tip for more than 10 seconds. A sustained non-zero rate means block assembly is stuck behind the chain. A shorter gap is the normal delay after a new block and is not counted |
+| `teranode_blockassembly_processing_stuck_total`                            | CounterVec   | Count of block-assembly failures that left the assembler behind the tip or its work unfinished, and of work it gave up. `reason` is one of `reorg_blocks_fetch` (fetching the blocks for the reorg/catch-up decision failed), `catchup` (forward-only catch-up failed), `reorg` (reorg failed; an expected `ErrBlockAssemblyReset` is logged as a warning and deliberately not counted), `get_block` (fetching the announced block failed), `moveforward` (subtree processor `MoveForwardBlock` failed), `skipped_fork_mark_unfinished` (a mark of skipped fork transactions did not finish and is retried), `skipped_fork_mark_record` (a move, reset or replay give-up was refused because its pending mark could not be recorded), `skipped_fork_subtree_lost` (a fork block owed that mark has no subtree in the subtree store; its transactions are given up) |
 | `teranode_blockassembly_catchup`                                          | Counter      | Number of forward-only catch-ups (moveBack=0) handled in block assembler        |
 | `teranode_blockassembly_coinbase_divergence_total`                        | CounterVec   | Coinbase-divergence events by outcome (label: `outcome`); every detection records exactly one follow-up outcome, so `detected == repaired + no_gap + escalated + aborted` |
 | `teranode_blockassembly_conflict_intents_pending`                         | Gauge        | Number of pending conflict-resolution WAL intents found at startup (interrupted ProcessConflicting/ReverseProcessConflicting operations awaiting replay) |
@@ -175,7 +176,7 @@ All metrics are CounterVec type with labels: `function` (handler function name),
 | `teranode_blockvalidation_last_validated_blocks_cache` | Gauge     | Number of blocks in the last validated blocks cache               |
 | `teranode_blockvalidation_block_exists_cache`          | Gauge     | Number of blocks in the block exists cache                        |
 | `teranode_blockvalidation_subtree_exists_cache`        | Gauge     | Number of subtrees in the subtree exists cache                    |
-| `teranode_blockvalidation_recovered_panics_total`      | CounterVec | Panics recovered in block validation, by `path` label: `worker`, `catchup`, `kafka` or `block_found`. Each one is a bug in the node. The block hash and stack are in the `PANIC` log line |
+| `teranode_blockvalidation_recovered_panics_total`      | CounterVec | Panics recovered in block validation, by `path` label: `worker`, `catchup`, `kafka` or `block_found`, or for an errgroup goroutine those start, `catchup_fetch`, `block_validation` or `service`. Each one is a bug in the node. The stack, and on most paths the block hash, are in the `PANIC` log line |
 
 ### Catchup Operation Metrics
 
@@ -268,6 +269,9 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_legacy_netsync_process_block` | Histogram | The time taken to process a block |
 | `teranode_legacy_netsync_orphans` | Gauge | The number of orphan transactions |
 | `teranode_legacy_netsync_orphans_abandoned_total` | Counter | Orphan transactions dropped for good: evicted from the orphan pool and still invalid on the final validation attempt |
+| `teranode_legacy_netsync_relayed_tx_dropped_total` | Counter | Transactions relayed by legacy peers and dropped unvalidated: the relay queue was full or over its byte budget, the peer left before it was registered, or the sync manager stopped |
+| `teranode_legacy_netsync_inv_dropped_total` | CounterVec | Transaction announcements from legacy peers dropped without being asked for, in hashes, by reason (label `reason`): `peer_share` when the peer was over its share, `node_cap` when the node was over `legacy_invQueueMaxHashes`, `handlers_busy` when every `legacy_invHandlerSlots` handler slot for transaction-only messages was taken, `request_queue` when the peer already had 50,000 missing transactions waiting for a getdata, `lookup_failed` when the store read failed |
+| `teranode_legacy_netsync_inv_queued_hashes` | Gauge | Transaction announcements from legacy peers held from the read loop until a lookup worker finishes with them, in hashes; `legacy_invQueueMaxHashes` bounds it |
 | `teranode_legacy_netsync_orphan_time` | Histogram | The time taken to process an orphan transaction |
 | `teranode_legacy_netsync_parked_blocks` | Gauge | The number of downloaded blocks held on disk waiting for their parent |
 | `teranode_legacy_netsync_parked_bytes` | Gauge | Bytes the park bills for the blocks it holds: a block parked off the wire at its wire size, a block recovered from disk after a restart at its converted record's size; `bytes_ahead` is what the backstop reads |
@@ -346,6 +350,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_bless_missing_transaction`      | Histogram | Duration of bless missing transaction             |
 | `teranode_subtreevalidation_bless_unlock_failed`            | Counter   | Accepted transactions blessed although their two-phase-commit unlock failed |
 | `teranode_subtreevalidation_bless_unlock_recovered`         | Counter   | Subset of `bless_unlock_failed` that the per-level unlock retry made spendable |
+| `teranode_subtreevalidation_conflicting_kept_aside`         | Counter   | Transactions of peer subtrees kept aside because they conflict with accepted transactions, until a block references them, counted per validation pass |
 | `teranode_subtreevalidation_bless_unlock_retry_failed_batches` | Counter | Unlock retry calls that returned an error; counted per call, not per transaction, because the store reports no per-record result |
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_batch`  | Histogram | Duration of one SetCacheMulti batch from a Kafka txmeta message (per Kafka message, not per entry) |
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_count`  | Counter   | Number of ADD entries processed from Kafka (per-entry; mirrors the pre-batching histogram count)   |
@@ -353,6 +358,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_subtreevalidation_set_tx_meta_cache_kafka_errors` | Counter   | Number of errors setting tx meta cache from kafka |
 | `teranode_subtreevalidation_kafka_malformed_messages_total` | Counter   | Malformed Kafka subtree messages dropped, labelled by `reason` (`nil_message`, `too_short`, `unmarshal_failure`, `bad_hash`, `bad_url`) |
 | `teranode_subtreevalidation_subtree_already_exists_skipped_total` | Counter | Subtree Kafka messages skipped because the subtree already exists. Benign individually; the per-message log line is at DEBUG, so watch this rate instead |
+| `teranode_subtreevalidation_cached_subtree_conflict_probes_total` | Counter | Transactions of already-cached subtrees whose conflicting flag was read from the UTXO store during block blessing. Scales with transactions per block |
 | `teranode_subtreevalidation_peer_subtree_admission_wait` | Histogram | Seconds a peer subtree waited for a `subtreevalidation_peerSubtreeConcurrency` slot |
 | `teranode_subtreevalidation_peer_subtree_admission_waiting` | Gauge | Peer subtrees waiting for a `subtreevalidation_peerSubtreeConcurrency` slot |
 
@@ -413,6 +419,7 @@ The download gauges and the `download_*_total` counters are published from the 3
 | `teranode_tx_meta_cache_current_gen_entries`  | Gauge | Number of entries in the current generation of the tx meta cache |
 | `teranode_tx_meta_cache_previous_gen_entries` | Gauge | Number of valid entries from the previous generation in the tx meta cache |
 | `teranode_tx_meta_cache_lane_waits`           | Gauge | Number of times a `lockfree` cache writer found every lane busy; should stay 0 |
+| `teranode_tx_meta_cache_tombstoned_writes_evicted_total` | Counter | Writes of a tx demoted to conflicting that were dropped, or evicted right after landing when the demotion arrived during the write: a txmeta ADD consumed after the demotion's DELETE (they travel on different partitions), or a read-through write whose store read raced the demotion. Non-zero means the race happened and was absorbed |
 
 ## Aerospike Service Metrics
 
@@ -474,5 +481,7 @@ CounterVec metrics use labels: `function` (function name), `error` (error type).
 | `teranode_subtreeprocessor_remove_tx`                    | Histogram | Duration of removing tx in subtree processor                      |
 | `teranode_subtreeprocessor_reset`                        | Histogram | Duration of resetting subtree processor                           |
 | `teranode_subtreeprocessor_dynamic_subtree_size`         | Gauge     | Size of the dynamic subtree in the subtree processor              |
+| `teranode_subtreeprocessor_blockmaxsize_resizes`         | Counter   | Number of times the queued subtrees were re-chunked because the first one exceeded `blockmaxsize`. A resize lasts for one block, so a count that rises every block means the queue is rebuilt and stored again each block |
 | `teranode_subtreeprocessor_current_state`                | Gauge     | Current state of the subtree processor                           |
 | `teranode_subtreeprocessor_oversize_batch_admitted_total` | Counter  | Number of client batches that exceeded the normalized `blockassembly_maxQueueItems` and were admitted alone onto an empty queue, so the ceiling is transiently exceeded by one batch rather than that client wedging forever. **Any** non-zero value means a client's batch size is above this pod's normalized cap and the cross-pod sizing guidance in the `blockassembly_maxQueueItems` longdesc has not been applied |
+| `teranode_subtreeprocessor_txmeta_delete_dropped_total` | Counter | Txmeta cache DELETEs for txs demoted to conflicting that block assembly dropped because the txmeta producer buffer was full or stopped. Each one can leave subtree validation caching that tx as non-conflicting until the cache rotates it out, so alert on any increase |

@@ -470,8 +470,9 @@ func TestReleaseCatchupLock_DrainChargesPrimaryEvenOnMixedCycle(t *testing.T) {
 	server.recordCatchupPeerFailure("primary-peer", errors.NewNotFoundError("status code [404] subtree not found"))
 
 	// ...and the cycle's terminal error is unrelated: a generic peer error, not
-	// ErrExternal/ErrBlockInvalid/ErrBlockIncomplete/local.
-	relErr := error(errors.NewProcessingError("terminal generic peer error"))
+	// ErrExternal/ErrBlockInvalid/ErrBlockIncomplete/local. Not a ProcessingError:
+	// that code is local and would skip the reportPeerErr branch.
+	relErr := error(errors.NewNetworkInvalidResponseError("terminal generic peer error"))
 	server.releaseCatchupLock(ctx, &relErr)
 
 	recorder.mu.Lock()
@@ -896,6 +897,15 @@ func TestShouldReportConsensusMalicious(t *testing.T) {
 				errors.NewContextCanceledError("catchup context cancelled on shutdown")),
 			want: false,
 		},
+		{
+			// The processing exemption must not swallow a consensus code that a
+			// processing wrapper carries: this is blessMissingTransaction's shape for a
+			// block that double-spends against its own ancestry.
+			name: "processing error wrapping tx-invalid is still the peer's fault",
+			err: errors.NewProcessingError("failed to check counter conflicting tx on current chain",
+				errors.NewTxInvalidError("transaction is already mined on our chain")),
+			want: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1033,6 +1043,56 @@ func TestIsLocalCatchupFault(t *testing.T) {
 			err: errors.NewBlockInvalidError("block is not valid",
 				errors.NewContextCanceledError("catchup context cancelled on shutdown")),
 			want: true,
+		},
+		{
+			name: "bare processing error is ours",
+			err:  errors.NewProcessingError("failed to add node to subtree"),
+			want: true,
+		},
+		{
+			// The counter-spend lookup during conflict resolution missed a record the
+			// pruner removed: our state, not anything the peer served.
+			name: "conflict resolution read miss is ours",
+			err: errors.NewProcessingError("failed to check counter conflicting tx on current chain",
+				errors.NewProcessingError("failed to get counter conflicting tx meta",
+					errors.NewTxNotFoundError("tx not found"))),
+			want: true,
+		},
+		{
+			name: "conflict walk budget exceeded is ours",
+			err: errors.NewProcessingError("failed to bless missing transaction",
+				errors.NewUtxoWalkLimitExceededError("conflicting walk exceeded 100000 nodes")),
+			want: true,
+		},
+		{
+			// blessMissingTransaction wraps a counter-spend already mined in the block's
+			// own ancestry in a ProcessingError. The block double-spends its own history,
+			// so the consensus code must win over the processing wrapper.
+			name: "processing error wrapping tx-invalid is the peer's",
+			err: errors.NewProcessingError("failed to check counter conflicting tx on current chain",
+				errors.NewTxInvalidError("transaction is already mined on our chain")),
+			want: false,
+		},
+		{
+			name: "block-invalid wrapping a processing error is the peer's",
+			err: errors.NewBlockInvalidError("parent not on chain",
+				errors.NewProcessingError("parent check failed")),
+			want: false,
+		},
+		{
+			name: "processing error wrapping a corrupt body is the peer's",
+			err:  errors.NewProcessingError("catchup failed", errors.NewBlockCorruptError("body does not bind to header")),
+			want: false,
+		},
+		{
+			name: "processing error wrapping an invalid peer response is the peer's",
+			err:  errors.NewProcessingError("catchup failed", errors.NewNetworkInvalidResponseError("subtree bytes hash to a different hash")),
+			want: false,
+		},
+		{
+			name: "processing error wrapping an incomplete block is the peer's",
+			err:  errors.NewProcessingError("catchup failed", errors.NewBlockIncompleteError("no coinbase from seeded peer")),
+			want: false,
 		},
 	}
 

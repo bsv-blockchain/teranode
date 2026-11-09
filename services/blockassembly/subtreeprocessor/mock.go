@@ -358,6 +358,11 @@ func (m *MockSubtreeProcessor) WaitForPendingBlocks(ctx context.Context) error {
 	return args.Error(0)
 }
 
+// RequestBlockMaxSizeCheck implements Interface.RequestBlockMaxSizeCheck
+func (m *MockSubtreeProcessor) RequestBlockMaxSizeCheck() {
+	m.Called()
+}
+
 // Stop implements Interface.Stop
 func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 	m.Called(ctx)
@@ -367,4 +372,8 @@ func (m *MockSubtreeProcessor) Stop(ctx context.Context) {
 func (m *MockSubtreeProcessor) ReconcileCoinbases(ctx context.Context, gapBlocks []*model.Block) error {
 	args := m.Called(ctx, gapBlocks)
 	return args.Error(0)
+}
+
+func (m *MockSubtreeProcessor) MarkRecoveredConflicts(ctx context.Context, hashes []chainhash.Hash) error {
+	return m.Called(ctx, hashes).Error(0)
 }

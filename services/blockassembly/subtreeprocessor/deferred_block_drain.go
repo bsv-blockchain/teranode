@@ -9,6 +9,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	txmap "github.com/bsv-blockchain/go-tx-map"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 )
 
 // deferredBlockDrain is the end of a moveForwardBlock that the caller runs
@@ -29,6 +30,10 @@ type deferredBlockDrain struct {
 	transactionMap    *SortedHashSet
 	losingTxHashesMap txmap.TxMap
 	conflictingHashes map[chainhash.Hash]struct{}
+	// ackConflictIntents is set when the block has conflicting nodes, so ProcessConflicting ran
+	// for it and left a forward intent to acknowledge. It does not depend on how many
+	// transactions the operation demoted, which can be none.
+	ackConflictIntents bool
 }
 
 // runDeferredBlockDrain runs the end of a moveForwardBlock that
@@ -71,6 +76,13 @@ func (stp *SubtreeProcessor) runDeferredBlockDrain(ctx context.Context, block *m
 	// The clear is moveForwardBlock's commit point, so a storage error from it
 	// keeps the label it had when the clear ran inside moveForwardBlock.
 	stp.drainAndLogDiskTxMapErr("moveForwardBlock_commit")
+	if !stp.drainResetRequested.Load() && drain.ackConflictIntents {
+		// The block is committed. A failed acknowledgement is only reported, as in moveForwardBlock:
+		// the finished intent stays pending, and the next startup replays and acknowledges it.
+		if err := utxo.CompleteConflictIntentsForBlock(ctx, stp.utxoStore, *block.Hash()); err != nil {
+			stp.logger.Errorf("[SubtreeProcessor][%s] conflict WAL acknowledgement failed after commit; the intent stays pending until startup recovery: %v", block.String(), err)
+		}
+	}
 }
 
 // drainQueueAfterBlock drains the queue as dequeueDuringBlockMovement does -
