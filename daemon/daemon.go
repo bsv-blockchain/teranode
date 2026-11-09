@@ -505,8 +505,9 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	// error). Report the start failure, which is the root cause.
 	//
 	// A start "failure" that is only context.Canceled is not one: a SIGINT or
-	// SIGTERM, or Stop(), cancelled a context-aware Init. sm.Wait() treats the
-	// same cancellation as a clean shutdown, so defer to its result here: nil
+	// SIGTERM, or Stop(), cancelled a context-aware Init. The service manager
+	// treats a service that returns on its own cancelled context as a clean
+	// stop, so defer to sm.Wait()'s result here: nil
 	// for a requested stop, or the real error when a running service failed
 	// first and its errgroup cancellation reached the Init.
 	//

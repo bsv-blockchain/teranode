@@ -841,6 +841,51 @@ func TestDaemon_Start_RemoteCancelDuringInitIsReturned(t *testing.T) {
 	require.Equal(t, codes.Canceled, status.Code(err))
 }
 
+// runningRemoteCancelService signals ready, then fails with a gRPC
+// codes.Canceled when released, as a running service does when a remote
+// service it waits on (the blockchain FSM, say) is stopping.
+type runningRemoteCancelService struct {
+	*mockService
+	release        chan struct{}
+	ctxErrAtReturn chan error
+}
+
+func (s *runningRemoteCancelService) Start(ctx context.Context, ready chan<- struct{}) error {
+	close(ready)
+	<-s.release
+	s.ctxErrAtReturn <- ctx.Err()
+
+	return status.Error(codes.Canceled, "remote handler stopped")
+}
+
+// TestDaemon_Start_RunningServiceRemoteCancelIsReturned: the same remote
+// cancellation as RemoteCancelDuringInit, but from a service that is already
+// running, so it reaches Start through ServiceManager.Wait rather than the
+// startup error. Nothing asked this process to stop, so Start must fail.
+func TestDaemon_Start_RunningServiceRemoteCancelIsReturned(t *testing.T) {
+	svc := &runningRemoteCancelService{
+		mockService:    newMockService("running-remote-cancel"),
+		release:        make(chan struct{}),
+		ctxErrAtReturn: make(chan error, 1),
+	}
+
+	readyCh := make(chan struct{})
+	_, result := startDaemon(t, []string{"-all=0"}, nil, readyCh, namedService{svc.name, svc})
+
+	select {
+	case <-readyCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("service did not become ready")
+	}
+
+	close(svc.release)
+
+	err := awaitStartResult(t, result)
+	require.NoError(t, <-svc.ctxErrAtReturn, "premise: the local context was live when Start returned")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remote handler stopped")
+}
+
 // TestDaemon_Start_CancelDuringInitKeepsEarlierServiceFailure: a running
 // service fails, and the errgroup's cancellation is what ends a later
 // service's Init. The Init error is only context.Canceled, but the daemon did
