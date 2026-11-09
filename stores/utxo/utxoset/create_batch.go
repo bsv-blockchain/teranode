@@ -708,17 +708,20 @@ func (s *Store) runSeedPlan(ctx context.Context, q querier, p *createPlan) error
 
 // runIdentPlan claims the identity half of a plan on the identity table.
 func (s *Store) runIdentPlan(ctx context.Context, q querier, p *createPlan) error {
-	args := []any{
+	stmt, argCount := createIdentPlanSQL, 26
+	if p.lanes != nil {
+		stmt, argCount = createIdentPlanLaneSQL, 27
+	}
+
+	// Sized up front: growing a slice this wide for one more argument costs a whole second array.
+	args := append(make([]any, 0, argCount),
 		p.idx, p.leaves, p.txids, p.heights, p.offChain, p.sizes,
 		p.inpoints, p.locktimes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.minedHeight, p.blockID, p.subtreeIdx,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoLeaves, p.utxoFlags,
-		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees,
-	}
-
-	stmt := createIdentPlanSQL
+		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
 	if p.lanes != nil {
-		stmt, args = createIdentPlanLaneSQL, append(args, p.lanes)
+		args = append(args, p.lanes)
 	}
 
 	rows, err := q.Query(ctx, stmt, args...)
@@ -755,16 +758,18 @@ func (s *Store) runMinedPlan(ctx context.Context, q querier, p *createPlan) erro
 
 	s.countCreatesAheadOfTip(p)
 
-	args := []any{
+	stmt, argCount := createMinedPlanSQL, 25
+	if p.lanes != nil {
+		stmt, argCount = createMinedPlanLaneSQL, 26
+	}
+
+	args := append(make([]any, 0, argCount),
 		p.idx, p.leaves, p.txids, p.heights, p.minedHeight, p.blockID, p.subtreeIdx,
 		p.sizes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoMined, p.utxoBlockIDs,
-		p.utxoLeaves, p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees,
-	}
-
-	stmt := createMinedPlanSQL
+		p.utxoLeaves, p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
 	if p.lanes != nil {
-		stmt, args = createMinedPlanLaneSQL, append(args, p.lanes)
+		args = append(args, p.lanes)
 	}
 
 	rows, err := q.Query(ctx, stmt, args...)

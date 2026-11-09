@@ -864,14 +864,14 @@ func withLanePositionColumn(stmt string) string {
 	return out
 }
 
-// createCTEStatement returns the CTE statement for a record and the extra
-// trailing argument it needs: none without a lane position, $27 with one.
-func createCTEStatement(position uint64) (string, []any) {
+// createCTEStatement returns the CTE statement for a record and how many arguments it takes: 26
+// without a lane position, 27 with one, so the arguments are sized once for what the record needs.
+func createCTEStatement(position uint64) (string, int) {
 	if position == lane.None {
-		return createCTESQL, nil
+		return createCTESQL, 26
 	}
 
-	return createCTEWithLanePositionSQL, []any{lane.ToSigned(position)}
+	return createCTEWithLanePositionSQL, 27
 }
 
 // createCTE executes a single CTE statement with UNNEST arrays to insert a transaction
@@ -896,8 +896,8 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 	var inserted bool
 	err = sqlConn.Raw(func(driverConn interface{}) error {
 		pgxConn := driverConn.(*stdlib.Conn).Conn()
-		stmt, extra := createCTEStatement(options.LanePosition)
-		args := append(make([]any, 0, 26+len(extra)),
+		stmt, argCount := createCTEStatement(options.LanePosition)
+		args := append(make([]any, 0, argCount),
 			// $1-$10: transaction scalars
 			txHash[:], btTx.Version, btTx.LockTime, txMeta.Fee, txMeta.SizeInBytes,
 			isCoinbase, options.Frozen, options.Conflicting, options.Locked, unminedSince,
@@ -913,7 +913,11 @@ func (s *Store) createCTE(ctx context.Context, btTx *bt.Tx, blockHeight uint32, 
 			// $26: delete_at_height for a mined tx with no spendable outputs
 			s.unspendableMinedTxDAH(btTx, blockHeight, options),
 		)
-		rows, execErr := pgxConn.Query(ctx, stmt, append(args, extra...)...)
+		if options.LanePosition != lane.None {
+			args = append(args, lane.ToSigned(options.LanePosition))
+		}
+
+		rows, execErr := pgxConn.Query(ctx, stmt, args...)
 		if execErr != nil {
 			return execErr
 		}
@@ -1206,8 +1210,8 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 		for _, idx := range validIndices {
 			p := &prepared[idx]
 			item := batch[idx]
-			stmt, extra := createCTEStatement(item.options.LanePosition)
-			args := append(make([]any, 0, 26+len(extra)),
+			stmt, argCount := createCTEStatement(item.options.LanePosition)
+			args := append(make([]any, 0, argCount),
 				// $1-$10: transaction scalars
 				p.txHash[:], item.tx.Version, item.tx.LockTime,
 				p.txMeta.Fee, p.txMeta.SizeInBytes,
@@ -1227,7 +1231,11 @@ func (s *Store) sendCreateBatch(batch []*batchCreateItem) {
 				// $26: delete_at_height for a mined tx with no spendable outputs
 				s.unspendableMinedTxDAH(item.tx, item.blockHeight, item.options),
 			)
-			pgxBatch.Queue(stmt, append(args, extra...)...)
+			if item.options.LanePosition != lane.None {
+				args = append(args, lane.ToSigned(item.options.LanePosition))
+			}
+
+			pgxBatch.Queue(stmt, args...)
 		}
 
 		br := pgxConn.SendBatch(s.ctx, pgxBatch)

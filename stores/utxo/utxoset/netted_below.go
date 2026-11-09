@@ -597,11 +597,15 @@ func (s *Store) netBelowClaim(ctx context.Context, dbTx pgx.Tx, p *createPlan) (
 
 	s.countCreatesAheadOfTip(p)
 
-	args := []any{p.txids, p.minedHeight, p.blockID, p.subtreeIdx, p.heights, p.sizes, p.fees, p.createdAt, p.txFlags}
-
-	stmt := nettedMinedSQL
+	stmt, argCount := nettedMinedSQL, 9
 	if p.lanes != nil {
-		stmt, args = nettedMinedLaneSQL, append(args, p.lanes)
+		stmt, argCount = nettedMinedLaneSQL, 10
+	}
+
+	args := append(make([]any, 0, argCount),
+		p.txids, p.minedHeight, p.blockID, p.subtreeIdx, p.heights, p.sizes, p.fees, p.createdAt, p.txFlags)
+	if p.lanes != nil {
+		args = append(args, p.lanes)
 	}
 
 	rows, err := dbTx.Query(ctx, stmt, args...)
