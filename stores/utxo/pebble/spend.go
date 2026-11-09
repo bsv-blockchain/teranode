@@ -64,6 +64,10 @@ func (s *Store) stageMaster(batch *pebble.Batch, hash []byte, old, updated *mast
 		}
 	}
 
+	if old.flags&flagLocked != 0 && updated.flags&flagLocked == 0 {
+		_ = batch.Delete(ownerKey(hash), nil)
+	}
+
 	encoded, err := encodeMaster(updated)
 	if err != nil {
 		return err

@@ -39,6 +39,8 @@ const (
 	prefixIntent       = 'w'
 	prefixOverride     = 'o'
 	prefixMeta         = 'M'
+	prefixRecovery     = 'r'
+	prefixLockOwner    = 'O'
 	numStripes         = 1024
 	spikePageSizeSlots = 64
 )

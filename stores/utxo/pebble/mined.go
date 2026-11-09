@@ -170,6 +170,40 @@ func (s *Store) GetConflictingTxIterator() (utxo.UnminedTxIterator, error) {
 	return &heightIndexIterator{store: s, prefix: prefixConflictIdx, cutoff: -1}, nil
 }
 
+func (s *Store) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	snap, release, err := s.snapshot()
+	if err != nil {
+		return nil, false, err
+	}
+
+	defer release()
+
+	lower, upper := prefixBounds([]byte{prefixConflictIdx})
+
+	iter, err := snap.NewIter(&pebbledb.IterOptions{LowerBound: lower, UpperBound: upper})
+	if err != nil {
+		return nil, false, errors.NewStorageError("pebble: conflicting index scan failed", err)
+	}
+
+	defer func() { _ = iter.Close() }()
+
+	hashes := make([]chainhash.Hash, 0, 16)
+
+	for iter.First(); iter.Valid(); iter.Next() {
+		if err = ctx.Err(); err != nil {
+			return nil, false, errors.NewContextCanceledError("pebble: conflicting index scan canceled", err)
+		}
+
+		hashes = append(hashes, chainhash.Hash(iter.Key()[1:]))
+	}
+
+	if err = iter.Error(); err != nil {
+		return nil, false, errors.NewStorageError("pebble: conflicting index iteration failed", err)
+	}
+
+	return hashes, true, nil
+}
+
 func (it *heightIndexIterator) Next(ctx context.Context) ([]*utxo.UnminedTransaction, error) {
 	it.mu.Lock()
 	defer it.mu.Unlock()

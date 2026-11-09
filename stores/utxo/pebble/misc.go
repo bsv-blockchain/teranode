@@ -20,7 +20,7 @@ import (
 	pebbledb "github.com/cockroachdb/pebble/v2"
 )
 
-func txInpointsFromBlob(inputsBlob []byte) (*subtree.TxInpoints, error) {
+func inputsFromBlob(inputsBlob []byte) ([]*bt.Input, error) {
 	n := offsetBlobCount(inputsBlob)
 	inputs := make([]*bt.Input, n)
 
@@ -34,6 +34,15 @@ func txInpointsFromBlob(inputsBlob []byte) (*subtree.TxInpoints, error) {
 		if _, err = inputs[i].ReadFromExtended(bytes.NewReader(item)); err != nil {
 			return nil, errors.NewTxInvalidError("pebble: could not read input %d", i, err)
 		}
+	}
+
+	return inputs, nil
+}
+
+func txInpointsFromBlob(inputsBlob []byte) (*subtree.TxInpoints, error) {
+	inputs, err := inputsFromBlob(inputsBlob)
+	if err != nil {
+		return nil, err
 	}
 
 	txInpoints, err := subtree.NewTxInpointsFromInputs(inputs)
@@ -337,24 +346,6 @@ func decodeIntent(b []byte) (utxo.ConflictIntent, error) {
 	return intent, nil
 }
 
-func (s *Store) BeginConflictIntent(ctx context.Context, intent utxo.ConflictIntent) error {
-	id := intent.IntentID()
-
-	if err := s.setDirect(intentKey(id[:]), encodeIntent(intent)); err != nil {
-		return errors.NewStorageError("pebble: failed to record conflict intent %s", id, err)
-	}
-
-	return nil
-}
-
-func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
-	if err := s.deleteDirect(intentKey(intentID[:])); err != nil {
-		return errors.NewStorageError("pebble: failed to remove conflict intent %s", intentID, err)
-	}
-
-	return nil
-}
-
 func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
 	lower, upper := prefixBounds([]byte{prefixIntent})
 
@@ -372,6 +363,8 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 		if err != nil {
 			return nil, err
 		}
+
+		intent.ID = chainhash.Hash(iter.Key()[1:])
 
 		intents = append(intents, intent)
 	}

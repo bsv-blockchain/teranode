@@ -470,6 +470,7 @@ func (s *Store) stageDelete(batch *pebble.Batch, hash []byte) error {
 	_ = batch.Delete(conflictIdxKey(hash), nil)
 	_ = batch.Delete(masterKey(hash), nil)
 	_ = batch.Delete(payloadKey(hash), nil)
+	_ = batch.Delete(ownerKey(hash), nil)
 
 	// Collect the forward edges where this hash is the parent before the range
 	// delete below removes them, so each paired reverse edge goes too. Without

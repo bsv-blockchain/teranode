@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util"
@@ -325,6 +326,54 @@ func TestConflictingIteratorAndSkipInUnmined(t *testing.T) {
 	all = drainUnmined(t, it)
 	require.Len(t, all, 1)
 	require.Equal(t, *normal.TxIDChainHash(), all[0].Node.Hash)
+}
+
+func TestConflictingTxHashesReadsTheIndex(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	hashes, indexed, err := store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Empty(t, hashes)
+
+	conflicting := newExtendedTx(t, 1, 52_000)
+	mustCreate(t, store, conflicting, 100, utxo.WithConflicting(true))
+
+	normal := newExtendedTx(t, 1, 53_000)
+	mustCreate(t, store, normal, 100)
+
+	hashes, indexed, err = store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.True(t, indexed)
+	require.Equal(t, []chainhash.Hash{*conflicting.TxIDChainHash()}, hashes)
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*normal.TxIDChainHash()}, true)
+	require.NoError(t, err)
+
+	hashes, _, err = store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []chainhash.Hash{*conflicting.TxIDChainHash(), *normal.TxIDChainHash()}, hashes)
+
+	_, _, err = store.SetConflicting(ctx, []chainhash.Hash{*conflicting.TxIDChainHash()}, false)
+	require.NoError(t, err)
+
+	hashes, _, err = store.ConflictingTxHashes(ctx)
+	require.NoError(t, err)
+	require.Equal(t, []chainhash.Hash{*normal.TxIDChainHash()}, hashes)
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	_, indexed, err = store.ConflictingTxHashes(canceled)
+	require.Error(t, err)
+	require.False(t, indexed)
+
+	require.NoError(t, store.Close(ctx))
+
+	_, indexed, err = store.ConflictingTxHashes(ctx)
+	require.Error(t, err)
+	require.False(t, indexed)
 }
 
 func TestConsistencyScanFindsMinedButUnmined(t *testing.T) {
@@ -676,4 +725,142 @@ func TestPreviousOutputsDecorate(t *testing.T) {
 	err := store.PreviousOutputsDecorate(context.Background(), orphan)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, errors.ErrTxNotFound))
+}
+
+func TestSpendsMadeByAnswersFromSlots(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	parent := newExtendedTx(t, 3, 150_000)
+	mustCreate(t, store, parent, 100)
+
+	child := newSpendingTx(t, parent, 0, 2)
+	mustCreate(t, store, child, 101)
+
+	spends, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+
+	_, err = store.Spend(ctx, child, 102)
+	require.NoError(t, err)
+
+	made, err := store.SpendsMadeBy(ctx, *child.TxIDChainHash())
+	require.NoError(t, err)
+	require.Len(t, made, 2)
+
+	for i, sp := range made {
+		require.Equal(t, *parent.TxIDChainHash(), *sp.TxID)
+		require.Equal(t, spends[i].Vout, sp.Vout)
+		require.Equal(t, *spends[i].UTXOHash, *sp.UTXOHash)
+		require.Equal(t, *child.TxIDChainHash(), *sp.SpendingData.TxID)
+		require.Equal(t, i, sp.SpendingData.Vin)
+	}
+
+	other := newSpendingTx(t, parent, 1)
+	mustCreate(t, store, other, 101)
+
+	made, err = store.SpendsMadeBy(ctx, *other.TxIDChainHash())
+	require.NoError(t, err)
+	require.Empty(t, made, "an input this transaction never spent is omitted")
+
+	require.NoError(t, store.Delete(ctx, parent.TxIDChainHash()))
+
+	made, err = store.SpendsMadeBy(ctx, *child.TxIDChainHash())
+	require.NoError(t, err)
+	require.Empty(t, made, "a pruned parent is omitted")
+
+	_, err = store.SpendsMadeBy(ctx, *newExtendedTx(t, 1, 151_000).TxIDChainHash())
+	require.ErrorIs(t, err, errors.ErrTxNotFound)
+}
+
+func TestConflictLocksAreOwnedByTheOperation(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	parent := newExtendedTx(t, 1, 152_000)
+	mustCreate(t, store, parent, 100)
+
+	hash := *parent.TxIDChainHash()
+	ownerA := chainhash.HashH([]byte("operation a"))
+	ownerB := chainhash.HashH([]byte("operation b"))
+
+	require.NoError(t, store.SetConflictLocks(ctx, ownerA, []chainhash.Hash{hash}, true))
+	require.NoError(t, store.SetConflictLocks(ctx, ownerA, []chainhash.Hash{hash}, true), "the owner may retry")
+
+	require.Error(t, store.SetConflictLocks(ctx, ownerB, []chainhash.Hash{hash}, true))
+	require.Error(t, store.SetConflictLocks(ctx, ownerB, []chainhash.Hash{hash}, false))
+	require.NoError(t, store.ReleaseConflictLocks(ctx, ownerB, []chainhash.Hash{hash}))
+
+	md, err := store.Get(ctx, &hash, fields.Locked)
+	require.NoError(t, err)
+	require.True(t, md.Locked, "a foreign operation leaves the lock alone")
+
+	require.NoError(t, store.SetConflictLocks(ctx, ownerA, []chainhash.Hash{hash}, false))
+
+	md, err = store.Get(ctx, &hash, fields.Locked)
+	require.NoError(t, err)
+	require.False(t, md.Locked)
+	require.NoError(t, store.SetConflictLocks(ctx, ownerB, []chainhash.Hash{hash}, false), "an unlocked parent needs no owner")
+
+	require.NoError(t, store.SetConflictLocks(ctx, ownerA, []chainhash.Hash{hash}, true))
+	require.NoError(t, store.SetLocked(ctx, []chainhash.Hash{hash}, false))
+	require.NoError(t, store.SetConflictLocks(ctx, ownerB, []chainhash.Hash{hash}, true), "an ordinary unlock clears the owner")
+	require.NoError(t, store.ReleaseConflictLocks(ctx, ownerB, []chainhash.Hash{hash}))
+
+	md, err = store.Get(ctx, &hash, fields.Locked)
+	require.NoError(t, err)
+	require.False(t, md.Locked)
+
+	missing := *newExtendedTx(t, 1, 153_000).TxIDChainHash()
+	require.Error(t, store.SetConflictLocks(ctx, ownerA, []chainhash.Hash{missing}, true))
+	require.NoError(t, store.ReleaseConflictLocks(ctx, ownerA, []chainhash.Hash{missing}))
+}
+
+func TestConflictRecoveryLifecycle(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	intent := utxo.ConflictIntent{
+		Kind:      utxo.ConflictIntentForward,
+		BlockHash: chainhash.HashH([]byte("block")),
+		StartedAt: 1,
+	}
+	id := intent.IntentID()
+
+	require.Error(t, store.SaveConflictRecovery(ctx, id, &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryPlanning}),
+		"a checklist needs its intent")
+
+	recovery, err := store.LoadConflictRecovery(ctx, id)
+	require.NoError(t, err)
+	require.Nil(t, recovery)
+
+	intent.Recovery = &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryPlanning}
+	require.NoError(t, store.BeginConflictIntent(ctx, intent))
+
+	intent.Recovery = &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryFinished}
+	require.NoError(t, store.BeginConflictIntent(ctx, intent), "begin is idempotent and keeps the first checklist")
+
+	recovery, err = store.LoadConflictRecovery(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, utxo.ConflictRecoveryPlanning, recovery.Phase)
+
+	require.NoError(t, store.SaveConflictRecovery(ctx, id, &utxo.ConflictRecovery{Version: 1, Phase: utxo.ConflictRecoveryMutating}))
+
+	recovery, err = store.LoadConflictRecovery(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, utxo.ConflictRecoveryMutating, recovery.Phase)
+
+	pending, err := store.PendingConflictIntents(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, id, pending[0].ID)
+	require.Nil(t, pending[0].Recovery)
+
+	require.NoError(t, store.CompleteConflictIntent(ctx, id))
+	require.NoError(t, store.CompleteConflictIntent(ctx, id), "completing an absent intent is not an error")
+
+	recovery, err = store.LoadConflictRecovery(ctx, id)
+	require.NoError(t, err)
+	require.Nil(t, recovery)
+
+	require.Equal(t, pruner.NoStamp, store.Stamper())
 }
