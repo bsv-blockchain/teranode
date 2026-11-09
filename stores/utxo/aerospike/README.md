@@ -452,7 +452,7 @@ the legacy cleanup still clears it.
 
 ### Lua package version and re-registration
 
-The Lua package name carries a version (`teranode_v63`). A UDF registered under the same
+The Lua package name carries a version (`teranode_v66`). A UDF registered under the same
 filename is no longer trusted: at startup the registered body is read back (`udf-get`) and
 compared byte for byte with the embedded script. On a mismatch the store logs a warning with
 both SHA-1 digests and the listed hash, and registers the embedded script again

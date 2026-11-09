@@ -218,10 +218,10 @@ type Store struct {
 	outpointBatcher     batcherIfc[batchOutpoint]
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]
-	lockedBatcher   batcherIfc[batchLocked]
-	finalizeBatcher batcherIfc[batchFinalize]
-	externalStore   blob.Store
-	utxoBatchSize   int
+	lockedBatcher       batcherIfc[batchLocked]
+	finalizeBatcher     batcherIfc[batchFinalize]
+	externalStore       blob.Store
+	utxoBatchSize       int
 
 	// externalTxCache caches whatever GetTxFromExternalStore returned for a txid:
 	// the full externally-stored transaction when a .tx blob exists, otherwise the
