@@ -483,10 +483,11 @@ type SubtreeProcessor struct {
 	lastResetStorageFailed atomic.Bool
 	lastResetRotated       atomic.Bool
 
-	// failedForkReorgNeedsReset is set when a fork reorg (one with moved-back
-	// blocks) fails or panics, and cleared only by a reset that gets past its
-	// tx map rotation. While it is set, Reorg and MoveForwardBlock are refused
-	// with ErrResetRequired. A failed fork reorg leaves subtrees and tx map
+	// failedForkReorgNeedsReset is set when a fork reorg (any reorgBlocks call
+	// other than the forward-only catch-up) fails or panics, and cleared only
+	// by a reset that gets past its tx map rotation. While it is set, Reorg and
+	// MoveForwardBlock are refused with a ResetRequiredError. A failed fork
+	// reorg leaves subtrees and tx map
 	// that disagree: the rollback puts back the pre-reorg subtrees, but the
 	// map is the object the move-back already wrote its transactions into.
 	// A reorg or move-forward run on that state drops the moved-back
