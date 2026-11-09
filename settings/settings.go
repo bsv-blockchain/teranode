@@ -643,6 +643,25 @@ func NewSettings(alternativeContext ...string) *Settings {
 			EnablePeerScoring:              getBool("p2p_enable_peer_scoring", true, alternativeContext...),
 			EnablePeerExchange:             getBool("p2p_enable_peer_exchange", true, alternativeContext...),
 			PeerScoreIPColocationThreshold: getInt("p2p_peer_score_ip_colocation_threshold", 10, alternativeContext...),
+			// Connection manager watermarks and libp2p resource manager overrides.
+			// Every default is 0 / empty, which keeps the go-p2p-message-bus and
+			// go-libp2p defaults, so a node that sets none of these builds the
+			// same message bus config as before the keys existed.
+			MaxConnections:          getInt("p2p_max_connections", 0, alternativeContext...),
+			MinConnections:          getInt("p2p_min_connections", 0, alternativeContext...),
+			ConnectionGracePeriod:   getDuration("p2p_connection_grace_period", 0, alternativeContext...),
+			RcmgrConns:              getInt("p2p_rcmgr_conns", 0, alternativeContext...),
+			RcmgrConnsInbound:       getInt("p2p_rcmgr_conns_inbound", 0, alternativeContext...),
+			RcmgrConnsOutbound:      getInt("p2p_rcmgr_conns_outbound", 0, alternativeContext...),
+			RcmgrStreams:            getInt("p2p_rcmgr_streams", 0, alternativeContext...),
+			RcmgrStreamsInbound:     getInt("p2p_rcmgr_streams_inbound", 0, alternativeContext...),
+			RcmgrStreamsOutbound:    getInt("p2p_rcmgr_streams_outbound", 0, alternativeContext...),
+			RcmgrFD:                 getInt("p2p_rcmgr_fd", 0, alternativeContext...),
+			RcmgrPeerConns:          getInt("p2p_rcmgr_peer_conns", 0, alternativeContext...),
+			RcmgrPeerConnsInbound:   getInt("p2p_rcmgr_peer_conns_inbound", 0, alternativeContext...),
+			RcmgrPeerStreamsInbound: getInt("p2p_rcmgr_peer_streams_inbound", 0, alternativeContext...),
+			RcmgrIPv4SubnetLimits:   dropEmptyStrings(getMultiString("p2p_rcmgr_ipv4_subnet_limits", "|", []string{}, alternativeContext...)),
+			RcmgrIPv6SubnetLimits:   dropEmptyStrings(getMultiString("p2p_rcmgr_ipv6_subnet_limits", "|", []string{}, alternativeContext...)),
 			// Full/pruned node selection configuration
 			AllowPrunedNodeFallback:                   getBool("p2p_allow_pruned_node_fallback", true, alternativeContext...),
 			SyncCoordinatorPeriodicEvaluationInterval: getDuration("p2p_sync_coordinator_periodic_evaluation_interval", 30*time.Second, alternativeContext...),

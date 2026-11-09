@@ -802,7 +802,7 @@ func TestGapBV054_RetryPanicChargesAlternative(t *testing.T) {
 // TestGapBV054_BlockFoundChPanicIsCountedAndAnswersCaller panics in processBlockFoundChannel on a
 // blockFoundCh worker, with a panic value that holds words the substring classifiers look for.
 // The recover must count the panic on the block_found path, and a WaitToComplete caller, which
-// waits on an unbuffered errCh, must get an ERR_PROCESSING error that is not a network, malicious
+// waits on its reply, must get an ERR_PROCESSING error that is not a network, malicious
 // or corrupt error and does not hold the panic value.
 func TestGapBV054_BlockFoundChPanicIsCountedAndAnswersCaller(t *testing.T) {
 	initPrometheusMetrics()
@@ -818,24 +818,24 @@ func TestGapBV054_BlockFoundChPanicIsCountedAndAnswersCaller(t *testing.T) {
 
 	panicsBefore := testutil.ToFloat64(prometheusRecoveredPanics.WithLabelValues(recoveredPanicPathBlockFound))
 
-	errCh := make(chan error)
+	reply := newBlockFoundReply()
 
 	done := make(chan struct{})
 
 	go func() {
-		s.processBlockFoundChItem(ctx, 0, processBlockFound{hash: block.Hash(), baseURL: "http://test-peer", peerID: "peerA", errCh: errCh})
+		s.processBlockFoundChItem(ctx, 0, processBlockFound{hash: block.Hash(), baseURL: "http://test-peer", peerID: "peerA", reply: reply})
 		close(done)
 	}()
 
 	var err error
 
 	select {
-	case err = <-errCh:
+	case err = <-reply.ch:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the WaitToComplete caller got no answer after the panic")
 	}
 
-	gap054RequireAnsweredOnce(t, errCh, done)
+	gap054RequireAnsweredOnce(t, reply, done)
 
 	select {
 	case <-chain.panicking:
@@ -853,20 +853,19 @@ func TestGapBV054_BlockFoundChPanicIsCountedAndAnswersCaller(t *testing.T) {
 	require.False(t, errors.IsMaliciousResponseError(err), "%v", err)
 }
 
-// gap054RequireAnsweredOnce checks, after the caller took one answer from errCh, that the
-// blockFoundCh worker returned and sent no second answer. A second send on the unbuffered errCh
-// would block the worker, so done would never close.
-func gap054RequireAnsweredOnce(t *testing.T, errCh chan error, done chan struct{}) {
+// gap054RequireAnsweredOnce checks, after the caller took one answer from the reply, that the
+// blockFoundCh worker returned and sent no second answer.
+func gap054RequireAnsweredOnce(t *testing.T, reply *blockFoundReply, done chan struct{}) {
 	t.Helper()
 
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the blockFoundCh worker did not return after it answered the caller: a second send on the unbuffered errCh blocks it for ever")
+		t.Fatal("the blockFoundCh worker did not return after it answered the caller")
 	}
 
 	select {
-	case extra := <-errCh:
+	case extra := <-reply.ch:
 		t.Fatalf("the caller got a second answer: %v", extra)
 	default:
 	}
@@ -879,6 +878,12 @@ type gap054ExistsChain struct {
 
 func (c *gap054ExistsChain) GetBlockExists(context.Context, *chainhash.Hash) (bool, error) {
 	return true, nil
+}
+
+// GetBlockHeader reports every block as stored valid, matching GetBlockExists: a WaitToComplete
+// caller of a stored block is answered from the stored header (storedBlockAnswer).
+func (c *gap054ExistsChain) GetBlockHeader(context.Context, *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	return &model.BlockHeader{}, &model.BlockHeaderMeta{}, nil
 }
 
 // gap054PanicLogger wraps a logger and panics on a Debugf call whose format holds match.
@@ -913,22 +918,22 @@ func TestGapBV054_BlockFoundChPanicAfterAnswerDoesNotBlockWorker(t *testing.T) {
 	panicsBefore := testutil.ToFloat64(prometheusRecoveredPanics.WithLabelValues(recoveredPanicPathBlockFound))
 
 	for i := 1; i <= 2; i++ {
-		errCh := make(chan error)
+		reply := newBlockFoundReply()
 		done := make(chan struct{})
 
 		go func() {
-			s.processBlockFoundChItem(ctx, 0, processBlockFound{hash: block.Hash(), baseURL: "http://test-peer", peerID: "peerA", errCh: errCh})
+			s.processBlockFoundChItem(ctx, 0, processBlockFound{hash: block.Hash(), baseURL: "http://test-peer", peerID: "peerA", reply: reply})
 			close(done)
 		}()
 
 		select {
-		case err := <-errCh:
+		case err := <-reply.ch:
 			require.NoError(t, err, "item %d: the caller must get the answer the processing gave, not the panic error", i)
 		case <-time.After(10 * time.Second):
 			t.Fatalf("item %d: the WaitToComplete caller got no answer", i)
 		}
 
-		gap054RequireAnsweredOnce(t, errCh, done)
+		gap054RequireAnsweredOnce(t, reply, done)
 		require.Equal(t, panicsBefore+float64(i), testutil.ToFloat64(prometheusRecoveredPanics.WithLabelValues(recoveredPanicPathBlockFound)), "item %d: the panic after the answer must be recovered and counted", i)
 	}
 }
@@ -983,23 +988,23 @@ func TestGapBV054_BlockFoundChPanicCapStopsFetch(t *testing.T) {
 	httpmock.RegisterResponder("GET", "http://test-peer/block/"+block.Hash().String(), httpmock.NewBytesResponder(200, blockBytes))
 
 	deliver := func(peerID string) error {
-		errCh := make(chan error)
+		reply := newBlockFoundReply()
 		done := make(chan struct{})
 
 		go func() {
-			s.processBlockFoundChItem(ctx, 0, processBlockFound{hash: block.Hash(), baseURL: "http://test-peer", peerID: peerID, errCh: errCh})
+			s.processBlockFoundChItem(ctx, 0, processBlockFound{hash: block.Hash(), baseURL: "http://test-peer", peerID: peerID, reply: reply})
 			close(done)
 		}()
 
 		var answer error
 
 		select {
-		case answer = <-errCh:
+		case answer = <-reply.ch:
 		case <-time.After(10 * time.Second):
 			t.Fatalf("peer %q: the WaitToComplete caller got no answer", peerID)
 		}
 
-		gap054RequireAnsweredOnce(t, errCh, done)
+		gap054RequireAnsweredOnce(t, reply, done)
 
 		return answer
 	}
@@ -1434,23 +1439,23 @@ func (c *gap054PeerListCounter) GetPeersForCatchup(ctx context.Context) ([]*p2p.
 func gap054Deliver(ctx context.Context, t *testing.T, s *Server, hash *chainhash.Hash, baseURL, peerID string) error {
 	t.Helper()
 
-	errCh := make(chan error)
+	reply := newBlockFoundReply()
 	done := make(chan struct{})
 
 	go func() {
-		s.processBlockFoundChItem(ctx, 0, processBlockFound{hash: hash, baseURL: baseURL, peerID: peerID, errCh: errCh})
+		s.processBlockFoundChItem(ctx, 0, processBlockFound{hash: hash, baseURL: baseURL, peerID: peerID, reply: reply})
 		close(done)
 	}()
 
 	var answer error
 
 	select {
-	case answer = <-errCh:
+	case answer = <-reply.ch:
 	case <-time.After(10 * time.Second):
 		t.Fatalf("peer %q: the WaitToComplete caller got no answer", peerID)
 	}
 
-	gap054RequireAnsweredOnce(t, errCh, done)
+	gap054RequireAnsweredOnce(t, reply, done)
 
 	return answer
 }

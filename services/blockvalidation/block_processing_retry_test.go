@@ -1152,7 +1152,7 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 		hash:    blocks[4].Hash(), // This block's parent (block 3) is neither stored nor queued yet
 		baseURL: "http://test-peer",
 		peerID:  "test_peer",
-		errCh:   make(chan error, 1),
+		reply:   newBlockFoundReply(),
 	}
 
 	err = server.processBlockFoundChannel(ctx, blockFound4)
@@ -1176,7 +1176,7 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 		hash:    blocks[3].Hash(),
 		baseURL: "http://test-peer",
 		peerID:  "test_peer",
-		errCh:   make(chan error, 1),
+		reply:   newBlockFoundReply(),
 	}
 
 	// Process the chain-extending block
@@ -1203,7 +1203,7 @@ func TestChainExtendingBlocksNotSentToCatchup(t *testing.T) {
 
 	// Block 4 announced again: its parent is now queued, so it waits behind it instead of
 	// going to catchup (issue 4944), and takes its parent's class
-	blockFound4.errCh = make(chan error, 1)
+	blockFound4.reply = newBlockFoundReply()
 
 	err = server.processBlockFoundChannel(ctx, blockFound4)
 	require.NoError(t, err)

@@ -416,6 +416,10 @@ func buildP2PMessageBusConfig(logger ulogger.Logger, tSettings *settings.Setting
 	// peers; regtest must never dial, relay through or join the DHT of those.
 	conf.DisableDefaultBootstrapPeers = isRegtest(tSettings)
 
+	if err := applyConnectionLimits(&conf, tSettings.P2P); err != nil {
+		return p2pMessageBus.Config{}, err
+	}
+
 	if tSettings.P2P.EnablePeerScoring {
 		params := p2pMessageBus.DefaultPeerScoreParams()
 		if t := tSettings.P2P.PeerScoreIPColocationThreshold; t > 0 {

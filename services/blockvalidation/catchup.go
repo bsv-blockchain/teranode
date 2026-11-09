@@ -57,7 +57,11 @@ type CatchupContext struct {
 	commonAncestorMeta  *model.BlockHeaderMeta
 	commonAncestorIndex int // Index of common ancestor in peer headers
 	forkDepth           uint32
-	currentHeight       uint32
+	// walkExhausted is set by findCommonAncestor when every header the peer served is one we hold,
+	// at or below our tip: the walk ran off the end of the list without finding where the chains
+	// diverge. forkDepth is not measured then, because nothing has shown there is a fork.
+	walkExhausted bool
+	currentHeight uint32
 	// bestBlockMeta is the accepted chain tip read once by findCommonAncestor and reused by
 	// every later step, so they all reason about the same tip. Reading it a second time would
 	// let the tip move in between: the ancestor is chosen against this height, so a tip that
@@ -302,6 +306,14 @@ func (u *Server) catchup(ctx context.Context, blockUpTo *model.Block, peerID, ba
 		return err
 	}
 
+	// Step 3.1: A list whose every header we already hold, at or below our tip, offers nothing new,
+	// so nothing below may act on a fork depth measured from where it ended: not the
+	// coinbase-maturity check, the secret-mining check, the netted-route refusal or the mined_set
+	// clear.
+	if catchupCtx.walkExhausted {
+		return u.handleExhaustedAncestorWalk(ctx, catchupCtx)
+	}
+
 	// Step 4: Validate fork depth against coinbase maturity
 	if err = u.validateForkDepth(catchupCtx); err != nil {
 		return u.preferNettedRouteForkRefusal(catchupCtx, err)
@@ -439,6 +451,87 @@ func (u *Server) clearMinedSetOnForkedBlocks(ctx context.Context, catchupCtx *Ca
 		u.logger.Infof("[catchup][%s] Cleared mined_set on %d fork blocks and sent notifications",
 			catchupCtx.blockUpTo.Hash().String(), len(headers))
 	}
+}
+
+// handleExhaustedAncestorWalk ends a catchup whose served headers are all ones we already hold, at
+// or below our tip. A held header may be a stored side-chain block, so this is not proof the list
+// is our main chain, but the walk found no header we lack: it never reached the point where the
+// peer's chain leaves what we hold, and nothing the peer offered is new.
+//
+// Why the list ended decides who is at fault. If our own accumulated-header cap or iteration limit
+// cut it, we stopped asking: the peer would have gone on, and the list says nothing about its
+// chain. That holds only when the list starts where our locator does. An honest peer serves from
+// the newest locator entry on its chain, and includes that block, so a peer holding our first
+// entry starts its list there. The locator starts below our tip only while the UTXO store lags the
+// chain (catchupGetBlockHeaders), and then the cap can end that honest list below our tip. That is
+// returned as a ServiceError marked with localHeaderCapKey, a local fault, so the peer is not
+// charged and the per-block attempt cap bounds the retries. The same locator truncates the same
+// way, so the retry cannot get further until the lag shrinks below the cap.
+//
+// A capped list that starts anywhere else is charged to the peer as an invalid response. Either
+// the peer ignored the locator, for instance serving our own chain from genesis to trip our cap
+// and dodge any charge, or it lacks our first locator entry, and then the list shows its chain
+// leaving ours more than one cap deep, far past coinbase maturity.
+//
+// Otherwise the peer ended the list itself, short of the block it announced, which is the case
+// handleNoNewHeaders already judges.
+//
+// Treating the depth as zero instead would be wrong: a long genuine fork is exactly what the cap
+// truncates, so the depth checks must be skipped, not fed a zero.
+func (u *Server) handleExhaustedAncestorWalk(ctx context.Context, catchupCtx *CatchupContext) error {
+	result := catchupCtx.headersFetchResult
+	lastHeight := catchupCtx.commonAncestorMeta.Height
+
+	if result.StoppedOnCap {
+		if !listStartsAtLocator(result) {
+			firstHash := "none"
+			if len(result.Headers) > 0 {
+				firstHash = result.Headers[0].Hash().String()
+			}
+
+			return errors.NewNetworkInvalidResponseError("[catchup][%s] peer %s served a header list starting at %s, not at our block locator's first entry, that our header cap (%s) cut at height %d below our tip at %d with every header one we hold", catchupCtx.blockUpTo.Hash().String(), catchupCtx.peerID, firstHash, result.StopReason, lastHeight, catchupCtx.currentHeight)
+		}
+
+		return newLocalHeaderCapRefusal("[catchup][%s] header fetch stopped on our own header cap (%s) at height %d, below our tip at %d, with every header one we hold: no evidence of a fork, not charging peer %s", catchupCtx.blockUpTo.Hash().String(), result.StopReason, lastHeight, catchupCtx.currentHeight, catchupCtx.peerID)
+	}
+
+	u.logger.Infof("[catchup][%s] every header peer %s served is one we hold, up to height %d (our tip %d): nothing new", catchupCtx.blockUpTo.Hash().String(), catchupCtx.peerID, lastHeight, catchupCtx.currentHeight)
+
+	return u.handleNoNewHeaders(ctx, catchupCtx.blockUpTo)
+}
+
+// listStartsAtLocator reports whether the served header list starts at the first entry of the
+// block locator we sent, which GetBlockLocator sets to the block the locator was built from.
+func listStartsAtLocator(result *catchup.Result) bool {
+	if len(result.Headers) == 0 || len(result.LocatorHashes) == 0 || result.LocatorHashes[0] == nil {
+		return false
+	}
+
+	return result.Headers[0].Hash().IsEqual(result.LocatorHashes[0])
+}
+
+// localHeaderCapKey is the error-data key newLocalHeaderCapRefusal sets on the local fault
+// handleExhaustedAncestorWalk returns when our own header cap cut a list that starts at our
+// locator. releaseCatchupLock scores an error that carries it as local_header_cap, not as a peer
+// error (isLocalHeaderCapRefusal).
+const localHeaderCapKey = "local_header_cap"
+
+// newLocalHeaderCapRefusal builds that local fault: a ServiceError, so no peer is charged, marked
+// with localHeaderCapKey.
+func newLocalHeaderCapRefusal(message string, params ...interface{}) *errors.Error {
+	err := errors.NewServiceError(message, params...)
+	err.SetData(localHeaderCapKey, true)
+
+	return err
+}
+
+// isLocalHeaderCapRefusal reports whether err is a local fault that newLocalHeaderCapRefusal built.
+func isLocalHeaderCapRefusal(err error) bool {
+	if err == nil || !isLocalCatchupFault(err) {
+		return false
+	}
+
+	return hasErrorMarker(err, localHeaderCapKey)
 }
 
 // handleNoNewHeaders is invoked when filterHeaders leaves zero headers to process.
@@ -690,6 +783,11 @@ func (u *Server) releaseCatchupLock(ctx *CatchupContext, err *error) {
 			// text-matched case, because the wrapped cause of a retried quick validation can
 			// contain "eof", "http" or "connection", and those cases charge the peer.
 			errorType = "local_no_verified_checkpoint"
+			isPeerError = false
+		case isLocalHeaderCapRefusal(*err):
+			// Our own header cap cut a list that starts at our locator, with every header one we
+			// hold (handleExhaustedAncestorWalk). Matched by its data marker, like the case above.
+			errorType = "local_header_cap"
 			isPeerError = false
 		case !isLocalCatchupFault(*err) && (errors.Is(*err, errors.ErrBlockInvalid) || errors.Is(*err, errors.ErrTxInvalid)):
 			// Gated on the same predicate validateBlocksOnChannel and
@@ -1089,6 +1187,11 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	stoppedAboveTip := false
 	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
 
+	// The walk ends in one of two ways: it stops on a header we do not hold, or one above our tip,
+	// which is where the peer's list leaves what we hold, or it runs off the end of the list with every
+	// header one we hold. Only the first is evidence of a fork; walkExhausted records the second.
+	walkExhausted := true
+
 	for i, header := range peerHeaders {
 		// GetBlockHeader conveys both existence and height in a single RPC: a
 		// not-found error means the block is absent from our chain (stop the search),
@@ -1097,6 +1200,8 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		if err != nil {
 			if errors.Is(err, errors.ErrBlockNotFound) {
 				u.logger.Debugf("[catchup][%s] Block %s not in our chain - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String())
+				walkExhausted = false
+
 				break // Once we find a header we don't have, stop
 			}
 
@@ -1112,6 +1217,8 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		if meta.Height > currentHeight {
 			u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of our tip %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
 			stoppedAboveTip = true
+			walkExhausted = false
+
 			break
 		}
 
@@ -1173,9 +1280,11 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		}
 	}
 
-	// Calculate fork depth
+	// Calculate fork depth, only where the walk found the divergence. A list that ran out with every
+	// header held ends where the peer, or our own header cap, stopped serving, not where the chains
+	// part, so the distance from there to our tip is no fork depth.
 	forkDepth := uint32(0)
-	if commonAncestorMeta.Height < currentHeight {
+	if !walkExhausted && commonAncestorMeta.Height < currentHeight {
 		forkDepth = currentHeight - commonAncestorMeta.Height
 	}
 
@@ -1183,8 +1292,9 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	catchupCtx.commonAncestorMeta = commonAncestorMeta
 	catchupCtx.commonAncestorIndex = commonAncestorIndex
 	catchupCtx.forkDepth = forkDepth
+	catchupCtx.walkExhausted = walkExhausted
 
-	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth)
+	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d, ran out of headers: %t", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth, walkExhausted)
 
 	return nil
 }

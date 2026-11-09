@@ -43,6 +43,13 @@ read every section between yours and the target.
 - **The alert service picks its network by `network` and validates `alert_genesis_keys`.** On
   testnet and stn, clear `alert_genesis_keys`, `alert_protocol_id` and `alert_topic_name` if they
   hold mainnet values. An explicit key list needs 3–10 compressed public keys or startup fails. (#1955)
+- **Block Validation `BlockFound` with `wait_to_complete` returns the block's outcome.** It no
+  longer answers success at enqueue. A rejected block returns its validation error, whose code
+  varies; one already stored invalid returns `ERR_BLOCK_INVALID`; a failed fetch returns at once with
+  a retryable error; a block sent to catchup or dropped returns a retryable `ERR_SERVICE_ERROR`; a
+  caller whose context ends gets `ERR_CONTEXT_CANCELED`. Under opt-in optimistic peer-block mining,
+  success means the block was added, not fully validated. gRPC callers that wait must handle these.
+  (#2132)
 - **`utxostore_updateTxMinedStatus` is removed.** Nodes that set it to `false` now always run
   mined-tagging and its duplicate-transaction check, with no way to turn them off. Delete the
   key; the loader ignores it. (#2019)
@@ -132,6 +139,15 @@ read every section between yours and the target.
   Count those 429s with `teranode_asset_http_rate_limited_total{scope="global"}`. (#1793)
 - **Out-of-tree `utxo.Store` implementations must add `SpendAndCreateMulti` and
   `ParentOutputsForValidation`.** `utxo.DefaultSpendAndCreateMulti` provides the first. (#1875)
+- **Block assembly can fail to start while a skipped-fork mark is unfinished.** A restart finishes
+  it before loading the pool, and fails if the subtree or UTXO store doesn't answer or
+  `BlockAssemblerSkippedForkMark` is malformed: restart once they answer, or clear that key. (#2065)
+- **`teranode_blockassembly_processing_stuck_total` gains three reasons:**
+  `skipped_fork_mark_unfinished`, `skipped_fork_mark_record`, `skipped_fork_subtree_lost`. An alert
+  on the total without a `reason` filter now fires on them too. (#2065)
+- **Asset block-list endpoints honour `fromHeight` with `includeOrphans`.** They now page down
+  instead of returning the chain's top; clients passing both get the blocks at or below
+  `fromHeight`. (#2065)
 
 ## [0.16.0] - 2026-10-05
 
