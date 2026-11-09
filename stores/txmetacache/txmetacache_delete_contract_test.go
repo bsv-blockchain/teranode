@@ -188,7 +188,7 @@ func TestTxMetaCache_BeginCreateFirstRollback_DelegatesAndEvicts(t *testing.T) {
 	_, found := cache.GetMetaCached(ctx, hash)
 	require.True(t, found, "precondition: the entry is in the cache")
 
-	began, err := cache.BeginCreateFirstRollback(ctx, &hash)
+	began, err := cache.BeginCreateFirstRollback(ctx, &hash, nil)
 	require.ErrorIs(t, err, errors.ErrStorageError, "the underlying error is propagated")
 	require.True(t, began, "the underlying answer is propagated")
 	require.Equal(t, 1, marking.calls)
@@ -206,8 +206,64 @@ type beginRollbackStore struct {
 	calls int
 }
 
-func (s *beginRollbackStore) BeginCreateFirstRollback(_ context.Context, _ *chainhash.Hash) (bool, error) {
+func (s *beginRollbackStore) BeginCreateFirstRollback(_ context.Context, _ *chainhash.Hash, _ []byte) (bool, error) {
 	s.calls++
 
 	return s.began, s.err
+}
+
+// TestTxMetaCache_HoldMethods_DelegateAndEvict pins that ending a rollback, taking a hold and clearing
+// a hold reach the underlying store and drop the cache entry, which would otherwise keep describing
+// the record as it was before the call.
+func TestTxMetaCache_HoldMethods_DelegateAndEvict(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	utxoStoreURL, err := url.Parse("sqlitememory:///txmetacache_hold_methods_evict")
+	require.NoError(t, err)
+
+	underlying, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+	require.NoError(t, err)
+
+	c, err := NewTxMetaCache(ctx, settings.NewSettings(), logger, underlying, Unallocated)
+	require.NoError(t, err)
+
+	cache, ok := c.(*TxMetaCache)
+	require.True(t, ok)
+
+	calls := map[string]func(hash *chainhash.Hash) error{
+		"end": func(hash *chainhash.Hash) error { return cache.EndCreateFirstRollback(ctx, hash, []byte{1}) },
+		"take": func(hash *chainhash.Hash) error {
+			took, takeErr := cache.TakeRollbackHold(ctx, hash, []byte{1})
+			require.False(t, took, "a store with no tentative state has nothing to take")
+
+			return takeErr
+		},
+		"clear": func(hash *chainhash.Hash) error {
+			cleared, clearErr := cache.ClearCreateFirstHold(ctx, hash, true)
+			require.False(t, cleared, "a store with no tentative state leaves no hold")
+
+			return clearErr
+		},
+	}
+
+	seed := 30
+
+	for name, call := range calls {
+		hash := testHash(seed)
+		seed++
+
+		require.NoError(t, cache.SetCache(&hash, testMeta()))
+
+		_, found := cache.GetMetaCached(ctx, hash)
+		require.True(t, found, "%s: precondition: the entry is in the cache", name)
+
+		require.NoError(t, call(&hash), name)
+
+		_, found = cache.GetMetaCached(ctx, hash)
+		require.False(t, found, "%s: the entry must be evicted", name)
+	}
+
+	require.NoError(t, cache.ReleaseRollbackHold(ctx, &chainhash.Hash{}, []byte{1}))
 }

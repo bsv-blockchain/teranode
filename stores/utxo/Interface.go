@@ -259,7 +259,7 @@ type BlockIDsRemoval struct {
 
 var (
 	// MetaFields defines the standard set of metadata fields that can be queried.
-	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating, fields.RollingBack}
+	MetaFields = []fields.FieldName{fields.LockTime, fields.Fee, fields.SizeInBytes, fields.TxInpoints, fields.BlockIDs, fields.IsCoinbase, fields.Conflicting, fields.Locked, fields.Creating, fields.RollingBack, fields.Attempt}
 	// MetaFieldsWithTx defines the set of metadata fields including the transaction data.
 	MetaFieldsWithTx = append(MetaFields, fields.Tx)
 )
@@ -616,8 +616,12 @@ type Store interface {
 	// FinalizeTransaction clears the tentative "creating" state set by the create-first
 	// phase of SpendAndCreate, making the transaction's outputs spendable. It takes the
 	// full tx so multi-record stores can derive the record count without a read.
-	// Idempotent; stores without create-first support return nil.
-	FinalizeTransaction(ctx context.Context, tx *bt.Tx) error
+	// attempt is the token of the attempt the caller created or read: the clear touches only
+	// a record that carries that token, so a finalize left over from an earlier attempt of the
+	// same txid cannot clear a later attempt's state. A record that is absent, rolling back or
+	// owned by another attempt is refused with ErrTxNotFound. Idempotent for an already final
+	// record; stores without create-first support return nil.
+	FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error
 
 	// QueryStaleCreatingTxs returns the hashes of transactions still in the "creating"
 	// state whose unminedSince height is strictly below unminedSinceBefore. Used by the
@@ -670,23 +674,55 @@ type Store interface {
 	DeleteComplete(ctx context.Context, hash *chainhash.Hash) error
 
 	// BeginCreateFirstRollback claims the rollback of a record that is still creating, by
-	// marking it as rolling back, so no concurrent roll-forward can finalize it. The claim is
-	// exclusive: it reports true only to the one caller whose write set the marker, and that
-	// caller alone reverses the spends and deletes the record. It reports false, and writes
-	// nothing, when the record is absent, already finalized, or already rolling back under
-	// another caller. A store with no tentative state reports false. Used by the create-first
-	// rollback, which then reverses its spends and calls DeleteRollingBack. The pruner sweep
-	// resumes an abandoned rollback without this call, because the record already carries the
-	// marker.
-	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error)
+	// marking it as rolling back, so no concurrent roll-forward can finalize it. attempt is the
+	// token of the attempt the caller created or read, and the claim touches only a record that
+	// carries it. The claim is exclusive: it reports true only to the one caller whose write set
+	// the marker, and that caller alone reverses the spends and ends the rollback. It reports
+	// false, and writes nothing, when the record is absent, already finalized, owned by another
+	// attempt, or already rolling back under another caller. A store with no tentative state
+	// reports false. Used by the create-first rollback, which then reverses its spends and calls
+	// EndCreateFirstRollback. The pruner sweep resumes an abandoned rollback without this call,
+	// because the record already carries the marker.
+	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error)
 
-	// DeleteRollingBack is DeleteComplete for the create-first rollback: it removes the
-	// transaction only while its master record is still marked as rolling back. A record that
-	// is absent, or that is no longer rolling back because a new attempt at the same
-	// transaction created it afresh, is left alone and the call reports success. It is
-	// idempotent in the same way DeleteComplete is. A store with no tentative state treats it
-	// as DeleteComplete, because it is never called for a record that store marked.
-	DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error
+	// EndCreateFirstRollback ends the create-first rollback of the attempt that carries the
+	// token: it removes the pagination children and the external blobs of the transaction, then
+	// turns the master record into a hold. The hold keeps the txid, the creating and rollingBack
+	// markers and the token, and refuses a new create of the txid until it expires, one
+	// utxostore_spendRollbackTimeout after it was written or last taken. The master stays in
+	// place throughout, so no attempt at the same txid can create records while the children and
+	// blobs are removed. A record that is absent, a hold already, or owned by another attempt is
+	// left alone and the call reports success. It fails while a holder is reversing spends under
+	// TakeRollbackHold. A store with no tentative state treats it as DeleteComplete, because it
+	// is never called for a record that store marked.
+	EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error
+
+	// TakeRollbackHold reserves the right to reverse the spends of the inputs of a transaction
+	// whose attempt, identified by the token, was marked as rolling back. A spend record is the
+	// txid and the input index, so a reversal cannot tell two attempts of one txid apart. This
+	// call is the proof that the attempt it names still owns the txid: it reports true only when
+	// the record is rolling back, carries the token and is not already held by another actor, and
+	// then marks the record busy and renews the hold. A caller that gets false, because the
+	// record is absent, belongs to another attempt or is busy, must not reverse any spend. The
+	// caller reverses under a context bounded by utxostore_spendRollbackTimeout and then calls
+	// ReleaseRollbackHold. A store with no tentative state reports false.
+	TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error)
+
+	// ReleaseRollbackHold clears the busy marker that TakeRollbackHold set. It touches only a
+	// record that carries the token, and an absent record or one owned by another attempt is
+	// success.
+	ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error
+
+	// ClearCreateFirstHold removes the hold that EndCreateFirstRollback left for the txid, when
+	// it may go, and reports whether the txid is free of a hold afterwards: true when the record
+	// is absent or the hold was removed, false when a hold stands or the record is not a hold.
+	// With adopt false the hold goes only once it has expired: utxostore_spendRollbackTimeout
+	// after its last write while no holder is busy, or twice that while a holder is busy, which
+	// is a holder that crashed. With adopt true, used by a create in block context that must not
+	// wait out the hold, the hold goes at once unless a holder is busy. The delete is filtered on
+	// the hold, so it never removes a record of a later attempt. A store with no tentative state
+	// reports false.
+	ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error)
 
 	GetSpend(ctx context.Context, spend *Spend) (*SpendResponse, error) // Remove? Only used in tests
 	GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error

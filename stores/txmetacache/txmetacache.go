@@ -1184,10 +1184,10 @@ func (t *TxMetaCache) DeleteComplete(ctx context.Context, hash *chainhash.Hash) 
 	return err
 }
 
-// DeleteRollingBack deletes a rolling back record from the underlying store and evicts the
+// EndCreateFirstRollback ends the rollback of a record in the underlying store and evicts the
 // cache entry whatever the outcome, for the same reason DeleteComplete does.
-func (t *TxMetaCache) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
-	err := t.utxoStore.DeleteRollingBack(ctx, hash)
+func (t *TxMetaCache) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	err := t.utxoStore.EndCreateFirstRollback(ctx, hash, attempt)
 
 	t.cache.Del(hash[:])
 	t.metrics.evictions.Add(1)
@@ -1195,11 +1195,38 @@ func (t *TxMetaCache) DeleteRollingBack(ctx context.Context, hash *chainhash.Has
 	return err
 }
 
+// TakeRollbackHold delegates to the wrapped store and evicts the cache entry, which would keep
+// reporting the record as it was before the hold was taken.
+func (t *TxMetaCache) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	took, err := t.utxoStore.TakeRollbackHold(ctx, hash, attempt)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return took, err
+}
+
+// ReleaseRollbackHold delegates to the wrapped store.
+func (t *TxMetaCache) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	return t.utxoStore.ReleaseRollbackHold(ctx, hash, attempt)
+}
+
+// ClearCreateFirstHold clears a hold in the underlying store and evicts the cache entry
+// whatever the outcome, for the same reason DeleteComplete does.
+func (t *TxMetaCache) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
+	cleared, err := t.utxoStore.ClearCreateFirstHold(ctx, hash, adopt)
+
+	t.cache.Del(hash[:])
+	t.metrics.evictions.Add(1)
+
+	return cleared, err
+}
+
 // BeginCreateFirstRollback marks a creating record as rolling back in the underlying store
 // and evicts the cache entry whatever the outcome, for the same reason DeleteComplete does:
 // a cached entry would keep reporting the record as an ordinary creating one.
-func (t *TxMetaCache) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
-	began, err := t.utxoStore.BeginCreateFirstRollback(ctx, hash)
+func (t *TxMetaCache) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	began, err := t.utxoStore.BeginCreateFirstRollback(ctx, hash, attempt)
 
 	t.cache.Del(hash[:])
 	t.metrics.evictions.Add(1)
@@ -1263,8 +1290,8 @@ func (t *TxMetaCache) SupportsCreateFirst() bool { return t.utxoStore.SupportsCr
 
 // FinalizeTransaction delegates and invalidates the cached meta so a stale
 // Creating=true entry cannot be served after the flag is cleared.
-func (t *TxMetaCache) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
-	if err := t.utxoStore.FinalizeTransaction(ctx, tx); err != nil {
+func (t *TxMetaCache) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+	if err := t.utxoStore.FinalizeTransaction(ctx, tx, attempt); err != nil {
 		return err
 	}
 

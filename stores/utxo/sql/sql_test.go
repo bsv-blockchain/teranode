@@ -3833,15 +3833,25 @@ func TestSQLStore_CreateFirstNoOps(t *testing.T) {
 
 	// SQL is spend-first: no create-first support, finalize is a no-op, no stale creating txs.
 	require.False(t, store.SupportsCreateFirst())
-	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}))
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}, nil))
 
 	// Every record is final, so the rollback marker reports false and deletes nothing.
 	_, err = store.Create(ctx, tests.Tx, 100)
 	require.NoError(t, err)
 
-	began, err := store.BeginCreateFirstRollback(ctx, tests.Tx.TxIDChainHash())
+	began, err := store.BeginCreateFirstRollback(ctx, tests.Tx.TxIDChainHash(), nil)
 	require.NoError(t, err)
 	require.False(t, began)
+	require.NoError(t, store.GetMeta(ctx, tests.Tx.TxIDChainHash(), &meta.Data{}), "a final record must survive")
+
+	took, err := store.TakeRollbackHold(ctx, tests.Tx.TxIDChainHash(), nil)
+	require.NoError(t, err)
+	require.False(t, took, "no record is rolling back, so no hold can be taken")
+	require.NoError(t, store.ReleaseRollbackHold(ctx, tests.Tx.TxIDChainHash(), nil))
+
+	cleared, err := store.ClearCreateFirstHold(ctx, tests.Tx.TxIDChainHash(), true)
+	require.NoError(t, err)
+	require.False(t, cleared, "the store never leaves a hold")
 	require.NoError(t, store.GetMeta(ctx, tests.Tx.TxIDChainHash(), &meta.Data{}), "a final record must survive")
 
 	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)

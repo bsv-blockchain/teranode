@@ -73,7 +73,7 @@ func (m *MockUTXOStore) Stamper() pruner.Stamper { return pruner.NoStamp }
 // Implement remaining interface methods as no-ops for testing
 func (m *MockUTXOStore) SupportsOutpointOnlySpend() bool { return false }
 func (m *MockUTXOStore) SupportsCreateFirst() bool       { return false }
-func (m *MockUTXOStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
+func (m *MockUTXOStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
 	return nil
 }
 func (m *MockUTXOStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
@@ -96,11 +96,23 @@ func (m *MockUTXOStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash
 	return nil
 }
 
-func (m *MockUTXOStore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+func (m *MockUTXOStore) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
 	return nil
 }
 
-func (m *MockUTXOStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (m *MockUTXOStore) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
+}
+
+func (m *MockUTXOStore) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	return nil
+}
+
+func (m *MockUTXOStore) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
+	return false, nil
+}
+
+func (m *MockUTXOStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
 	return false, nil
 }
 

@@ -737,7 +737,7 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 		}
 
 		// Mid-flight record: fetch the tx bytes and roll it forward (re-spend + finalize).
-		md, err := s.Get(ctx, &item.Hash, fields.Tx, fields.Creating, fields.RollingBack)
+		md, err := s.Get(ctx, &item.Hash, fields.Tx, fields.Creating, fields.RollingBack, fields.Attempt)
 		if err != nil {
 			if errors.Is(err, errors.ErrTxNotFound) {
 				continue
@@ -746,20 +746,25 @@ func (s *Store) rollForwardCreatingBeforeSetMined(ctx context.Context, hashes []
 			return errors.NewProcessingError("[setMined] create-first pre-flight: get tx %s failed", item.Hash.String(), err)
 		}
 
-		if !md.Creating || md.Tx == nil {
+		if !md.Creating {
 			continue // finalized between the batch read and this get
 		}
 
 		if md.RollingBack {
-			// Its owner is undoing it and will delete it, so it must not be completed or mined
-			// against. Fail closed: the block is retried once the rollback completes.
+			// Its owner is undoing it, and the hold it leaves carries no transaction at all, so it
+			// must not be completed or mined against. Fail closed: the block is retried once the
+			// rollback completes or the hold expires.
 			return errors.NewProcessingError("[setMined] create-first pre-flight: tx %s is rolling back", item.Hash.String())
+		}
+
+		if md.Tx == nil {
+			continue // finalized between the batch read and this get
 		}
 
 		// WithIgnoreLocked: a mined tx's parents may still be locked (e.g. their own
 		// create-first tentative lock); the roll-forward completes an already-committed
 		// spend, so a locked parent must not fail-close setMined for the whole block.
-		if _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
+		if _, err := utxo.RollForwardCreating(ctx, s.logger, s, md.Tx, md.Attempt, blockHeight, utxo.WithIgnoreLocked(true)); err != nil {
 			return errors.NewProcessingError("[setMined] create-first pre-flight: roll-forward of %s failed", item.Hash.String(), err)
 		}
 	}

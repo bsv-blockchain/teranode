@@ -59,7 +59,9 @@ func (m *NullStore) SupportsOutpointOnlySpend() bool { return false }
 func (m *NullStore) SupportsCreateFirst() bool { return false }
 
 // FinalizeTransaction is a no-op: the null store has no tentative-create state.
-func (m *NullStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error { return nil }
+func (m *NullStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+	return nil
+}
 
 // QueryStaleCreatingTxs returns nothing: the null store has no tentative-create state.
 func (m *NullStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
@@ -308,13 +310,28 @@ func (m *NullStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) er
 	return nil
 }
 
-// DeleteRollingBack does nothing: the null store holds no records.
-func (m *NullStore) DeleteRollingBack(ctx context.Context, hash *chainhash.Hash) error {
+// EndCreateFirstRollback does nothing: the null store holds no records.
+func (m *NullStore) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
 	return nil
 }
 
+// TakeRollbackHold reports false: the null store holds no records, so none is rolling back.
+func (m *NullStore) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	return false, nil
+}
+
+// ReleaseRollbackHold does nothing: the null store holds no records.
+func (m *NullStore) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	return nil
+}
+
+// ClearCreateFirstHold reports false: the null store holds no records, so none is a hold.
+func (m *NullStore) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
+	return false, nil
+}
+
 // BeginCreateFirstRollback reports false: the null store holds no records, so none is creating.
-func (m *NullStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash) (bool, error) {
+func (m *NullStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
 	return false, nil
 }
 

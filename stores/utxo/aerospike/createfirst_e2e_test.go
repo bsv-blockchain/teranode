@@ -1,12 +1,16 @@
 package aerospike_test
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
+	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
+	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -106,10 +110,7 @@ func TestSpendAndCreate_CreateFirst_DoubleSpendLeavesNoRecord(t *testing.T) {
 	_, _, err = store.SpendAndCreate(ctx, loser, 101)
 	require.Error(t, err, "the create-first double-spend loser must fail")
 
-	got := &meta.Data{}
-	err = store.GetMeta(ctx, loser.TxIDChainHash(), got)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrTxNotFound), "the loser's tentative record must be deleted, got: %v", err)
+	requireHeld(t, ctx, store, loser.TxIDChainHash(), "the loser's tentative record is replaced by a hold, never left spendable")
 
 	competitor := spendableChildTx(t, tests.ParentTx, 1)
 	competitor.Version = 9
@@ -146,8 +147,7 @@ func TestSpendAndCreate_CreateFirst_MissingParentLeavesNoRecord(t *testing.T) {
 	_, _, err := store.SpendAndCreate(ctx, orphan, 106)
 	require.ErrorIs(t, err, errors.ErrTxNotFound, "a missing parent must fail the fresh create-first spend")
 
-	require.ErrorIs(t, store.GetMeta(ctx, orphan.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
-		"the rolled back record must be gone, not finalized with an input it never spent")
+	requireHeld(t, ctx, store, orphan.TxIDChainHash(), "the rolled back record is a hold, not finalized with an input it never spent")
 }
 
 // TestSpendAndCreateMulti_CreateFirst_RollsForwardTentativeDuplicate is the quick-validation
@@ -273,7 +273,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxCreating), "child spend before finalize must be ErrTxCreating, got: %v", err)
 
-		require.NoError(t, store.FinalizeTransaction(ctx, tx))
+		require.NoError(t, store.FinalizeTransaction(ctx, tx, attemptOf(t, ctx, store, tx.TxIDChainHash())))
 
 		_, err = store.Spend(ctx, child, 102)
 		require.NoError(t, err, "child spend must succeed after the parent is finalized")
@@ -308,7 +308,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		_, err = store.Spend(ctx, parent2, 103)
 		require.NoError(t, err, "re-spending the same inputs by the same tx must be idempotent-success (roll-forward safety)")
 
-		require.NoError(t, store.FinalizeTransaction(ctx, parent2))
+		require.NoError(t, store.FinalizeTransaction(ctx, parent2, attemptOf(t, ctx, store, parent2.TxIDChainHash())))
 
 		_, err = store.Spend(ctx, child2, 104)
 		require.NoError(t, err, "child must be spendable once the parent is rolled forward")
@@ -330,7 +330,7 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		_, spendErr := store.Spend(ctx, child, 106)
 		require.ErrorIs(t, spendErr, errors.ErrTxNotFound, "a creating child is not proof that its parent was spent")
 
-		_, rfErr := utxo.RollForwardCreating(ctx, logger, store, child, 106)
+		_, rfErr := utxo.RollForwardCreating(ctx, logger, store, child, attemptOf(t, ctx, store, child.TxIDChainHash()), 106)
 		require.ErrorIs(t, rfErr, errors.ErrTxNotFound)
 
 		got := &meta.Data{}
@@ -338,8 +338,8 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.True(t, got.Creating, "the record is not finalized")
 
 		// The sweep's path for an unwinnable spend error: roll the record back and delete it.
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child))
-		require.ErrorIs(t, store.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound, "the rolled back record is deleted")
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child, attemptOf(t, ctx, store, child.TxIDChainHash())))
+		requireHeld(t, ctx, store, child.TxIDChainHash(), "the rolled back record is a hold")
 	})
 
 	t.Run("double-spend: creating loser is rolled back and deleted", func(t *testing.T) {
@@ -376,11 +376,9 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.True(t, sawSpent, "the loser must fail with ErrSpent (top-level or per-spend), got: %v", err)
 
 		// Roll back as the submit path and the sweep do: mark, unspend what was taken, delete.
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, parent3))
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, parent3, attemptOf(t, ctx, store, parent3.TxIDChainHash())))
 
-		got := &meta.Data{}
-		err = store.GetMeta(ctx, parent3.TxIDChainHash(), got)
-		require.True(t, errors.Is(err, errors.ErrTxNotFound), "the loser must leave no record, got: %v", err)
+		requireHeld(t, ctx, store, parent3.TxIDChainHash(), "the loser must leave no record but a hold")
 
 		// The free input is spendable again, and the winner keeps the contested one.
 		freeSpender := spendableChildTx(t, tx, 2)
@@ -448,10 +446,9 @@ func TestCreateFirstLifecycle(t *testing.T) {
 
 		require.True(t, sawLocked, "input 1 must fail this pass with ErrTxLocked")
 
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, loser))
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, loser, attemptOf(t, ctx, store, loser.TxIDChainHash())))
 
-		got := &meta.Data{}
-		require.ErrorIs(t, store.GetMeta(ctx, loser.TxIDChainHash(), got), errors.ErrTxNotFound, "the rolled back record must be gone")
+		requireHeld(t, ctx, store, loser.TxIDChainHash(), "the rolled back record must be a hold")
 
 		resp, err := store.GetSpend(ctx, loserSpends[1])
 		require.NoError(t, err)
@@ -498,11 +495,10 @@ func TestCreateFirstLifecycle(t *testing.T) {
 		require.NotNil(t, before.SpendingData, "the valid input is spent in the failing pass, so the rollback has work to undo")
 		require.Equal(t, child.TxIDChainHash().String(), before.SpendingData.TxID.String())
 
-		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child),
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child, attemptOf(t, ctx, store, child.TxIDChainHash())),
 			"an input the tx can never have spent must not fail the rollback")
 
-		require.ErrorIs(t, store.GetMeta(ctx, child.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound,
-			"the rolled back record must be gone, not left rolling back")
+		requireHeld(t, ctx, store, child.TxIDChainHash(), "the rolled back record must be a hold, not left rolling back with its transaction")
 
 		resp, err := store.GetSpend(ctx, inputs[0])
 		require.NoError(t, err)
@@ -573,11 +569,11 @@ func TestRollForwardCreating_RollingBackRecordHasNoParentSpent(t *testing.T) {
 	_, err = store.Create(ctx, child, 107, utxo.WithCreating(true))
 	require.NoError(t, err)
 
-	began, err := store.BeginCreateFirstRollback(ctx, child.TxIDChainHash())
+	began, err := store.BeginCreateFirstRollback(ctx, child.TxIDChainHash(), attemptOf(t, ctx, store, child.TxIDChainHash()))
 	require.NoError(t, err)
 	require.True(t, began)
 
-	spends, err := utxo.RollForwardCreating(ctx, logger, store, child, 107, utxo.WithIgnoreLocked(true))
+	spends, err := utxo.RollForwardCreating(ctx, logger, store, child, attemptOf(t, ctx, store, child.TxIDChainHash()), 107, utxo.WithIgnoreLocked(true))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "rolling back")
 	require.Nil(t, spends)
@@ -589,4 +585,207 @@ func TestRollForwardCreating_RollingBackRecordHasNoParentSpent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int(utxo.Status_OK), resp.Status, "the parent output must still be unspent")
 	require.Nil(t, resp.SpendingData, "no spender is recorded on the parent output")
+}
+
+// swapBeforeFinalizeStore runs swap once, just before the roll-forward's finalize reaches the
+// store. It places the interleaving that only timing produces: the attempt being recovered is
+// rolled back and replaced after the roll-forward read it, and before its finalize lands. Every
+// store call is the real store's.
+type swapBeforeFinalizeStore struct {
+	*teranode_aerospike.Store
+
+	swap func()
+}
+
+func (s *swapBeforeFinalizeStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+	if s.swap != nil {
+		swap := s.swap
+		s.swap = nil
+
+		swap()
+	}
+
+	return s.Store.FinalizeTransaction(ctx, tx, attempt)
+}
+
+// TestRollForward_CompensationOfAReplacedAttemptLeavesItsSpends pins that the compensation of a
+// roll-forward does not reverse spends the txid's later attempt made. Attempt A is read as
+// creating and re-spent, then A is rolled back and attempt B creates the same txid and spends the
+// same inputs. A's finalize is refused, and A's compensation fails its take of the hold, because
+// the record no longer carries A's token and is not rolling back. B's spends, which cannot be told
+// from A's, must stay.
+func TestRollForward_CompensationOfAReplacedAttemptLeavesItsSpends(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	child := spendableChildTx(t, tests.ParentTx, 0)
+	hash := child.TxIDChainHash()
+
+	inputs, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+
+	first, err := store.Create(ctx, child, 106, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	var second *meta.Data
+
+	wrapper := &swapBeforeFinalizeStore{Store: store}
+	wrapper.swap = func() {
+		require.NoError(t, utxo.RollBackCreating(ctx, logger, store, child, first.Attempt), "attempt A is rolled back")
+
+		cleared, clearErr := store.ClearCreateFirstHold(ctx, hash, true)
+		require.NoError(t, clearErr)
+		require.True(t, cleared, "a block-context create adopts the hold")
+
+		var createErr error
+
+		second, createErr = store.Create(ctx, child, 106, utxo.WithCreating(true))
+		require.NoError(t, createErr, "attempt B creates the same txid")
+
+		_, spendErr := store.Spend(ctx, child, 106)
+		require.NoError(t, spendErr, "attempt B spends the same inputs")
+	}
+
+	_, rfErr := utxo.RollForwardCreating(ctx, logger, wrapper, child, first.Attempt, 106)
+	require.ErrorIs(t, rfErr, errors.ErrTxNotFound, "A's finalize is refused on B's record")
+	require.NotNil(t, second, "the interleaving ran")
+
+	resp, err := store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.NotNil(t, resp.SpendingData, "B's spend of the input must survive A's compensation")
+	require.Equal(t, hash.String(), resp.SpendingData.TxID.String())
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got))
+	require.True(t, got.Creating, "B is still creating")
+	require.False(t, got.RollingBack, "A's failed take must not have marked B's record")
+	require.Equal(t, second.Attempt, got.Attempt)
+	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String())
+
+	require.NoError(t, store.FinalizeTransaction(ctx, child, second.Attempt), "B finalizes with its own token")
+}
+
+// TestCreateFirst_HoldRefusesResubmissionUntilItExpires pins what a rolled back attempt leaves
+// behind. The orphan's parent is missing, so the attempt is rolled back. The parent then appears.
+// A resubmission is refused with a transient error while the hold stands, and once it has
+// expired the same call creates, spends and finalizes the transaction.
+func TestCreateFirst_HoldRefusesResubmissionUntilItExpires(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+	tSettings.UtxoStore.SpendRollbackTimeout = 2 * time.Second
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	missing := spendableChildTx(t, tests.ParentTx, 0)
+	missing.Version = 99
+
+	orphan := spendableChildTx(t, missing, 0)
+	hash := orphan.TxIDChainHash()
+
+	_, _, err = store.SpendAndCreate(ctx, orphan, 106)
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "a missing parent rolls the attempt back")
+	requireHeld(t, ctx, store, hash)
+
+	_, err = store.Create(ctx, missing, 106)
+	require.NoError(t, err, "the parent arrives")
+
+	_, _, err = store.SpendAndCreate(ctx, orphan, 107)
+	require.ErrorIs(t, err, errors.ErrProcessing, "a resubmission inside the hold is refused as transient")
+	require.NotErrorIs(t, err, errors.ErrTxExists)
+	require.Contains(t, err.Error(), "rolling back")
+	requireHeld(t, ctx, store, hash)
+
+	time.Sleep(3 * time.Second)
+
+	md, spends, err := store.SpendAndCreate(ctx, orphan, 108)
+	require.NoError(t, err, "the expired hold is deleted by the create that finds it, and the create goes on")
+	require.NotNil(t, md)
+	require.Len(t, spends, 1)
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got))
+	require.False(t, got.Creating, "the resubmission finalized")
+	require.False(t, got.Hold)
+
+	_, err = store.Spend(ctx, spendableChildTx(t, orphan, 0), 109)
+	require.NoError(t, err, "the finalized transaction's outputs are spendable")
+}
+
+// TestCreateFirst_BlockContextAdoptsHold pins that a transaction a block contains does not wait out
+// the hold of a rolled back attempt: a create that ignores locks, or carries mined block info,
+// adopts the hold at once, unless a holder is busy reversing spends, which it waits for.
+func TestCreateFirst_BlockContextAdoptsHold(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.UseCreateFirstOrder = true
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	blockContexts := map[string][]utxo.CreateOption{
+		"ignore locked":    {utxo.WithIgnoreLocked(true)},
+		"mined block info": {utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 1, BlockHeight: 106, SubtreeIdx: 0})},
+	}
+
+	vout := uint32(0)
+
+	for name, opts := range blockContexts {
+		t.Run(name, func(t *testing.T) {
+			missing := spendableChildTx(t, tests.ParentTx, vout)
+			missing.Version = 200 + vout
+
+			orphan := spendableChildTx(t, missing, 0)
+			hash := orphan.TxIDChainHash()
+			vout++
+
+			_, _, err := store.SpendAndCreate(ctx, orphan, 106)
+			require.ErrorIs(t, err, errors.ErrTxNotFound)
+			requireHeld(t, ctx, store, hash)
+
+			_, err = store.Create(ctx, missing, 106)
+			require.NoError(t, err, "the parent arrives")
+
+			token := attemptOf(t, ctx, store, hash)
+
+			took, err := store.TakeRollbackHold(ctx, hash, token)
+			require.NoError(t, err)
+			require.True(t, took, "a holder is reversing spends")
+
+			_, _, err = store.SpendAndCreate(ctx, orphan, 107, opts...)
+			require.ErrorIs(t, err, errors.ErrProcessing, "block context waits for a busy holder")
+			requireHeld(t, ctx, store, hash)
+
+			require.NoError(t, store.ReleaseRollbackHold(ctx, hash, token))
+
+			_, _, err = store.SpendAndCreate(ctx, orphan, 107)
+			require.ErrorIs(t, err, errors.ErrProcessing, "a create that is not in block context waits out the hold")
+
+			md, _, err := store.SpendAndCreate(ctx, orphan, 107, opts...)
+			require.NoError(t, err, "block context adopts the hold at once")
+			require.NotNil(t, md)
+
+			got := &meta.Data{}
+			require.NoError(t, store.GetMeta(ctx, hash, got))
+			require.False(t, got.Hold)
+			require.False(t, got.Creating, "the adopting create finalized")
+		})
+	}
 }

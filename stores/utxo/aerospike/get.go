@@ -674,6 +674,9 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 // The function handles field dependencies such as:
 //   - TxInpoints requires Inputs and External fields
 //   - BlockIDs requires BlockHeights field
+//   - Creating and RollingBack require Hold, so that the record a rolled back create-first attempt
+//     leaves, which carries no transaction data, is read as its markers alone: Creating,
+//     RollingBack, Hold and the attempt token, whatever other fields were requested
 //   - Other abstracted field mappings
 //
 // This abstraction layer allows callers to request high-level fields without
@@ -722,6 +725,10 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 		if !slices.Contains(newBins, fields.External) {
 			newBins = append(newBins, fields.External)
 		}
+	}
+
+	if (slices.Contains(newBins, fields.Creating) || slices.Contains(newBins, fields.RollingBack)) && !slices.Contains(newBins, fields.Hold) {
+		newBins = append(newBins, fields.Hold)
 	}
 
 	if slices.Contains(newBins, fields.BlockIDs) {
@@ -861,6 +868,15 @@ NEXT_BATCH_RECORD:
 		bins := batchRecord.BatchRec().Record.Bins
 
 		items[idx].Data = &meta.Data{}
+
+		if hold, _ := bins[fields.Hold.String()].(bool); hold {
+			items[idx].Data.Creating = true
+			items[idx].Data.RollingBack = true
+			items[idx].Data.Hold = true
+			items[idx].Data.Attempt, _ = bins[fields.Attempt.String()].([]byte)
+
+			continue NEXT_BATCH_RECORD
+		}
 
 		// If the tx is external, we need to fetch it from the external store...
 		var externalTx *bt.Tx
@@ -1141,6 +1157,11 @@ NEXT_BATCH_RECORD:
 				rollingBackBool, ok := bins[key.String()].(bool)
 				if ok {
 					items[idx].Data.RollingBack = rollingBackBool
+				}
+
+			case fields.Attempt:
+				if attempt, ok := bins[key.String()].([]byte); ok {
+					items[idx].Data.Attempt = attempt
 				}
 
 			case fields.ConflictingChildren:

@@ -1,6 +1,7 @@
 package aerospike
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 type batchFinalize struct {
 	ctx       context.Context
 	tx        *bt.Tx
+	attempt   []byte
 	group     *completion.Group
 	completed atomic.Bool
 	result    error // written by the CAS winner, after the CAS and before group.Done(); see complete
@@ -45,12 +47,16 @@ func (b *batchFinalize) complete(err error) {
 // FinalizeTransaction clears the tentative creating state set by
 // Create(..., WithCreating(true)), making the transaction's outputs spendable.
 // Idempotent: finalizing an already-final tx (creating bin already absent) is a
-// no-op success. Returns ErrTxNotFound if the record has vanished or is rolling back
-// (BeginCreateFirstRollback): both mean the record will not be completed, and the caller's
-// spends of its inputs are its own to remove. A batch that completed cleanly returns nil even if
+// no-op success. attempt is the token of the attempt the caller created or read: the clear is
+// filtered on it, on the master and on every pagination child, so a finalize left over from an
+// earlier attempt of the same txid cannot clear a later attempt's creating state. Returns
+// ErrTxNotFound if the record has vanished, is rolling back (BeginCreateFirstRollback) or
+// belongs to another attempt: all three mean this attempt's record will not be completed, and
+// the caller's spends of its inputs are its own to remove only if it can take the hold of its
+// attempt (TakeRollbackHold). A batch that completed cleanly returns nil even if
 // ctx was cancelled afterwards, because the record is finalized. Otherwise a cancelled ctx returns
 // its context error, then a recorded batch error, then a timeout error.
-func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
 	if tx == nil {
 		return errors.NewProcessingError("[FinalizeTransaction] nil tx")
 	}
@@ -67,9 +73,10 @@ func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx) error {
 	)
 
 	item := &batchFinalize{
-		ctx:   ctx,
-		tx:    tx,
-		group: group,
+		ctx:     ctx,
+		tx:      tx,
+		attempt: attempt,
+		group:   group,
 		onError: func(err error) {
 			mu.Lock()
 			if firstErr == nil {
@@ -148,8 +155,6 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		})
 	}()
 
-	filterExp := finalizeFilter()
-
 	var (
 		singleRecords []aerospike.BatchRecordIfc
 		singleOwner   []int // singleRecords[k] belongs to batch[singleOwner[k]]
@@ -162,7 +167,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 			// Multi-record: reuse the create-path phase-2 clearer (children first,
 			// master last) so the master's creating flag stays the atomic completion
 			// indicator, exactly as at create time.
-			item.complete(s.clearCreatingFlag(item.tx.TxIDChainHash(), numRecords))
+			item.complete(s.clearCreatingFlag(item.tx.TxIDChainHash(), numRecords, item.attempt))
 			continue
 		}
 
@@ -176,7 +181,7 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 
 		writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
 		writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
-		writePolicy.FilterExpression = filterExp // only touch records that still carry the creating bin and are not rolling back
+		writePolicy.FilterExpression = finalizeFilter(item.attempt) // only touch records that still carry the creating bin and the token and are not rolling back
 
 		// Clear by writing nil (bin absence == not creating).
 		clearOp := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
@@ -210,8 +215,8 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 		switch {
 		case ok && aErr.ResultCode == types.FILTERED_OUT:
 			// Creating bin already absent → already finalized, idempotent success. A rolling
-			// back record is refused, so the roll-forward removes its own spends.
-			batch[idx].complete(s.finalizeFilteredOutResult(batch[idx].tx.TxIDChainHash()))
+			// back record, or one owned by another attempt, is refused.
+			batch[idx].complete(s.finalizeFilteredOutResult(batch[idx].tx.TxIDChainHash(), batch[idx].attempt))
 		case ok && aErr.ResultCode == types.KEY_NOT_FOUND_ERROR:
 			// The record vanished between create and finalize — surface it so the
 			// caller (validator roll-forward / sweeper) knows the state is broken.
@@ -222,19 +227,34 @@ func (s *Store) sendFinalizeBatch(batch []*batchFinalize) {
 	}
 }
 
-// finalizeFilter selects a master record a finalize may clear: still creating and not
-// rolling back.
-func finalizeFilter() *aerospike.Expression {
+// finalizeFilter selects a record a finalize of the attempt that carries the token may clear:
+// still creating, not rolling back, and written by that attempt.
+func finalizeFilter(attempt []byte) *aerospike.Expression {
 	return aerospike.ExpAnd(
 		aerospike.ExpBinExists(fields.Creating.String()),
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.RollingBack.String())),
+		attemptFilter(attempt),
+	)
+}
+
+// attemptFilter selects a record that carries the token. A record with no attempt bin, one that
+// predates the token, matches a nil token only.
+func attemptFilter(attempt []byte) *aerospike.Expression {
+	if len(attempt) == 0 {
+		return aerospike.ExpNot(aerospike.ExpBinExists(fields.Attempt.String()))
+	}
+
+	return aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.Attempt.String()),
+		aerospike.ExpEq(aerospike.ExpBlobBin(fields.Attempt.String()), aerospike.ExpBlobVal(attempt)),
 	)
 }
 
 // finalizeFilteredOutResult reads the master record after a finalize write was filtered out
 // and returns the finalize result: nil when the creating bin is gone (already final), and
-// ErrTxNotFound when the record is rolling back or has vanished.
-func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash) error {
+// ErrTxNotFound when the record is rolling back, has vanished or is creating under another
+// attempt.
+func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash, attempt []byte) error {
 	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
 	if err != nil {
 		return errors.NewProcessingError("[finalizeFilteredOutResult] failed to create key for %s", txHash.String(), err)
@@ -252,6 +272,8 @@ func (s *Store) finalizeFilteredOutResult(txHash *chainhash.Hash) error {
 		return errors.NewTxNotFoundError("[sendFinalizeBatch] tx %s is rolling back", txHash.String())
 	case !state.creating:
 		return nil
+	case !bytes.Equal(state.attempt, attempt):
+		return errors.NewTxNotFoundError("[sendFinalizeBatch] tx %s is creating under another attempt", txHash.String())
 	}
 
 	return errors.NewProcessingError("[sendFinalizeBatch] finalize of tx %s was filtered out but the record is still creating", txHash.String())

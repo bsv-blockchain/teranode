@@ -138,11 +138,21 @@ func TestNullStoreCreateFirstNoOps(t *testing.T) {
 	tx := &bt.Tx{}
 
 	assert.False(t, store.SupportsCreateFirst())
-	assert.NoError(t, store.FinalizeTransaction(ctx, tx))
+	assert.NoError(t, store.FinalizeTransaction(ctx, tx, nil))
 
-	began, err := store.BeginCreateFirstRollback(ctx, tx.TxIDChainHash())
+	began, err := store.BeginCreateFirstRollback(ctx, tx.TxIDChainHash(), nil)
 	assert.NoError(t, err)
 	assert.False(t, began, "a store with no records has nothing to roll back")
+
+	took, err := store.TakeRollbackHold(ctx, tx.TxIDChainHash(), nil)
+	assert.NoError(t, err)
+	assert.False(t, took)
+	assert.NoError(t, store.ReleaseRollbackHold(ctx, tx.TxIDChainHash(), nil))
+	assert.NoError(t, store.EndCreateFirstRollback(ctx, tx.TxIDChainHash(), nil))
+
+	cleared, err := store.ClearCreateFirstHold(ctx, tx.TxIDChainHash(), false)
+	assert.NoError(t, err)
+	assert.False(t, cleared)
 
 	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
 	assert.NoError(t, err)
