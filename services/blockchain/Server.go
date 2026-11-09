@@ -1635,7 +1635,7 @@ func (b *Blockchain) AssignBlockID(ctx context.Context, req *blockchain_api.Assi
 func (b *Blockchain) ReserveLaneRange(ctx context.Context, req *blockchain_api.ReserveLaneRangeRequest) (*blockchain_api.ReserveLaneRangeResponse, error) {
 	ctx, _, deferFn := tracing.Tracer("blockchain").Start(ctx, "ReserveLaneRange",
 		tracing.WithParentStat(b.stats),
-		tracing.WithLogMessage(b.logger, "[ReserveLaneRange] called by %s", req.GetHolder()),
+		tracing.WithDebugLogMessage(b.logger, "[ReserveLaneRange] called by %s", req.GetHolder()),
 	)
 	defer deferFn()
 
