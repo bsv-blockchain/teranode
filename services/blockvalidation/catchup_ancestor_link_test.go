@@ -169,6 +169,10 @@ const (
 	// marked invalid, then h13, h14 on s12. b10 is mined at a harder difficulty, so our tip stays
 	// at b10 although s11 is higher, and the invalid block is not the first one above our tip.
 	offerThroughValidThenInvalidAboveTip
+	// offerAllStoredSideBranch: s6..s10 built on b5 and stored valid, and the peer serves nothing
+	// past them although it announced a child of s10. Every served header is one we hold, at or
+	// below our tip, and s10 has the same work as b10, so the less-work gate would not stop it.
+	offerAllStoredSideBranch
 	// offerSideBranchOnly: the peer serves s6..s9, h10, h11 without b5 in front. s6..s9 are stored
 	// but none is on our current chain, and our tip does not move, so the reply cannot have come
 	// from our locator.
@@ -280,6 +284,13 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		storeSideBlock(ctx, t, store, sideBranch[6], 12, options.WithInvalid(true))
 
 		offered = append(sideBranch, forkHeadersFrom(t, sideBranch[6], 2, 13, 700)...)
+	case offerAllStoredSideBranch:
+		offered = forkHeadersFrom(t, ancestor, 5, 6, 700)
+		for i, h := range offered {
+			storeSideBlock(ctx, t, store, h, uint32(6+i)) //nolint:gosec // i < 5
+		}
+
+		unservedTarget = forkHeadersFrom(t, offered[4], 1, 11, 700)[0]
 	case offerBreakBetweenBatches, offerReplayBetweenBatches:
 		// With b5 in front this is a full batch, so the fetch asks again from h9999.
 		offered = forkHeadersFrom(t, ancestor, maxBlockHeadersPerRequest-1, 6, 1000)
@@ -419,6 +430,8 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		offered = append(append([]*model.BlockHeader{}, offered...), later...)
 	case offerReplayBetweenBatches:
 		offered = append(append([]*model.BlockHeader{}, later...), unservedTarget)
+	case offerAllStoredSideBranch:
+		offered = append(append([]*model.BlockHeader{}, offered...), unservedTarget)
 	}
 
 	targetBlock := &model.Block{
@@ -671,6 +684,32 @@ func TestCatchup_ValidThenInvalidStoredBlocksAboveTipAreRejected(t *testing.T) {
 	require.Zero(t, run.minedClears, "a rejected offer must not un-stamp any local block (step 9.6)")
 	require.Equal(t, []bool{true, true, true, true, true}, minedAboveAncestor(t, run),
 		"a rejected offer must leave the local blocks above the ancestor mined")
+}
+
+// TestCatchup_AllStoredSideBranchChangesNothing covers an offer the ancestor narrowing and the
+// exhausted-walk rule both apply to. The local chain is b1..b10, s6..s10 on b5 are stored valid, and
+// the peer announces a child of s10 but serves only [b5, s6..s10]. Narrowing puts the ancestor at
+// b5, but nothing served is new, so there is no reorg to prepare for. Catchup must charge the peer
+// for the block it did not serve and leave b6..b10 stamped.
+//
+// Mutation proof: clearing walkExhausted when the ancestor was narrowed measures a fork depth of 5,
+// and the offer's equal work passes the less-work gate, so step 9.6 un-stamps b6..b10.
+func TestCatchup_AllStoredSideBranchChangesNothing(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerAllStoredSideBranch)
+
+	s10 := run.offered[4]
+	_, s10Meta, err := run.client.GetBlockHeader(context.Background(), s10.Hash())
+	require.NoError(t, err)
+	require.False(t, s10Meta.Invalid, "s10 must be stored valid, else the setup is vacuous")
+	require.Equal(t, uint32(10), s10Meta.Height, "s10 must sit at our tip's height, else the setup is vacuous")
+
+	require.Error(t, run.err, "the peer did not serve the block it announced")
+	require.True(t, errors.Is(run.err, errors.ErrNetworkInvalidResponse), "got %v", run.err)
+	require.Contains(t, run.err.Error(), "peer returned no new headers")
+	require.Zero(t, run.blocksRequests, "no block may be fetched when nothing offered is new")
+	require.Zero(t, run.minedClears, "no local block may be un-stamped when nothing offered is new")
+	require.Equal(t, []bool{true, true, true, true, true}, minedAboveAncestor(t, run),
+		"the local blocks above the ancestor must stay mined")
 }
 
 // failingHeaderLookupClient fails GetBlockHeader for one hash and defers to the real client otherwise.
