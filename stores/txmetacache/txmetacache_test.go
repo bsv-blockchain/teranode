@@ -1350,7 +1350,7 @@ func TestTxMetaCache_CreateFirstDelegates(t *testing.T) {
 
 	// Delegates to the wrapped SQL store (which is spend-first / no-op).
 	require.False(t, c.SupportsCreateFirst())
-	require.NoError(t, c.FinalizeTransaction(ctx, &bt.Tx{}))
+	require.NoError(t, c.FinalizeTransaction(ctx, &bt.Tx{}, nil))
 
 	hashes, err := c.QueryStaleCreatingTxs(ctx, 100, 0)
 	require.NoError(t, err)

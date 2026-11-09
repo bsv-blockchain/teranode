@@ -500,7 +500,33 @@ func TestDeleteComplete_OrphanChildResidueIsUnreachableNotMineable(t *testing.T)
 	require.True(t, accepted, "after adoption and unlock a high-numbered output is spendable again")
 }
 
-func TestDeleteRollingBack_LeavesSameTxidReplacement(t *testing.T) {
+// hookedDelBlobStore runs onDel once, before the first Del, and delegates everything else. It is the
+// injection point that lets a test act while the cascade of a rollback is between its child pass
+// and the end of the rollback.
+type hookedDelBlobStore struct {
+	blob.Store
+
+	onDel func()
+	fired bool
+}
+
+func (b *hookedDelBlobStore) Del(ctx context.Context, key []byte, ft fileformat.FileType, opts ...options.FileOption) error {
+	if !b.fired {
+		b.fired = true
+
+		if b.onDel != nil {
+			b.onDel()
+		}
+	}
+
+	return b.Store.Del(ctx, key, ft, opts...)
+}
+
+// TestEndCreateFirstRollback_HoldsTxidThroughTheCascade pins that a rollback does not give up the
+// master record until its children and blobs are gone, and then leaves a hold instead of nothing.
+// Deleting the master first let a same-txid replacement create its own children and blobs, and
+// the tail of the rollback then removed them.
+func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
 
@@ -515,53 +541,134 @@ func TestDeleteRollingBack_LeavesSameTxidReplacement(t *testing.T) {
 		child := spendableChildTx(t, tests.ParentTx, 0)
 		hash := child.TxIDChainHash()
 
-		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		require.NoError(t, store.DeleteRollingBack(ctx, hash))
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
 
 		got := &meta.Data{}
 		require.NoError(t, store.GetMeta(ctx, hash, got), "a creating record that nobody is rolling back survives")
 		require.True(t, got.Creating)
+		require.False(t, got.Hold)
 	})
 
-	t.Run("a rolling back record is deleted", func(t *testing.T) {
+	t.Run("a rolling back record becomes a hold that refuses a create of its txid", func(t *testing.T) {
 		child := spendableChildTx(t, tests.ParentTx, 1)
 		hash := child.TxIDChainHash()
 
-		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		began, err := store.BeginCreateFirstRollback(ctx, hash)
-		require.NoError(t, err)
-		require.True(t, began)
-
-		require.NoError(t, store.DeleteRollingBack(ctx, hash))
-		require.ErrorIs(t, store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound)
-	})
-
-	t.Run("a stale rollback does not delete a replacement created after its record went", func(t *testing.T) {
-		child := spendableChildTx(t, tests.ParentTx, 2)
-		hash := child.TxIDChainHash()
-
-		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
-		require.NoError(t, err)
-
-		began, err := store.BeginCreateFirstRollback(ctx, hash)
+		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
 		require.NoError(t, err)
 		require.True(t, began)
 
-		require.NoError(t, store.DeleteRollingBack(ctx, hash), "the owner's rollback deletes the record it marked")
-		require.ErrorIs(t, store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound)
+		before := time.Now().Unix()
+
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got), "the txid stays taken")
+		require.True(t, got.Creating)
+		require.True(t, got.RollingBack)
+		require.True(t, got.Hold)
+		require.Equal(t, md.Attempt, got.Attempt, "the hold keeps the token of the attempt it replaced")
+
+		bins := recordBins(t, client, store, hash, 0, fields.TxID, fields.Creating, fields.RollingBack, fields.Hold, fields.HoldUntil, fields.Utxos, fields.Inputs, fields.Fee, fields.UnminedSince)
+		require.Equal(t, true, bins[fields.Hold.String()])
+		require.Contains(t, bins, fields.TxID.String(), "the sweep reads the txid from the hold")
+		require.Contains(t, bins, fields.UnminedSince.String(), "the sweep selects holds by unminedSince")
+		require.NotContains(t, bins, fields.Utxos.String(), "a hold carries no outputs")
+		require.NotContains(t, bins, fields.Inputs.String())
+		require.NotContains(t, bins, fields.Fee.String())
+
+		holdUntil, ok := bins[fields.HoldUntil.String()].(int)
+		require.True(t, ok)
+		require.GreaterOrEqual(t, int64(holdUntil), before+int64(tSettings.UtxoStore.SpendRollbackTimeout/time.Second))
 
 		_, err = store.Create(ctx, child, 102, utxo.WithCreating(true))
-		require.NoError(t, err, "a new attempt creates the same txid afresh")
+		require.ErrorIs(t, err, errors.ErrTxExists, "a resubmission is refused while the hold stands")
+	})
 
-		require.NoError(t, store.DeleteRollingBack(ctx, hash), "a stale rollback of the old attempt reports success")
+	t.Run("the master is in place while the children and blobs go, so no replacement can be created meanwhile", func(t *testing.T) {
+		utxoBatchSize := tSettings.UtxoStore.UtxoBatchSize
+		require.Positive(t, utxoBatchSize)
+
+		_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
+		require.NoError(t, err)
+
+		child := paginatedSpendAndCreateTx(t, 4, 6101, utxoBatchSize+72)
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+		require.Positive(t, masterChildCount(t, client, store, hash), "precondition: the record really paginates")
+		require.True(t, childRecordExists(t, client, store, hash, 1), "precondition: the first child page exists")
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		var (
+			replacementErr   error
+			childrenGone     bool
+			masterStillThere bool
+		)
+
+		healthy := store.GetExternalStore()
+		store.SetExternalStore(&hookedDelBlobStore{Store: healthy, onDel: func() {
+			childrenGone = !childRecordExists(t, client, store, hash, 1)
+			masterStillThere = store.GetMeta(ctx, hash, &meta.Data{}) == nil
+
+			_, replacementErr = store.Create(ctx, child, 102, utxo.WithCreating(true))
+		}})
+
+		t.Cleanup(func() { store.SetExternalStore(healthy) })
+
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
+
+		require.True(t, childrenGone, "the children are removed before the blobs")
+		require.True(t, masterStillThere, "the master record is in place while the blobs are removed")
+		require.ErrorIs(t, replacementErr, errors.ErrTxExists, "a same-txid create during the cascade finds the master and is refused")
+		require.False(t, childRecordExists(t, client, store, hash, 1), "no replacement child page exists after the cascade")
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got))
+		require.True(t, got.Hold)
+	})
+
+	t.Run("a stale rollback of an earlier attempt leaves the replacement and its children alone", func(t *testing.T) {
+		utxoBatchSize := tSettings.UtxoStore.UtxoBatchSize
+
+		child := paginatedSpendAndCreateTx(t, 4, 6102, utxoBatchSize+72)
+		hash := child.TxIDChainHash()
+
+		first, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, first.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, first.Attempt))
+
+		cleared, err := store.ClearCreateFirstHold(ctx, hash, true)
+		require.NoError(t, err)
+		require.True(t, cleared, "a block-context create adopts the hold")
+
+		second, err := store.Create(ctx, child, 102, utxo.WithCreating(true))
+		require.NoError(t, err, "a new attempt creates the same txid afresh")
+		require.NotEqual(t, first.Attempt, second.Attempt)
+		require.True(t, childRecordExists(t, client, store, hash, 1))
+
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, first.Attempt), "a stale rollback of the old attempt reports success")
 
 		got := &meta.Data{}
 		require.NoError(t, store.GetMeta(ctx, hash, got), "the replacement must survive the stale rollback")
 		require.True(t, got.Creating)
 		require.False(t, got.RollingBack)
+		require.False(t, got.Hold)
+		require.Equal(t, second.Attempt, got.Attempt)
+		require.True(t, childRecordExists(t, client, store, hash, 1), "the replacement's children must survive the stale rollback")
 	})
 }

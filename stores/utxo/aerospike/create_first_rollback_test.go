@@ -1,12 +1,16 @@
 package aerospike_test
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	teranode_aerospike "github.com/bsv-blockchain/teranode/stores/utxo/aerospike"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
@@ -45,6 +49,32 @@ func recordBins(t *testing.T, client *uaerospike.Client, store *teranode_aerospi
 	return rec.Bins
 }
 
+// attemptOf reads the token of the attempt that wrote the creating record of hash, the way the
+// sweep and the setMined pre-flight read it. It is nil for a record that is not creating.
+func attemptOf(t *testing.T, ctx context.Context, store *teranode_aerospike.Store, hash *chainhash.Hash) []byte {
+	t.Helper()
+
+	md, err := store.Get(ctx, hash, fields.Attempt)
+	if errors.Is(err, errors.ErrTxNotFound) {
+		return nil
+	}
+
+	require.NoError(t, err)
+
+	return md.Attempt
+}
+
+// requireHeld asserts that the record at hash is the hold a rolled back attempt leaves: it reads
+// as creating and rolling back, so every gate refuses it, and it carries no transaction.
+func requireHeld(t *testing.T, ctx context.Context, store *teranode_aerospike.Store, hash *chainhash.Hash, msgAndArgs ...any) {
+	t.Helper()
+
+	got := &meta.Data{}
+	require.NoError(t, store.GetMeta(ctx, hash, got), msgAndArgs...)
+	require.True(t, got.Creating && got.RollingBack && got.Hold, msgAndArgs...)
+	require.Nil(t, got.Tx, msgAndArgs...)
+}
+
 func TestBeginCreateFirstRollback(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -63,7 +93,7 @@ func TestBeginCreateFirstRollback(t *testing.T) {
 		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		began, err := store.BeginCreateFirstRollback(ctx, hash)
+		began, err := store.BeginCreateFirstRollback(ctx, hash, attemptOf(t, ctx, store, hash))
 		require.NoError(t, err)
 		require.True(t, began)
 
@@ -84,11 +114,11 @@ func TestBeginCreateFirstRollback(t *testing.T) {
 		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
 
-		began, err := store.BeginCreateFirstRollback(ctx, hash)
+		began, err := store.BeginCreateFirstRollback(ctx, hash, attemptOf(t, ctx, store, hash))
 		require.NoError(t, err)
 		require.True(t, began, "the first caller owns the rollback")
 
-		began, err = store.BeginCreateFirstRollback(ctx, hash)
+		began, err = store.BeginCreateFirstRollback(ctx, hash, attemptOf(t, ctx, store, hash))
 		require.NoError(t, err)
 		require.False(t, began, "a second caller does not own a rollback that is already running")
 
@@ -121,7 +151,7 @@ func TestBeginCreateFirstRollback(t *testing.T) {
 
 				<-start
 
-				began, callErr := store.BeginCreateFirstRollback(ctx, hash)
+				began, callErr := store.BeginCreateFirstRollback(ctx, hash, attemptOf(t, ctx, store, hash))
 				if callErr != nil {
 					errored.Add(1)
 					return
@@ -146,9 +176,9 @@ func TestBeginCreateFirstRollback(t *testing.T) {
 
 		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
 		require.NoError(t, err)
-		require.NoError(t, store.FinalizeTransaction(ctx, child))
+		require.NoError(t, store.FinalizeTransaction(ctx, child, attemptOf(t, ctx, store, child.TxIDChainHash())))
 
-		began, err := store.BeginCreateFirstRollback(ctx, hash)
+		began, err := store.BeginCreateFirstRollback(ctx, hash, attemptOf(t, ctx, store, hash))
 		require.NoError(t, err)
 		require.False(t, began)
 
@@ -165,9 +195,235 @@ func TestBeginCreateFirstRollback(t *testing.T) {
 		absent := spendableChildTx(t, tests.ParentTx, 0)
 		absent.Version = 77
 
-		began, err := store.BeginCreateFirstRollback(ctx, absent.TxIDChainHash())
+		began, err := store.BeginCreateFirstRollback(ctx, absent.TxIDChainHash(), attemptOf(t, ctx, store, absent.TxIDChainHash()))
 		require.NoError(t, err)
 		require.False(t, began)
 		require.Nil(t, recordBins(t, client, store, absent.TxIDChainHash(), 0, fields.RollingBack), "UPDATE_ONLY must not create the record")
+	})
+}
+
+// rolledBackHold creates child in the creating state, marks it as rolling back and ends the
+// rollback, which leaves the hold. It returns the token of the attempt that was rolled back.
+func rolledBackHold(t *testing.T, ctx context.Context, store *teranode_aerospike.Store, child *bt.Tx) []byte {
+	t.Helper()
+
+	hash := child.TxIDChainHash()
+
+	md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, began)
+	require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
+	requireHeld(t, ctx, store, hash, "precondition: the rolled back attempt left a hold")
+
+	return md.Attempt
+}
+
+// TestRollbackHold covers the hold a rollback leaves for its txid: who may take it to reverse
+// spends, who may clear it, and when it goes.
+func TestRollbackHold(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.SpendRollbackTimeout = 2 * time.Second
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	t.Run("a take needs the mark, the token and no busy holder, and a release clears only the busy bin", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		took, err := store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, took, "a record that was never marked as rolling back has nothing to take")
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		took, err = store.TakeRollbackHold(ctx, hash, []byte("another attempt!"))
+		require.NoError(t, err)
+		require.False(t, took, "a take with another attempt's token is refused")
+
+		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, took, "the attempt that was marked can take its hold, which is marked busy while the record is still rolling back")
+
+		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, took, "a busy hold is taken by one actor only")
+
+		require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "holder is reversing spends", "the end of the rollback must not drop the busy marker of a holder")
+		require.NoError(t, store.GetMeta(ctx, hash, &meta.Data{}))
+
+		bins := recordBins(t, client, store, hash, 0, fields.Busy, fields.HoldUntil)
+		require.Equal(t, true, bins[fields.Busy.String()])
+		require.GreaterOrEqual(t, bins[fields.HoldUntil.String()], int(time.Now().Unix())+1, "the take renews holdUntil")
+
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, []byte("another attempt!")))
+		require.Equal(t, true, recordBins(t, client, store, hash, 0, fields.Busy)[fields.Busy.String()], "a release with another attempt's token leaves the busy bin")
+
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String())
+
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "with the busy marker gone the rollback ends")
+		requireHeld(t, ctx, store, hash)
+
+		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, took, "a hold can be taken too, and the take renews it")
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+	})
+
+	t.Run("a take of an absent record reports false", func(t *testing.T) {
+		absent := spendableChildTx(t, tests.ParentTx, 0)
+		absent.Version = 78
+
+		took, err := store.TakeRollbackHold(ctx, absent.TxIDChainHash(), []byte("anything"))
+		require.NoError(t, err)
+		require.False(t, took)
+		require.NoError(t, store.ReleaseRollbackHold(ctx, absent.TxIDChainHash(), []byte("anything")))
+		require.Nil(t, recordBins(t, client, store, absent.TxIDChainHash(), 0, fields.Busy), "UPDATE_ONLY must not create the record")
+	})
+
+	t.Run("a stale claim, take and finalize of the old token touch nothing of the adopted record", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 1)
+		child.Version = 12
+		hash := child.TxIDChainHash()
+
+		old := rolledBackHold(t, ctx, store, child)
+
+		cleared, err := store.ClearCreateFirstHold(ctx, hash, true)
+		require.NoError(t, err)
+		require.True(t, cleared)
+
+		adopted, err := store.Create(ctx, child, 102, utxo.WithCreating(true))
+		require.NoError(t, err)
+		require.NotEqual(t, old, adopted.Attempt)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, old)
+		require.NoError(t, err)
+		require.False(t, began, "a stale roll-forward cannot claim the adopted record")
+
+		took, err := store.TakeRollbackHold(ctx, hash, old)
+		require.NoError(t, err)
+		require.False(t, took)
+
+		require.ErrorIs(t, store.FinalizeTransaction(ctx, child, old), errors.ErrTxNotFound, "a stale roll-forward cannot finalize the adopted record")
+
+		_, err = utxo.RollForwardCreating(ctx, logger, store, child, old, 102)
+		require.ErrorIs(t, err, errors.ErrProcessing, "the fence refuses a roll-forward that read an earlier attempt")
+		require.Contains(t, err.Error(), "another attempt")
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got))
+		require.True(t, got.Creating, "the adopted record is untouched")
+		require.False(t, got.RollingBack)
+		require.False(t, got.Hold)
+		require.Equal(t, adopted.Attempt, got.Attempt)
+		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.RollingBack, fields.Busy), fields.RollingBack.String())
+	})
+
+	t.Run("a hold is cleared at once for a block-context create unless a holder is busy, and otherwise only after it expires", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 2)
+		child.Version = 13
+		hash := child.TxIDChainHash()
+
+		token := rolledBackHold(t, ctx, store, child)
+
+		cleared, err := store.ClearCreateFirstHold(ctx, hash, false)
+		require.NoError(t, err)
+		require.False(t, cleared, "a live hold is not cleared by a create that is not in block context")
+		requireHeld(t, ctx, store, hash)
+
+		took, err := store.TakeRollbackHold(ctx, hash, token)
+		require.NoError(t, err)
+		require.True(t, took)
+
+		cleared, err = store.ClearCreateFirstHold(ctx, hash, true)
+		require.NoError(t, err)
+		require.False(t, cleared, "a busy holder is waited for even in block context")
+		requireHeld(t, ctx, store, hash)
+
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, token))
+
+		cleared, err = store.ClearCreateFirstHold(ctx, hash, true)
+		require.NoError(t, err)
+		require.True(t, cleared, "a block-context create adopts a hold at once when no holder is busy")
+		require.ErrorIs(t, store.GetMeta(ctx, hash, &meta.Data{}), errors.ErrTxNotFound)
+
+		cleared, err = store.ClearCreateFirstHold(ctx, hash, false)
+		require.NoError(t, err)
+		require.True(t, cleared, "an absent record is free")
+	})
+
+	t.Run("a record that is not a hold is never cleared", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		child.Version = 16
+		hash := child.TxIDChainHash()
+
+		_, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		for _, adopt := range []bool{false, true} {
+			cleared, err := store.ClearCreateFirstHold(ctx, hash, adopt)
+			require.NoError(t, err)
+			require.False(t, cleared)
+		}
+
+		got := &meta.Data{}
+		require.NoError(t, store.GetMeta(ctx, hash, got))
+		require.True(t, got.Creating, "a creating record survives every clear")
+	})
+
+	t.Run("an expired hold is cleared, a busy one only after a further expiry, and the sweep query finds it", func(t *testing.T) {
+		free := spendableChildTx(t, tests.ParentTx, 0)
+		free.Version = 14
+		busy := spendableChildTx(t, tests.ParentTx, 0)
+		busy.Version = 15
+
+		rolledBackHold(t, ctx, store, free)
+		busyToken := rolledBackHold(t, ctx, store, busy)
+
+		took, err := store.TakeRollbackHold(ctx, busy.TxIDChainHash(), busyToken)
+		require.NoError(t, err)
+		require.True(t, took)
+
+		stale, err := store.QueryStaleCreatingTxs(ctx, 200, 0)
+		require.NoError(t, err)
+		require.Contains(t, stale, *free.TxIDChainHash(), "the sweep selects a hold by unminedSince")
+		require.Contains(t, stale, *busy.TxIDChainHash())
+
+		cleared, err := store.ClearCreateFirstHold(ctx, free.TxIDChainHash(), false)
+		require.NoError(t, err)
+		require.False(t, cleared, "the hold has not expired yet")
+
+		time.Sleep(3 * time.Second)
+
+		cleared, err = store.ClearCreateFirstHold(ctx, free.TxIDChainHash(), false)
+		require.NoError(t, err)
+		require.True(t, cleared, "an expired hold with no busy holder is deleted")
+		require.ErrorIs(t, store.GetMeta(ctx, free.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound)
+
+		cleared, err = store.ClearCreateFirstHold(ctx, busy.TxIDChainHash(), false)
+		require.NoError(t, err)
+		require.False(t, cleared, "a busy hold survives its first expiry")
+		requireHeld(t, ctx, store, busy.TxIDChainHash())
+
+		time.Sleep(2 * time.Second)
+
+		cleared, err = store.ClearCreateFirstHold(ctx, busy.TxIDChainHash(), false)
+		require.NoError(t, err)
+		require.True(t, cleared, "a hold whose holder crashed is deleted once it has expired by a further timeout")
+		require.ErrorIs(t, store.GetMeta(ctx, busy.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound)
 	})
 }
