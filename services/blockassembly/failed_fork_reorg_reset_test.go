@@ -57,7 +57,7 @@ type failedForkReorgBA struct {
 
 	parent, tipA, forkF, forkF2, childA2, childA3 *model.BlockHeader
 
-	a1, f1 *bt.Tx
+	a1Parent, a1, f1 *bt.Tx
 
 	fSubtreeKey   *chainhash.Hash
 	fSubtreeBytes []byte
@@ -168,6 +168,7 @@ func newFailedForkReorgBA(t *testing.T) *failedForkReorgBA {
 	// a1 spends a mined parent, so the reload's input check can accept it. a1
 	// and f1 have records and are mined: a1 in A, f1 in F.
 	a1Parent := newTestTx(t, 0x50)
+	f.a1Parent = a1Parent
 	f.a1 = newTestChild(t, a1Parent, 0xa1)
 
 	for _, tx := range []*bt.Tx{a1Parent, f.f1} {
@@ -232,6 +233,9 @@ func newFailedForkReorgBA(t *testing.T) *failedForkReorgBA {
 	f.stp, ok = f.ba.subtreeProcessor.(*subtreeprocessor.SubtreeProcessor)
 	require.True(t, ok)
 
+	// Cleanups run last in, first out, so the processor stops before its
+	// channel closes and the drain goroutine below ends.
+	t.Cleanup(func() { close(newSubtreeChan) })
 	t.Cleanup(func() { f.stp.Stop(context.Background()) })
 
 	go func() {
@@ -353,9 +357,32 @@ func TestFailedForkReorgAndReset_MoveForwardToTheLosingSideResets(t *testing.T) 
 	require.Equal(t, f.childA3.Hash(), f.stp.GetCurrentBlockHeader().Hash())
 }
 
-// A reset after a refused move forward can itself fail. Block assembly then
+// The reset after a refused move forward reloads the unmined transactions with
+// their inputs checked, as handleReorg's reset after a failed reorg does. d1 is
+// an unmined double spend of a1's input, and a1 is mined in A, which is on the
+// chain again, so the reload must leave d1 out of block assembly.
+func TestFailedForkReorgAndReset_ResetAfterARefusalChecksTheReloadedInputs(t *testing.T) {
+	f := newFailedForkReorgBA(t)
+	f.failForkReorgThenItsReset(t)
+
+	d1 := newTestChild(t, f.a1Parent, 0xd1)
+	_, _, err := f.utxo.SpendAndCreate(t.Context(), d1, 2, utxo.WithCreateOnly())
+	require.NoError(t, err)
+	require.NotZero(t, unminedSinceOfTx(t, f.utxo, d1), "precondition: d1 is unmined, so the reload reads it")
+
+	err = f.ba.moveToBlock(t.Context(), f.childA2, f.meta(t, f.childA2))
+	require.ErrorIs(t, err, errors.ErrBlockAssemblyReset, "a refused move forward must lead to a reset")
+	require.Equal(t, f.childA2.Hash(), f.stp.GetCurrentBlockHeader().Hash())
+
+	require.False(t, f.assemblyHas(t, d1), "the reload checks inputs and leaves out d1, which spends an output a1 already spends")
+	require.NoError(t, f.stp.CheckSubtreeProcessor())
+}
+
+// A reset after a refused move forward can itself fail. When it fails before
+// the processor's tx map rotation, as here in getReorgBlocks, block assembly
 // stays on A, the processor keeps refusing, and the next pass resets again
-// rather than stalling.
+// rather than stalling. A reset that fails after the rotation has already
+// cleared the refusal.
 func TestFailedForkReorgAndReset_FailedResetAfterARefusalIsRetriedNextPass(t *testing.T) {
 	f := newFailedForkReorgBA(t)
 	f.failForkReorgThenItsReset(t)

@@ -367,6 +367,23 @@ func TestFailedForkReorg_ResetFailingBeforeTheRotationKeepsRefusing(t *testing.T
 	f.requireReorgKeepsA1(t)
 }
 
+// A reset that fails after the tx map rotation, here in its postProcess reload,
+// has already emptied the map the failed reorg left behind, so the refusal is
+// cleared at the rotation and the next move forward is not refused.
+func TestFailedForkReorg_ResetFailingAfterTheRotationClearsTheRefusal(t *testing.T) {
+	f := newFailedForkReorgFixture(t)
+	f.failReorgAtFirstForwardStep(t)
+
+	resp := f.stp.Reset(f.tipA, []*model.Block{}, []*model.Block{}, false, func() error {
+		return errors.NewProcessingError("injected reload failure")
+	})
+	require.ErrorContains(t, resp.Err, "injected reload failure")
+	require.True(t, resp.Rotated, "the reset failed after the rotation")
+
+	require.NoError(t, f.stp.MoveForwardBlock(f.blockA2), "the rotation cleared the refusal")
+	require.Equal(t, f.childA2.Hash(), f.stp.GetCurrentBlockHeader().Hash())
+}
+
 // A failed forward-only catch-up rolls back completely and block assembly does
 // not reset after it, so it must not leave the processor refusing: the next
 // catch-up runs.

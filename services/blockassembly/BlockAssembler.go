@@ -1766,8 +1766,10 @@ func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHea
 // losing side of that reorg would be refused on every pass.
 //
 // It returns ErrBlockAssemblyReset when the reset succeeded, as handleReorg does, so the
-// caller does not overwrite the tip the reset set. A failed reset leaves the processor
-// refusing, so the next pass resets again.
+// caller does not overwrite the tip the reset set. A reset that fails before the
+// processor's tx map rotation, for example in getReorgBlocks or in the sweep before the
+// rotation, leaves the processor refusing, so the next pass resets again. A reset that
+// fails after the rotation has already cleared the refusal.
 func (b *BlockAssembler) resetAfterRefusedMove(ctx context.Context, header *model.BlockHeader, height uint32, stuckLabel string, refusal error) error {
 	b.logger.Warnf("[BlockAssembler][%s] the subtree processor needs a reset after a failed fork reorg, resetting instead of moving: %v", header.Hash(), refusal)
 
