@@ -987,7 +987,7 @@ func TestServer_blockHandler_processBlockFound_happyPath(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, hash.String(), found.hash.String())
 		assert.Equal(t, url, found.baseURL)
-		assert.Nil(t, found.errCh) // errCh should be nil to avoid blocking Kafka consumer
+		assert.Nil(t, found.reply) // no reply: the Kafka consumer must not wait for validation
 	}()
 
 	err := server.blockHandler(context.Background(), kafkaMsg)
@@ -1425,7 +1425,7 @@ func Test_BlockFound(t *testing.T) {
 		blockFound := <-server.blockFoundCh
 		require.Equal(t, hash.String(), blockFound.hash.String())
 		require.Equal(t, "http://test.com", blockFound.baseURL)
-		require.Nil(t, blockFound.errCh)
+		require.Nil(t, blockFound.reply)
 	})
 
 	t.Run("new block with wait - success", func(t *testing.T) {
@@ -1460,8 +1460,8 @@ func Test_BlockFound(t *testing.T) {
 		go func() {
 			time.Sleep(10 * time.Millisecond) // Small delay
 			blockFound := <-server.blockFoundCh
-			require.NotNil(t, blockFound.errCh)
-			blockFound.errCh <- nil // Signal success
+			require.NotNil(t, blockFound.reply)
+			blockFound.reply.answer(nil) // Signal success
 		}()
 
 		resp, err := server.BlockFound(ctx, req)
@@ -1501,8 +1501,8 @@ func Test_BlockFound(t *testing.T) {
 		go func() {
 			time.Sleep(10 * time.Millisecond) // Small delay
 			blockFound := <-server.blockFoundCh
-			require.NotNil(t, blockFound.errCh)
-			blockFound.errCh <- errors.New(errors.ERR_BLOCK_NOT_FOUND, "validation failed")
+			require.NotNil(t, blockFound.reply)
+			blockFound.reply.answer(errors.New(errors.ERR_BLOCK_NOT_FOUND, "validation failed"))
 		}()
 
 		resp, err := server.BlockFound(ctx, req)
@@ -2018,9 +2018,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 		go func() {
 			blockFound := <-server.blockFoundCh
 			require.NotNil(t, blockFound)
-			if blockFound.errCh != nil {
-				blockFound.errCh <- nil
-			}
+			blockFound.reply.answer(nil)
 		}()
 
 		err = handler(msg)
@@ -2083,7 +2081,7 @@ func Test_consumerMessageHandler(t *testing.T) {
 			// Unbuffered: the inner blockHandler goroutine blocks on this send
 			// (no reader in the test), so the handler's select can only fire
 			// ctx.Done(). Without this, the buffered send returned immediately
-			// and racy select could pick errCh=nil.
+			// and racy select could pick the nil error.
 			blockFoundCh:        make(chan processBlockFound),
 			blockValidation:     bv,
 			stats:               gocore.NewStat("test"),
