@@ -184,9 +184,13 @@ Aerospike keeps the WAL in the `<set>_conflictwal` set of the UTXO namespace.
 `utxo_conflictwal` in namespace `utxo-store`.
 
 ```bash
-# Record count per node. The WAL is empty when every node reports objects=0 or
-# does not list the set.
-asadm -e "show sets"
+# One row per namespace and set across the cluster. The WAL is empty when the
+# <namespace> / <set>_conflictwal row shows 0 Total Records, or there is no such
+# row. `asadm -e "show statistics sets"` gives the same counts per node.
+asadm -e "info set"
+
+# The same check against a single node: empty when it reports objects=0 or
+# returns nothing. Run it on every node.
 asinfo -v "sets/<namespace>/<set>_conflictwal"
 
 # List the records with their kind (forward or reverse).
