@@ -311,3 +311,52 @@ func conflictWALRootWriters(t *testing.T, client *uaerospike.Client, store *tera
 
 	require.NoError(t, store.CompleteConflictIntent(ctx, id))
 }
+
+// The commands that the conflict-recovery doc and the PR give operators whose Teranode cannot
+// create indexes, with <ns> and <set> for the namespace and the UTXO set.
+const (
+	conflictWALIndexCommand81    = "sindex-create:namespace=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;bin=startedAt;type=numeric"
+	conflictWALIndexCommandPre81 = "sindex-create:ns=<ns>;set=<set>_conflictwal;indexname=<set>_conflictwal_startedAt;indexdata=startedAt,numeric"
+)
+
+// The documented manual command creates the index the store reads through, on each server line
+// the repository runs: the startup read then uses it without a scan.
+func TestConflictWALIndex_ManualCreateCommand(t *testing.T) {
+	for _, tc := range []struct{ image, command string }{
+		{"aerospike/aerospike-server:8.1", conflictWALIndexCommand81},
+		{"aerospike/aerospike-server:8.0", conflictWALIndexCommandPre81},
+	} {
+		t.Run(tc.image, func(t *testing.T) {
+			client, store, ctx := initAerospikeImageWith(t, tc.image, test.CreateBaseTestSettings(t), nil)
+			walSet := store.GetName() + "_conflictwal"
+
+			// Model a Teranode without index-create rights: the index is not there.
+			require.NoError(t, client.DropIndex(nil, store.GetNamespace(), walSet, store.ConflictWALIndexName()))
+			require.Eventually(t, func() bool {
+				_, readable, err := store.QueryConflictWALIndex(ctx)
+				return err == nil && !readable
+			}, 30*time.Second, 100*time.Millisecond, "the dropped index must stop being readable")
+
+			command := strings.NewReplacer("<ns>", store.GetNamespace(), "<set>", store.GetName()).Replace(tc.command)
+
+			node, err := client.Cluster().GetRandomNode()
+			require.NoError(t, err)
+
+			response, err := node.RequestInfo(aerospike.NewInfoPolicy(), command)
+			require.NoError(t, err)
+			require.Equal(t, "ok", strings.ToLower(response[command]), "the server must accept %q", command)
+
+			waitConflictWALIndexReadable(t, store)
+
+			intent := utxo.ConflictIntent{Kind: utxo.ConflictIntentReverse, BlockHeight: 31, BlockHash: chainhash.HashH([]byte("manual-index-block")), StartedAt: 4}
+			require.NoError(t, store.BeginConflictIntent(ctx, intent))
+
+			scans := teranode_aerospike.ConflictWALFallbackScans()
+
+			pending, pendingErr := store.PendingConflictIntents(ctx)
+			require.NoError(t, pendingErr)
+			require.Len(t, pending, 1)
+			require.Equal(t, scans, teranode_aerospike.ConflictWALFallbackScans(), "the manually created index must serve the read")
+		})
+	}
+}
