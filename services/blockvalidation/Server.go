@@ -1225,6 +1225,10 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		return nil
 	}
 
+	// Both paths below fetch from this announcer. A waiter for a hash already queued joins the queued
+	// entry first, so the fetch can only add a source, never settle the waiter.
+	blockFound = u.joinQueuedBlock(blockFound)
+
 	// Check queue depth and determine if we might need catchup mode
 	queueSize := u.blockPriorityQueue.Size()
 	shouldConsiderCatchup := u.settings.BlockValidation.UseCatchupWhenBehind && (queueSize > 10 || len(u.blockFoundCh) > 3)
@@ -1245,7 +1249,7 @@ func (u *Server) processBlockFoundChannel(ctx context.Context, blockFound proces
 		block = fetched
 		blockFound = source
 		if err != nil {
-			blockFound.reply.answer(err)
+			u.answerFetchFailure(blockFound, err)
 			return errors.NewProcessingError("[processBlockFoundChannel] failed to get block [%s]", blockFound.hash.String(), err)
 		}
 
@@ -1596,8 +1600,7 @@ func (u *Server) BlockFound(ctx context.Context, req *blockvalidation_api.BlockF
 	// first check if the block exists, it is very expensive to do all the checks below
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
-		return nil, errors.WrapGRPC(
-			errors.NewServiceError("[BlockFound][%s] failed to check if block exists", hash.String(), err))
+		return nil, errors.WrapGRPC(blockLookupError(ctx, hash, "check if block exists", err))
 	}
 
 	if exists {
@@ -2580,8 +2583,9 @@ func (u *Server) finishProcessedBlock(workerID int, blockFound processBlockFound
 // a caller that announces the hash again waits on the retry's outcome, not this answered one.
 //
 // A caller that announced a hash already on the queue was joined to that entry's reply (see
-// BlockPriorityQueue.Add). It gets the outcome of the attempt on the first announcer's source,
-// not on its own: its source is not tried before that answer is sent.
+// joinQueuedBlock and BlockPriorityQueue.Add). It gets the outcome of the attempt on the first
+// announcer's source, not on its own: a failed fetch from its own source does not answer it, and
+// its source is not tried by the worker before that answer is sent.
 //
 // A nil from the processing is not enough for nil: processBlockFound also returns nil when it
 // hands the block to catchup, or finds it stored already, which may be as invalid. So the store
@@ -2612,7 +2616,7 @@ func (u *Server) answerStoredBlock(ctx context.Context, reply *blockFoundReply, 
 func (u *Server) storedBlockAnswer(ctx context.Context, hash *chainhash.Hash) error {
 	exists, err := u.blockValidation.GetBlockExists(ctx, hash)
 	if err != nil {
-		return errors.NewServiceError("[BlockFound][%s] failed to check if block is stored", hash.String(), err)
+		return blockLookupError(ctx, hash, "check if block is stored", err)
 	}
 
 	if !exists {
@@ -2622,7 +2626,7 @@ func (u *Server) storedBlockAnswer(ctx context.Context, hash *chainhash.Hash) er
 	// The header is read from the client the exists check used, so both reads see one chain.
 	_, meta, err := u.blockValidation.blockchainClient.GetBlockHeader(ctx, hash)
 	if err != nil {
-		return errors.NewServiceError("[BlockFound][%s] failed to read stored block header", hash.String(), err)
+		return blockLookupError(ctx, hash, "read stored block header", err)
 	}
 
 	if meta != nil && meta.Invalid {
@@ -2630,6 +2634,18 @@ func (u *Server) storedBlockAnswer(ctx context.Context, hash *chainhash.Hash) er
 	}
 
 	return nil
+}
+
+// blockLookupError is the answer for a failed store read made for a BlockFound caller. If ctx has
+// ended, the read failed because the caller stopped waiting, whatever error the client returned, so
+// the answer is ERR_CONTEXT_CANCELED. Otherwise the store failed, which is a retry-later
+// ERR_SERVICE_ERROR.
+func blockLookupError(ctx context.Context, hash *chainhash.Hash, action string, err error) error {
+	if ctx.Err() != nil {
+		return errors.NewContextCanceledError("[BlockFound][%s] context ended during the attempt to %s", hash.String(), action, ctx.Err())
+	}
+
+	return errors.NewServiceError("[BlockFound][%s] failed to %s", hash.String(), action, err)
 }
 
 func newBlockRetryAttemptsCache() *ttlcache.Cache[chainhash.Hash, int] {
@@ -3695,11 +3711,34 @@ func (u *Server) addBlockToPriorityQueue(ctx context.Context, blockFound process
 	if err != nil {
 		u.logger.Errorf("[addBlockToPriorityQueue] Failed to fetch block %s: %v", blockFound.hash.String(), err)
 
-		blockFound.reply.answer(err)
+		u.answerFetchFailure(blockFound, err)
+
 		return
 	}
 
 	u.queueFetchedBlock(ctx, blockFound, block)
+}
+
+// joinQueuedBlock joins a waiting caller to the queue entry for its hash, if there is one, and
+// returns blockFound without its reply, so nothing later on this announcement's path can answer it.
+// The caller then gets the queued block's outcome, and this announcement can only add a source.
+// With no queue entry to join, blockFound is returned as it is.
+func (u *Server) joinQueuedBlock(blockFound processBlockFound) processBlockFound {
+	if u.blockPriorityQueue.JoinReply(blockFound.hash, blockFound.reply) {
+		blockFound.reply = nil
+	}
+
+	return blockFound
+}
+
+// answerFetchFailure answers a waiting caller whose announcer's source failed to serve the block.
+// Another announcement can have queued the hash while the fetch ran, so the join is tried again: the
+// failure says nothing about that entry. With no entry the caller gets the failure, even if another
+// worker is fetching or validating the hash outside the queue: the failure is a retry-later one, and
+// calling BlockFound again gets the outcome.
+func (u *Server) answerFetchFailure(blockFound processBlockFound, err error) {
+	blockFound = u.joinQueuedBlock(blockFound)
+	blockFound.reply.answer(err)
 }
 
 // queueFetchedBlock hands an announced block, already fetched from blockFound's source, to catchup
