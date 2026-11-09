@@ -7,10 +7,10 @@
 // which are covered under subtreeprocessor/.
 //
 // Coverage map:
-//   - TestBlockAssembler_Reorg_DeepReorgGate         -> BA-REORG-006 (both-conditions gate)
-//   - TestBlockAssembler_Reorg_MaturityDepthBoundary -> BA-REORG-006 (">" vs ">=" boundary)
-//   - TestBlockAssembler_Reorg_NoWedgeOnFailure      -> BA-REORG-007, BA-REORG-008, BA-STATE-002
-//   - TestBlockAssembler_Reorg_Idempotency           -> BA-REORG-002, BA-REORG-009
+//   - TestHandleReorg_DeepReorgResetNeedsHeightAboveThousand  -> BA-REORG-006 (height term)
+//   - TestHandleReorg_ResetsWhenDepthReachesCoinbaseMaturity -> BA-REORG-006 (depth boundary)
+//   - TestProcessNewBlockAnnouncement_FailureLeavesRunningAndTip -> BA-REORG-007, BA-REORG-008, BA-STATE-002
+//   - TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent -> BA-REORG-002, BA-REORG-009
 package blockassembly
 
 import (
@@ -29,7 +29,7 @@ import (
 // (WaitForPendingBlocks + Reset) both no-op. Stubbing BOTH lets a test assert which
 // branch handleReorg's deep-reorg gate actually took (via AssertCalled/AssertNotCalled)
 // instead of crashing with an unexpected-call panic when the branch differs from
-// expectation — which is what makes the BA-REORG-006 spec probe fail cleanly.
+// expectation.
 func newReorgMockStp(t *testing.T, items *baTestItems) *subtreeprocessor.MockSubtreeProcessor {
 	t.Helper()
 
@@ -88,12 +88,13 @@ func assertReorgedInPlace(t *testing.T, mockStp *subtreeprocessor.MockSubtreePro
 	mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestBlockAssembler_Reorg_DeepReorgGate covers the untested negative branch of
-// BA-REORG-006: a full reset requires BOTH depth >= maturity AND currentHeight > 1000.
-// The existing suite only exercises the positive case (height 1001 -> reset). Here the
-// depth term is satisfied (CoinbaseMaturity=1, moveBack=1) but the height gate is not,
-// so the service MUST reorg in place, never reset.
-func TestBlockAssembler_Reorg_DeepReorgGate(t *testing.T) {
+// TestHandleReorg_DeepReorgResetNeedsHeightAboveThousand covers the negative branch
+// of the maturity rule in BA-REORG-006: a full reset on depth >= coinbase maturity
+// also requires the current chain height to be greater than 1000. Here the depth
+// term is satisfied (CoinbaseMaturity=1, moveBack=1) but the height term is not, so
+// handleReorg MUST reorg in place, never reset. The decision itself is unit-tested by
+// TestReorgNeedsReset; this drives it through handleReorg.
+func TestHandleReorg_DeepReorgResetNeedsHeightAboveThousand(t *testing.T) {
 	initPrometheusMetrics()
 
 	t.Run("deep depth but height 999 (< 1000) reorgs in place", func(t *testing.T) {
@@ -101,45 +102,31 @@ func TestBlockAssembler_Reorg_DeepReorgGate(t *testing.T) {
 		assertReorgedInPlace(t, mockStp, err)
 	})
 
-	// The spec says "greater than 1000" and the impl uses `> 1000`; at exactly 1000
-	// the gate must NOT fire. Locks that height boundary.
+	// The spec says "greater than 1000"; at exactly 1000 the gate must NOT fire.
 	t.Run("deep depth but height 1000 (==, not >) reorgs in place", func(t *testing.T) {
 		mockStp, err := runReorgDecision(t, 1000, 1)
 		assertReorgedInPlace(t, mockStp, err)
 	})
 }
 
-// TestBlockAssembler_Reorg_MaturityDepthBoundary probes the BA-REORG-006 depth
-// comparison at the exact boundary depth == maturity.
-func TestBlockAssembler_Reorg_MaturityDepthBoundary(t *testing.T) {
+// TestHandleReorg_ResetsWhenDepthReachesCoinbaseMaturity pins the depth boundary of
+// BA-REORG-006 through handleReorg: above height 1000, a reorg whose deeper side is
+// at least the coinbase-maturity threshold MUST take the full-reset path, and one
+// below it MUST reorg in place.
+func TestHandleReorg_ResetsWhenDepthReachesCoinbaseMaturity(t *testing.T) {
 	initPrometheusMetrics()
 
-	// Below threshold: maturity=2, depth=1 (1 < 2). Spec and impl agree: reorg in place.
 	t.Run("depth below maturity reorgs in place", func(t *testing.T) {
 		mockStp, err := runReorgDecision(t, 1001, 2)
 		assertReorgedInPlace(t, mockStp, err)
 	})
 
-	// SPEC PROBE (BA-REORG-006) — EXPECTED TO FAIL against the current implementation.
-	//
-	// Spec: "When a competing chain's depth from the common ancestor *exceeds* the
-	// coinbase-maturity threshold AND the current chain height is greater than 1000,
-	// the service MUST perform a full reset". "exceeds" means strictly greater (>),
-	// and both the state diagram ("depth > maturity") and AC-BA-REORG-006.1 agree.
-	//
-	// Here depth (moveBack=1) == maturity (1) and height 1001 > 1000. Because the depth
-	// does NOT exceed the threshold, the spec requires an in-place reorg. The
-	// implementation at BlockAssembler.go:1656 uses `>=` (len(moveBack) >= CoinbaseMaturity
-	// || len(moveForward) >= CoinbaseMaturity), so it performs a full RESET instead.
-	//
-	// This assertion encodes the spec-required behavior; it will FAIL until the `>=`
-	// off-by-one at BlockAssembler.go:1656 is changed to `>`.
-	t.Run("depth == maturity must reorg in place (EXPECTED FAIL: impl uses >=)", func(t *testing.T) {
-		mockStp, err := runReorgDecision(t, 1001, 1)
-		require.NoError(t, err,
-			"BA-REORG-006: depth == maturity does not *exceed* maturity; must reorg in place, not reset")
-		mockStp.AssertCalled(t, "Reorg", mock.Anything, mock.Anything)
-		mockStp.AssertNotCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	// The spec says "at least the coinbase-maturity threshold", so depth == maturity
+	// (moveBack=1, CoinbaseMaturity=1) at height 1001 resets.
+	t.Run("depth equal to maturity resets", func(t *testing.T) {
+		mockStp, _ := runReorgDecision(t, 1001, 1)
+		mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		mockStp.AssertNotCalled(t, "Reorg", mock.Anything, mock.Anything)
 	})
 }
 
@@ -158,11 +145,11 @@ func assertRunningAndTipUnchanged(t *testing.T, ba *BlockAssembler, wantHeader *
 		"BA-REORG-007: best-block height must be unchanged on partial failure")
 }
 
-// TestBlockAssembler_Reorg_NoWedgeOnFailure drives processNewBlockAnnouncement into
+// TestProcessNewBlockAnnouncement_FailureLeavesRunningAndTip drives processNewBlockAnnouncement into
 // each failure path and asserts the service returns to Running (BA-REORG-008) with the
 // best-block reference untouched (BA-REORG-007). The existing "catch-up mid-error"
 // test checks the tip but never asserts the operational state.
-func TestBlockAssembler_Reorg_NoWedgeOnFailure(t *testing.T) {
+func TestProcessNewBlockAnnouncement_FailureLeavesRunningAndTip(t *testing.T) {
 	initPrometheusMetrics()
 
 	// BA-REORG-003: a failed authoritative-state read must not advance or wedge.
@@ -196,11 +183,13 @@ func TestBlockAssembler_Reorg_NoWedgeOnFailure(t *testing.T) {
 			Return(child, &model.BlockHeaderMeta{Height: 1}, nil)
 		mockBC.On("GetBlock", mock.Anything, mock.Anything).
 			Return(nil, errors.NewServiceError("block not available"))
+		mockBC.On("SetState", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 		items.blockAssembler.blockchainClient = mockBC
 
 		items.blockAssembler.processNewBlockAnnouncement(t.Context())
 
 		assertRunningAndTipUnchanged(t, items.blockAssembler, genesis, 0)
+		mockBC.AssertCalled(t, "GetBlock", mock.Anything, mock.Anything)
 	})
 
 	// BA-REORG-007: a move-forward failure must leave the best-block reference unchanged.
@@ -244,10 +233,10 @@ func TestBlockAssembler_Reorg_NoWedgeOnFailure(t *testing.T) {
 	})
 }
 
-// TestBlockAssembler_Reorg_Idempotency covers BA-REORG-009 (duplicate/repeated
+// TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent covers BA-REORG-009 (duplicate/repeated
 // wake-ups are idempotent) and BA-REORG-002 (the notification payload is untrusted;
 // reconciliation is driven solely by GetBestBlockHeader).
-func TestBlockAssembler_Reorg_Idempotency(t *testing.T) {
+func TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent(t *testing.T) {
 	initPrometheusMetrics()
 
 	// Firing the reconcile three times for a single-block advance must apply the

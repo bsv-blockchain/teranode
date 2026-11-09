@@ -795,6 +795,11 @@ The current implementation does not validate `InitialMerkleItemsPerSubtree` and 
 The current implementation hardcodes `50` as the anti-creep threshold at `subtreeprocessor/SubtreeProcessor.go:1600`. The spec requires it to be a function of `MinimumMerkleItemsPerSubtree` so the gate scales with deployment configuration.
 *Work required:* replace the hardcoded constant with a derived value (e.g. a small multiple of `MinimumMerkleItemsPerSubtree`); the chosen factor MUST be commented in the source.
 
+**GAP-BA-006.** A reorg that fails half way does not restore the transaction map.
+*Affects:* BA-REORG-007.
+When a reorg fails after its move-back has run, `reorgBlocks` rolls back the best-block reference and the subtrees, but restores `currentTxMap` by reassigning the pointer it saved before the move-back, and the move-back had added the rolled-back block's transactions into that same map in place. Those transactions stay in the map, which then no longer matches the restored subtrees (`CheckSubtreeProcessor` reports the size mismatch). The best-block reference is restored, so the letter of BA-REORG-007 holds, and in production `handleReorg` follows a failed reorg with a full reset, which hides the stale entries. Proof: `TestKnownDefect_PartialFailureRollbackLeavesMovedBackTx` (build tag `bagaps`).
+*Work required:* snapshot the map's content (or clone it) before the move-back, so the rollback restores what the map held, not the mutated map.
+
 ---
 
 ## Open Questions
