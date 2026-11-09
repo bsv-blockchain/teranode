@@ -398,7 +398,12 @@ func (s *Store) appendCreate(p *createPlan, item int, tx *bt.Tx, blockHeight uin
 	p.locktimes = append(p.locktimes, int32(tx.LockTime))
 	p.createdAt = append(p.createdAt, time.Now().UnixMilli())
 	p.txFlags = append(p.txFlags, flags)
-	p.addLane(s.Take(options))
+	// With no column there is nowhere to write it. The daemon only gives a store a source with the
+	// flag on, and the flag adds the column at open, so this is a caller naming a position on a
+	// store opened with the flag off.
+	if s.laneColumn {
+		p.addLane(s.Take(options))
+	}
 	p.bodies = append(p.bodies, body)
 	p.minedRows = append(p.minedRows, atBirth)
 	p.seedRows = append(p.seedRows, s.seedingCreate(options))

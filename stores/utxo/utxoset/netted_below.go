@@ -376,7 +376,7 @@ SELECT t.txid, t.mined_height, t.block_id, t.subtree_idx, t.created_height,
 ON CONFLICT (txid, mined_height, block_id) DO NOTHING
 RETURNING txid`
 
-// nettedMinedLaneSQL is nettedMinedSQL with lane_position added, for a chunk with a position. It
+// nettedMinedLaneSQL is nettedMinedSQL with lane_position added, for a database with the column. It
 // looks at no existing row, unlike the create statements, because a coinbase is never in a netted
 // list and any other transaction below the checkpoint is contained in one block under one id.
 var nettedMinedLaneSQL = laneStatement(nettedMinedSQL,
@@ -598,13 +598,13 @@ func (s *Store) netBelowClaim(ctx context.Context, dbTx pgx.Tx, p *createPlan) (
 	s.countCreatesAheadOfTip(p)
 
 	stmt, argCount := nettedMinedSQL, 9
-	if p.lanes != nil {
+	if s.laneColumn {
 		stmt, argCount = nettedMinedLaneSQL, 10
 	}
 
 	args := append(make([]any, 0, argCount),
 		p.txids, p.minedHeight, p.blockID, p.subtreeIdx, p.heights, p.sizes, p.fees, p.createdAt, p.txFlags)
-	if p.lanes != nil {
+	if s.laneColumn {
 		args = append(args, p.lanes)
 	}
 

@@ -2,20 +2,137 @@ package utxoset
 
 import (
 	"context"
+	"net/url"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	"github.com/bsv-blockchain/go-chaincfg"
 	"github.com/bsv-blockchain/teranode/errors"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/tests"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+// newLaneStore and its siblings are the test stores with lane positions on, which is what gives the
+// database the column.
+func newLaneStore(t *testing.T) (*Store, context.Context) {
+	t.Helper()
+
+	return newTestStoreWith(t, func(ts *settings.Settings) { ts.UtxoStore.LanePositions = true })
+}
+
+func newUncheckpointedLaneStore(t *testing.T) (*Store, context.Context) {
+	t.Helper()
+
+	return newTestStoreWith(t, func(ts *settings.Settings) {
+		withCheckpoints(ts, nil)
+		ts.UtxoStore.LanePositions = true
+	})
+}
+
+func newCheckpointLaneStore(t *testing.T) (*Store, context.Context) {
+	t.Helper()
+
+	return newTestStoreWith(t, func(ts *settings.Settings) {
+		params := *ts.ChainCfgParams
+		params.Checkpoints = []chaincfg.Checkpoint{{Height: checkpointFloor}}
+		ts.ChainCfgParams = &params
+		ts.UtxoStore.LanePositions = true
+	})
+}
+
+func newBodySkipLaneStore(t *testing.T) *Store {
+	t.Helper()
+
+	s, _ := newTestStoreWith(t, func(ts *settings.Settings) {
+		ts.UtxoStore.SkipTxBodyBelowCheckpoint = true
+		ts.UtxoStore.LanePositions = true
+	})
+
+	return s
+}
+
+// reopenWithFlag opens the same database again, as a restart with the flag set to on would.
+func reopenWithFlag(t *testing.T, s *Store, on bool) *Store {
+	t.Helper()
+
+	ts := *s.settings
+	ts.UtxoStore.LanePositions = on
+
+	u, err := url.Parse(testDSN(t))
+	require.NoError(t, err)
+
+	reopened, err := New(t.Context(), ulogger.TestLogger{}, &ts, u)
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+
+	return reopened
+}
+
+// With the flag off a database never gets the column, so its rows stay what main writes. That is the
+// point of opening it only with the flag on: a NULL in a row with no other NULL costs 8 bytes.
+func TestLaneColumnExistsOnlyWithTheFlagOn(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	for _, table := range laneColumnTables {
+		require.False(t, hasLaneColumn(t, s, ctx, table), "flag off: %s has no lane_position", table)
+	}
+
+	// A read naming the field finds no column to read, and a position has nowhere to go. Neither fails.
+	tx := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, tx, 100, utxo.WithLanePosition(lane.Pack(2, 1)))
+	require.NoError(t, err)
+	requireGetLane(t, s, ctx, tx, lane.None, "flag off")
+
+	_, err = s.SetMinedMulti(ctx, hashes(tx), utxo.MinedBlockInfo{BlockID: 7, BlockHeight: 100, OnLongestChain: true})
+	require.NoError(t, err, "the copy into tx_mined runs its plain form")
+}
+
+// Switching the flag on adds the column to a database in use. Records already there read as having no
+// position, new ones get one, and it survives the flag going off again, because the copies follow the
+// column and not the flag.
+func TestLaneColumnArrivesWhenTheFlagGoesOnAndOutlivesIt(t *testing.T) {
+	s, ctx := newTestStore(t)
+
+	before := mkTx(t, 1, 5_000)
+	_, err := s.Create(ctx, before, 100)
+	require.NoError(t, err)
+
+	on := reopenWithFlag(t, s, true)
+
+	for _, table := range laneColumnTables {
+		require.True(t, hasLaneColumn(t, on, ctx, table), "flag on: %s gains lane_position", table)
+	}
+
+	requireGetLane(t, on, ctx, before, lane.None, "a record from before the flag")
+
+	want := lane.Pack(200, 7)
+	during := mkTx(t, 1, 6_000)
+	_, err = on.Create(ctx, during, 101, utxo.WithLanePosition(want))
+	require.NoError(t, err)
+	requireGetLane(t, on, ctx, during, want, "a record created with the flag on")
+
+	off := reopenWithFlag(t, s, false)
+	require.True(t, off.laneColumn, "the column outlives the flag")
+
+	_, err = off.SetMinedMulti(ctx, hashes(during), utxo.MinedBlockInfo{BlockID: 8, BlockHeight: 101, OnLongestChain: true})
+	require.NoError(t, err)
+
+	v, null, ok := storedLane(t, off, ctx, "tx_mined", during)
+	require.True(t, ok)
+	require.False(t, null, "the copy carries the position with the flag off")
+	require.Equal(t, lane.ToSigned(want), v)
+	requireGetLane(t, off, ctx, during, want, "read with the flag off")
+}
 
 // TestLanePositionContractUtxoset runs the shared lane position contract. The multi contract's
 // "below the checkpoint" case and the mined create need a store whose checkpoint is below the test
@@ -23,12 +140,12 @@ import (
 // none, so the contract runs on both kinds of store.
 func TestLanePositionContractUtxoset(t *testing.T) {
 	t.Run("no checkpoints", func(t *testing.T) {
-		s, _ := newUncheckpointedStore(t)
+		s, _ := newUncheckpointedLaneStore(t)
 		tests.LanePositionContract(t, s)
 	})
 
 	t.Run("checkpointed", func(t *testing.T) {
-		s, _ := newTestStore(t)
+		s, _ := newLaneStore(t)
 		tests.LanePositionMinedCreate(t, s)
 		tests.LanePositionMulti(t, s)
 		tests.LanePositionAbsentWithoutOption(t, s)
@@ -75,7 +192,7 @@ func requireGetLane(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx, want
 // a block is recorded, still there after the stamp deletes the identity row, and copied again to
 // preserved_parent, which is what answers once the containment partition is gone.
 func TestLanePositionSurvivesEveryCopyOfTheRow(t *testing.T) {
-	s, ctx := newTestStore(t)
+	s, ctx := newLaneStore(t)
 
 	// Lane 200 sets the top bit, so the column holds a negative number.
 	want := lane.Pack(200, 4_242)
@@ -149,7 +266,7 @@ func storedLaneInBlock(t *testing.T, s *Store, ctx context.Context, tx *bt.Tx, b
 // TestLanePositionSurvivesEveryCopyOfTheRow only copies from the identity row. The rival is above
 // the stamp fence, or the write is fenced out and this checks nothing.
 func TestLanePositionIsCopiedFromAnExistingContainmentRow(t *testing.T) {
-	s, ctx := newTestStore(t)
+	s, ctx := newLaneStore(t)
 
 	want := lane.Pack(200, 4_243)
 
@@ -182,8 +299,8 @@ func TestAnExistingIdentityRowDecidesTheLanePosition(t *testing.T) {
 		height uint32
 		store  func(t *testing.T) (*Store, context.Context)
 	}{
-		{"identity plan", 901, newUncheckpointedStore},
-		{"mined plan", checkpointFloor - 1, func(t *testing.T) (*Store, context.Context) { return newCheckpointStore(t, false) }},
+		{"identity plan", 901, newUncheckpointedLaneStore},
+		{"mined plan", checkpointFloor - 1, func(t *testing.T) (*Store, context.Context) { return newCheckpointLaneStore(t) }},
 	}
 
 	offered := lane.Pack(4, 200)
@@ -261,7 +378,7 @@ func TestARefusedCreateCannotGiveARecordASecondLanePosition(t *testing.T) {
 	}
 
 	t.Run("below the checkpoint", func(t *testing.T) {
-		s, ctx := newCheckpointStore(t, false)
+		s, ctx := newCheckpointLaneStore(t)
 
 		tx := mkTx(t, 3, 5_000)
 
@@ -277,7 +394,7 @@ func TestARefusedCreateCannotGiveARecordASecondLanePosition(t *testing.T) {
 	})
 
 	t.Run("after the stamp deleted the identity row", func(t *testing.T) {
-		s, ctx := newTestStore(t)
+		s, ctx := newLaneStore(t)
 
 		tx := mkTx(t, 3, 6_000)
 
@@ -322,7 +439,7 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 	entry := func(t *testing.T, call func(s *Store, w *tests.MultiWorkload) error) *primeOrderSource {
 		t.Helper()
 
-		s, _ := newUncheckpointedStore(t)
+		s, _ := newUncheckpointedLaneStore(t)
 		w := tests.BuildMultiWorkload(t, 0xf4, 1, 1)
 		w.StoreRoots(t, s, 900)
 
@@ -374,7 +491,7 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 // does not set the options that reach it, proves nothing about it. The source runs out partway through
 // the list, so one record goes without a position beside the others that have theirs.
 func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
-	s := newBodySkipStore(t)
+	s := newBodySkipLaneStore(t)
 	ctx := t.Context()
 
 	const height = 831
@@ -412,7 +529,7 @@ func TestLanePositionOnTheNettedBelowCheckpointWrite(t *testing.T) {
 // TestLanePositionInABatchMixingMinedAndUnmined: one flush can carry both create statements, which
 // makes each half a projection of the plan. Each half must keep its own positions.
 func TestLanePositionInABatchMixingMinedAndUnmined(t *testing.T) {
-	s, ctx := newCheckpointStore(t, false)
+	s, ctx := newCheckpointLaneStore(t)
 
 	mined := mkTx(t, 1, 5_000)
 	unmined := mkTx(t, 1, 6_000)
@@ -443,7 +560,7 @@ func TestLanePositionInABatchMixingMinedAndUnmined(t *testing.T) {
 // TestTier2BuildsAnUnminedRecordWithItsMarkerAndBody does.
 func TestLanePositionThroughTheSecondTier(t *testing.T) {
 	t.Run("from the containment row", func(t *testing.T) {
-		s, ctx := newTestStore(t)
+		s, ctx := newLaneStore(t)
 
 		want := lane.Pack(200, 9)
 
@@ -466,7 +583,7 @@ func TestLanePositionThroughTheSecondTier(t *testing.T) {
 	})
 
 	t.Run("from the identity row", func(t *testing.T) {
-		s, ctx := newTestStore(t)
+		s, ctx := newLaneStore(t)
 
 		want := lane.Pack(201, 10)
 
@@ -491,7 +608,7 @@ func TestLanePositionThroughTheSecondTier(t *testing.T) {
 // which is every create with the feature off, writes NULL on the identity and containment rows
 // and reads back as lane.None.
 func TestLanePositionAbsentIsNullInEveryTable(t *testing.T) {
-	s, ctx := newTestStore(t)
+	s, ctx := newLaneStore(t)
 
 	tx := mkTx(t, 1, 5_000)
 	_, err := s.Create(ctx, tx, 100)
@@ -533,10 +650,10 @@ func TestLanePositionAbsentIsNullInEveryTable(t *testing.T) {
 // column existed gains it on the tables and partitions that already exist, with no value, and a
 // second pass changes nothing.
 func TestLanePositionColumnsAreAddedToAnExistingSchema(t *testing.T) {
-	s, ctx := newTestStore(t)
+	s, ctx := newLaneStore(t)
 
 	for _, table := range laneColumnTables {
-		require.True(t, hasLaneColumn(t, s, ctx, table), "a fresh schema has %s.lane_position from its CREATE TABLE", table)
+		require.True(t, hasLaneColumn(t, s, ctx, table), "the flag gives a fresh store %s.lane_position from its CREATE TABLE", table)
 	}
 
 	// Put one containment partition in place first, so there is an attached tx_mined partition
@@ -558,7 +675,7 @@ func TestLanePositionColumnsAreAddedToAnExistingSchema(t *testing.T) {
 		require.False(t, hasLaneColumn(t, s, ctx, table), "%s is the old shape before the migration", table)
 	}
 
-	require.NoError(t, CreateSchema(ctx, s.pool))
+	require.NoError(t, addLanePositionColumns(ctx, s.pool, laneColumnMigrationLimit))
 
 	var partitions []string
 
@@ -595,7 +712,7 @@ func TestLanePositionColumnsAreAddedToAnExistingSchema(t *testing.T) {
 	requireGetLane(t, s, ctx, fresh, want, "a create after the migration")
 
 	// Running the schema again is a no-op.
-	require.NoError(t, CreateSchema(ctx, s.pool))
+	require.NoError(t, addLanePositionColumns(ctx, s.pool, laneColumnMigrationLimit))
 	requireGetLane(t, s, ctx, fresh, want, "after a second schema pass")
 }
 
@@ -603,7 +720,7 @@ func TestLanePositionColumnsAreAddedToAnExistingSchema(t *testing.T) {
 // transaction open on tx_mined, the migration waits for it, and while it waits tx_ident has been
 // altered and committed and answers queries, so no table is held while waiting on another.
 func TestLanePositionMigrationHoldsOneTableAtATime(t *testing.T) {
-	s, ctx := newTestStore(t)
+	s, ctx := newLaneStore(t)
 
 	for _, table := range laneColumnTables {
 		_, err := s.pool.Exec(ctx, `ALTER TABLE `+table+` DROP COLUMN lane_position`)
@@ -620,7 +737,7 @@ func TestLanePositionMigrationHoldsOneTableAtATime(t *testing.T) {
 
 	migrated := make(chan error, 1)
 
-	go func() { migrated <- CreateSchema(ctx, s.pool) }()
+	go func() { migrated <- addLanePositionColumns(ctx, s.pool, laneColumnMigrationLimit) }()
 
 	altered := false
 
@@ -661,7 +778,7 @@ func TestLanePositionMigrationHoldsOneTableAtATime(t *testing.T) {
 // If another process keeps a transaction open past the retry limit, the store refuses to open with
 // the lock timeout error, and the next start tries again.
 func TestLanePositionMigrationGivesUpAtItsLimit(t *testing.T) {
-	s, ctx := newTestStore(t)
+	s, ctx := newLaneStore(t)
 
 	for _, table := range laneColumnTables {
 		_, err := s.pool.Exec(ctx, `ALTER TABLE `+table+` DROP COLUMN lane_position`)
@@ -676,13 +793,13 @@ func TestLanePositionMigrationGivesUpAtItsLimit(t *testing.T) {
 	var n int64
 	require.NoError(t, blocker.QueryRow(ctx, `SELECT count(*) FROM tx_mined`).Scan(&n))
 
-	err = createSchema(ctx, s.pool, time.Millisecond)
+	err = addLanePositionColumns(ctx, s.pool, time.Millisecond)
 	require.Error(t, err, "the transaction is still open at the limit")
 	require.Contains(t, err.Error(), "lock timeout", "the error says why")
 	require.Contains(t, err.Error(), "tx_mined", "the error names the table")
 
 	require.NoError(t, blocker.Rollback(ctx))
-	require.NoError(t, createSchema(ctx, s.pool, time.Millisecond), "the next start tries again")
+	require.NoError(t, addLanePositionColumns(ctx, s.pool, time.Millisecond), "the next start tries again")
 
 	for _, table := range laneColumnTables {
 		require.True(t, hasLaneColumn(t, s, ctx, table), "%s gains lane_position", table)
@@ -693,7 +810,7 @@ func TestLanePositionMigrationGivesUpAtItsLimit(t *testing.T) {
 // it must look first and not ask for the lock, or every start would queue behind the longest open
 // transaction on these tables.
 func TestLanePositionMigrationOnAMigratedSchemaTakesNoLock(t *testing.T) {
-	s, ctx := newTestStore(t)
+	s, ctx := newLaneStore(t)
 
 	blocker, err := s.pool.Begin(ctx)
 	require.NoError(t, err)
@@ -708,7 +825,7 @@ func TestLanePositionMigrationOnAMigratedSchemaTakesNoLock(t *testing.T) {
 	schemaCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	require.NoError(t, CreateSchema(schemaCtx, s.pool))
+	require.NoError(t, addLanePositionColumns(schemaCtx, s.pool, laneColumnMigrationLimit))
 	require.NoError(t, blocker.QueryRow(ctx, `SELECT 1`).Scan(&n), "the transaction was open throughout")
 }
 
@@ -734,7 +851,7 @@ func TestLanePositionsKeepTheirRowsWhenTheFirstRowsHaveNone(t *testing.T) {
 		}},
 	} {
 		t.Run(route.name, func(t *testing.T) {
-			s, ctx := newCheckpointStore(t, false)
+			s, ctx := newCheckpointLaneStore(t)
 
 			txs := make([]*bt.Tx, len(want))
 			items := make([]*createItem, len(want))

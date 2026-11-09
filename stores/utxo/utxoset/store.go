@@ -38,6 +38,10 @@ type querier interface {
 type Store struct {
 	utxo.LanePositions
 
+	// laneColumn is whether this database has lane_position, read once at open. Without it the
+	// store runs the statements main runs and writes no position. See openLaneColumns.
+	laneColumn bool
+
 	logger   ulogger.Logger
 	settings *settings.Settings
 	pool     *pgxpool.Pool
@@ -378,6 +382,14 @@ func New(ctx context.Context, logger ulogger.Logger, tSettings *settings.Setting
 		pool.Close()
 		return nil, errors.NewStorageError("[utxoset] create schema", err)
 	}
+
+	laneColumn, err := openLaneColumns(ctx, pool, tSettings.UtxoStore.LanePositions)
+	if err != nil {
+		pool.Close()
+		return nil, errors.NewStorageError("[utxoset] lane position columns", err)
+	}
+
+	s.laneColumn = laneColumn
 
 	if err := s.loadOldestUndoLeaf(ctx); err != nil {
 		pool.Close()

@@ -21,7 +21,7 @@ import (
 // the table used to carry was read as "the earliest row is the winner" and stamped reorg losers
 // onto UTXOs.
 //
-// The payload -- size, fee, inpoints, locktime, created_at, created_height, flags and lane_position -- is what
+// The payload -- size, fee, inpoints, locktime, created_at, created_height and flags -- is what
 // a lookup needs to answer from the row alone once the identity row is gone, and it is copied
 // from the identity row when there is one. Otherwise it is copied from an existing containment
 // row of the same transaction at or above the lookup floor ($6), which is the coinbase's case on
@@ -41,19 +41,18 @@ import (
 // whole partition.
 const recordMinedSQL = `
 INSERT INTO tx_mined (txid, mined_height, block_id, subtree_idx, created_height,
-                      size_in_bytes, fee, tx_inpoints, locktime, created_at, flags,
-                      lane_position)
+                      size_in_bytes, fee, tx_inpoints, locktime, created_at, flags)
 SELECT k.txid, $3::int, $4::int, $5::int, p.created_height, p.size_in_bytes, p.fee,
-       p.tx_inpoints, p.locktime, p.created_at, p.flags, p.lane_position
+       p.tx_inpoints, p.locktime, p.created_at, p.flags
   FROM unnest($2::bytea[]) AS k(txid)
  CROSS JOIN LATERAL (
    (SELECT 1 AS pri, i.created_height, i.size_in_bytes, i.fee, i.tx_inpoints, i.locktime,
-           i.created_at, i.flags, i.lane_position
+           i.created_at, i.flags
       FROM tx_ident i
      WHERE i.leaf = $1::smallint AND i.txid = k.txid)
    UNION ALL
    (SELECT 2, m.created_height, m.size_in_bytes, m.fee, m.tx_inpoints, m.locktime,
-           m.created_at, m.flags, m.lane_position
+           m.created_at, m.flags
       FROM tx_mined m
      WHERE m.txid = k.txid
        AND m.mined_height >= $6::int
@@ -62,6 +61,14 @@ SELECT k.txid, $3::int, $4::int, $5::int, p.created_height, p.size_in_bytes, p.f
    ORDER BY pri LIMIT 1 OFFSET 0
  ) AS p
 ON CONFLICT (txid, mined_height, block_id) DO NOTHING`
+
+// recordMinedLaneSQL is recordMinedSQL carrying lane_position, for a database that has the column.
+var recordMinedLaneSQL = laneStatement(recordMinedSQL,
+	"created_at, flags)\nSELECT k.txid", "created_at, flags, lane_position)\nSELECT k.txid",
+	"p.tx_inpoints, p.locktime, p.created_at, p.flags\n", "p.tx_inpoints, p.locktime, p.created_at, p.flags, p.lane_position\n",
+	"i.created_at, i.flags\n", "i.created_at, i.flags, i.lane_position\n",
+	"m.created_at, m.flags\n", "m.created_at, m.flags, m.lane_position\n",
+)
 
 // clearMarkerSQL clears the unmined marker of every listed identity row, because the caller
 // has said a block on the longest chain contains the transaction. A transaction with no
@@ -501,7 +508,7 @@ func (s *Store) recordMined(ctx context.Context, txids [][]byte, info utxo.Mined
 
 	for _, g := range leafGroups(txids) {
 		if insert {
-			if _, err := dbTx.Exec(ctx, recordMinedSQL, g.leaf, g.txids,
+			if _, err := dbTx.Exec(ctx, s.laneForm(recordMinedSQL, recordMinedLaneSQL), g.leaf, g.txids,
 				int32(info.BlockHeight), int32(info.BlockID), int32(info.SubtreeIdx), floor); err != nil { //nolint:gosec // heights and ids fit
 				return false, errors.NewStorageError("[utxoset][SetMinedMulti] record mined", err)
 			}
