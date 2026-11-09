@@ -1086,6 +1086,7 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	commonAncestorIndex := -1
 	var commonAncestorMeta *model.BlockHeaderMeta
 	storedMetas := make([]*model.BlockHeaderMeta, 0, len(peerHeaders))
+	stoppedAboveTip := false
 	u.logger.Debugf("[catchup][%s] Checking %d peer headers for common ancestor (current height: %d)", catchupCtx.blockUpTo.Hash().String(), len(peerHeaders), currentHeight)
 
 	for i, header := range peerHeaders {
@@ -1110,6 +1111,7 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		// what changed is only where the height comes from.
 		if meta.Height > currentHeight {
 			u.logger.Debugf("[catchup][%s] Block %s at height %d is ahead of our tip %d - stopping search", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, currentHeight)
+			stoppedAboveTip = true
 			break
 		}
 
@@ -1150,6 +1152,15 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 		}
 	}
 
+	// The height ceiling ended the ancestor search, not the offer, so stored headers above our tip
+	// have not been checked yet. The same un-stamping applies: with s6..s10 valid and s11 invalid
+	// on b5, against a tip at b10, the ancestor is b5 and step 9.6 would un-stamp b6..b10.
+	if stoppedAboveTip {
+		if err := u.rejectInvalidStoredHeader(ctx, catchupCtx, peerHeaders[len(storedMetas):], commonAncestorHash); err != nil {
+			return err
+		}
+	}
+
 	// The headers after the ancestor must form one chain built on it. Every later step assigns
 	// heights as ancestor+1+index, so a first header built on some other stored block would be
 	// validated at the wrong heights (checkpoint matching included), and a break further up would
@@ -1174,6 +1185,28 @@ func (u *Server) findCommonAncestor(ctx context.Context, catchupCtx *CatchupCont
 	catchupCtx.forkDepth = forkDepth
 
 	u.logger.Infof("[catchup][%s] Found common ancestor: %s at height %d (index %d), fork depth: %d", catchupCtx.blockUpTo.Hash().String(), commonAncestorHash.String(), commonAncestorMeta.Height, commonAncestorIndex, forkDepth)
+
+	return nil
+}
+
+// rejectInvalidStoredHeader walks headers oldest to newest, up to the first one we do not store,
+// and returns a BlockInvalidError for the first one stored marked invalid. A failed lookup is our
+// own fault, so it is a ServiceError, which the caller retries without charging the peer.
+func (u *Server) rejectInvalidStoredHeader(ctx context.Context, catchupCtx *CatchupContext, headers []*model.BlockHeader, commonAncestorHash *chainhash.Hash) error {
+	for _, header := range headers {
+		_, meta, err := u.blockchainClient.GetBlockHeader(ctx, header.Hash())
+		if err != nil {
+			if errors.Is(err, errors.ErrBlockNotFound) {
+				return nil
+			}
+
+			return errors.NewServiceError("[catchup][%s] failed to get header for block %s", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), err)
+		}
+
+		if meta.Invalid {
+			return errors.NewBlockInvalidError("[catchup][%s] offered block %s at height %d (common ancestor %s) is marked invalid, not catching up", catchupCtx.blockUpTo.Hash().String(), header.Hash().String(), meta.Height, commonAncestorHash.String())
+		}
+	}
 
 	return nil
 }
