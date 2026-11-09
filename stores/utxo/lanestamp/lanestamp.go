@@ -73,14 +73,14 @@ func (s *Store) start() {
 // SpendAndCreate gives the record the next lane position unless the call
 // creates nothing. With no range in hand the record is created without one.
 func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) (*meta.Data, []*utxo.Spend, error) {
-	s.start()
-
 	var o utxo.CreateOptions
 	for _, opt := range opts {
 		opt(&o)
 	}
 
 	if !o.SpendOnly {
+		s.start()
+
 		if v, ok := s.positions.Next(); ok {
 			opts = append(opts[:len(opts):len(opts)], utxo.WithLanePosition(v))
 		}
@@ -93,9 +93,9 @@ func (s *Store) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint3
 // position, in list order. Positions the allocator cannot fill are left as
 // lane.None, and those records are created without one.
 func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeight uint32, opts ...utxo.CreateOption) ([]utxo.SpendAndCreateMultiResult, error) {
-	s.start()
-
 	if len(txs) > 0 {
+		s.start()
+
 		positions := make([]uint64, len(txs))
 		if s.positions.Fill(positions) > 0 {
 			opts = append(opts[:len(opts):len(opts)], utxo.WithLanePositions(positions))
@@ -103,6 +103,14 @@ func (s *Store) SpendAndCreateMulti(ctx context.Context, txs []*bt.Tx, blockHeig
 	}
 
 	return s.Store.SpendAndCreateMulti(ctx, txs, blockHeight, opts...)
+}
+
+// NetsBelowCheckpoint forwards the wrapped store's answer. utxo.NetsBelowCheckpoint is a bare
+// type assertion and BelowCheckpointNetter is not part of utxo.Store, so without this the wrapper
+// would make a netting store report that it does not net, and quick validation and the store
+// would disagree about the below-checkpoint route.
+func (s *Store) NetsBelowCheckpoint() bool {
+	return utxo.NetsBelowCheckpoint(s.Store)
 }
 
 // Unwrap returns the wrapped store, so utxo.As still finds what it can do.

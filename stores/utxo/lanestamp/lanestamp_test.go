@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,6 +82,32 @@ func TestTheWrapperDoesNotHideTheWrappedStore(t *testing.T) {
 	require.True(t, ok)
 }
 
+// nettingStore answers NetsBelowCheckpoint the way the utxoset store does.
+type nettingStore struct {
+	utxostore.Store
+	nets bool
+}
+
+func (s *nettingStore) NetsBelowCheckpoint() bool { return s.nets }
+
+// utxo.NetsBelowCheckpoint is a bare assertion, not an Unwrap walk, and it picks the
+// below-checkpoint route. The wrapper must give the wrapped store's answer, both ways.
+func TestTheWrapperForwardsNetsBelowCheckpoint(t *testing.T) {
+	inner, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	wrap := func(store utxostore.Store) utxostore.Store {
+		a := lane.NewAllocator(&source{}, "pod-3", filepath.Join(t.TempDir(), "lane"), nil)
+		t.Cleanup(a.Close)
+
+		return lanestamp.New(store, a, nil)
+	}
+
+	require.True(t, utxostore.NetsBelowCheckpoint(wrap(&nettingStore{Store: inner, nets: true})))
+	require.False(t, utxostore.NetsBelowCheckpoint(wrap(&nettingStore{Store: inner, nets: false})))
+	require.False(t, utxostore.NetsBelowCheckpoint(wrap(inner)), "a store that is no netter does not net")
+}
+
 func lanePosition(t *testing.T, db utxostore.Store, tx *bt.Tx) uint64 {
 	t.Helper()
 
@@ -119,6 +146,66 @@ func TestEveryCreateThroughTheWrapperGetsTheNextPosition(t *testing.T) {
 	}
 }
 
+// The allocator starts on the first create, through either entry point. Nothing else in the
+// process starts it, so without this a process would stamp nothing.
+func TestTheFirstCreateStartsTheAllocator(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("SpendAndCreate", func(t *testing.T) {
+		inner, stamped := newStores(t, &source{}, false)
+		root := tests.BuildMultiWorkload(t, 0xe3, 1, 1).Roots[0]
+
+		_, _, err := stamped.SpendAndCreate(ctx, root, 900, utxostore.WithCreateOnly())
+		require.NoError(t, err)
+		require.Equal(t, lane.Pack(7, 1), lanePosition(t, inner, root))
+	})
+
+	t.Run("SpendAndCreateMulti", func(t *testing.T) {
+		inner, stamped := newStores(t, &source{}, false)
+		w := tests.BuildMultiWorkload(t, 0xe4, 2, 2)
+		w.StoreRoots(t, inner, 900)
+
+		results, err := stamped.SpendAndCreateMulti(ctx, w.Txs, 901, utxostore.WithIgnoreLocked(true))
+		require.NoError(t, err)
+		require.Len(t, results, len(w.Txs))
+
+		for i, tx := range w.Txs {
+			require.Equal(t, lane.Pack(7, uint64(i)+1), lanePosition(t, inner, tx)) //nolint:gosec // test data
+		}
+	})
+}
+
+// countingSource is a source that counts its calls, so a test can tell whether the allocator
+// ever started.
+type countingSource struct {
+	source
+	calls atomic.Int64
+}
+
+func (s *countingSource) ReserveLaneRange(ctx context.Context, holder string, wantLane uint8, hasLane bool) (lane.Range, error) {
+	s.calls.Add(1)
+
+	return s.source.ReserveLaneRange(ctx, holder, wantLane, hasLane)
+}
+
+// A spend-only call creates nothing, so it must not take a lane or wait for a range.
+func TestASpendOnlyCallDoesNotStartTheAllocator(t *testing.T) {
+	ctx := context.Background()
+	src := &countingSource{}
+	inner, stamped := newStores(t, src, false)
+
+	w := tests.BuildMultiWorkload(t, 0xe5, 1, 1)
+	w.StoreRoots(t, inner, 900)
+
+	_, _, err := stamped.SpendAndCreate(ctx, w.Txs[0], 901, utxostore.WithSpendOnly())
+	require.NoError(t, err)
+
+	// An empty list creates nothing either. The store's answer to it is not what this checks.
+	_, _ = stamped.SpendAndCreateMulti(ctx, nil, 901)
+
+	require.Zero(t, src.calls.Load(), "a call that creates nothing asks for no range")
+}
+
 func TestACreateWithNoRangeInHandHasNoLanePosition(t *testing.T) {
 	ctx := context.Background()
 	inner, stamped := newStores(t, &source{down: true}, false)
@@ -126,11 +213,17 @@ func TestACreateWithNoRangeInHandHasNoLanePosition(t *testing.T) {
 	w := tests.BuildMultiWorkload(t, 0xe1, 1, 1)
 
 	_, _, err := stamped.SpendAndCreate(ctx, w.Roots[0], 900, utxostore.WithCreateOnly())
-	require.NoError(t, err, "a create never waits on, or fails for, the blockchain service")
+	require.NoError(t, err, "a create does not fail for the blockchain service: the first waits for the start bound, then goes out without a position")
+
+	// Only the first create in the process waits. With the service still down, the wait must
+	// not repeat, or every create would stall for the whole outage. The bound is half the start
+	// wait rather than something tighter, so a loaded machine does not make it flaky.
+	began := time.Now()
 
 	results, err := stamped.SpendAndCreateMulti(ctx, w.Txs, 901, utxostore.WithIgnoreLocked(true))
 	require.NoError(t, err)
 	require.Len(t, results, 1)
+	require.Less(t, time.Since(began), 2500*time.Millisecond, "the second create waited for a range again")
 
 	require.Equal(t, lane.None, lanePosition(t, inner, w.Roots[0]))
 	require.Equal(t, lane.None, lanePosition(t, inner, w.Txs[0]))
