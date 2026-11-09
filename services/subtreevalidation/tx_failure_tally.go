@@ -19,7 +19,13 @@ import (
 //
 // The cause is the code of the innermost *errors.Error in the chain. The outer
 // codes are the wrappers every failure shares (TX_INVALID, PROCESSING); the
-// innermost is what went wrong (UTXO_SPENT, STORAGE_ERROR, SERVICE_UNAVAILABLE).
+// innermost is what went wrong (UTXO_SPENT, UTXO_ERROR, SERVICE_UNAVAILABLE).
+// This names one cause per transaction. A transaction with several failed
+// inputs carries them as a joined chain of siblings, and the innermost is the
+// last failed input: spent, spent, frozen reads UTXO_FROZEN, and a breaker
+// error on the first of three inputs is not named. One label per transaction is
+// a fair trade for a log summary; the first error's full chain is still
+// returned to the caller.
 type txFailureTally struct {
 	mu     sync.Mutex
 	causes map[string]*txFailureCause
@@ -104,25 +110,59 @@ func (t *txFailureTally) String() string {
 	return b.String()
 }
 
+// rootCodeMaxDepth bounds the chain walk in rootErrorCode. The store and the
+// validator cap a joined spend chain at 10 links plus the "... and N more"
+// marker, so a real chain is far shorter; the bound guards a cycle or a
+// pathological wrapper.
+const rootCodeMaxDepth = 64
+
 // rootErrorCode returns the name of the innermost coded *errors.Error in err's
-// chain, or the name of ERR_UNKNOWN when the chain holds none. A plain Go error
-// at the bottom of the chain is wrapped by the errors package under ERR_UNKNOWN;
-// that carries no information, so the coded error above it names the cause.
+// chain, or the name of ERR_UNKNOWN when the chain holds none.
+//
+// Two codes carry no information and are skipped: ERR_UNKNOWN, which the errors
+// package puts on a plain Go error at the bottom of a chain, and ERR_ERROR, which
+// errors.JoinCapped puts on its "... and N more errors" marker at the end of a
+// capped chain. Without the second skip a transaction with more than 10 failed
+// inputs would be counted as ERROR instead of by its cause.
+//
+// The walk calls errors.As once, to reach the first *errors.Error through any
+// gRPC or foreign wrapper, and then follows Unwrap with type assertions. The
+// package-level errors.As checks for a gRPC status on every call, which renders
+// the chain; once per link made this quadratic in the chain length.
 func rootErrorCode(err error) string {
+	var e *errors.Error
+	if !errors.As(err, &e) {
+		return errors.ERR_UNKNOWN.String()
+	}
+
 	code := errors.ERR_UNKNOWN
 
-	for err != nil {
-		var e *errors.Error
-		if !errors.As(err, &e) {
-			break
+	for depth := 0; e != nil && depth < rootCodeMaxDepth; depth++ {
+		if c := e.Code(); c != errors.ERR_UNKNOWN && c != errors.ERR_ERROR {
+			code = c
 		}
 
-		if e.Code() != errors.ERR_UNKNOWN {
-			code = e.Code()
-		}
-
-		err = e.Unwrap()
+		e = nextCodedError(e.Unwrap())
 	}
 
 	return code.String()
+}
+
+// nextCodedError returns the first *errors.Error at or below err, following
+// single-error Unwrap through foreign wrappers, or nil when there is none.
+func nextCodedError(err error) *errors.Error {
+	for depth := 0; err != nil && depth < rootCodeMaxDepth; depth++ {
+		if e, ok := err.(*errors.Error); ok {
+			return e
+		}
+
+		wrapper, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return nil
+		}
+
+		err = wrapper.Unwrap()
+	}
+
+	return nil
 }
