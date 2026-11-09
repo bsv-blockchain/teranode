@@ -1533,8 +1533,11 @@ func (u *Server) blessMissingTransactions(ctx context.Context, subtreeHash chain
 						u.logger.Debugf("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
 						errorsFound.Add(1)
 
+						dupErr := errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
+						failures.add(*tx.TxIDChainHash(), dupErr)
+
 						firstErrorOnce.Do(func() {
-							firstError = errors.NewProcessingError("[validateSubtree][%s] tx meta already exists in txMetaSlice at index %d: %s", subtreeHash.String(), txIdx, tx.TxIDChainHash().String())
+							firstError = dupErr
 						})
 
 						return nil
