@@ -343,7 +343,8 @@ func (s *Store) lookupManyLane(ctx context.Context, hashes []chainhash.Hash,
 	wantChildren, noBody, wantLane bool) (lookupResult, error) {
 	res := newLookupResult(len(hashes))
 	res.noBody = noBody
-	res.wantLane = wantLane
+	// With no column there is no position to read, and the lane forms would fail.
+	res.wantLane = wantLane && s.laneColumn
 	if len(hashes) == 0 {
 		return res, nil
 	}
@@ -462,6 +463,16 @@ func (s *Store) lookupManyLane(ctx context.Context, hashes []chainhash.Hash,
 	res.applyLanes()
 
 	return res, nil
+}
+
+// laneForm picks the form of a statement that copies a record's payload, by whether the database has
+// lane_position.
+func (s *Store) laneForm(plain, withLane string) string {
+	if s.laneColumn {
+		return withLane
+	}
+
+	return plain
 }
 
 // statement picks the form of a read: the one that also selects lane_position only if asked.

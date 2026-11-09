@@ -42,15 +42,14 @@ func (s *Store) QueryOldUnminedTransactions(_ context.Context, _ uint32) ([]chai
 const preserveParentSQL = `
 INSERT INTO preserved_parent (txid, mined_height, block_id, subtree_idx, created_height,
                               fee, size_in_bytes, tx_inpoints, locktime, created_at, flags,
-                              preserve_until, lane_position)
+                              preserve_until)
 SELECT k.txid, s.mined_height, s.block_id, s.subtree_idx, s.created_height,
        s.fee, s.size_in_bytes, s.tx_inpoints, s.locktime, s.created_at,
-       s.flags & ~$8::smallint, $5::int, s.lane_position
+       s.flags & ~$8::smallint, $5::int
   FROM unnest($1::smallint[], $2::bytea[], $3::uuid[], $4::uuid[]) AS k(leaf, txid, lo, hi)
  CROSS JOIN LATERAL (
    (SELECT 1 AS pri, m.mined_height, m.block_id, m.subtree_idx, m.created_height,
-           m.fee, m.size_in_bytes, m.tx_inpoints, m.locktime, m.created_at, m.flags,
-           m.lane_position
+           m.fee, m.size_in_bytes, m.tx_inpoints, m.locktime, m.created_at, m.flags
       FROM tx_mined m
      WHERE m.txid = k.txid
        AND m.mined_height >= $6::int
@@ -58,21 +57,21 @@ SELECT k.txid, s.mined_height, s.block_id, s.subtree_idx, s.created_height,
      ORDER BY (m.tx_inpoints IS NULL), m.mined_height, m.block_id LIMIT 1)
    UNION ALL
    (SELECT 2, m.mined_height, m.block_id, m.subtree_idx, m.created_height,
-           NULL, NULL, NULL, NULL, NULL, m.flags, NULL
+           NULL, NULL, NULL, NULL, NULL, m.flags
       FROM tx_mined m
      WHERE m.txid = k.txid
        AND m.mined_height >= $7::int
      LIMIT 1)
    UNION ALL
    (SELECT 3, u.mined_height, u.block_id, 0, u.created_height,
-           NULL, NULL, NULL, NULL, NULL, u.flags, NULL
+           NULL, NULL, NULL, NULL, NULL, u.flags
       FROM utxo u
      WHERE u.leaf = k.leaf AND u.ukey >= k.lo AND u.ukey <= k.hi AND u.txid = k.txid
        AND u.mined_height > 0
      ORDER BY u.ukey LIMIT 1)
    UNION ALL
    (SELECT 4, j.mined_height, j.block_id, 0, j.created_height,
-           NULL, NULL, NULL, NULL, NULL, j.flags, NULL
+           NULL, NULL, NULL, NULL, NULL, j.flags
       FROM spend_journal j
      WHERE j.ukey >= k.lo AND j.ukey <= k.hi AND j.txid = k.txid
        AND j.mined_height > 0
@@ -82,6 +81,17 @@ SELECT k.txid, s.mined_height, s.block_id, s.subtree_idx, s.created_height,
  WHERE s.pri <> 2
     ON CONFLICT (txid) DO UPDATE
    SET preserve_until = GREATEST(preserved_parent.preserve_until, EXCLUDED.preserve_until)`
+
+// preserveParentLaneSQL is preserveParentSQL carrying lane_position, for a database that has the
+// column. Only the full copy has a position to carry; the thin copies have none.
+var preserveParentLaneSQL = laneStatement(preserveParentSQL,
+	"preserve_until)\nSELECT k.txid", "preserve_until, lane_position)\nSELECT k.txid",
+	"s.flags & ~$8::smallint, $5::int\n", "s.flags & ~$8::smallint, $5::int, s.lane_position\n",
+	"m.fee, m.size_in_bytes, m.tx_inpoints, m.locktime, m.created_at, m.flags\n", "m.fee, m.size_in_bytes, m.tx_inpoints, m.locktime, m.created_at, m.flags,\n           m.lane_position\n",
+	"NULL, NULL, NULL, NULL, NULL, m.flags\n", "NULL, NULL, NULL, NULL, NULL, m.flags, NULL\n",
+	"NULL, NULL, NULL, NULL, NULL, u.flags\n", "NULL, NULL, NULL, NULL, NULL, u.flags, NULL\n",
+	"NULL, NULL, NULL, NULL, NULL, j.flags\n", "NULL, NULL, NULL, NULL, NULL, j.flags, NULL\n",
+)
 
 // renewPreservedSQL extends the preservation of every named parent that already has one. The
 // insert above copies a parent only from its block's tx_mined partition, a live UTXO or a spend-journal row,
@@ -160,7 +170,7 @@ func (s *Store) PreserveTransactions(ctx context.Context, txIDs []chainhash.Hash
 
 	leaves, ids, los, his := liveUTXOArgs(txids)
 
-	if _, err := s.pool.Exec(ctx, preserveParentSQL, leaves, ids, los, his, until,
+	if _, err := s.pool.Exec(ctx, s.laneForm(preserveParentSQL, preserveParentLaneSQL), leaves, ids, los, his, until,
 		int32(floors.DroppedFloor), int32(floors.StampCompleteFloor), FlagLocked); err != nil { //nolint:gosec // heights fit int32
 		return errors.NewStorageError("[utxoset][PreserveTransactions] preserve %d parents until %d",
 			len(txids), preserveUntilHeight, err)

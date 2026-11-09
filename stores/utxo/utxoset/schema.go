@@ -396,7 +396,6 @@ CREATE TABLE IF NOT EXISTS tx_mined (
     locktime        INTEGER,
     created_at      BIGINT,
     flags           SMALLINT NOT NULL DEFAULT 0,
-    lane_position   BIGINT,
     CONSTRAINT tx_mined_ck CHECK (length(txid) = 32),
     PRIMARY KEY (txid, mined_height, block_id)
 ) PARTITION BY RANGE (mined_height);
@@ -484,8 +483,7 @@ CREATE TABLE IF NOT EXISTS preserved_parent (
     locktime        INTEGER,
     created_at      BIGINT,
     flags           SMALLINT NOT NULL DEFAULT 0,
-    preserve_until  INTEGER  NOT NULL,
-    lane_position   BIGINT
+    preserve_until  INTEGER  NOT NULL
 );
 
 -- ---------------------------------------------------------------------------
@@ -536,7 +534,6 @@ CREATE TABLE IF NOT EXISTS tx_ident (
     locktime             INTEGER,
     created_at           BIGINT,
     flags                SMALLINT NOT NULL DEFAULT 0,
-    lane_position        BIGINT,              -- util/lane; NULL means none
 
     -- LOAD-BEARING, and not defensive tidiness: this IS the global uniqueness rule.
     --
@@ -552,11 +549,6 @@ CREATE TABLE IF NOT EXISTS tx_ident (
     CONSTRAINT tx_ident_ck CHECK (length(txid) = 32 AND leaf = (get_byte(txid, 0) & 7)),
     PRIMARY KEY (leaf, txid)
 ) PARTITION BY LIST (leaf);
-
--- lane_position is the record's util/lane position, written once by the create and carried
--- into tx_mined and preserved_parent with the rest of the payload. NULL means none, which is
--- every record created with the feature off. It has no index. A database from before the column
--- gains it in addLanePositionColumns, not in this script: see there for why.
 
 -- ---------------------------------------------------------------------------
 -- THE BODY. Serialized transaction bytes, and nothing else.
@@ -710,12 +702,6 @@ CREATE INDEX IF NOT EXISTS tx_ident_off_chain_idx ON tx_ident (off_chain_since)
 
 // CreateSchema installs the M1 schema. Idempotent.
 func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
-	return createSchema(ctx, pool, laneColumnMigrationLimit)
-}
-
-// createSchema is CreateSchema with the lane column retry limit as an argument, so a test can reach
-// the limit without waiting five minutes.
-func createSchema(ctx context.Context, pool *pgxpool.Pool, laneColumnLimit time.Duration) error {
 	if _, err := pool.Exec(ctx, schemaSQL); err != nil {
 		return err
 	}
@@ -732,25 +718,48 @@ func createSchema(ctx context.Context, pool *pgxpool.Pool, laneColumnLimit time.
 		return err
 	}
 
-	if err := assertSchemaShape(ctx, pool); err != nil {
-		return err
+	return assertSchemaShape(ctx, pool)
+}
+
+// openLaneColumns reports whether this database has lane_position, adding it first when lane
+// positions are on. It is not in the schema, because a NULL in a row that has no other NULL adds a
+// null bitmap, which is 8 bytes of heap and WAL per row with nothing to show for them. A database
+// that has never had lane positions on keeps the rows main writes.
+//
+// A process with the flag off still looks, because the column outlives the flag: on a database
+// where it exists, the statements that copy a record's payload keep carrying it. A process started
+// before another one added the column does not see it until it restarts, so switch the flag on
+// across a node's processes together.
+func openLaneColumns(ctx context.Context, pool *pgxpool.Pool, on bool) (bool, error) {
+	if on {
+		if err := addLanePositionColumns(ctx, pool, laneColumnMigrationLimit); err != nil {
+			return false, err
+		}
+
+		return true, nil
 	}
 
-	return addLanePositionColumns(ctx, pool, laneColumnLimit)
+	for _, table := range laneColumnTables {
+		found, err := schemaHas(ctx, pool, table, "lane_position")
+		if err != nil || !found {
+			return false, err
+		}
+	}
+
+	return true, nil
 }
 
 // laneColumnTables are the tables that carry lane_position.
 var laneColumnTables = []string{"tx_ident", "tx_mined", "preserved_parent"}
 
 // laneColumnMigrationLimit is how long addLanePositionColumns keeps retrying one table before the
-// store refuses to open with the error. It only matters on the first start of this build, beside
-// another process that keeps a transaction open on that table for all of this time.
+// store refuses to open with the error. It only matters on the first start with lane positions on,
+// beside another process that keeps a transaction open on that table for all of this time.
 const laneColumnMigrationLimit = 5 * time.Minute
 
-// addLanePositionColumns gives a database from before lane_position the nullable column, with no
-// default, no rewrite and no backfill. A fresh database has it from the CREATE TABLEs, last in each,
-// so both have the same column order. ADD COLUMN on a partitioned parent adds it to every existing
-// partition, and a partition made later inherits it.
+// addLanePositionColumns gives the database the nullable column, with no default, no rewrite and no
+// backfill. A row already stored reads NULL with no change to it. ADD COLUMN on a partitioned parent
+// adds it to every existing partition, and a partition made later inherits it.
 //
 // It does not live in schemaSQL because that script runs as one implicit transaction, and a lock
 // taken there is held to its end. Altering the three tables in it holds ACCESS EXCLUSIVE on
@@ -761,8 +770,8 @@ const laneColumnMigrationLimit = 5 * time.Minute
 // the timeout for each lock it takes.
 //
 // The catalog check comes first because ALTER TABLE takes its lock before it looks, and every
-// process that opens the store runs this. Once the columns exist this is three catalog reads and
-// no lock.
+// process that opens the store with lane positions on runs this. Once the columns exist this is
+// three catalog reads and no lock.
 func addLanePositionColumns(ctx context.Context, pool *pgxpool.Pool, limit time.Duration) error {
 	for _, table := range laneColumnTables {
 		if err := addLanePositionColumn(ctx, pool, table, limit); err != nil {

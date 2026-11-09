@@ -351,7 +351,7 @@ type createPlan struct {
 	txFlags   []int16
 	// lanes is the lane position of each transaction in its signed form (util/lane), 0 for none.
 	// It stays nil until a transaction in the plan has one, so a plan with none allocates nothing
-	// for it and runs the plain statements.
+	// for it.
 	lanes  []int64
 	bodies [][]byte
 	// minedRows is true for a transaction that carries a block at or below the highest
@@ -491,9 +491,9 @@ func (p *createPlan) sortRows() {
 // existingContainmentRow is the lane statements' probe for a mined row of the same transaction, for
 // a create with no identity row to copy from. It is the second arm of recordMinedSQL, so a refused
 // create cannot give a record a second position: a coinbase seen again in a second block, or one
-// whose identity row the stamp has deleted, keeps the position its first row has. Only a plan with a
-// position runs it, and those rows are the block-carrying ones, which above the checkpoint means
-// coinbases. The floor keeps it to the same partitions as the claim's probe of tx_mined.
+// whose identity row the stamp has deleted, keeps the position its first row has. Only a database
+// with the column runs it, and only for block-carrying rows. The floor keeps it to the same
+// partitions as the claim's probe of tx_mined.
 const existingContainmentRow = `
       LEFT JOIN LATERAL (
         SELECT TRUE AS found, m.lane_position
@@ -503,14 +503,16 @@ const existingContainmentRow = `
          ORDER BY (m.tx_inpoints IS NULL), m.mined_height, m.block_id
          LIMIT 1 OFFSET 0 ) AS e ON TRUE`
 
-// minedLaneValue is the position a mined row gets: the identity row's when there is one, NULL
+// minedLaneValue is the position a mined row gets on a database with the column, whether or not this
+// plan took a position or this process has the flag on: the identity row's when there is one, NULL
 // included, then an existing mined row's, and the create's own only for a record new to the store.
 const minedLaneValue = `CASE WHEN i.created_height IS NOT NULL THEN i.lane_position
                 WHEN e.found THEN e.lane_position
                 ELSE NULLIF(t.lane_position, 0) END`
 
-// The create statements with lane_position added. A plan with no position runs the plain statement,
-// so with lane positions off a create sends exactly what it sent before the column existed.
+// The create statements with lane_position added. A database without the column runs the plain
+// statement, so with lane positions off a create sends exactly what main sends. A plan with no
+// position sends SQL NULL for the array, which a multi-array unnest pads with NULLs.
 var (
 	createIdentPlanLaneSQL = laneStatement(createIdentPlanSQL,
 		"$14::int[], $15::int[], $16::int[], $26::bigint[])", "$14::int[], $15::int[], $16::int[], $26::bigint[], $27::bigint[])",
@@ -709,7 +711,7 @@ func (s *Store) runSeedPlan(ctx context.Context, q querier, p *createPlan) error
 // runIdentPlan claims the identity half of a plan on the identity table.
 func (s *Store) runIdentPlan(ctx context.Context, q querier, p *createPlan) error {
 	stmt, argCount := createIdentPlanSQL, 26
-	if p.lanes != nil {
+	if s.laneColumn {
 		stmt, argCount = createIdentPlanLaneSQL, 27
 	}
 
@@ -720,7 +722,7 @@ func (s *Store) runIdentPlan(ctx context.Context, q querier, p *createPlan) erro
 		p.minedHeight, p.blockID, p.subtreeIdx,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoLeaves, p.utxoFlags,
 		p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
-	if p.lanes != nil {
+	if s.laneColumn {
 		args = append(args, p.lanes)
 	}
 
@@ -759,7 +761,7 @@ func (s *Store) runMinedPlan(ctx context.Context, q querier, p *createPlan) erro
 	s.countCreatesAheadOfTip(p)
 
 	stmt, argCount := createMinedPlanSQL, 25
-	if p.lanes != nil {
+	if s.laneColumn {
 		stmt, argCount = createMinedPlanLaneSQL, 26
 	}
 
@@ -768,7 +770,7 @@ func (s *Store) runMinedPlan(ctx context.Context, q querier, p *createPlan) erro
 		p.sizes, p.createdAt, p.txFlags, p.bodies, p.lo, p.hi,
 		p.utxoSats, p.utxoHeights, p.utxoSpendable, p.utxoMined, p.utxoBlockIDs,
 		p.utxoLeaves, p.utxoFlags, p.utxoUkeys, p.utxoTxids, p.utxoScripts, s.claimFloor(), p.fees)
-	if p.lanes != nil {
+	if s.laneColumn {
 		args = append(args, p.lanes)
 	}
 

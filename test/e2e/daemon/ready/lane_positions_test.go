@@ -1,6 +1,7 @@
 package smoke
 
 import (
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,25 +14,31 @@ import (
 	utxofactory "github.com/bsv-blockchain/teranode/stores/utxo/factory"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/test"
+	tpostgres "github.com/bsv-blockchain/teranode/test/utils/postgres"
 	"github.com/bsv-blockchain/teranode/test/utils/transactions"
 	"github.com/bsv-blockchain/teranode/util/lane"
 	"github.com/stretchr/testify/require"
 )
 
-// TestLanePositionsOnNewRecords runs a node with lane positions on and checks
-// what the records carry: a transaction validated by the node gets a lane
-// position, a second process creating records against the same blockchain
-// service gets a different lane, and after a restart the node carries on in
-// its lane above every position it used before.
-func TestLanePositionsOnNewRecords(t *testing.T) {
-	settingsFunc := test.ComposeSettings(
+// lanePositionSettings is lane positions on, with small ranges.
+func lanePositionSettings(extra func(*settings.Settings)) func(*settings.Settings) {
+	return test.ComposeSettings(
 		test.SystemTestSettings(),
 		func(s *settings.Settings) {
 			s.ChainCfgParams.CoinbaseMaturity = 2
 			s.UtxoStore.LanePositions = true
 			s.BlockChain.LaneRangeSize = 1000
+
+			if extra != nil {
+				extra(s)
+			}
 		},
 	)
+}
+
+// TestLanePositionsOnNewRecords runs a node on Aerospike with lane positions on.
+func TestLanePositionsOnNewRecords(t *testing.T) {
+	settingsFunc := lanePositionSettings(nil)
 
 	td := daemon.NewTestDaemon(t, daemon.TestOptions{
 		UTXOStoreType:        "aerospike",
@@ -45,6 +52,48 @@ func TestLanePositionsOnNewRecords(t *testing.T) {
 			_ = containerManager.Cleanup()
 		}
 	}()
+
+	runLanePositionsScenario(t, td, func() *daemon.TestDaemon {
+		return daemon.NewTestDaemon(t, daemon.TestOptions{
+			ContainerManager:     containerManager,
+			SkipRemoveDataDir:    true,
+			SkipContainerCleanup: true,
+			SettingsOverrideFunc: settingsFunc,
+		})
+	})
+}
+
+// TestLanePositionsOnNewRecordsUtxoset runs the same node on utxoset, the Postgres store mainnet runs.
+// The test daemon has no utxoset container of its own, so the store's URL comes from the settings. The
+// flag gives the database its column at the first open.
+func TestLanePositionsOnNewRecordsUtxoset(t *testing.T) {
+	dsn, cleanup, err := tpostgres.SetupTestPostgresContainer()
+	require.NoError(t, err)
+
+	defer func() { _ = cleanup() }()
+
+	storeURL, err := url.Parse(dsn)
+	require.NoError(t, err)
+
+	storeURL.Scheme = "utxoset"
+
+	settingsFunc := lanePositionSettings(func(s *settings.Settings) { s.UtxoStore.UtxoStore = storeURL })
+
+	td := daemon.NewTestDaemon(t, daemon.TestOptions{SettingsOverrideFunc: settingsFunc})
+
+	runLanePositionsScenario(t, td, func() *daemon.TestDaemon {
+		return daemon.NewTestDaemon(t, daemon.TestOptions{
+			SkipRemoveDataDir:    true,
+			SettingsOverrideFunc: settingsFunc,
+		})
+	})
+}
+
+// runLanePositionsScenario checks what the records carry: a transaction validated by the node gets a
+// lane position, a second process creating records against the same blockchain service gets a
+// different lane, and after a restart the node carries on in its lane above every position it used.
+func runLanePositionsScenario(t *testing.T, td *daemon.TestDaemon, restart func() *daemon.TestDaemon) {
+	t.Helper()
 
 	require.NoError(t, td.BlockchainClient.Run(td.Ctx, "test"))
 	require.NoError(t, td.BlockAssemblyClient.GenerateBlocks(td.Ctx, &blockassembly_api.GenerateBlocksRequest{Count: 4}))
@@ -115,12 +164,7 @@ func TestLanePositionsOnNewRecords(t *testing.T) {
 	td.Stop(t)
 	td.ResetServiceManagerContext(t)
 
-	td = daemon.NewTestDaemon(t, daemon.TestOptions{
-		ContainerManager:     containerManager,
-		SkipRemoveDataDir:    true,
-		SkipContainerCleanup: true,
-		SettingsOverrideFunc: settingsFunc,
-	})
+	td = restart()
 	defer td.Stop(t)
 
 	tx1 := td.CreateTransactionWithOptions(t,

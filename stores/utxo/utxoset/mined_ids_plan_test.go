@@ -151,6 +151,8 @@ func TestMinedReadsNeverScanEveryBodyWindow(t *testing.T) {
 	})
 
 	t.Run("minedByTxidSQL naming the lane position", func(t *testing.T) {
+		require.NoError(t, addLanePositionColumns(ctx, s.pool, laneColumnMigrationLimit))
+
 		root := explainUnderNoNestloop(t, s, ctx, minedByTxidLaneSQL, keys, int32(0), true)
 		require.True(t, assertFenced(t, root), "this read joins the body, so its plan must name tx_body")
 	})
