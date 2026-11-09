@@ -228,6 +228,16 @@ type BlockAssembler struct {
 	// loop goroutine.
 	diskTxMapResetPending bool
 
+	// resetOwed holds the options of a reset that is not storage-triggered (after a failed
+	// queue drain, a ResetBlockAssembly call, or an invalid block block assembly built itself)
+	// that handleResetRequests refused because the mark of skipped fork transactions it would
+	// owe could not be recorded. The heartbeat queues it again once resetOwedRetryAt is past
+	// (requeueRefusedReset); resetOwedWait is the back-off, doubled on each refusal in a row.
+	// Touched only by the main loop goroutine.
+	resetOwed        *resetRequest
+	resetOwedWait    time.Duration
+	resetOwedRetryAt time.Time
+
 	// storageResetMinInterval is the least time between the end of one
 	// storage-triggered reset and the start of the next (zero means
 	// defaultStorageResetMinInterval), so a fault that each reset cures but
@@ -276,6 +286,29 @@ type BlockAssembler struct {
 
 	// bestTipUnsupportedLogged is set once that finding has been logged as a warning.
 	bestTipUnsupportedLogged atomic.Bool
+
+	// skippedForkBlocksMarked holds the fork blocks, by hash with their height, whose
+	// transactions markSkippedForkTxs has already marked or given up. skippedForkMarkPending is
+	// set while a run of it is unfinished, and skippedForkReloadPending while the pool reload a
+	// run needs has not run (skippedForkWorkOwed reads both). skippedForkMarkWait is the back-off
+	// after the last run that did not finish, and the next one is not due before
+	// skippedForkMarkRetryAt. skippedForkMarkRan is set once a run started in the current pass
+	// (runOwedSkippedForkWork). skippedForkRecheck holds transactions a mark wrote off the
+	// longest chain without finishing its check against the best chain (markOffLongestChain).
+	// skippedForkHeldRepair holds the transactions block assembly held that a fork block whose
+	// subtree is gone mined, while their mark off the longest chain is unfinished; the record
+	// under SkippedForkMarkStateKey carries them, so a start repairs them although its pool is
+	// empty. skippedForkAtStart is set while Start runs the mark, before the pool is loaded. All
+	// are owned by the block-processing loop, and by Start before it.
+	skippedForkBlocksMarked  map[chainhash.Hash]uint32
+	skippedForkHeldRepair    []chainhash.Hash
+	skippedForkAtStart       bool
+	skippedForkMarkPending   bool
+	skippedForkReloadPending bool
+	skippedForkMarkWait      time.Duration
+	skippedForkMarkRetryAt   time.Time
+	skippedForkMarkRan       bool
+	skippedForkRecheck       map[chainhash.Hash]struct{}
 
 	// currentRunningState tracks the current operational state
 	currentRunningState atomic.Value
@@ -647,6 +680,8 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 					b.resetAfterDrainFailure()
 				}
 
+				b.requeueRefusedReset()
+
 				requested := b.subtreeProcessor.TakeResetRequested()
 				if b.diskTxMapResetPending {
 					b.diskTxMapResetPending = false
@@ -675,9 +710,7 @@ func (b *BlockAssembler) startChannelListeners(ctx context.Context) (err error) 
 				// runs outside StateReconciling, so a mining candidate asked
 				// for meanwhile is not an empty one, and a replay starts only
 				// when the tip moved.
-				if b.reconcileDue(time.Now()) && b.idleReconcileNeeded(ctx) {
-					b.triggerReconcile()
-				}
+				b.wakeIdleReconcile(ctx)
 
 			case resetReq := <-b.resetCh:
 				b.setCurrentRunningState(StateResetting)
@@ -742,6 +775,109 @@ drain:
 		storageTriggered = storageTriggered || req.StorageTriggered
 	}
 
+	// A reset refused earlier (resetOwed) runs with this one, so it does not run again. If this
+	// one then fails before the rotation, the owed options go with it, as a failed reset's own
+	// options always did; nothing asks for them again.
+	owed := b.resetOwed
+	b.resetOwed = nil
+
+	if owed != nil {
+		fullReset = fullReset || owed.FullReset
+		validateInputs = validateInputs || owed.ValidateInputs
+	}
+
+	answer := func(err error) {
+		for _, req := range batch {
+			if req.ErrCh != nil {
+				req.ErrCh <- err
+			}
+		}
+	}
+
+	b.skippedForkMarkRan = false
+
+	// A reset traverses only its endpoint lineages. Keep the replay position so any
+	// briefly winning branch outside those lineages is still replayed afterwards. Without a
+	// replay position nothing replays them, so the reset owes the mark of skipped fork
+	// transactions a move to the best header owes. As for that move, it is recorded first,
+	// since the reset persists its new tip, and without the record the reset does not run.
+	//
+	// Owed work runs before the reset, whose reload takes in what it unmarks, so the pass
+	// needs no second reload. Without a replay position the record is then written again
+	// and the work owed again: the reset reads the best tip anew, and a block that became the
+	// best tip in between is marked by the run that ends the pass. A run that does not finish
+	// is not run a second time in the pass (runOwedSkippedForkWork).
+	// A refused reset stays owed, since nothing else asks for it again: a storage-triggered one
+	// as a reset that failed before the rotation (onResetDone), any other in resetOwed, which
+	// the heartbeat queues again after its own back-off.
+	refuse := func(err error) {
+		b.skippedForkMarkPending = true
+		b.noteSkippedForkMarkFailure(time.Now())
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
+
+		refused := errors.NewProcessingError("[BlockAssembler] reset refused: the mark of skipped fork transactions it would owe cannot be recorded", err)
+		b.logger.Errorf("%v", refused)
+
+		b.onResetDone(storageTriggered, subtreeprocessor.ResetResponse{}, refused)
+
+		b.resetOwed = owed
+
+		for _, req := range batch {
+			if req.StorageTriggered {
+				continue
+			}
+
+			if b.resetOwed == nil {
+				b.resetOwed = &resetRequest{}
+			}
+
+			b.resetOwed.FullReset = b.resetOwed.FullReset || req.FullReset
+			b.resetOwed.ValidateInputs = b.resetOwed.ValidateInputs || req.ValidateInputs
+		}
+
+		// Its own back-off, so a mark that keeps failing for another reason, which pushes
+		// skippedForkMarkRetryAt out on every pass, does not hold it back. It doubles while
+		// refusals follow one another, the heartbeat's retry among them, which arrives as a new
+		// request with resetOwed already cleared (requeueRefusedReset).
+		if b.resetOwed != nil {
+			if b.resetOwedWait == 0 {
+				b.resetOwedWait = skippedForkMarkRetryBase
+			} else {
+				b.resetOwedWait = retry.CappedExponentialBackoff(b.resetOwedWait, 2, skippedForkMarkRetryMax)
+			}
+
+			b.resetOwedRetryAt = time.Now().Add(b.resetOwedWait)
+		}
+
+		b.drainPendingInvalidations(ctx)
+		answer(refused)
+	}
+
+	wasPending := b.bestTipResetReplayPending.Load()
+	if !b.bestTipPosKnown.Load() {
+		if err := b.saveSkippedForkMark(ctx, true); err != nil {
+			refuse(err)
+			return
+		}
+
+		b.skippedForkMarkPending = true
+	}
+
+	if b.skippedForkWorkOwed() {
+		if err := b.markSkippedForkTxs(ctx, true); err == nil && !b.bestTipPosKnown.Load() {
+			if err = b.saveSkippedForkMark(ctx, true); err != nil {
+				refuse(err)
+				return
+			}
+
+			b.skippedForkMarkPending = true
+			b.skippedForkMarkRan = false
+		}
+	}
+
+	// Past the last refusal: the next refused reset starts its back-off over.
+	b.resetOwedWait = 0
+
 	// If FullReset requested, run lightweight consistency scan first
 	if fullReset {
 		if fixErr := b.fixUnminedSinceInconsistencies(ctx); fixErr != nil {
@@ -749,9 +885,6 @@ drain:
 		}
 	}
 
-	// A reset traverses only its endpoint lineages. Keep the replay position so any
-	// briefly winning branch outside those lineages is still replayed afterwards.
-	wasPending := b.bestTipResetReplayPending.Load()
 	if b.bestTipPosKnown.Load() {
 		b.bestTipResetReplayPending.Store(true)
 	}
@@ -760,6 +893,17 @@ drain:
 		// Nothing was discarded: block assembly is still on its old tip with its old pool,
 		// and the ordinary replay from the unchanged position carries it forward.
 		b.bestTipResetReplayPending.Store(wasPending)
+	}
+
+	if err != nil {
+		// The failed reset is the pass's one attempt: the owed work, which may need a reload
+		// that is a reset too, waits for the next pass or for the idle wake after a back-off,
+		// counted once in the pass.
+		if b.skippedForkWorkOwed() && !time.Now().Before(b.skippedForkMarkRetryAt) {
+			b.noteSkippedForkMarkFailure(time.Now())
+		}
+
+		b.skippedForkMarkRan = true
 	}
 	// Judge the storage outcome of this reset before replay can return an
 	// unrelated history error. A clean rotation still cured its disk fault.
@@ -776,17 +920,17 @@ drain:
 		}
 	}
 
+	// The pass ends with the work a mark of skipped fork transactions owes, whether or not
+	// there is a replay position, unless it ran the mark before the reset.
+	b.runOwedSkippedForkWork(ctx)
+
 	// The Reset path replays moveForward blocks through the same
 	// conflict resolution, so it can queue refusals too. Unlike the
 	// reorg path this does not run inside processNewBlockAnnouncement,
 	// so nothing else would drain them until the next block arrives.
 	b.drainPendingInvalidations(ctx)
 
-	for _, req := range batch {
-		if req.ErrCh != nil {
-			req.ErrCh <- err
-		}
-	}
+	answer(err)
 }
 
 // triggerReconcile asks the channel listener to run processNewBlockAnnouncement.
@@ -1441,6 +1585,11 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 	// acquisition), and it must run AFTER movement, never during it.
 	defer b.drainPendingInvalidations(ctx)
 
+	// Whatever path this pass takes, it ends with the work a mark of skipped fork transactions
+	// owes (deferred after the drain, so it runs before it).
+	b.skippedForkMarkRan = false
+	defer b.runOwedSkippedForkWork(ctx)
+
 	b.lastBestTipReplay.Store(time.Now().UnixNano())
 
 	if !b.followBestTipChanges(ctx) {
@@ -1456,7 +1605,39 @@ func (b *BlockAssembler) processNewBlockAnnouncement(ctx context.Context) {
 		return
 	}
 
-	_ = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta)
+	before, _ := b.CurrentBlock()
+
+	// Following the best header owes a mark of the fork blocks it skips when it moves the tip.
+	// The move persists block assembly's new tip, so the mark is recorded first: a crash right
+	// after the move still finishes it at the next start. Without that record block assembly
+	// does not move, and the pending run wakes the next pass after a back-off. With no move the
+	// mark a replay give-up owes is recorded already (followBestTipChanges), and the pass ends
+	// with it (runOwedSkippedForkWork), unless a failed reset was the pass's one attempt; the
+	// idle wake then runs it after the back-off.
+	if before == nil || !bestBlockchainBlockHeader.Hash().IsEqual(before.Hash()) {
+		if err = b.saveSkippedForkMark(ctx, true); err != nil {
+			b.skippedForkMarkPending = true
+			b.noteSkippedForkMarkFailure(time.Now())
+			prometheusBlockAssemblyProcessingStuck.WithLabelValues("skipped_fork_mark_record").Inc()
+			b.logger.Errorf("[BlockAssembler] not following the best header to %s, the mark of skipped fork transactions it would owe cannot be recorded, retrying at %s: %v", bestBlockchainBlockHeader.Hash(), b.skippedForkMarkRetryAt.Format(time.RFC3339), err)
+
+			// The failure is this pass's one attempt (runOwedSkippedForkWork).
+			b.skippedForkMarkRan = true
+
+			return
+		}
+
+		b.skippedForkMarkPending = true
+	}
+
+	// A move that ran a reset ends on the best tip as well (errBestTipReset is the replay's
+	// version of the same outcome).
+	if err = b.moveToBlock(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta); err != nil && !errors.Is(err, errors.ErrBlockAssemblyReset) {
+		// The pending mark keeps the idle wake retrying the move, after a back-off. The
+		// failure is this pass's one attempt (runOwedSkippedForkWork).
+		b.noteSkippedForkMarkFailure(time.Now())
+		b.skippedForkMarkRan = true
+	}
 }
 
 // moveToBlock moves block assembly from its tip to the given block by the shortest path
@@ -1675,6 +1856,12 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		}
 	}
 
+	// A mark of skipped fork transactions a restart cut short makes them unmined, so it runs
+	// before they are loaded.
+	if err = b.finishSkippedForkMarkAtStart(ctx); err != nil {
+		return err
+	}
+
 	// Replay any conflict-resolution WAL intents left behind by a crash mid-
 	// ProcessConflicting / ReverseProcessConflicting (#861), BEFORE chain-tip
 	// reconciliation — loadUnminedTransactions and any reset() rebuild must see a
@@ -1689,6 +1876,9 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 		// we cannot start block assembly if we have not loaded unmined transactions successfully
 		return errors.NewStorageError("[BlockAssembler] failed to load un-mined transactions: %v", err)
 	}
+
+	// That load is the pool reload a mark of skipped fork transactions at start-up may owe.
+	b.skippedForkReloadPending = false
 
 	recoveredIDs, recoveryErr := b.prepareRecoveredConflictUpdates(ctx)
 	if recoveryErr != nil {
@@ -2433,6 +2623,31 @@ func (b *BlockAssembler) resetAfterDrainFailure() {
 	}()
 }
 
+// requeueRefusedReset queues again, with its options, a reset handleResetRequests refused
+// (resetOwed), once its back-off is over (resetOwedRetryAt), so a record that keeps failing
+// does not refuse one reset after another.
+func (b *BlockAssembler) requeueRefusedReset() {
+	if b.resetOwed == nil || time.Now().Before(b.resetOwedRetryAt) {
+		return
+	}
+
+	owed := *b.resetOwed
+	b.resetOwed = nil
+
+	b.logger.Warnf("[BlockAssembler] retrying a reset refused because the mark of skipped fork transactions it would owe could not be recorded")
+
+	go func() {
+		errCh := make(chan error, 1)
+		owed.ErrCh = errCh
+
+		b.resetCh <- owed
+
+		if err := <-errCh; err != nil {
+			b.logger.Errorf("[BlockAssembler] error retrying a refused reset: %v", err)
+		}
+	}()
+}
+
 // defaultStorageResetMinInterval is the default storageResetMinInterval.
 const defaultStorageResetMinInterval = 10 * time.Minute
 
@@ -2481,6 +2696,12 @@ func (b *BlockAssembler) onResetDone(storageTriggered bool, resp subtreeprocesso
 	// Any rotation discards the phantom a pending reset was for.
 	if resp.Rotated {
 		b.diskTxMapResetPending = false
+	}
+
+	// A reset that finished reloaded every unmined transaction, which is the pool reload a
+	// mark of skipped fork transactions may still owe.
+	if resetErr == nil {
+		b.skippedForkReloadPending = false
 	}
 
 	switch {

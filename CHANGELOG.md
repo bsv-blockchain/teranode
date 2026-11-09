@@ -132,6 +132,15 @@ read every section between yours and the target.
   Count those 429s with `teranode_asset_http_rate_limited_total{scope="global"}`. (#1793)
 - **Out-of-tree `utxo.Store` implementations must add `SpendAndCreateMulti` and
   `ParentOutputsForValidation`.** `utxo.DefaultSpendAndCreateMulti` provides the first. (#1875)
+- **Block assembly can fail to start while a skipped-fork mark is unfinished.** A restart finishes
+  it before loading the pool, and fails if the subtree or UTXO store doesn't answer or
+  `BlockAssemblerSkippedForkMark` is malformed: restart once they answer, or clear that key. (#2065)
+- **`teranode_blockassembly_processing_stuck_total` gains three reasons:**
+  `skipped_fork_mark_unfinished`, `skipped_fork_mark_record`, `skipped_fork_subtree_lost`. An alert
+  on the total without a `reason` filter now fires on them too. (#2065)
+- **Asset block-list endpoints honour `fromHeight` with `includeOrphans`.** They now page down
+  instead of returning the chain's top; clients passing both get the blocks at or below
+  `fromHeight`. (#2065)
 
 ## [0.16.0] - 2026-10-05
 
