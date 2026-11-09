@@ -7494,6 +7494,10 @@ func (stp *SubtreeProcessor) processRemainderTxHashes(ctx context.Context, chain
 			for i, node := range nodes {
 				f := flags[i]
 				if f == 0 {
+					if pos == len(view) {
+						return errors.NewProcessingError("[processRemainderTxHashes] subtree %d keeps more nodes than the %d counted", idx, len(view))
+					}
+
 					view[pos] = node
 					pos++
 
