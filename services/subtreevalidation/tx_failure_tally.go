@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -94,7 +95,7 @@ func (t *txFailureTally) String() string {
 		c := t.causes[code]
 		b.WriteString(code)
 		b.WriteString("=")
-		b.WriteString(uitoa(c.count))
+		b.WriteString(strconv.FormatUint(c.count, 10))
 		b.WriteString(" (e.g. ")
 		b.WriteString(c.example.String())
 		b.WriteString(")")
@@ -124,21 +125,4 @@ func rootErrorCode(err error) string {
 	}
 
 	return code.String()
-}
-
-func uitoa(n uint64) string {
-	if n == 0 {
-		return "0"
-	}
-
-	var buf [20]byte
-	i := len(buf)
-
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-
-	return string(buf[i:])
 }
