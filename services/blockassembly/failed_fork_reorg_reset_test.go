@@ -353,6 +353,35 @@ func TestFailedForkReorgAndReset_MoveForwardToTheLosingSideResets(t *testing.T) 
 	require.Equal(t, f.childA3.Hash(), f.stp.GetCurrentBlockHeader().Hash())
 }
 
+// A reset after a refused move forward can itself fail. Block assembly then
+// stays on A, the processor keeps refusing, and the next pass resets again
+// rather than stalling.
+func TestFailedForkReorgAndReset_FailedResetAfterARefusalIsRetriedNextPass(t *testing.T) {
+	f := newFailedForkReorgBA(t)
+	f.failForkReorgThenItsReset(t)
+
+	// The move forward makes no getReorgBlocks call before MoveForwardBlock, so
+	// the armed failure is consumed by the reset after the refusal.
+	f.client.failNext.Store(true)
+
+	err := f.ba.moveToBlock(t.Context(), f.childA2, f.meta(t, f.childA2))
+	require.ErrorContains(t, err, "error resetting after the subtree processor refused to move")
+	require.ErrorContains(t, err, "[Reset] error getting reorg blocks")
+	require.False(t, f.client.failNext.Load(), "the injected failure was consumed by the reset")
+
+	tip, _ := f.ba.CurrentBlock()
+	require.Equal(t, f.tipA.Hash(), tip.Hash(), "block assembly stays on A")
+	require.Equal(t, f.tipA.Hash(), f.stp.GetCurrentBlockHeader().Hash())
+
+	err = f.ba.moveToBlock(t.Context(), f.childA2, f.meta(t, f.childA2))
+	require.ErrorIs(t, err, errors.ErrBlockAssemblyReset, "the next pass is refused again and resets")
+
+	tip, _ = f.ba.CurrentBlock()
+	require.Equal(t, f.childA2.Hash(), tip.Hash())
+	require.Equal(t, f.childA2.Hash(), f.stp.GetCurrentBlockHeader().Hash())
+	require.NoError(t, f.stp.CheckSubtreeProcessor())
+}
+
 // The same as the move forward, but two blocks ahead on the losing side, so the
 // next pass is a forward-only catch-up, which returns its failure without a
 // reset of its own.
