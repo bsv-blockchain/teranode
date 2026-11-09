@@ -305,14 +305,18 @@ func applyPeerURLPolicy(logger ulogger.Logger, appSettings *settings.Settings) {
 	}
 }
 
+// waitForPostgres is the wait Start runs for -wait_for_postgres=1. It is a
+// variable so a test can make the wait fail without a minute-long timeout.
+var waitForPostgres = waitForPostgresToStart
+
 // Start initializes and starts the Daemon and its services, and blocks until
 // they have all stopped.
 //
 // It returns nil when the services stopped cleanly, whether because Stop() was
-// called, a SIGINT/SIGTERM arrived, or they finished on their own. It returns
-// an error when the daemon could not start, when a service failed and brought
-// the daemon down, or when a service failed to stop during a requested
-// shutdown. The deferred client and store teardown has run by the time Start
+// called, a SIGINT/SIGTERM arrived (during startup too), or they finished on
+// their own. It returns an error when the daemon could not start, when a
+// service failed and brought the daemon down, or when a service failed to stop
+// during a requested shutdown. The deferred client and store teardown has run by the time Start
 // returns, so the caller can turn the error into an exit status: a supervisor
 // with an on-failure restart policy only sees a failure if the process exits
 // non-zero.
@@ -327,7 +331,7 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 
 	// Before continuing, if the command line contains "-wait_for_postgres=1", wait for postgres to be ready
 	if d.shouldStart("wait_for_postgres", args) {
-		if err := waitForPostgresToStart(logger, appSettings.PostgresCheckAddress); err != nil {
+		if err := waitForPostgres(logger, appSettings.PostgresCheckAddress); err != nil {
 			logger.Errorf("error waiting for postgres: %v", err)
 			return err
 		}
@@ -487,7 +491,13 @@ func (d *Daemon) Start(logger ulogger.Logger, args []string, appSettings *settin
 	// the requested-shutdown branch, and sm.Wait() can return nil because the
 	// failing service never reached the errgroup (an Init or constructor
 	// error). Report the start failure, which is the root cause.
-	if startErr != nil {
+	//
+	// A start "failure" that is only context.Canceled is not one: a SIGINT or
+	// SIGTERM, or Stop(), cancelled a context-aware Init. sm.Wait() treats the
+	// same cancellation as a clean shutdown, so defer to its result here: nil
+	// for a requested stop, or the real error when a running service failed
+	// first and its errgroup cancellation reached the Init.
+	if startErr != nil && !errors.Is(startErr, context.Canceled) {
 		return startErr
 	}
 

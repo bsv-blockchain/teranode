@@ -614,27 +614,49 @@ func TestDaemon_Start_AllServices(t *testing.T) {
 func startDaemonWithService(t *testing.T, svc *mockService, readyCh chan struct{}) (*Daemon, <-chan error) {
 	t.Helper()
 
+	return startDaemon(t, svc.name, svc, []string{"-all=0"}, nil, readyCh)
+}
+
+// startDaemon is startDaemonWithService with extra command-line args and a
+// hook to adjust the settings before Start runs.
+func startDaemon(t *testing.T, name string, svc servicemanager.Service, args []string, adjust func(*settings.Settings),
+	readyCh chan struct{}) (*Daemon, <-chan error) {
+	t.Helper()
+
 	appSettings := settings.NewSettings()
 	appSettings.Context = "daemon-exit-" + t.Name()
 	appSettings.HealthCheckHTTPListenAddress = "127.0.0.1:0"
 
+	if adjust != nil {
+		adjust(appSettings)
+	}
+
 	d := New(WithLoggerFactory(func(string) ulogger.Logger { return ulogger.TestLogger{} }))
-	d.AddExternalService(svc.name, func() (servicemanager.Service, error) { return svc, nil })
+	d.AddExternalService(name, func() (servicemanager.Service, error) { return svc, nil })
 
 	result := make(chan error, 1)
 
 	go func() {
 		if readyCh != nil {
-			result <- d.Start(ulogger.TestLogger{}, []string{"-all=0"}, appSettings, readyCh)
+			result <- d.Start(ulogger.TestLogger{}, args, appSettings, readyCh)
 			return
 		}
 
-		result <- d.Start(ulogger.TestLogger{}, []string{"-all=0"}, appSettings)
+		result <- d.Start(ulogger.TestLogger{}, args, appSettings)
 	}()
 
-	// Stop shuts the health server down; the waitErr path in Start leaves it
-	// serving because production exits right after.
-	t.Cleanup(func() { _ = d.Stop(true) })
+	t.Cleanup(func() {
+		select {
+		case <-d.stopCh:
+			// Start ran to the end. Stop shuts the health server down; the
+			// waitErr path leaves it serving because production exits next.
+			_ = d.Stop(true)
+		default:
+			// Start returned before its select (or is still running), so
+			// stopCh is never closed and Stop would wait out its timeout.
+			d.ServiceManager.ForceShutdown()
+		}
+	})
 
 	return d, result
 }
@@ -728,6 +750,76 @@ func TestDaemon_Start_StopErrorDuringRequestedShutdownIsReturned(t *testing.T) {
 	err := awaitStartResult(t, result)
 	require.Error(t, err)
 	require.ErrorIs(t, err, stopErr)
+}
+
+// cancelDuringInitService blocks in Init until its context is cancelled and
+// then fails the way a context-aware storage read does: with a project error
+// wrapping ctx.Err(). Blockchain.Init's FSM state query behaves like this.
+type cancelDuringInitService struct {
+	*mockService
+	entered chan struct{}
+}
+
+func (s *cancelDuringInitService) Init(ctx context.Context) error {
+	close(s.entered)
+	<-ctx.Done()
+
+	return errors.NewStorageError("initial storage read cancelled", ctx.Err())
+}
+
+// TestDaemon_Start_CancelDuringInitReturnsNil: a SIGINT/SIGTERM that lands
+// while startServices is still in a context-aware Init is a requested
+// shutdown, not a start failure, so Start must return nil and the process exit
+// 0. ForceShutdown calls the same cancel function as the signal handler.
+func TestDaemon_Start_CancelDuringInitReturnsNil(t *testing.T) {
+	svc := &cancelDuringInitService{mockService: newMockService("cancel-init"), entered: make(chan struct{})}
+
+	d, result := startDaemon(t, svc.name, svc, []string{"-all=0"}, nil, nil)
+
+	select {
+	case <-svc.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Init did not begin")
+	}
+
+	d.ServiceManager.ForceShutdown()
+
+	require.NoError(t, awaitStartResult(t, result))
+}
+
+// TestDaemon_Start_PostgresWaitFailureIsReturned: with -wait_for_postgres=1,
+// a database that never comes up must fail Start rather than end it cleanly.
+func TestDaemon_Start_PostgresWaitFailureIsReturned(t *testing.T) {
+	waitErr := errors.NewStorageError("timed out waiting for PostgreSQL to start")
+
+	original := waitForPostgres
+	waitForPostgres = func(ulogger.Logger, string) error { return waitErr }
+
+	t.Cleanup(func() { waitForPostgres = original })
+
+	_, result := startDaemon(t, "unused", newMockService("unused"), []string{"-all=0", "-wait_for_postgres=1"}, nil, nil)
+
+	err := awaitStartResult(t, result)
+	require.Error(t, err)
+	require.ErrorIs(t, err, waitErr)
+}
+
+// TestDaemon_Start_HealthListenerFailureIsReturned: production's Fatalf exits
+// the process, but a logger whose Fatalf returns (tests, embedders) must still
+// see Start fail when the health listener cannot be created.
+func TestDaemon_Start_HealthListenerFailureIsReturned(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	t.Cleanup(func() { _ = occupied.Close() })
+
+	_, result := startDaemon(t, "listener", newMockService("listener"), []string{"-all=0"}, func(s *settings.Settings) {
+		s.HealthCheckHTTPListenAddress = occupied.Addr().String()
+	}, nil)
+
+	err = awaitStartResult(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "health check listener")
 }
 
 // TestWaitForPostgresToStart_Success verifies the happy‑path where the TCP endpoint becomes available.
