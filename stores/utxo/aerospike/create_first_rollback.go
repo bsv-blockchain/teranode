@@ -182,10 +182,24 @@ func (s *Store) convertToHold(key *aerospike.Key, hash *chainhash.Hash, state cr
 	return errors.NewStorageError("hold conversion of %s was filtered out but the record is still rolling back", hash.String())
 }
 
+// notBusyOrStale selects a record whose busy bin is absent, or whose holder has crashed: every
+// take renews holdUntil, so a busy bin that holdUntil has passed by a further
+// utxostore_spendRollbackTimeout is not a live holder's.
+func (s *Store) notBusyOrStale(now int64) *aerospike.Expression {
+	return aerospike.ExpOr(
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.Busy.String())),
+		aerospike.ExpAnd(
+			aerospike.ExpBinExists(fields.HoldUntil.String()),
+			aerospike.ExpLessEq(aerospike.ExpIntBin(fields.HoldUntil.String()), aerospike.ExpIntVal(now-s.holdSeconds())),
+		),
+	)
+}
+
 // TakeRollbackHold reports whether the caller may reverse the spends of the inputs of the
 // transaction whose attempt carries the token. One UPDATE_ONLY write, filtered on the record
-// rolling back, carrying the token and not busy, marks the record busy and renews holdUntil to
-// now plus utxostore_spendRollbackTimeout. A filtered-out write or an absent record reports
+// rolling back, carrying the token and not busy, or busy with a holder that crashed (holdUntil
+// passed by a further utxostore_spendRollbackTimeout), marks the record busy and renews holdUntil
+// to now plus utxostore_spendRollbackTimeout, so a live holder is never taken over. A filtered-out write or an absent record reports
 // false and writes nothing: the record is gone, a later attempt owns the txid, or another actor
 // is reversing under the hold.
 func (s *Store) TakeRollbackHold(_ context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
@@ -198,7 +212,7 @@ func (s *Store) TakeRollbackHold(_ context.Context, hash *chainhash.Hash, attemp
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	writePolicy.FilterExpression = aerospike.ExpAnd(
 		aerospike.ExpBinExists(fields.RollingBack.String()),
-		aerospike.ExpNot(aerospike.ExpBinExists(fields.Busy.String())),
+		s.notBusyOrStale(time.Now().Unix()),
 		attemptFilter(attempt),
 	)
 
@@ -258,8 +272,9 @@ func (s *Store) ReleaseRollbackHold(_ context.Context, hash *chainhash.Hash, att
 // makes the delete fail.
 //
 // With adopt, the call of a create in block context that must not wait out the hold, the hold
-// goes at once unless a holder is busy. The delete is filtered on the hold and on the busy bin
-// being absent.
+// goes at once unless a live holder is busy. A busy bin that holdUntil has passed by a further
+// timeout is a crashed holder's and does not stop it. The delete is filtered on the hold and on the
+// busy bin being absent or stale.
 //
 // A delete that the filter refused reports false: the record changed under the call, and the
 // caller retries later.
@@ -284,17 +299,18 @@ func (s *Store) ClearCreateFirstHold(_ context.Context, hash *chainhash.Hash, ad
 
 	var filter *aerospike.Expression
 
+	now := time.Now().Unix()
+
 	if adopt {
-		if state.busy {
+		if state.busy && now < state.holdUntil+s.holdSeconds() {
 			return false, nil
 		}
 
 		filter = aerospike.ExpAnd(
 			aerospike.ExpBinExists(fields.Hold.String()),
-			aerospike.ExpNot(aerospike.ExpBinExists(fields.Busy.String())),
+			s.notBusyOrStale(now),
 		)
 	} else {
-		now := time.Now().Unix()
 
 		expired := now >= state.holdUntil && !state.busy
 		crashed := now >= state.holdUntil+s.holdSeconds()
