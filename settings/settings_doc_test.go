@@ -905,7 +905,7 @@ var checkedRowsPerDoc = map[string]int{
 	"coinbase_settings.md":          21,
 	"faucet_settings.md":            1,
 	"legacy_settings.md":            32,
-	"p2p_settings.md":               46,
+	"p2p_settings.md":               61,
 	"propagation_settings.md":       13,
 	"pruner_settings.md":            25,
 	"rpc_settings.md":               11,
