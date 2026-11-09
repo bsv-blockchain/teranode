@@ -1449,8 +1449,9 @@ func (u *Server) filterHeaders(ctx context.Context, catchupCtx *CatchupContext) 
 		return errors.NewProcessingError("[catchup][%s] no headers to filter", catchupCtx.blockUpTo.Hash().String())
 	}
 
-	// Since we found the true common ancestor, all headers after that index should be new to us
-	// No need for complex filtering - just take everything after the common ancestor
+	// Take everything after the common ancestor. The ancestor is the last offered header on our
+	// current chain, so the headers after it can still include stored side blocks. The block fetch
+	// trims the stored-valid ones before it requests anything (see storedHeaderPrefix).
 	if catchupCtx.commonAncestorIndex < 0 || catchupCtx.commonAncestorIndex >= len(peerHeaders) {
 		return errors.NewProcessingError("[catchup][%s] invalid common ancestor index: %d", catchupCtx.blockUpTo.Hash().String(), catchupCtx.commonAncestorIndex)
 	}

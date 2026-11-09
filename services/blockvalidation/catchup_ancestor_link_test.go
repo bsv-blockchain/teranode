@@ -165,6 +165,10 @@ const (
 	// invalid, then h12, h13 on s11. s11 is the only stored header above our tip at b10, so the
 	// ancestor walk stops at its height ceiling before it reads s11's invalid flag.
 	offerThroughInvalidAboveTip
+	// offerThroughValidThenInvalidAboveTip: s6..s11 built on b5 and stored valid, s12 on s11 stored
+	// marked invalid, then h13, h14 on s12. b10 is mined at a harder difficulty, so our tip stays
+	// at b10 although s11 is higher, and the invalid block is not the first one above our tip.
+	offerThroughValidThenInvalidAboveTip
 	// offerSideBranchOnly: the peer serves s6..s9, h10, h11 without b5 in front. s6..s9 are stored
 	// but none is on our current chain, and our tip does not move, so the reply cannot have come
 	// from our locator.
@@ -211,6 +215,15 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 	require.NoError(t, err)
 
 	mainChain := forkHeadersFrom(t, genesis, 10, 1, 0)
+
+	if shape == offerThroughValidThenInvalidAboveTip {
+		// Each regtest block adds work 2, and these bits add 8. Above genesis our chain to b10 weighs
+		// 26, the stored side branch to s11 weighs 22, and the offer to h14 weighs 28. So b10 stays
+		// our tip, and the offer still passes the less-work gate that ends a lighter one as a no-op.
+		mainChain[9].Bits = nBitsFrom(t, "201fffff")
+		testhelpers.MineHeader(mainChain[9])
+	}
+
 	for i, h := range mainChain {
 		storeMinedBlock(ctx, t, store, h, uint32(i+1)) //nolint:gosec // i < 10
 	}
@@ -258,6 +271,15 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		storeSideBlock(ctx, t, store, sideBranch[5], 11, options.WithInvalid(true))
 
 		offered = append(sideBranch, forkHeadersFrom(t, sideBranch[5], 2, 12, 700)...)
+	case offerThroughValidThenInvalidAboveTip:
+		sideBranch := forkHeadersFrom(t, ancestor, 7, 6, 700)
+		for i, h := range sideBranch[:6] {
+			storeSideBlock(ctx, t, store, h, uint32(6+i)) //nolint:gosec // i < 6
+		}
+
+		storeSideBlock(ctx, t, store, sideBranch[6], 12, options.WithInvalid(true))
+
+		offered = append(sideBranch, forkHeadersFrom(t, sideBranch[6], 2, 13, 700)...)
 	case offerBreakBetweenBatches, offerReplayBetweenBatches:
 		// With b5 in front this is a full batch, so the fetch asks again from h9999.
 		offered = forkHeadersFrom(t, ancestor, maxBlockHeadersPerRequest-1, 6, 1000)
@@ -615,6 +637,36 @@ func TestCatchup_InvalidStoredBlockAboveTipIsRejected(t *testing.T) {
 	require.Error(t, run.err)
 	require.True(t, errors.Is(run.err, errors.ErrBlockInvalid), "an offer through a stored invalid block must be rejected as invalid: %v", run.err)
 	require.Contains(t, run.err.Error(), s11.Hash().String(), "the error must name s11, the first invalid offered block")
+	require.Zero(t, run.blocksRequests, "no block may be fetched for a rejected offer")
+	require.Zero(t, run.minedClears, "a rejected offer must not un-stamp any local block (step 9.6)")
+	require.Equal(t, []bool{true, true, true, true, true}, minedAboveAncestor(t, run),
+		"a rejected offer must leave the local blocks above the ancestor mined")
+}
+
+// TestCatchup_ValidThenInvalidStoredBlocksAboveTipAreRejected covers an invalid block that is not
+// the first stored header above our tip. The local chain is b1..b10 with b10 at a harder difficulty,
+// s6..s11 on b5 are stored valid, s12 is stored invalid, and the peer offers [b5, s6..s12, h13, h14].
+// The walk stops at s11, so catchup must read past that valid block to find s12.
+//
+// Mutation proof: returning from rejectInvalidStoredHeader after the first header it reads lets the
+// offer through, un-stamping b6..b10 and reaching the block fetch.
+func TestCatchup_ValidThenInvalidStoredBlocksAboveTipAreRejected(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerThroughValidThenInvalidAboveTip)
+
+	s11 := run.offered[5]
+	_, s11Meta, err := run.client.GetBlockHeader(context.Background(), s11.Hash())
+	require.NoError(t, err)
+	require.False(t, s11Meta.Invalid, "s11 must be stored valid, else the setup is vacuous")
+	require.Equal(t, uint32(11), s11Meta.Height, "s11 must sit above the tip at b10, else the setup is vacuous")
+
+	s12 := run.offered[6]
+	_, s12Meta, err := run.client.GetBlockHeader(context.Background(), s12.Hash())
+	require.NoError(t, err)
+	require.True(t, s12Meta.Invalid, "s12 must be stored invalid, else the setup is vacuous")
+
+	require.Error(t, run.err)
+	require.True(t, errors.Is(run.err, errors.ErrBlockInvalid), "an offer through a stored invalid block must be rejected as invalid: %v", run.err)
+	require.Contains(t, run.err.Error(), s12.Hash().String(), "the error must name s12, the first invalid offered block")
 	require.Zero(t, run.blocksRequests, "no block may be fetched for a rejected offer")
 	require.Zero(t, run.minedClears, "a rejected offer must not un-stamp any local block (step 9.6)")
 	require.Equal(t, []bool{true, true, true, true, true}, minedAboveAncestor(t, run),
