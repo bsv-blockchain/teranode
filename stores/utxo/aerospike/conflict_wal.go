@@ -2,6 +2,7 @@ package aerospike
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -135,91 +136,92 @@ func (s *Store) CompleteConflictIntent(ctx context.Context, intentID chainhash.H
 	return nil
 }
 
-// PendingConflictIntents scans the WAL set and returns every begun-but-not-
-// completed intent. It reads only the root bins, never the checklist chunks:
-// callers load a checklist with LoadConflictRecovery when they need it.
-func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
-	stmt := aerospike.NewStatement(s.namespace, s.conflictWALSet())
-	stmt.BinNames = []string{walBinKind, walBinBlockHeight, walBinBlockHash, walBinTxHashes, walBinStartedAt, walBinKeyFormula, "recoveryDone"}
+// conflictWALScanTimeout bounds one fallback scan of the WAL set. Without the WAL index the
+// server walks every record of the namespace to find the few in this set, and sends nothing while
+// it walks other sets' records, so the scan has no socket timeout and only this overall bound.
+const conflictWALScanTimeout = 5 * time.Minute
 
-	queryPolicy := aerospike.NewQueryPolicy()
-	queryPolicy.MaxRetries = 3
-	queryPolicy.SocketTimeout = 30 * time.Second
-	queryPolicy.TotalTimeout = 120 * time.Second
+// conflictWALIndexName is the secondary index over the startedAt bin of the WAL set. Every intent
+// record has that bin, whichever build wrote it, so the index holds every pending intent. It is
+// named after the set because an index name is unique within a namespace.
+func (s *Store) conflictWALIndexName() string {
+	return s.conflictWALSet() + "_" + walBinStartedAt
+}
 
-	recordset, err := s.client.Query(queryPolicy, stmt)
-	if err != nil {
-		return nil, errors.NewStorageError("[PendingConflictIntents] failed to query WAL set", err)
+// conflictWALBins are the root bins PendingConflictIntents reads.
+var conflictWALBins = []string{walBinKind, walBinBlockHeight, walBinBlockHash, walBinTxHashes, walBinStartedAt, walBinKeyFormula, "recoveryDone"}
+
+// ensureConflictWALIndex creates the WAL index when it is missing. The server builds it in the
+// background over every existing record, so intents written before it existed are found through it
+// once it is built. A failure only costs startup speed: PendingConflictIntents scans the set until
+// the index is readable.
+func (s *Store) ensureConflictWALIndex() {
+	if s.client == nil || s.client.Client == nil {
+		return
 	}
-	defer recordset.Close()
+
+	indexName := s.conflictWALIndexName()
+
+	s.indexMutex.Lock()
+	defer s.indexMutex.Unlock()
+
+	exists, err := s.indexExistsInSet(indexName, s.conflictWALSet())
+	if err != nil {
+		s.logger.Warnf("[ensureConflictWALIndex] could not check whether %s exists; Block Assembly startup will scan the namespace for conflict intents until it does: %v", indexName, err)
+		return
+	}
+
+	if exists {
+		return
+	}
+
+	s.logger.Infof("[ensureConflictWALIndex] creating index %s:%s:%s", s.namespace, s.conflictWALSet(), indexName)
+
+	if _, err := s.client.CreateIndex(aerospike.NewWritePolicy(0, 0), s.namespace, s.conflictWALSet(), indexName, walBinStartedAt, aerospike.NUMERIC); err != nil {
+		if err.Matches(types.INDEX_FOUND) {
+			return
+		}
+
+		s.logger.Warnf("[ensureConflictWALIndex] failed to create %s; Block Assembly startup will scan the namespace for conflict intents: %v", indexName, err)
+	}
+}
+
+// PendingConflictIntents returns every begun-but-not-completed intent. It reads only the root
+// bins, never the checklist chunks: callers load a checklist with LoadConflictRecovery when they
+// need it.
+//
+// It reads the WAL set through its secondary index, which costs the size of the set. While the
+// index is missing or still building it falls back to a scan of the set, which without a set index
+// walks the whole namespace. Either read is attempted once: an error is returned for the caller to
+// retry.
+func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
+	records, readable, err := s.queryConflictWALIndex(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if !readable {
+		s.logger.Warnf("[PendingConflictIntents] index %s is missing or not built yet; scanning the WAL set, which walks the whole namespace", s.conflictWALIndexName())
+
+		if records, err = s.scanConflictWAL(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	var (
 		intents []utxo.ConflictIntent
 		done    []chainhash.Hash
 	)
 
-	for res := range recordset.Results() {
-		if res.Err != nil {
-			return nil, errors.NewStorageError("[PendingConflictIntents] error reading WAL record", res.Err)
-		}
-
-		record := res.Record
-		if record == nil {
-			continue
-		}
-
-		kind, ok := record.Bins[walBinKind].(string)
-		if !ok {
-			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinKind)
-		}
-
-		blockHeight, ok := record.Bins[walBinBlockHeight].(int)
-		if !ok {
-			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinBlockHeight)
-		}
-
-		blockHashBytes, ok := record.Bins[walBinBlockHash].([]byte)
-		if !ok {
-			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinBlockHash)
-		}
-
-		txHashesBytes, ok := record.Bins[walBinTxHashes].([]byte)
-		if !ok {
-			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinTxHashes)
-		}
-
-		startedAt, ok := record.Bins[walBinStartedAt].(int)
-		if !ok {
-			return nil, errors.NewStorageError(errWALRecordMissingBin, walBinStartedAt)
-		}
-
-		bh, err := chainhash.NewHash(blockHashBytes)
+	for _, record := range records {
+		intent, completed, err := decodeConflictWALRecord(record)
 		if err != nil {
-			return nil, errors.NewStorageError("[PendingConflictIntents] corrupt blockHash (kind=%s height=%d startedAt=%d)", kind, blockHeight, startedAt, err)
-		}
-
-		hashes, err := decodeIntentHashes(txHashesBytes)
-		if err != nil {
-			return nil, errors.NewStorageError("[PendingConflictIntents] corrupt intent record (kind=%s height=%d startedAt=%d)", kind, blockHeight, startedAt, err)
-		}
-
-		intent := utxo.ConflictIntent{
-			Kind:        utxo.ConflictIntentKind(kind),
-			BlockHeight: uint32(blockHeight),
-			BlockHash:   *bh,
-			TxHashes:    hashes,
-			StartedAt:   int64(startedAt),
-		}
-
-		// The query returns no user keys. A record that this build keyed by its fields carries the
-		// key formula. One without it was written by an older build, under that build's formula.
-		if _, derived := record.Bins[walBinKeyFormula]; !derived {
-			intent.ID = utxo.LegacyConflictIntentID(intent.Kind, intent.BlockHash, intent.BlockHeight, intent.TxHashes)
+			return nil, err
 		}
 
 		// A completed intent whose chunk cleanup was interrupted is not pending. Finish its
 		// deletion below rather than expose it as a new legacy operation.
-		if record.Bins["recoveryDone"] == true {
+		if completed {
 			done = append(done, intent.IntentID())
 			continue
 		}
@@ -234,4 +236,127 @@ func (s *Store) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictInte
 	}
 
 	return intents, nil
+}
+
+// queryConflictWALIndex reads every WAL root through the WAL index. readable is false when the
+// server reports the index missing or not built on some node.
+func (s *Store) queryConflictWALIndex(ctx context.Context) (records []*aerospike.Record, readable bool, err error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, false, ctxErr
+	}
+
+	stmt := aerospike.NewStatement(s.namespace, s.conflictWALSet(), conflictWALBins...)
+	if err := stmt.SetFilter(aerospike.NewRangeFilter(walBinStartedAt, math.MinInt64, math.MaxInt64)); err != nil {
+		return nil, false, errors.NewProcessingError("[PendingConflictIntents] could not build the index filter", err)
+	}
+
+	recordset, aErr := s.client.Query(util.GetAerospikeQueryPolicy(s.settings), stmt)
+	if aErr != nil {
+		if conflictingIndexNotReadable(aErr) {
+			return nil, false, nil
+		}
+
+		return nil, false, errors.NewStorageError("[PendingConflictIntents] WAL index query failed", aErr)
+	}
+
+	_, readable, err = readQueryResults(ctx, "[PendingConflictIntents] WAL index query failed", recordset.Results(), func() { _ = recordset.Close() }, func(record *aerospike.Record) bool {
+		records = append(records, record)
+		return false
+	})
+	if err != nil || !readable {
+		return nil, readable, err
+	}
+
+	return records, true, nil
+}
+
+// scanConflictWAL reads every WAL root with a scan of the set.
+func (s *Store) scanConflictWAL(ctx context.Context) ([]*aerospike.Record, error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ctxErr
+	}
+
+	stmt := aerospike.NewStatement(s.namespace, s.conflictWALSet(), conflictWALBins...)
+
+	policy := aerospike.NewQueryPolicy()
+	policy.MaxRetries = 2
+	policy.SocketTimeout = 0
+	policy.TotalTimeout = conflictWALScanTimeout
+
+	recordset, aErr := s.client.Query(policy, stmt)
+	if aErr != nil {
+		return nil, errors.NewStorageError("[PendingConflictIntents] failed to scan WAL set", aErr)
+	}
+
+	var records []*aerospike.Record
+
+	_, readable, err := readQueryResults(ctx, "[PendingConflictIntents] error reading WAL record", recordset.Results(), func() { _ = recordset.Close() }, func(record *aerospike.Record) bool {
+		records = append(records, record)
+		return false
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if !readable {
+		// A scan names no index. A server that answers it with an index error is misbehaving.
+		return nil, errors.NewStorageError("[PendingConflictIntents] WAL set scan returned an index error")
+	}
+
+	return records, nil
+}
+
+// decodeConflictWALRecord turns a WAL root into its intent. completed reports a root whose
+// completion was interrupted after it was marked done.
+func decodeConflictWALRecord(record *aerospike.Record) (intent utxo.ConflictIntent, completed bool, err error) {
+	kind, ok := record.Bins[walBinKind].(string)
+	if !ok {
+		return intent, false, errors.NewStorageError(errWALRecordMissingBin, walBinKind)
+	}
+
+	blockHeight, ok := record.Bins[walBinBlockHeight].(int)
+	if !ok {
+		return intent, false, errors.NewStorageError(errWALRecordMissingBin, walBinBlockHeight)
+	}
+
+	blockHashBytes, ok := record.Bins[walBinBlockHash].([]byte)
+	if !ok {
+		return intent, false, errors.NewStorageError(errWALRecordMissingBin, walBinBlockHash)
+	}
+
+	txHashesBytes, ok := record.Bins[walBinTxHashes].([]byte)
+	if !ok {
+		return intent, false, errors.NewStorageError(errWALRecordMissingBin, walBinTxHashes)
+	}
+
+	startedAt, ok := record.Bins[walBinStartedAt].(int)
+	if !ok {
+		return intent, false, errors.NewStorageError(errWALRecordMissingBin, walBinStartedAt)
+	}
+
+	bh, err := chainhash.NewHash(blockHashBytes)
+	if err != nil {
+		return intent, false, errors.NewStorageError("[PendingConflictIntents] corrupt blockHash (kind=%s height=%d startedAt=%d)", kind, blockHeight, startedAt, err)
+	}
+
+	hashes, err := decodeIntentHashes(txHashesBytes)
+	if err != nil {
+		return intent, false, errors.NewStorageError("[PendingConflictIntents] corrupt intent record (kind=%s height=%d startedAt=%d)", kind, blockHeight, startedAt, err)
+	}
+
+	intent = utxo.ConflictIntent{
+		Kind:        utxo.ConflictIntentKind(kind),
+		BlockHeight: uint32(blockHeight),
+		BlockHash:   *bh,
+		TxHashes:    hashes,
+		StartedAt:   int64(startedAt),
+	}
+
+	// The query returns no user keys. A record that this build keyed by its fields carries the
+	// key formula. One without it was written by an older build, under that build's formula.
+	if _, derived := record.Bins[walBinKeyFormula]; !derived {
+		intent.ID = utxo.LegacyConflictIntentID(intent.Kind, intent.BlockHash, intent.BlockHeight, intent.TxHashes)
+	}
+
+	return intent, record.Bins["recoveryDone"] == true, nil
 }

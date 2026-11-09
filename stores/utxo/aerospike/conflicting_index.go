@@ -177,6 +177,12 @@ func (s *Store) conflictingIndexRecords(ctx context.Context, binNames []string, 
 // node goroutine can otherwise block on a full results buffer and the close never finish. When
 // the results end, the node goroutines are done and the close is immediate.
 func readConflictingIndexResults(ctx context.Context, results <-chan *aerospike.Result, closeRecordset func(), visit func(*aerospike.Record) bool) (found, readable bool, err error) {
+	return readQueryResults(ctx, "[ConflictingTxHashes] index query failed", results, closeRecordset, visit)
+}
+
+// readQueryResults is readConflictingIndexResults for any query, with failure as the message of a
+// node error.
+func readQueryResults(ctx context.Context, failure string, results <-chan *aerospike.Result, closeRecordset func(), visit func(*aerospike.Record) bool) (found, readable bool, err error) {
 	closeInBackground := func() {
 		go func() {
 			go func() {
@@ -213,7 +219,7 @@ func readConflictingIndexResults(ctx context.Context, results <-chan *aerospike.
 				return false, false, nil
 			}
 
-			return false, false, errors.NewStorageError("[ConflictingTxHashes] index query failed", res.Err)
+			return false, false, errors.NewStorageError(failure, res.Err)
 		}
 
 		if res.Record != nil && visit(res.Record) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/bscript"
@@ -52,10 +53,17 @@ type replaySpyStore struct {
 	// removed the intents that were completed during the drain loop.
 	drainOnReRead bool
 	pendingCalls  int
+	// failFirst makes the first failFirst reads of the WAL fail with a storage timeout, as an
+	// Aerospike cluster under the load of a full node start can.
+	failFirst int
 }
 
 func (s *replaySpyStore) PendingConflictIntents(_ context.Context) ([]utxo.ConflictIntent, error) {
 	s.pendingCalls++
+	if s.pendingCalls <= s.failFirst {
+		return nil, errors.NewStorageError("[PendingConflictIntents] error reading WAL record: ResultCode: TIMEOUT")
+	}
+
 	if s.drainOnReRead && s.pendingCalls > 1 {
 		return nil, s.pendingErr
 	}
@@ -84,8 +92,12 @@ func newReplayTestAssembler(store utxo.Store, bc blockchain.ClientI) *BlockAssem
 		logger:           ulogger.TestLogger{},
 		utxoStore:        store,
 		blockchainClient: bc,
+		conflictWALRead:  shortConflictWALRead,
 	}
 }
+
+// shortConflictWALRead keeps the WAL read retries of a test to milliseconds.
+var shortConflictWALRead = conflictWALReadBackoff{initial: time.Millisecond, max: 2 * time.Millisecond, budget: time.Second}
 
 // TestReplayPendingConflictIntents_NoPending is a no-op when the WAL is empty.
 func TestReplayPendingConflictIntents_NoPending(t *testing.T) {
@@ -921,7 +933,8 @@ func TestConflictRecoveryStartupChecks_NilStore(t *testing.T) {
 	require.Empty(t, ids)
 }
 
-// failingWALStore wraps a real store and fails one WAL read, so the startup checks report it.
+// failingWALStore wraps a real store and fails its WAL reads, so the startup checks report it.
+// failPendingAt fails that read and every later one, so the startup retries cannot get past it.
 type failingWALStore struct {
 	utxo.Store
 	failPending   bool
@@ -933,7 +946,7 @@ type failingWALStore struct {
 func (s *failingWALStore) PendingConflictIntents(ctx context.Context) ([]utxo.ConflictIntent, error) {
 	s.pendingSeen++
 
-	if s.failPending || (s.failPendingAt > 0 && s.pendingSeen == s.failPendingAt) {
+	if s.failPending || (s.failPendingAt > 0 && s.pendingSeen >= s.failPendingAt) {
 		return nil, errors.NewStorageError("injected WAL read failure")
 	}
 
@@ -959,6 +972,7 @@ func TestConflictRecoveryStartupChecks_Branches(t *testing.T) {
 
 	wrapped := &failingWALStore{Store: store}
 	b.utxoStore = wrapped
+	b.conflictWALRead = shortConflictWALRead
 
 	wrapped.failPending = true
 	require.ErrorContains(t, b.checkConflictRecoveryReady(ctx, nil), "injected WAL read failure")
@@ -1025,8 +1039,84 @@ func TestReplayPendingConflictIntents_ReReadFailure(t *testing.T) {
 	require.NoError(t, store.BeginConflictIntent(ctx, forward))
 
 	b.utxoStore = &failingWALStore{Store: store, failPendingAt: 2}
+	b.conflictWALRead = shortConflictWALRead
 
 	failed := b.replayPendingConflictIntents(ctx)
 	require.Contains(t, failed, forward.IntentID())
 	require.NotContains(t, failed, reverse.IntentID())
+}
+
+// TestPendingConflictIntents_TransientErrorDoesNotFailStartup: the startup readiness check read
+// the WAL once and failed Block Assembly on the first storage timeout (issue 2148). A read that
+// fails and then succeeds must let startup go on.
+func TestPendingConflictIntents_TransientErrorDoesNotFailStartup(t *testing.T) {
+	spy := &replaySpyStore{MockUtxostore: &utxo.MockUtxostore{}, failFirst: 2}
+	b := newReplayTestAssembler(spy, blockchainMembershipMock(false, true))
+
+	require.NoError(t, b.checkConflictRecoveryReady(context.Background(), nil))
+	require.Equal(t, 3, spy.pendingCalls, "the two failed reads must be retried")
+}
+
+// TestReplayPendingConflictIntents_TransientErrorStillReplays: a WAL read that fails once must not
+// skip replay. Before the retry, replay logged the error and never reached the intent, so it stayed
+// pending and the readiness check refused to start.
+func TestReplayPendingConflictIntents_TransientErrorStillReplays(t *testing.T) {
+	demoted := chainhash.HashH([]byte("transient-demoted"))
+
+	intent := utxo.ConflictIntent{
+		Kind:        utxo.ConflictIntentReverse,
+		BlockHeight: 500,
+		TxHashes:    []chainhash.Hash{demoted},
+		StartedAt:   1,
+	}
+
+	mockStore := &utxo.MockUtxostore{}
+	mockStore.On("BatchDecorate", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		for _, item := range args.Get(1).([]*utxo.UnresolvedMetaData) {
+			item.Data = &meta.Data{}
+		}
+	}).Return(nil).Maybe()
+	mockStore.On("Get", mock.Anything, &demoted, mock.Anything).Return(&meta.Data{}, nil)
+
+	spy := &replaySpyStore{MockUtxostore: mockStore, pending: []utxo.ConflictIntent{intent}, failFirst: 1}
+	b := newReplayTestAssembler(spy, blockchainMembershipMock(false, true))
+
+	b.replayPendingConflictIntents(context.Background())
+
+	mockStore.AssertCalled(t, "Get", mock.Anything, &demoted, mock.Anything)
+	require.GreaterOrEqual(t, spy.pendingCalls, 2, "the failed read must be retried")
+}
+
+// TestPendingConflictIntents_GivesUpAfterBudget: a store that keeps failing still stops startup,
+// with the store's error, once the retry budget is spent.
+func TestPendingConflictIntents_GivesUpAfterBudget(t *testing.T) {
+	spy := &replaySpyStore{MockUtxostore: &utxo.MockUtxostore{}, failFirst: 1 << 30}
+	b := newReplayTestAssembler(spy, blockchainMembershipMock(false, true))
+
+	err := b.checkConflictRecoveryReady(context.Background(), nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "could not read the conflict WAL")
+	require.ErrorContains(t, err, "TIMEOUT", "the store's error must be kept")
+	require.Greater(t, spy.pendingCalls, 1)
+}
+
+// TestPendingConflictIntents_StopsOnCancel: a cancelled startup stops retrying at once.
+func TestPendingConflictIntents_StopsOnCancel(t *testing.T) {
+	spy := &replaySpyStore{MockUtxostore: &utxo.MockUtxostore{}, failFirst: 1 << 30}
+	b := newReplayTestAssembler(spy, blockchainMembershipMock(false, true))
+	b.conflictWALRead = conflictWALReadBackoff{initial: time.Hour, budget: 2 * time.Hour}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := b.pendingConflictIntents(ctx)
+
+	require.Error(t, err)
+	require.Less(t, time.Since(start), 10*time.Second, "a cancelled ctx must end the backoff")
+	require.Equal(t, 1, spy.pendingCalls)
 }
