@@ -563,6 +563,76 @@ func ConflictRecoveryConfirmedLoserOwnsWinningInput(t *testing.T, db utxo.Store)
 	require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
 }
 
+// ConflictRecoveryConfirmedLoserMixedChains puts two mined losers in one operation. W1's mined
+// descendants D and E are in a block on the current chain. C, which W2 displaces, is mined in a
+// sibling block the chain has abandoned: the ordinary reorg case. The chain query for the union
+// says yes, so the answer must be attributed per loser. Only D and E are refused; C is demoted as
+// before. The chain is asked once for the union and once per distinct block, not once per loser.
+func ConflictRecoveryConfirmedLoserMixedChains(t *testing.T, db utxo.Store) {
+	ctx := t.Context()
+	const currentBlockID, siblingBlockID = uint32(621), uint32(622)
+
+	parentA, parentB := crashParentTx(0xd4), crashParentTx(0xd5)
+	for _, tx := range []*bt.Tx{parentA, parentB} {
+		_, _, err := db.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
+		require.NoError(t, err)
+	}
+
+	// W1 owns parentA:0 and is Conflicting; D and E descend from it and are mined on the current chain.
+	w1 := crashSpendTx(t, parentA, 90000)
+	d := crashSpendTx(t, w1, 80000)
+	e := crashSpendTx(t, d, 70000)
+	for _, tx := range []*bt.Tx{w1, d, e} {
+		_, _, err := db.SpendAndCreate(ctx, tx, 2)
+		require.NoError(t, err)
+	}
+	_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*w1.TxIDChainHash()}, true)
+	require.NoError(t, err)
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{d.TxIDChainHash(), e.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: currentBlockID, BlockHeight: 4})
+	require.NoError(t, err)
+
+	// C owns parentB:0 and is mined only on the abandoned sibling block; W2 takes the input.
+	c := crashSpendTx(t, parentB, 90000)
+	_, _, err = db.SpendAndCreate(ctx, c, 2)
+	require.NoError(t, err)
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{c.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: siblingBlockID, BlockHeight: 3})
+	require.NoError(t, err)
+	w2 := crashSpendTx(t, parentB, 80000)
+	_, _, err = db.SpendAndCreate(ctx, w2, 2, utxo.WithCreateOnly(), utxo.WithConflicting(true))
+	require.NoError(t, err)
+
+	var queries [][]uint32
+	guard := utxo.NewCurrentChainGuard(func(_ context.Context, ids []uint32) (bool, error) {
+		queries = append(queries, slices.Clone(ids))
+		return slices.Contains(ids, currentBlockID), nil
+	})
+
+	var refused []chainhash.Hash
+	block := chainhash.HashH([]byte("confirmed-loser-mixed-chains"))
+	winners := []chainhash.Hash{*w1.TxIDChainHash(), *w2.TxIDChainHash()}
+	losers, _, err := utxo.ProcessConflicting(ctx, db, 3, block, winners, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion(),
+		utxo.WithRecoveryChainGuard(guard), utxo.WithConfirmedLoserHandler(func(h chainhash.Hash) { refused = append(refused, h) }))
+	require.NoError(t, err, "the sibling-fork loser owns W2's input, so refusing it would fail the run")
+
+	// The current-chain descendants are kept.
+	require.False(t, crashConflicting(t, ctx, db, d.TxIDChainHash()))
+	require.False(t, crashConflicting(t, ctx, db, e.TxIDChainHash()))
+	require.Equal(t, d.TxIDChainHash(), crashSpender(t, ctx, db, w1))
+	require.Equal(t, e.TxIDChainHash(), crashSpender(t, ctx, db, d))
+
+	// The sibling-fork loser is demoted and W2 owns its input.
+	require.True(t, crashConflicting(t, ctx, db, c.TxIDChainHash()))
+	require.Equal(t, w2.TxIDChainHash(), crashSpender(t, ctx, db, parentB))
+	require.Equal(t, 1, losers.Length())
+	require.True(t, losers.Exists(*c.TxIDChainHash()))
+	require.ElementsMatch(t, []chainhash.Hash{*d.TxIDChainHash(), *e.TxIDChainHash()}, refused)
+
+	require.LessOrEqual(t, len(queries), 3, "one union query and one per distinct block, not one per loser: %v", queries)
+
+	intent := utxo.ConflictIntent{Kind: utxo.ConflictIntentForward, BlockHeight: 3, BlockHash: block, TxHashes: winners}
+	require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
+}
+
 // A parent locked by another holder must not stop the operation, and the operation must neither
 // take nor release that lock.
 func ConflictRecoveryForeignLock(t *testing.T, db utxo.Store) {

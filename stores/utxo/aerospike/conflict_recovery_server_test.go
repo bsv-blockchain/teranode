@@ -53,6 +53,7 @@ func TestAerospikeConflictRecovery(t *testing.T) {
 		{"ReplanThenHeal", func(t *testing.T) { tests.ConflictRecoveryReplanThenHeal(t, store) }},
 		{"ConfirmedLoserNotDemoted", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserNotDemoted(t, store) }},
 		{"ConfirmedLoserOwnsWinningInput", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserOwnsWinningInput(t, store) }},
+		{"ConfirmedLoserMixedChains", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserMixedChains(t, store) }},
 	}
 
 	for _, tc := range cases {

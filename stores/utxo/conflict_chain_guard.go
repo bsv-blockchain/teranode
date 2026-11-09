@@ -90,7 +90,7 @@ func (g CurrentChainGuard) protectForward(ctx context.Context, s Store, winners 
 //
 // As in filterAncestryConfirmedLosers, a store error aborts and a missing record is no evidence.
 // One chain query settles the common case, where no loser is confirmed; only a positive answer
-// pays for a query per loser, to name them.
+// pays for a query per distinct block ID, to name them.
 func (g CurrentChainGuard) confirmedLosers(ctx context.Context, s Store, losers []chainhash.Hash, winners map[chainhash.Hash]struct{}) ([]chainhash.Hash, error) {
 	if g.check == nil {
 		return nil, nil
@@ -147,16 +147,27 @@ func (g CurrentChainGuard) confirmedLosers(ctx context.Context, s Store, losers 
 		return nil, nil
 	}
 
+	// Attribute the answer per block, not per loser: a cascade often has many losers mined in the
+	// same block, and each block needs asking only once.
+	onChain := make(map[uint32]bool, len(union))
+
+	for _, id := range union {
+		answer, err := g.check(ctx, []uint32{id})
+		if err != nil {
+			return nil, errors.NewProcessingError("[confirmedLosers] failed to check the current chain for block %d", id, err)
+		}
+
+		onChain[id] = answer
+	}
+
 	var confirmed []chainhash.Hash
 
 	for _, u := range mined {
-		onChain, err := g.check(ctx, u.Data.BlockIDs)
-		if err != nil {
-			return nil, errors.NewProcessingError("[confirmedLosers][%s] failed to check the current chain for losing tx", u.Hash.String(), err)
-		}
-
-		if onChain {
-			confirmed = append(confirmed, u.Hash)
+		for _, id := range u.Data.BlockIDs {
+			if onChain[id] {
+				confirmed = append(confirmed, u.Hash)
+				break
+			}
 		}
 	}
 

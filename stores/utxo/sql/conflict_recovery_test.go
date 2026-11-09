@@ -40,6 +40,11 @@ func TestConflictRecoveryConfirmedLoserOwnsWinningInput(t *testing.T) {
 	tests.ConflictRecoveryConfirmedLoserOwnsWinningInput(t, store)
 }
 
+func TestConflictRecoveryConfirmedLoserMixedChains(t *testing.T) {
+	store, _ := newTestStore(t)
+	tests.ConflictRecoveryConfirmedLoserMixedChains(t, store)
+}
+
 func TestConflictRecoveryForeignLock(t *testing.T) {
 	store, _ := newTestStore(t)
 	tests.ConflictRecoveryForeignLock(t, store)
