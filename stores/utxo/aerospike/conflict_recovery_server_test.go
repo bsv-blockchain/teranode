@@ -51,6 +51,8 @@ func TestAerospikeConflictRecovery(t *testing.T) {
 		{"RollbackStepFailures", func(t *testing.T) { tests.ConflictRecoveryRollbackStepFailures(t, store) }},
 		{"RollbackRetryTwoWinners", func(t *testing.T) { tests.ConflictRecoveryRollbackRetryTwoWinners(t, store) }},
 		{"ReplanThenHeal", func(t *testing.T) { tests.ConflictRecoveryReplanThenHeal(t, store) }},
+		{"ConfirmedLoserNotDemoted", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserNotDemoted(t, store) }},
+		{"ConfirmedLoserOwnsWinningInput", func(t *testing.T) { tests.ConflictRecoveryConfirmedLoserOwnsWinningInput(t, store) }},
 	}
 
 	for _, tc := range cases {

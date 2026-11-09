@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -427,6 +428,139 @@ func ConflictRecoveryForwardOwnBlock(t *testing.T, db utxo.Store) {
 			require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
 		})
 	}
+}
+
+// currentChainGuardFor returns a current-chain guard that reports the given block IDs on the chain.
+func currentChainGuardFor(onChain ...uint32) utxo.CurrentChainGuard {
+	return utxo.NewCurrentChainGuard(func(_ context.Context, ids []uint32) (bool, error) {
+		for _, id := range ids {
+			if slices.Contains(onChain, id) {
+				return true, nil
+			}
+		}
+
+		return false, nil
+	})
+}
+
+// ConflictRecoveryConfirmedLoserNotDemoted is the #2071 shape reached through a winner that is
+// Conflicting but already owns its input, so the counter-conflicting walk returns the winner's own
+// descendants. Those descendants are mined later on the current chain. The forward operation must
+// leave them out, and still resolve the rest: the second winner takes its input from a mempool loser.
+func ConflictRecoveryConfirmedLoserNotDemoted(t *testing.T, db utxo.Store) {
+	ctx := t.Context()
+	const winnerBlockID, descendantBlockID = uint32(601), uint32(602)
+
+	parentA, parentB := crashParentTx(0xd1), crashParentTx(0xd2)
+	for _, tx := range []*bt.Tx{parentA, parentB} {
+		_, _, err := db.SpendAndCreate(ctx, tx, 1, utxo.WithCreateOnly())
+		require.NoError(t, err)
+	}
+
+	// W1 owns parentA:0 and is Conflicting. Its child D and grandchild E are mined on the current chain.
+	w1 := crashSpendTx(t, parentA, 90000)
+	d := crashSpendTx(t, w1, 80000)
+	e := crashSpendTx(t, d, 70000)
+	for _, tx := range []*bt.Tx{w1, d, e} {
+		_, _, err := db.SpendAndCreate(ctx, tx, 2)
+		require.NoError(t, err)
+	}
+	_, _, err := db.SetConflicting(ctx, []chainhash.Hash{*w1.TxIDChainHash()}, true)
+	require.NoError(t, err)
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{w1.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: winnerBlockID, BlockHeight: 3})
+	require.NoError(t, err)
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{d.TxIDChainHash(), e.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: descendantBlockID, BlockHeight: 4})
+	require.NoError(t, err)
+
+	// W2 takes parentB:0 from the mempool loser C.
+	c := crashSpendTx(t, parentB, 90000)
+	_, _, err = db.SpendAndCreate(ctx, c, 2)
+	require.NoError(t, err)
+	w2 := crashSpendTx(t, parentB, 80000)
+	_, _, err = db.SpendAndCreate(ctx, w2, 2, utxo.WithCreateOnly(), utxo.WithConflicting(true))
+	require.NoError(t, err)
+
+	var refused []chainhash.Hash
+	block := chainhash.HashH([]byte("confirmed-loser-not-demoted"))
+	winners := []chainhash.Hash{*w1.TxIDChainHash(), *w2.TxIDChainHash()}
+	losers, marked, err := utxo.ProcessConflicting(ctx, db, 3, block, winners, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion(),
+		utxo.WithRecoveryChainGuard(currentChainGuardFor(winnerBlockID, descendantBlockID)),
+		utxo.WithConfirmedLoserHandler(func(h chainhash.Hash) { refused = append(refused, h) }))
+	require.NoError(t, err)
+
+	// The mined descendants keep their flags and their spends.
+	require.False(t, crashConflicting(t, ctx, db, d.TxIDChainHash()))
+	require.False(t, crashConflicting(t, ctx, db, e.TxIDChainHash()))
+	require.Equal(t, d.TxIDChainHash(), crashSpender(t, ctx, db, w1))
+	require.Equal(t, e.TxIDChainHash(), crashSpender(t, ctx, db, d))
+
+	require.Equal(t, 1, losers.Length())
+	require.True(t, losers.Exists(*c.TxIDChainHash()))
+	require.Equal(t, []chainhash.Hash{*c.TxIDChainHash()}, marked)
+	require.ElementsMatch(t, []chainhash.Hash{*d.TxIDChainHash(), *e.TxIDChainHash()}, refused, "the mined descendants are refused, the winners are not checked")
+
+	// The rest is resolved. Neither winner is left Conflicting, so neither gets a deleteAtHeight.
+	require.False(t, crashConflicting(t, ctx, db, w1.TxIDChainHash()))
+	require.False(t, crashConflicting(t, ctx, db, w2.TxIDChainHash()))
+	require.Equal(t, w1.TxIDChainHash(), crashSpender(t, ctx, db, parentA))
+	require.Equal(t, w2.TxIDChainHash(), crashSpender(t, ctx, db, parentB))
+	require.True(t, crashConflicting(t, ctx, db, c.TxIDChainHash()))
+
+	intent := utxo.ConflictIntent{Kind: utxo.ConflictIntentForward, BlockHeight: 3, BlockHash: block, TxHashes: winners}
+	r, err := db.LoadConflictRecovery(ctx, intent.IntentID())
+	require.NoError(t, err)
+	require.Equal(t, utxo.ConflictRecoveryFinished, r.Phase)
+	require.Equal(t, []chainhash.Hash{*c.TxIDChainHash()}, r.Losers, "the checklist must not hold a confirmed loser")
+
+	// A replay returns the saved result and still leaves the descendants alone.
+	again, _, err := utxo.ProcessConflicting(ctx, db, 3, block, winners, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion(),
+		utxo.WithRecoveryChainGuard(currentChainGuardFor(winnerBlockID, descendantBlockID)))
+	require.NoError(t, err)
+	require.Equal(t, 1, again.Length())
+	require.True(t, again.Exists(*c.TxIDChainHash()))
+	require.False(t, crashConflicting(t, ctx, db, d.TxIDChainHash()))
+	require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
+}
+
+// ConflictRecoveryConfirmedLoserOwnsWinningInput: a loser mined on the current chain owns the input
+// the winner needs. The winner cannot take it without unspending a confirmed transaction, so the
+// operation fails and changes nothing.
+func ConflictRecoveryConfirmedLoserOwnsWinningInput(t *testing.T, db utxo.Store) {
+	ctx := t.Context()
+	const loserBlockID = uint32(611)
+
+	parent := crashParentTx(0xd3)
+	_, _, err := db.SpendAndCreate(ctx, parent, 1, utxo.WithCreateOnly())
+	require.NoError(t, err)
+	loser := crashSpendTx(t, parent, 80000)
+	_, _, err = db.SpendAndCreate(ctx, loser, 2)
+	require.NoError(t, err)
+	_, err = db.SetMinedMulti(ctx, []*chainhash.Hash{loser.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: loserBlockID, BlockHeight: 4})
+	require.NoError(t, err)
+	winner := crashSpendTx(t, parent, 70000)
+	_, _, err = db.SpendAndCreate(ctx, winner, 2, utxo.WithCreateOnly(), utxo.WithConflicting(true))
+	require.NoError(t, err)
+
+	var refused []chainhash.Hash
+	block := chainhash.HashH([]byte("confirmed-loser-owns-winning-input"))
+	winners := []chainhash.Hash{*winner.TxIDChainHash()}
+	losers, _, err := utxo.ProcessConflicting(ctx, db, 3, block, winners, nil, utxo.NoAncestryGuard, utxo.WithDeferredConflictCompletion(),
+		utxo.WithRecoveryChainGuard(currentChainGuardFor(loserBlockID)),
+		utxo.WithConfirmedLoserHandler(func(h chainhash.Hash) { refused = append(refused, h) }))
+	require.Equal(t, loser.TxIDChainHash(), crashSpender(t, ctx, db, parent))
+	require.False(t, crashConflicting(t, ctx, db, loser.TxIDChainHash()))
+	require.True(t, crashConflicting(t, ctx, db, winner.TxIDChainHash()))
+	require.False(t, crashLocked(t, ctx, db, parent.TxIDChainHash()))
+
+	require.ErrorContains(t, err, "confirmed on the current chain")
+	require.Nil(t, losers)
+	require.Equal(t, []chainhash.Hash{*loser.TxIDChainHash()}, refused)
+
+	intent := utxo.ConflictIntent{Kind: utxo.ConflictIntentForward, BlockHeight: 3, BlockHash: block, TxHashes: winners}
+	r, err := db.LoadConflictRecovery(ctx, intent.IntentID())
+	require.NoError(t, err)
+	require.Equal(t, utxo.ConflictRecoveryPlanning, r.Phase, "nothing was planned or changed")
+	require.NoError(t, db.CompleteConflictIntent(ctx, intent.IntentID()))
 }
 
 // A parent locked by another holder must not stop the operation, and the operation must neither

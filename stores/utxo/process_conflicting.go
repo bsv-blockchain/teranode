@@ -132,6 +132,12 @@ const compensationTimeout = 2 * time.Minute
 // back and plans again under the same record. A winner that is not Conflicting and owns every input
 // is already applied, and the plan skips it.
 //
+// Two chain checks keep confirmed transactions from being demoted. A loser mined on the block's own
+// ancestry means the block is invalid: nothing is changed and the WithRefusalHandler callback is called. A
+// loser mined elsewhere on the current chain (WithRecoveryChainGuard) is left out of the plan, the
+// rest is resolved, and the WithConfirmedLoserHandler callback is called; if it owns a winning input
+// the run fails instead.
+//
 // ProcessConflicting returns:
 //   - losers: the transactions displaced by the winners, with their descendants. It never contains
 //     a winner. Callers mark these in the subtrees.
@@ -318,6 +324,29 @@ func ProcessConflicting(ctx context.Context, s Store, blockHeight uint32, blockH
 			// carried result still needs acknowledgement, and replay uses the WAL's input.
 			return finishConflictRecoveryWithCarried(ctx, s, intent, allWinners, carried, options.deferCompletion)
 		}
+	}
+	// A transaction confirmed on the current chain cannot lose to a block on that chain. Leave it out
+	// of the plan and resolve the rest. Refusing the whole operation, as the ancestry guard does, would
+	// leave the winners Conflicting without invalidating their block, and a Conflicting record gets a
+	// deleteAtHeight, so the pruner would delete a winner mined on the current chain. When a confirmed
+	// loser owns a winning input, the winners cannot be applied without unspending it: that is an error.
+	confirmed, e := options.currentChainGuard.confirmedLosers(ctx, s, affected.order, winnerSet)
+	if e != nil {
+		return nil, nil, e
+	}
+	if len(confirmed) > 0 {
+		for _, h := range confirmed {
+			prometheusUtxoConflictingCurrentChainDemotionRefused.Inc()
+			if options.onConfirmedLoser != nil {
+				options.onConfirmedLoser(h)
+			}
+		}
+		if e = refuseConfirmedWinningInputOwner(ctx, s, winningSpends, confirmed); e != nil {
+			return nil, nil, e
+		}
+		// A confirmed loser that turns out to be a child of a loser being demoted is not in the plan,
+		// so the descendant check below aborts and rolls back rather than erase its edge.
+		affected = affected.without(confirmed)
 	}
 	recovery, err = prepareConflictRecovery(ctx, s, affected.order, winningSpends)
 	if err != nil {
@@ -1134,6 +1163,49 @@ func appendNewHashes(dst, src []chainhash.Hash) []chainhash.Hash {
 	}
 
 	return dst
+}
+
+// without returns the members of h that drop does not hold, in order.
+func (h *hashSet) without(drop []chainhash.Hash) hashSet {
+	var dropped, out hashSet
+
+	dropped.add(drop...)
+
+	for _, hash := range h.order {
+		if !dropped.has(hash) {
+			out.add(hash)
+		}
+	}
+
+	return out
+}
+
+// refuseConfirmedWinningInputOwner returns an error when a transaction in confirmed is the recorded
+// spender of a winning input. The winners cannot take that input without unspending a transaction
+// confirmed on the current chain. Planning would also reject the outside owner, but as a spend that
+// changed during preparation, which is not what happened.
+func refuseConfirmedWinningInputOwner(ctx context.Context, s Store, winningSpends []*Spend, confirmed []chainhash.Hash) error {
+	var refused hashSet
+
+	refused.add(confirmed...)
+
+	for _, sp := range winningSpends {
+		response, err := s.GetSpend(ctx, sp)
+		if err != nil {
+			return errors.NewProcessingError("[ProcessConflicting] cannot read the spender of winning input %s:%d", sp.TxID.String(), sp.Vout, err)
+		}
+
+		if response == nil || response.SpendingData == nil || response.SpendingData.TxID == nil {
+			continue
+		}
+
+		if refused.has(*response.SpendingData.TxID) {
+			return errors.NewProcessingError("[ProcessConflicting] refusing conflict resolution: winning input %s:%d is spent by %s, which is confirmed on the current chain",
+				sp.TxID.String(), sp.Vout, response.SpendingData.TxID.String())
+		}
+	}
+
+	return nil
 }
 
 func (h *hashSet) add(hashes ...chainhash.Hash) {

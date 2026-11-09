@@ -1974,7 +1974,7 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 					// is dropped by that drain regardless of cascade discovery, so
 					// the per-block transient set is not needed here.
 					losingTxHashesMap, allMarkedConflicting, err := utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
-						utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block), utxostore.WithDeferredConflictCompletion(), utxostore.WithRecoveryChainGuard(stp.currentChainGuard()),
+						utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block), utxostore.WithDeferredConflictCompletion(), utxostore.WithRecoveryChainGuard(stp.currentChainGuard()), stp.confirmedLoserHandler(block),
 						utxostore.WithConflictEvictor(stp.txMetaEvictor.Evict))
 
 					// the store now says these are conflicting; subtree validation's txmeta cache must
@@ -6092,6 +6092,21 @@ func (stp *SubtreeProcessor) refusalHandler(block *model.Block) utxostore.Proces
 	)
 }
 
+// confirmedLoserHandler logs a losing transaction that ProcessConflicting did not demote because it
+// is mined on the current chain. The rest of the block's conflict resolution went ahead. It is
+// counted on teranode_utxo_conflicting_current_chain_demotion_refused_total. The block is not
+// queued for invalidation: a loser confirmed after the block says nothing against the block.
+func (stp *SubtreeProcessor) confirmedLoserHandler(block *model.Block) utxostore.ProcessConflictingOption {
+	blockHash := *block.Hash()
+
+	return utxostore.WithConfirmedLoserHandler(
+		func(loser chainhash.Hash) {
+			stp.logger.Errorf("[processConflictingTransactions][%s] REFUSED to demote transaction %s: it is mined on the current chain, so it cannot lose to this block. The rest of the conflict resolution was applied",
+				blockHash.String(), loser.String())
+		},
+	)
+}
+
 // QueueInvalidation records a block that must be invalidated because its
 // conflict resolution would have reversed a spend confirmed in its own
 // ancestry. Idempotent.
@@ -6213,7 +6228,7 @@ func (stp *SubtreeProcessor) processConflictingTransactions(ctx context.Context,
 
 		var allMarkedConflicting []chainhash.Hash
 		losingTxHashesMap, allMarkedConflicting, err = utxostore.ProcessConflicting(ctx, stp.utxoStore, block.Height, *block.Hash(), conflictingNodes, processedConflictingHashesMap,
-			utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block), utxostore.WithDeferredConflictCompletion(), utxostore.WithRecoveryChainGuard(stp.currentChainGuard()),
+			utxostore.NewAncestryGuard(stp.blockchainClient.CheckBlockIsAncestorOfBlock), stp.refusalHandler(block), utxostore.WithDeferredConflictCompletion(), utxostore.WithRecoveryChainGuard(stp.currentChainGuard()), stp.confirmedLoserHandler(block),
 			utxostore.WithConflictEvictor(stp.txMetaEvictor.Evict))
 
 		// the store now says these are conflicting; subtree validation's txmeta cache must
