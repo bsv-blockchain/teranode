@@ -427,3 +427,135 @@ func TestRollbackHold(t *testing.T) {
 		require.ErrorIs(t, store.GetMeta(ctx, busy.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound)
 	})
 }
+
+// setBusy writes the busy and holdUntil bins of the master record of hash with the raw client, which
+// is how the state a holder that crashed before its release leaves is reproduced.
+func setBusy(t *testing.T, client *uaerospike.Client, store *teranode_aerospike.Store, hash *chainhash.Hash, holdUntil int64) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+
+	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), hash[:])
+	require.NoError(t, err)
+
+	policy := util.GetAerospikeWritePolicy(tSettings, 0)
+	policy.RecordExistsAction = aerospike.UPDATE_ONLY
+
+	require.Nil(t, client.PutBins(policy, key,
+		aerospike.NewBin(fields.Busy.String(), true),
+		aerospike.NewBin(fields.HoldUntil.String(), int(holdUntil)),
+	))
+}
+
+// TestRollbackHold_CrashedHolderAgesOut pins that a busy marker no holder will ever clear does not
+// wedge a txid: once holdUntil has passed by a further timeout, a take and an adopting clear
+// proceed, and a busy marker inside that window still stops both.
+func TestRollbackHold_CrashedHolderAgesOut(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.SpendRollbackTimeout = 2 * time.Second
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	t.Run("a take succeeds over a stale busy marker and not over a live one", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		child.Version = 21
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		now := time.Now().Unix()
+
+		setBusy(t, client, store, hash, now+1)
+
+		took, err := store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, took, "a busy marker inside the hold is a live holder's")
+
+		setBusy(t, client, store, hash, now-1)
+
+		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, took, "a hold that has expired once is not yet a crashed holder's")
+
+		setBusy(t, client, store, hash, now-10)
+
+		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, took, "a busy marker that holdUntil passed by a further timeout is a crashed holder's")
+
+		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.False(t, took, "the take renewed holdUntil, so the new holder is live")
+	})
+
+	t.Run("the rollback of a record a holder crashed on is finished by the next holder", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 1)
+		child.Version = 22
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		_, err = store.Spend(ctx, child, 101)
+		require.NoError(t, err)
+
+		inputs, err := utxo.GetSpends(child)
+		require.NoError(t, err)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		setBusy(t, client, store, hash, time.Now().Unix()-10)
+		require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "holder is reversing spends")
+
+		took, err := store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, took, "the sweep's take succeeds over the crashed holder's marker")
+
+		require.NoError(t, utxo.UnspendTolerantOfMissingParents(ctx, store, inputs))
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
+		requireHeld(t, ctx, store, hash)
+
+		resp, err := store.GetSpend(ctx, inputs[0])
+		require.NoError(t, err)
+		require.Nil(t, resp.SpendingData, "the input is unspent")
+	})
+
+	t.Run("an adopting clear removes a hold whose busy marker is stale and not one whose marker is live", func(t *testing.T) {
+		stale := spendableChildTx(t, tests.ParentTx, 2)
+		stale.Version = 23
+		live := spendableChildTx(t, tests.ParentTx, 2)
+		live.Version = 24
+
+		rolledBackHold(t, ctx, store, stale)
+		rolledBackHold(t, ctx, store, live)
+
+		now := time.Now().Unix()
+
+		setBusy(t, client, store, live.TxIDChainHash(), now+1)
+		setBusy(t, client, store, stale.TxIDChainHash(), now-10)
+
+		cleared, err := store.ClearCreateFirstHold(ctx, live.TxIDChainHash(), true)
+		require.NoError(t, err)
+		require.False(t, cleared, "a live holder is waited for")
+		requireHeld(t, ctx, store, live.TxIDChainHash())
+
+		cleared, err = store.ClearCreateFirstHold(ctx, stale.TxIDChainHash(), true)
+		require.NoError(t, err)
+		require.True(t, cleared, "a crashed holder does not stop a block-context create")
+		require.ErrorIs(t, store.GetMeta(ctx, stale.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound)
+	})
+}
