@@ -42,14 +42,15 @@ func (s *Store) QueryOldUnminedTransactions(_ context.Context, _ uint32) ([]chai
 const preserveParentSQL = `
 INSERT INTO preserved_parent (txid, mined_height, block_id, subtree_idx, created_height,
                               fee, size_in_bytes, tx_inpoints, locktime, created_at, flags,
-                              preserve_until)
+                              preserve_until, lane_position)
 SELECT k.txid, s.mined_height, s.block_id, s.subtree_idx, s.created_height,
        s.fee, s.size_in_bytes, s.tx_inpoints, s.locktime, s.created_at,
-       s.flags & ~$8::smallint, $5::int
+       s.flags & ~$8::smallint, $5::int, s.lane_position
   FROM unnest($1::smallint[], $2::bytea[], $3::uuid[], $4::uuid[]) AS k(leaf, txid, lo, hi)
  CROSS JOIN LATERAL (
    (SELECT 1 AS pri, m.mined_height, m.block_id, m.subtree_idx, m.created_height,
-           m.fee, m.size_in_bytes, m.tx_inpoints, m.locktime, m.created_at, m.flags
+           m.fee, m.size_in_bytes, m.tx_inpoints, m.locktime, m.created_at, m.flags,
+           m.lane_position
       FROM tx_mined m
      WHERE m.txid = k.txid
        AND m.mined_height >= $6::int
@@ -57,21 +58,21 @@ SELECT k.txid, s.mined_height, s.block_id, s.subtree_idx, s.created_height,
      ORDER BY (m.tx_inpoints IS NULL), m.mined_height, m.block_id LIMIT 1)
    UNION ALL
    (SELECT 2, m.mined_height, m.block_id, m.subtree_idx, m.created_height,
-           NULL, NULL, NULL, NULL, NULL, m.flags
+           NULL, NULL, NULL, NULL, NULL, m.flags, NULL
       FROM tx_mined m
      WHERE m.txid = k.txid
        AND m.mined_height >= $7::int
      LIMIT 1)
    UNION ALL
    (SELECT 3, u.mined_height, u.block_id, 0, u.created_height,
-           NULL, NULL, NULL, NULL, NULL, u.flags
+           NULL, NULL, NULL, NULL, NULL, u.flags, NULL
       FROM utxo u
      WHERE u.leaf = k.leaf AND u.ukey >= k.lo AND u.ukey <= k.hi AND u.txid = k.txid
        AND u.mined_height > 0
      ORDER BY u.ukey LIMIT 1)
    UNION ALL
    (SELECT 4, j.mined_height, j.block_id, 0, j.created_height,
-           NULL, NULL, NULL, NULL, NULL, j.flags
+           NULL, NULL, NULL, NULL, NULL, j.flags, NULL
       FROM spend_journal j
      WHERE j.ukey >= k.lo AND j.ukey <= k.hi AND j.txid = k.txid
        AND j.mined_height > 0
