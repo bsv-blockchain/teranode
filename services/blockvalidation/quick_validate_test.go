@@ -287,12 +287,16 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).
 			Return((*meta.Data)(nil), []*utxo.Spend{}, errors.ErrTxExists).Maybe()
 
-		// Mock SetMinedMulti - should be called with both transaction hashes
-		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.MatchedBy(func(hashes []*chainhash.Hash) bool {
-			return len(hashes) == 2
-		}), mock.MatchedBy(func(info utxo.MinedBlockInfo) bool {
-			return info.BlockID == 50 && info.BlockHeight == 100
-		})).Return(map[chainhash.Hash][]uint32{}, nil).Once()
+		// SetMinedMulti is called once per subtree, each with that subtree's index
+		for subtreeIdx, tx := range regularTxs {
+			txHash := tx.TxIDChainHash()
+
+			suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.MatchedBy(func(hashes []*chainhash.Hash) bool {
+				return len(hashes) == 1 && hashes[0].IsEqual(txHash)
+			}), mock.MatchedBy(func(info utxo.MinedBlockInfo) bool {
+				return info.BlockID == 50 && info.BlockHeight == 100 && info.SubtreeIdx == subtreeIdx
+			})).Return(map[chainhash.Hash][]uint32{}, nil).Once()
+		}
 
 		// Mock the spend phase
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).

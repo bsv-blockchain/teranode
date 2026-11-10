@@ -2486,10 +2486,14 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// one-at-a-time fallback's combined call spends before it creates and keeps the spends
 	// when the record is found. Spending them again here would cost a whole extra round of
 	// store calls on every replayed batch for no change.
-	var existingTxHashes []*chainhash.Hash
+	// Grouped by subtree index, since the restamp records the index with the block id and a
+	// batch can span several subtrees.
+	existingTxHashes := make(map[int][]*chainhash.Hash)
+	existingCount := 0
 
-	collectExisting := func(tx *bt.Tx) {
-		existingTxHashes = append(existingTxHashes, tx.TxIDChainHash())
+	collectExisting := func(tx *bt.Tx, subtreeIdx int) {
+		existingTxHashes[subtreeIdx] = append(existingTxHashes[subtreeIdx], tx.TxIDChainHash())
+		existingCount++
 	}
 
 	start := time.Now()
@@ -2526,7 +2530,7 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// Logged on the failure path too: how long the list ran for is the first thing anyone
 	// reading the log wants.
 	u.logger.Infof("[createAndSpendUTXOsForBatch][%s] batch %d-%d applied: listed=%d unspendable=%d existing=%d (list=%v, total=%v, err=%v)",
-		block.Hash().String(), batch.batchStart, batch.batchEnd, len(txs), len(unspendableTxs), len(existingTxHashes), listDuration, time.Since(start), applyErr)
+		block.Hash().String(), batch.batchStart, batch.batchEnd, len(txs), len(unspendableTxs), existingCount, listDuration, time.Since(start), applyErr)
 
 	if applyErr != nil {
 		if nets {
@@ -2545,15 +2549,16 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 	// previous attempt created UTXOs with a different block ID. Chunked via the shared helper
 	// (issue 936): on a fat-batch retry every tx in the batch already exists, and a single
 	// unchunked SetMinedMulti call would overrun the aerospike client connection pool.
-	if len(existingTxHashes) > 0 {
+	for subtreeIdx, hashes := range existingTxHashes {
 		minedBlockInfo := utxo.MinedBlockInfo{
 			BlockID:     block.ID,
 			BlockHeight: block.Height,
+			SubtreeIdx:  subtreeIdx,
 		}
 
-		if err := utxo.SetMinedMultiChunked(ctx, u.logger, u.utxoStore, existingTxHashes, minedBlockInfo,
+		if err := utxo.SetMinedMultiChunked(ctx, u.logger, u.utxoStore, hashes, minedBlockInfo,
 			u.settings.UtxoStore.MaxMinedBatchSize, u.settings.UtxoStore.MaxMinedRoutines); err != nil {
-			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs", block.Hash().String(), len(existingTxHashes), err)
+			return errors.NewProcessingError("[createAndSpendUTXOsForBatch][%s] failed to update mined info for %d existing txs in subtree %d", block.Hash().String(), len(hashes), subtreeIdx, err)
 		}
 	}
 
@@ -2784,7 +2789,7 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 // as an error. A batch that gives up after repeating names the retryable failure and, when the
 // latest pass also failed a transaction for good, carries that failure as its cause.
 func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs []*bt.Tx, txids []chainhash.Hash,
-	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx)) error {
+	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(tx *bt.Tx, subtreeIdx int)) error {
 	const maxRetries = 10
 
 	if len(txs) == 0 {
@@ -2886,7 +2891,7 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 			switch {
 			case r.Status == utxo.MultiTxExisted:
 				if carried == nil || !carried[i] {
-					collectExisting(txs[i])
+					collectExisting(txs[i], subtreeIdxs[i])
 				}
 
 				continue
@@ -2993,7 +2998,7 @@ func withParentsInList(txs []*bt.Tx, txids []chainhash.Hash, failed []int) []int
 // store refused as malformed. A transaction that already exists is collected for the mined-info
 // stamp; any other failure fails the batch with the store's own error class.
 func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, subtreeIdxs []int,
-	lockUTXOs, outpointOnly bool, collectExisting func(*bt.Tx)) error {
+	lockUTXOs, outpointOnly bool, collectExisting func(tx *bt.Tx, subtreeIdx int)) error {
 	const maxRetries = 10
 
 	backoff := u.spendRetryBackoff
@@ -3038,7 +3043,7 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 		switch {
 		case err == nil:
 		case errors.Is(err, errors.ErrTxExists):
-			collectExisting(tx)
+			collectExisting(tx, subtreeIdxs[i])
 		default:
 			return errors.NewProcessingError("[applyOneByOne][%s] failed to apply tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 		}

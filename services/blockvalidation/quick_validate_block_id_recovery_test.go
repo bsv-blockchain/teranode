@@ -281,3 +281,45 @@ func TestQuickValidate_RetryAfterSweep_RestampsNewID(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, recorded.BlockIDs, retry.ID, "the transaction must carry the id the block is stored under")
 }
+
+// TestQuickValidate_RestampKeepsSubtreeIndex: the transaction the block shares with a
+// stored fork sits in the block's second subtree. Quick validation finds it already
+// existing and restamps it with the block's id, which must record subtree index 1,
+// or a merkle proof for it searches the first subtree.
+//
+// Mutation target: dropping SubtreeIdx from the restamp's MinedBlockInfo in
+// createAndSpendUTXOsForBatch. The transaction is then recorded under index 0.
+func TestQuickValidate_RestampKeepsSubtreeIndex(t *testing.T) {
+	for i, d := range quickDrivers {
+		t.Run(d.name, func(t *testing.T) {
+			h := newPreBindHarness(t, nil)
+			seed := byte(0x90 + 0x10*i)
+
+			first := preBindSpendOf(t, h.storeGenuineParent(seed), 9_000)
+			other := preBindSpendOf(t, h.storeGenuineParent(seed+1), 9_000)
+			shared := preBindSpendOf(t, h.storeGenuineParent(seed+2), 9_000)
+
+			forkID := h.storeForkHolding(shared, seed+3)
+
+			coinbase := preBindCoinbase(t, seed+4)
+			_, roots, merkleRoot := h.multiSubtreeBody(coinbase, [][]*bt.Tx{{first}, {other, shared}})
+			block := h.newPreBindBlock(coinbase, roots, merkleRoot, 4)
+
+			require.NoError(t, h.quickValidateWith(d, block))
+			h.requireStoredUnder(block, block.ID)
+
+			recorded, err := h.utxoStore.Get(h.ctx, shared.TxIDChainHash())
+			require.NoError(t, err)
+			require.Len(t, recorded.SubtreeIdxs, len(recorded.BlockIDs))
+
+			subtreeOf := make(map[uint32]int, len(recorded.BlockIDs))
+			for j, id := range recorded.BlockIDs {
+				subtreeOf[id] = recorded.SubtreeIdxs[j]
+			}
+
+			require.Equal(t, 0, subtreeOf[forkID], "precondition: the fork recorded the transaction at index 0")
+			require.Contains(t, subtreeOf, block.ID)
+			require.Equal(t, 1, subtreeOf[block.ID], "the restamp must record the transaction's own subtree index")
+		})
+	}
+}
