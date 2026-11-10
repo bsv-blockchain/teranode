@@ -49,6 +49,14 @@ var (
 	// topic's concurrent per-partition consumption, not a genuinely invalid or attack transaction.
 	prometheusMissingParentTransactions prometheus.Counter
 
+	// prometheusValidatorDAHGraceBlessed counts transactions returned as already validated because
+	// their parent record is gone and their own record is mined on the current chain.
+	prometheusValidatorDAHGraceBlessed prometheus.Counter
+
+	// prometheusValidatorDAHGraceFault counts grace decisions aborted by a store or blockchain
+	// fault, labelled by stage (meta_read, chain_check).
+	prometheusValidatorDAHGraceFault *prometheus.CounterVec
+
 	// prometheusHeldLimitShedTransactions counts Kafka-sourced transactions that block assembly
 	// refused at its in-memory transaction limit. Kept separate from
 	// prometheusInvalidTransactions because the transaction was valid; the node had no room for
@@ -306,6 +314,25 @@ func _initPrometheusMetrics() {
 			Name:      "missing_parent_transactions",
 			Help:      "Number of Kafka-sourced transactions rejected because their parent UTXO had not been seen yet (ordering artifact, not necessarily invalid)",
 		},
+	)
+
+	prometheusValidatorDAHGraceBlessed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "dah_grace_blessed_total",
+			Help:      "Number of transactions accepted without re-validation because their parent was gone and they are mined on the current chain",
+		},
+	)
+
+	prometheusValidatorDAHGraceFault = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "validator",
+			Name:      "dah_grace_fault_total",
+			Help:      "Number of DAH-evicted-parent grace decisions aborted by a store or blockchain fault, by stage",
+		},
+		[]string{"stage"},
 	)
 
 	// Held-limit shed counter (Kafka intake only)
