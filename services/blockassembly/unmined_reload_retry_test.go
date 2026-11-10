@@ -7,9 +7,12 @@ import (
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	utxoStore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
@@ -372,4 +375,105 @@ func TestCheckUnminedTxInputs_FailedBodyReadIsNotPermanent(t *testing.T) {
 
 	require.Error(t, items.blockAssembler.loadUnminedTransactions(ctx, true, true), "the load fails rather than leave the transaction out")
 	require.Equal(t, excluded, testutil.ToFloat64(prometheusBlockAssemblerUnminedUndecidedExcluded))
+}
+
+func TestReset_FailedReloadKeepsTheHeldCountFullUntilTheRetrySucceeds(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items := setupBlockAssemblyTestWithUtxoStore(t, withCoinbaseMaturity(testCoinbaseMaturity), func(s *settings.Settings) {
+		s.BlockAssembly.MaxTransactionsInMemory = 1
+	})
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
+
+	_, child := seedParentAndChild(ctx, t, items)
+
+	stp := items.blockAssembler.subtreeProcessor
+	limit := stp.MaxTransactionsInMemory()
+	require.Positive(t, limit)
+
+	flaky := &flakyUtxoStore{Store: items.utxoStore}
+	flaky.down.Store(true)
+	items.blockAssembler.utxoStore = flaky
+	items.blockAssembler.unminedReloadRetryInterval = time.Millisecond
+
+	mockGenesisChainForReset(items)
+
+	require.Error(t, items.blockAssembler.reset(ctx, true))
+	require.True(t, items.blockAssembler.unminedReloadPending.Load(), "precondition: the failed reload left a retry")
+
+	require.GreaterOrEqual(t, stp.HeldCount(), limit, "the subtrees are empty and the retry is pending, which must not read as room")
+	require.True(t, items.blockAssembler.HeldByUnminedLoad())
+	require.Equal(t, subtreeprocessor.RefusedHeld, stp.AddBatchBounded(
+		[]subtreepkg.Node{{Hash: chainhash.HashH([]byte("while-retry-pending"))}}, []*subtreepkg.TxInpoints{{}}, false),
+		"mempool ingest is refused until the retry has reloaded the mempool")
+
+	flaky.down.Store(false)
+	time.Sleep(5 * time.Millisecond)
+
+	require.True(t, items.blockAssembler.retryFailedUnminedReload())
+
+	req := <-items.blockAssembler.resetCh
+	_, err := items.blockAssembler.resetWithResponse(ctx, req.ValidateInputs)
+	req.ErrCh <- err
+	require.NoError(t, err)
+
+	require.True(t, containsHash(stp.GetTransactionHashes(ctx), *child.TxIDChainHash()))
+	require.False(t, items.blockAssembler.unminedReloadPending.Load())
+	require.False(t, items.blockAssembler.HeldByUnminedLoad(), "the hold ends when the retry's reload completes")
+	require.Less(t, stp.HeldCount(), limit)
+}
+
+// A validating reset's reload fails and leaves a validating retry pending with the held count
+// held full. A later ordinary reset reloads with success: the subtrees are full again, so the
+// hold ends, while the validating retry stays pending and still runs.
+func TestReset_AnOrdinaryReloadEndsTheHoldAValidatingRetryLeft(t *testing.T) {
+	initPrometheusMetrics()
+
+	ctx := t.Context()
+	items := setupBlockAssemblyTestWithUtxoStore(t, withCoinbaseMaturity(testCoinbaseMaturity), func(s *settings.Settings) {
+		s.BlockAssembly.MaxTransactionsInMemory = 1
+	})
+	items.blockAssembler.settings.BlockAssembly.OnRestartValidateParentChain = false
+
+	_, child := seedParentAndChild(ctx, t, items)
+
+	stp := items.blockAssembler.subtreeProcessor
+	limit := stp.MaxTransactionsInMemory()
+	require.Positive(t, limit)
+
+	flaky := &flakyUtxoStore{Store: items.utxoStore}
+	flaky.down.Store(true)
+	items.blockAssembler.utxoStore = flaky
+	items.blockAssembler.unminedReloadRetryInterval = time.Millisecond
+
+	mockGenesisChainForReset(items)
+
+	require.Error(t, items.blockAssembler.reset(ctx, true))
+	require.True(t, items.blockAssembler.unminedReloadPending.Load(), "precondition: the failed validating reload left a retry")
+	require.True(t, items.blockAssembler.HeldByUnminedLoad(), "precondition: the failed reload holds the count full")
+
+	flaky.down.Store(false)
+
+	require.NoError(t, items.blockAssembler.reset(ctx, false), "an ordinary reset reloads without validation")
+
+	require.True(t, containsHash(stp.GetTransactionHashes(ctx), *child.TxIDChainHash()), "the reload filled the subtrees")
+	require.False(t, items.blockAssembler.HeldByUnminedLoad(), "a successful reload ends the hold whatever it validated")
+	require.Less(t, stp.HeldCount(), limit, "the held count reads what is held, not the limit")
+	require.True(t, items.blockAssembler.unminedReloadPending.Load(), "the validating retry stays pending")
+	require.True(t, items.blockAssembler.unminedReloadValidate.Load())
+
+	time.Sleep(5 * time.Millisecond)
+
+	require.True(t, items.blockAssembler.retryFailedUnminedReload(), "and it still runs")
+
+	req := <-items.blockAssembler.resetCh
+	require.True(t, req.ValidateInputs)
+
+	_, err := items.blockAssembler.resetWithResponse(ctx, req.ValidateInputs)
+	req.ErrCh <- err
+	require.NoError(t, err)
+
+	require.False(t, items.blockAssembler.unminedReloadPending.Load())
+	require.False(t, items.blockAssembler.HeldByUnminedLoad())
 }
