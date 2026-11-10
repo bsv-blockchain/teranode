@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -12,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/errors"
 	blobmemory "github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	"github.com/bsv-blockchain/teranode/util"
 	"github.com/bsv-blockchain/teranode/util/test"
 	"github.com/stretchr/testify/require"
 )
@@ -205,4 +207,73 @@ func TestBlock_Valid_UnboundCoinbaseHeightDecodeFailureIsCorrupt(t *testing.T) {
 	require.False(t, errors.Is(err, errors.ErrBlockInvalid),
 		"an unbound body must NEVER be poisoned (invalid=true) on a coinbase-height extraction failure")
 	require.Contains(t, err.Error(), "error extracting coinbase height")
+}
+
+// TestBlock_Valid_BIP34HeightPrefixAtEncodingBoundaries runs the BIP34 check through Block.Valid at
+// every height where the canonical encoding changes shape.
+//
+// Spec: BV-BODY-009. util.TestExtractCoinbaseHeight_AcceptsExactlyTheBitcoinSVPrefix proves the
+// encoder equals bitcoin-sv's CScript() << height over sampled heights; this test proves Block.Valid
+// applies it to the block's own height, on a bound body.
+//
+// Scenario: a coinbase-only block (bound: its merkle root is the coinbase txid) at height h, with
+// BIP34 active from height 1. When the coinbase scriptSig starts with CScript() << h, Then the block
+// is valid. When it starts with the same number behind OP_PUSHDATA1, with a redundant zero byte, or
+// with CScript() << (h + 1), Then the block is rejected ERR_BLOCK_INVALID.
+func TestBlock_Valid_BIP34HeightPrefixAtEncodingBoundaries(t *testing.T) {
+	const minerTag = "/t/"
+
+	heights := []uint32{1, 16, 17, 127, 128, 255, 256, 32767, 32768, 8388607, 8388608}
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.ChainCfgParams = bip34ReorderSettings(t)
+	tSettings.ChainCfgParams.Checkpoints = nil
+
+	validate := func(t *testing.T, height uint32, heightPrefix []byte) (bool, error) {
+		t.Helper()
+
+		coinbase := bt.NewTx()
+		require.NoError(t, coinbase.From("0000000000000000000000000000000000000000000000000000000000000000", 0xffffffff, "", 0))
+		coinbase.Inputs[0].UnlockingScript = bscript.NewFromBytes(append(append([]byte(nil), heightPrefix...), minerTag...))
+		coinbase.AddOutput(&bt.Output{Satoshis: 0, LockingScript: bscript.NewFromBytes([]byte{bscript.OpTRUE})})
+		require.True(t, coinbase.IsCoinbase())
+
+		hdr := minedHeaderVersion(t, 4, coinbase.TxIDChainHash())
+		block, err := NewBlock(hdr, coinbase, []*chainhash.Hash{}, 1, uint64(coinbase.Size()), height, 0) //nolint:gosec
+		require.NoError(t, err)
+
+		return block.Valid(context.Background(), ulogger.TestLogger{}, nil, nil,
+			txmap.NewSyncedMap[chainhash.Hash, []uint32](), []*BlockHeader{}, []uint32{}, tSettings, nil)
+	}
+
+	for _, height := range heights {
+		canonical := util.EncodeCoinbaseHeightPush(height)
+
+		t.Run(fmt.Sprintf("height %d: CScript() << height is accepted", height), func(t *testing.T) {
+			valid, err := validate(t, height, canonical)
+			require.NoError(t, err)
+			require.True(t, valid)
+		})
+
+		number := canonical[1:]
+		if height <= 16 {
+			number = []byte{byte(height)}
+		}
+
+		wrongPrefixes := map[string][]byte{
+			"the same number behind OP_PUSHDATA1":        append([]byte{bscript.OpPUSHDATA1, byte(len(number))}, number...),
+			"the same number with a redundant zero byte": append(append([]byte{byte(len(number) + 1)}, number...), 0x00),
+			"CScript() << (height + 1)":                  util.EncodeCoinbaseHeightPush(height + 1),
+		}
+
+		for name, prefix := range wrongPrefixes {
+			t.Run(fmt.Sprintf("height %d: %s is rejected invalid", height, name), func(t *testing.T) {
+				valid, err := validate(t, height, prefix)
+				require.False(t, valid)
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a bound body with a wrong BIP34 prefix is invalid, got: %v", err)
+				require.Contains(t, err.Error(), "coinbase")
+			})
+		}
+	}
 }

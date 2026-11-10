@@ -608,7 +608,9 @@ func TestBlock_CheckHeaderContextual(t *testing.T) {
 		err := block.CheckHeaderContextual([]*BlockHeader{}, tSettings, logger)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "two hours in the future")
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
+		// The class is GAP-BV-050: BV-HEADER-006 makes this a clock-dependent outcome, not an
+		// invalid verdict. TestKnownDefect_FutureDatedBlock_IsNotClassifiedInvalid (bvgaps)
+		// asserts it.
 	})
 
 	t.Run("current timestamp is accepted", func(t *testing.T) {

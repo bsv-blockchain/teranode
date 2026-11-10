@@ -1635,16 +1635,9 @@ func TestBlockValidation_IncompleteBlockNilCoinbase(t *testing.T) {
 			coinbaseTx:  nil,
 			expectError: "coinbase tx is nil or empty",
 		},
-		{
-			name:        "Coinbase with nil inputs returns ErrBlockIncomplete",
-			coinbaseTx:  &bt.Tx{Inputs: nil},
-			expectError: "coinbase tx is nil or empty",
-		},
-		{
-			name:        "Coinbase with empty inputs returns ErrBlockIncomplete",
-			coinbaseTx:  &bt.Tx{Inputs: []*bt.Input{}},
-			expectError: "coinbase tx is nil or empty",
-		},
+		// A present coinbase with no inputs is not an absent coinbase: BV-BODY-005 reserves
+		// ErrBlockIncomplete for the absent one. Its class is GAP-BV-046 and is asserted by
+		// TestKnownDefect_InputlessCoinbaseOnUnboundBody_IsCorruptNotIncomplete (bvgaps).
 	}
 
 	for _, tt := range tests {
@@ -3998,8 +3991,9 @@ func TestBlockValidation_OptimisticMining_RejectsFutureTimestampSynchronously(t 
 	// from ValidateBlock rather than swallowed by the optimistic background goroutine.
 	err = bv.ValidateBlock(ctx, block, "test", false)
 	require.Error(t, err)
-	require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 	require.Contains(t, err.Error(), "two hours in the future")
+	// The class is GAP-BV-050: BV-HEADER-006 makes this a clock-dependent outcome, not an invalid
+	// verdict. TestKnownDefect_FutureDatedBlock_IsNotClassifiedInvalid (bvgaps) asserts it.
 
 	// The optimistic background goroutine (which alone calls GetBlockHeaderIDs) must never start,
 	// confirming the rejection happened before the optimistic AddBlock.

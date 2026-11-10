@@ -534,18 +534,8 @@ func TestQuickValidateBlock_IncompleteBlockNilCoinbase(t *testing.T) {
 		assert.False(t, errors.Is(err, errors.ErrBlockInvalid), "should NOT be ErrBlockInvalid")
 	})
 
-	t.Run("empty inputs returns ErrBlockIncomplete", func(t *testing.T) {
-		suite := NewCatchupTestSuite(t)
-		defer suite.Cleanup()
-
-		block := testhelpers.CreateTestBlocks(t, 1)[0]
-		block.CoinbaseTx = &bt.Tx{Inputs: []*bt.Input{}}
-
-		err := suite.Server.blockValidation.quickValidateBlock(suite.Ctx, block, "test-peer", "")
-		require.Error(t, err)
-		assert.True(t, errors.Is(err, errors.ErrBlockIncomplete), "expected ErrBlockIncomplete, got: %v", err)
-		assert.False(t, errors.Is(err, errors.ErrBlockInvalid), "should NOT be ErrBlockInvalid")
-	})
+	// A present coinbase with empty inputs is GAP-BV-046 and is asserted by
+	// TestKnownDefect_InputlessCoinbaseOnUnboundBody_IsCorruptNotIncomplete (bvgaps).
 }
 
 func TestQuickValidateSkipUtxoLockSetting_DefaultsOff(t *testing.T) {

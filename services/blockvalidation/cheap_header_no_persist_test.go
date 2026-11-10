@@ -359,8 +359,10 @@ func TestValidateBlock_Difficulty1Header_IsNotPersisted(t *testing.T) {
 
 		err = bv.ValidateBlockWithOptions(ctx, block, "http://localhost", &ValidateBlockOptions{PeerID: "peer-serving"})
 		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrBlockInvalid))
 		require.ErrorContains(t, err, "contextual validation")
+		// The class is GAP-BV-050: BV-HEADER-006 makes this a clock-dependent outcome, not an
+		// invalid verdict. TestKnownDefect_FutureDatedBlock_IsNotClassifiedInvalid (bvgaps)
+		// asserts it.
 
 		requireNothingPersisted(ctx, t, client, block.Hash())
 	})
