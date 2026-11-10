@@ -122,6 +122,7 @@ type BlockAssembler struct {
 	// the failure or the last retry, until a reload succeeds (see retryFailedUnminedReload). Atomics, because the reload runs on the subtree
 	// processor's goroutine and the tick on the assembler's.
 	unminedReloadPending  atomic.Bool
+	pendingReloadHeld     atomic.Bool
 	unminedReloadValidate atomic.Bool
 	unminedReloadFailedAt atomic.Int64
 
@@ -325,6 +326,11 @@ type BlockAssembler struct {
 	// unminedTransactionsLoading indicates if unmined transactions are currently being loaded
 	unminedTransactionsLoading atomic.Bool
 
+	// startupLoadHeld is set from construction until Start's load phase ends. It holds the
+	// subtree processor in its loading state, so the held count reads full while gRPC ingest is
+	// already up and the unmined load has not yet run or finished.
+	startupLoadHeld atomic.Bool
+
 	// unminedDropHashes accumulates hashes that should be dropped from the
 	// input queue at the end of loadUnminedTransactions. Populated by
 	// markAsConflicting via the cascade returned from MarkConflictingRecursively.
@@ -443,6 +449,9 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 
 	b.setCurrentRunningState(StateStarting)
 
+	b.startupLoadHeld.Store(true)
+	subtreeProcessor.SetUnminedLoading(true)
+
 	// MoveForwardBlock and Reorg block the main loop for the whole call, so the
 	// processor beats on the loop's behalf at each step that proves the work is
 	// advancing. BeatIfStarted, not Beat: WaitForPendingBlocks also runs from
@@ -450,6 +459,20 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 	subtreeProcessor.SetProgressHook(b.heartbeat.BeatIfStarted)
 
 	return b, nil
+}
+
+// endStartupLoad ends the loading state NewBlockAssembler set, once. Start calls it when its load
+// phase ends and again on return, so the state clears on success and on every error path.
+func (b *BlockAssembler) endStartupLoad() {
+	if b.startupLoadHeld.CompareAndSwap(true, false) {
+		b.subtreeProcessor.SetUnminedLoading(false)
+	}
+}
+
+// HeldByUnminedLoad reports whether the held count reads full because the assembler is loading its
+// unmined transactions, at startup, inside a reset, or while a failed reload waits for its retry.
+func (b *BlockAssembler) HeldByUnminedLoad() bool {
+	return b.subtreeProcessor.UnminedLoading()
 }
 
 // TxCount returns the total number of transactions in the assembler.
@@ -507,6 +530,15 @@ func (b *BlockAssembler) ConsumerExited() bool {
 //   - int64: The enforced item cap (<= 0 when unbounded)
 func (b *BlockAssembler) QueueMaxItems() int64 {
 	return b.subtreeProcessor.QueueMaxItems()
+}
+
+// MaxTransactionsInMemory returns the enforced limit on transactions held in
+// memory, or a value <= 0 when there is no limit.
+//
+// Returns:
+//   - int64: The enforced limit (<= 0 when unlimited)
+func (b *BlockAssembler) MaxTransactionsInMemory() int64 {
+	return b.subtreeProcessor.MaxTransactionsInMemory()
 }
 
 // QueueHeadAge returns how long the oldest queued batch has been waiting.
@@ -1839,6 +1871,8 @@ func (b *BlockAssembler) GetCurrentRunningState() State {
 // Returns:
 //   - error: Any error encountered during startup
 func (b *BlockAssembler) Start(ctx context.Context) (err error) {
+	defer b.endStartupLoad()
+
 	if err = b.initState(ctx); err != nil {
 		return errors.NewProcessingError("[BlockAssembler] failed to initialize state: %v", err)
 	}
@@ -1908,6 +1942,8 @@ func (b *BlockAssembler) Start(ctx context.Context) (err error) {
 			return err
 		}
 	}
+
+	b.endStartupLoad()
 
 	// Start SubtreeProcessor goroutine after loading unmined transactions to avoid race conditions
 	b.subtreeProcessor.Start(ctx)
@@ -2518,20 +2554,28 @@ func (b *BlockAssembler) CurrentBlock() (*model.BlockHeader, uint32) {
 	return info.Header, info.Height
 }
 
-// AddTxBatchIfRoom adds a batch of transactions to the block assembler only if
-// the configured queue bound would not be exceeded, reporting whether it did.
-// When no bound is configured it never refuses, so it is the only batch entry
-// point this type offers: an unbounded variant alongside it is a cap bypass
-// waiting for the next caller to reach for the shorter name.
+// AddTxBatchBounded offers a batch under the configured bounds and reports which bound refused
+// it, if one did. inBlock marks transactions that arrived inside a block, which the in-memory
+// transaction limit does not refuse.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
+//   - inBlock: Whether the transactions arrived inside a block
 //
 // Returns:
-//   - bool: true if the batch was enqueued, false if it was refused for room
-func (b *BlockAssembler) AddTxBatchIfRoom(nodes []subtree.Node, txInpoints []*subtree.TxInpoints) bool {
-	return b.subtreeProcessor.AddBatchIfRoom(nodes, txInpoints)
+//   - subtreeprocessor.Admission: Admitted, or the bound that refused the batch
+func (b *BlockAssembler) AddTxBatchBounded(nodes []subtree.Node, txInpoints []*subtree.TxInpoints, inBlock bool) subtreeprocessor.Admission {
+	return b.subtreeProcessor.AddBatchBounded(nodes, txInpoints, inBlock)
+}
+
+// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
+// already in subtrees.
+//
+// Returns:
+//   - int64: Transactions held in memory
+func (b *BlockAssembler) HeldCount() int64 {
+	return b.subtreeProcessor.HeldCount()
 }
 
 // RemoveTx removes a transaction from the block assembler.
@@ -2968,14 +3012,22 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 
 	blockSubsidy := util.GetBlockSubsidyForHeight(nextBlockHeight, b.settings.ChainCfgParams)
 
-	id := &chainhash.Hash{}
-	copy(id[:], bestBlockHeader.Hash()[:])
-	id[0] ^= 0xFF
+	// The id covers the time as well as the parent, as the main candidate's does. A job keeps the
+	// time it was issued with, and a solution that omits its time is mined with the job's. With an id
+	// from the parent alone every poll at one tip shared a job, each poll overwrote its time, and a
+	// miner still hashing an earlier poll's time submitted a header the node rebuilt with a later one,
+	// which failed the proof-of-work check. A poll with a different candidate time now gets a job of
+	// its own. Polls that share a time, in the same second or while the median-time-past floor holds
+	// the time fixed, share a job and that time.
+	timeBytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(timeBytes, timeNowUint32)
+	previousHash := bestBlockHeader.Hash()
+	id := chainhash.HashB(append(previousHash.CloneBytes(), timeBytes...))
 
 	// Version uses miningCandidateVersion (same as the main candidate) rather than the tip's version.
 	miningCandidate := &model.MiningCandidate{
-		Id:                  id[:],
-		PreviousHash:        bestBlockHeader.Hash()[:],
+		Id:                  id,
+		PreviousHash:        previousHash[:],
 		CoinbaseValue:       blockSubsidy,
 		Version:             miningCandidateVersion,
 		NBits:               nBits[:],
@@ -4125,7 +4177,10 @@ func (b *BlockAssembler) loadUnminedTransactions(ctx context.Context, isReload b
 
 	// Set flag to indicate unmined transactions are being loaded
 	b.unminedTransactionsLoading.Store(true)
+	b.subtreeProcessor.SetUnminedLoading(true)
 	defer func() {
+		b.subtreeProcessor.SetUnminedLoading(false)
+
 		// Clear flag when loading is complete
 		b.unminedTransactionsLoading.Store(false)
 		b.logger.Infof("[loadUnminedTransactions] unmined transaction loading completed")

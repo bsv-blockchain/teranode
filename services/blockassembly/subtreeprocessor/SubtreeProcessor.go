@@ -314,6 +314,10 @@ type SubtreeProcessor struct {
 	// txCount tracks the total number of transactions processed
 	txCount atomic.Uint64
 
+	// unminedLoading counts the loads and reloads of the unmined transactions in progress. While it
+	// is positive the held count reads at least the in-memory limit; see SetUnminedLoading.
+	unminedLoading atomic.Int32
+
 	// queue manages the transaction processing queue
 	queue *LockFreeQueue
 
@@ -652,6 +656,7 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	}
 
 	maxQueueItems := normalizeMaxQueueItems(logger, tSettings.BlockAssembly.MaxQueueItems, tSettings.BlockAssembly.SendBatchSize)
+	maxTransactionsInMemory := normalizeMaxTransactionsInMemory(logger, tSettings.BlockAssembly.MaxTransactionsInMemory, tSettings.BlockAssembly.SendBatchSize)
 	queue := NewLockFreeQueueWithLimit(maxQueueItems)
 
 	// Calculate subtree sample size based on expected block time
@@ -789,6 +794,9 @@ func NewSubtreeProcessor(_ context.Context, logger ulogger.Logger, tSettings *se
 	if stp.diskTxMap == nil {
 		stp.currentTxMapShadow = NewSplitTxInpointsMap(splitBuckets)
 	}
+
+	// The in-memory limit counts what the queue holds plus what has reached a subtree.
+	queue.setHeldLimit(maxTransactionsInMemory, stp.heldBase)
 
 	// Goroutine does not start automatically - Start(ctx) must be called explicitly
 	// This ensures proper initialization order and avoids race conditions during loadUnminedTransactions
@@ -1133,6 +1141,13 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						dequeueBatches = append(dequeueBatches, batch)
 					}
 
+					// Items taken off the queue stay counted as held until the subtree count
+					// below includes them. See LockFreeQueue.heldTotal.
+					dequeuedItems := int64(0)
+					for _, batch := range dequeueBatches {
+						dequeuedItems += int64(len(batch.nodes))
+					}
+
 					if len(dequeueBatches) == 0 {
 						stp.setCurrentRunningState(StateRunning)
 						// Sleep briefly to avoid busy-wait when queue is empty.
@@ -1162,6 +1177,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 							stp.logger.Errorf("[SubtreeProcessor] error creating new subtree: %s", err)
 							// If we can't create a subtree, we can't process this node.
 							// We should probably retry or abort, but here we skip to avoid crash.
+							stp.queue.settle(dequeuedItems)
+
 							continue
 						}
 						stp.currentSubtree.Store(newSubtree)
@@ -1170,6 +1187,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 						// This is the first subtree for this block - we need a coinbase placeholder
 						if err = currentSubtree.AddCoinbaseNode(); err != nil {
 							stp.logger.Errorf("[SubtreeProcessor] error adding coinbase placeholder: %s", err)
+							stp.queue.settle(dequeuedItems)
+
 							continue
 						}
 						addedCount++
@@ -1247,6 +1266,8 @@ func (stp *SubtreeProcessor) Start(ctx context.Context) {
 					if addedCount > 0 {
 						stp.txCount.Add(addedCount)
 					}
+
+					stp.queue.settle(dequeuedItems)
 
 					// only after subtrees grew; the idle loop must stay free of subtree access.
 					// Before the drain below, which also reports a resize's tx map errors.
@@ -1599,6 +1620,9 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	)
 
 	defer deferFn()
+
+	stp.SetUnminedLoading(true)
+	defer stp.SetUnminedLoading(false)
 
 	// reset has no rollback: it commits to a new state (clearing currentTxMap
 	// below, then reloading) unconditionally, unlike moveForwardBlock/
@@ -2051,9 +2075,13 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	validUntilMillis := stp.clock.Now().UnixMilli()
 
 	for {
-		if _, found := stp.queue.dequeueBatchUntil(validUntilMillis); !found {
+		batch, found := stp.queue.dequeueBatchUntil(validUntilMillis)
+		if !found {
 			break
 		}
+
+		// dropped, so nothing will count it
+		stp.queue.settle(int64(len(batch.nodes)))
 	}
 
 	// Both reset branches complete the finished forward intents of every moveForward block. An
@@ -2388,7 +2416,7 @@ func (stp *SubtreeProcessor) TxCount() uint64 {
 // number of batches - see LockFreeQueue.length for why that distinction
 // matters.
 //
-// For items added through the bounded reservation path (AddBatchIfRoom), this
+// For items added through the bounded reservation path (AddBatchBounded), this
 // counts reserved-or-published items: while a failed reservation is being rolled
 // back the value can transiently read slightly higher than the number of
 // dequeuable items, but it never reads lower than the published-outstanding
@@ -2466,6 +2494,16 @@ func (stp *SubtreeProcessor) ConsumerExited() bool {
 //   - int64: The enforced item cap (<= 0 when unbounded)
 func (stp *SubtreeProcessor) QueueMaxItems() int64 {
 	return stp.queue.MaxItems()
+}
+
+// MaxTransactionsInMemory returns the enforced (normalized) limit on transactions
+// held in memory, queued plus already in subtrees, or a value <= 0 when there is
+// no limit. It is reported in the shed message.
+//
+// Returns:
+//   - int64: The enforced limit (<= 0 when unlimited)
+func (stp *SubtreeProcessor) MaxTransactionsInMemory() int64 {
+	return stp.queue.maxHeld
 }
 
 // QueueHeadAge returns how long the oldest batch still in the ingest queue has
@@ -2704,6 +2742,24 @@ func (stp *SubtreeProcessor) InitCurrentBlockHeader(blockHeader *model.BlockHead
 // Returns:
 //   - error: Any error encountered during addition
 func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (err error) {
+	_, err = stp.placeNode(node, parents, skipNotification)
+
+	return err
+}
+
+// placeNode adds a new transaction node to the current subtree and reports whether it placed
+// the node. A duplicate already in currentTxMap is skipped without error and reports false, so
+// a caller that counts what it placed does not count it again.
+//
+// Parameters:
+//   - node: Transaction node to add
+//   - parents: Parent references for the node, or nil when currentTxMap already holds them
+//   - skipNotification: Whether to skip notification of new subtrees
+//
+// Returns:
+//   - bool: True if the node was added to a subtree
+//   - error: Any error encountered during addition
+func (stp *SubtreeProcessor) placeNode(node subtreepkg.Node, parents *subtreepkg.TxInpoints, skipNotification bool) (placed bool, err error) {
 	// parents can only be set to nil, when they are already in the map
 	if parents == nil {
 		var held bool
@@ -2715,7 +2771,7 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 		}
 
 		if !held {
-			return errors.NewProcessingError("error adding node to subtree: txInpoints not found in currentTxMap for %s", node.Hash.String())
+			return false, errors.NewProcessingError("error adding node to subtree: txInpoints not found in currentTxMap for %s", node.Hash.String())
 		}
 	} else {
 		// SetIfNotExists returns (value, wasSet) where wasSet is true if the key was newly inserted
@@ -2723,7 +2779,7 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 			// Key already existed, this is a duplicate
 			stp.logger.Debugf("[addNode] duplicate transaction ignored %s", node.Hash.String())
 
-			return nil
+			return false, nil
 		}
 	}
 
@@ -2732,29 +2788,29 @@ func (stp *SubtreeProcessor) addNode(node subtreepkg.Node, parents *subtreepkg.T
 
 		newSubtree, err := stp.newSubtree(itemsPerFile)
 		if err != nil {
-			return err
+			return false, err
 		}
 		stp.currentSubtree.Store(newSubtree)
 
 		// This is the first subtree for this block - we need a coinbase placeholder
 		if err = stp.currentSubtree.Load().AddCoinbaseNode(); err != nil {
-			return err
+			return false, err
 		}
 
 		stp.txCount.Add(1)
 	}
 
 	if err = stp.currentSubtree.Load().AddSubtreeNode(node); err != nil {
-		return errors.NewProcessingError(errAddingNodeToSubtree, err)
+		return false, errors.NewProcessingError(errAddingNodeToSubtree, err)
 	}
 
 	if stp.currentSubtree.Load().IsComplete() {
 		if err = stp.processCompleteSubtree(skipNotification); err != nil {
-			return err
+			return true, err
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
 // addNodePreValidated adds a node that's already been validated and inserted into currentTxMap.
@@ -3093,12 +3149,12 @@ func (stp *SubtreeProcessor) updateChainedSubtreeCounts() {
 
 // AddBatch adds a batch of transaction nodes to the processor queue
 // unconditionally. This path bypasses the capacity bound but, like
-// AddBatchIfRoom, reserves its items before publishing so it upholds the
+// AddBatchBounded, reserves its items before publishing so it upholds the
 // queueLength >= published-outstanding invariant; callers needing the bound must
-// use AddBatchIfRoom.
+// use AddBatchBounded.
 //
 // Its only non-test caller is the teranodecli subtree benchmark, which drives the
-// processor directly and wants no cap. The ingest handlers must use AddBatchIfRoom:
+// processor directly and wants no cap. The ingest handlers must use AddBatchBounded:
 // this method is what the queue bound exists to keep them away from.
 //
 // Parameters:
@@ -3108,18 +3164,75 @@ func (stp *SubtreeProcessor) AddBatch(nodes []subtreepkg.Node, txInpoints []*sub
 	stp.queue.enqueueBatch(nodes, txInpoints)
 }
 
-// AddBatchIfRoom adds a batch of transaction nodes to the processor queue only
-// if the configured capacity bound would not be exceeded, reporting whether it
-// did. When no bound is configured it never refuses, behaving as AddBatch.
+// AddBatchBounded offers a batch to the queue under the configured bounds and reports which
+// bound refused it, if one did. inBlock marks transactions that arrived inside a block: the
+// in-memory transaction limit does not refuse them and the ingest queue bound still does.
 //
 // Parameters:
 //   - nodes: Transaction nodes to add
 //   - txInpoints: Parent transaction references for each node
+//   - inBlock: Whether the transactions arrived inside a block
 //
 // Returns:
-//   - bool: true if the batch was enqueued, false if it was refused for room
-func (stp *SubtreeProcessor) AddBatchIfRoom(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) bool {
-	return stp.queue.enqueueBatchIfRoom(nodes, txInpoints)
+//   - Admission: Admitted, or the bound that refused the batch
+func (stp *SubtreeProcessor) AddBatchBounded(nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) Admission {
+	return stp.queue.enqueueBatchBounded(nodes, txInpoints, inBlock)
+}
+
+// heldBase is the count of transactions the subtrees hold, which the queue's in-memory limit
+// adds the queued and dequeued items to. During a load of the unmined transactions it reports at
+// least the limit. The load raises txCount one transaction at a time, so a producer reading it
+// early in the load would see almost nothing held, fill the queue up to the limit, and the load
+// would then add the rest on top. Reading full instead refuses mempool ingest as held until the
+// load completes and makes Kafka backpressure pause rather than drop. Block transactions stay
+// exempt from the limit.
+func (stp *SubtreeProcessor) heldBase() int64 {
+	count := int64(stp.txCount.Load()) // nolint:gosec
+
+	if stp.unminedLoading.Load() > 0 {
+		return max(count, stp.queue.maxHeld)
+	}
+
+	return count
+}
+
+// SetUnminedLoading marks the start (true) or end (false) of a load or reload of the unmined
+// transactions. Calls nest, because a reset runs a reload inside itself. An end without a start
+// leaves the count at zero.
+func (stp *SubtreeProcessor) SetUnminedLoading(loading bool) {
+	if loading {
+		stp.unminedLoading.Add(1)
+
+		return
+	}
+
+	for {
+		current := stp.unminedLoading.Load()
+		if current <= 0 {
+			stp.logger.Warnf("[SubtreeProcessor] SetUnminedLoading(false) with no load in progress; a caller ended a hold it did not start, which would otherwise end another caller's hold")
+
+			return
+		}
+
+		if stp.unminedLoading.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
+}
+
+// UnminedLoading reports whether a load or reload of the unmined transactions holds the held
+// count full.
+func (stp *SubtreeProcessor) UnminedLoading() bool {
+	return stp.unminedLoading.Load() > 0
+}
+
+// HeldCount returns the transactions held in memory: queued, dequeued but not yet counted, and
+// already in subtrees. It reads atomics only, so a monitoring goroutine can call it.
+//
+// Returns:
+//   - int64: Transactions held in memory
+func (stp *SubtreeProcessor) HeldCount() int64 {
+	return stp.queue.heldCount()
 }
 
 // AddDirectly adds a transaction node directly to the subtree processor without going through the queue.
@@ -5524,9 +5637,8 @@ func (stp *SubtreeProcessor) checkMarkNotOnLongestChain(ctx context.Context, inv
 // and the queue. This ensures the transaction count remains accurate
 // after chain modifications.
 func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
-	stp.txCount.Store(0)
-
 	var (
+		total      uint64
 		subtreeLen uint64
 		err        error
 	)
@@ -5538,7 +5650,7 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 			continue
 		}
 
-		stp.txCount.Add(subtreeLen)
+		total += subtreeLen
 	}
 
 	currSubtreeLenUint64, err := safeconversion.IntToUint64(stp.currentSubtree.Load().Length())
@@ -5547,7 +5659,9 @@ func (stp *SubtreeProcessor) setTxCountFromSubtrees() {
 		return
 	}
 
-	stp.txCount.Add(currSubtreeLenUint64)
+	// Stored once, from a local sum. Zeroing the counter and adding to it let a producer reading
+	// it for the in-memory limit see a partial total and be admitted at the limit.
+	stp.txCount.Store(total + currSubtreeLenUint64)
 }
 
 // moveBackBlock processes a block during downward chain movement.
@@ -7080,7 +7194,9 @@ func (stp *SubtreeProcessor) DrainQueue(dropHashes map[chainhash.Hash]struct{}) 
 // Returns:
 //   - error: Any error encountered during processing
 func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHashSet, losingTxHashesMap txmap.TxMap, conflictingHashes map[chainhash.Hash]struct{}, skipNotification bool) (err error) {
-	return stp.forEachDrainChunk(1, func(batches []*TxBatch) error {
+	return stp.forEachDrainChunk(1, func(batches []*TxBatch) (int, error) {
+		placed := 0
+
 		for _, batch := range batches {
 			// Process all transactions in this batch
 			for i, node := range batch.nodes {
@@ -7097,15 +7213,20 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 					continue
 				}
 
-				if addErr := stp.addNode(node, txInpoints, skipNotification); addErr != nil {
+				wasPlaced, addErr := stp.placeNode(node, txInpoints, skipNotification)
+				if addErr != nil {
 					stp.logger.Errorf("[SubtreeProcessor] error adding node %s during sequential remainder processing: %v", node.Hash.String(), addErr)
+				}
+
+				if wasPlaced {
+					placed++
 				}
 			}
 
 			prometheusSubtreeProcessorDequeuedTxs.Add(float64(len(batch.nodes)))
 		}
 
-		return nil
+		return placed, nil
 	})
 }
 
@@ -7113,8 +7234,10 @@ func (stp *SubtreeProcessor) dequeueDuringBlockMovement(transactionMap *SortedHa
 // movement covers and hands them to fn in queue order, at most maxItems txs
 // at a time (but always at least one batch). Dequeuing as it goes keeps the
 // queue length, and the backpressure that reads it, honest during the
-// drain, and bounds what a failure part-way through can lose.
-func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) error) error {
+// drain, and bounds what a failure part-way through can lose. fn reports how
+// many of the chunk's transactions it placed in subtrees, and that number is
+// added to the subtrees count before the chunk is settled.
+func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*TxBatch) (int, error)) error {
 	// Bound the drain by two complementary cutoffs:
 	//
 	//  1. Time: validFromMillis = clock.Now() at function entry (or
@@ -7123,7 +7246,7 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	//     enqueue timestamp is >= this value, so we only drain batches
 	//     that existed before this moment. Batches arriving during the
 	//     drain stay queued and roll forward to the next state-transition
-	//     cycle. The gRPC ingest handlers admit through AddBatchIfRoom,
+	//     cycle. The gRPC ingest handlers admit through AddBatchBounded,
 	//     which only refuses when blockassembly_maxQueueItems is positive;
 	//     with the default of 0 ingest is not backpressured, and even when
 	//     it is, the queue keeps filling up to its cap during the drain.
@@ -7174,7 +7297,7 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 		itemsProcessed += int64(len(batch.nodes))
 
 		if chunkItems >= maxItems {
-			if err := fn(chunk); err != nil {
+			if err := stp.runDrainChunk(chunk, chunkItems, fn); err != nil {
 				return err
 			}
 
@@ -7183,10 +7306,35 @@ func (stp *SubtreeProcessor) forEachDrainChunk(maxItems int, fn func(batches []*
 	}
 
 	if len(chunk) > 0 {
-		return fn(chunk)
+		return stp.runDrainChunk(chunk, chunkItems, fn)
 	}
 
 	return nil
+}
+
+// runDrainChunk hands one dequeued chunk to fn, then adds what fn placed to txCount and settles
+// the chunk. The add comes first: addNode does not add to txCount, so settling before it would
+// leave the placed transactions in none of the queue length, the unsettled count or the
+// subtrees count, and the held total would read low until the drain's final recount. The add is
+// the reported number, not a walk of every chained subtree per chunk, so fn must report every
+// node it put in a subtree, including one whose subtree then failed to complete, and no duplicate
+// that placeNode skipped. The number fn reports is added even when fn returns an error, so the
+// nodes it did place stay counted. The settle is deferred so a panic in fn, which
+// runHandlerWithRecover absorbs, cannot leave the chunk counted as unsettled for good.
+func (stp *SubtreeProcessor) runDrainChunk(chunk []*TxBatch, chunkItems int, fn func(batches []*TxBatch) (int, error)) (err error) {
+	placed := 0
+
+	defer func() {
+		if placed > 0 {
+			stp.txCount.Add(uint64(placed)) // nolint:gosec
+		}
+
+		stp.queue.settle(int64(chunkItems))
+	}()
+
+	placed, err = fn(chunk)
+
+	return err
 }
 
 // processCoinbaseUtxos processes UTXOs from coinbase transactions.

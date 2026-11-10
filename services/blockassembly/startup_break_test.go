@@ -33,6 +33,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -55,6 +56,7 @@ func newRecoveryTestAssembler(t *testing.T, store utxostore.Store, bc *blockchai
 		stats:            gocore.NewStat("startup-break-test"),
 		utxoStore:        store,
 		blockchainClient: bc,
+		subtreeProcessor: &subtreeprocessor.MockSubtreeProcessor{},
 	}
 	ba.setBestBlockHeader(model.GenesisBlockHeader, 0)
 

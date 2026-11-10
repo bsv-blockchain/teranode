@@ -29,6 +29,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -141,6 +142,10 @@ type Server struct {
 	// an unsynchronised cross-goroutine access that -race is right to flag, and the
 	// mutex costs nothing on a per-service-lifecycle path.
 	consumerMu sync.Mutex
+
+	// backpressureOffWarned latches the one warning that Kafka backpressure is off while block
+	// assembly enforces an in-memory transaction limit.
+	backpressureOffWarned atomic.Bool
 
 	// consumerCtx is a cancellable child of the Start context that the Kafka
 	// message handler passes into ValidateWithOptions. Cancelling it aborts an
@@ -495,6 +500,17 @@ func (v *Server) handleKafkaTxMessage(consumerCtx context.Context, msg *kafka.Ka
 		// The tx was accepted, spent and created; only the unlock failed. It is already
 		// logged and counted in the validator, and the lock heals when the tx is mined.
 		if errors.Is(err, errors.ErrTxUnlockFailed) {
+			return nil
+		}
+
+		// A shed at block assembly's in-memory limit is not an invalid tx either: the
+		// validator unwound a valid transaction because the node had no room for it.
+		// It is counted on its own, and the validator already logged the drop at a
+		// bounded rate, so nil commits the offset without an error line per message.
+		if blockassembly.IsHeldLimitShed(err) {
+			prometheusHeldLimitShedTransactions.Inc()
+			v.warnBackpressureOffWithLimit(consumerCtx)
+
 			return nil
 		}
 
