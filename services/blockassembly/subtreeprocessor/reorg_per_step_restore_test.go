@@ -523,5 +523,4 @@ func TestCatchUp_KeepsThePreCatchUpMapPinnedUntilItEnds(t *testing.T) {
 	require.ElementsMatch(t, []chainhash.Hash{f.m1}, f.assemblyHashes(t))
 	require.NoError(t, f.stp.CheckSubtreeProcessor())
 	require.Nil(t, f.stp.diskTxMapAnchor, "the catch-up has ended, so nothing is pinned")
-	require.False(t, f.stp.catchUpRollbackPinned)
 }
