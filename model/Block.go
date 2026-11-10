@@ -1264,16 +1264,17 @@ func (b *Block) CheckCoinbaseOnlyBodyBound() error {
 	return nil
 }
 
-// CheckCoinbaseOnlyBodyCount rejects a body with no subtrees that claims more than one transaction.
-// It is a no-op for a body that carries subtrees.
+// CheckCoinbaseOnlyBodyCount rejects a body with no subtrees that does not claim exactly one
+// transaction. Such a body holds the coinbase and nothing else, so zero is as false as two. It is a
+// no-op for a body that carries subtrees.
 //
 // This is a consistency check, not part of the binding. TransactionCount is untrusted wire data the
 // header does not commit to, so it says nothing about what the miner committed. Callers run it last,
-// after every consensus check, so a peer cannot spare an invalid block by writing a count above one.
+// after every consensus check, so a peer cannot spare an invalid block by writing a false count.
 // It only stops a body that is otherwise valid from being stored with a false count. Corrupt, so the
 // block is fetched again and the serving peer takes a strike.
 func (b *Block) CheckCoinbaseOnlyBodyCount() error {
-	if len(b.Subtrees) == 0 && b.TransactionCount > 1 {
+	if len(b.Subtrees) == 0 && b.TransactionCount != 1 {
 		return errors.NewBlockCorruptError("[BLOCK][%s] body carries no subtrees but claims %d transactions", b.String(), b.TransactionCount)
 	}
 

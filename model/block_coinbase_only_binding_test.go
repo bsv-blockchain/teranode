@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -120,7 +121,7 @@ func TestCheckCoinbaseOnlyBodyBound(t *testing.T) {
 
 	t.Run("genuine coinbase-only body: bound, no error", func(t *testing.T) {
 		require.NoError(t, newBody(coinbase.TxIDChainHash(), nil, 1).CheckCoinbaseOnlyBodyBound())
-		// A count of 0 is what an in-memory fixture that never set it carries; it must not be rejected.
+		// The binding does not read the count, so 0 binds too. CheckCoinbaseOnlyBodyCount judges it.
 		require.NoError(t, newBody(coinbase.TxIDChainHash(), nil, 0).CheckCoinbaseOnlyBodyBound())
 	})
 }
@@ -139,18 +140,20 @@ func TestCheckCoinbaseOnlyBodyCount(t *testing.T) {
 		}
 	}
 
-	t.Run("no subtrees, more than one transaction claimed: corrupt", func(t *testing.T) {
-		err := newBody(nil, 2).CheckCoinbaseOnlyBodyCount()
-		require.Error(t, err)
-		require.True(t, errors.IsBlockCorrupt(err), "a false count is a corrupt body, got: %v", err)
-		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a false count must never condemn the hash")
-		require.Contains(t, err.Error(), "claims 2 transactions")
+	t.Run("no subtrees, any count but one claimed: corrupt", func(t *testing.T) {
+		// The body holds the coinbase, so 0 is as false as 2. A stored 0 would make the legacy
+		// export write a zero count followed by the coinbase.
+		for _, count := range []uint64{0, 2} {
+			err := newBody(nil, count).CheckCoinbaseOnlyBodyCount()
+			require.Error(t, err, "count %d", count)
+			require.True(t, errors.IsBlockCorrupt(err), "a false count is a corrupt body, got: %v", err)
+			require.False(t, errors.Is(err, errors.ErrBlockInvalid), "a false count must never condemn the hash")
+			require.Contains(t, err.Error(), fmt.Sprintf("claims %d transactions", count))
+		}
 	})
 
-	t.Run("no subtrees, zero or one transaction claimed: fine", func(t *testing.T) {
-		// A count of 0 is what an in-memory fixture that never set it carries.
+	t.Run("no subtrees, exactly one transaction claimed: fine", func(t *testing.T) {
 		require.NoError(t, newBody(nil, 1).CheckCoinbaseOnlyBodyCount())
-		require.NoError(t, newBody(nil, 0).CheckCoinbaseOnlyBodyCount())
 	})
 
 	t.Run("subtrees present: no-op", func(t *testing.T) {

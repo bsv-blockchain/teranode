@@ -713,37 +713,40 @@ func TestCoinbaseOnlyBodyCount_CheckedAfterConsensusRules(t *testing.T) {
 			return tSettings
 		}
 
-		t.Run(route.name+", coinbase breaks a later rule: invalid", func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+		// The body holds the coinbase alone, so a claimed 0 is as false as a claimed 2.
+		for _, count := range []uint64{0, 2} {
+			t.Run(fmt.Sprintf("%s, count %d, coinbase breaks a later rule: invalid", route.name, count), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
 
-			tSettings := settingsFor(t)
-			bv, client := newNoPersistHarness(ctx, t, tSettings)
-			block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, shortScriptSigCoinbaseForService(t))
-			block.TransactionCount = 2
+				tSettings := settingsFor(t)
+				bv, client := newNoPersistHarness(ctx, t, tSettings)
+				block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, shortScriptSigCoinbaseForService(t))
+				block.TransactionCount = count
 
-			err := route.validate(ctx, bv, block)
-			require.Error(t, err)
-			require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a committed coinbase breaking a rule is invalid whatever the count, got: %v", err)
-			require.False(t, errors.IsBlockCorrupt(err), "must not be corrupt, got: %v", err)
+				err := route.validate(ctx, bv, block)
+				require.Error(t, err)
+				require.True(t, errors.Is(err, errors.ErrBlockInvalid), "a committed coinbase breaking a rule is invalid whatever the count, got: %v", err)
+				require.False(t, errors.IsBlockCorrupt(err), "must not be corrupt, got: %v", err)
 
-			if route.full {
-				requireStoredInvalid(ctx, t, client, block)
-			}
-		})
+				if route.full {
+					requireStoredInvalid(ctx, t, client, block)
+				}
+			})
 
-		t.Run(route.name+", coinbase breaks nothing: corrupt", func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			t.Run(fmt.Sprintf("%s, count %d, coinbase breaks nothing: corrupt", route.name, count), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
 
-			tSettings := settingsFor(t)
-			bv, client := newNoPersistHarness(ctx, t, tSettings)
-			block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, coinbaseAtHeight(t, blockHeight))
-			block.TransactionCount = 2
+				tSettings := settingsFor(t)
+				bv, client := newNoPersistHarness(ctx, t, tSettings)
+				block := gap046BlockWithCoinbaseUnchecked(ctx, t, tSettings, bv, blockHeight, coinbaseAtHeight(t, blockHeight))
+				block.TransactionCount = count
 
-			err := route.validate(ctx, bv, block)
-			requireCorruptNotCondemned(ctx, t, client, block, err)
-			require.Contains(t, err.Error(), "claims 2 transactions")
-		})
+				err := route.validate(ctx, bv, block)
+				requireCorruptNotCondemned(ctx, t, client, block, err)
+				require.Contains(t, err.Error(), fmt.Sprintf("claims %d transactions", count))
+			})
+		}
 	}
 }
