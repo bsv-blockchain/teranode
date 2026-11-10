@@ -1726,6 +1726,10 @@ func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHea
 			b.setCurrentRunningState(StateMovingUp)
 
 			if err = b.handleCatchUp(ctx, moveForwardBlocksWithMeta); err != nil {
+				if subtreeprocessor.IsResetRequired(err) {
+					return b.resetAfterRefusedMove(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height, "catchup", err)
+				}
+
 				ctxLogger.Errorf("[BlockAssembler][%s] error catching up: %v", bestBlockchainBlockHeader.Hash(), err)
 				prometheusBlockAssemblyProcessingStuck.WithLabelValues("catchup").Inc()
 				return err
@@ -1760,6 +1764,10 @@ func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHea
 		b.setCurrentRunningState(StateMovingUp)
 
 		if err = b.subtreeProcessor.MoveForwardBlock(block); err != nil {
+			if subtreeprocessor.IsResetRequired(err) {
+				return b.resetAfterRefusedMove(ctx, bestBlockchainBlockHeader, bestBlockchainBlockHeaderMeta.Height, "moveforward", err)
+			}
+
 			ctxLogger.Errorf("[BlockAssembler][%s] error moveForwardBlock in subtree processor: %v", bestBlockchainBlockHeader.Hash(), err)
 			prometheusBlockAssemblyProcessingStuck.WithLabelValues("moveforward").Inc()
 			return err
@@ -1780,6 +1788,33 @@ func (b *BlockAssembler) moveToBlock(ctx context.Context, bestBlockchainBlockHea
 	}
 
 	return nil
+}
+
+// resetAfterRefusedMove resets block assembly onto the block that moveToBlock was
+// moving to, after the subtree processor refused the move with a ResetRequiredError.
+// The processor refuses every reorg and move-forward after a failed fork reorg until a
+// reset has rotated its state. handleReorg resets on any failure, but the catch-up and
+// the single move-forward return theirs, so without this a chain that went back to the
+// losing side of that reorg would be refused on every pass.
+//
+// It returns ErrBlockAssemblyReset when the reset succeeded, as handleReorg does, so the
+// caller does not overwrite the tip the reset set. A reset that fails before the
+// processor's tx map rotation, for example in getReorgBlocks or in the sweep before the
+// rotation, leaves the processor refusing, so the next pass resets again. A reset that
+// fails after the rotation has already cleared the refusal.
+func (b *BlockAssembler) resetAfterRefusedMove(ctx context.Context, header *model.BlockHeader, height uint32, stuckLabel string, refusal error) error {
+	b.logger.Warnf("[BlockAssembler][%s] the subtree processor needs a reset after a failed fork reorg, resetting instead of moving: %v", header.Hash(), refusal)
+
+	// validateInputs=true for the same reason as a reset after a failed reorg in
+	// handleReorg: the refusal stands for that failed reorg.
+	if err := b.resetToBlockAndRecord(ctx, header, height, true); err != nil {
+		b.logger.Errorf("[BlockAssembler][%s] error resetting after the subtree processor refused to move: %v", header.Hash(), err)
+		prometheusBlockAssemblyProcessingStuck.WithLabelValues(stuckLabel).Inc()
+
+		return errors.NewProcessingError("error resetting after the subtree processor refused to move", err)
+	}
+
+	return errors.NewBlockAssemblyResetError("reset instead of moving, the last fork reorg failed and left the subtree processor needing a reset")
 }
 
 // setBestBlockHeader updates the internal best block header and height atomically.
