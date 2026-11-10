@@ -33,9 +33,9 @@ const (
 // observation already covers, so the stats are read once per interval, not twice. The gate does
 // not need the controller to be enabled.
 //
-// It fails open. Without a fresh reading, with no reported limit, or after a failed read,
-// atLimit is false and the transaction takes the ordinary path, where block assembly still
-// refuses it and the validator unwinds.
+// It fails open. Without a fresh reading, with no reported limit, or once failed reads have aged
+// the last reading past the freshness window, atLimit is false and the transaction takes the
+// ordinary path, where block assembly still refuses it and the validator unwinds.
 type heldLimitGate struct {
 	reader   queueStatsReader
 	interval time.Duration
@@ -118,8 +118,9 @@ func (g *heldLimitGate) stop() {
 }
 
 // poll reads the stats once unless a fresh observation already covers this interval. A failed
-// read clears the limited state, so the gate fails open. It returns how long to wait before the
-// next poll.
+// read leaves the last reading to age out, and once it is older than the freshness window it
+// clears the limited state, so the gate fails open. It returns how long to wait before the next
+// poll.
 func (g *heldLimitGate) poll(ctx context.Context) time.Duration {
 	if g.now().UnixNano()-g.observedAt.Load() < 2*int64(g.interval) {
 		return g.wait()
@@ -131,6 +132,13 @@ func (g *heldLimitGate) poll(ctx context.Context) time.Duration {
 	cancel()
 
 	if err != nil {
+		// A reading inside the freshness window keeps the poll cadence, so one slow read does not
+		// leave the gate idle for ten seconds. The reading is not renewed, so atLimit fails open
+		// once the window ends.
+		if g.now().UnixNano()-g.observedAt.Load() <= int64(heldGateFreshnessPolls)*int64(g.interval) {
+			return g.interval
+		}
+
 		g.limited.Store(false)
 		g.maxHeld.Store(0)
 

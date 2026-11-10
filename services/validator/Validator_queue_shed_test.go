@@ -2625,6 +2625,29 @@ func TestValidate_InBlockShedUnlockedByABlockDoesNotResetBlockAssembly(t *testin
 	require.Zero(t, v.shedRecovery.pending(), "the tracked ids are cleared once checked")
 }
 
+func TestValidate_RecoveryChecksOnlyShedsAFullDelayOld(t *testing.T) {
+	ctx := context.Background()
+	v, _, baStore, _, childTx, _ := recoverySetup(t, "inblock_shed_recovery_age")
+	v.inBlockShedRecoveryDelay = 400 * time.Millisecond
+	baStore.err = errors.NewThresholdExceededError("block assembly queue full")
+
+	older := chainhash.Hash{9}
+	v.trackInBlockShed(&older)
+
+	time.Sleep(300 * time.Millisecond)
+
+	_, err := v.Validate(ctx, childTx, 100, WithSkipPolicyChecks(true), WithInBlock(true))
+	require.NoError(t, err, "a younger shed that no block has unlocked yet")
+
+	time.Sleep(250 * time.Millisecond)
+
+	require.Equal(t, int32(0), baStore.resets.Load(),
+		"the check at the first shed's age must not read the younger one, whose block has had no time to unlock it")
+
+	require.Eventually(t, func() bool { return baStore.resets.Load() == 1 }, 5*time.Second, 10*time.Millisecond,
+		"the younger shed is checked once it is a full delay old, and its record is still Locked")
+}
+
 func TestValidate_FailedRecoveryResetIsRetried(t *testing.T) {
 	ctx := context.Background()
 	v, _, baStore, _, childTx, _ := recoverySetup(t, "inblock_shed_recovery_retry")

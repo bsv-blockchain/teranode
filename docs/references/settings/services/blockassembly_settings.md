@@ -85,7 +85,7 @@ A Kafka pause caused only by the held count ends at the retention of the validat
 
 ### Block transactions kept Locked
 
-When block assembly refuses a block transaction on the ingest queue bound (`blockassembly_maxQueueItems`), the validator accepts the transaction and keeps its record Locked, so an ordinary child cannot enter the template without it. `teranode_validator_shed_inblock_dropped_total` counts these, and a rising value is the signal to act. The lock clears when the block's `setMined` runs. A block that validates and never connects leaves the record Locked, and an ordinary child of it is refused as locked. A block assembly reset, or a restart, runs the unmined reload. It reads every unmined record, including Locked ones, adds them to the template and unlocks them.
+When block assembly refuses a block transaction on the ingest queue bound (`blockassembly_maxQueueItems`), the validator accepts the transaction and keeps its record Locked, so an ordinary child cannot enter the template without it. `teranode_validator_shed_inblock_dropped_total` counts these, and a rising value is the signal to act. The lock clears when the block's `setMined` runs, which it does for every block that validates, side chains included. A block that fails validation before `setMined` runs leaves the record Locked, and an ordinary child of it is refused as locked. The validator checks each such record five minutes after its shed and resets block assembly if any is still Locked and unmined, counted by `teranode_validator_shed_inblock_recovery_resets_total`. A block assembly reset, or a restart, runs the unmined reload. It reads every unmined record, including Locked ones, adds them to the template and unlocks them.
 
 ## Coinbase Divergence Recovery
 

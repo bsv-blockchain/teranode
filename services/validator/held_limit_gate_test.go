@@ -77,6 +77,28 @@ func TestHeldLimitGate_FailsOpenWhenTheReadFails(t *testing.T) {
 	require.Eventually(t, func() bool { return !gate.atLimit() }, 2*time.Second, time.Millisecond, "a dark signal must never shed")
 }
 
+func TestHeldLimitGate_AFailedReadKeepsThePollCadenceWhileTheReadingIsFresh(t *testing.T) {
+	reader := &fakeReader{}
+	reader.set(0, errors.NewServiceError("block assembly busy"))
+
+	gate := newPollingGate(t, reader)
+	gate.once.Do(func() {}) // the test drives poll itself, so no background poller runs
+
+	base := time.Unix(9000, 0)
+	now := base
+	gate.now = func() time.Time { return now }
+
+	gate.observe(blockassembly.QueueStats{HeldCount: 100, MaxHeld: 100})
+
+	now = base.Add(3 * gate.interval)
+	require.Equal(t, gate.interval, gate.poll(t.Context()), "one failed read does not idle the poll for ten seconds")
+	require.True(t, gate.atLimit(), "the reading is still fresh")
+
+	now = base.Add(time.Duration(heldGateFreshnessPolls+1) * gate.interval)
+	require.Equal(t, heldGateIdleInterval, gate.poll(t.Context()), "with no reading inside the window the poll idles")
+	require.False(t, gate.atLimit(), "a dark signal never sheds")
+}
+
 func TestHeldLimitGate_AReadingGoesStale(t *testing.T) {
 	gate := newPollingGate(t, &fakeReader{})
 

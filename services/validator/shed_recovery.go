@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	// inBlockShedRecoveryDelay is how long after the first in-block shed the recovery check runs.
-	// It leaves a block's setMined time to clear the locks, which it does for every block that
+	// inBlockShedRecoveryDelay is how old an in-block shed must be before the recovery check reads
+	// it. It leaves a block's setMined time to clear the lock, which it does for every block that
 	// validates, so the check only acts on records that no block unlocked.
 	inBlockShedRecoveryDelay = 5 * time.Minute
 
@@ -30,18 +30,23 @@ type blockAssemblyResetter interface {
 	ResetBlockAssembly(ctx context.Context) error
 }
 
-// shedRecovery tracks the transactions an in-block shed kept Locked outside the template, and
-// the one timer that checks them.
+// shedRecovery tracks the transactions an in-block shed kept Locked outside the template, each
+// with the time of its shed, and the one timer that checks them. A transaction is checked only
+// once it is a full delay old, because a block's setMined needs that long to unlock it.
 type shedRecovery struct {
-	mu       sync.Mutex
-	hashes   map[chainhash.Hash]struct{}
-	overflow bool
-	timer    *time.Timer
+	mu     sync.Mutex
+	hashes map[chainhash.Hash]time.Time
+
+	// overflowAt is the time of the first shed that did not fit under inBlockShedTrackLimit, and
+	// zero when none overflowed. The check cannot name those records, so it resets block assembly
+	// without reading the store once the first of them is a full delay old.
+	overflowAt time.Time
+	timer      *time.Timer
 }
 
 // trackInBlockShed records a transaction an in-block shed left Locked outside the template and
-// arms the recovery check if none is pending. Sheds that arrive while a check is pending join
-// it, so a sustained shed causes one check per delay, not one per transaction.
+// arms the recovery check if none is pending. Sheds that arrive while a check is pending join it,
+// so a sustained shed causes one check per delay, not one per transaction.
 func (v *Validator) trackInBlockShed(hash *chainhash.Hash) {
 	r := &v.shedRecovery
 
@@ -49,70 +54,107 @@ func (v *Validator) trackInBlockShed(hash *chainhash.Hash) {
 	defer r.mu.Unlock()
 
 	if r.hashes == nil {
-		r.hashes = make(map[chainhash.Hash]struct{})
+		r.hashes = make(map[chainhash.Hash]time.Time)
+	}
+
+	now := time.Now()
+
+	if _, tracked := r.hashes[*hash]; tracked {
+		return
 	}
 
 	if len(r.hashes) < inBlockShedTrackLimit {
-		r.hashes[*hash] = struct{}{}
-	} else {
-		r.overflow = true
+		r.hashes[*hash] = now
+	} else if r.overflowAt.IsZero() {
+		r.overflowAt = now
 	}
 
-	v.armInBlockShedRecoveryLocked()
+	v.armInBlockShedRecoveryLocked(0)
 }
 
-func (v *Validator) armInBlockShedRecoveryLocked() {
+func (v *Validator) shedRecoveryDelay() time.Duration {
+	if v.inBlockShedRecoveryDelay > 0 {
+		return v.inBlockShedRecoveryDelay
+	}
+
+	return inBlockShedRecoveryDelay
+}
+
+// armInBlockShedRecoveryLocked arms the check for the moment the oldest tracked shed is a full
+// delay old, and never sooner than minWait from now, so a failed reset is not retried in a loop.
+// It does nothing when a check is already pending or nothing is tracked.
+func (v *Validator) armInBlockShedRecoveryLocked(minWait time.Duration) {
 	r := &v.shedRecovery
 
 	if r.timer != nil {
 		return
 	}
 
-	delay := v.inBlockShedRecoveryDelay
-	if delay <= 0 {
-		delay = inBlockShedRecoveryDelay
+	oldest := r.overflowAt
+
+	for _, shedAt := range r.hashes {
+		if oldest.IsZero() || shedAt.Before(oldest) {
+			oldest = shedAt
+		}
 	}
 
-	r.timer = time.AfterFunc(delay, v.recoverInBlockSheds)
+	if oldest.IsZero() {
+		return
+	}
+
+	wait := max(time.Until(oldest.Add(v.shedRecoveryDelay())), minWait)
+
+	r.timer = time.AfterFunc(wait, v.recoverInBlockSheds)
 }
 
-// recoverInBlockSheds resets block assembly when a transaction an in-block shed left Locked is
-// still Locked and unmined, which means no block unlocked it and the template is missing it. The
-// ids it checked leave the tracker only once the check is settled, so a failed reset keeps them
-// and arms the check again.
+// recoverInBlockSheds resets block assembly when a transaction an in-block shed left Locked, and
+// that is a full delay old, is still Locked and unmined, which means no block unlocked it and the
+// template is missing it. Younger transactions stay tracked and re-arm the check for the oldest of
+// them. The ids it checked leave the tracker only once the check is settled, so a failed reset
+// keeps them and arms the check again after a delay.
 func (v *Validator) recoverInBlockSheds() {
 	r := &v.shedRecovery
+	cutoff := time.Now().Add(-v.shedRecoveryDelay())
 
 	r.mu.Lock()
-	hashes := make([]chainhash.Hash, 0, len(r.hashes))
+	due := make([]chainhash.Hash, 0, len(r.hashes))
 
-	for hash := range r.hashes {
-		hashes = append(hashes, hash)
+	for hash, shedAt := range r.hashes {
+		if !shedAt.After(cutoff) {
+			due = append(due, hash)
+		}
 	}
 
-	overflow := r.overflow
+	overflow := !r.overflowAt.IsZero() && !r.overflowAt.After(cutoff)
 	r.timer = nil
 	r.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), inBlockShedRecoveryTimeout)
 	defer cancel()
 
-	if (overflow || v.anyInBlockShedStillLocked(ctx, hashes)) && !v.resetForInBlockSheds(ctx, len(hashes), overflow) {
-		r.mu.Lock()
-		v.armInBlockShedRecoveryLocked()
-		r.mu.Unlock()
-
-		return
+	settled := true
+	if overflow || v.anyInBlockShedStillLocked(ctx, due) {
+		settled = v.resetForInBlockSheds(ctx, len(due), overflow)
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for _, hash := range hashes {
+	if !settled {
+		v.armInBlockShedRecoveryLocked(v.shedRecoveryDelay())
+
+		return
+	}
+
+	for _, hash := range due {
 		delete(r.hashes, hash)
 	}
 
-	r.overflow = r.overflow && !overflow
+	if overflow {
+		r.overflowAt = time.Time{}
+	}
+
+	v.armInBlockShedRecoveryLocked(0)
 }
 
 // anyInBlockShedStillLocked reports whether any of the ids is still Locked and unmined. A read

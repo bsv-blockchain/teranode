@@ -1708,10 +1708,14 @@ func (v *Validator) observeQueueStats(stats blockassembly.QueueStats) {
 // shedAtHeldLimit reports whether a transaction is shed before any UTXO-store write because block
 // assembly already holds as many transactions in memory as its limit allows. It covers the steady
 // state at the limit, where every ingest transaction would otherwise be spent, created, refused
-// and unwound. It runs after the parent reads and the script validation, so an invalid transaction
-// keeps its invalid verdict at the limit and only a valid one is shed. A block transaction is never shed here, because block assembly does not
-// refuse it for that limit. The view is the heldLimitGate poll, so it can lag: a transaction that
-// crosses the limit between two polls still takes the late shed and the unwind.
+// and unwound. It runs after the parent reads and the script validation, so a transaction that
+// fails those keeps its invalid verdict at the limit. A verdict decided in the spend or create, such
+// as a double spend, a frozen or immature output or a conflicting create, is deferred at the limit:
+// the caller gets the retryable held shed, and the rejected-transaction topic is not published. A
+// transaction the store already holds is not shed, so a resubmit keeps its idempotent success. A
+// block transaction is never shed here, because block assembly does not refuse it for that limit.
+// The view is the heldLimitGate poll, so it can lag: a transaction that crosses the limit between
+// two polls still takes the late shed and the unwind.
 //
 // The caller counts the shed once, in the Kafka handler. Here an ingest transaction is counted as
 // dropped and warned at the bounded rate, as the late shed does.
