@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	"github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/sql"
 	"github.com/bsv-blockchain/teranode/ulogger"
@@ -36,7 +37,7 @@ type reorgEquivResult struct {
 // block forward that mines {A, B, X} and must leave {C}.
 //
 // The block references its mined subtree in one of two ways, exercising the two
-// branches of moveForwardBlock -> processBlockSubtrees (SubtreeProcessor.go:4193):
+// branches of moveForwardBlock -> processBlockSubtrees:
 //
 //   - fromStore=false (in-memory / self-produced): block.Subtrees is the assembly's OWN
 //     chained-subtree root hash, so blockSubtreesMap ends empty and CreateTransactionMap
@@ -61,6 +62,11 @@ func runMoveForwardEquivalence(t *testing.T, fromStore bool, storeName string) r
 	require.NoError(t, err)
 
 	blobStore := blob_memory.New()
+	// Registered before stp.Stop so it runs after it: cleanups run last-registered-first.
+	t.Cleanup(func() {
+		_ = utxoStore.Close(context.Background())
+		_ = blobStore.Close(context.Background())
+	})
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 100)
 	go func() {
@@ -236,10 +242,15 @@ func currentSubtreeContains(stp *SubtreeProcessor, hash chainhash.Hash) bool {
 // invalidates a transaction the node is holding in its *incomplete current subtree*.
 //
 // Scenario: the node sits on tip block2 with two mempool txs (minedTx, keepTx) in its
-// current subtree (not yet a completed chained subtree). A 1-block reorg orphans block2
-// and adopts blockNew, whose subtree mines minedTx. After the reorg:
+// current subtree (not yet a completed chained subtree). Block2 itself mined backTx. A
+// 1-block reorg orphans block2 and adopts blockNew, whose subtree mines minedTx. After
+// the reorg:
 //   - minedTx must be evicted from the current subtree (now on the longest chain);
-//   - keepTx (not on the new chain) must remain available for re-mining;
+//   - keepTx (not on the new chain) must remain available for re-mining, and the reorg
+//     must leave its UTXO record alone: only txs of the moved-back blocks are marked
+//     (issue 2051);
+//   - backTx, which only the orphaned block carried, must be back in assembly and
+//     marked not on the longest chain;
 //   - the subtree processor's internal invariants (CheckSubtreeProcessor) must hold,
 //     including a correctly re-asserted coinbase placeholder.
 //
@@ -259,11 +270,12 @@ func TestReorg_InvalidatesCurrentSubtreeTx(t *testing.T) {
 	utxoStore, err := sql.New(ctx, ulogger.TestLogger{}, settings, utxoStoreURL)
 	require.NoError(t, err)
 
-	// The reorg's mark-not-on-longest-chain writes unmined_since = store block height,
-	// so a non-zero height is required for keepTx to be observably marked unmined.
-	require.NoError(t, utxoStore.SetBlockHeight(2))
-
 	blobStore := blob_memory.New()
+	// Registered before stp.Stop so it runs after it: cleanups run last-registered-first.
+	t.Cleanup(func() {
+		_ = utxoStore.Close(context.Background())
+		_ = blobStore.Close(context.Background())
+	})
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 100)
 	go func() {
@@ -291,8 +303,10 @@ func TestReorg_InvalidatesCurrentSubtreeTx(t *testing.T) {
 	// mark-on-longest-chain bookkeeping operates on real records.
 	minedTxTx := newReorgMempoolTx(101) // mined by the new chain -> invalidated out of assembly
 	keepTxTx := newReorgMempoolTx(102)  // not on the new chain -> stays in assembly
+	backTxTx := newReorgMempoolTx(103)  // mined only by the orphaned block2
 	minedTx := *minedTxTx.TxIDChainHash()
 	keepTx := *keepTxTx.TxIDChainHash()
+	backTx := *backTxTx.TxIDChainHash()
 
 	// The moved-forward (new tip) block mines minedTx; store its subtree.
 	fwdSubtreeHash := storeReorgSubtree(t, ctx, blobStore, []subtree.Node{
@@ -313,12 +327,25 @@ func TestReorg_InvalidatesCurrentSubtreeTx(t *testing.T) {
 	require.NoError(t, err)
 	_, err = utxoStore.Create(ctx, keepTxTx, 2)
 	require.NoError(t, err)
+	// backTx is mined on the longest chain in block2, so unmined_since starts at 0.
+	_, err = utxoStore.Create(ctx, backTxTx, 2, utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: 2, BlockHeight: 2, OnLongestChain: true}))
+	require.NoError(t, err)
+
+	backMetaBefore, err := utxoStore.Get(ctx, &backTx, fields.UnminedSince)
+	require.NoError(t, err)
+	require.Zero(t, backMetaBefore.UnminedSince, "precondition: backTx is mined on the longest chain")
+
+	keepMetaBefore, err := utxoStore.Get(ctx, &keepTx, fields.UnminedSince)
+	require.NoError(t, err)
+
+	backSubtreeHash := storeReorgSubtree(t, ctx, blobStore, []subtree.Node{{Hash: backTx, Fee: 1, SizeInBytes: 100}})
 
 	blockToMoveBack := &model.Block{
-		Header:     block2Header,
-		Height:     2,
-		CoinbaseTx: coinbaseTx2,
-		Subtrees:   []*chainhash.Hash{}, // orphaned block carried no mempool txs
+		Header:           block2Header,
+		Height:           2,
+		CoinbaseTx:       coinbaseTx2,
+		Subtrees:         []*chainhash.Hash{backSubtreeHash}, // orphaned block mined backTx
+		TransactionCount: 2,                                  // coinbase + backTx
 	}
 	blockToMoveForward := &model.Block{
 		Header:           blockNewHeader,
@@ -376,30 +403,42 @@ func TestReorg_InvalidatesCurrentSubtreeTx(t *testing.T) {
 	require.True(t, currentSubtreeContains(stp, keepTx),
 		"keepTx must still be present in the current subtree")
 
-	// UTXO-level confirmation of the invalidation. minedTx is now mined on the longest
-	// chain (unmined_since cleared to 0); keepTx is marked not-on-longest-chain
-	// (unmined_since set) so it remains recoverable for re-mining.
+	// backTx, which only the orphaned block carried, is back in assembly.
+	require.True(t, txMap.Exists(backTx), "a tx only the orphaned block carried must return to block assembly")
+
+	// UTXO-level confirmation. minedTx is now mined on the longest chain (unmined_since
+	// cleared to 0).
 	minedMeta, err := utxoStore.Get(ctx, &minedTx, fields.UnminedSince)
 	require.NoError(t, err)
 	require.Equal(t, uint32(0), minedMeta.UnminedSince,
 		"minedTx must be marked on the longest chain (unmined_since cleared) after the reorg mined it")
 
+	// backTx was mined only by the orphaned block, so the reorg marks it not on the
+	// longest chain (unmined_since set), which keeps it recoverable for re-mining.
+	backMeta, err := utxoStore.Get(ctx, &backTx, fields.UnminedSince)
+	require.NoError(t, err)
+	require.NotZero(t, backMeta.UnminedSince,
+		"backTx must be marked not on the longest chain after the reorg orphaned its block")
+
+	// keepTx was in no moved-back block, so the reorg leaves its record alone (issue
+	// 2051): unmined_since is whatever it was before the reorg.
 	keepMeta, err := utxoStore.Get(ctx, &keepTx, fields.UnminedSince)
 	require.NoError(t, err)
-	require.NotEqual(t, uint32(0), keepMeta.UnminedSince,
-		"keepTx must be marked not on the longest chain (unmined_since set) so it stays available for re-mining")
+	require.Equal(t, keepMetaBefore.UnminedSince, keepMeta.UnminedSince,
+		"the reorg must not touch the record of a tx no moved-back block carried")
 }
 
-// TestReorg_FromStoreConflictingNodes verifies the store-driven conflict path of
-// BA-REORG-011 end to end: when moveForwardBlock reads a block subtree whose
+// TestMoveForwardBlock_StoredConflictingNodeEvictsLoser covers the from-store conflict
+// path of move-forward: when moveForwardBlock reads a block subtree whose
 // ConflictingNodes trailer flags a winning tx, conflict resolution runs, the displaced
 // mempool loser is evicted from block assembly, and an unrelated tx is preserved.
 //
 // It runs against a real sqlitememory UTXO store and blockchain (the fixtures of
 // reset_conflict_wal_test.go), so ProcessConflicting's recovery protocol runs for real.
 // Existing tests check that the loser is marked conflicting in the store; this one
-// checks what block assembly does with it.
-func TestReorg_FromStoreConflictingNodes(t *testing.T) {
+// checks what block assembly does with it. Nothing is rolled back here; the rolled-back
+// case of BA-REORG-011 is covered in reset_conflict_wal_test.go.
+func TestMoveForwardBlock_StoredConflictingNodeEvictsLoser(t *testing.T) {
 	ctx := t.Context()
 	stp, store, subtreeStore, chain := newResetWALTestProcessor(t, true)
 
@@ -463,6 +502,11 @@ func TestReorg_DuplicateMoveForward_NoCorruption(t *testing.T) {
 	require.NoError(t, err)
 
 	blobStore := blob_memory.New()
+	// Registered before stp.Stop so it runs after it: cleanups run last-registered-first.
+	t.Cleanup(func() {
+		_ = utxoStore.Close(context.Background())
+		_ = blobStore.Close(context.Background())
+	})
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 100)
 	go func() {
@@ -563,6 +607,11 @@ func runPartialFailureReorg(t *testing.T) partialFailureReorg {
 	require.NoError(t, err)
 
 	blobStore := blob_memory.New()
+	// Registered before stp.Stop so it runs after it: cleanups run last-registered-first.
+	t.Cleanup(func() {
+		_ = utxoStore.Close(context.Background())
+		_ = blobStore.Close(context.Background())
+	})
 
 	newSubtreeChan := make(chan NewSubtreeRequest, 100)
 	go func() {
@@ -629,8 +678,9 @@ func runPartialFailureReorg(t *testing.T) partialFailureReorg {
 }
 
 // TestReorg_PartialFailureKeepsTipAndMempool: a reorg that fails half way MUST leave
-// the best-block reference unchanged, and the pre-reorg mempool txs must still be in
-// block assembly.
+// the best-block reference unchanged, and the rollback must restore the pre-reorg
+// subtrees: txA and txB back in the current subtree, and txBack (which the move-back
+// rebuild put there) gone from it.
 //
 // Spec: BA-REORG-007. That the rollback also restores the tx map's content is a
 // separate, still-open gap: TestKnownDefect_PartialFailureRollbackLeavesMovedBackTx
@@ -638,11 +688,28 @@ func runPartialFailureReorg(t *testing.T) partialFailureReorg {
 func TestReorg_PartialFailureKeepsTipAndMempool(t *testing.T) {
 	r := runPartialFailureReorg(t)
 
-	require.Error(t, r.reorgErr, "the injected mid-reorg failure must surface as an error")
+	requireFailedAfterMoveBack(t, r)
+
 	require.Equal(t, r.preReorgTip, r.stp.GetCurrentBlockHeader().Hash().String(),
 		"best-block reference must roll back to the pre-reorg tip after a partial failure")
 
-	txMap := r.stp.GetCurrentTxMap()
-	require.True(t, txMap.Exists(r.txA), "pre-reorg tx must survive the rolled-back reorg")
-	require.True(t, txMap.Exists(r.txB), "pre-reorg tx must survive the rolled-back reorg")
+	// The move-back adds to the tx map in place and never removes txA or txB, so the
+	// map alone cannot tell a restored rollback from a missing one. The current
+	// subtree can: the move-back rebuild puts txBack in it, the rollback takes it out.
+	require.True(t, currentSubtreeContains(r.stp, r.txA), "pre-reorg tx must be back in the current subtree")
+	require.True(t, currentSubtreeContains(r.stp, r.txB), "pre-reorg tx must be back in the current subtree")
+	require.False(t, currentSubtreeContains(r.stp, r.txBack),
+		"the move-back-only tx must not be in the restored current subtree")
+}
+
+// requireFailedAfterMoveBack asserts the reorg failed where runPartialFailureReorg
+// injects the failure: at moveForwardBlock's header guard, after the move-back ran.
+// Any other error (e.g. a failure before the move-back) would make the rollback
+// assertions trivially true.
+func requireFailedAfterMoveBack(t *testing.T, r partialFailureReorg) {
+	t.Helper()
+
+	require.Error(t, r.reorgErr, "the injected mid-reorg failure must surface as an error")
+	require.Contains(t, r.reorgErr.Error(), "does not match the current block header",
+		"the reorg must fail at the move-forward header guard, after the move-back ran")
 }

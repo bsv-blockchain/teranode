@@ -10,7 +10,8 @@
 //   - TestHandleReorg_DeepReorgResetNeedsHeightAboveThousand  -> BA-REORG-006 (height term)
 //   - TestHandleReorg_ResetsWhenDepthReachesCoinbaseMaturity -> BA-REORG-006 (depth boundary)
 //   - TestProcessNewBlockAnnouncement_FailureLeavesRunningAndTip -> BA-REORG-007, BA-REORG-008, BA-STATE-002
-//   - TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent -> BA-REORG-002, BA-REORG-009
+//     (best-tip read, linear move-up, catch-up, and competing-fork reorg + fallback reset failures)
+//   - TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent -> BA-REORG-009
 package blockassembly
 
 import (
@@ -124,7 +125,9 @@ func TestHandleReorg_ResetsWhenDepthReachesCoinbaseMaturity(t *testing.T) {
 	// The spec says "at least the coinbase-maturity threshold", so depth == maturity
 	// (moveBack=1, CoinbaseMaturity=1) at height 1001 resets.
 	t.Run("depth equal to maturity resets", func(t *testing.T) {
-		mockStp, _ := runReorgDecision(t, 1001, 1)
+		mockStp, err := runReorgDecision(t, 1001, 1)
+		// moveToBlock branches on this error, so pin it rather than drop it.
+		require.ErrorIs(t, err, errors.ErrBlockAssemblyReset)
 		mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		mockStp.AssertNotCalled(t, "Reorg", mock.Anything, mock.Anything)
 	})
@@ -146,8 +149,10 @@ func assertRunningAndTipUnchanged(t *testing.T, ba *BlockAssembler, wantHeader *
 }
 
 // TestProcessNewBlockAnnouncement_FailureLeavesRunningAndTip drives processNewBlockAnnouncement into
-// each failure path and asserts the service returns to Running (BA-REORG-008) with the
-// best-block reference untouched (BA-REORG-007). The existing "catch-up mid-error"
+// five failures and asserts each leaves the service Running (BA-REORG-008) with the
+// best-block reference untouched (BA-REORG-007): a failed best-tip read, a failed block
+// fetch and a failed move-forward on a linear move-up, a failed catch-up, and a
+// competing-fork reorg whose fallback reset fails too. The existing "catch-up mid-error"
 // test checks the tip but never asserts the operational state.
 func TestProcessNewBlockAnnouncement_FailureLeavesRunningAndTip(t *testing.T) {
 	initPrometheusMetrics()
@@ -231,17 +236,46 @@ func TestProcessNewBlockAnnouncement_FailureLeavesRunningAndTip(t *testing.T) {
 
 		assertRunningAndTipUnchanged(t, items.blockAssembler, genesis, 0)
 	})
+
+	// Competing fork (moveBack=1): the only case here that enters the reorg state. The
+	// in-place Reorg fails, handleReorg falls back to a full reset, and the reset fails
+	// too. Block assembly must stay on its own tip a1 and return to Running.
+	t.Run("Reorg and fallback Reset both fail on a competing fork", func(t *testing.T) {
+		items := setupBlockAssemblyTest(t)
+		genesis := genesisHeader(t, items)
+
+		// genesis->a1 is block assembly's chain; genesis->b1->b2 is longer and wins.
+		a1 := buildChain(genesis, 1, 900)[0]
+		addChain(t, items, []*model.BlockHeader{a1})
+		addChain(t, items, buildChain(genesis, 2, 950))
+
+		mockStp := &subtreeprocessor.MockSubtreeProcessor{}
+		mockStp.On("Reorg", mock.Anything, mock.Anything).
+			Return(errors.NewProcessingError("reorg failed"))
+		mockStp.On("WaitForPendingBlocks", mock.Anything).Return(nil)
+		mockStp.On("Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+			Return(subtreeprocessor.ResetResponse{Err: errors.NewProcessingError("reset failed")})
+		// The failed reset leaves the subtree processor where it was, on a1.
+		mockStp.On("GetCurrentBlockHeader").Return(a1)
+		injectMockStp(t, items, mockStp)
+
+		items.blockAssembler.setBestBlockHeader(a1, 1)
+
+		items.blockAssembler.processNewBlockAnnouncement(t.Context())
+
+		mockStp.AssertCalled(t, "Reorg", mock.Anything, mock.Anything)
+		mockStp.AssertCalled(t, "Reset", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		assertRunningAndTipUnchanged(t, items.blockAssembler, a1, 1)
+	})
 }
 
-// TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent covers BA-REORG-009 (duplicate/repeated
-// wake-ups are idempotent) and BA-REORG-002 (the notification payload is untrusted;
-// reconciliation is driven solely by GetBestBlockHeader).
+// TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent: repeated wake-ups apply a
+// move once, through the best-tip replay (BA-REORG-009).
 func TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent(t *testing.T) {
 	initPrometheusMetrics()
 
 	// Firing the reconcile three times for a single-block advance must apply the
-	// move-forward exactly once; subsequent passes observe the same authoritative tip
-	// and no-op.
+	// move-forward exactly once; later passes find nothing left to replay and no-op.
 	t.Run("repeated wake-ups advance exactly once", func(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		genesis := genesisHeader(t, items)
@@ -267,8 +301,7 @@ func TestProcessNewBlockAnnouncement_RepeatedWakeUpsAreIdempotent(t *testing.T) 
 		require.Equal(t, uint32(1), ht)
 	})
 
-	// BA already at the authoritative tip: a spurious wake-up (e.g. a duplicate or
-	// out-of-order notification whose payload is ignored) is a redundant no-op.
+	// BA already at the chain's best tip: a repeated wake-up is a redundant no-op.
 	t.Run("wake-up while already at tip is a no-op", func(t *testing.T) {
 		items := setupBlockAssemblyTest(t)
 		genesis := genesisHeader(t, items)

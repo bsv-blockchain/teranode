@@ -28,10 +28,10 @@ import (
 // restored subtrees. In production handleReorg falls back to a full reset on reorg
 // failure, which hides this.
 //
-// Spec: BA-REORG-007 (tracked as GAP-BA-006).
+// Spec: BA-REORG-007 (tracked as GAP-BA-004).
 func TestKnownDefect_PartialFailureRollbackLeavesMovedBackTx(t *testing.T) {
 	r := runPartialFailureReorg(t)
-	require.Error(t, r.reorgErr, "the injected mid-reorg failure must surface as an error")
+	requireFailedAfterMoveBack(t, r)
 
 	require.NoError(t, r.stp.CheckSubtreeProcessor(),
 		"rolled-back reorg must restore subtree processor invariants")
