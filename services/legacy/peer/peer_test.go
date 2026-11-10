@@ -1875,3 +1875,170 @@ func TestPeer_ARejectedBodyAtTheReadLoopDropsTheAssociationPrimary(t *testing.T)
 		require.True(t, disconnected(receiver))
 	})
 }
+
+// deadlineConn is a net.Pipe end with fake addresses. Unlike the io.Pipe mock
+// above, net.Pipe honours write deadlines, which the send timeout relies on.
+type deadlineConn struct {
+	net.Conn
+	laddr, raddr string
+}
+
+func (c deadlineConn) LocalAddr() net.Addr  { return &addr{"tcp", c.laddr} }
+func (c deadlineConn) RemoteAddr() net.Addr { return &addr{"tcp", c.raddr} }
+
+// newSendTimeoutTestPeer completes a handshake between an outbound peer with
+// the given legacy_peerSendTimeout and a hand-driven remote, then stops reading
+// on the remote. It returns the peer and the remote end of the pipe; nothing
+// reads from the remote end until the caller does.
+func newSendTimeoutTestPeer(t *testing.T, sendTimeout time.Duration) (*peer.Peer, net.Conn) {
+	t.Helper()
+
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.Legacy.PeerSendTimeout = sendTimeout
+
+	peerCfg := &peer.Config{
+		UserAgentName:          "peer",
+		UserAgentVersion:       "1.0",
+		ChainParams:            &chaincfg.MainNetParams,
+		TrickleInterval:        10 * time.Second,
+		TstAllowSelfConnection: true,
+	}
+
+	localEnd, remoteEnd := net.Pipe()
+	localConn := deadlineConn{Conn: localEnd, laddr: "10.0.0.1:8333", raddr: "10.0.0.2:8333"}
+
+	p, err := peer.NewOutboundPeer(ulogger.TestLogger{}, tSettings, peerCfg, "10.0.0.2:8333")
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		p.DisconnectWithInfo("test complete")
+		_ = remoteEnd.Close()
+	})
+
+	// Read until the peer's VERACK, then stop: everything the peer writes
+	// after that sits unread until the test reads it.
+	gotVerAck := make(chan error, 1)
+	go func() {
+		for {
+			_, msg, _, readErr := wire.ReadMessageN(remoteEnd, wire.ProtocolVersion, peerCfg.ChainParams.Net)
+			if readErr != nil {
+				gotVerAck <- readErr
+				return
+			}
+
+			if _, ok := msg.(*wire.MsgVerAck); ok {
+				gotVerAck <- nil
+				return
+			}
+		}
+	}()
+
+	p.AssociateConnection(localConn)
+
+	localNA := wire.NewNetAddressIPPort(net.ParseIP("10.0.0.1"), 8333, wire.SFNodeNetwork)
+	remoteNA := wire.NewNetAddressIPPort(net.ParseIP("10.0.0.2"), 8333, wire.SFNodeNetwork)
+	remoteVer := wire.NewMsgVersion(remoteNA, localNA, 0, 0)
+	remoteVer.ProtocolVersion = int32(wire.ProtocolVersion)
+
+	_, err = wire.WriteMessageN(remoteEnd, remoteVer, wire.ProtocolVersion, peerCfg.ChainParams.Net)
+	require.NoError(t, err)
+	_, err = wire.WriteMessageN(remoteEnd, wire.NewMsgVerAck(), wire.ProtocolVersion, peerCfg.ChainParams.Net)
+	require.NoError(t, err)
+
+	select {
+	case readErr := <-gotVerAck:
+		require.NoError(t, readErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer did not send VERACK")
+	}
+
+	return p, remoteEnd
+}
+
+// TestPeerSendTimeoutDisconnectsNonReadingPeer covers a peer that completes
+// the handshake and then never reads. Before the send timeout its socket write
+// blocked forever, so the peer was never dropped and its send queue grew
+// without bound. Now the write fails after legacy_peerSendTimeout and the peer
+// is disconnected, as SV Node does with its "socket sending timeout".
+func TestPeerSendTimeoutDisconnectsNonReadingPeer(t *testing.T) {
+	p, _ := newSendTimeoutTestPeer(t, 200*time.Millisecond)
+
+	p.QueueMessage(wire.NewMsgPing(1), nil)
+
+	disconnected := make(chan struct{})
+	go func() {
+		p.WaitForDisconnect()
+		close(disconnected)
+	}()
+
+	select {
+	case <-disconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a peer that stopped reading was not disconnected by the send timeout")
+	}
+
+	require.False(t, p.Connected())
+}
+
+// slowReader hands out at most readSize bytes per Read and sleeps before each
+// one, modelling a peer on a slow link that keeps reading.
+type slowReader struct {
+	r        io.Reader
+	readSize int
+	pause    time.Duration
+}
+
+func (s *slowReader) Read(b []byte) (int, error) {
+	time.Sleep(s.pause)
+
+	if len(b) > s.readSize {
+		b = b[:s.readSize]
+	}
+
+	return s.r.Read(b)
+}
+
+// TestPeerSendTimeoutKeepsSlowReadingPeer checks that the timeout counts
+// progress, not the whole message: a peer reading 16 KiB every 20 ms takes
+// over a second to receive a ~1 MB inv, five times the 200 ms send timeout,
+// yet the socket accepts bytes every 20 ms, so the peer stays up.
+func TestPeerSendTimeoutKeepsSlowReadingPeer(t *testing.T) {
+	const sendTimeout = 200 * time.Millisecond
+
+	p, remoteEnd := newSendTimeoutTestPeer(t, sendTimeout)
+
+	const invCount = 30000 // 30000 * 36 bytes is about 1 MB
+
+	invMsg := wire.NewMsgInvSizeHint(invCount)
+	for i := 0; i < invCount; i++ {
+		var hash chainhash.Hash
+		hash[0], hash[1], hash[2] = byte(i), byte(i>>8), byte(i>>16)
+		require.NoError(t, invMsg.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &hash)))
+	}
+
+	sent := make(chan struct{}, 1)
+	p.QueueMessage(invMsg, sent)
+
+	reader := &slowReader{r: remoteEnd, readSize: 16 * 1024, pause: 20 * time.Millisecond}
+	start := time.Now()
+
+	for {
+		_, msg, _, err := wire.ReadMessageN(reader, wire.ProtocolVersion, chaincfg.MainNetParams.Net)
+		require.NoError(t, err, "peer was cut off while the remote was still reading")
+
+		if got, ok := msg.(*wire.MsgInv); ok && len(got.InvList) == invCount {
+			break
+		}
+	}
+
+	elapsed := time.Since(start)
+
+	select {
+	case <-sent:
+	case <-time.After(5 * time.Second):
+		t.Fatal("peer did not report the inv as sent")
+	}
+
+	require.Greater(t, elapsed, sendTimeout, "the transfer must outlast the timeout for this test to prove anything")
+	require.True(t, p.Connected(), "a slow peer that keeps reading must not be disconnected")
+}
