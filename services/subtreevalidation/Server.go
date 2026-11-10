@@ -172,10 +172,11 @@ type Server struct {
 	// validation once it is RUNNING again.
 	skippedSubtrees skippedSubtrees
 
-	// failedPeerSubtrees keeps the hash of each peer subtree that failed validation, with the
-	// code of the failure, for subtreevalidation_failedSubtreeNegativeCacheTTL; a re-announcement
-	// in that window is skipped. Nil when the cache is off. See recordFailedPeerSubtree.
-	failedPeerSubtrees *expiringmap.ExpiringMap[chainhash.Hash, string]
+	// failedPeerSubtrees keeps the hash and DataHub URL of each peer subtree that failed
+	// validation, with the code of the failure, for subtreevalidation_failedSubtreeNegativeCacheTTL;
+	// a re-announcement of that hash with that URL in the window is skipped. Nil when the cache is
+	// off. See recordFailedPeerSubtree.
+	failedPeerSubtrees *expiringmap.ExpiringMap[failedPeerSubtreeKey, string]
 
 	// replaySubtreeFn replaces the validation of a replayed subtree, after its admission, age and
 	// RUNNING checks; nil in production.

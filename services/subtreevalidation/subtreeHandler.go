@@ -203,7 +203,7 @@ const (
 	// yet, so nothing was done. That validation may still fail.
 	peerSubtreeLocked
 
-	// peerSubtreeRecentlyFailed: the subtree failed validation within
+	// peerSubtreeRecentlyFailed: the subtree, fetched from the same URL, failed validation within
 	// subtreevalidation_failedSubtreeNegativeCacheTTL, so nothing was done.
 	peerSubtreeRecentlyFailed
 )
@@ -232,9 +232,10 @@ func (u *Server) validateAdmittedPeerSubtree(ctx context.Context, hash *chainhas
 		return 0, errors.NewProcessingError("[subtreesHandler] failed to get best block header meta during subtree validation")
 	}
 
-	// Before the lock: a subtree that failed a moment ago is not fetched or validated again,
-	// and block validation, which does not consult the cache, is not made to wait on it.
-	if code, failed := u.recentlyFailedPeerSubtree(hash); failed {
+	// Before the lock: a subtree that failed a moment ago from this URL is not fetched or
+	// validated again, and block validation, which does not consult the cache, is not made to
+	// wait on it.
+	if code, failed := u.recentlyFailedPeerSubtree(hash, baseURL.String()); failed {
 		prometheusRecentlyFailedPeerSubtreesSkipped.Inc()
 		u.logger.Debugf("[subtreesHandler][%s] skipping subtree from peer %s (url %s): failed validation within %s with %s", hash.String(), peerID, baseURL.String(), u.settings.SubtreeValidation.FailedSubtreeNegativeCacheTTL, code)
 
@@ -269,7 +270,7 @@ func (u *Server) validateAdmittedPeerSubtree(ctx context.Context, hash *chainhas
 	// goroutine completed the write between TryLockIfFileNotExists and the in-store existence
 	// check. Nothing to clean up, and it is stored either way.
 	if _, err = u.ValidateSubtreeInternal(ctx, v, bestBlockHeaderMeta.Height+1, *blockIDsMap, validationOptions...); err != nil {
-		u.recordFailedPeerSubtree(ctx, hash, err)
+		u.recordFailedPeerSubtree(ctx, hash, v.BaseURL, err)
 
 		return 0, err
 	}
