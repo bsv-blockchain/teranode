@@ -2042,3 +2042,68 @@ func TestPeerSendTimeoutKeepsSlowReadingPeer(t *testing.T) {
 	require.Greater(t, elapsed, sendTimeout, "the transfer must outlast the timeout for this test to prove anything")
 	require.True(t, p.Connected(), "a slow peer that keeps reading must not be disconnected")
 }
+
+// TestPeerSendTimeoutDisconnectsPeerThatStopsMidMessage covers a peer that
+// reads the start of a large message and then stops. The socket accepted some
+// bytes, so the writer re-arms the deadline, but the next window accepts
+// nothing and the peer must still be disconnected.
+func TestPeerSendTimeoutDisconnectsPeerThatStopsMidMessage(t *testing.T) {
+	p, remoteEnd := newSendTimeoutTestPeer(t, 200*time.Millisecond)
+
+	const invCount = 30000 // 30000 * 36 bytes is about 1 MB, far more than one pipe read
+
+	invMsg := wire.NewMsgInvSizeHint(invCount)
+	for i := 0; i < invCount; i++ {
+		var hash chainhash.Hash
+		hash[0], hash[1], hash[2] = byte(i), byte(i>>8), byte(i>>16)
+		require.NoError(t, invMsg.AddInvVect(wire.NewInvVect(wire.InvTypeTx, &hash)))
+	}
+
+	p.QueueMessage(invMsg, nil)
+
+	// Read the header and a few KiB of the payload, then stop reading.
+	partial := make([]byte, 8*1024)
+	_, err := io.ReadFull(remoteEnd, partial)
+	require.NoError(t, err)
+
+	disconnected := make(chan struct{})
+	go func() {
+		p.WaitForDisconnect()
+		close(disconnected)
+	}()
+
+	select {
+	case <-disconnected:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a peer that stopped reading partway through a message was not disconnected")
+	}
+
+	require.False(t, p.Connected())
+}
+
+// TestPeerSendTimeoutNonPositiveFallsBackToDefault checks that a zero or
+// negative legacy_peerSendTimeout means the 20 minute default. Used as is, it
+// would put every write deadline in the past and drop every peer during the
+// handshake.
+func TestPeerSendTimeoutNonPositiveFallsBackToDefault(t *testing.T) {
+	for _, sendTimeout := range []time.Duration{0, -time.Second} {
+		t.Run(sendTimeout.String(), func(t *testing.T) {
+			p, remoteEnd := newSendTimeoutTestPeer(t, sendTimeout)
+
+			go func() {
+				_, _ = io.Copy(io.Discard, remoteEnd)
+			}()
+
+			sent := make(chan struct{}, 1)
+			p.QueueMessage(wire.NewMsgPing(1), sent)
+
+			select {
+			case <-sent:
+			case <-time.After(5 * time.Second):
+				t.Fatal("peer did not send the ping")
+			}
+
+			require.True(t, p.Connected())
+		})
+	}
+}

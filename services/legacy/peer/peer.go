@@ -1571,7 +1571,7 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 	}
 
 	// Write the message to the peer. The progress writer fails the write when
-	// the socket accepts nothing for the send timeout, so a peer that stopped
+	// the socket accepts nothing for a whole send-timeout window, so a peer that stopped
 	// reading is disconnected by outHandler instead of parking it forever.
 	w := &sendProgressWriter{conn: p.conn, timeout: p.sendTimeout()}
 	n, err := wire.WriteMessageWithEncodingN(w, msg, p.ProtocolVersion(), p.cfg.ChainParams.Net, enc)
@@ -1584,9 +1584,10 @@ func (p *Peer) writeMessage(msg wire.Message, enc wire.MessageEncoding) error {
 	return err
 }
 
-// sendTimeout is how long a socket write may go without the socket accepting
-// any bytes before the peer is disconnected. It copies SV Node's "socket
-// sending timeout" (-p2ptimeout, default 20 minutes).
+// sendTimeout is the window a socket write gets to have any bytes accepted
+// before the peer is disconnected. It follows SV Node's "socket sending
+// timeout" (-p2ptimeout, default 20 minutes); sendProgressWriter says where
+// the bound differs.
 func (p *Peer) sendTimeout() time.Duration {
 	if p.settings == nil || p.settings.Legacy.PeerSendTimeout <= 0 {
 		return DefaultPeerSendTimeout
@@ -1601,9 +1602,12 @@ const DefaultPeerSendTimeout = 20 * time.Minute
 
 // sendProgressWriter arms a write deadline before each socket write and
 // re-arms it whenever the write timed out after the socket had accepted some
-// bytes. A write therefore fails only when the socket accepts nothing for the
-// whole timeout, which is SV Node's rule: a slow peer that keeps reading is
-// never cut off, however large the message.
+// bytes. A write therefore fails only when a whole timeout window passes with
+// no bytes accepted, so a slow peer that keeps reading is never cut off,
+// however large the message. The check runs once per window, so a peer that
+// stalls partway through a window is dropped after between one and two times
+// the timeout with no bytes accepted. SV Node compares the clock with its last
+// send and drops it after one.
 type sendProgressWriter struct {
 	conn    net.Conn
 	timeout time.Duration
