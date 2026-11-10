@@ -52,6 +52,7 @@ type fakeSequentialStore struct {
 	beginCalls     int
 	takeCalls      int
 	releaseCalls   int
+	releaseErr     error
 	clearCalls     int
 	clearAdopt     []bool
 	finalizeTokens [][]byte
@@ -159,7 +160,7 @@ func (f *fakeSequentialStore) ReleaseRollbackHold(_ context.Context, _ *chainhas
 	f.releaseCalls++
 	f.callSeq = append(f.callSeq, "release")
 
-	return nil
+	return f.releaseErr
 }
 
 func (f *fakeSequentialStore) ClearCreateFirstHold(_ context.Context, _ *chainhash.Hash, adopt bool) (bool, error) {
@@ -724,7 +725,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		md, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
 		require.Nil(t, md)
-		require.Equal(t, []string{"create", "spend", "begin", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"create", "spend", "begin", "unspend", "release", "delete"}, f.callSeq)
 		require.Equal(t, 0, f.finalizeCalls)
 		require.Len(t, f.unspentWith, 2, "every input of the tx is reversed, not only the spends that succeeded")
 		require.Len(t, f.deletedHashes, 1)
@@ -763,7 +764,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 
 		_, spends, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.ErrorIs(t, err, errors.ErrUtxoError)
-		require.Equal(t, []string{"create", "spend", "begin", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"create", "spend", "begin", "unspend", "release", "delete"}, f.callSeq)
 		require.Len(t, f.unspentWith, 2, "an earlier attempt may have spent inputs this pass did not")
 		require.Len(t, spends, 1)
 	})
@@ -860,7 +861,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "delete boom")
 		require.Contains(t, err.Error(), "double spend")
-		require.Equal(t, []string{"create", "spend", "begin", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"create", "spend", "begin", "unspend", "release", "delete"}, f.callSeq)
 		require.Len(t, spends, 2)
 	})
 
@@ -891,7 +892,7 @@ func TestSequentialSpendAndCreate_CreateFirst(t *testing.T) {
 
 		_, _, err := SequentialSpendAndCreate(ctx, logger, f, tx, 100, true)
 		require.Error(t, err)
-		require.Equal(t, []string{"create", "spend", "begin", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"create", "spend", "begin", "unspend", "release", "delete"}, f.callSeq)
 		require.Len(t, f.unspentWith, 2)
 		require.Len(t, f.deletedHashes, 1)
 		require.Equal(t, tx.TxIDChainHash().String(), f.deletedHashes[0].String())
@@ -1156,7 +1157,7 @@ func TestRollBackCreating(t *testing.T) {
 
 		err := RollBackCreating(ctx, logger, f, tx, nil)
 		require.NoError(t, err)
-		require.Equal(t, []string{"begin", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"begin", "unspend", "release", "delete"}, f.callSeq)
 		require.Len(t, f.unspentWith, 2)
 
 		for i, sp := range f.unspentWith {
@@ -1194,7 +1195,7 @@ func TestRollBackCreating(t *testing.T) {
 		require.Equal(t, []string{"begin"}, f.callSeq)
 	})
 
-	t.Run("a failed unspend skips the delete and returns the error", func(t *testing.T) {
+	t.Run("a failed unspend releases the hold, skips the delete and returns the error", func(t *testing.T) {
 		shortenUnspendBackoff(t)
 
 		f := &fakeSequentialStore{unspendErrs: []error{errors.NewStorageError("u1"), errors.NewStorageError("u2"), errors.NewStorageError("u3")}}
@@ -1202,6 +1203,24 @@ func TestRollBackCreating(t *testing.T) {
 		err := RollBackCreating(ctx, logger, f, tx, nil)
 		require.Error(t, err)
 		require.Equal(t, 3, f.unspendCalls)
+		require.Equal(t, 0, f.deleteCalls)
+		require.Equal(t, 1, f.releaseCalls, "the owner releases the hold so the sweep can take the record")
+	})
+
+	t.Run("the owner holds the hold for the whole unspend and releases it before it ends the rollback", func(t *testing.T) {
+		f := &fakeSequentialStore{}
+
+		require.NoError(t, RollBackCreating(ctx, logger, f, tx, []byte{6, 6}))
+		require.Equal(t, []string{"begin", "unspend", "release", "delete"}, f.callSeq)
+		require.Equal(t, 1, f.releaseCalls)
+	})
+
+	t.Run("a failed release returns the error and leaves the record rolling back", func(t *testing.T) {
+		f := &fakeSequentialStore{releaseErr: errors.NewStorageError("release boom")}
+
+		err := RollBackCreating(ctx, logger, f, tx, nil)
+		require.ErrorIs(t, err, errors.ErrStorageError)
+		require.Equal(t, []string{"begin", "unspend", "release"}, f.callSeq, "the rollback is not ended while the hold could not be released")
 		require.Equal(t, 0, f.deleteCalls)
 	})
 
@@ -1211,7 +1230,7 @@ func TestRollBackCreating(t *testing.T) {
 		err := RollBackCreating(ctx, logger, f, tx, nil)
 		require.NoError(t, err)
 		require.Equal(t, 3, f.unspendCalls, "one batch call, then one call per input")
-		require.Equal(t, []string{"begin", "unspend", "unspend", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"begin", "unspend", "unspend", "unspend", "release", "delete"}, f.callSeq)
 	})
 
 	t.Run("an input whose UTXO hash does not match is skipped and the other input is unspent", func(t *testing.T) {
@@ -1223,7 +1242,7 @@ func TestRollBackCreating(t *testing.T) {
 
 		err := RollBackCreating(ctx, logger, f, tx, nil)
 		require.NoError(t, err)
-		require.Equal(t, []string{"begin", "unspend", "unspend", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"begin", "unspend", "unspend", "unspend", "release", "delete"}, f.callSeq)
 		require.Len(t, f.unspentBatches, 3)
 		require.Len(t, f.unspentBatches[0], 2, "the first call carries every input")
 		require.Len(t, f.unspentBatches[1], 1)
@@ -1238,7 +1257,7 @@ func TestRollBackCreating(t *testing.T) {
 
 		err := RollBackCreating(ctx, logger, f, noInputs, nil)
 		require.NoError(t, err)
-		require.Equal(t, []string{"begin", "delete"}, f.callSeq)
+		require.Equal(t, []string{"begin", "release", "delete"}, f.callSeq)
 	})
 
 	t.Run("it runs under its own context after the caller is cancelled", func(t *testing.T) {
@@ -1249,7 +1268,7 @@ func TestRollBackCreating(t *testing.T) {
 
 		err := RollBackCreating(cancelled, logger, f, tx, nil)
 		require.NoError(t, err)
-		require.Equal(t, []string{"begin", "unspend", "delete"}, f.callSeq)
+		require.Equal(t, []string{"begin", "unspend", "release", "delete"}, f.callSeq)
 	})
 }
 

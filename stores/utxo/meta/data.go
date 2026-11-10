@@ -106,6 +106,10 @@ type Data struct {
 	// transaction data. Always accompanies Creating and RollingBack. Not part of the serialized form.
 	Hold bool `json:"hold,omitempty"`
 
+	// Reversed marks a rolling back record whose spends have all been reversed, so the rollback can
+	// be finished without the transaction data. Not part of the serialized form.
+	Reversed bool `json:"reversed,omitempty"`
+
 	// SpendingDatas is the transaction ID of the transaction that spent the given tx output idx
 	SpendingDatas []*spendpkg.SpendingData `json:"spendingDatas"`
 }

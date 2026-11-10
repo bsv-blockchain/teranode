@@ -41,9 +41,10 @@ read every section between yours and the target.
   resumes. (#1593)
 - **`utxo.Store` gains `SupportsCreateFirst`, `FinalizeTransaction`, `QueryStaleCreatingTxs`,
   `BeginCreateFirstRollback`, `EndCreateFirstRollback`, `TakeRollbackHold`, `ReleaseRollbackHold`
-  and `ClearCreateFirstHold`.** Out-of-tree stores must implement them; a store with no tentative
-  state returns false, nil, nothing, nil, false, nil and false, and ends a rollback by deleting
-  completely. `FinalizeTransaction` and `BeginCreateFirstRollback` take the attempt token that
+  and `ClearCreateFirstHold`, and `meta.Data` gains `Reversed`.** The Aerospike record gains the
+  `attempt`, `hold`, `holdUntil`, `busy` and `reversed` bins. Out-of-tree stores must implement
+  them; a store with no tentative state returns false, nil, nothing, nil, false, nil and false,
+  and ends a rollback by deleting completely. `FinalizeTransaction` and `BeginCreateFirstRollback` take the attempt token that
   `Create` returns in `meta.Data.Attempt`. A create-first rollback now leaves a hold on the txid
   for `utxostore_spendRollbackTimeout`: a mempool resubmission inside it gets a transient error,
   and a create in block context clears it. Run this build on the whole fleet before enabling

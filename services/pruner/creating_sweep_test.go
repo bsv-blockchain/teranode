@@ -2,6 +2,7 @@ package pruner
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -53,6 +54,9 @@ type fakeSweepStore struct {
 	lastLimit      int
 	onUnlock       func()
 	onGet          func()
+	txUnreadable   map[chainhash.Hash]bool
+	endErr         error
+	releaseErr     error
 }
 
 func (f *fakeSweepStore) SetLocked(_ context.Context, txHashes []chainhash.Hash, value bool) error {
@@ -72,7 +76,11 @@ func (f *fakeSweepStore) QueryStaleCreatingTxs(_ context.Context, _ uint32, limi
 	return f.stale, f.queryErr
 }
 
-func (f *fakeSweepStore) Get(_ context.Context, hash *chainhash.Hash, _ ...fields.FieldName) (*meta.Data, error) {
+func (f *fakeSweepStore) Get(_ context.Context, hash *chainhash.Hash, requested ...fields.FieldName) (*meta.Data, error) {
+	if f.txUnreadable[*hash] && slices.Contains(requested, fields.Tx) {
+		return nil, errors.NewStorageError("the external transaction blob of %s is gone", hash.String())
+	}
+
 	if md, ok := f.getResp[*hash]; ok {
 		snapshot := *md
 
@@ -149,7 +157,7 @@ func (f *fakeSweepStore) EndCreateFirstRollback(_ context.Context, hash *chainha
 	f.events = append(f.events, "end")
 	f.ended = append(f.ended, *hash)
 
-	return nil
+	return f.endErr
 }
 
 func (f *fakeSweepStore) TakeRollbackHold(_ context.Context, _ *chainhash.Hash, attempt []byte) (bool, error) {
@@ -162,7 +170,7 @@ func (f *fakeSweepStore) TakeRollbackHold(_ context.Context, _ *chainhash.Hash, 
 func (f *fakeSweepStore) ReleaseRollbackHold(_ context.Context, _ *chainhash.Hash, _ []byte) error {
 	f.events = append(f.events, "release")
 
-	return nil
+	return f.releaseErr
 }
 
 func (f *fakeSweepStore) ClearCreateFirstHold(_ context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
@@ -425,7 +433,7 @@ func TestSweepCreatingTxsDoubleSpendRollsBack(t *testing.T) {
 
 	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
 
-	require.Equal(t, []string{"begin", "unspend", "end"}, store.events, "a loser is marked rolling back, unspent, then its rollback ends")
+	require.Equal(t, []string{"begin", "unspend", "release", "end"}, store.events, "a loser is marked rolling back, unspent, then its rollback ends")
 	require.Equal(t, []chainhash.Hash{hashA}, store.began)
 	require.Len(t, store.unspent, 1)
 	require.Len(t, store.unspent[0], len(txA.Inputs), "every input of the tx is unspent, not only the ones this pass took")
@@ -479,7 +487,7 @@ func TestSweepCreatingTxsRollsBackCreatingRecordWithMissingVout(t *testing.T) {
 
 	require.Equal(t, []chainhash.Hash{hashA}, store.ended, "a record whose input names a missing vout must be rolled back and deleted")
 	require.Empty(t, store.finalized)
-	require.Equal(t, []string{"begin", "unspend", "end"}, store.events)
+	require.Equal(t, []string{"begin", "unspend", "release", "end"}, store.events)
 }
 
 func TestSweepCreatingTxsLockedParentRetriesNextBlock(t *testing.T) {
@@ -715,7 +723,14 @@ func TestSweepCreatingTxsDoesNotSpendForRecordThatBeganRollingBack(t *testing.T)
 	}
 
 	srv := newSweepServer(t, store)
-	store.onGet = func() { store.getResp[hashA] = &meta.Data{Creating: true, RollingBack: true, Tx: txA} }
+	gets := 0
+	store.onGet = func() {
+		gets++
+
+		if gets == 2 {
+			store.getResp[hashA] = &meta.Data{Creating: true, RollingBack: true, Tx: txA}
+		}
+	}
 
 	srv.sweepCreatingTxs(context.Background(), 100)
 
@@ -757,6 +772,77 @@ func TestSweepCreatingTxsSecondSweepOfMarkedRecordDoesNothing(t *testing.T) {
 	require.Equal(t, []string{"take"}, store.events, "a sweep that cannot take the hold must reverse nothing and end nothing")
 	require.Len(t, store.unspent, 1, "only the first sweep unspent")
 	require.Len(t, store.ended, 1, "only the first sweep ended the rollback")
+}
+
+// TestSweepCreatingTxsEndsReversedRollbackWithoutTheTransaction pins that a rollback whose spends
+// are all reversed is finished from the markers alone: its external blob may be gone, so reading
+// the transaction fails, and the sweep must neither read it, take the hold nor unspend again.
+func TestSweepCreatingTxsEndsReversedRollbackWithoutTheTransaction(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+	token := []byte{4, 2}
+
+	store := &fakeSweepStore{
+		NullStore:    ns,
+		stale:        []chainhash.Hash{hashA},
+		getResp:      map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Reversed: true, Attempt: token, Tx: txA}},
+		txUnreadable: map[chainhash.Hash]bool{hashA: true},
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"end"}, store.events, "a reversed rollback is ended without a take, an unspend or a read of the transaction")
+	require.Equal(t, []chainhash.Hash{hashA}, store.ended)
+	require.Empty(t, store.unspent)
+}
+
+// TestSweepCreatingTxsLeavesReversedRollbackWhoseEndFails pins that a failed
+// end leaves the record for the next pass, which again reads only the markers.
+func TestSweepCreatingTxsLeavesReversedRollbackWhoseEndFails(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:    ns,
+		stale:        []chainhash.Hash{hashA},
+		getResp:      map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Reversed: true, Tx: txA}},
+		txUnreadable: map[chainhash.Hash]bool{hashA: true},
+		endErr:       errors.NewStorageError("end boom"),
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"end"}, store.events)
+	require.Empty(t, store.unspent)
+}
+
+// TestSweepCreatingTxsDoesNotEndARollbackWhoseHoldWasNotReleased pins that a release that fails after
+// the reversal leaves the record rolling back: ending it would mark the spends reversed over a busy
+// marker the conversion refuses, and nothing would then take the marker over.
+func TestSweepCreatingTxsDoesNotEndARollbackWhoseHoldWasNotReleased(t *testing.T) {
+	ns, err := nullstore.NewNullStore()
+	require.NoError(t, err)
+
+	txA := oneOutputTx(1)
+	hashA := *txA.TxIDChainHash()
+
+	store := &fakeSweepStore{
+		NullStore:  ns,
+		stale:      []chainhash.Hash{hashA},
+		getResp:    map[chainhash.Hash]*meta.Data{hashA: {Creating: true, RollingBack: true, Tx: txA}},
+		releaseErr: errors.NewStorageError("release boom"),
+	}
+
+	newSweepServer(t, store).sweepCreatingTxs(context.Background(), 100)
+
+	require.Equal(t, []string{"take", "unspend", "release"}, store.events)
+	require.Empty(t, store.ended)
 }
 
 // TestSweepCreatingTxsDeletesExpiredHold pins that the sweep reaches a hold, which carries no

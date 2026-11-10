@@ -215,6 +215,7 @@ func rolledBackHold(t *testing.T, ctx context.Context, store *teranode_aerospike
 	began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
 	require.NoError(t, err)
 	require.True(t, began)
+	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
 	require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
 	requireHeld(t, ctx, store, hash, "precondition: the rolled back attempt left a hold")
 
@@ -256,11 +257,7 @@ func TestRollbackHold(t *testing.T) {
 
 		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
 		require.NoError(t, err)
-		require.True(t, took, "the attempt that was marked can take its hold, which is marked busy while the record is still rolling back")
-
-		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
-		require.NoError(t, err)
-		require.False(t, took, "a busy hold is taken by one actor only")
+		require.False(t, took, "the caller that marked the record holds the hold, so nobody else can take it")
 
 		require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "holder is reversing spends", "the end of the rollback must not drop the busy marker of a holder")
 		require.NoError(t, store.GetMeta(ctx, hash, &meta.Data{}))
@@ -274,6 +271,11 @@ func TestRollbackHold(t *testing.T) {
 
 		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
 		require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String())
+
+		took, err = store.TakeRollbackHold(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, took, "once the owner released it the attempt that was marked can take its hold again")
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
 
 		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "with the busy marker gone the rollback ends")
 		requireHeld(t, ctx, store, hash)
@@ -517,8 +519,10 @@ func TestRollbackHold_CrashedHolderAgesOut(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, began)
 
-		setBusy(t, client, store, hash, time.Now().Unix()-10)
+		setBusy(t, client, store, hash, time.Now().Unix())
 		require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "holder is reversing spends")
+
+		setBusy(t, client, store, hash, time.Now().Unix()-10)
 
 		took, err := store.TakeRollbackHold(ctx, hash, md.Attempt)
 		require.NoError(t, err)
@@ -532,6 +536,41 @@ func TestRollbackHold_CrashedHolderAgesOut(t *testing.T) {
 		resp, err := store.GetSpend(ctx, inputs[0])
 		require.NoError(t, err)
 		require.Nil(t, resp.SpendingData, "the input is unspent")
+	})
+
+	t.Run("a reversed rollback is converted over the stale busy marker of a holder that crashed", func(t *testing.T) {
+		child := spendableChildTx(t, tests.ParentTx, 0)
+		child.Version = 25
+		hash := child.TxIDChainHash()
+
+		md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		writeRawBins(t, client, store, hash, 0, aerospike.NewBin(fields.Reversed.String(), true))
+		setBusy(t, client, store, hash, time.Now().Unix()-10)
+
+		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "the stale marker does not strand a reversed record")
+		requireHeld(t, ctx, store, hash)
+
+		live := spendableChildTx(t, tests.ParentTx, 0)
+		live.Version = 26
+		liveHash := live.TxIDChainHash()
+
+		liveMd, err := store.Create(ctx, live, 101, utxo.WithCreating(true))
+		require.NoError(t, err)
+
+		began, err = store.BeginCreateFirstRollback(ctx, liveHash, liveMd.Attempt)
+		require.NoError(t, err)
+		require.True(t, began)
+
+		writeRawBins(t, client, store, liveHash, 0, aerospike.NewBin(fields.Reversed.String(), true))
+		setBusy(t, client, store, liveHash, time.Now().Unix())
+
+		require.ErrorContains(t, store.EndCreateFirstRollback(ctx, liveHash, liveMd.Attempt), "holder is reversing spends", "a live marker still stops the conversion")
 	})
 
 	t.Run("an adopting clear removes a hold whose busy marker is stale and not one whose marker is live", func(t *testing.T) {

@@ -301,6 +301,7 @@ type CreatingRollBacker interface {
 	SpendReverser
 	BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error)
 	EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error
+	ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error
 }
 
 // succeededSpends returns the spends that carry no per-input error.
@@ -339,6 +340,12 @@ func (r tolerantReverser) Unspend(ctx context.Context, spends []*Spend, flagAsLo
 // rolled back record. The store's ownership check makes an unspend of an input that tx does not
 // own a no-op, so a rival's spend is never cleared.
 //
+// The call that sets the marker also takes the hold of the attempt, so the owner holds it for its
+// whole unspend: a pruner sweep, which takes the hold before it reverses spends, finds the record
+// busy and does nothing, and a block-context create cannot adopt the record while the unspend is
+// in flight. The owner releases the hold when the unspend is done and before it ends the
+// rollback.
+//
 // The marker is what makes the order safe. While the record carries it, no roll-forward
 // can finalize the record, so the rollback owner is the only writer of its final outcome.
 // The marker is claimed exclusively and only for the attempt that carries the token, so only one
@@ -356,7 +363,10 @@ func (r tolerantReverser) Unspend(ctx context.Context, spends []*Spend, flagAsLo
 //     under another caller: a concurrent roll-forward finalized it and relies on the spends, or
 //     the other caller owns the reversal, so nothing is reversed. The return is nil.
 //   - The reversal fails: the record is left rolling back and the error is returned. Nobody
-//     can finalize it, and the sweep finishes the rollback.
+//     can finalize it. The hold is released best effort, so the sweep can take it at once, and
+//     otherwise once it has aged out, and finishes the rollback.
+//   - The release of the hold fails: the error is returned and the record is left rolling back
+//     and busy. The sweep takes it once the busy marker has aged out.
 //   - The end of the rollback fails, or a holder is still reversing spends: same, the record is
 //     left rolling back for the sweep.
 //
@@ -388,6 +398,7 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 	inputs, err := GetSpends(tx)
 	if err != nil {
 		logger.Errorf("SpendAndCreate create-first: building the input spends failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
+		releaseRollbackHold(ctx, logger, s, hash, attempt)
 
 		return err
 	}
@@ -395,9 +406,16 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 	if len(inputs) > 0 {
 		if err := unspendWithRetry(rbCtx, logger, tolerantReverser{s}, inputs); err != nil {
 			logger.Errorf("SpendAndCreate create-first: reversing spends failed for %s, tx left rolling back for the sweep: %v", hash.String(), err)
+			releaseRollbackHold(ctx, logger, s, hash, attempt)
 
 			return err
 		}
+	}
+
+	if err := releaseRollbackHoldStrict(ctx, s, hash, attempt); err != nil {
+		logger.Errorf("SpendAndCreate create-first: releasing the hold of %s failed, tx left rolling back for the sweep: %v", hash.String(), err)
+
+		return err
 	}
 
 	if err := s.EndCreateFirstRollback(rbCtx, hash, attempt); err != nil {
@@ -407,6 +425,24 @@ func RollBackCreating(ctx context.Context, logger ulogger.Logger, s CreatingRoll
 	}
 
 	return nil
+}
+
+// releaseRollbackHoldStrict releases the hold that BeginCreateFirstRollback set, under a fresh
+// context bounded by the store's rollback bound, so a bound that the reversal used up does not
+// stop the release.
+func releaseRollbackHoldStrict(ctx context.Context, s CreatingRollBacker, hash *chainhash.Hash, attempt []byte) error {
+	relCtx, cancel := rollbackContext(ctx, s)
+	defer cancel()
+
+	return s.ReleaseRollbackHold(relCtx, hash, attempt)
+}
+
+// releaseRollbackHold releases the hold best effort and logs a failure: the record stays rolling
+// back and the sweep takes it once the hold has aged out.
+func releaseRollbackHold(ctx context.Context, logger ulogger.Logger, s CreatingRollBacker, hash *chainhash.Hash, attempt []byte) {
+	if err := releaseRollbackHoldStrict(ctx, s, hash, attempt); err != nil {
+		logger.Errorf("SpendAndCreate create-first: releasing the hold of %s failed, it expires on its own: %v", hash.String(), err)
+	}
 }
 
 // sequentialCreateFirst persists a tx create-first: the record is created in the

@@ -789,3 +789,77 @@ func TestCreateFirst_BlockContextAdoptsHold(t *testing.T) {
 		})
 	}
 }
+
+// hookedUnspendStore runs onUnspend once, just before the real unspend, so a test can act as another
+// actor while the owner of a rollback is reversing its spends. Every store call is the real store's.
+type hookedUnspendStore struct {
+	*teranode_aerospike.Store
+
+	onUnspend func()
+}
+
+func (s *hookedUnspendStore) Unspend(ctx context.Context, spends []*utxo.Spend, flagAsLocked ...bool) error {
+	if hook := s.onUnspend; hook != nil {
+		s.onUnspend = nil
+
+		hook()
+	}
+
+	return s.Store.Unspend(ctx, spends, flagAsLocked...)
+}
+
+// TestRollBackCreating_OwnerHoldsTheHoldForItsUnspend pins that the caller that owns a rollback is
+// fenced for its whole unspend. A pruner sweep that reads the marked record while the owner is
+// unspending must fail its take, and a block-context create must not adopt the record, because
+// either would let a replacement attempt spend the inputs before the owner's unspend lands and
+// clears that spend.
+func TestRollBackCreating_OwnerHoldsTheHoldForItsUnspend(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, err := store.Create(ctx, tests.ParentTx, 100)
+	require.NoError(t, err)
+
+	child := spendableChildTx(t, tests.ParentTx, 0)
+	hash := child.TxIDChainHash()
+
+	md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	_, err = store.Spend(ctx, child, 101)
+	require.NoError(t, err)
+
+	var (
+		tookDuringUnspend    bool
+		clearedDuringUnspend bool
+		hookErr              error
+	)
+
+	owner := &hookedUnspendStore{Store: store, onUnspend: func() {
+		tookDuringUnspend, hookErr = store.TakeRollbackHold(ctx, hash, md.Attempt)
+		if hookErr != nil {
+			return
+		}
+
+		clearedDuringUnspend, hookErr = store.ClearCreateFirstHold(ctx, hash, true)
+	}}
+
+	require.NoError(t, utxo.RollBackCreating(ctx, logger, owner, child, md.Attempt))
+	require.NoError(t, hookErr)
+	require.False(t, tookDuringUnspend, "a second actor cannot take the hold while the owner unspends")
+	require.False(t, clearedDuringUnspend, "a block-context create cannot adopt the record while the owner unspends")
+
+	requireHeld(t, ctx, store, hash, "the rollback ended with a hold")
+	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Busy), fields.Busy.String(), "the owner released the hold before it ended the rollback")
+
+	inputs, err := utxo.GetSpends(child)
+	require.NoError(t, err)
+
+	resp, err := store.GetSpend(ctx, inputs[0])
+	require.NoError(t, err)
+	require.Nil(t, resp.SpendingData, "the owner's unspend landed")
+}

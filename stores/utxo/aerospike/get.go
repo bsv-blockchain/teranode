@@ -677,6 +677,8 @@ func (s *Store) getTxFromBins(bins aerospike.BinMap) (tx *bt.Tx, err error) {
 //   - Creating and RollingBack require Hold, so that the record a rolled back create-first attempt
 //     leaves, which carries no transaction data, is read as its markers alone: Creating,
 //     RollingBack, Hold and the attempt token, whatever other fields were requested
+//   - Creating and RollingBack require Reversed, so that a rollback whose spends are reversed
+//     can be told apart without reading the transaction
 //   - Other abstracted field mappings
 //
 // This abstraction layer allows callers to request high-level fields without
@@ -727,8 +729,14 @@ func (s *Store) addAbstractedBins(bins []fields.FieldName) []fields.FieldName {
 		}
 	}
 
-	if (slices.Contains(newBins, fields.Creating) || slices.Contains(newBins, fields.RollingBack)) && !slices.Contains(newBins, fields.Hold) {
-		newBins = append(newBins, fields.Hold)
+	if slices.Contains(newBins, fields.Creating) || slices.Contains(newBins, fields.RollingBack) {
+		if !slices.Contains(newBins, fields.Hold) {
+			newBins = append(newBins, fields.Hold)
+		}
+
+		if !slices.Contains(newBins, fields.Reversed) {
+			newBins = append(newBins, fields.Reversed)
+		}
 	}
 
 	if slices.Contains(newBins, fields.BlockIDs) {
@@ -1162,6 +1170,11 @@ NEXT_BATCH_RECORD:
 			case fields.Attempt:
 				if attempt, ok := bins[key.String()].([]byte); ok {
 					items[idx].Data.Attempt = attempt
+				}
+
+			case fields.Reversed:
+				if reversed, ok := bins[key.String()].(bool); ok {
+					items[idx].Data.Reversed = reversed
 				}
 
 			case fields.ConflictingChildren:

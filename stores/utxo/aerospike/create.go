@@ -1093,9 +1093,12 @@ const attemptTokenLength = 16
 // adoptSurvivingChildren gives the pagination children that survived an earlier attempt the
 // token of the attempt that has just created the master. The records are still creating, and a
 // finalize filtered on the token of this attempt would otherwise leave them creating for good.
-// The write is filtered on the creating bin, so a child that is no longer creating is left
-// alone. A failure is logged and the finalize reports the child it could not clear.
-func (s *Store) adoptSurvivingChildren(bItem *BatchStoreItem, recordKeys []*aerospike.Key, present []int) {
+// The write is filtered on the creating bin. A child that is no longer creating is already final:
+// its write is filtered out and that is not a failure. Any other per-record error, or an error of
+// the batch, is a failure, and the caller must not let the create succeed: a child that keeps the
+// token of the earlier attempt is never cleared by this attempt's finalize and its outputs would
+// stay unspendable for good.
+func (s *Store) adoptSurvivingChildren(bItem *BatchStoreItem, recordKeys []*aerospike.Key, present []int) error {
 	records := make([]aerospike.BatchRecordIfc, 0, len(present))
 
 	for _, idx := range present {
@@ -1111,12 +1114,44 @@ func (s *Store) adoptSurvivingChildren(bItem *BatchStoreItem, recordKeys []*aero
 	}
 
 	if len(records) == 0 {
-		return
+		return nil
 	}
 
 	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
-		s.logger.Errorf("[adoptSurvivingChildren] failed to give the surviving child records of %s the attempt token: %v", bItem.txHash, err)
+		return errors.NewProcessingError("failed to give the surviving child records of %s the attempt token", bItem.txHash, err)
 	}
+
+	for _, record := range records {
+		if recErr := record.BatchRec().Err; recErr != nil && !isFilteredOut(recErr) {
+			return errors.NewProcessingError("failed to give a surviving child record of %s the attempt token", bItem.txHash, recErr)
+		}
+	}
+
+	return nil
+}
+
+// deleteOwnMaster removes the master record that the attempt carrying the token has just written,
+// so that the store returns to the state before the attempt. The delete is filtered on the creating
+// bin and the token, so a master that another actor has since taken over is left alone. It reports
+// an error only when the delete itself failed: the master then stays creating under the token and
+// the pruner sweep rolls it back.
+func (s *Store) deleteOwnMaster(txHash *chainhash.Hash, attempt []byte) error {
+	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if err != nil {
+		return errors.NewProcessingError("error in aerospike NewKey", err)
+	}
+
+	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	writePolicy.FilterExpression = aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.Creating.String()),
+		attemptFilter(attempt),
+	)
+
+	if _, delErr := s.client.Delete(writePolicy, key); delErr != nil && !errors.Is(delErr, aerospike.ErrKeyNotFound) && !isFilteredOut(delErr) {
+		return delErr
+	}
+
+	return nil
 }
 
 // classifyCreateBatchResults decides, from one CREATE_ONLY batch's per-record results,
@@ -1287,7 +1322,19 @@ func (s *Store) storeExternallyWithLock(
 	}
 
 	if masterCreated && bItem.attempt != nil && len(alreadyPresent) > 0 {
-		s.adoptSurvivingChildren(bItem, recordKeys, alreadyPresent)
+		if adoptErr := s.adoptSurvivingChildren(bItem, recordKeys, alreadyPresent); adoptErr != nil {
+			s.logger.Errorf("[%s] %v", funcName, adoptErr)
+
+			if delErr := s.deleteOwnMaster(bItem.txHash, bItem.attempt); delErr != nil {
+				bItem.complete(errors.NewStorageError("[%s] the surviving child records of %s could not be adopted and the master record could not be removed; it is left creating for the pruner sweep", funcName, bItem.txHash, errors.Join(adoptErr, delErr)))
+
+				return
+			}
+
+			bItem.complete(errors.NewProcessingError("[%s] the surviving child records of %s could not be adopted; the create is undone and may be retried", funcName, bItem.txHash, adoptErr))
+
+			return
+		}
 	}
 
 	if len(failed) > 0 {
@@ -1534,6 +1581,11 @@ func (s *Store) ensureCreatingBin(bins []*aerospike.Bin, creating bool) []*aeros
 // window this function does not close: the children are then cleared while the master stays
 // creating and rolling back, and the rollback owner removes the children and blobs and leaves a
 // hold.
+//
+// A child write that is filtered out is read back (childFilteredOutResult). The child counts as
+// cleared only when it is no longer creating. One that is still creating, under another attempt's
+// token or this one, fails the call before the master is written, so the master stays creating
+// while any child is.
 func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attempt []byte) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
@@ -1584,13 +1636,19 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 			return errors.NewProcessingError("failed to unlock child records", err)
 		}
 
-		// Check results - FILTERED_OUT means bin didn't exist (success case)
+		// Check results. FILTERED_OUT means the child was not cleared by this write: it is
+		// success only when the child is no longer creating, which is read back.
 		failedCount := 0
 		for idx, record := range childWrites {
 			if record.BatchRec().Err != nil {
 				aErr, ok := record.BatchRec().Err.(*aerospike.AerospikeError)
-				// FILTERED_OUT is success - bin didn't exist, nothing to clear
 				if ok && aErr.ResultCode == types.FILTERED_OUT {
+					if filteredErr := s.childFilteredOutResult(txHash, idx+1, attempt); filteredErr != nil {
+						failedCount++
+
+						s.logger.Errorf("[clearCreatingFlag] child record %d of tx %s was not cleared: %v", idx+1, txHash, filteredErr)
+					}
+
 					continue
 				}
 				failedCount++
@@ -1624,6 +1682,35 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attemp
 	}
 
 	return nil
+}
+
+// childFilteredOutResult reads a pagination child after its creating bin was not cleared because
+// the write was filtered out, and returns nil only when the child is no longer creating. A child
+// that is still creating, under another attempt's token or under this one, or that has vanished,
+// is an error: its outputs would stay unspendable, so the master must not be cleared.
+func (s *Store) childFilteredOutResult(txHash *chainhash.Hash, index int, attempt []byte) error {
+	keySource := uaerospike.CalculateKeySourceInternal(txHash, uint32(index))
+
+	key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+	if err != nil {
+		return err
+	}
+
+	state, getErr := s.readCreatingState(key)
+	if getErr != nil {
+		return errors.NewStorageError("error reading child record %d of tx %s after its creating flag was filtered out", index, txHash.String(), getErr)
+	}
+
+	switch {
+	case state.absent:
+		return errors.NewProcessingError("child record %d of tx %s is absent", index, txHash.String())
+	case !state.creating:
+		return nil
+	case !bytes.Equal(state.attempt, attempt):
+		return errors.NewProcessingError("child %d of tx %s is creating under another attempt", index, txHash.String())
+	}
+
+	return errors.NewProcessingError("child %d of tx %s is still creating under this attempt although its clear was filtered out", index, txHash.String())
 }
 
 // masterRollingBack reports whether the master record of txHash is rolling back, which a hold

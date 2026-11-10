@@ -1315,16 +1315,49 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 					conflictingCreateOpts = append(conflictingCreateOpts, utxo.WithSkipExtendedInputs(true))
 				}
 
-				if txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false, conflictingCreateOpts...); utxoMapErr != nil {
-					if errors.Is(utxoMapErr, errors.ErrTxExists) {
-						txMetaData = &meta.Data{}
-						if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
-							err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, err)
+				for round := 0; ; round++ {
+					txMetaData, utxoMapErr = v.CreateInUtxoStore(decoupledCtx, tx, blockHeight, true, false, conflictingCreateOpts...)
+					if utxoMapErr == nil || !errors.Is(utxoMapErr, errors.ErrTxExists) {
+						break
+					}
+
+					txMetaData = &meta.Data{}
+					if err = v.utxoStore.GetMeta(decoupledCtx, tx.TxIDChainHash(), txMetaData); err != nil {
+						err = errors.NewProcessingError("[Validate][%s] CreateInUtxoStore failed - tx exists but unable to get meta data", txID, err)
+						span.RecordError(err)
+
+						return nil, err
+					}
+
+					if !txMetaData.Hold && !txMetaData.Creating && !txMetaData.RollingBack {
+						break
+					}
+
+					// The record at this txid is a create-first attempt's tentative record or the hold a rolled
+					// back attempt left, not a transaction: it carries no data to mark conflicting and another
+					// actor owns it. A hold in block context goes at once unless a holder is reversing spends.
+					if txMetaData.Hold && round == 0 {
+						cleared, clearErr := v.utxoStore.ClearCreateFirstHold(decoupledCtx, tx.TxIDChainHash(), true)
+						if clearErr != nil {
+							err = errors.NewProcessingError("[Validate][%s] tx is rolling back and its hold could not be cleared", txID, clearErr)
 							span.RecordError(err)
 
 							return nil, err
 						}
 
+						if cleared {
+							continue
+						}
+					}
+
+					err = errors.NewProcessingError("[Validate][%s] tx is being created or rolled back by another attempt; retry after it completes", txID)
+					span.RecordError(err)
+
+					return nil, err
+				}
+
+				if utxoMapErr != nil {
+					if errors.Is(utxoMapErr, errors.ErrTxExists) {
 						// Tx already exists — ensure it and all its spending descendants are marked conflicting.
 						// NOTE: cascaded descendants may still be in the subtree processor's in-memory template
 						// until the next reset/reload — this path has no subtreeProcessor handle to evict them.

@@ -28,7 +28,11 @@ func (s *Store) holdSeconds() int64 {
 
 // BeginCreateFirstRollback claims the rollback of a master record that still carries the
 // creating bin, by setting the rollingBack bin atomically, so a concurrent finalize or
-// roll-forward refuses the record from then on. The write is UPDATE_ONLY and filtered on the
+// roll-forward refuses the record from then on. The same write marks the record busy and sets
+// holdUntil to now plus utxostore_spendRollbackTimeout, so the caller that owns the rollback
+// holds the hold for its whole reversal of spends: no other actor can take it and reverse the
+// same spends, and a block-context create cannot adopt the record while it is busy. The owner
+// calls ReleaseRollbackHold once the reversal is done. The write is UPDATE_ONLY and filtered on the
 // creating bin being present, the rollingBack bin being absent and the attempt bin carrying the
 // token, so a finalized or absent record is never touched, a record of another attempt is never
 // claimed, and only one caller can set the marker.
@@ -49,7 +53,11 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
 	writePolicy.FilterExpression = finalizeFilter(attempt)
 
-	_, putErr := s.client.Operate(writePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.RollingBack.String(), true)))
+	_, putErr := s.client.Operate(writePolicy, key,
+		aerospike.PutOp(aerospike.NewBin(fields.RollingBack.String(), true)),
+		aerospike.PutOp(aerospike.NewBin(fields.Busy.String(), true)),
+		aerospike.PutOp(aerospike.NewBin(fields.HoldUntil.String(), int(time.Now().Unix()+s.holdSeconds()))),
+	)
 	if putErr == nil {
 		return true, nil
 	}
@@ -76,12 +84,15 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 	return false, errors.NewStorageError("rolling back marker for %s was filtered out but the record is still creating", hash.String())
 }
 
-// EndCreateFirstRollback ends the rollback of the attempt that carries the token. It removes the
+// EndCreateFirstRollback ends the rollback of the attempt that carries the token. Its callers
+// call it only once every spend of the attempt is reversed, and its first write records that
+// on the master as the reversed bin, so that a recovery that finds the record after the external
+// blob is gone finishes the rollback without reading the transaction. It then removes the
 // pagination children, filtered on the token, then the external blobs, and last turns the master
 // record into a hold: one REPLACE_ONLY write that keeps the txid, the creating and rollingBack
 // markers, the token and the unminedSince selector, and adds the hold marker and holdUntil, now
 // plus utxostore_spendRollbackTimeout. The write is filtered on the record still rolling back
-// under the token, not already a hold and not busy.
+// under the token, not already a hold and not busy with a live holder.
 //
 // The master record is in place for the whole cascade. A new attempt at the same txid finds it
 // and is refused, so it cannot create children or blobs that this call would then remove, and
@@ -92,11 +103,14 @@ func (s *Store) BeginCreateFirstRollback(_ context.Context, hash *chainhash.Hash
 //
 // A master that is absent, already a hold, no longer rolling back or owned by another attempt
 // means this attempt's rollback is already over: the call reports success and touches nothing. A
-// holder that is reversing spends under TakeRollbackHold makes the conversion fail, because the
-// conversion would drop the busy marker that protects it. The record is then left rolling back
-// and the sweep ends the rollback on a later pass. A cascade that fails leaves the master
+// live holder that is reversing spends under TakeRollbackHold makes the conversion fail, because the
+// conversion would drop the busy marker that protects it. A holder that crashed, whose holdUntil has
+// passed by a further utxostore_spendRollbackTimeout, does not: the conversion proceeds over its
+// marker. After a refusal the record is left rolling back and the sweep ends the rollback on a
+// later pass. A cascade that fails leaves the master
 // rolling back for the same reason, so a retry finds the children and blobs by the master's
-// child count.
+// child count. A conversion that fails after the blob is deleted leaves the master rolling back
+// and reversed, and the sweep calls this method again for it without reading the transaction.
 func (s *Store) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
 	key, keyErr := aerospike.NewKey(s.namespace, s.setName, hash[:])
 	if keyErr != nil {
@@ -109,6 +123,15 @@ func (s *Store) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash
 	}
 
 	if state.absent || state.hold || !state.rollingBack || !bytes.Equal(state.attempt, attempt) {
+		return nil
+	}
+
+	proceed, markErr := s.markReversed(key, hash, attempt)
+	if markErr != nil {
+		return markErr
+	}
+
+	if !proceed {
 		return nil
 	}
 
@@ -125,6 +148,47 @@ func (s *Store) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash
 	return s.convertToHold(key, hash, state, attempt)
 }
 
+// markReversed records on the master that every spend of the rolling back attempt has been
+// reversed, so a recovery that finds the record after the blob is gone can finish the rollback
+// without the transaction data. One UPDATE_ONLY write, filtered on the record rolling back under
+// the token and not a hold. A record that is absent, a hold, no longer rolling back or owned by
+// another attempt means the rollback is already over: it reports false and is not an error.
+func (s *Store) markReversed(key *aerospike.Key, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+	writePolicy.FilterExpression = aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.RollingBack.String()),
+		aerospike.ExpNot(aerospike.ExpBinExists(fields.Hold.String())),
+		attemptFilter(attempt),
+	)
+
+	_, putErr := s.client.Operate(writePolicy, key, aerospike.PutOp(aerospike.NewBin(fields.Reversed.String(), true)))
+	if putErr == nil {
+		return true, nil
+	}
+
+	if errors.Is(putErr, aerospike.ErrKeyNotFound) {
+		return false, nil
+	}
+
+	if !isFilteredOut(putErr) {
+		prometheusUtxoMapErrors.WithLabelValues("EndCreateFirstRollback", "error").Inc()
+
+		return false, errors.NewStorageError("error marking %s as reversed", hash.String(), putErr)
+	}
+
+	after, getErr := s.readCreatingState(key)
+	if getErr != nil {
+		return false, errors.NewStorageError("error reading record after the reversed marker was filtered out", getErr)
+	}
+
+	if after.absent || after.hold || !after.rollingBack || !bytes.Equal(after.attempt, attempt) {
+		return false, nil
+	}
+
+	return false, errors.NewStorageError("reversed marker of %s was filtered out but the record is still rolling back", hash.String())
+}
+
 // convertToHold rewrites the master record of a rolled back attempt as its hold.
 func (s *Store) convertToHold(key *aerospike.Key, hash *chainhash.Hash, state creatingState, attempt []byte) error {
 	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
@@ -132,7 +196,7 @@ func (s *Store) convertToHold(key *aerospike.Key, hash *chainhash.Hash, state cr
 	writePolicy.FilterExpression = aerospike.ExpAnd(
 		aerospike.ExpBinExists(fields.RollingBack.String()),
 		aerospike.ExpNot(aerospike.ExpBinExists(fields.Hold.String())),
-		aerospike.ExpNot(aerospike.ExpBinExists(fields.Busy.String())),
+		s.notBusyOrStale(time.Now().Unix()),
 		attemptFilter(attempt),
 	)
 
@@ -175,7 +239,7 @@ func (s *Store) convertToHold(key *aerospike.Key, hash *chainhash.Hash, state cr
 	switch {
 	case after.absent, after.hold, !after.rollingBack, !bytes.Equal(after.attempt, attempt):
 		return nil
-	case after.busy:
+	case after.busy && time.Now().Unix() < after.holdUntil+s.holdSeconds():
 		return errors.NewProcessingError("ending the rollback of %s: a holder is reversing spends; the record is left rolling back for the sweep", hash.String())
 	}
 

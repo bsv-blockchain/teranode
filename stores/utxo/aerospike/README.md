@@ -423,12 +423,17 @@ The healers (setMined pre-flight and pruner sweep) are not gated on the flag.
 
 A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`:
 `BeginCreateFirstRollback(hash, attempt)` sets the `rollingBack` bin on the master with a filter
-on the `creating` bin and the token, every input of the tx is unspent (not only the spends that
+on the `creating` bin and the token. The same write sets `busy` and `holdUntil`, so the owner
+holds the hold for its whole unspend and releases it with `ReleaseRollbackHold` before it ends
+the rollback. Every input of the tx is unspent (not only the spends that
 succeeded in the failing pass, because an earlier attempt may have spent an input that now fails
 for another reason; the Lua ownership check makes an input the tx does not own a no-op, and an
 input whose UTXO hash does not match or whose vout does not exist is skipped, because the tx can
 never have spent it), then `EndCreateFirstRollback(hash, attempt)` removes the pagination
-children (filtered on the token) and the external blobs and turns the master into a hold. While
+children (filtered on the token) and the external blobs and turns the master into a hold. Its
+first write sets the `reversed` bin, which says that every spend is undone, so that a recovery
+that finds the record after the blob is gone ends the rollback without reading the transaction.
+While
 the marker is set, `FinalizeTransaction` (single and multi-record) refuses the record with
 `ErrTxNotFound`, so a concurrent roll-forward cannot complete it. A roll-forward whose finalize
 is refused reverses the spends it made only if it can take the hold (see below). The Lua spend
@@ -451,7 +456,10 @@ from touching the next.
   `FILTERED_OUT` that reads back as "not mine" (`ErrTxNotFound` for a finalize). Every actor takes
   its token from the record it read: the fresh create from its own create, the `ErrTxExists`
   roll-forward, the sweep and the setMined pre-flight from their `Get`. A multi-record create
-  that finds children left by an earlier attempt gives them its own token.
+  that finds children left by an earlier attempt gives them its own token. If a child cannot be
+  given the token, the create deletes the master it wrote and returns a transient error. A
+  finalize that finds a child filtered out reads it back: only a child that is no longer
+  creating counts as cleared, and the master stays creating otherwise.
 - **Hold.** The rollback end does not delete the master. It deletes the children and the
   external blobs while the master is still there, so a same-txid create is refused and writes
   nothing, and then rewrites the master in one `REPLACE_ONLY` write, filtered on the token, the
@@ -466,8 +474,10 @@ from touching the next.
   bounded by `utxostore_spendRollbackTimeout`, then calls `ReleaseRollbackHold`. A failed take
   (record absent, another token, busy) means a replacement owns the inputs, or another actor is
   reversing them, and nothing is reversed. The sweep's `finishRollback` and the roll-forward's
-  compensation work this way. The rollback end fails while `busy` is set, because the rewrite
-  would drop the marker that protects the holder, and the sweep ends the rollback on a later pass.
+  compensation work this way, and so does the direct owner, which takes the hold when it marks
+  the record. The rollback end fails while a live `busy` is set, because the rewrite would drop
+  the marker that protects the holder, and the sweep ends the rollback on a later pass. A record
+  that carries `reversed` needs no take: the sweep calls the rollback end for it directly.
 - **Expiry.** `ClearCreateFirstHold(hash, adopt)` deletes a hold, filtered on `hold` and on the
   `holdUntil` that was read, so a take in between makes the delete fail. Without `adopt` it goes
   once `holdUntil` has passed and no holder is busy, or has passed by a further timeout (a
