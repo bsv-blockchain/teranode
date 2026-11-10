@@ -422,7 +422,7 @@ func TestSyncCoordinator_LogCandidateList_NoPanic(t *testing.T) {
 
 func TestSyncCoordinator_SendSyncMessage_PeerNotFoundErrors(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
-	err := sc.sendSyncMessage("not-in-registry")
+	_, err := sc.sendSyncMessage("not-in-registry")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not found")
 }
@@ -431,7 +431,7 @@ func TestSyncCoordinator_SendSyncMessage_NoBlockHashErrors(t *testing.T) {
 	sc, reg := newTestSyncCoordinator(t)
 	reg.Register(&blockchain.PeerInfo{ID: "p", DataHubURL: "x", Height: 100})
 
-	err := sc.sendSyncMessage("p")
+	_, err := sc.sendSyncMessage("p")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "no block hash")
 }
@@ -1211,6 +1211,96 @@ func TestSyncCoordinator_ProactiveInCatchingBlocks(t *testing.T) {
 
 	require.Equal(t, "ahead", sc.GetCurrentSyncPeer(),
 		"coordinator should proactively select a sync peer while in CATCHINGBLOCKS")
+}
+
+// A blocks producer whose publish channel is full (the state a dead or slow
+// broker leaves it in) must not wedge the coordinator: the sync decision has
+// to return and release decisionMu, and the trigger it could not hand over
+// must be re-sent on a later tick once the producer drains, because nothing
+// else re-sends it while the peer holds the slot.
+func TestSyncCoordinator_BackloggedProducerDoesNotWedgeDecisionLock(t *testing.T) {
+	sc, reg, _ := newTestSyncCoordinatorWithFSM(t, blockchain_api.FSMStateType_CATCHINGBLOCKS)
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
+	sc.blocksKafkaProducerClient = producer
+	producer.PublishChannel() <- &kafka.Message{Key: []byte("backlog")}
+
+	reg.Register(&blockchain.PeerInfo{ID: "ahead", DataHubURL: "http://ahead", Height: 100,
+		BlockHash: syncCoordinatorTestHash(t)})
+
+	tick := func() {
+		done := make(chan struct{})
+		go func() {
+			sc.checkFSMState()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("checkFSMState blocked on a backlogged Kafka producer while holding decisionMu")
+		}
+	}
+
+	tick()
+	require.Equal(t, "ahead", sc.GetCurrentSyncPeer())
+
+	// Another decisionMu path must still get the lock.
+	cleared := make(chan struct{})
+	go func() {
+		sc.decisionMu.Lock()
+		sc.decisionMu.Unlock() //nolint:staticcheck // empty critical section proves the lock is free
+		close(cleared)
+	}()
+	select {
+	case <-cleared:
+	case <-time.After(time.Second):
+		t.Fatal("decisionMu still held after the sync decision returned")
+	}
+
+	// A tick while the producer is still backlogged neither blocks nor sends.
+	tick()
+	require.Len(t, producer.PublishChannel(), 1)
+
+	// The producer drains; the next tick re-sends the deferred trigger once.
+	backlog := <-producer.PublishChannel()
+	require.Equal(t, []byte("backlog"), backlog.Key)
+	tick()
+	require.Len(t, producer.PublishChannel(), 1)
+	resent := <-producer.PublishChannel()
+	require.Equal(t, []byte(syncCoordinatorTestHash(t).String()), resent.Key)
+
+	tick()
+	require.Empty(t, producer.PublishChannel(), "a delivered trigger must not be re-sent")
+}
+
+// A deferred trigger belongs to the peer it was built for: once the slot has
+// moved on, re-sending it would point block validation at a peer the
+// coordinator no longer follows.
+func TestSyncCoordinator_DeferredTriggerDroppedWhenSlotMoves(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
+	sc.blocksKafkaProducerClient = producer
+	producer.PublishChannel() <- &kafka.Message{Key: []byte("backlog")}
+
+	reg.Register(&blockchain.PeerInfo{ID: "first", DataHubURL: "http://first", Height: 100,
+		BlockHash: syncCoordinatorTestHash(t)})
+
+	sc.decisionMu.Lock()
+	sc.mu.Lock()
+	sc.currentSyncPeer = "first"
+	sc.mu.Unlock()
+	published, err := sc.sendSyncMessage("first")
+	require.NoError(t, err)
+	require.False(t, published)
+
+	sc.mu.Lock()
+	sc.currentSyncPeer = "second"
+	sc.mu.Unlock()
+	<-producer.PublishChannel()
+	sc.retryDeferredSyncTrigger()
+	sc.decisionMu.Unlock()
+
+	require.Empty(t, producer.PublishChannel(), "a trigger for a peer that lost the slot must not be re-sent")
+	require.Empty(t, sc.deferredTriggerPeer)
 }
 
 // A stalled, still-ahead PROVEN incumbent must be preempted by an unproven candidate with
