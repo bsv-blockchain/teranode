@@ -182,3 +182,16 @@ func (s *Store) SpendHeldAfterFailureForTest(ctx context.Context, tx *bt.Tx, hei
 
 	return result, done, nil
 }
+
+// SpendRetryForTest runs Spend for tx against a spend batcher that dispatches
+// every claim through the real backend at once, with a wait budget of wait. It
+// returns the channel that receives Spend's error.
+func (s *Store) SpendRetryForTest(ctx context.Context, tx *bt.Tx, height uint32, wait time.Duration) <-chan error {
+	s.settings.UtxoStore.SpendWaitTimeout = wait
+	s.spendBatcher = batcher.NewWithPool(1, time.Millisecond, func(items []*batchSpend) { s.sendSpendBatchLua(items) }, false)
+
+	result := make(chan error, 1)
+	go func() { _, err := s.Spend(ctx, tx, height); result <- err }()
+
+	return result
+}

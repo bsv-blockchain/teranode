@@ -132,25 +132,52 @@ type batchSpend struct {
 	// while the backend had already started it. onOrphan performs that rollback.
 	orphan   utxo.SpendOrphan
 	onOrphan func(item *batchSpend)
+	// orphans lists this item while it is an unresolved orphan, so a retry of
+	// the same transaction waits for it. It may be nil.
+	orphans *utxo.OrphanLedger
 }
 
 // markOrphaned records that the caller gave up on an item the backend had
 // started. Spend calls it only when the batch rollback is not suppressed, so a
-// late success is unspent exactly when the batch rollback would be. If the
-// item has already published a success the caller rolls the spend back;
-// otherwise complete does when the item publishes.
+// late success is unspent exactly when the batch rollback would be. The item
+// stays in the orphan ledger until it is resolved, so a retry of the same
+// transaction waits for it. If the item has already published, the caller
+// resolves it; otherwise complete does when the item publishes.
 func (b *batchSpend) markOrphaned() {
+	if b.orphans != nil {
+		b.orphans.Begin(b.spend.SpendingData.TxID)
+	}
+
 	b.orphan.Mark()
 	b.rollbackIfOrphaned()
 }
 
-// rollbackIfOrphaned starts the rollback of this item's spend, on a detached
-// goroutine, when its caller gave up and the item published a success. Both
-// complete and markOrphaned call it, and the claim lets exactly one of them
-// start the rollback whichever runs first.
+// rollbackIfOrphaned resolves an orphaned item once it has published. A success
+// starts the rollback of its spend on a detached goroutine, and the item leaves
+// the ledger when that rollback ends. A failure leaves nothing to roll back.
+// Both complete and markOrphaned call it, and the claim lets exactly one of
+// them resolve the item whichever runs first.
 func (b *batchSpend) rollbackIfOrphaned() {
-	if b.onOrphan != nil && b.published.Load() && b.err == nil && b.orphan.Claim() {
-		go b.onOrphan(b)
+	if b.onOrphan == nil || !b.published.Load() || !b.orphan.Claim() {
+		return
+	}
+
+	if b.err != nil {
+		b.endOrphan()
+
+		return
+	}
+
+	go func() {
+		defer b.endOrphan()
+
+		b.onOrphan(b)
+	}()
+}
+
+func (b *batchSpend) endOrphan() {
+	if b.orphans != nil {
+		b.orphans.End(b.spend.SpendingData.TxID)
 	}
 }
 
@@ -562,6 +589,11 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	if spendTimeout <= 0 {
 		spendTimeout = 30 * time.Second
 	}
+
+	if waitErr := s.orphans.AwaitSpend(ctx, tx.TxIDChainHash(), spendTimeout); waitErr != nil {
+		return nil, waitErr
+	}
+
 	requestCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
@@ -596,6 +628,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			requestCtx:          requestCtx,
 			done:                make(chan struct{}),
 			onOrphan:            s.rollbackOrphanedSpend,
+			orphans:             &s.orphans,
 		}
 		items[idx] = item
 

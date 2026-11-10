@@ -215,6 +215,7 @@ type Store struct {
 	getBatcher          batcherIfc[batchGetItem]
 	spendBatcher        batcherIfc[batchSpend]
 	spendCircuitBreaker *circuitBreaker
+	orphans             utxo.OrphanLedger
 	outpointBatcher     batcherIfc[batchOutpoint]
 	incrementBatcher    batcherIfc[batchIncrement]
 	setDAHBatcher       batcherIfc[batchDAH]

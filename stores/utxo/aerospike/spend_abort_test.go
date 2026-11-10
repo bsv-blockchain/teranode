@@ -380,3 +380,61 @@ func TestSpendDoesNotRollBackLateClaimWhenTransientLockSuppressesRollback(t *tes
 	require.Never(t, func() bool { return outpointIsUnspent(storeCtx, store, laterTx) }, 3*time.Second, 50*time.Millisecond,
 		"the late claim was rolled back although a transient lock suppressed the batch rollback")
 }
+
+// A retry of the same transaction must not have its spend cleared by the
+// orphan rollback of an earlier attempt. Both attempts store identical
+// spending data, so the rollback cannot tell them apart in storage: it must not
+// run while a retry owns the input.
+func TestOrphanRollbackDoesNotClearRetryOfSameTransaction(t *testing.T) {
+	store, storeCtx, laterTx, before := prepareHeldSpend(t, "orphan-vs-retry", 300*time.Millisecond, 4*time.Second)
+	entered, release := make(chan struct{}), make(chan struct{})
+
+	result, done, err := store.SpendHeldForTest(storeCtx, laterTx, 2, before, entered, release)
+	require.NoError(t, err)
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("claim part did not start")
+	}
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return while its started claim was held")
+	}
+
+	retryResult := store.SpendRetryForTest(storeCtx, laterTx, 2, 10*time.Second)
+
+	var retryErr error
+
+	retryReturned := false
+
+	select {
+	case retryErr = <-retryResult:
+		retryReturned = true
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("held batch did not complete")
+	}
+
+	if !retryReturned {
+		select {
+		case retryErr = <-retryResult:
+		case <-time.After(15 * time.Second):
+			t.Fatal("retry did not return")
+		}
+	}
+
+	require.NoError(t, retryErr, "the retry must succeed")
+
+	require.Never(t, func() bool { return outpointIsUnspent(storeCtx, store, laterTx) }, time.Second, 50*time.Millisecond,
+		"the orphan rollback of an earlier attempt cleared the spend a retry of the same transaction owns")
+}

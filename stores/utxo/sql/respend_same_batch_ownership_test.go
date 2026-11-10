@@ -444,6 +444,7 @@ type heldClaim struct {
 	store   *Store
 	parent  *bt.Tx
 	later   *batchSpend
+	queued  chan *batchSpend
 	result  chan error
 	release chan struct{}
 	done    chan struct{}
@@ -467,7 +468,7 @@ func startHeldClaim(t *testing.T, name string, wait, bound time.Duration) *heldC
 	store.settings.UtxoStore.SpendWaitTimeout = wait
 	store.settings.UtxoStore.SpendRollbackTimeout = bound
 
-	held := &heldClaim{store: store, parent: parent, result: make(chan error, 1), release: make(chan struct{}), done: make(chan struct{})}
+	held := &heldClaim{store: store, parent: parent, queued: queued, result: make(chan error, 1), release: make(chan struct{}), done: make(chan struct{})}
 
 	go func() { _, err := store.Spend(ctx, spendOf(t, parent, 2, 0), 2); held.result <- err }()
 
@@ -763,4 +764,89 @@ func TestSpendDoesNotRollBackLateClaimWhenTransientLockSuppressesRollback(t *tes
 
 	require.Never(t, func() bool { return outputIsUnspent(ctx, store, claim.spend) }, 2*time.Second, 20*time.Millisecond,
 		"the late claim was rolled back although a transient lock suppressed the batch rollback")
+}
+
+// A retry of the same transaction must not have its spend cleared by the
+// orphan rollback of an earlier attempt. Both attempts store identical
+// spending data, so the rollback cannot tell them apart in storage: it must not
+// run while a retry owns the input.
+func TestOrphanRollbackDoesNotClearRetryOfSameTransaction(t *testing.T) {
+	ctx := context.Background()
+	held := startHeldClaim(t, "orphan-vs-retry", 300*time.Millisecond, 4*time.Second)
+
+	select {
+	case err := <-held.result:
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return while its started claim was held")
+	}
+
+	held.store.settings.UtxoStore.SpendWaitTimeout = 10 * time.Second
+
+	retryResult := make(chan error, 1)
+
+	go func() { _, err := held.store.Spend(ctx, spendOf(t, held.parent, 2, 0), 2); retryResult <- err }()
+
+	process := func(item *batchSpend) { held.store.sendSpendBatch([]*batchSpend{item}) }
+
+	var retryItem *batchSpend
+
+	select {
+	case retryItem = <-held.queued:
+		process(retryItem)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	close(held.release)
+
+	select {
+	case <-held.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("held batch did not complete")
+	}
+
+	if retryItem == nil {
+		select {
+		case retryItem = <-held.queued:
+			process(retryItem)
+		case <-time.After(10 * time.Second):
+			t.Fatal("retry was never queued")
+		}
+	}
+
+	select {
+	case err := <-retryResult:
+		require.NoError(t, err, "the retry must succeed")
+	case <-time.After(10 * time.Second):
+		t.Fatal("retry did not return")
+	}
+
+	require.Never(t, func() bool { return outputIsUnspent(ctx, held.store, held.later.spend) }, time.Second, 20*time.Millisecond,
+		"the orphan rollback of an earlier attempt cleared the spend a retry of the same transaction owns")
+}
+
+// A retry that cannot wait out an earlier attempt's unresolved late spend fails
+// at the wait budget, without queueing a claim that could be rolled back by it.
+func TestRetryFailsAtWaitBudgetWhileEarlierLateSpendIsUnresolved(t *testing.T) {
+	ctx := context.Background()
+	held := startHeldClaim(t, "orphan-retry-budget", 300*time.Millisecond, 4*time.Second)
+
+	select {
+	case err := <-held.result:
+		require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+	case <-time.After(5 * time.Second):
+		t.Fatal("caller did not return while its started claim was held")
+	}
+
+	_, err := held.store.Spend(ctx, spendOf(t, held.parent, 2, 0), 2)
+	require.ErrorIs(t, err, errors.ErrServiceUnavailable)
+
+	select {
+	case <-held.queued:
+		t.Fatal("the retry queued a claim while the earlier late spend was unresolved")
+	default:
+	}
+
+	close(held.release)
+	<-held.done
 }
