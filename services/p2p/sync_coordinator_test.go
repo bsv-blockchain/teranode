@@ -1288,9 +1288,9 @@ func TestSyncCoordinator_DeferredTriggerDroppedWhenSlotMoves(t *testing.T) {
 	sc.mu.Lock()
 	sc.currentSyncPeer = "first"
 	sc.mu.Unlock()
-	published, err := sc.sendSyncMessage("first")
+	deferred, err := sc.sendSyncMessage("first")
 	require.NoError(t, err)
-	require.False(t, published)
+	require.True(t, deferred)
 
 	sc.mu.Lock()
 	sc.currentSyncPeer = "second"

@@ -1180,12 +1180,12 @@ func (sc *SyncCoordinator) selectAndActivateNewPeer(localHeight uint32, oldPeer 
 		sc.warnfUnlessStopping("[SyncCoordinator] RecordSyncAttempt failed for %s: %v", newSyncPeer, err)
 	}
 
-	published, err := sc.sendSyncMessage(newSyncPeer)
+	deferred, err := sc.sendSyncMessage(newSyncPeer)
 	if err != nil {
 		sc.logger.Errorf("[SyncCoordinator] Failed to trigger sync: %v", err)
 		return err
 	}
-	if published {
+	if !deferred {
 		sc.logger.Infof("[SyncCoordinator] Triggered sync with peer %s via Kafka", newSyncPeer)
 	}
 	return nil
@@ -1712,11 +1712,14 @@ func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash stri
 }
 
 // sendSyncMessage sends a sync message to a specific peer (canonical libp2p ID string).
-// It requires decisionMu to be held. published is false when the blocks producer
-// was backlogged; the trigger is then remembered in deferredTriggerPeer and
-// retried by retryDeferredSyncTrigger, so the claim on the peer stands and is
-// not charged a second sync attempt.
-func (sc *SyncCoordinator) sendSyncMessage(peerID string) (published bool, err error) {
+// It requires decisionMu to be held. deferred is true only when the blocks
+// producer was backlogged; the trigger is then remembered in deferredTriggerPeer
+// and retried by retryDeferredSyncTrigger, so the claim on the peer stands and is
+// not charged a second sync attempt. deferred is false both when the trigger was
+// handed to the producer and when sendSyncTriggerToKafka dropped it for good (no
+// producer, a blacklisted DataHub URL or a marshal error), so false does not mean
+// the trigger was sent.
+func (sc *SyncCoordinator) sendSyncMessage(peerID string) (deferred bool, err error) {
 	sc.logger.Infof("[sendSyncMessage] Preparing to send sync message to peer %s", peerID)
 
 	peerInfo, exists, err := sc.registryGetPeer(peerID)
@@ -1744,10 +1747,10 @@ func (sc *SyncCoordinator) sendSyncMessage(peerID string) (published bool, err e
 				sc.logger.Warnf("[sendSyncMessage] Kafka blocks producer backlogged, deferring sync trigger for peer %s; retrying each FSM tick", peerID)
 			}
 			sc.deferredTriggerPeer = peerID
-			return false, nil
+			return true, nil
 		}
 		sc.deferredTriggerPeer = ""
-		return true, nil
+		return false, nil
 	}
 	sc.logger.Errorf("[sendSyncMessage] Cannot send sync - no best block hash available for peer %s", peerID)
 	return false, errors.NewServiceError(fmt.Sprintf("no block hash available for peer %s", peerID))
@@ -1766,12 +1769,12 @@ func (sc *SyncCoordinator) retryDeferredSyncTrigger() {
 		sc.deferredTriggerPeer = ""
 		return
 	}
-	published, err := sc.sendSyncMessage(peerID)
+	deferred, err := sc.sendSyncMessage(peerID)
 	if err != nil {
 		sc.deferredTriggerPeer = ""
 		return
 	}
-	if published {
-		sc.logger.Infof("[SyncCoordinator] Sent deferred sync trigger for peer %s", peerID)
+	if !deferred {
+		sc.logger.Infof("[SyncCoordinator] Stopped deferring sync trigger for peer %s: the producer took it or sendSyncTriggerToKafka dropped it", peerID)
 	}
 }
