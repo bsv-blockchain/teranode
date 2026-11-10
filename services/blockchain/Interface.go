@@ -783,7 +783,8 @@ type ClientI interface {
 	// - blockIDs: Array of block IDs to check
 	//
 	// Returns:
-	// - Boolean indicating whether all the blocks are in the main chain (true) or not (false)
+	// - Boolean indicating whether ANY of the blocks is in the main chain (true) or none is (false).
+	//   Callers rely on this any-of semantics; an empty blockIDs slice returns false.
 	// - Error if the check operation fails
 	CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error)
 

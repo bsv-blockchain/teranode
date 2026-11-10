@@ -1026,8 +1026,12 @@ func (v *Validator) validateInternal(ctx context.Context, tx *bt.Tx, blockHeight
 		// gates selected the same single call and the first read as a gate while
 		// gating nothing.
 		if utxoHeights, err = v.getTransactionInputBlockHeightsAndExtendTx(ctx, tx, txID, validationOptions); err != nil {
-			if errors.Is(err, errors.ErrTxMissingParent) {
-				txMeta, blessed, fatalErr := v.dahEvictedParentGrace(ctx, tx, txID)
+			if errors.Is(err, errors.ErrTxMissingParent) && !validationOptions.InBlock {
+				// Ingest only: block drivers skip every tx whose record resolves before
+				// the validator runs, so a block-sourced tx never has a record to bless.
+				// Cancellation must not turn a deferrable missing-parent into a fatal
+				// StorageError: the caller's all-missing-parent deferral counts exactly.
+				txMeta, blessed, fatalErr := v.dahEvictedParentGrace(context.WithoutCancel(ctx), tx, txID)
 				if fatalErr != nil {
 					span.RecordError(fatalErr)
 
@@ -2025,40 +2029,47 @@ func (v *Validator) twoPhaseCommitTransaction(ctx context.Context, tx *bt.Tx, tx
 // grace, and the caller surfaces the original missing-parent error. A STORE or
 // BLOCKCHAIN fault, however, is returned as fatalErr — a DB read error is not
 // a verdict about the transaction, and reclassifying it as "invalid: missing
-// parent" would fail blocks (and feed the BLOCK_INCOMPLETE cap) on transient
-// infrastructure blips. Without a blockchain client (some embedded/test
-// wirings) the grace fails closed.
+// parent" would fail blocks on transient infrastructure blips. Both faults use
+// node-fault classes (STORAGE_ERROR, SERVICE_UNAVAILABLE) so the RPC layer does
+// not report them to the submitter as a verdict on the transaction. Without a
+// blockchain client (some embedded/test wirings) the grace fails closed before
+// any store read.
 //
 // This is the single source of truth for the grace, shared by the extend/heights
 // step and the spend step so their tolerance for evaporated parents cannot drift.
 func (v *Validator) dahEvictedParentGrace(ctx context.Context, tx *bt.Tx, txID string) (txMeta *meta.Data, blessed bool, fatalErr error) {
+	if v.blockchainClient == nil {
+		return nil, false, nil
+	}
+
 	txMetaData := &meta.Data{}
 	if metaErr := v.utxoStore.GetMeta(ctx, tx.TxIDChainHash(), txMetaData); metaErr != nil {
 		if !errors.Is(metaErr, errors.ErrTxNotFound) {
+			prometheusValidatorDAHGraceFault.WithLabelValues("meta_read").Inc()
+
 			return nil, false, errors.NewStorageError("[Validate][%s] DAH-evicted-parent grace: meta read failed (degraded store?)", txID, metaErr)
 		}
 
 		return nil, false, nil
 	}
 
-	if len(txMetaData.BlockIDs) == 0 || txMetaData.Conflicting || txMetaData.Locked {
-		return nil, false, nil
-	}
-
-	if v.blockchainClient == nil {
+	if len(txMetaData.BlockIDs) == 0 || txMetaData.Conflicting || txMetaData.Locked || txMetaData.Creating {
 		return nil, false, nil
 	}
 
 	onCurrentChain, chainErr := v.blockchainClient.CheckBlockIsInCurrentChain(ctx, txMetaData.BlockIDs)
 	if chainErr != nil {
-		return nil, false, errors.NewServiceError("[Validate][%s] DAH-evicted-parent grace: current-chain check failed", txID, chainErr)
+		prometheusValidatorDAHGraceFault.WithLabelValues("chain_check").Inc()
+
+		return nil, false, errors.NewServiceUnavailableError("[Validate][%s] DAH-evicted-parent grace: current-chain check failed", txID, chainErr)
 	}
 
 	if !onCurrentChain {
 		return nil, false, nil
 	}
 
-	v.logger.Warnf("[Validate][%s] parent tx DAH-evicted, child already mined on current chain and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
+	prometheusValidatorDAHGraceBlessed.Inc()
+	v.logger.Debugf("[Validate][%s] parent tx DAH-evicted, child already mined on current chain and not conflicting/locked, assuming blessed (BlockIDs=%v)", txID, txMetaData.BlockIDs)
 
 	return txMetaData, true, nil
 }

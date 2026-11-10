@@ -16,6 +16,7 @@ import (
 	"testing"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
@@ -28,7 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeExtendGraceTxAndParent(t *testing.T) (*bt.Tx, *bt.Tx) {
+func makeExtendGraceTx(t *testing.T) *bt.Tx {
 	privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("THIS_IS_A_DETERMINISTIC_PRIVATE_KEY"))
 	coinbaseTx := transactions.Create(t,
 		transactions.WithCoinbaseData(100, "/Test miner/"),
@@ -41,139 +42,185 @@ func makeExtendGraceTxAndParent(t *testing.T) (*bt.Tx, *bt.Tx) {
 		transactions.WithChangeOutput(),
 	)
 
-	return tx, coinbaseTx
+	return tx
 }
 
-func setupExtendGraceValidator(t *testing.T, getMetaResult *meta.Data, getMetaErr error, onCurrentChain bool, chainErr error) (*Validator, *utxo.MockUtxostore) {
+type extendGraceSetup struct {
+	childMeta      *meta.Data
+	childMetaErr   error
+	onCurrentChain bool
+	chainErr       error
+	parentResult   []utxo.ParentOutput
+	parentErr      error
+}
+
+func setupExtendGraceValidator(t *testing.T, tx *bt.Tx, cfg extendGraceSetup) (*Validator, *utxo.MockUtxostore, *blockchain.Mock) {
 	ctx := context.Background()
 	logger := ulogger.TestLogger{}
 	mockStore := &utxo.MockUtxostore{}
 	settings := test.CreateBaseTestSettings(t)
 
 	blockchainMock := &blockchain.Mock{}
-	blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(onCurrentChain, chainErr).Maybe()
+
+	if cfg.childMeta != nil {
+		blockchainMock.On("CheckBlockIsInCurrentChain", mock.Anything, cfg.childMeta.BlockIDs).Return(cfg.onCurrentChain, cfg.chainErr).Maybe()
+	}
 
 	validator, err := New(ctx, logger, settings, mockStore, nil, nil, nil, nil, blockchainMock)
 	require.NoError(t, err)
 
 	v := validator.(*Validator)
 
-	// The per-parent lookup during extension / input-height resolution fails:
-	// the parent record is gone from the store.
-	mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return([]utxo.ParentOutput{{Status: utxo.ParentOutputTxNotFound}}, nil)
+	parentResult := cfg.parentResult
+	if parentResult == nil && cfg.parentErr == nil {
+		parentResult = []utxo.ParentOutput{{Status: utxo.ParentOutputTxNotFound}}
+	}
+
+	if parentResult != nil {
+		mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(parentResult, nil)
+	} else {
+		mockStore.On("ParentOutputsForValidation", mock.Anything, mock.Anything).Return(nil, cfg.parentErr)
+	}
+
 	mockStore.On("GetBlockState").Return(utxo.BlockState{Height: 100, MedianTime: 1000000000})
 
-	if getMetaErr != nil {
-		mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).Return(getMetaErr)
+	// The grace must read the CHILD's record, never a parent's.
+	childHash := mock.MatchedBy(func(h *chainhash.Hash) bool { return h.IsEqual(tx.TxIDChainHash()) })
+
+	if cfg.childMetaErr != nil {
+		mockStore.On("GetMeta", mock.Anything, childHash, mock.Anything).Return(cfg.childMetaErr)
 	} else {
-		mockStore.On("GetMeta", mock.Anything, mock.Anything, mock.Anything).
+		mockStore.On("GetMeta", mock.Anything, childHash, mock.Anything).
 			Run(func(args mock.Arguments) {
 				data := args.Get(2).(*meta.Data)
-				*data = *getMetaResult
+				*data = *cfg.childMeta
 			}).
 			Return(nil)
 	}
 
-	return v, mockStore
+	return v, mockStore, blockchainMock
 }
 
 func TestValidate_ExtendStepDAHEvictedParentGrace(t *testing.T) {
-	t.Run("grace allowed when child mined and not flagged", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
-		existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}, Conflicting: false, Locked: false}
-		v, mockStore := setupExtendGraceValidator(t, existingMeta, nil, true, nil)
+	t.Run("grace allowed when child mined on current chain and not flagged", func(t *testing.T) {
+		tx := makeExtendGraceTx(t)
+		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true})
 
 		txMetaData, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.NoError(t, err)
 		require.NotNil(t, txMetaData)
 		require.Equal(t, []uint32{1, 2}, txMetaData.BlockIDs)
+		// The verdict must come from the chain oracle, asked about the child's own BlockIDs.
+		chain.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{1, 2})
 		// The grace must short-circuit BEFORE any spend is attempted: no Spend
 		// expectation is registered, so a Spend call would fail the test.
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("no grace when child not mined", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
-		existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{}}
-		v, mockStore := setupExtendGraceValidator(t, existingMeta, nil, true, nil)
+	for _, tc := range []struct {
+		name string
+		meta *meta.Data
+	}{
+		{"child not mined", &meta.Data{BlockIDs: []uint32{}}},
+		{"child conflicting", &meta.Data{BlockIDs: []uint32{1}, Conflicting: true}},
+		{"child locked", &meta.Data{BlockIDs: []uint32{1}, Locked: true}},
+		{"child still creating", &meta.Data{BlockIDs: []uint32{1}, Creating: true}},
+	} {
+		t.Run("no grace when "+tc.name, func(t *testing.T) {
+			tx := makeExtendGraceTx(t)
+			tc.meta.Tx = tx
+			v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: tc.meta, onCurrentChain: true})
 
-		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+			_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+			require.Error(t, err)
+			require.True(t, errors.Is(err, errors.ErrTxMissingParent), "missing-parent error must surface, got: %v", err)
+			// The flags are checked before the blockchain round-trip.
+			chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+			mockStore.AssertExpectations(t)
+		})
+	}
+
+	t.Run("no extend-step grace for a block-sourced tx", func(t *testing.T) {
+		tx := makeExtendGraceTx(t)
+		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true})
+
+		_, err := v.validateInternal(context.Background(), tx, 100, &Options{InBlock: true})
 
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "missing-parent error must surface, got: %v", err)
-		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("no grace when child conflicting", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
-		existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1}, Conflicting: true}
-		v, mockStore := setupExtendGraceValidator(t, existingMeta, nil, true, nil)
-
-		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
-
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "missing-parent error must surface, got: %v", err)
-		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("no grace when child locked", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
-		existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1}, Locked: true}
-		v, mockStore := setupExtendGraceValidator(t, existingMeta, nil, true, nil)
-
-		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
-
-		require.Error(t, err)
-		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "missing-parent error must surface, got: %v", err)
-		mockStore.AssertExpectations(t)
+		mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
 	})
 
 	t.Run("no grace when child absent from store", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
-		v, mockStore := setupExtendGraceValidator(t, nil, errors.NewTxNotFoundError("child not found"), true, nil)
+		tx := makeExtendGraceTx(t)
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMetaErr: errors.NewTxNotFoundError("child not found"), onCurrentChain: true})
 
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "missing-parent error must surface, got: %v", err)
+		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
 		mockStore.AssertExpectations(t)
 	})
 
 	t.Run("no grace when mined block lost a reorg (not on current chain)", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
+		tx := makeExtendGraceTx(t)
 		// BlockIDs alone are not proof of main-chain inclusion: a block that lost
 		// a reorg keeps its stale ID on the tx meta.
 		staleMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
-		v, mockStore := setupExtendGraceValidator(t, staleMeta, nil, false, nil)
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: staleMeta, onCurrentChain: false})
 
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "missing-parent error must surface, got: %v", err)
+		chain.AssertCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, []uint32{1, 2})
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("chain-check fault aborts instead of reclassifying as missing parent", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
+	t.Run("finality is enforced before the grace can bless", func(t *testing.T) {
+		tx := makeExtendGraceTx(t)
+		// A height-based nLockTime above the validation height with a non-final
+		// sequence: the record was final at the height it was mined at, not at 100.
+		tx.LockTime = 500
+		for _, input := range tx.Inputs {
+			input.SequenceNumber = 0
+		}
+
 		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
-		v, mockStore := setupExtendGraceValidator(t, minedMeta, nil, false, errors.NewServiceError("blockchain unavailable"))
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true})
 
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.Error(t, err)
-		// A blockchain-service fault is not a verdict about the transaction: it
-		// must surface as the fault itself, not as "invalid: missing parent"
-		// (which would fail the enclosing block and feed the BLOCK_INCOMPLETE
-		// cap on a transient infrastructure blip).
+		require.True(t, errors.Is(err, errors.ErrNonFinal), "non-final error must surface, got: %v", err)
+		mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+	})
+
+	t.Run("chain-check fault aborts as a node fault instead of missing parent", func(t *testing.T) {
+		tx := makeExtendGraceTx(t)
+		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
+		v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, chainErr: errors.NewServiceError("blockchain unavailable")})
+
+		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.Error(t, err)
 		require.False(t, errors.Is(err, errors.ErrTxMissingParent), "fault must not be reported as missing parent, got: %v", err)
-		require.True(t, errors.Is(err, errors.ErrServiceError), "the blockchain fault must surface, got: %v", err)
+		// SERVICE_UNAVAILABLE is on the RPC layer's node-fault list; SERVICE_ERROR is not,
+		// and would be reported to the submitter as a verdict on the transaction.
+		require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "the fault must surface as a node-fault class, got: %v", err)
 		mockStore.AssertExpectations(t)
 	})
 
 	t.Run("store fault on meta read aborts instead of reclassifying", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
-		v, mockStore := setupExtendGraceValidator(t, nil, errors.NewStorageError("aerospike timeout"), true, nil)
+		tx := makeExtendGraceTx(t)
+		v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMetaErr: errors.NewStorageError("aerospike timeout")})
 
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
@@ -183,30 +230,56 @@ func TestValidate_ExtendStepDAHEvictedParentGrace(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("no grace without a blockchain client (fail closed)", func(t *testing.T) {
-		tx, _ := makeExtendGraceTxAndParent(t)
+	t.Run("no grace without a blockchain client (fail closed, no store read)", func(t *testing.T) {
+		tx := makeExtendGraceTx(t)
 		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
-		v, mockStore := setupExtendGraceValidator(t, minedMeta, nil, true, nil)
+		v, mockStore, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true})
 		v.blockchainClient = nil
 
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrTxMissingParent), "missing-parent error must surface, got: %v", err)
-		mockStore.AssertExpectations(t)
+		mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("a parent read fault that is not a missing parent never reaches the grace", func(t *testing.T) {
+		tx := makeExtendGraceTx(t)
+		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true, parentErr: errors.NewStorageError("bulk parent read failed")})
+
+		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrTxMissingParent), "a read fault is not a missing parent, got: %v", err)
+		mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
+	})
+
+	t.Run("no grace for a mined child whose parent is present", func(t *testing.T) {
+		tx := makeExtendGraceTx(t)
+		minedMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{1, 2}}
+		v, mockStore, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: minedMeta, onCurrentChain: true, parentResult: []utxo.ParentOutput{{Status: utxo.ParentOutputNoSuchIndex}}})
+
+		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
+
+		require.Error(t, err)
+		require.False(t, errors.Is(err, errors.ErrTxMissingParent), "a per-output verdict is not a missing parent, got: %v", err)
+		mockStore.AssertNotCalled(t, "GetMeta", mock.Anything, mock.Anything, mock.Anything)
+		chain.AssertNotCalled(t, "CheckBlockIsInCurrentChain", mock.Anything, mock.Anything)
 	})
 }
 
 // A current-chain verdict must be refreshed for every grace decision: a reorg
 // can orphan the block between two validations of the same transaction.
 func TestExtendGraceChainCheckRecheckedAfterReorg(t *testing.T) {
-	tx, _ := makeExtendGraceTxAndParent(t)
-	existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{7, 9}, Conflicting: false, Locked: false}
+	tx := makeExtendGraceTx(t)
+	existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{7, 9}}
 
-	v, _ := setupExtendGraceValidator(t, existingMeta, nil, true, nil)
+	v, _, _ := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: existingMeta, onCurrentChain: true})
 	chain := &blockchain.Mock{}
-	chain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(true, nil).Once()
-	chain.On("CheckBlockIsInCurrentChain", mock.Anything, mock.Anything).Return(false, nil).Once()
+	chain.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{7, 9}).Return(true, nil).Once()
+	chain.On("CheckBlockIsInCurrentChain", mock.Anything, []uint32{7, 9}).Return(false, nil).Once()
 	v.blockchainClient = chain
 
 	mined, err := v.validateInternal(context.Background(), tx, 100, &Options{})
@@ -218,28 +291,19 @@ func TestExtendGraceChainCheckRecheckedAfterReorg(t *testing.T) {
 	chain.AssertExpectations(t)
 }
 
-// TestExtendGraceChainCheckErrorsNotMemoised verifies a failed current-chain
+// TestExtendGraceChainCheckErrorsRetried verifies a failed current-chain
 // check is retried: a transient blockchain fault must not pin a verdict.
 func TestExtendGraceChainCheckErrorsRetried(t *testing.T) {
-	tx, _ := makeExtendGraceTxAndParent(t)
-	existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{11}, Conflicting: false, Locked: false}
+	tx := makeExtendGraceTx(t)
+	existingMeta := &meta.Data{Tx: tx, BlockIDs: []uint32{11}}
 
-	v, _ := setupExtendGraceValidator(t, existingMeta, nil, false, errors.NewServiceError("blockchain unavailable"))
-
-	blockchainMock := v.blockchainClient.(*blockchain.Mock)
+	v, _, chain := setupExtendGraceValidator(t, tx, extendGraceSetup{childMeta: existingMeta, chainErr: errors.NewServiceError("blockchain unavailable")})
 
 	for i := 0; i < 3; i++ {
 		_, err := v.validateInternal(context.Background(), tx, 100, &Options{})
 		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrServiceUnavailable), "the chain fault must surface on every attempt, got: %v", err)
 	}
 
-	chainChecks := 0
-
-	for _, call := range blockchainMock.Calls {
-		if call.Method == "CheckBlockIsInCurrentChain" {
-			chainChecks++
-		}
-	}
-
-	require.Equal(t, 3, chainChecks, "a failed chain check must be retried")
+	chain.AssertNumberOfCalls(t, "CheckBlockIsInCurrentChain", 3)
 }
