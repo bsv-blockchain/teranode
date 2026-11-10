@@ -2410,8 +2410,11 @@ func (u *BlockValidation) ValidateBlockWithOptions(ctx context.Context, block *m
 				// ErrProcessing test placed above ErrTxInvalid would swallow every genuine verdict. A
 				// storage failure or a cancelled context is not evidence of peer misconduct, so it
 				// must neither strike the peer nor produce a corrupt verdict — return it retryable.
+				// ERR_CONTEXT_CANCELED is the code subtree validation wraps its own cancellations
+				// in (settledError); it is not the stdlib context.Canceled, so it needs its own test.
 				if errors.Is(err, context.Canceled) ||
 					errors.Is(err, context.DeadlineExceeded) ||
+					errors.Is(err, errors.ErrContextCanceled) ||
 					errors.Is(err, errors.ErrStorageError) ||
 					errors.Is(err, errors.ErrServiceError) {
 					ctxLogger.Warnf("[ValidateBlock][%s] local failure during subtree transaction validation, will retry: %s", block.Hash().String(), err)
