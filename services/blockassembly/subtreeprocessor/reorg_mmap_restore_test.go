@@ -46,6 +46,14 @@ var mmapRestoreCases = map[string]func(t *testing.T, f *stepRestoreFixture) erro
 	"fork_move_back_build": func(_ *testing.T, f *stepRestoreFixture) error {
 		return f.stp.Reorg([]*model.Block{f.blockABadBuild}, []*model.Block{f.blockF, f.blockF2})
 	},
+	// A single block outside a reorg fails after its reset replaced the subtrees,
+	// and its dispatcher rollback puts them back. m1 is the only transaction in
+	// the remainder, so its missing map entry fails the remainder pass.
+	"single_block_mid_step": func(t *testing.T, f *stepRestoreFixture) error {
+		require.True(t, f.stp.GetCurrentTxMap().Delete(f.m1))
+
+		return f.stp.MoveForwardBlock(f.blockA2)
+	},
 	// A2 commits, A3 fails, and the catch-up's rollback puts back the subtrees
 	// from before the catch-up.
 	"catch_up_second_block": func(t *testing.T, f *stepRestoreFixture) error {
@@ -97,7 +105,7 @@ func runMmapRestoreChild(t *testing.T, name string) {
 	held := f.assemblyHashes(t)
 	require.Contains(t, held, f.m1)
 
-	if name != "catch_up_second_block" {
+	if strings.HasPrefix(name, "fork_") {
 		// the reset that follows a failed fork reorg sweeps the same subtrees
 		swept := f.sweepAfterFailure(t)
 		require.Contains(t, swept, f.m1)

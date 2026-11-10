@@ -13,7 +13,8 @@ import (
 
 // A failed fork reorg keeps the subtrees of its last completed step, and a step
 // that fails part way puts back its own input, so the reset block assembly falls
-// back to sweeps the pre-reorg mempool. m1 is in block assembly before the reorg,
+// back to sweeps the unmined transactions from before the reorg. m1 is one, in
+// block assembly before the reorg,
 // but its record says it was mined in A2, a block block assembly never moved onto,
 // so the reload would not find it: only the sweep's mark brings it back. a1 is
 // mined in the moved-back block A. The reorg fails inside the first forward step,
@@ -23,7 +24,7 @@ import (
 // The subtree processor's own tests cover the other failure points. This one
 // cannot fail a step before its reset, as they do, by deleting F's subtree file:
 // block assembly's reset reads that file too.
-func TestFailedForkReorg_ResetKeepsThePreReorgMempoolAndTheMovedBackTx(t *testing.T) {
+func TestFailedForkReorg_ResetKeepsAPreReorgUnminedTxAndTheMovedBackTx(t *testing.T) {
 	f := newFailedForkReorgBA(t)
 
 	// m1 spends a parent mined in P, so the reload's input check accepts it.

@@ -507,9 +507,9 @@ type SubtreeProcessor struct {
 	// other than the forward-only catch-up) fails or panics, and cleared only
 	// by a reset that gets past its tx map rotation. While it is set, Reorg and
 	// MoveForwardBlock are refused with a ResetRequiredError. A failed fork
-	// reorg leaves the state of its last completed step: the header is put
-	// back to the losing tip, but the subtrees and the tx map already hold the
-	// moved-back transactions. A reorg or move-forward run on a failed reorg's
+	// reorg leaves the subtrees and tx map of its last completed step, which
+	// already hold the moved-back transactions. On a failure, though not on a
+	// panic, the header is put back to the losing tip. A reorg or move-forward run on a failed reorg's
 	// state is unsafe (on the old whole-reorg rollback it dropped the moved-back
 	// transactions from block assembly without marking them unmined), so only
 	// a reset may run on it, and no mining data is served
@@ -4579,8 +4579,8 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtree
 // This can be called from any goroutine without synchronization.
 // Updated when a subtree completes or a block is processed.
 //
-// It returns nil while a failed fork reorg waits for a reset: the header is
-// back on the losing tip but the subtrees already hold the moved-back
+// It returns nil while a failed fork reorg waits for a reset: the header may
+// be back on the losing tip while the subtrees already hold the moved-back
 // transactions, so a candidate built from them would mine those twice.
 func (stp *SubtreeProcessor) GetPrecomputedMiningData() *PrecomputedMiningData {
 	if stp.failedForkReorgNeedsReset.Load() {
@@ -5203,7 +5203,7 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 	// subtrees for the whole reorg instead cost the largest share of block
 	// assembly's heap on a long reorg, and nothing reads them: only a reset may
 	// run after a failed fork reorg (failedForkReorgNeedsReset), and its sweep
-	// finds every pre-reorg mempool transaction in any step's output.
+	// finds every unmined transaction from before the reorg in any step's output.
 	//
 	// The header still goes back to the losing tip, so block assembly, which
 	// realigns to it when the reset fails early, stays behind the chain tip and
@@ -6158,7 +6158,8 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 
 	// The previous subtrees are retired, not closed, so a failed build can put
 	// them back: a failed fork reorg's reset sweeps whatever subtrees are
-	// installed, and the half-built ones would miss the previous mempool. They
+	// installed, and the half-built ones would miss the unmined transactions
+	// that were in the previous subtrees. They
 	// are closed once a later step commits.
 	stp.retireSubtrees(stp.currentSubtree.Load())
 	stp.currentSubtree.Store(newSubtree)
@@ -9201,7 +9202,12 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 		if cs := stp.currentSubtree.Load(); cs != nil {
 			cs.Close()
 		}
-		stp.closeRetiredSubtrees()
+		// every retired subtree, including any the mining snapshot still points at:
+		// nothing reads them after Stop, and only Close removes their mmap files
+		for _, st := range stp.retiredSubtrees {
+			st.Close()
+		}
+		stp.retiredSubtrees = nil
 		// Clean up DiskTxMap. Both halves of the double buffer own log
 		// directories, as does anything still retired from an interrupted reorg,
 		// and only Close() removes them — see closeRetiredDiskTxMaps.

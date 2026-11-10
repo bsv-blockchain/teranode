@@ -73,8 +73,8 @@ func (s *stepRestoreStore) takeMarkedNotOnLongestChain() []chainhash.Hash {
 }
 
 // stepRestoreFixture is a started, disk-tx-map-backed processor on tip A (parent
-// P). Its pre-reorg mempool is m1, plus mempool fillers when asked for, so that
-// it holds complete chained subtrees. a1 is mined in the losing block A. The
+// P). Before the reorg it holds the unmined transaction m1, plus unmined fillers
+// when asked for, so that it holds complete chained subtrees. a1 is mined in the losing block A. The
 // winning branch is F (f1) then F2 (f2). A2 (x1) and A3 (x2) extend A, for a
 // catch-up. blockABadBuild is A with a second subtree that makes the move-back's
 // bulk build fail after it has replaced the subtrees.
@@ -188,7 +188,8 @@ func newStepRestoreFixture(t *testing.T, o stepRestoreOptions) *stepRestoreFixtu
 
 	f.stp.InitCurrentBlockHeader(f.tipA)
 
-	// The pre-reorg mempool, added before the processor goroutine starts.
+	// The unmined transactions from before the reorg, added before the
+	// processor goroutine starts.
 	require.NoError(t, f.stp.AddDirectly(&subtreepkg.Node{Hash: f.m1, Fee: 50, SizeInBytes: 200}, &subtreepkg.TxInpoints{}, true))
 
 	for i := range o.fillers {
@@ -268,12 +269,12 @@ func errText(text string) func(*stepRestoreFixture) string {
 	return func(*stepRestoreFixture) string { return text }
 }
 
-// The reset after a failed fork reorg must sweep every pre-reorg mempool
-// transaction, wherever the reorg failed. The sweep reads the subtrees the failed
+// The reset after a failed fork reorg must sweep every unmined transaction from
+// before the reorg, wherever the reorg failed. The sweep reads the subtrees the failed
 // reorg left. A step that fails part way, after it replaced the subtrees, puts
 // back its own input, so the sweep sees the last completed step's output, which
 // still holds m1 and, once A has moved back, a1.
-func TestFailedForkReorg_ResetSweepsThePreReorgMempoolAtEveryFailurePoint(t *testing.T) {
+func TestFailedForkReorg_ResetSweepsThePreReorgUnminedTxsAtEveryFailurePoint(t *testing.T) {
 	cases := []struct {
 		name string
 		// run fails the reorg and returns its error
@@ -360,16 +361,17 @@ func TestFailedForkReorg_ResetSweepsThePreReorgMempoolAtEveryFailurePoint(t *tes
 			require.ErrorContains(t, err, tc.wantErr(f), "the reorg must fail at the injected point, not elsewhere")
 			require.Equal(t, f.tipA.Hash(), f.stp.GetCurrentBlockHeader().Hash(), "the header goes back to the losing tip")
 			require.Nil(t, f.stp.GetPrecomputedMiningData(), "no mining data is served from a failed fork reorg's state")
+			require.Nil(t, f.stp.GetIncompleteSubtreeMiningData(context.Background()), "not even an incomplete-subtree snapshot")
 
 			held := f.assemblyHashes(t)
-			require.Contains(t, held, f.m1, "the failed reorg's subtrees still hold the pre-reorg mempool")
+			require.Contains(t, held, f.m1, "the failed reorg's subtrees still hold m1, unmined before the reorg")
 
 			if tc.consistent {
 				require.NoError(t, f.stp.CheckSubtreeProcessor(), "the map agrees with the subtrees left in place")
 			}
 
 			swept := f.sweepAfterFailure(t)
-			require.Contains(t, swept, f.m1, "the reset's sweep must mark the pre-reorg mempool")
+			require.Contains(t, swept, f.m1, "the reset's sweep must mark m1")
 
 			if slices.Contains(held, f.a1) {
 				require.Contains(t, swept, f.a1, "and the moved-back a1 it holds")
