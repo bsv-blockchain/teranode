@@ -769,7 +769,9 @@ func (ba *BlockAssembly) runBlockSubmissionListener(ctx context.Context, done ch
 		case blockSubmission := <-ba.blockSubmissionChan:
 			_, err := ba.submitMiningSolution(ctx, blockSubmission)
 			if err != nil {
-				ba.logger.Warnf("Failed to submit block for job id %s %+v", chainhash.Hash(blockSubmission.Id), err)
+				// Id is whatever the caller sent, so it may not be 32 bytes: converting it to
+				// chainhash.Hash would panic before the error reached the caller.
+				ba.logger.Warnf("Failed to submit block for job id %s %+v", util.ReverseAndHexEncodeSlice(blockSubmission.Id), err)
 			}
 
 			if blockSubmission.responseChan != nil {

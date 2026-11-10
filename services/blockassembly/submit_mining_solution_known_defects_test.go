@@ -45,7 +45,11 @@ func (f *txStoreThatCannotPersist) Set(_ context.Context, _ []byte, _ fileformat
 // to the Blockchain service anyway and returns Ok, so the chain advances on a
 // block whose coinbase was never persisted.
 //
-// Spec: BA-SOLUTION-003, BA-SOLUTION-007 (tracked as GAP-BA-004).
+// When the defect is fixed and this test is promoted, the first assertion would pass
+// on any submission error, including one raised before the coinbase write; also
+// assert the error names the coinbase write as the reason.
+//
+// Spec: BA-SOLUTION-003, BA-SOLUTION-007 (tracked as GAP-BA-005).
 func TestKnownDefect_CoinbaseStoreFailureStillSubmitsBlock(t *testing.T) {
 	s, ctx := newRunningServer(t, &txStoreThatCannotPersist{Store: memory.New()})
 
@@ -77,16 +81,21 @@ func TestKnownDefect_CoinbaseStoreFailureStillSubmitsBlock(t *testing.T) {
 }
 
 // TestKnownDefect_GetMiningCandidateServesWhileUnminedTxsLoading: while block
-// assembly is still replaying unmined transactions at startup, GetMiningCandidate
-// MUST reject as not ready, like SubmitMiningSolution and the reset calls do.
+// assembly is still reloading unmined transactions at startup, GetMiningCandidate
+// MUST reject as not ready.
 //
 // Today GetMiningCandidate only checks that the blockchain FSM is RUNNING. During
-// startup recovery the FSM is usually already RUNNING while block assembly is
-// still loading, so a miner can be handed a candidate built from a partly
-// recovered pipeline that omits unmined transactions not yet reloaded.
+// startup recovery the FSM is usually already RUNNING while block assembly is still
+// loading, so a miner can be handed a candidate that omits unmined transactions not
+// yet reloaded.
+//
+// This test sets the loading flag on a running assembler, so it cannot tell the
+// startup load from a reset reload, which sets the same flag but where the state
+// matrix says "accept (stale data)". A fix that gated on this flag would make it pass
+// while breaking the reset behaviour; see GAP-BA-006 for the intended fix.
 //
 // Spec: BA-STATE-001 matrix row "GetMiningCandidate | LoadingUnmined | reject
-// (not ready)", BA-CANDIDATE-001 (tracked as GAP-BA-005).
+// (not ready)", BA-CANDIDATE-001 (tracked as GAP-BA-006).
 func TestKnownDefect_GetMiningCandidateServesWhileUnminedTxsLoading(t *testing.T) {
 	s, ctx := newRunningServer(t, nil)
 

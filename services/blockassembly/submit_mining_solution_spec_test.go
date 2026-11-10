@@ -10,7 +10,8 @@ package blockassembly
 // submit_mining_solution_known_defects_test.go behind the bagaps build tag.
 //
 // Contract references:
-//   BA-SOLUTION-004  unknown/expired candidate -> NotFound; malformed ID -> InvalidArgument
+//   BA-SOLUTION-004  unknown candidate -> NotFound
+//   SubmitMiningSolution error responses: candidate ID not 32 bytes -> InvalidArgument
 //   BA-SOLUTION-005  linear-extension stale -> exact stale message
 //   BA-CANDIDATE-005 successful submission clears ALL candidates
 //   BA-CANDIDATE-006 chain-tip change does not wipe candidates
@@ -135,8 +136,8 @@ func newRunningServer(t *testing.T, txStore blob.Store) (*BlockAssembly, context
 	return s, ctx
 }
 
-// fillOneSubtree adds enough transactions to complete one subtree, so the next
-// candidate carries new content and therefore a new content-derived ID.
+// fillOneSubtree adds subtreeSize-1 transactions. With the coinbase placeholder they
+// complete the first subtree, so GetMiningCandidate has a completed subtree to include.
 func fillOneSubtree(t *testing.T, s *BlockAssembly, salt string) {
 	t.Helper()
 
@@ -189,7 +190,7 @@ func mineRealCandidate(t *testing.T, s *BlockAssembly, ctx context.Context, salt
 // TestSubmitMiningSolution_UnknownCandidateIsNotFound: a solution against a
 // candidate the service does not recognise MUST return NotFound.
 //
-// Spec: BA-SOLUTION-004, AC-BA-CANDIDATE-005.1.
+// Spec: BA-SOLUTION-004.
 func TestSubmitMiningSolution_UnknownCandidateIsNotFound(t *testing.T) {
 	s, _ := setupServer(t)
 	require.NoError(t, s.blockAssembler.Start(t.Context()))
@@ -209,63 +210,99 @@ func TestSubmitMiningSolution_UnknownCandidateIsNotFound(t *testing.T) {
 }
 
 // TestSubmitMiningSolution_MalformedCandidateIDIsInvalidArgument: a candidate ID
-// that is not 32 bytes is a bad request, rejected as InvalidArgument (as
-// GetCandidateBlock does) rather than an unclassified error.
+// that is not 32 bytes is a bad request. A caller of the public SubmitMiningSolution
+// gets InvalidArgument back (as GetCandidateBlock returns for the same ID), whether
+// the ID is empty, short or too long.
 //
-// Spec: BA-SOLUTION-004 (SubmitMiningSolution request-validation row).
+// Spec: SubmitMiningSolution error responses ("InvalidArgument if the candidate ID is
+// not 32 bytes").
 func TestSubmitMiningSolution_MalformedCandidateIDIsInvalidArgument(t *testing.T) {
-	s, _ := setupServer(t)
-	require.NoError(t, s.blockAssembler.Start(t.Context()))
+	s, ctx := newRunningServer(t, nil)
 
-	req := &BlockSubmissionRequest{
-		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{
-			Id:    []byte{0x01, 0x02, 0x03}, // not 32 bytes
-			Nonce: 1,
-		},
+	for _, tc := range []struct {
+		name string
+		id   []byte
+	}{
+		{"empty", []byte{}},
+		{"short", []byte{0x01, 0x02, 0x03}},
+		{"too long", make([]byte, 33)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := s.SubmitMiningSolution(ctx, &blockassembly_api.SubmitMiningSolutionRequest{
+				Id:    tc.id,
+				Nonce: 1,
+			})
+			require.Error(t, err)
+			require.False(t, resp != nil && resp.Ok, "a malformed ID must not be accepted")
+			require.True(t, errors.Is(err, errors.ErrInvalidArgument), "expected InvalidArgument, got %v", err)
+		})
 	}
-
-	resp, err := s.submitMiningSolution(t.Context(), req)
-	require.Error(t, err)
-	require.Nil(t, resp)
-	require.True(t, errors.Is(err, errors.ErrInvalidArgument), "expected InvalidArgument, got %v", err)
 }
 
 // ---------------------------------------------------------------------------
 // Stale candidate
 // ---------------------------------------------------------------------------
 
-// TestSubmitMiningSolution_StaleCandidateIsRejectedButStillRecognized: when the
-// candidate's previous-block hash equals the current tip's previous-block hash,
-// the chain has already advanced past the candidate's parent and the service
-// MUST reject with the exact stale message.
-//
-// The same request also shows the candidate was not wiped by the chain advancing:
-// it is still recognized (stale error), never NotFound. The only paths that clear
-// the job store are DeleteAll on a successful submission and Delete of the one
-// offending job on an invalid block; no chain-notification path touches it.
+// TestSubmitMiningSolution_StaleCandidateIsRejectedButStillRecognized: a candidate
+// is issued on the current tip, then the chain advances by an external block. A
+// solution for it MUST be rejected with the exact stale message (its parent is now the
+// tip's parent), and the candidate MUST still be recognized: the tip change did not
+// wipe it, so the answer is the stale error, never NotFound.
 //
 // Spec: BA-SOLUTION-005, AC-BA-CANDIDATE-006.1, BA-CANDIDATE-006.
 func TestSubmitMiningSolution_StaleCandidateIsRejectedButStillRecognized(t *testing.T) {
-	s, _ := setupServer(t)
-	require.NoError(t, s.blockAssembler.Start(t.Context()))
+	s, ctx := newRunningServer(t, nil)
 
-	best, _ := s.blockAssembler.CurrentBlock()
-	require.NotNil(t, best, "best block header must be loaded after Start")
+	// Given a candidate issued on the current tip
+	tip, _ := s.blockAssembler.CurrentBlock()
+	require.NotNil(t, tip, "best block header must be loaded after Start")
 
-	// Given a candidate whose parent is the SAME as the current tip's parent
-	staleCandidateID := craftJob(t, s, *best.HashPrevBlock)
+	candidateID := craftJob(t, s, *tip.Hash())
 
-	// When a solution for it is submitted
-	resp, err := s.submitMiningSolution(t.Context(), &BlockSubmissionRequest{
-		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{Id: staleCandidateID, Nonce: 1},
+	// When an external block extends the chain, and block assembly moves to it
+	newTip := addExternalBlock(t, s, tip)
+	require.Eventually(t, func() bool {
+		current, _ := s.blockAssembler.CurrentBlock()
+		return current != nil && current.Hash().IsEqual(newTip.Hash())
+	}, 10*time.Second, 50*time.Millisecond, "block assembly must move to the external block")
+
+	// Then a solution for the candidate is rejected as stale, and the candidate is
+	// still known
+	resp, err := s.submitMiningSolution(ctx, &BlockSubmissionRequest{
+		SubmitMiningSolutionRequest: &blockassembly_api.SubmitMiningSolutionRequest{Id: candidateID, Nonce: 1},
 	})
-
-	// Then it is rejected as stale, and is still a known candidate
 	require.Error(t, err)
 	require.Nil(t, resp)
 	require.Contains(t, err.Error(), "candidate is stale: chain has already advanced past its parent")
 	require.False(t, errors.Is(err, errors.ErrNotFound),
-		"a stale candidate must remain recognized, not be wiped to NotFound")
+		"the tip change must not wipe the candidate: it must be recognized, not NotFound")
+}
+
+// addExternalBlock stores a block on top of parent in the blockchain, as if a peer had
+// mined it, and returns its header.
+func addExternalBlock(t *testing.T, s *BlockAssembly, parent *model.BlockHeader) *model.BlockHeader {
+	t.Helper()
+
+	coinbase, err := bt.NewTxFromString("02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff03510101ffffffff0100f2052a01000000232103656065e6886ca1e947de3471c9e723673ab6ba34724476417fa9fcef8bafa604ac00000000")
+	require.NoError(t, err)
+
+	header := &model.BlockHeader{
+		Version:        0x20000000,
+		HashPrevBlock:  parent.Hash(),
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      parent.Timestamp + 1,
+		Bits:           parent.Bits,
+		Nonce:          4242,
+	}
+
+	require.NoError(t, s.blockchainClient.AddBlock(t.Context(), &model.Block{
+		Header:           header,
+		CoinbaseTx:       coinbase,
+		TransactionCount: 1,
+		Subtrees:         []*chainhash.Hash{},
+	}, ""))
+
+	return header
 }
 
 // ---------------------------------------------------------------------------
@@ -349,15 +386,16 @@ func TestSubmitMiningSolution_RejectsUnparseableCoinbase(t *testing.T) {
 //
 // Spec: BA-CANDIDATE-005, AC-BA-CANDIDATE-005.1.
 func TestSubmitMiningSolution_SuccessClearsEveryOutstandingCandidate(t *testing.T) {
-	s, ctx := newRunningServer(t, nil)
+	// A real TX store, so the coinbase write of BA-SOLUTION-003(a) runs on this
+	// success path rather than being skipped.
+	s, ctx := newRunningServer(t, memory.New())
 
 	// Given a fully mineable candidate C1
 	c1, sol1 := mineRealCandidate(t, s, ctx, "c1")
 
 	// And a second, distinct candidate C2 outstanding alongside it. The candidate ID
-	// is derived from assembly content, so another subtree must complete first.
-	fillOneSubtree(t, s, "c2")
-
+	// hashes the subtree root, the parent and the time, so a poll in a later second
+	// gets a different ID; the Eventually below waits for that.
 	var c2 *model.MiningCandidate
 	require.Eventually(t, func() bool {
 		c, err := s.GetMiningCandidate(ctx, &blockassembly_api.GetMiningCandidateRequest{})
