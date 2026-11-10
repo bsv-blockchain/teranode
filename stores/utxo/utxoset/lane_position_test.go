@@ -521,13 +521,17 @@ func (p *primeOrderSource) Next() (uint64, bool) {
 // TestUtxosetPrimesBeforeAnyTransaction: the first-range wait must not run with a Postgres transaction
 // and its locks held, so each entry point that creates primes first. A spend-only call does not,
 // because it takes no position and must not start the allocator.
+//
+// Create has two paths. The batched one plans with no connection held, so it could take its
+// position there safely even without the prime. The direct one, taken by a conflicting create or a
+// store with no create batcher, plans inside its transaction (createIn), which is where a wait
+// would hold locks, so it has its own subtest.
 func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 	ctx := t.Context()
 
-	entry := func(t *testing.T, call func(s *Store, w *tests.MultiWorkload) error) *primeOrderSource {
+	entryOn := func(t *testing.T, s *Store, call func(s *Store, w *tests.MultiWorkload) error) *primeOrderSource {
 		t.Helper()
 
-		s, _ := newUncheckpointedLaneStore(t)
 		w := tests.BuildMultiWorkload(t, 0xf4, 1, 1)
 		w.StoreRoots(t, s, 900)
 
@@ -538,11 +542,35 @@ func TestUtxosetPrimesBeforeAnyTransaction(t *testing.T) {
 		return source
 	}
 
+	entry := func(t *testing.T, call func(s *Store, w *tests.MultiWorkload) error) *primeOrderSource {
+		t.Helper()
+
+		s, _ := newUncheckpointedLaneStore(t)
+
+		return entryOn(t, s, call)
+	}
+
+	createTx := func(s *Store, w *tests.MultiWorkload) error {
+		_, err := s.Create(ctx, w.Txs[0], 901)
+		return err
+	}
+
 	t.Run("Create", func(t *testing.T) {
-		source := entry(t, func(s *Store, w *tests.MultiWorkload) error {
-			_, err := s.Create(ctx, w.Txs[0], 901)
-			return err
+		source := entry(t, createTx)
+		require.NotZero(t, source.primes.Load())
+		require.Zero(t, source.nextsBeforePrime.Load())
+		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
+	})
+
+	t.Run("Create on the direct path", func(t *testing.T) {
+		s, _ := newTestStoreWith(t, func(ts *settings.Settings) {
+			withCheckpoints(ts, nil)
+			ts.UtxoStore.LanePositions = true
+			ts.UtxoStore.StoreBatcherSize = 1
 		})
+		require.Nil(t, s.createBatcher, "this subtest needs Create's direct path")
+
+		source := entryOn(t, s, createTx)
 		require.NotZero(t, source.primes.Load())
 		require.Zero(t, source.nextsBeforePrime.Load())
 		require.Zero(t, source.connsAtPrime.Load(), "the wait ran with a connection held")
