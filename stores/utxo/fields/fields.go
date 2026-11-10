@@ -55,6 +55,9 @@ const (
 	HoldUntil FieldName = "holdUntil"
 	// Busy marks a hold whose holder is reversing the spends of its inputs
 	Busy FieldName = "busy"
+	// Reversed marks a rolling back record whose spends have all been reversed, so the rollback needs
+	// no transaction data to finish
+	Reversed FieldName = "reversed"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
 	// SpendingHeight is the block height at which the UTXO was spent

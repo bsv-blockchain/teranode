@@ -1,12 +1,14 @@
 package validator
 
 import (
+	"context"
 	"fmt"
 	"net/url"
 	"testing"
 	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
+	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	bec "github.com/bsv-blockchain/go-sdk/primitives/ec"
 	"github.com/bsv-blockchain/teranode/errors"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -493,6 +495,175 @@ func TestBlockPathSpendOfImmatureCoinbaseIsInvalid(t *testing.T) {
 			_, err := f.v.Validate(t.Context(), tx, 100)
 			require.Error(t, err)
 			require.False(t, errors.Is(err, errors.ErrTxInvalid), "%v", err)
+		})
+	}
+}
+
+// recordStateShim makes the txid of one transaction hold a record that is not a transaction: a
+// create of it fails with ErrTxExists and its meta reads as the given state, while every other call
+// goes to the real store. Clearing the hold removes the state when clearResult is set.
+type recordStateShim struct {
+	utxostore.Store
+
+	hash         chainhash.Hash
+	state        meta.Data
+	active       bool
+	clearResult  bool
+	clearErr     error
+	clearAdopt   []bool
+	setConflicts int
+}
+
+func (s *recordStateShim) SpendAndCreate(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts ...utxostore.CreateOption) (*meta.Data, []*utxostore.Spend, error) {
+	o, err := utxostore.ParseCreateOptions(opts...)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if s.active && o.CreateOnly && *tx.TxIDChainHash() == s.hash {
+		return nil, nil, errors.NewTxExistsError("transaction already exists: %s", s.hash.String())
+	}
+
+	return s.Store.SpendAndCreate(ctx, tx, blockHeight, opts...)
+}
+
+func (s *recordStateShim) GetMeta(ctx context.Context, hash *chainhash.Hash, data *meta.Data) error {
+	if s.active && *hash == s.hash {
+		*data = s.state
+
+		return nil
+	}
+
+	return s.Store.GetMeta(ctx, hash, data)
+}
+
+func (s *recordStateShim) ClearCreateFirstHold(_ context.Context, _ *chainhash.Hash, adopt bool) (bool, error) {
+	s.clearAdopt = append(s.clearAdopt, adopt)
+
+	if s.clearErr != nil {
+		return false, s.clearErr
+	}
+
+	if s.clearResult {
+		s.active = false
+	}
+
+	return s.clearResult, nil
+}
+
+func (s *recordStateShim) SetConflicting(ctx context.Context, hashes []chainhash.Hash, value bool) ([]*utxostore.Spend, []chainhash.Hash, error) {
+	s.setConflicts++
+
+	return s.Store.SetConflicting(ctx, hashes, value)
+}
+
+// TestBlockPathConflictingFallbackOverARecordThatIsNotATransaction pins the conflicting fallback of a
+// block's double-spend when the txid already holds a create-first record that carries no transaction:
+// the hold a rolled back attempt leaves, or a tentative record another attempt owns. The fallback must
+// not mark such a record conflicting, which dereferences the transaction it does not have and, in a
+// batched call, ends the process. A hold in block context is cleared and the create runs again; a
+// hold that cannot be cleared, or a tentative record, is a retryable error.
+func TestBlockPathConflictingFallbackOverARecordThatIsNotATransaction(t *testing.T) {
+	hold := meta.Data{Creating: true, RollingBack: true, Hold: true, Attempt: []byte{1, 2, 3}}
+	tentative := meta.Data{Creating: true, Attempt: []byte{1, 2, 3}}
+	rollingBack := meta.Data{Creating: true, RollingBack: true, Attempt: []byte{1, 2, 3}}
+
+	newFixture := func(t *testing.T, name string, state meta.Data) (*Validator, *recordStateShim, *bt.Tx) {
+		ctx := t.Context()
+		logger := ulogger.NewErrorTestLogger(t)
+		tSettings := test.CreateBaseTestSettings(t)
+		tSettings.BlockAssembly.Disabled = true
+
+		utxoStoreURL, err := url.Parse("sqlitememory:///" + name)
+		require.NoError(t, err)
+
+		utxoStore, err := sql.New(ctx, logger, tSettings, utxoStoreURL)
+		require.NoError(t, err)
+		utxoStore.RawDB().SetMaxOpenConns(1)
+		require.NoError(t, utxoStore.SetBlockHeight(100))
+		require.NoError(t, utxoStore.SetMedianBlockTime(uint32(time.Now().Unix()))) //nolint:gosec
+
+		privateKey, publicKey := bec.PrivateKeyFromBytes([]byte("CONFLICTING_HOLD_TEST_KEY!!!!!!!"))
+		parentTx := transactions.Create(t,
+			transactions.WithCoinbaseData(1, "/conflicting hold test/"),
+			transactions.WithP2PKHOutputs(1, 100_000, publicKey),
+		)
+		_, err = utxoStore.Create(ctx, parentTx, 1, utxostore.WithMinedBlockInfo(utxostore.MinedBlockInfo{BlockID: 1, BlockHeight: 1, SubtreeIdx: 0}))
+		require.NoError(t, err)
+
+		winner := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(parentTx, 0, privateKey),
+			transactions.WithP2PKHOutputs(1, 90_000, publicKey),
+		)
+		loser := transactions.Create(t,
+			transactions.WithPrivateKey(privateKey),
+			transactions.WithInput(parentTx, 0, privateKey),
+			transactions.WithP2PKHOutputs(1, 80_000, publicKey),
+		)
+
+		shim := &recordStateShim{Store: utxoStore, hash: *loser.TxIDChainHash(), state: state}
+
+		validator, err := New(ctx, logger, tSettings, shim, nil, nil, nil, nil, nil)
+		require.NoError(t, err)
+
+		v := validator.(*Validator)
+
+		_, err = v.Validate(ctx, winner, 100)
+		require.NoError(t, err)
+
+		shim.active = true
+
+		return v, shim, loser
+	}
+
+	t.Run("a hold is cleared in block context and the tx is created as conflicting", func(t *testing.T) {
+		v, shim, loser := newFixture(t, "conflicting_hold_cleared", hold)
+		shim.clearResult = true
+
+		txMeta, err := v.Validate(t.Context(), loser, 100, WithCreateConflicting(true))
+		require.ErrorIs(t, err, errors.ErrTxConflicting)
+		require.NotNil(t, txMeta)
+		require.True(t, txMeta.Conflicting)
+		require.Equal(t, []bool{true}, shim.clearAdopt, "the fallback is block context, so it adopts the hold")
+		require.Zero(t, shim.setConflicts, "a hold is never marked conflicting")
+
+		stored := &meta.Data{}
+		require.NoError(t, shim.Store.GetMeta(t.Context(), loser.TxIDChainHash(), stored))
+		require.True(t, stored.Conflicting, "the tx was created as conflicting once the hold was gone")
+	})
+
+	t.Run("a hold that cannot be cleared is a retryable error", func(t *testing.T) {
+		v, shim, loser := newFixture(t, "conflicting_hold_busy", hold)
+
+		txMeta, err := v.Validate(t.Context(), loser, 100, WithCreateConflicting(true))
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.False(t, errors.Is(err, errors.ErrTxConflicting), "the tx is not decided: %v", err)
+		require.Nil(t, txMeta)
+		require.Equal(t, []bool{true}, shim.clearAdopt)
+		require.Zero(t, shim.setConflicts)
+		require.ErrorIs(t, shim.Store.GetMeta(t.Context(), loser.TxIDChainHash(), &meta.Data{}), errors.ErrTxNotFound, "nothing was created")
+	})
+
+	t.Run("a failed clear is a retryable error", func(t *testing.T) {
+		v, shim, loser := newFixture(t, "conflicting_hold_clear_error", hold)
+		shim.clearErr = errors.NewStorageError("clear boom")
+
+		_, err := v.Validate(t.Context(), loser, 100, WithCreateConflicting(true))
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.Zero(t, shim.setConflicts)
+	})
+
+	for name, state := range map[string]meta.Data{"a tentative record": tentative, "a rolling back record": rollingBack} {
+		t.Run(name+" is a retryable error and is left alone", func(t *testing.T) {
+			v, shim, loser := newFixture(t, "conflicting_state_"+fmt.Sprint(len(name)), state)
+
+			txMeta, err := v.Validate(t.Context(), loser, 100, WithCreateConflicting(true))
+			require.ErrorIs(t, err, errors.ErrProcessing)
+			require.False(t, errors.Is(err, errors.ErrTxConflicting), "the tx is not decided: %v", err)
+			require.Nil(t, txMeta)
+			require.Empty(t, shim.clearAdopt, "only a hold is cleared")
+			require.Zero(t, shim.setConflicts, "another attempt's record is not marked conflicting")
 		})
 	}
 }

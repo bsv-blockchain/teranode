@@ -565,6 +565,7 @@ func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 
 		before := time.Now().Unix()
 
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
 		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
 
 		got := &meta.Data{}
@@ -625,6 +626,7 @@ func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 
 		t.Cleanup(func() { store.SetExternalStore(healthy) })
 
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
 		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt))
 
 		require.True(t, childrenGone, "the children are removed before the blobs")
@@ -650,6 +652,7 @@ func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, began)
 
+		require.NoError(t, store.ReleaseRollbackHold(ctx, hash, first.Attempt))
 		require.NoError(t, store.EndCreateFirstRollback(ctx, hash, first.Attempt))
 
 		cleared, err := store.ClearCreateFirstHold(ctx, hash, true)
@@ -671,4 +674,57 @@ func TestEndCreateFirstRollback_HoldsTxidThroughTheCascade(t *testing.T) {
 		require.Equal(t, second.Attempt, got.Attempt)
 		require.True(t, childRecordExists(t, client, store, hash, 1), "the replacement's children must survive the stale rollback")
 	})
+}
+
+// TestEndCreateFirstRollback_FailedConversionLeavesARecordThatNeedsNoBlob pins that a rollback whose
+// hold conversion fails after the external blob was deleted can still be finished: the master carries
+// the reversed marker, so a recovery reads only the markers, which does not touch the missing blob,
+// and ends the rollback.
+func TestEndCreateFirstRollback_FailedConversionLeavesARecordThatNeedsNoBlob(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	cleanDB(t, client)
+
+	_, _, err := store.SpendAndCreate(ctx, tests.Tx, 1000, utxo.WithCreateOnly())
+	require.NoError(t, err)
+
+	child := paginatedSpendAndCreateTx(t, 4, 6103, tSettings.UtxoStore.UtxoBatchSize+72)
+	hash := child.TxIDChainHash()
+
+	md, err := store.Create(ctx, child, 101, utxo.WithCreating(true))
+	require.NoError(t, err)
+
+	began, err := store.BeginCreateFirstRollback(ctx, hash, md.Attempt)
+	require.NoError(t, err)
+	require.True(t, began)
+	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+
+	healthy := store.GetExternalStore()
+	store.SetExternalStore(&hookedDelBlobStore{Store: healthy, onDel: func() {
+		setBusy(t, client, store, hash, time.Now().Unix()+60)
+	}})
+
+	t.Cleanup(func() { store.SetExternalStore(healthy) })
+
+	require.ErrorContains(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "holder is reversing spends", "the conversion is refused by the busy holder")
+
+	_, err = store.Get(ctx, hash, fields.Tx)
+	require.Error(t, err, "precondition: the blob is gone, so the transaction cannot be read")
+
+	got, err := store.Get(ctx, hash, fields.Creating, fields.RollingBack, fields.Attempt, fields.Reversed)
+	require.NoError(t, err, "the markers are readable without the transaction")
+	require.True(t, got.Creating)
+	require.True(t, got.RollingBack)
+	require.True(t, got.Reversed, "the record says that every spend is already reversed")
+	require.False(t, got.Hold)
+	require.Equal(t, md.Attempt, got.Attempt)
+
+	require.NoError(t, store.ReleaseRollbackHold(ctx, hash, md.Attempt))
+	require.NoError(t, store.EndCreateFirstRollback(ctx, hash, md.Attempt), "a recovery finishes the rollback without the blob")
+	requireHeld(t, ctx, store, hash)
+
+	require.NotContains(t, recordBins(t, client, store, hash, 0, fields.Reversed), fields.Reversed.String(), "the hold drops the reversed marker with every other bin")
 }

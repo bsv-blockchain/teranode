@@ -349,6 +349,7 @@ func TestFinalizeTransaction_StaleAttemptIsRefused(t *testing.T) {
 			began, err := store.BeginCreateFirstRollback(ctx, hash, first.Attempt)
 			require.NoError(t, err)
 			require.True(t, began)
+			require.NoError(t, store.ReleaseRollbackHold(ctx, hash, first.Attempt))
 			require.NoError(t, store.EndCreateFirstRollback(ctx, hash, first.Attempt))
 
 			cleared, err := store.ClearCreateFirstHold(ctx, hash, true)
