@@ -1624,6 +1624,41 @@ func (s *vanishOnSaveRead) Get(ctx context.Context, hash *chainhash.Hash, f ...f
 	return s.Store.Get(ctx, hash, f...)
 }
 
+// A vanished direct child of the coinbase has no saved ancestor, so only the vanished arm of the move
+// back can take it out of block assembly: the cascade from the saved txs never reaches it.
+func TestRemoveCoinbaseUtxosTakesAVanishedChildOfTheCoinbaseOutOfBlockAssembly(t *testing.T) {
+	ctx := context.Background()
+	stp, block := newMoveForwardCommitBoundaryProcessor(t)
+
+	first, second := createCoinbaseChain(t, ctx, stp, block)
+
+	for _, tx := range []*bt.Tx{first, second} {
+		addToAssembly(t, stp, tx)
+		require.True(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "precondition: block assembly holds %s", tx.TxIDChainHash())
+	}
+
+	before := testutil.ToFloat64(prometheusReorgDeletedTxsVanished)
+
+	stp.utxoStore = &vanishOnSaveRead{Store: stp.utxoStore, target: *first.TxIDChainHash()}
+
+	require.NoError(t, stp.removeCoinbaseUtxos(ctx, block))
+
+	require.Equal(t, before+1, testutil.ToFloat64(prometheusReorgDeletedTxsVanished), "precondition: first vanished after the lock")
+
+	saved, err := stp.readReorgDeletedTxs(ctx, block.Header.Hash())
+	require.NoError(t, err)
+	require.Len(t, saved, 1, "precondition: only second is saved")
+	require.True(t, saved[0].tx.TxIDChainHash().IsEqual(second.TxIDChainHash()), "precondition: only second is saved")
+
+	for name, tx := range map[string]*bt.Tx{"first": first, "second": second} {
+		require.False(t, stp.currentTxMap.Exists(*tx.TxIDChainHash()), "%s must be taken out of block assembly", name)
+		require.True(t, stp.removeMap.Exists(*tx.TxIDChainHash()), "%s must be in the remove map", name)
+
+		foundIndex, _, _ := stp.locateTxInSubtrees(*tx.TxIDChainHash())
+		require.Equal(t, -1, foundIndex, "%s must not be in any subtree", name)
+	}
+}
+
 // A tx the walk locked that vanishes before the save is not in the saved file and has no record to
 // delete, but block assembly can still hold it and its descendants. The move back takes them out of
 // the subtrees and marks them for removal, as it does for a missing tx.
