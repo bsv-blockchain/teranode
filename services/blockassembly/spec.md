@@ -158,7 +158,7 @@ The implementation MAY apply additional usage-derived ceilings; such ceilings ar
 
 **BA-REORG-006.** The service MUST perform a full reset rather than an in-place reorganization when the deeper side of the reorganization (blocks moved back or forward from the common ancestor) is at least the effective UTXO store block height retention (`GetUtxoStoreBlockHeightRetention()`: the global retention plus the UTXO store adjustment, floored at 0; 0 disables this rule), at any height, or when it is at least the coinbase-maturity threshold and the current chain height is greater than 1000.
 
-**BA-REORG-007.** Advancement of the service's best-block reference SHALL be atomic with successful completion of subtree-processor reconciliation for the new tip. A partial failure during reorg or move-forward MUST leave the best-block reference unchanged, and MUST leave the transaction map consistent with the restored subtrees.
+**BA-REORG-007.** Advancement of the service's best-block reference SHALL be atomic with successful completion of subtree-processor reconciliation for the new tip. A partial failure during reorg or move-forward MUST leave the best-block reference unchanged, and MUST leave the transaction map consistent with the subtrees it leaves in place.
 
 **BA-REORG-008.** The operational state SHALL return to `Running` at the end of every reconciliation cycle, regardless of cycle outcome. The service MUST NOT be wedged in `Reorging`, `MovingUp`, or other transient states due to reconciliation failure.
 
@@ -796,11 +796,6 @@ The current implementation does not validate `InitialMerkleItemsPerSubtree` and 
 *Affects:* BA-SUBTREE-024.
 The current implementation hardcodes `50` as the anti-creep threshold at `subtreeprocessor/SubtreeProcessor.go:1600`. The spec requires it to be a function of `MinimumMerkleItemsPerSubtree` so the gate scales with deployment configuration.
 *Work required:* replace the hardcoded constant with a derived value (e.g. a small multiple of `MinimumMerkleItemsPerSubtree`); the chosen factor MUST be commented in the source.
-
-**GAP-BA-004.** A reorg that fails half way does not restore the transaction map.
-*Affects:* BA-REORG-007.
-When a reorg fails after its move-back has run, `reorgBlocks` rolls back the best-block reference and the subtrees, but restores `currentTxMap` by reassigning the pointer it saved before the move-back, and the move-back had added the rolled-back block's transactions into that same map in place. Those transactions stay in the map, which then no longer matches the restored subtrees (`CheckSubtreeProcessor` reports the size mismatch), contrary to BA-REORG-007. In production `handleReorg` follows a failed reorg with a full reset, which hides the stale entries. Proof: `TestKnownDefect_PartialFailureRollbackLeavesMovedBackTx` (build tag `bagaps`).
-*Work required:* snapshot the map's content (or clone it) before the move-back, so the rollback restores what the map held, not the mutated map. On nodes with `blockassembly_subtreeMmapDir` set this may not be enough: `moveBackBlockBulkBuild` closes the original current and chained subtrees before rebuilding, and the rollback stores those same subtrees back, which by then may be unmapped. (Read from the code, not yet reproduced with an mmap directory.)
 
 ---
 
