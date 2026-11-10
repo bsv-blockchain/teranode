@@ -3069,8 +3069,10 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 			Bits:           nbits,
 			Nonce:          0,
 		},
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: uint64(candidate.NumTxs),
+		CoinbaseTx: coinbaseTx,
+		// NumTxs leaves the coinbase out, and the block's count includes it. An empty candidate
+		// carries 0, which block validation rejects on a body with no subtrees.
+		TransactionCount: uint64(candidate.NumTxs) + 1,
 		SizeInBytes:      candidate.GetSizeWithoutCoinbase() + coinbaseSizeUint64,
 		Subtrees:         subtreeHashes,
 		Height:           candidate.Height,

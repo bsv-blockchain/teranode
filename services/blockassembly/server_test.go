@@ -179,7 +179,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block.Header)
 
 		assert.Equal(t, uint32(1), block.Height)
-		assert.Equal(t, uint64(0), block.TransactionCount)
+		require.Equal(t, uint64(1), block.TransactionCount, "the coinbase alone")
 		assert.Equal(t, uint64(5000000000), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 
@@ -232,7 +232,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block)
 		require.NotNil(t, block.Header)
 		assert.Equal(t, uint32(251), block.Height)
-		assert.Equal(t, uint64(0), block.TransactionCount)
+		require.Equal(t, uint64(1), block.TransactionCount, "the coinbase alone")
 		assert.Equal(t, uint64(2500000000), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 
@@ -282,7 +282,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block.Header)
 
 		assert.Equal(t, uint32(1), block.Height)
-		assert.Equal(t, uint64(10), block.TransactionCount)
+		require.Equal(t, uint64(11), block.TransactionCount, "ten transactions plus the coinbase")
 		assert.Equal(t, uint64(5000000045), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 }
