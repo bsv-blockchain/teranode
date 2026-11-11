@@ -595,13 +595,12 @@ func TestPrunedReplayRejectedBeforeFrozen(t *testing.T) {
 	})
 }
 
-// TestSpendDoesNotBlessSpenderCreatedByCaller: "parent not found, but the
+// TestSpendDoesNotBlessWithRequireParentOutputs: "parent not found, but the
 // spending transaction exists" is treated as a transaction validated before its
-// parent was pruned, and the error is cleared. Not when the caller wrote that
-// record itself in this pass: the create-first block paths write the spender
-// before they spend, so a replay of a transaction whose parent was pruned too
-// would be blessed by the copy the replay just created.
-func TestSpendDoesNotBlessSpenderCreatedByCaller(t *testing.T) {
+// parent was pruned, and the error is cleared. Not with RequireParentOutputs,
+// the second wave of a below-checkpoint list, whose first wave may have written
+// the record itself.
+func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 	forEachBackend(t, func(t *testing.T, ctx context.Context, store *Store) {
 		parent := bt.NewTx()
 		require.NoError(t, parent.From("1111111111111111111111111111111111111111111111111111111111111111", 0, "51", 30000))
@@ -626,8 +625,8 @@ func TestSpendDoesNotBlessSpenderCreatedByCaller(t *testing.T) {
 		_, err = store.Spend(ctx, child, 1200)
 		require.NoError(t, err, "control: a pre-existing child with a pruned parent is blessed")
 
-		_, err = store.Spend(ctx, child, 1200, utxo.IgnoreFlags{SpenderCreatedByCaller: true})
-		require.ErrorIs(t, err, errors.ErrTxNotFound, "a record the caller wrote itself is not proof of prior validation")
+		_, err = store.Spend(ctx, child, 1200, utxo.IgnoreFlags{RequireParentOutputs: true})
+		require.ErrorIs(t, err, errors.ErrTxNotFound, "with RequireParentOutputs the record is not proof of prior validation")
 	})
 }
 
@@ -852,35 +851,22 @@ func TestRejectedReplayRollsBackFreshSpendsAtZeroRetention(t *testing.T) {
 	})
 }
 
-// TestSpendRollbackSetHoldsIdempotentWhenAnInputIsUnresolved pins the
-// unknown-answer half of utxo.RollbackSet's contract on the SQL store. Input A
-// failed ErrSpent, so the call rolls back. Input B matched idempotently: the
-// output already recorded this exact spend. Input C stopped waiting (timeout or
-// cancellation) before its batch answered, so its slot holds an error that is
-// not a replay answer while its real answer may have been the marker. B's match
-// may then be a confirmed historical spend, and reversing it would hand that
-// output to anyone, so only A's own write may be reversed.
-//
-// Unit-level on purpose: the spend batcher runs its batches one at a time, so a
-// Spend call cannot be made to leave exactly one input unanswered while the
-// others are answered without depending on goroutine order.
-func TestSpendRollbackSetHoldsIdempotentWhenAnInputIsUnresolved(t *testing.T) {
+// TestSpendRollbackSetForRequireParentOutputs: a RequireParentOutputs call
+// reverses only what it wrote, and only when an input failed with a validation
+// error. An idempotent match is that record's own spend and is never reversed,
+// and a call that failed only on a transient error leaves its writes for the
+// retry to match.
+func TestSpendRollbackSetForRequireParentOutputs(t *testing.T) {
 	written := &utxo.Spend{Vout: 0}
 	idempotent := &utxo.Spend{Vout: 1}
 	spent := &utxo.Spend{Vout: 2, Err: errors.NewUtxoSpentError(chainhash.Hash{}, 2, chainhash.Hash{}, nil)}
 	timedOut := &utxo.Spend{Vout: 3, Err: errors.NewServiceUnavailableError("batch operation timed out")}
 
-	spends := []*utxo.Spend{written, idempotent, spent, timedOut}
-
 	require.Equal(t, []*utxo.Spend{written},
-		spendRollbackSet(spends, []*utxo.Spend{written}, []*utxo.Spend{idempotent}, 1, false, false),
-		"an unanswered input may be the marker hit, so the idempotent match is held back")
-
-	require.Equal(t, []*utxo.Spend{written, idempotent},
-		spendRollbackSet(spends, []*utxo.Spend{written}, []*utxo.Spend{idempotent}, 0, false, false),
-		"control: with every input answered and no replay answer, the idempotent match is reversed (self-healing)")
+		spendRollbackSet([]*utxo.Spend{written, idempotent, spent, timedOut}, []*utxo.Spend{written}),
+		"a validation failure reverses what the call wrote and nothing else")
 
 	require.Nil(t,
-		spendRollbackSet([]*utxo.Spend{written, timedOut}, []*utxo.Spend{written}, nil, 1, true, false),
-		"control: a caller-created spender whose call failed only on a transient error reverses nothing")
+		spendRollbackSet([]*utxo.Spend{written, timedOut}, []*utxo.Spend{written}),
+		"a call that failed only on a transient error reverses nothing")
 }

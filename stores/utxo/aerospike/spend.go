@@ -111,16 +111,12 @@ type batchSpend struct {
 	published         atomic.Bool
 	ignoreConflicting bool
 	ignoreLocked      bool
-	// spenderCreatedByCaller is set for utxo.IgnoreFlags.SpenderCreatedByCaller or
-	// utxo.IgnoreFlags.RequireParentOutputs. It turns off the "already blessed"
-	// fallback and switches the rollback to its error-class rule (see
-	// rollbackPartialSpends).
-	spenderCreatedByCaller bool
-	// spenderRecordFound is set for RequireParentOutputs without
-	// SpenderCreatedByCaller: the record was in place before the list, so a
-	// failed call keeps its idempotent matches, which are that record's own
-	// spends (spendCompletionResult.rollbackSet).
-	spenderRecordFound bool
+	// requireParentOutput is set for utxo.IgnoreFlags.RequireParentOutputs. It
+	// turns off the "already blessed" fallback, switches the rollback to its
+	// error-class rule (see rollbackPartialSpends), and keeps a failed call's
+	// idempotent matches, which are the record's own spends
+	// (spendCompletionResult.rollbackSet).
+	requireParentOutput bool
 	// idempotent is set from the Lua response when the utxo already recorded
 	// exactly this spend, so nothing was written. resolveSpendCompletions keeps
 	// such inputs out of the rollback list: the spend they matched is the
@@ -507,12 +503,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
-	// Both flags turn the bless off and decide the rollback by error class. Only
-	// SpenderCreatedByCaller says the caller wrote the record: with
-	// RequireParentOutputs alone the record may be a live transaction's, so a
-	// failed call reverses what it wrote and leaves its idempotent matches.
-	spenderCreatedByCaller := len(ignoreFlags) > 0 && (ignoreFlags[0].SpenderCreatedByCaller || ignoreFlags[0].RequireParentOutputs)
-	spenderRecordFound := spenderCreatedByCaller && !ignoreFlags[0].SpenderCreatedByCaller
+	// RequireParentOutputs turns the bless off and decides the rollback by error
+	// class. The record may be a live transaction's, so a failed call reverses
+	// what it wrote and leaves its idempotent matches.
+	useRequireParentOutputs := len(ignoreFlags) > 0 && ignoreFlags[0].RequireParentOutputs
 
 	spends, err = utxo.GetSpends(tx)
 	if err != nil {
@@ -541,13 +535,12 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		}
 
 		item := &batchSpend{
-			spend:                  spend,
-			blockHeight:            blockHeight,
-			group:                  group,
-			ignoreConflicting:      useIgnoreConflicting,
-			ignoreLocked:           useIgnoreLocked,
-			spenderCreatedByCaller: spenderCreatedByCaller,
-			spenderRecordFound:     spenderRecordFound,
+			spend:               spend,
+			blockHeight:         blockHeight,
+			group:               group,
+			ignoreConflicting:   useIgnoreConflicting,
+			ignoreLocked:        useIgnoreLocked,
+			requireParentOutput: useRequireParentOutputs,
 		}
 		items[idx] = item
 
@@ -682,10 +675,9 @@ type spendCompletionResult struct {
 	// unresolved counts inputs skipped because they were still in flight on the
 	// abort path. Their answers are unknown.
 	unresolved int
-	// spenderCreatedByCaller and spenderRecordFound mirror the batchSpend fields
-	// for the call; see rollbackPartialSpends and rollbackSet.
-	spenderCreatedByCaller bool
-	spenderRecordFound     bool
+	// requireParentOutput mirrors the batchSpend field for the call; see
+	// rollbackPartialSpends and rollbackSet.
+	requireParentOutput bool
 
 	spenderChecked bool
 	spenderExists  bool
@@ -720,7 +712,7 @@ type spendCompletionResult struct {
 // or when any input is still unanswered, since that input may be the marker hit.
 // On the normal path every input is answered, so unresolved is zero there.
 func (r *spendCompletionResult) rollbackSet() []*utxo.Spend {
-	return utxo.RollbackSet(r.spentSpends, r.idempotentSpends, r.prunedRejection || r.unresolved > 0 || r.spenderRecordFound)
+	return utxo.RollbackSet(r.spentSpends, r.idempotentSpends, r.prunedRejection || r.unresolved > 0 || r.requireParentOutput)
 }
 
 // rollbackDecision is what the spender-existence probe implies for the spends
@@ -820,17 +812,14 @@ func (s *Store) rollbackPartialSpends(tx *bt.Tx, result *spendCompletionResult, 
 		return
 	}
 
-	// The create-first block paths (utxo.IgnoreFlags.SpenderCreatedByCaller, and
-	// RequireParentOutputs on DefaultSpendAndCreateMulti's second wave) wrote the
-	// spending transaction's record themselves in this pass, so the
-	// existence probe below would always find it and never fire, and on a
-	// failure the caller deletes that record again (utxo.DeleteCreated): the
-	// spends left in place would name a record-less spender. Those callers
-	// decide by error class instead (utxo.IsSpendRollbackError, recorded as
-	// rollbackNeeded): a validation failure, either pruned-replay answer
-	// included, reverses what the call wrote, while an infrastructure error
-	// leaves it for the retry to match idempotently.
-	if result.spenderCreatedByCaller {
+	// RequireParentOutputs, on DefaultSpendAndCreateMulti's second wave, spends
+	// a record its first wave wrote or found, so the existence probe below would
+	// always find it and never fire. That caller decides by error class instead
+	// (utxo.IsSpendRollbackError, recorded as rollbackNeeded): a validation
+	// failure, either pruned-replay answer included, reverses what the call
+	// wrote, while an infrastructure error leaves it for the retry to match
+	// idempotently.
+	if result.requireParentOutput {
 		if !result.rollbackNeeded {
 			return
 		}
@@ -1017,12 +1006,8 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 	for _, item := range items {
 		// Set when the call was built, never written by the dispatcher, so it
 		// is safe to read on an unpublished item too.
-		if item.spenderCreatedByCaller {
-			result.spenderCreatedByCaller = true
-		}
-
-		if item.spenderRecordFound {
-			result.spenderRecordFound = true
+		if item.requireParentOutput {
+			result.requireParentOutput = true
 		}
 
 		if onlyCompleted && !item.published.Load() {
@@ -1056,14 +1041,12 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 		// place.
 		blessed := false
 
-		if spend.Err != nil && errors.Is(spend.Err, errors.ErrTxNotFound) && !item.spenderCreatedByCaller {
+		if spend.Err != nil && errors.Is(spend.Err, errors.ErrTxNotFound) && !item.requireParentOutput {
 			// the parent transaction was not found, this can happen when the parent tx has been DAH'd and removed from
 			// the utxo store. We can check whether the tx already exists, which means it has been validated and
-			// blessed. In this case we can just clear the error. Never when the caller wrote the spending
-			// transaction's record in this pass (SpenderCreatedByCaller, the create-first block paths, or
-			// RequireParentOutputs, the second wave of DefaultSpendAndCreateMulti): its presence is not prior
-			// validation, and a replay of a transaction whose parent was pruned too would be blessed by the
-			// copy the replay itself just created.
+			// blessed. In this case we can just clear the error. Never with RequireParentOutputs, the second
+			// wave of DefaultSpendAndCreateMulti: its first wave may have written the record, so its presence
+			// is not prior validation.
 			//
 			// The outcome is memoized on result (both ways) so a determinate
 			// answer (found, or definitively not-found) is looked up at most once
@@ -1117,7 +1100,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 				spend.ConflictingTxID = errSpent.SpendingData.TxID
 			}
 
-			if utxo.IsSpendRollbackError(spend.Err, item.spenderCreatedByCaller) {
+			if utxo.IsSpendRollbackError(spend.Err, item.requireParentOutput) {
 				result.rollbackNeeded = true
 			}
 
@@ -1137,9 +1120,7 @@ func (s *Store) resolveSpendCompletions(ctx context.Context, tx *bt.Tx, items []
 		// blessed input wrote nothing and has no record to reverse.
 		switch {
 		case blessed:
-			spend.Blessed = true
 		case item.idempotent:
-			spend.Idempotent = true
 			result.idempotentSpends = append(result.idempotentSpends, spend)
 		default:
 			result.spentSpends = append(result.spentSpends, spend)

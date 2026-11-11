@@ -2129,12 +2129,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 	useIgnoreConflicting := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreConflicting
 	useIgnoreLocked := len(ignoreFlags) > 0 && ignoreFlags[0].IgnoreLocked
 	useSkipUTXOHashCheck := len(ignoreFlags) > 0 && ignoreFlags[0].SkipUTXOHashCheck
-	// Both flags turn the bless off and decide the rollback by error class. Only
-	// SpenderCreatedByCaller says the caller wrote the record: with
-	// RequireParentOutputs alone the record may be a live transaction's, so a
-	// failed call reverses what it wrote and leaves its idempotent matches.
-	spenderCreatedByCaller := len(ignoreFlags) > 0 && (ignoreFlags[0].SpenderCreatedByCaller || ignoreFlags[0].RequireParentOutputs)
-	spenderRecordFound := spenderCreatedByCaller && !ignoreFlags[0].SpenderCreatedByCaller
+	// RequireParentOutputs turns the bless off and decides the rollback by error
+	// class. The record may be a live transaction's, so a failed call reverses
+	// what it wrote and leaves its idempotent matches.
+	useRequireParentOutputs := len(ignoreFlags) > 0 && ignoreFlags[0].RequireParentOutputs
 
 	if useSkipUTXOHashCheck {
 		spends, err = utxo.GetSpendsOutpointOnly(tx)
@@ -2260,13 +2258,10 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			}
 
 			// Handle "already blessed" — parent tx not found but spending tx exists.
-			// Mirrors aerospike spend.go resolveSpendCompletions. Never for a record
-			// the caller wrote in this pass: the create-first block paths
-			// (SpenderCreatedByCaller) and the second wave of
-			// DefaultSpendAndCreateMulti (RequireParentOutputs) write the spender
-			// before they spend, so its presence is not prior validation, and a
-			// replay of a transaction whose parent was pruned too would be blessed
-			// by the copy the replay itself just created.
+			// Mirrors aerospike spend.go resolveSpendCompletions. Not with
+			// RequireParentOutputs, the second wave of DefaultSpendAndCreateMulti:
+			// its first wave may have written the spender, so its presence is not
+			// prior validation.
 			//
 			// A blessed input wrote nothing: its parent row is gone. It counts as
 			// succeeded but goes into neither rollback list, because Unspend
@@ -2274,7 +2269,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			// leaving the sibling spends this call did write in place.
 			blessed := false
 
-			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) && !spenderCreatedByCaller {
+			if batchErr != nil && errors.Is(batchErr, errors.ErrTxNotFound) && !useRequireParentOutputs {
 				mu.Lock()
 				exists := txAlreadyExists
 				mu.Unlock()
@@ -2321,9 +2316,7 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 			// blessed input wrote nothing and has no row to reverse.
 			switch {
 			case blessed:
-				spend.Blessed = true
 			case item.idempotent:
-				spend.Idempotent = true
 				idempotentSpends = append(idempotentSpends, spend)
 			default:
 				spentSpends = append(spentSpends, spend)
@@ -2378,20 +2371,17 @@ func (s *Store) Spend(ctx context.Context, tx *bt.Tx, blockHeight uint32, ignore
 		// with a pruned-replay answer or never answered at all, since such a
 		// match may be a confirmed historical spend.
 		//
-		// The create-first block paths (SpenderCreatedByCaller, and
-		// RequireParentOutputs on DefaultSpendAndCreateMulti's second wave) take
-		// spendRollbackSet's rule instead, holding idempotent matches back when
-		// the record was found rather than created by the list. They wrote the spender's record
-		// themselves and delete it again on a failure (utxo.DeleteCreated), so
-		// the existence probe would always find it and never fire, leaving the
-		// spends naming a record-less spender.
+		// RequireParentOutputs, on DefaultSpendAndCreateMulti's second wave,
+		// takes spendRollbackSet's rule instead: it spends a record its first
+		// wave wrote or found, so the existence probe would always find it and
+		// never fire.
 		sawTransientLock := hasTransientLockFailure(spends)
 		sawTransientCreating := hasTransientCreatingFailure(spends)
 		rollback := utxo.RollbackSet(spentSpends, idempotentSpends, utxo.AnyPrunedReplay(spends) || unresolved > 0)
 
 		switch {
-		case spenderCreatedByCaller:
-			if rollback = spendRollbackSet(spends, spentSpends, idempotentSpends, unresolved, true, spenderRecordFound); len(rollback) > 0 {
+		case useRequireParentOutputs:
+			if rollback = spendRollbackSet(spends, spentSpends); len(rollback) > 0 {
 				prometheusUtxoPartialSpendRollbacks.WithLabelValues(utxo.RollbackOutcomeFired).Inc()
 				s.rollbackPartialSpends(tx, rollback)
 			}
@@ -2522,27 +2512,18 @@ func (s *Store) unspendRollback(rbCtx context.Context, tx *bt.Tx, rollback []*ut
 	s.logger.Warnf("[SPEND][%s] rolled back %d partial spend(s) (batched mode)", tx.TxID(), reverted)
 }
 
-// spendRollbackSet is what a failed batched Spend reverses for a caller that
-// wrote the spender's record itself (SpenderCreatedByCaller): nothing unless an
-// input failed with a genuine validation error (utxo.NeedsSpendRollback), and then
-// the inputs this call wrote plus, when that is safe, its idempotent matches
-// (utxo.RollbackSet). recordFound (RequireParentOutputs without
-// SpenderCreatedByCaller) holds every idempotent match back: the record was in
-// place before the list, and its matches are that transaction's own spends.
-//
-// Both halves of RollbackSet's historical contract apply, as on Aerospike
-// (spendCompletionResult.rollbackSet): an idempotent match is held back when an
-// answered input hit the pruned-replay marker, AND when any input stopped
-// waiting before its batch answered. Such an input's slot holds the
-// cancellation or timeout error the wait wrote, neither of which is a replay
-// answer, while its real answer may be the marker; reversing the idempotent
-// matches then would release a confirmed historical spend to anyone.
-func spendRollbackSet(spends, written, idempotent []*utxo.Spend, unresolved int, spenderCreatedByCaller, recordFound bool) []*utxo.Spend {
-	if !utxo.NeedsSpendRollback(spends, spenderCreatedByCaller) {
+// spendRollbackSet is what a failed batched Spend reverses for a
+// RequireParentOutputs caller: nothing unless an input failed with a genuine
+// validation error (utxo.NeedsSpendRollback), and then only the inputs this call
+// wrote. Every idempotent match is held back: the record may be a live
+// transaction's, and its matches are that transaction's own spends, as on
+// Aerospike (spendCompletionResult.rollbackSet).
+func spendRollbackSet(spends, written []*utxo.Spend) []*utxo.Spend {
+	if !utxo.NeedsSpendRollback(spends, true) {
 		return nil
 	}
 
-	return utxo.RollbackSet(written, idempotent, utxo.AnyPrunedReplay(spends) || unresolved > 0 || recordFound)
+	return written
 }
 
 // deadlockRetriesExhaustedError is the error a retry loop returns after it gave up on a deadlock. It
@@ -4288,62 +4269,6 @@ func (s *Store) Delete(ctx context.Context, hash *chainhash.Hash) error {
 // whole transaction; DeleteComplete is therefore equivalent to Delete here.
 func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	return s.Delete(ctx, hash)
-}
-
-// DeleteCompleteIfLockedUnmined is DeleteComplete, except that the transaction
-// is deleted only while it is still locked and has no block id, checked in the
-// same database transaction as the delete. deleted is false when the row was
-// absent or no longer in that state, and then nothing was touched.
-//
-// The replay cleanup in utxo.SequentialSpendAndCreate uses it: it reads a record
-// in that state and then reads its parents, and a reorg's move-back that fails in
-// between unlocks the record. The condition stops the delete from landing on a
-// record that is now a live unmined transaction.
-func (s *Store) DeleteCompleteIfLockedUnmined(ctx context.Context, hash *chainhash.Hash) (deleted bool, err error) {
-	txn, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-
-	defer func() {
-		_ = txn.Rollback()
-	}()
-
-	var id int64
-
-	err = txn.QueryRowContext(ctx, `
-		DELETE FROM transactions
-		WHERE hash = $1
-		  AND locked = true
-		  AND NOT EXISTS (SELECT 1 FROM block_ids WHERE block_ids.transaction_id = transactions.id)
-		RETURNING id
-	`, hash[:]).Scan(&id)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-
-		return false, err
-	}
-
-	// The foreign keys cascade on delete; these remove the rows explicitly as
-	// Delete does, in case a schema predates the cascade.
-	for _, q := range []string{
-		`DELETE FROM outputs WHERE transaction_id = $1`,
-		`DELETE FROM inputs WHERE transaction_id = $1`,
-	} {
-		if _, err = txn.ExecContext(ctx, q, id); err != nil {
-			return false, err
-		}
-	}
-
-	if err = txn.Commit(); err != nil {
-		return false, err
-	}
-
-	prometheusUtxoDelete.Inc()
-
-	return true, nil
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {

@@ -2503,8 +2503,6 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 
 	start := time.Now()
 
-	replays := newListReplays()
-
 	var applyErr error
 
 	if nets {
@@ -2516,23 +2514,15 @@ func (u *BlockValidation) createAndSpendUTXOsForBatch(ctx context.Context, block
 				hi++
 			}
 
-			applyErr = u.applyList(ctx, block, txs[lo:hi], txids[lo:hi], subtreeIdxs[lo:hi], lockUTXOs, outpointOnly, collectExisting, replays)
+			applyErr = u.applyList(ctx, block, txs[lo:hi], txids[lo:hi], subtreeIdxs[lo:hi], lockUTXOs, outpointOnly, collectExisting)
 			lo = hi
 		}
 
 	} else {
-		applyErr = u.applyList(ctx, block, txs, txids, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting, replays)
+		applyErr = u.applyList(ctx, block, txs, txids, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
 	}
 
 	listDuration := time.Since(start)
-
-	if applyErr != nil {
-		if cleanupErr := u.removePrunedReplayGhosts(ctx, block, txs, txids, replays); cleanupErr != nil {
-			// A ServiceError: the verdict on the block waits on a retry that
-			// starts from a store with the recreated records gone.
-			applyErr = errors.NewServiceError("[createAndSpendUTXOsForBatch][%s] the list failed and the recreated pruned transactions could not be removed", block.Hash().String(), errors.Join(applyErr, cleanupErr))
-		}
-	}
 
 	// Spend the unspendable transactions' inputs once every create of the batch has committed,
 	// since they may spend an output the list created. Conflicts are NOT tolerated here: the
@@ -2595,14 +2585,6 @@ const detachedStoreCallBoundDefault = 150 * time.Second
 // spend and, when that spend fails part-way, the rollback of the spends that succeeded. So the
 // bound is the spend's own budget (SpendWaitTimeout) plus the rollback's (SpendRollbackTimeout),
 // whose documentation names it the longest a failed or cancelled spend can block its caller.
-//
-// It does not bound the store's replay cleanup. When a spend meets a pruned transaction's
-// marker, or a recheck finds a replay, utxo.SequentialSpendAndCreate reads and removes the
-// recreated record under context.WithoutCancel, which drops this deadline, with each step
-// under its own SpendRollbackTimeout. On that path a call can run past this bound by up to
-// three SpendRollbackTimeouts (the recheck, the read of the record and its parents, and the
-// delete), 360s more at the defaults. Each step is still bounded, so a wedged store cannot
-// hold the wave forever.
 func (u *BlockValidation) detachedStoreCallBound() time.Duration {
 	if u.settings == nil {
 		return detachedStoreCallBoundDefault
@@ -2812,7 +2794,7 @@ func (u *BlockValidation) spendBatchWithRetry(ctx context.Context, block *model.
 // as an error. A batch that gives up after repeating names the retryable failure and, when the
 // latest pass also failed a transaction for good, carries that failure as its cause.
 func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs []*bt.Tx, txids []chainhash.Hash,
-	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(tx *bt.Tx, subtreeIdx int), replays *listReplays) error {
+	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(tx *bt.Tx, subtreeIdx int)) error {
 	const maxRetries = 10
 
 	if len(txs) == 0 {
@@ -2893,17 +2875,8 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 
 			u.logger.Warnf("[applyList][%s] the store refused the list of %d transactions, applying them one at a time: %v", block.Hash().String(), len(txs), err)
 
-			return u.applyOneByOne(ctx, block, txs, txids, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting, replays)
+			return u.applyOneByOne(ctx, block, txs, subtreeIdxs, lockUTXOs, outpointOnly, collectExisting)
 		case err != nil:
-			// A pass cut short still reports what it wrote and what the store
-			// rejected before the cut, and the cleanup after a pruned replay needs
-			// both: a replay rejected in this pass would otherwise keep its record.
-			if len(results) == len(txs) {
-				for i, r := range results {
-					replays.observe(txids[i], r)
-				}
-			}
-
 			lastErr = err
 			continue
 		case len(results) != len(txs):
@@ -2920,8 +2893,6 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 		)
 
 		for i, r := range results {
-			replays.observe(txids[i], r)
-
 			switch {
 			case r.Status == utxo.MultiTxExisted:
 				if carried == nil || !carried[i] {
@@ -2993,210 +2964,6 @@ func (u *BlockValidation) applyList(ctx context.Context, block *model.Block, txs
 	return giveUp("[applyList][%s] %d of a list of %d transactions still failing after %d retries", lastErr, block.Hash().String(), len(txs), total, maxRetries)
 }
 
-// compensatingDeleteTimeoutDefault bounds each step of the cleanup after a list
-// that failed on a pruned replay, which runs detached from the batch context
-// (see removePrunedReplayGhosts), when no settings are wired. It is the settings
-// default of utxostore_spendRollbackTimeout.
-const compensatingDeleteTimeoutDefault = 2 * time.Minute
-
-// compensatingDeleteTimeout bounds each step of the replay-ghost cleanup: the
-// leftover read and the delete. The cleanup is a compensation for writes the
-// failed list made, the same job as a spend's rollback, so it takes the
-// rollback's budget (utxostore_spendRollbackTimeout).
-func (u *BlockValidation) compensatingDeleteTimeout() time.Duration {
-	if u.settings == nil || u.settings.UtxoStore.SpendRollbackTimeout <= 0 {
-		return compensatingDeleteTimeoutDefault
-	}
-
-	return u.settings.UtxoStore.SpendRollbackTimeout
-}
-
-// listReplays is what applyList saw, across all of its passes, that the cleanup
-// after a pruned replay needs: the records the list itself wrote, and the
-// transactions the store answered with a pruned-replay answer.
-//
-// The cleanup runs only after a failed list that saw a replay answer, which a
-// block that applies cleanly never does, so the created txids are appended and
-// not hashed into a set. createdSet builds the set once, on that path.
-type listReplays struct {
-	created  []chainhash.Hash
-	rejected map[chainhash.Hash]error
-	set      map[chainhash.Hash]struct{}
-}
-
-func newListReplays() *listReplays {
-	return &listReplays{rejected: make(map[chainhash.Hash]error)}
-}
-
-// observe records one transaction's result from one pass. A record is ours from
-// the pass that wrote it on, even when a later pass finds it as existing, so
-// created only ever grows.
-func (r *listReplays) observe(txid chainhash.Hash, result utxo.SpendAndCreateMultiResult) {
-	if r == nil {
-		return
-	}
-
-	if result.Created {
-		r.created = append(r.created, txid)
-		r.set = nil
-	}
-
-	if result.Status == utxo.MultiTxFailed && utxo.IsReplayAnswer(result.Err) {
-		r.rejected[txid] = result.Err
-	}
-}
-
-// createdSet is the set of every txid observe saw created, built on first use.
-func (r *listReplays) createdSet() map[chainhash.Hash]struct{} {
-	if r.set == nil {
-		r.set = make(map[chainhash.Hash]struct{}, len(r.created))
-		for _, txid := range r.created {
-			r.set[txid] = struct{}{}
-		}
-	}
-
-	return r.set
-}
-
-// removePrunedReplayGhosts deletes the records a failed list left behind for a
-// block that replays pruned transactions.
-//
-// A WithBelowCheckpoint list writes a transaction with a parent in the list in
-// two waves: a create-only call first, then its spends. Create does not consult
-// the pruner's replay markers, so a replay gets its record written in the first
-// wave and is rejected only in the second, by the marker or by a parent record
-// that is gone, and the record stays behind stored mined with no
-// delete_at_height, which nothing else reclaims. Its descendants in the list
-// were written in the first wave too and never spent. utxo.PrunedReplayGhosts
-// decides which of those records to delete and why a record this attempt did
-// not write is left alone; utxo.DeleteCreated deletes them and nothing else.
-//
-// "This attempt wrote it" is the list's own Created answer, plus the leftovers
-// of an earlier attempt at this block that never finished (utxo.LeftoversAmong,
-// confirmed by utxo.ConfirmLeftovers): a ghost whose delete failed last time is
-// found as existing this time and must still go. Leftovers are read only here,
-// on a failed list that saw a replay answer, so a block that applies cleanly
-// never pays for the read. A transaction with no parent in the list gets one
-// combined call, which spends before it creates, so a replay of it is rejected
-// before its record exists and leaves nothing behind, with two exceptions: a
-// create whose outcome is unknown can still land, and a recheck that cannot
-// answer keeps the record its create wrote. Either record is found here only
-// as a locked leftover of this block.
-//
-// The limit, stated: that combined call keeps the stores' "already blessed"
-// fallback (see utxo.DefaultSpendAndCreateMulti), so a record of such a
-// transaction that is already there blesses a missing parent. This flow never
-// writes one, but a binary from before the list flow wrote every record of a
-// block create-only first, so an attempt it left unfinished across an upgrade
-// can leave a leftover that a retry here blesses.
-//
-// Every store call runs on a context detached from ctx with its own bound. ctx
-// is the batch's errgroup context, shared with the subtree-file write, and a
-// failure there landing at the same moment would otherwise cancel the cleanup
-// and leave the ghost. The leftover read and the delete get a bound each, so a
-// slow read cannot use up the delete's.
-//
-// A failed leftover read still deletes what this attempt wrote. Those records
-// are unlocked once a retry's first wave finds them, so LeftoversAmong would
-// never name them again, and with the lock skipped a ghost's outputs are
-// spendable at once.
-func (u *BlockValidation) removePrunedReplayGhosts(ctx context.Context, block *model.Block, txs []*bt.Tx, txids []chainhash.Hash, replays *listReplays) error {
-	if replays == nil || len(replays.rejected) == 0 {
-		return nil
-	}
-
-	leftovers, idMismatch, readErr := u.prunedReplayLeftovers(ctx, block, txids, replays)
-	if readErr != nil {
-		leftovers = nil
-	}
-
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.compensatingDeleteTimeout())
-	defer cancel()
-
-	created := replays.createdSet()
-
-	createdHere := func(txHash *chainhash.Hash) bool {
-		if _, ok := created[*txHash]; ok {
-			return true
-		}
-
-		_, leftover := leftovers[*txHash]
-
-		return leftover
-	}
-
-	// Every transaction the store answered with a pruned-replay answer starts
-	// the walk, whoever wrote it. A root with no parent in the list got a
-	// combined call, which spends first, so a missing parent leaves it with no
-	// record at all and createdHere false; the dependents the first wave wrote
-	// for it are still this attempt's writes in a block that has failed, and a
-	// retry writes them again. PrunedReplayGhosts deletes only what createdHere
-	// vouches for, so a root or dependent this attempt did not write stays.
-	rejected := make([]*chainhash.Hash, 0, len(replays.rejected))
-
-	for i := range txids {
-		if _, ok := replays.rejected[txids[i]]; ok {
-			rejected = append(rejected, &txids[i])
-		}
-	}
-
-	ghosts := utxo.PrunedReplayGhosts(txs, rejected, createdHere)
-
-	deleteErr := utxo.DeleteCreated(cleanupCtx, u.logger, u.utxoStore, ghosts, u.settings.UtxoStore.StoreBatcherSize*8)
-
-	if idMismatch {
-		const msg = "[removePrunedReplayGhosts][%s] block id %d is held by another committed block; failing the attempt so the retry takes an id of its own"
-
-		if deleteErr != nil {
-			return errors.NewServiceError(msg, block.Hash().String(), block.ID, deleteErr)
-		}
-
-		return errors.NewServiceError(msg, block.Hash().String(), block.ID)
-	}
-
-	if readErr != nil && deleteErr != nil {
-		return errors.Join(readErr, deleteErr)
-	}
-
-	if readErr != nil {
-		return readErr
-	}
-
-	return deleteErr
-}
-
-// prunedReplayLeftovers reads which of the records the list did not write are
-// leftovers of an earlier attempt at this block (utxo.LeftoversAmong), confirmed
-// against the committed block under this id (utxo.ConfirmLeftovers). A mismatch
-// means another block is committed under this id, so the locked records are its,
-// not this block's leftovers: none are trusted, and the attempt reports it so
-// the retry takes an id of its own.
-func (u *BlockValidation) prunedReplayLeftovers(ctx context.Context, block *model.Block, txids []chainhash.Hash, replays *listReplays) (map[chainhash.Hash]struct{}, bool, error) {
-	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), u.compensatingDeleteTimeout())
-	defer cancel()
-
-	created := replays.createdSet()
-	notCreated := make([]*chainhash.Hash, 0, len(txids))
-
-	for i := range txids {
-		if _, ok := created[txids[i]]; !ok {
-			notCreated = append(notCreated, &txids[i])
-		}
-	}
-
-	leftovers, err := utxo.LeftoversAmong(readCtx, u.utxoStore, notCreated, block.ID)
-	if err != nil {
-		return nil, false, errors.NewProcessingError("[removePrunedReplayGhosts][%s] failed to classify %d existing txs", block.Hash().String(), len(notCreated), err)
-	}
-
-	leftovers, idMismatch, err := utxo.ConfirmLeftovers(readCtx, blockchain.CommittedBlockHashLookup(u.blockchainClient), block.Hash(), block.ID, leftovers)
-	if err != nil {
-		return nil, false, errors.NewProcessingError("[removePrunedReplayGhosts][%s] failed to confirm the leftovers' block id", block.Hash().String(), err)
-	}
-
-	return leftovers, idMismatch, nil
-}
-
 // withParentsInList returns the positions in failed, with the position of every parent in the
 // list of a transaction at one of them, in list order. A retry carries those parents, although
 // they went through, so that a failed transaction meets the store with the same parents in its
@@ -3235,15 +3002,8 @@ func withParentsInList(txs []*bt.Tx, txids []chainhash.Hash, failed []int) []int
 // applyOneByOne applies txs one SpendAndCreate at a time, in block order: the path for a list the
 // store refused as malformed. A transaction that already exists is collected for the mined-info
 // stamp; any other failure fails the batch with the store's own error class.
-//
-// It reports to replays as applyList does, so the cleanup after a pruned replay runs on this path
-// too: each record a call wrote, and each transaction the store answered with a replay answer. The
-// case that needs it is a combined call whose create had an unknown outcome and landed, then a
-// retry of that call rejected at the spend by the pruner's marker. The retry never reaches the
-// create, so nothing else removes the record; the cleanup finds it as a leftover of this attempt
-// (utxo.LeftoversAmong), which needs it locked, so with the catch-up lock skipped it stays.
-func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, txids []chainhash.Hash,
-	subtreeIdxs []int, lockUTXOs, outpointOnly bool, collectExisting func(tx *bt.Tx, subtreeIdx int), replays *listReplays) error {
+func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block, txs []*bt.Tx, subtreeIdxs []int,
+	lockUTXOs, outpointOnly bool, collectExisting func(tx *bt.Tx, subtreeIdx int)) error {
 	const maxRetries = 10
 
 	backoff := u.spendRetryBackoff
@@ -3287,12 +3047,9 @@ func (u *BlockValidation) applyOneByOne(ctx context.Context, block *model.Block,
 
 		switch {
 		case err == nil:
-			replays.observe(txids[i], utxo.SpendAndCreateMultiResult{Status: utxo.MultiTxCreated, Created: true})
 		case errors.Is(err, errors.ErrTxExists):
 			collectExisting(tx, subtreeIdxs[i])
 		default:
-			replays.observe(txids[i], utxo.SpendAndCreateMultiResult{Status: utxo.MultiTxFailed, Err: err})
-
 			return errors.NewProcessingError("[applyOneByOne][%s] failed to apply tx %s", block.Hash().String(), tx.TxIDChainHash().String(), err)
 		}
 	}

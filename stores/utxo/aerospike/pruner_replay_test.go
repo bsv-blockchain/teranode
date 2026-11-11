@@ -478,12 +478,12 @@ func TestPrunedReplayRollbackKeepsSiblingHistoricalSpend(t *testing.T) {
 	require.False(t, thiefExists, "the thief must not have been created")
 }
 
-// TestSpendDoesNotBlessSpenderCreatedByCaller: "parent not found, but the
+// TestSpendDoesNotBlessWithRequireParentOutputs: "parent not found, but the
 // spending transaction exists" is treated as a transaction validated before its
-// parent was pruned, and the error is cleared. Not when the caller wrote that
-// record itself in this pass (the create-first block paths), or a replay of a
-// transaction whose parent was pruned too is blessed by its own copy.
-func TestSpendDoesNotBlessSpenderCreatedByCaller(t *testing.T) {
+// parent was pruned, and the error is cleared. Not with RequireParentOutputs,
+// the second wave of a below-checkpoint list, whose first wave may have written
+// the record itself.
+func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 	logger := ulogger.New("spend-bless-test")
 	s := test.CreateBaseTestSettings(t)
 	s.Aerospike.EnableSpendFilterExpressions = true
@@ -511,8 +511,8 @@ func TestSpendDoesNotBlessSpenderCreatedByCaller(t *testing.T) {
 	_, err = store.Spend(ctx, child, 1200)
 	require.NoError(t, err, "control: a pre-existing child with a pruned parent is blessed")
 
-	_, err = store.Spend(ctx, child, 1200, utxo.IgnoreFlags{SpenderCreatedByCaller: true})
-	require.ErrorIs(t, err, errors.ErrTxNotFound, "a record the caller wrote itself is not proof of prior validation")
+	_, err = store.Spend(ctx, child, 1200, utxo.IgnoreFlags{RequireParentOutputs: true})
+	require.ErrorIs(t, err, errors.ErrTxNotFound, "with RequireParentOutputs the record is not proof of prior validation")
 }
 
 // TestPrunerMarksOnlyTheChildThatHeldTheSpend is the Aerospike twin of the SQL

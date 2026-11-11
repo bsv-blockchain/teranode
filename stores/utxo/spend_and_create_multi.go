@@ -50,17 +50,6 @@ type SpendAndCreateMultiResult struct {
 	// MultiTxFailed see SpendAndCreate's contract.
 	Spends []*Spend
 	Err    error
-	// Created says this call wrote the transaction's record. It is set with
-	// MultiTxCreated, and kept when a WithBelowCheckpoint list then answers
-	// MultiTxFailed or MultiTxParentFailed for a record its first wave wrote,
-	// so a caller can tell a record it must clean up from one that was already
-	// there (MultiTxExisted). It is kept too when a cancelled call stops before
-	// the spends of a record its first wave wrote and answers MultiTxNotAttempted.
-	// Zero when the record was found or never written, and also for a
-	// MultiTxFailed whose create wrote the record but whose recheck could not
-	// answer, or whose create's outcome is unknown: those records are found only
-	// as locked leftovers (LeftoversAmong).
-	Created bool
 }
 
 const spendAndCreateMultiRefusedKey = "spend_and_create_multi_refused"
@@ -284,7 +273,7 @@ func DefaultSpendAndCreateMulti(ctx context.Context, s SpendAndCreateMultiStore,
 
 				switch {
 				case err == nil:
-					results[i] = SpendAndCreateMultiResult{Status: MultiTxCreated, Meta: md, Spends: spends, Created: true}
+					results[i] = SpendAndCreateMultiResult{Status: MultiTxCreated, Meta: md, Spends: spends}
 				case errors.Is(err, errors.ErrTxExists):
 					// The record already exists (propagation, a sibling block, or
 					// an earlier attempt). SpendAndCreate leaves the spends in place.
@@ -330,8 +319,7 @@ func DefaultSpendAndCreateMulti(ctx context.Context, s SpendAndCreateMultiStore,
 //     leaves the spends in place when the record exists.
 //
 // Every spend of the second wave sets IgnoreFlags.RequireParentOutputs, so a
-// missing parent output fails the spend, and SpenderCreatedByCaller as well when
-// the first wave created the record (Created). Without it the store would read the
+// missing parent output fails the spend. Without it the store would read the
 // spender's own record, created moments earlier by the first wave, as proof
 // that the spend happened in an earlier attempt and the parent has been pruned
 // since, and a list spending an output that exists nowhere would pass. Turning
@@ -380,7 +368,6 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 	// RequireParentOutputs in the second. They are built per call, so a list holds no options
 	// for its transactions while it runs; the wave's own are built once here.
 	createOnly, spendOnly, requireParentOutputs := WithCreateOnly(), WithSpendOnly(), withRequireParentOutputs()
-	requireParentOutputsCreated := withRequireParentOutputsCreatedByCaller()
 
 	all := make([]int, len(txs))
 	for i := range all {
@@ -402,7 +389,7 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 
 		switch {
 		case err == nil:
-			results[i] = SpendAndCreateMultiResult{Status: MultiTxCreated, Meta: md, Spends: spends, Created: true}
+			results[i] = SpendAndCreateMultiResult{Status: MultiTxCreated, Meta: md, Spends: spends}
 		case errors.Is(err, errors.ErrTxExists):
 			results[i] = SpendAndCreateMultiResult{Status: MultiTxExisted, Spends: spends}
 		default:
@@ -411,12 +398,10 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 	})
 
 	if notStarted {
-		// A create-only record whose spends never ran is not a written
-		// transaction, but it is still this call's write: Created stays, so a
-		// caller cleaning up after a pruned replay can find it.
+		// A create-only record whose spends never ran is not a written transaction.
 		for i := range txs {
 			if len(parentsInList[i]) > 0 && results[i].Status != MultiTxFailed {
-				results[i] = SpendAndCreateMultiResult{Created: results[i].Created}
+				results[i] = SpendAndCreateMultiResult{}
 			}
 		}
 
@@ -436,9 +421,8 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 
 		if failedParent(results, parentsInList[i]) {
 			results[i] = SpendAndCreateMultiResult{
-				Status:  MultiTxParentFailed,
-				Err:     errors.NewProcessingError("SpendAndCreateMulti: the write of a parent of %s earlier in the list failed", txids[i]),
-				Created: results[i].Created,
+				Status: MultiTxParentFailed,
+				Err:    errors.NewProcessingError("SpendAndCreateMulti: the write of a parent of %s earlier in the list failed", txids[i]),
 			}
 
 			continue
@@ -451,7 +435,7 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 
 	if err := ctx.Err(); err != nil {
 		for _, i := range toSpend {
-			results[i] = SpendAndCreateMultiResult{Created: results[i].Created}
+			results[i] = SpendAndCreateMultiResult{}
 		}
 
 		return results, err
@@ -462,25 +446,9 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 	notStarted = runDetachedWave(ctx, bound, widths.Spend, toSpend, func(callCtx context.Context, i int) {
 		spent[i] = true
 
-		// A record the first wave created is the list's own, and a failed spend
-		// may reverse its idempotent matches with the rest. A record found in
-		// place may be a live transaction's, so only what this spend wrote is.
-		//
-		// Created answers for this call only. A retry pass of the same block
-		// finds a record its own earlier pass wrote as existing, so the store
-		// keeps that record's idempotent matches, while the caller's cleanup
-		// still counts the record as its own (quick_validate.go observe). That is
-		// deliberate: the cleanup only runs on the below-checkpoint paths, where
-		// every transaction in the list is confirmed history and historically
-		// spent each of its inputs, so keeping the matches is right either way.
-		waveOption := requireParentOutputs
-		if results[i].Created {
-			waveOption = requireParentOutputsCreated
-		}
-
-		_, spends, err := s.SpendAndCreate(callCtx, txs[i], blockHeight, items.option(i), spendOnly, waveOption)
+		_, spends, err := s.SpendAndCreate(callCtx, txs[i], blockHeight, items.option(i), spendOnly, requireParentOutputs)
 		if err != nil {
-			results[i] = SpendAndCreateMultiResult{Status: MultiTxFailed, Meta: results[i].Meta, Spends: spends, Err: err, Created: results[i].Created}
+			results[i] = SpendAndCreateMultiResult{Status: MultiTxFailed, Meta: results[i].Meta, Spends: spends, Err: err}
 
 			return
 		}
@@ -489,11 +457,10 @@ func writeCreateThenSpend(ctx context.Context, s SpendAndCreateMultiStore, width
 	})
 
 	if notStarted {
-		// A record whose spends never ran is not a written transaction; Created
-		// stays, as above.
+		// A record whose spends never ran is not a written transaction.
 		for _, i := range toSpend {
 			if !spent[i] {
-				results[i] = SpendAndCreateMultiResult{Created: results[i].Created}
+				results[i] = SpendAndCreateMultiResult{}
 			}
 		}
 

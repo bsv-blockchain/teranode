@@ -443,8 +443,7 @@ func TestParkCommitFailure_AMissingParentOutputKeepsTheBlockAndBlamesNobody(t *t
 // answer a replay of a pruned transaction gets is the sibling of the code-30
 // miss above, and lands on the same row. A parked block is below the
 // checkpoint, so the replay says the store is ahead of the chain, not that the
-// peer sent a bad block. The cleanup failures quick validation raises after
-// such a replay are retried, not judged.
+// peer sent a bad block.
 func TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault(t *testing.T) {
 	replay := parkCommitChain(errors.NewProcessingError("transaction %s could not be applied", "abcd",
 		errors.NewUtxoSpendingTxPrunedError("[Spend] invalid spend for %s:%d: spending transaction was pruned", "ef01", 0)))
@@ -453,14 +452,6 @@ func TestParkCommitFailure_APrunedReplayAnswerIsALocalUtxoFault(t *testing.T) {
 	require.Equal(t, parkDispositionLocalUtxoFault, d)
 	require.False(t, d.markFailed, "the block is canonical below the checkpoint")
 	require.False(t, d.blamePeer, "the peer sent a good block")
-
-	for _, cleanupErr := range []error{
-		errors.NewServiceError("[removePrunedReplayGhosts][abcd] block id 7 is held by another committed block; failing the attempt so the retry takes an id of its own"),
-		errors.NewServiceError("[createAndSpendUTXOsForBatch][abcd] the list failed and the recreated pruned transactions could not be removed",
-			errors.NewUtxoSpendingTxPrunedError("spending transaction was pruned")),
-	} {
-		require.Equal(t, parkDispositionRetryLater, parkCommitFailure(parkCommitChain(cleanupErr)), "%v", cleanupErr)
-	}
 }
 
 // TestParkCommitFailure_TheFullRoutesInvalidTransactionVerdictIsAJudgement pins
