@@ -1380,6 +1380,12 @@ func (stp *SubtreeProcessor) resetAnnouncementTicker() {
 // nothing to snapshot, and cancelled when ctx ended while the store waited.
 // It runs on the processing goroutine.
 func (stp *SubtreeProcessor) incompleteSubtreeMiningData(ctx context.Context) (data *PrecomputedMiningData, cancelled bool) {
+	// A request sent before a fork reorg failed reaches here only after the
+	// failure, on this goroutine, so this check sees the flag the reorg set.
+	if stp.failedForkReorgNeedsReset.Load() {
+		return nil, false
+	}
+
 	data = stp.incompleteSubtreeSnapshot()
 	if data == nil {
 		return nil, false
@@ -4658,7 +4664,7 @@ func (stp *SubtreeProcessor) GetIncompleteSubtreeMiningData(ctx context.Context)
 			return nil
 		}
 
-		return snapshot.data
+		return stp.unlessFailedForkReorg(snapshot.data)
 	}
 
 	responseCh := make(chan *PrecomputedMiningData, 1)
@@ -4669,10 +4675,20 @@ func (stp *SubtreeProcessor) GetIncompleteSubtreeMiningData(ctx context.Context)
 	}
 	select {
 	case data := <-responseCh:
-		return data
+		return stp.unlessFailedForkReorg(data)
 	case <-ctx.Done():
 		return nil
 	}
+}
+
+// unlessFailedForkReorg returns data, or nil if a fork reorg failed while the
+// caller waited for it.
+func (stp *SubtreeProcessor) unlessFailedForkReorg(data *PrecomputedMiningData) *PrecomputedMiningData {
+	if stp.failedForkReorgNeedsReset.Load() {
+		return nil
+	}
+
+	return data
 }
 
 // updatePrecomputedMiningData snapshots chainedSubtrees and stores them for mining candidate generation.

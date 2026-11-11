@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -381,6 +382,43 @@ func TestFailedForkReorg_ResetSweepsThePreReorgUnminedTxsAtEveryFailurePoint(t *
 				require.Contains(t, swept, f.a1, "and the moved-back a1 it holds")
 			}
 		})
+	}
+}
+
+// An incomplete-subtree request sent while a fork reorg runs is answered only
+// after the reorg has failed. Its answer must be nil like any later request's,
+// or a candidate on the restored losing tip A would mine the moved-back a1,
+// which A already holds, a second time.
+func TestFailedForkReorg_ARequestParkedAcrossTheFailureGetsNoMiningData(t *testing.T) {
+	f := newStepRestoreFixture(t, stepRestoreOptions{})
+
+	parked := make(chan *PrecomputedMiningData, 1)
+	viaGetter := make(chan *PrecomputedMiningData, 1)
+
+	f.atStep(f.parent, func(stp *SubtreeProcessor) {
+		// The processor is inside the reorg, so neither request is read until it ends.
+		go func() {
+			responseCh := make(chan *PrecomputedMiningData, 1)
+			stp.getIncompleteSubtreeDataChan <- responseCh
+			parked <- <-responseCh
+		}()
+		go func() { viaGetter <- stp.GetIncompleteSubtreeMiningData(context.Background()) }()
+
+		failSequentialRemainderOn(t, stp, f.a1)
+	})
+
+	err := f.stp.Reorg([]*model.Block{f.blockA}, []*model.Block{f.blockF, f.blockF2})
+	require.ErrorContains(t, err, "error getting node txInpoints from currentTxMap")
+	require.Equal(t, f.tipA.Hash(), f.stp.GetCurrentBlockHeader().Hash(), "the header goes back to the losing tip")
+	require.Contains(t, f.assemblyHashes(t), f.m1, "the open subtree is not empty, so a snapshot would hold transactions")
+
+	for name, ch := range map[string]chan *PrecomputedMiningData{"processor request": parked, "getter": viaGetter} {
+		select {
+		case data := <-ch:
+			require.Nil(t, data, "%s: no incomplete-subtree snapshot from a failed fork reorg's state", name)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: the parked request was never answered", name)
+		}
 	}
 }
 
