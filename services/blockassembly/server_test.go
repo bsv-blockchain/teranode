@@ -2565,9 +2565,9 @@ func TestIngestKeepsParentLinksWithSubtreeMetaOff(t *testing.T) {
 		var handed []*subtreepkg.TxInpoints
 
 		stp := &subtreeprocessor.MockSubtreeProcessor{}
-		stp.On("AddBatchIfRoom", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		stp.On("AddBatchBounded", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 			handed = args.Get(1).([]*subtreepkg.TxInpoints)
-		}).Return(true)
+		}).Return(subtreeprocessor.Admitted)
 
 		ba := baWithProcessor(t, func(s *settings.Settings) {
 			s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
