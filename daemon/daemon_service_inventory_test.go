@@ -40,6 +40,7 @@ var daemonServiceNames = map[string]string{
 	"serviceNameP2PFormal":           serviceNameP2PFormal,
 	"servicePropagationFormal":       servicePropagationFormal,
 	"servicePrunerFormal":            servicePrunerFormal,
+	"serviceProbeFormal":             serviceProbeFormal,
 	"serviceRPCFormal":               serviceRPCFormal,
 	"serviceSubtreeValidationFormal": serviceSubtreeValidationFormal,
 	"serviceUtxoPersisterFormal":     serviceUtxoPersisterFormal,
