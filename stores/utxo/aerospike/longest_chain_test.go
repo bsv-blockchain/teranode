@@ -656,7 +656,7 @@ func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
 	}
 
 	// with returns a copy of bins with set applied; a nil value removes the bin.
-	with := func(bins aerospike.BinMap, set aerospike.BinMap) aerospike.BinMap {
+	with := func(bins, set aerospike.BinMap) aerospike.BinMap {
 		out := make(aerospike.BinMap, len(bins))
 		for k, v := range bins {
 			out[k] = v
