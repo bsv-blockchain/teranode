@@ -79,14 +79,9 @@ func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, snapsh
 
 	notPersisted, err := c.notPersisted(ctx)
 	if err == nil {
-		var minedNotSet []*model.Block
+		c.setBacklog(notPersisted)
 
-		minedNotSet, err = c.minedNotSet(ctx)
-		if err == nil {
-			c.setBacklog(notPersisted, minedNotSet)
-
-			return append([]uint32{}, c.lastWait...), c.lastCount, c.lastBehind
-		}
+		return append([]uint32{}, c.lastWait...), c.lastCount, c.lastBehind
 	}
 
 	c.lastWait = []uint32{}
@@ -96,19 +91,19 @@ func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, snapsh
 	return []uint32{}, c.lastCount, c.lastBehind
 }
 
-func (c *Chain) setBacklog(notPersisted, minedNotSet []*model.Block) {
+func (c *Chain) setBacklog(notPersisted []*model.Block) {
 	behind := snapshot.Reading{Value: float64(len(notPersisted)), Status: snapshot.StatusOK}
 	if len(notPersisted) >= chainPersisterLimit {
 		behind.Value = chainPersisterLimit
 		behind.Note = "25 or more"
 	}
 
-	count := snapshot.Reading{Value: float64(countHeights(notPersisted, minedNotSet)), Status: snapshot.StatusOK}
+	count := snapshot.Reading{Value: float64(countHeights(notPersisted)), Status: snapshot.StatusOK}
 	if len(notPersisted) >= chainPersisterLimit {
 		count.Note = behind.Note
 	}
 
-	c.lastWait = waitingHeights(notPersisted, minedNotSet)
+	c.lastWait = waitingHeights(notPersisted)
 	c.lastCount = count
 	c.lastBehind = behind
 }
@@ -185,13 +180,6 @@ func (c *Chain) notPersisted(ctx context.Context) ([]*model.Block, error) {
 	defer cancel()
 
 	return c.bc.GetBlocksNotPersisted(ctx, chainPersisterLimit)
-}
-
-func (c *Chain) minedNotSet(ctx context.Context) ([]*model.Block, error) {
-	ctx, cancel := context.WithTimeout(ctx, chainCallTimeout)
-	defer cancel()
-
-	return c.bc.GetBlocksMinedNotSet(ctx)
 }
 
 func waitingHeights(groups ...[]*model.Block) []uint32 {

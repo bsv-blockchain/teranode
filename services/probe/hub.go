@@ -19,6 +19,8 @@ import (
 
 const (
 	maxWSClients         = 16
+	maxWSPending         = 32
+	wsCloseTryLater      = 1013
 	wsQueueSize          = 4
 	wsReadLimit          = 1024
 	wsCloseUnauthorized  = 4401
@@ -37,6 +39,7 @@ type Hub struct {
 	writeWait time.Duration
 	pingEvery time.Duration
 	slots     chan struct{}
+	pending   chan struct{}
 
 	mu      sync.Mutex
 	clients map[*wsClient]struct{}
@@ -69,6 +72,7 @@ func NewHub(updates <-chan snapshot.Snapshot) *Hub {
 		writeWait: defaultWSWriteWait,
 		pingEvery: wsPingEvery,
 		slots:     make(chan struct{}, maxWSClients),
+		pending:   make(chan struct{}, maxWSPending),
 		clients:   map[*wsClient]struct{}{},
 	}
 
@@ -154,6 +158,23 @@ func (h *Hub) acquire() bool {
 
 func (h *Hub) release() {
 	<-h.slots
+}
+
+func (h *Hub) full() bool {
+	return len(h.slots) >= cap(h.slots)
+}
+
+func (h *Hub) acquirePending() bool {
+	select {
+	case h.pending <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Hub) releasePending() {
+	<-h.pending
 }
 
 func (h *Hub) register(conn *websocket.Conn) (*wsClient, bool) {
@@ -330,11 +351,14 @@ func (s *Server) handleWS(c echo.Context) error {
 
 	hub := run.hub
 
-	if !hub.acquire() {
+	if hub.full() || !hub.acquirePending() {
 		return c.NoContent(http.StatusServiceUnavailable)
 	}
 
-	defer hub.release()
+	var pendingOnce sync.Once
+
+	releasePending := func() { pendingOnce.Do(hub.releasePending) }
+	defer releasePending()
 
 	upgrader := websocket.Upgrader{CheckOrigin: sameOrigin}
 
@@ -351,6 +375,17 @@ func (s *Server) handleWS(c echo.Context) error {
 
 		return nil
 	}
+
+	releasePending()
+
+	if !hub.acquire() {
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(wsCloseTryLater, "too many dashboards"), time.Now().Add(wsCloseWait))
+		_ = conn.Close()
+
+		return nil
+	}
+
+	defer hub.release()
 
 	client, ok := hub.register(conn)
 	if !ok {

@@ -99,6 +99,7 @@ var MetricNames = append([]string{
 	metricCacheHits,
 	metricCacheMisses,
 	metricCacheEvictions,
+	metricCacheInsertions,
 	metricCacheValidEntries,
 	metricCacheCurrentGen,
 	metricCachePreviousGen,

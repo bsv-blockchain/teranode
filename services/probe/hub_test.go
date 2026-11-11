@@ -179,6 +179,36 @@ func TestSeventeenthClientRefused(t *testing.T) {
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
+func TestSilentSocketsDoNotTakeClientSlots(t *testing.T) {
+	srv := newProbe(t, probeOpts{})
+	runProbe(t, srv)
+
+	for range maxWSClients {
+		mustDialWS(t, srv)
+	}
+
+	conn := authedWS(t, srv)
+	readSnapshot(t, conn, 2*time.Second)
+
+	require.Equal(t, 1, srv.hubClients())
+}
+
+func TestSilentSocketsAreCappedBeforeAuthentication(t *testing.T) {
+	srv := newProbe(t, probeOpts{})
+	runProbe(t, srv)
+
+	for range maxWSPending {
+		mustDialWS(t, srv)
+	}
+
+	conn, resp, err := dialWS(srv, nil)
+	require.Error(t, err)
+	require.Nil(t, conn)
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	require.NoError(t, resp.Body.Close())
+}
+
 func TestSlowClientDroppedWithoutBlockingOthers(t *testing.T) {
 	interval := 100 * time.Millisecond
 	waiting := make([]uint32, 50000)

@@ -222,9 +222,7 @@ func TestCollectFailureReturnsErrorAndNilPatch(t *testing.T) {
 type countingClient struct {
 	blockchain.ClientI
 	notPersistedCalls int
-	minedNotSetCalls  int
 	failBacklog       bool
-	failMinedNotSet   bool
 }
 
 func (c *countingClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
@@ -235,16 +233,6 @@ func (c *countingClient) GetBlocksNotPersisted(ctx context.Context, limit int) (
 	}
 
 	return c.ClientI.GetBlocksNotPersisted(ctx, limit)
-}
-
-func (c *countingClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
-	c.minedNotSetCalls++
-
-	if c.failMinedNotSet {
-		return nil, errors.NewServiceError("mined not set unavailable")
-	}
-
-	return c.ClientI.GetBlocksMinedNotSet(ctx)
 }
 
 func newCountingRig(t *testing.T) (*chainRig, *countingClient, *time.Time) {
@@ -276,14 +264,12 @@ func TestBacklogCallsRateLimitedToTenSeconds(t *testing.T) {
 	require.Equal(t, first.Chain.PersisterBehind, second.Chain.PersisterBehind)
 	require.Equal(t, uint32(2), second.Tip)
 	require.Equal(t, 1, cc.notPersistedCalls)
-	require.Equal(t, 1, cc.minedNotSetCalls)
 
 	*clock = clock.Add(time.Second)
 
 	third := collectSnapshot(t, rig.chain)
 	require.Contains(t, third.Chain.BlocksWaiting, uint32(2))
 	require.Equal(t, 2, cc.notPersistedCalls)
-	require.Equal(t, 2, cc.minedNotSetCalls)
 }
 
 func TestPersisterBehindLowerBoundNote(t *testing.T) {
@@ -340,17 +326,24 @@ func TestBacklogFailureWaitsTenSecondsBeforeRetry(t *testing.T) {
 	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
 }
 
-func TestMinedNotSetFailureAlsoLeavesBacklogWithoutData(t *testing.T) {
-	rig, cc, _ := newCountingRig(t)
+type noMinedNotSetClient struct {
+	blockchain.ClientI
+}
+
+func (c *noMinedNotSetClient) GetBlocksMinedNotSet(context.Context) ([]*model.Block, error) {
+	panic("the probe must not call GetBlocksMinedNotSet: it has no limit")
+}
+
+func TestBacklogNeverCallsTheUnboundedMinedNotSetQuery(t *testing.T) {
+	rig := newChainRig(t)
 	rig.addBlock(t, 1)
 
-	cc.failMinedNotSet = true
+	rig.chain = NewChain(&noMinedNotSetClient{ClientI: rig.bc})
 
 	s := collectSnapshot(t, rig.chain)
 
-	require.Equal(t, uint32(1), s.Tip)
-	require.Equal(t, snapshot.StatusNoData, s.Chain.PersisterBehind.Status)
-	require.Equal(t, snapshot.StatusNoData, s.Chain.BlocksWaitingCount.Status)
+	require.Contains(t, s.Chain.BlocksWaiting, uint32(1))
+	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
 }
 
 func TestWaitingHeights(t *testing.T) {
