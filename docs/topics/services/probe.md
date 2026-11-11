@@ -131,7 +131,7 @@ When a source fails, every value from that source goes grey with the age of its 
 | Data stores | Aerospike and PostgreSQL disk fill, size, read latency, reads/s, writes/s, PostgreSQL commits/s | Aerospike info protocol, PostgreSQL statistics views, UTXO store metrics |
 
 A reading shows `no data` when its metric does not exist on this node. For example, the Data stores stage shows no data for a store that the node does not use.
-The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit.
+The persister backlog is a lower bound. The probe asks for at most 25 blocks and shows "25 or more" at that limit. The waiting blocks are the blocks that the persister has not written yet.
 The Blockchain panel shows the count of waiting blocks and the lowest three heights. A "+N more" marker shows how many waiting blocks the panel does not list.
 The probe reads the peer heights from the P2P service as its own `p2p` source. When that call fails, the best peer height goes grey with its age, and the tip chip turns grey. The FSM state, the tip and the backlog stay live. After 90 seconds the Blockchain stage raises its source alarm.
 
