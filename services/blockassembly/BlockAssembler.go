@@ -195,15 +195,6 @@ type BlockAssembler struct {
 	// Set by NewBlockAssembler; read once when the loop starts.
 	heartbeatInterval time.Duration
 
-	// currentChainMap maps block hashes to their heights
-	currentChainMap map[chainhash.Hash]uint32
-
-	// currentChainMapIDs tracks block IDs in the current chain
-	currentChainMapIDs map[uint32]struct{}
-
-	// currentChainMapMu protects access to chain maps
-	currentChainMapMu sync.RWMutex
-
 	// blockchainSubscriptionCh receives blockchain notifications
 	blockchainSubscriptionCh chan *blockchain.Notification
 
@@ -438,8 +429,6 @@ func NewBlockAssembler(ctx context.Context, logger ulogger.Logger, tSettings *se
 		blockchainClient:    blockchainClient,
 		subtreeProcessor:    subtreeProcessor,
 		txMetaEvictor:       options.txMetaEvictor,
-		currentChainMap:     make(map[chainhash.Hash]uint32, tSettings.BlockAssembly.MaxBlockReorgCatchup),
-		currentChainMapIDs:  make(map[uint32]struct{}, tSettings.BlockAssembly.MaxBlockReorgCatchup),
 		defaultMiningNBits:  defaultMiningBits,
 		resetCh:             make(chan resetRequest, 2),
 		reconcileCh:         make(chan struct{}, 1),
