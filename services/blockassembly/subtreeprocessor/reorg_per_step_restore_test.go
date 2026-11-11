@@ -75,16 +75,16 @@ func (s *stepRestoreStore) takeMarkedNotOnLongestChain() []chainhash.Hash {
 // stepRestoreFixture is a started, disk-tx-map-backed processor on tip A (parent
 // P). Before the reorg it holds the unmined transaction m1, plus unmined fillers
 // when asked for, so that it holds complete chained subtrees. a1 is mined in the losing block A. The
-// winning branch is F (f1) then F2 (f2). A2 (x1) and A3 (x2) extend A, for a
-// catch-up. blockABadBuild is A with a second subtree that makes the move-back's
+// winning branch is F (f1) then F2 (f2). A2 (x1), A3 (x2) and A4 (x3) extend A,
+// for a catch-up. blockABadBuild is A with a second subtree that makes the move-back's
 // bulk build fail after it has replaced the subtrees.
 type stepRestoreFixture struct {
 	stp   *SubtreeProcessor
 	store *stepRestoreStore
 	blob  *blob_memory.Memory
 
-	parent, tipA, forkF, forkF2, childA2, childA3             *model.BlockHeader
-	blockA, blockABadBuild, blockF, blockF2, blockA2, blockA3 *model.Block
+	parent, tipA, forkF, forkF2, childA2, childA3, childA4             *model.BlockHeader
+	blockA, blockABadBuild, blockF, blockF2, blockA2, blockA3, blockA4 *model.Block
 
 	m1, a1, f1, f2 chainhash.Hash
 
@@ -127,6 +127,7 @@ func newStepRestoreFixture(t *testing.T, o stepRestoreOptions) *stepRestoreFixtu
 
 	x1 := chainhash.HashH([]byte("step-restore-x1"))
 	x2 := chainhash.HashH([]byte("step-restore-x2"))
+	x3 := chainhash.HashH([]byte("step-restore-x3"))
 	y1 := chainhash.HashH([]byte("step-restore-y1"))
 
 	aSubtreeKey := storeReorgSubtree(t, ctx, f.blob, []subtreepkg.Node{{Hash: f.a1, Fee: 100, SizeInBytes: 250}})
@@ -134,6 +135,7 @@ func newStepRestoreFixture(t *testing.T, o stepRestoreOptions) *stepRestoreFixtu
 	f2SubtreeKey := storeReorgSubtree(t, ctx, f.blob, []subtreepkg.Node{{Hash: f.f2, Fee: 100, SizeInBytes: 250}})
 	a2SubtreeKey := storeReorgSubtree(t, ctx, f.blob, []subtreepkg.Node{{Hash: x1, Fee: 100, SizeInBytes: 250}})
 	f.a3SubtreeKey = storeReorgSubtree(t, ctx, f.blob, []subtreepkg.Node{{Hash: x2, Fee: 100, SizeInBytes: 250}})
+	a4SubtreeKey := storeReorgSubtree(t, ctx, f.blob, []subtreepkg.Node{{Hash: x3, Fee: 100, SizeInBytes: 250}})
 
 	// A second subtree whose first node is the coinbase placeholder: the move-back
 	// skips the placeholder only in a block's first subtree, so the bulk build's
@@ -150,6 +152,7 @@ func newStepRestoreFixture(t *testing.T, o stepRestoreOptions) *stepRestoreFixtu
 	f.forkF2 = header(f.forkF, 9404)
 	f.childA2 = header(f.tipA, 9405)
 	f.childA3 = header(f.childA2, 9406)
+	f.childA4 = header(f.childA3, 9407)
 
 	f.blockA = &model.Block{Height: 2, CoinbaseTx: coinbaseTx2, Subtrees: []*chainhash.Hash{aSubtreeKey}, Header: f.tipA}
 	f.blockABadBuild = &model.Block{Height: 2, CoinbaseTx: coinbaseTx2, Subtrees: []*chainhash.Hash{aSubtreeKey, badBuildKey}, Header: f.tipA}
@@ -157,6 +160,7 @@ func newStepRestoreFixture(t *testing.T, o stepRestoreOptions) *stepRestoreFixtu
 	f.blockF2 = &model.Block{Height: 3, CoinbaseTx: coinbaseTx, Subtrees: []*chainhash.Hash{f2SubtreeKey}, Header: f.forkF2}
 	f.blockA2 = &model.Block{Height: 3, CoinbaseTx: coinbaseTx, Subtrees: []*chainhash.Hash{a2SubtreeKey}, Header: f.childA2}
 	f.blockA3 = &model.Block{Height: 4, CoinbaseTx: coinbaseTx3, Subtrees: []*chainhash.Hash{f.a3SubtreeKey}, Header: f.childA3}
+	f.blockA4 = &model.Block{Height: 5, CoinbaseTx: coinbaseTx2, Subtrees: []*chainhash.Hash{a4SubtreeKey}, Header: f.childA4}
 
 	_, err = sqlStore.Create(ctx, coinbaseTx2, 2)
 	require.NoError(t, err)
@@ -168,7 +172,7 @@ func newStepRestoreFixture(t *testing.T, o stepRestoreOptions) *stepRestoreFixtu
 	bc.On("SetBlockProcessedAt", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	bc.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
-	for _, h := range []*model.BlockHeader{f.parent, f.tipA, f.forkF, f.forkF2, f.childA2, f.childA3} {
+	for _, h := range []*model.BlockHeader{f.parent, f.tipA, f.forkF, f.forkF2, f.childA2, f.childA3, f.childA4} {
 		bc.On("GetBlockHeader", mock.Anything, h.Hash()).Return(h, &model.BlockHeaderMeta{}, nil)
 	}
 

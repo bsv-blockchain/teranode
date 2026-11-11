@@ -236,9 +236,15 @@ type SubtreeProcessor struct {
 	// retiredSubtrees are mmap-backed subtrees replaced by a blockmaxsize resize, a
 	// removal, a block's subtree reset or a reorg's move-back. Storage workers or
 	// retries may still read them, and a failed block movement puts its input subtrees
-	// back, so they are closed when the next block commits, on reset or on Stop instead
-	// of immediately. Owned by the processor goroutine.
+	// back, so they are closed when the block or move-back step commits, on reset or on
+	// Stop instead of immediately. Owned by the processor goroutine.
 	retiredSubtrees []*subtreepkg.Subtree
+
+	// catchUpRollbackSubtrees are the chained and current subtrees from before a
+	// catch-up, which its rollback puts back if any block fails. closeRetiredSubtrees
+	// keeps them mapped until the catch-up ends, while it closes each block's
+	// replaced subtrees at that block's commit. Owned by the processor goroutine.
+	catchUpRollbackSubtrees []*subtreepkg.Subtree
 
 	// blockIntervals tracks recent intervals per subtree in previous blocks
 	blockIntervals []time.Duration
@@ -475,8 +481,8 @@ type SubtreeProcessor struct {
 	// catchUpRollbackPinned is set while reorgBlocks' forward-only catch-up
 	// branch runs. Its rollback puts back the tx map and subtrees from before
 	// the catch-up, so until it ends the anchor map is kept past each block's
-	// commit and retired subtrees are not closed. Only mutated by the single
-	// Start() goroutine.
+	// commit, and catchUpRollbackSubtrees keeps those subtrees mapped. Only
+	// mutated by the single Start() goroutine.
 	catchUpRollbackPinned bool
 
 	// diskTxMapRetired holds disk maps displaced by the fresh-allocation path
@@ -4424,8 +4430,9 @@ func (stp *SubtreeProcessor) retireSubtrees(subtrees ...*subtreepkg.Subtree) {
 
 // closeRetiredSubtrees closes the retired subtrees nothing in the processor still
 // holds. A failed block movement puts its input subtrees back while they sit in
-// retiredSubtrees, and the precomputed mining data may still point at a retired
-// one, so those are kept for a later close rather than unmapped under a reader.
+// retiredSubtrees, a catch-up's rollback puts back the subtrees from before it, and
+// the precomputed mining data may still point at a retired one, so those are kept
+// for a later close rather than unmapped under a reader.
 func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 	if len(stp.retiredSubtrees) == 0 {
 		return
@@ -4437,6 +4444,10 @@ func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 	}
 
 	held[stp.currentSubtree.Load()] = struct{}{}
+
+	for _, st := range stp.catchUpRollbackSubtrees {
+		held[st] = struct{}{}
+	}
 
 	if data := stp.precomputedMiningData.Load(); data != nil {
 		for _, st := range data.Subtrees {
@@ -5136,9 +5147,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// stays pinned as the anchor and the subtrees stay mapped until the
 		// catch-up ends. Registered before the panic defer, so it runs after it.
 		stp.catchUpRollbackPinned = true
+		stp.catchUpRollbackSubtrees = append(slices.Clone(originalChainedSubtrees), originalCurrentSubtree)
 
 		defer func() {
 			stp.catchUpRollbackPinned = false
+			stp.catchUpRollbackSubtrees = nil
 
 			// whichever state survived, the snapshot points at it before the
 			// subtrees nothing holds any more are unmapped
@@ -5297,6 +5310,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		if err != nil {
 			return err
 		}
+
+		// A later failure puts back this step's output, not its input, so the
+		// subtrees it replaced can be unmapped now. The mining snapshot still
+		// holds the pre-reorg ones, so those stay until the refresh below.
+		stp.closeRetiredSubtrees()
 
 		if len(conflictingHashes) > 0 {
 			// The block being moved back carried a non-empty
@@ -6182,7 +6200,7 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	// them back: a failed fork reorg's reset sweeps whatever subtrees are
 	// installed, and the half-built ones would miss the unmined transactions
 	// that were in the previous subtrees. They
-	// are closed once a later step commits.
+	// are closed once this move-back returns.
 	stp.retireSubtrees(stp.currentSubtree.Load())
 	stp.currentSubtree.Store(newSubtree)
 
@@ -7119,10 +7137,9 @@ func (stp *SubtreeProcessor) finalizeBlockProcessing(ctx context.Context, block 
 
 	// the block is committed and the snapshot above no longer references the subtrees that
 	// resizes, rechains, removals and the block's reset replaced, so they can be unmapped.
-	// A catch-up waits until it ends: its rollback puts back the subtrees from before it.
-	if !stp.catchUpRollbackPinned {
-		stp.closeRetiredSubtrees()
-	}
+	// In a catch-up, closeRetiredSubtrees keeps the subtrees from before it, which its
+	// rollback puts back.
+	stp.closeRetiredSubtrees()
 }
 
 // moveForwardBlock cleans out all transactions that are in the current subtrees and also in the block
@@ -7215,8 +7232,8 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	// holds this block's input: a failure, or a panic, puts it back here. The
 	// input is live for the whole step anyway, so this costs no memory, and it
 	// is what a failed fork reorg's reset sweeps. Registered before
-	// resetSubtreeState, which can fail after it has replaced the map and the
-	// current subtree. The in-place writes a move-back made to the map are not
+	// resetSubtreeState, which can fail (at newSubtree) after it has already
+	// replaced the map. The in-place writes a move-back made to the map are not
 	// undone: only a reset may run on a failed fork reorg, and it clears the map.
 	stepCommitted := false
 

@@ -17,6 +17,7 @@ import (
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/stretchr/testify/require"
 )
 
@@ -187,4 +188,168 @@ func TestFailedForkReorg_ResetLeavesNoReplacedSubtreeRetired(t *testing.T) {
 		// closed subtree's nodes faults
 		require.False(t, slices.Contains(f.stp.retiredSubtrees, st), "the reset closed this subtree, so it must not stay retired")
 	}
+}
+
+// unheldRetiredAtEveryStep records, at the top of every block movement step, how
+// many retired subtrees nothing holds: not installed, not in the mining snapshot
+// and not in keep. Those are the ones the previous step should already have
+// closed, so with mmap they sit on the mmap volume for no reader.
+func unheldRetiredAtEveryStep(f *stepRestoreFixture, keep []*subtreepkg.Subtree) *[]int {
+	counts := &[]int{}
+
+	hook := func(_ *model.BlockHeader) {
+		stp := f.stp
+
+		held := make(map[*subtreepkg.Subtree]struct{})
+		for _, st := range append(installedMmapSubtrees(stp), keep...) {
+			held[st] = struct{}{}
+		}
+
+		if data := stp.precomputedMiningData.Load(); data != nil {
+			for _, st := range data.Subtrees {
+				held[st] = struct{}{}
+			}
+		}
+
+		unheld := 0
+
+		for _, st := range stp.retiredSubtrees {
+			if _, ok := held[st]; !ok {
+				unheld++
+			}
+		}
+
+		*counts = append(*counts, unheld)
+	}
+
+	f.hook.Store(&hook)
+
+	return counts
+}
+
+// A multi-block movement closes the subtrees each step replaced once nothing can
+// put them back, as a single block does at its commit, so the mmap volume holds
+// one step's worth of replaced subtrees and not one per block. A catch-up keeps
+// only the subtrees from before it, which its rollback puts back.
+func TestBlockMovement_ClosesEachStepsReplacedSubtrees(t *testing.T) {
+	t.Run("catch-up", func(t *testing.T) {
+		f := newStepRestoreFixture(t, stepRestoreOptions{opts: []Options{WithMmapDir(t.TempDir())}})
+		require.True(t, f.stp.currentSubtree.Load().IsMmapBacked(), "the fixture must use mmap subtrees")
+
+		counts := unheldRetiredAtEveryStep(f, installedMmapSubtrees(f.stp))
+
+		require.NoError(t, f.stp.Reorg([]*model.Block{}, []*model.Block{f.blockA2, f.blockA3, f.blockA4}))
+		require.Equal(t, f.childA4.Hash(), f.stp.GetCurrentBlockHeader().Hash())
+
+		require.GreaterOrEqual(t, len(*counts), 3, "precondition: the hook ran at each catch-up block")
+		require.Equal(t, make([]int, len(*counts)), *counts, "each catch-up block closes the subtrees it replaced at its commit")
+		require.Empty(t, f.stp.retiredSubtrees, "the catch-up's end closes the subtrees from before it")
+	})
+
+	t.Run("move-back", func(t *testing.T) {
+		f := newStepRestoreFixture(t, stepRestoreOptions{opts: []Options{WithMmapDir(t.TempDir())}})
+		require.True(t, f.stp.currentSubtree.Load().IsMmapBacked(), "the fixture must use mmap subtrees")
+
+		require.NoError(t, f.stp.Reorg([]*model.Block{}, []*model.Block{f.blockA2, f.blockA3}))
+
+		counts := unheldRetiredAtEveryStep(f, nil)
+
+		require.NoError(t, f.stp.Reorg([]*model.Block{f.blockA3, f.blockA2, f.blockA}, []*model.Block{f.blockF, f.blockF2}))
+		require.Equal(t, f.forkF2.Hash(), f.stp.GetCurrentBlockHeader().Hash())
+
+		require.GreaterOrEqual(t, len(*counts), 5, "precondition: the hook ran at three move-back and two forward steps")
+		require.Equal(t, make([]int, len(*counts)), *counts, "each move-back step closes the subtrees it replaced")
+	})
+}
+
+// newChainedMmapFixture is the step-restore fixture with mmap subtrees and two
+// complete chained subtrees, which the mining snapshot holds.
+func newChainedMmapFixture(t *testing.T) (*stepRestoreFixture, []*subtreepkg.Subtree) {
+	t.Helper()
+
+	f := newStepRestoreFixture(t, stepRestoreOptions{
+		fillers:  6,
+		opts:     []Options{WithMmapDir(t.TempDir())},
+		settings: func(s *settings.Settings) { s.BlockAssembly.InitialMerkleItemsPerSubtree = 4 },
+	})
+	require.True(t, f.stp.currentSubtree.Load().IsMmapBacked(), "the fixture must use mmap subtrees")
+
+	// AddDirectly does not refresh the snapshot; a move-forward-free reorg is not
+	// available, so refresh it the way the processor does after a block.
+	f.stp.updatePrecomputedMiningData()
+
+	snapshot := f.stp.precomputedMiningData.Load()
+	require.NotNil(t, snapshot)
+	require.Len(t, snapshot.Subtrees, 2, "precondition: the mining snapshot holds the two chained subtrees")
+
+	return f, slices.Clone(snapshot.Subtrees)
+}
+
+// A reset replaces the subtrees the mining snapshot points at and closes the
+// retired ones before it refreshes the snapshot, while a mining candidate may
+// still read them. The snapshot's subtrees must stay mapped until that refresh.
+func TestReset_KeepsTheSnapshotsSubtreesMappedUntilItRefreshesIt(t *testing.T) {
+	f, snapshotSubtrees := newChainedMmapFixture(t)
+
+	var (
+		fired     bool
+		stillHeld []bool
+	)
+
+	hook := func(_ *model.BlockHeader) {
+		if fired {
+			return
+		}
+
+		fired = true
+
+		for _, st := range snapshotSubtrees {
+			stillHeld = append(stillHeld, slices.Contains(f.stp.retiredSubtrees, st))
+		}
+	}
+	f.hook.Store(&hook)
+
+	resp := f.stp.Reset(f.childA2, []*model.Block{}, []*model.Block{f.blockA2}, false, nil)
+	require.NoError(t, resp.Err)
+
+	require.True(t, fired, "precondition: the hook ran inside the reset, after its first close")
+	require.Equal(t, []bool{true, true}, stillHeld, "the snapshot's subtrees stay retired, not closed, until the snapshot moves off them")
+}
+
+// Stop closes every retired subtree, including those the mining snapshot still
+// points at, so no mmap file is left behind.
+func TestStop_ClosesRetiredSubtreesTheSnapshotHolds(t *testing.T) {
+	mmapDir := t.TempDir()
+
+	f := newStepRestoreFixture(t, stepRestoreOptions{
+		fillers:  6,
+		opts:     []Options{WithMmapDir(mmapDir)},
+		settings: func(s *settings.Settings) { s.BlockAssembly.InitialMerkleItemsPerSubtree = 4 },
+	})
+	f.stp.updatePrecomputedMiningData()
+
+	snapshot := f.stp.precomputedMiningData.Load()
+	require.NotNil(t, snapshot)
+	require.Len(t, snapshot.Subtrees, 2, "precondition: the mining snapshot holds the two chained subtrees")
+
+	// The state a block's reset leaves before the snapshot is refreshed: the
+	// chained subtrees replaced and retired, and the snapshot still pointing at
+	// them, so closeRetiredSubtrees keeps them. Set directly while the processor
+	// goroutine is idle.
+	f.stp.retireChainedSubtrees()
+	f.stp.closeRetiredSubtrees()
+
+	for _, st := range snapshot.Subtrees {
+		require.True(t, slices.Contains(f.stp.retiredSubtrees, st), "precondition: a snapshot subtree is retired and was not closed")
+	}
+
+	entries, err := os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, entries, "precondition: the subtrees have mmap files")
+
+	f.stp.Stop(context.Background())
+
+	entries, err = os.ReadDir(mmapDir)
+	require.NoError(t, err)
+	require.Empty(t, entries, "Stop removes every mmap file, the snapshot's included")
 }
