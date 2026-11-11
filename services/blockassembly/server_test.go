@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
+	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/test"
@@ -2545,5 +2546,70 @@ func TestMoreCoveragePaths(t *testing.T) {
 
 		// Give time for background notification goroutine to complete
 		time.Sleep(50 * time.Millisecond)
+	})
+}
+
+// With blockassembly_storeTxInpointsForSubtreeMeta off, every ingest path still hands the tx's parent
+// links to the subtree processor: the descendant cascades read them to take a removed tx's children
+// out of block assembly, and nothing else supplies them in this mode.
+func TestIngestKeepsParentLinksWithSubtreeMetaOff(t *testing.T) {
+	parentHash := chainhash.Hash{0x05}
+	parentLinks := inpointsForParents(t, []chainhash.Hash{parentHash}, [][]uint32{{0}})
+
+	txid := make([]byte, 32)
+	txid[0] = 0x01
+
+	captureParents := func(t *testing.T, add func(ba *BlockAssembly) error) []chainhash.Hash {
+		t.Helper()
+
+		var handed []*subtreepkg.TxInpoints
+
+		stp := &subtreeprocessor.MockSubtreeProcessor{}
+		stp.On("AddBatchIfRoom", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+			handed = args.Get(1).([]*subtreepkg.TxInpoints)
+		}).Return(true)
+
+		ba := baWithProcessor(t, func(s *settings.Settings) {
+			s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+		}, stp)
+
+		require.NoError(t, add(ba))
+		require.Len(t, handed, 1)
+
+		return handed[0].ParentTxHashes
+	}
+
+	t.Run("AddTx", func(t *testing.T) {
+		parents := captureParents(t, func(ba *BlockAssembly) error {
+			_, err := ba.AddTx(context.Background(), &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100, TxInpoints: parentLinks})
+			return err
+		})
+		require.Equal(t, []chainhash.Hash{parentHash}, parents)
+	})
+
+	t.Run("AddTxBatch", func(t *testing.T) {
+		parents := captureParents(t, func(ba *BlockAssembly) error {
+			_, err := ba.AddTxBatch(context.Background(), &blockassembly_api.AddTxBatchRequest{
+				TxRequests: []*blockassembly_api.AddTxRequest{{Txid: txid, Fee: 1, Size: 100, TxInpoints: parentLinks}},
+			})
+			return err
+		})
+		require.Equal(t, []chainhash.Hash{parentHash}, parents)
+	})
+
+	t.Run("AddTxBatchColumnar", func(t *testing.T) {
+		parents := captureParents(t, func(ba *BlockAssembly) error {
+			_, err := ba.AddTxBatchColumnar(context.Background(), &blockassembly_api.AddTxBatchColumnarRequest{
+				TxidsPacked:          txid,
+				Fees:                 []uint64{1},
+				Sizes:                []uint64{100},
+				ParentTxHashesPacked: parentHash[:],
+				ParentTxOffsets:      []uint32{0, 1},
+				VoutIdxsPacked:       []uint32{1, 0},
+				VoutIdxsTxOffsets:    []uint32{0, 2},
+			})
+			return err
+		})
+		require.Equal(t, []chainhash.Hash{parentHash}, parents)
 	})
 }

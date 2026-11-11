@@ -5990,6 +5990,44 @@ func (stp *SubtreeProcessor) inAssemblyDescendantsOf(removed, missing []chainhas
 	return descendants
 }
 
+// txInpointsFromUtxoStore reads the parent links of nodes from the utxo store, in one batch, for a
+// moved-back block whose subtree meta was not written (blockassembly_storeTxInpointsForSubtreeMeta
+// off). A node whose record is gone, and the coinbase placeholder, get empty links; any other read
+// failure is returned, so the move-back fails rather than return txs to block assembly blind.
+func (stp *SubtreeProcessor) txInpointsFromUtxoStore(ctx context.Context, nodes []subtreepkg.Node) ([]subtreepkg.TxInpoints, error) {
+	txInpoints := make([]subtreepkg.TxInpoints, len(nodes))
+	unresolved := make([]*utxostore.UnresolvedMetaData, 0, len(nodes))
+
+	for i := range nodes {
+		if nodes[i].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		unresolved = append(unresolved, &utxostore.UnresolvedMetaData{Hash: nodes[i].Hash, Idx: i})
+	}
+
+	if len(unresolved) == 0 {
+		return txInpoints, nil
+	}
+
+	if err := stp.utxoStore.BatchDecorate(ctx, unresolved, fields.TxInpoints); err != nil {
+		return nil, err
+	}
+
+	for _, item := range unresolved {
+		switch {
+		case item.Err != nil && errors.Is(item.Err, errors.ErrTxNotFound):
+			continue
+		case item.Err != nil:
+			return nil, errors.NewProcessingError("error reading the parent links of tx %s", item.Hash.String(), item.Err)
+		case item.Data != nil:
+			txInpoints[item.Idx] = item.Data.TxInpoints
+		}
+	}
+
+	return txInpoints, nil
+}
+
 func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block *model.Block) ([][]subtreepkg.Node, [][]subtreepkg.TxInpoints, []chainhash.Hash, error) {
 	_, _, deferFn := tracing.Tracer("subtreeprocessor").Start(ctx, "moveBackBlockGetSubtrees",
 		tracing.WithLogMessage(stp.logger, "[moveBackBlock:GetSubtrees][%s] with %d subtrees: get subtrees", block.String(), len(block.Subtrees)),
@@ -6072,10 +6110,12 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 
 				subtreeMetaTxInpoints[idx] = subtreeMeta.TxInpoints
 			} else {
-				subtreeMetaTxInpoints[idx] = make([]subtreepkg.TxInpoints, len(subtree.Nodes))
-
-				for i := range subtreeMetaTxInpoints[idx] {
-					subtreeMetaTxInpoints[idx][i] = subtreepkg.TxInpoints{}
+				// no subtree meta was written for this block, so read the parent links from the utxo
+				// store: the descendant cascades need them for the txs this move-back returns to
+				// block assembly
+				subtreeMetaTxInpoints[idx], err = stp.txInpointsFromUtxoStore(gCtx, subtree.Nodes)
+				if err != nil {
+					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error reading the parent links of subtree %s", block.String(), subtreeHash.String(), err)
 				}
 			}
 

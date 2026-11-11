@@ -31,6 +31,10 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
+  Block assembly keeps every unmined tx's parent links in memory in both modes, and the unmined
+  reload reads them from the store. Nodes running it off use more memory per unmined tx and a little
+  more CPU on the restart reload; nothing to change. (#2128)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)
