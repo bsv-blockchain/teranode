@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -1105,6 +1106,18 @@ func TestEmergencyDifficultyDelayCandidate(t *testing.T) {
 			required, err := server.blockchainClient.GetNextWorkRequired(t.Context(), tip.Hash(), int64(candidate.Time))
 			require.NoError(t, err)
 			require.Equal(t, required.CloneBytes(), candidate.NBits, "block validation requires exactly this difficulty for the candidate timestamp")
+
+			difficulty, err := server.GetCurrentDifficulty(t.Context(), &blockassembly_api.EmptyMessage{})
+			require.NoError(t, err)
+			require.Equal(t, tip.Hash().CloneBytes(), difficulty.BlockHash)
+
+			if tt.wantMinimum {
+				require.InDelta(t, 1.0, difficulty.Difficulty, 1e-9)
+			} else {
+				wantDifficulty, _ := usual.CalculateDifficulty().Float64()
+				require.Greater(t, wantDifficulty, 1.0)
+				require.InDelta(t, wantDifficulty, difficulty.Difficulty, 1e-9)
+			}
 		})
 	}
 }
