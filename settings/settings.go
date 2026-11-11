@@ -801,6 +801,7 @@ func NewSettings(alternativeContext ...string) *Settings {
 			AllowSyncCandidateFromLocalPeers: getBool("legacy_allowSyncCandidateFromLocalPeers", false, alternativeContext...),
 			TempStore:                        getURL("temp_store", "file://./data/tempstore", alternativeContext...),
 			PeerIdleTimeout:                  getDuration("legacy_peerIdleTimeout", 125*time.Second, alternativeContext...), // ping/pong interval is 2 mins, so we set this to 125s to be sure
+			PeerSendTimeout:                  getDuration("legacy_peerSendTimeout", 20*time.Minute, alternativeContext...),  // SV Node -p2ptimeout default
 			MaxAddnodePeers:                  getInt("legacy_maxAddnodePeers", 8, alternativeContext...),
 			ReplenishInterval:                getDuration("legacy_replenishInterval", 2*time.Second, alternativeContext...),
 			MaxFeelerPeers:                   getInt("legacy_maxFeelerPeers", 1, alternativeContext...),
