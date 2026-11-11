@@ -38,32 +38,19 @@ func buildTexts() map[string]text {
 			title: "Validator latency is high",
 			body: "The Validator takes longer than normal to validate a transaction. " +
 				"Look at the tx meta cache hit rate and Aerospike read latency first. " +
-				"A slow Validator fills its queue and starves Block Assembly.",
-		},
-		"validator-queue-fill": {
-			title: "Validator queue is filling",
-			body: "The Validator cannot process transactions as fast as they arrive. " +
-				"Its internal queue grows. " +
-				"Look at the tx meta cache hit rate and Aerospike read latency. " +
-				"During catch-up, the Validator also checks the transactions of each queued block.",
+				"A slow Validator starves Block Assembly.",
 		},
 		"assembly-queue-head-age": {
 			title: "Block Assembly input is old",
 			body: "The oldest transaction in the Block Assembly queue waits longer than normal. " +
 				"Block Assembly does not keep up with its input. " +
-				"Look at the Validator queue and the Block Assembly state.",
+				"Look at the Validator latency and the Block Assembly state.",
 		},
 		"assembly-tip-lag": {
 			title: "Block Assembly is behind the chain tip",
 			body: "Block Assembly works on a block below the current chain tip. " +
 				"It does not move to new blocks as fast as they arrive. " +
 				"Look at the Blockchain panel and the Block Assembly state.",
-		},
-		"subtree-queue-age": {
-			title: "Subtrees wait too long",
-			body: "The oldest queued subtree waits longer than normal. " +
-				"Subtree validation does not keep up with the subtrees that peers announce. " +
-				"Look at the Validator queue and the tx meta cache hit rate.",
 		},
 		"persister-behind": {
 			title: "Block persister is behind",

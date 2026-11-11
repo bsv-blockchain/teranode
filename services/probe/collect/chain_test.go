@@ -224,6 +224,7 @@ type countingClient struct {
 	notPersistedCalls int
 	minedNotSetCalls  int
 	failBacklog       bool
+	failMinedNotSet   bool
 }
 
 func (c *countingClient) GetBlocksNotPersisted(ctx context.Context, limit int) ([]*model.Block, error) {
@@ -238,6 +239,10 @@ func (c *countingClient) GetBlocksNotPersisted(ctx context.Context, limit int) (
 
 func (c *countingClient) GetBlocksMinedNotSet(ctx context.Context) ([]*model.Block, error) {
 	c.minedNotSetCalls++
+
+	if c.failMinedNotSet {
+		return nil, errors.NewServiceError("mined not set unavailable")
+	}
 
 	return c.ClientI.GetBlocksMinedNotSet(ctx)
 }
@@ -295,22 +300,57 @@ func TestPersisterBehindLowerBoundNote(t *testing.T) {
 	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
 }
 
-func TestBacklogRefreshFailureRetriesNextCollect(t *testing.T) {
+func TestBacklogFailureKeepsFSMAndTipLive(t *testing.T) {
+	rig, cc, _ := newCountingRig(t)
+	rig.addBlock(t, 1)
+
+	cc.failBacklog = true
+
+	s := collectSnapshot(t, rig.chain)
+
+	require.NotEmpty(t, s.FSM)
+	require.Equal(t, uint32(1), s.Tip)
+	require.Equal(t, snapshot.StatusNoData, s.Chain.PersisterBehind.Status)
+	require.Equal(t, snapshot.StatusNoData, s.Chain.BlocksWaitingCount.Status)
+	require.NotNil(t, s.Chain.BlocksWaiting)
+	require.Empty(t, s.Chain.BlocksWaiting)
+}
+
+func TestBacklogFailureWaitsTenSecondsBeforeRetry(t *testing.T) {
 	rig, cc, clock := newCountingRig(t)
 	rig.addBlock(t, 1)
 
 	cc.failBacklog = true
 
-	patch, err := rig.chain.Collect(context.Background())
-	require.Error(t, err)
-	require.Nil(t, patch)
+	collectSnapshot(t, rig.chain)
+	require.Equal(t, 1, cc.notPersistedCalls)
 
 	cc.failBacklog = false
-	*clock = clock.Add(time.Second)
+	*clock = clock.Add(9 * time.Second)
 
 	s := collectSnapshot(t, rig.chain)
-	require.Contains(t, s.Chain.BlocksWaiting, uint32(1))
+	require.Equal(t, 1, cc.notPersistedCalls)
+	require.Equal(t, snapshot.StatusNoData, s.Chain.PersisterBehind.Status)
+
+	*clock = clock.Add(time.Second)
+
+	s = collectSnapshot(t, rig.chain)
 	require.Equal(t, 2, cc.notPersistedCalls)
+	require.Contains(t, s.Chain.BlocksWaiting, uint32(1))
+	require.Equal(t, snapshot.StatusOK, s.Chain.PersisterBehind.Status)
+}
+
+func TestMinedNotSetFailureAlsoLeavesBacklogWithoutData(t *testing.T) {
+	rig, cc, _ := newCountingRig(t)
+	rig.addBlock(t, 1)
+
+	cc.failMinedNotSet = true
+
+	s := collectSnapshot(t, rig.chain)
+
+	require.Equal(t, uint32(1), s.Tip)
+	require.Equal(t, snapshot.StatusNoData, s.Chain.PersisterBehind.Status)
+	require.Equal(t, snapshot.StatusNoData, s.Chain.BlocksWaitingCount.Status)
 }
 
 func TestWaitingHeights(t *testing.T) {

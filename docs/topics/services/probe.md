@@ -123,7 +123,7 @@ When a source fails, every value from that source goes grey with the age of its 
 
 | Stage | Readings | Source |
 |-------|----------|--------|
-| Ingress | Propagation tx/s, subtree intake/s, peers, rejected tx/s, subtree queue, age of the oldest queued subtree | Propagation, Subtree Validation and P2P metrics |
+| Ingress | Propagation tx/s, subtree intake/s, peers, rejected tx/s, subtree queue | Propagation, Subtree Validation and P2P metrics |
 | Validator | Validated tx/s, latency p99, queue fill, spend batch fill, errors/s | Validator metrics (see the note below the table), Aerospike spend batch metrics |
 | Tx meta cache | Hit rate, misses/s, evictions/s, inserts/s, fill, current and previous generation share, entries, size, capacity | Tx meta cache metrics |
 | Block Assembly | State (running or paused), tip lag in blocks, age of the oldest queued transaction, ingest queue fill, subtree fill | Block Assembly metrics |
@@ -163,7 +163,7 @@ A group that has subscribed but has not committed an offset shows the full topic
 ### 4.3 Drain Time
 
 The probe adds the queued blocks and the subtree queue to get one backlog.
-The block part is the count of waiting blocks, up to the persister limit of about 25. It is not limited to the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the best peer height and the tip.
+The block part is the count of waiting blocks, up to the persister limit of about 25. It is not limited to the heights that the panel shows. While the FSM is in `CATCHINGBLOCKS`, the block part is at least the gap between the best peer height and the tip. The best peer height is the highest height that the node accepts from a peer that is not banned. The node caps the height that a peer claims, so one peer cannot inflate the drain time.
 It fits a line through the backlog samples of the last 5 minutes. The drain time is the backlog divided by the drain rate.
 When the backlog grows, the dashboard shows "growing" and no time.
 
@@ -244,7 +244,7 @@ A floor is a fixed limit that you set for one reading. A reading beyond its floo
 Set floors in `probe_floors` as a pipe-separated list of `metric=value` entries:
 
 ```conf
-probe_floors = cache.hitRate=0.9|validator.queueFill=0.8
+probe_floors = cache.hitRate=0.9|validator.latencyP99Sec=2
 ```
 
 For `cache.hitRate`, a value below the floor is bad. For all other keys, a value above the floor is bad.
@@ -254,10 +254,8 @@ For `cache.hitRate`, a value below the floor is bad. For all other keys, a value
 | `cache.hitRate` | fraction from 0 to 1 |
 | `stores.aerospike.readP99Sec` | seconds |
 | `validator.latencyP99Sec` | seconds |
-| `validator.queueFill` | fraction from 0 to 1 |
 | `assembly.queueHeadAgeSec` | seconds |
 | `assembly.tipLagBlocks` | blocks |
-| `ingress.subtreeQueueOldestSec` | seconds |
 | `chain.persisterBehind` | blocks |
 
 The node refuses to start when a floor entry has one of these faults:
@@ -267,14 +265,16 @@ The node refuses to start when a floor entry has one of these faults:
 - It names a key twice.
 - Its key is not in this table.
 
+The probe has no alarm and no floor for `validator.queueFill`, `ingress.subtreeQueueOldestSec` and `assembly.subtreeFill`. These three readings show no data, because no metric feeds them. A floor on `validator.queueFill` or `ingress.subtreeQueueOldestSec` stops the node at startup.
+
 ### 5.4 Cause Chains and Start of Chain
 
 One slow component often causes alarms in other stages. The probe sorts alarms into two cause chains:
 
 | Chain | Order |
 |-------|-------|
-| Throughput | 1. Tx meta cache hit rate, 2. Aerospike read latency, 3. Validator latency and queue, 4. Block Assembly input and tip lag |
-| Catch-up | 1. FSM `CATCHINGBLOCKS`, 2. Block persister behind, 3. Subtree queue age, 4. Validator latency and queue |
+| Throughput | 1. Tx meta cache hit rate, 2. Aerospike read latency, 3. Validator latency, 4. Block Assembly input and tip lag |
+| Catch-up | 1. FSM `CATCHINGBLOCKS`, 2. Block persister behind, 3. Validator latency |
 
 The probe uses the catch-up chain while the FSM is in `CATCHINGBLOCKS`. Otherwise it uses the throughput chain.
 The active alarm that is earliest in the chain gets the tag "Start of chain". Start your investigation there.

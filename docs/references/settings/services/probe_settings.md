@@ -42,6 +42,5 @@ read-only credentials, set the two `probe_*URL` settings to a read-only user.
 
 ### Valid Floor Keys
 
-`cache.hitRate`, `stores.aerospike.readP99Sec`, `validator.latencyP99Sec`, `validator.queueFill`,
-`assembly.queueHeadAgeSec`, `assembly.tipLagBlocks`, `ingress.subtreeQueueOldestSec`,
-`chain.persisterBehind`.
+`cache.hitRate`, `stores.aerospike.readP99Sec`, `validator.latencyP99Sec`,
+`assembly.queueHeadAgeSec`, `assembly.tipLagBlocks`, `chain.persisterBehind`.

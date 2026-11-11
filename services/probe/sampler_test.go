@@ -1028,6 +1028,64 @@ func TestSourceFailureLoggedOncePerStateChange(t *testing.T) {
 	require.Contains(t, infos[0], "flaky")
 }
 
+func TestHungSourceLogsTimeoutOnceAndRecovery(t *testing.T) {
+	logger := &recordingLogger{}
+	release := make(chan struct{})
+
+	hung := newFake("hung", func(_ context.Context, call int) (snapshot.Patch, error) {
+		if call == 2 {
+			<-release
+		}
+
+		return okPatch(func(s *snapshot.Snapshot) {
+			s.Cache.HitRate = snapshot.Reading{Value: 0.8, Status: snapshot.StatusOK}
+		})(context.Background(), call)
+	})
+
+	s := NewSampler([]Collector{hung}, nil, 20*time.Millisecond, time.Hour, "n", WithLogger(logger))
+	startSampler(t, s)
+
+	require.Eventually(t, func() bool {
+		for _, line := range logger.Lines() {
+			if strings.HasPrefix(line, "WARN ") {
+				return true
+			}
+		}
+
+		return false
+	}, 5*time.Second, 5*time.Millisecond)
+
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+
+	require.Eventually(t, func() bool {
+		for _, line := range logger.Lines() {
+			if strings.HasPrefix(line, "INFO ") {
+				return true
+			}
+		}
+
+		return false
+	}, 5*time.Second, 5*time.Millisecond)
+
+	var warns, infos []string
+
+	for _, line := range logger.Lines() {
+		switch {
+		case strings.HasPrefix(line, "WARN "):
+			warns = append(warns, line)
+		case strings.HasPrefix(line, "INFO "):
+			infos = append(infos, line)
+		}
+	}
+
+	require.Len(t, warns, 1)
+	require.Contains(t, warns[0], "hung")
+	require.Contains(t, warns[0], "timed out after 20ms")
+	require.Len(t, infos, 1)
+	require.Contains(t, infos[0], "hung")
+}
+
 func TestStaleChainFieldsCarryTheSourceAge(t *testing.T) {
 	clock := newFakeClock()
 

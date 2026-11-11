@@ -22,6 +22,8 @@ import (
 
 const (
 	readHeaderTimeout   = 10 * time.Second
+	defaultReadTimeout  = 15 * time.Second
+	defaultIdleTimeout  = 60 * time.Second
 	shutdownTimeout     = 5 * time.Second
 	defaultNodeName     = "node"
 	probeStoppedMessage = "probe stopped after 5 consecutive panics"
@@ -38,6 +40,8 @@ type Server struct {
 	now           func() time.Time
 	processHook   func(*snapshot.Snapshot)
 	wsAuthTimeout time.Duration
+	readTimeout   time.Duration
+	idleTimeout   time.Duration
 	wsWriteWait   time.Duration
 	flushEvery    time.Duration
 	rename        func(oldPath, newPath string) error
@@ -73,6 +77,8 @@ func New(logger ulogger.Logger, tSettings *settings.Settings, bc blockchain.Clie
 		p2pClient:        p2pc,
 		now:              time.Now,
 		wsAuthTimeout:    defaultWSAuthTimeout,
+		readTimeout:      defaultReadTimeout,
+		idleTimeout:      defaultIdleTimeout,
 		wsWriteWait:      defaultWSWriteWait,
 		flushEvery:       defaultFlushEvery,
 		rename:           moveAside,
@@ -228,6 +234,8 @@ func (s *Server) Start(ctx context.Context, readyCh chan<- struct{}) error {
 		httpSrv: &http.Server{
 			Handler:           s.newRouter(),
 			ReadHeaderTimeout: readHeaderTimeout,
+			ReadTimeout:       s.readTimeout,
+			IdleTimeout:       s.idleTimeout,
 		},
 	}
 

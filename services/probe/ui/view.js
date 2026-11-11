@@ -180,10 +180,8 @@ export const ALARM_ANCHORS = {
   'cache-hit-rate': 'cache.hitRate',
   'aerospike-read-p99': 'stores.aerospike',
   'validator-latency-p99': 'validator.latencyP99Sec',
-  'validator-queue-fill': 'validator.queueFill',
   'assembly-queue-head-age': 'assembly.queueHeadAgeSec',
   'assembly-tip-lag': 'assembly.tipLagBlocks',
-  'subtree-queue-age': 'ingress.subtreeQueue',
   'persister-behind': 'chain.persisterBehind',
 };
 

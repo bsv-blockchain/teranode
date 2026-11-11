@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -68,6 +69,64 @@ func get(t *testing.T, url, token string) int {
 	require.NoError(t, resp.Body.Close())
 
 	return resp.StatusCode
+}
+
+func waitForClose(t *testing.T, conn net.Conn, within time.Duration) {
+	t.Helper()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(within)))
+
+	buf := make([]byte, 4096)
+
+	for {
+		if _, err := conn.Read(buf); err != nil {
+			require.NotErrorIs(t, err, os.ErrDeadlineExceeded)
+
+			return
+		}
+	}
+}
+
+func TestIdleKeepAliveConnectionIsClosed(t *testing.T) {
+	srv := newTestServer(t, testToken)
+	srv.idleTimeout = 200 * time.Millisecond
+
+	cancel, errCh := startServer(t, srv)
+	defer func() {
+		cancel()
+		<-errCh
+	}()
+
+	conn, err := net.Dial("tcp", srv.Addr())
+	require.NoError(t, err)
+
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.Write([]byte("GET /index.html HTTP/1.1\r\nHost: probe\r\n\r\n"))
+	require.NoError(t, err)
+
+	waitForClose(t, conn, 5*time.Second)
+}
+
+func TestSlowRequestBodyConnectionIsClosed(t *testing.T) {
+	srv := newTestServer(t, testToken)
+	srv.readTimeout = 200 * time.Millisecond
+
+	cancel, errCh := startServer(t, srv)
+	defer func() {
+		cancel()
+		<-errCh
+	}()
+
+	conn, err := net.Dial("tcp", srv.Addr())
+	require.NoError(t, err)
+
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.Write([]byte("POST /api/snooze HTTP/1.1\r\nHost: probe\r\nAuthorization: Bearer " + testToken + "\r\nContent-Length: 100\r\n\r\n{"))
+	require.NoError(t, err)
+
+	waitForClose(t, conn, 5*time.Second)
 }
 
 func TestInitFailsWithEmptyToken(t *testing.T) {
