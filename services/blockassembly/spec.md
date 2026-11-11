@@ -142,7 +142,9 @@ The implementation MAY apply additional usage-derived ceilings; such ceilings ar
 
 **BA-SOLUTION-007.** When any post-validation step in BA-SOLUTION-003 fails after the block has already been submitted, the service MUST invalidate the block via the Blockchain client and continue serving new candidates.
 
-**BA-SOLUTION-008.** A solution that produces an invalid block (fails block validation) MUST cause: (a) the offending candidate's tracking entry to be deleted; (b) a full Reset of the assembler. The chain MUST NOT change as a consequence of an invalid solution.
+**BA-SOLUTION-008.** A solution that produces an invalid block (fails block validation) MUST be rejected, and the chain MUST NOT change as a consequence. What else happens depends on the cause:
+- When the block breaks a consensus rule on data the miner chose (its timestamp, block version or coinbase), local assembly state did not cause the fault and a reset would not stop it recurring. The candidate's tracking entry SHALL be kept, since every miner on that candidate was handed the same coinbase, and the assembler SHALL NOT reset. The entry goes when its TTL lapses or a block is mined, as in bitcoin-sv, where an invalid `submitminingsolution` leaves the candidate alone.
+- Any other validation failure (corrupt body, duplicate transaction, merkle mismatch, processing or storage error) points at what this node built, and MUST cause (a) the offending candidate's tracking entry to be deleted and (b) a full Reset of the assembler.
 
 ### Chain-Tip and Reorg Contract (`BA-REORG-NNN`)
 
@@ -369,7 +371,7 @@ The Block Assembly service exposes 18 gRPC operations. Each is governed by the r
 | **Valid states** | `Running` |
 | **Request validation** | Candidate ID is 32 bytes; nonce + version present; if a coinbase tx is supplied, exactly one input with valid script-sig length |
 | **Success effect** | Block validated, coinbase persisted, block submitted to Blockchain, JobStore wiped (BA-CANDIDATE-005) |
-| **Error responses** | `NotFound` for unknown/expired candidate; `candidate is stale: chain has already advanced past its parent` for linear-extension stale; passthrough block-validation error for invalid block (triggers full Reset); Idle / loading guards |
+| **Error responses** | `InvalidArgument` if the candidate ID is not 32 bytes; `NotFound` for unknown/expired candidate; `candidate is stale: chain has already advanced past its parent` for linear-extension stale; block-validation error for an invalid block (a full Reset only when the fault is in what this node built, per BA-SOLUTION-008); Idle / loading guards |
 | **Idempotency** | No |
 | **Concurrency** | Single-mining-process assumption (BA-CANDIDATE-008) |
 | **Persistence** | Coinbase tx written to TX store; coinbase UTXOs to UTXO store; block submitted to Blockchain |
@@ -600,7 +602,9 @@ stateDiagram-v2
 
 **AC-BA-CANDIDATE-006.1.** Given a candidate was issued before an external block extended the local chain, when the chain has advanced (linear extension) but no JobStore eviction has occurred, then `SubmitMiningSolution` for the now-stale candidate MUST return the stale-chain error per BA-SOLUTION-005.
 
-**AC-BA-SOLUTION-008.1.** Given a candidate is solved with a nonce that produces a block failing block validation, when `SubmitMiningSolution` is invoked, then the chain MUST NOT be modified, the candidate MUST be removed from the JobStore, and the assembler MUST be in `Resetting` (transitioning to `Running`) immediately afterward.
+**AC-BA-SOLUTION-008.1.** Given a solution whose block breaks a consensus rule on data the miner chose (for example a coinbase that overpays), when `SubmitMiningSolution` is invoked, then the chain MUST NOT be modified, the candidate MUST still be recognized, and the assembler MUST NOT reset.
+
+**AC-BA-SOLUTION-008.2.** Given a solution whose block fails validation because of what this node built (for example a duplicate transaction in assembly), when `SubmitMiningSolution` is invoked, then the chain MUST NOT be modified, the candidate MUST be removed from the JobStore, and the assembler MUST be in `Resetting` (transitioning to `Running`) immediately afterward.
 
 **AC-BA-REORG-006.1.** Given a competing chain arrives with a depth from common ancestor of 150 blocks at current chain height of 5000 (coinbase maturity threshold = 100), then the service MUST perform a full reset and MUST NOT execute move-back / move-forward in place.
 
@@ -797,6 +801,15 @@ The current implementation does not validate `InitialMerkleItemsPerSubtree` and 
 The current implementation hardcodes `50` as the anti-creep threshold at `subtreeprocessor/SubtreeProcessor.go:1600`. The spec requires it to be a function of `MinimumMerkleItemsPerSubtree` so the gate scales with deployment configuration.
 *Work required:* replace the hardcoded constant with a derived value (e.g. a small multiple of `MinimumMerkleItemsPerSubtree`); the chosen factor MUST be commented in the source.
 
+**GAP-BA-005.** Coinbase persistence failure does not stop or invalidate the block.
+*Affects:* BA-SOLUTION-003, BA-SOLUTION-007.
+`submitMiningSolution` logs a failed coinbase write to the TX store, then submits the block to the Blockchain service anyway and returns `Ok`. Nothing invalidates the block afterwards, so the chain advances on a block whose coinbase transaction was never persisted. Proof: `TestKnownDefect_CoinbaseStoreFailureStillSubmitsBlock` (build tag `bagaps`).
+*Work required:* fail the submission before `AddBlock` when the coinbase cannot be persisted, or invalidate the block via the Blockchain client per BA-SOLUTION-007.
+
+**GAP-BA-006.** `GetMiningCandidate` is not gated during the startup load of unmined transactions.
+*Affects:* BA-STATE-001, BA-CANDIDATE-001.
+`GetMiningCandidate` checks only that the blockchain FSM is `RUNNING`. During startup recovery the FSM is usually already `RUNNING` while block assembly is still reloading unmined transactions, so a miner can be handed a candidate that omits transactions not yet reloaded; the state matrix says `LoadingUnmined` must reject. From reading the code (not reproduced against a real restart), the subtree processor has not started yet during the startup load, so the call waits up to 5 seconds for a snapshot and then returns an empty-block candidate. Proof: `TestKnownDefect_GetMiningCandidateServesWhileUnminedTxsLoading` (build tag `bagaps`). That test sets the loading flag on a running assembler, so it cannot tell the startup load from a reset reload.
+*Work required:* reject `GetMiningCandidate` with "service not ready" during the startup load only. The `unminedTransactionsLoading` flag is not the right signal: every reset reload sets it too, and in `Resetting` the matrix says "accept (stale data)", which today returns an empty block on the chain tip (pinned by `TestGetMiningCandidate_BlockProcessingStatesBuildOnChainTip`). Gate on a startup-specific signal instead, and keep serving empty candidates during a reset.
 **GAP-BA-004.** A reorg that fails half way does not restore the transaction map.
 *Affects:* BA-REORG-007.
 When a reorg fails after its move-back has run, `reorgBlocks` rolls back the best-block reference and the subtrees, but restores `currentTxMap` by reassigning the pointer it saved before the move-back, and the move-back had added the rolled-back block's transactions into that same map in place. Those transactions stay in the map, which then no longer matches the restored subtrees (`CheckSubtreeProcessor` reports the size mismatch), contrary to BA-REORG-007. In production `handleReorg` follows a failed reorg with a full reset, which hides the stale entries. Proof: `TestKnownDefect_PartialFailureRollbackLeavesMovedBackTx` (build tag `bagaps`).
