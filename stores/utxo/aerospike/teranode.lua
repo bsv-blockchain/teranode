@@ -27,24 +27,6 @@ local BIN_UTXO_SPENDABLE_IN = "utxoSpendableIn"
 local BIN_LAST_SPENT_STATE = "lastSpentState"  -- Tracks last signaled state: "ALLSPENT" or "NOTALLSPENT"
 local BIN_DELETED_CHILDREN = "deletedChildren"  -- Tracks which child transactions have already been deleted
 
--- Values stored in BIN_DELETED_CHILDREN. The key is the pruned child's txid;
--- the value says which pruner wrote it, and so how far it can be trusted.
---
---   true (legacy): written by the pruner before replay markers were verified,
---   and also by addDeletedChildren. It was written for EVERY deleted child,
---   conflicting losers included, so it is only proof of a replay when the
---   output still names that child as its spender. It is honoured only in the
---   already-spent-with-the-same-data branch, exactly as the old Lua did.
---
---   DELETED_CHILD_VERIFIED (2): written by the current pruner under a filter
---   that held only while an output of this record named the child as its
---   spender. That makes it proof on its own, so it is checked against the
---   incoming spender before anything else and survives an unspend.
---
--- Older Lua tests the value for truthiness, so a 2 behaves like true there and
--- a downgrade keeps the old protection.
-local DELETED_CHILD_VERIFIED = 2
-
 -- Status constants
 local STATUS_OK = "OK"
 local STATUS_ERROR = "ERROR"
@@ -345,36 +327,42 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         return response
     end
 
-    -- Record-level answers (conflicting, locked, coinbase immaturity, no utxos)
-    -- are decided here but NOT returned yet. The replay marker below takes
-    -- precedence over every other answer about an output, as it does on both SQL
-    -- paths: a replay of a transaction the pruner removed must be answered as
-    -- one, or the block paths cannot recognise it and its recreated record
-    -- survives. Returning these first answered, for example, CONFLICTING for a
-    -- parent flagged by ProcessConflicting after a reorg, which the legacy block
-    -- path swallows. With no marker hit the response is exactly what it was:
-    -- the whole-record error, nothing written.
-    local recordErrorCode = nil
-    local recordErrorMessage = nil
+    if not ignoreConflicting then
+        if rec[BIN_CONFLICTING] then
+            response[FIELD_STATUS] = STATUS_ERROR
+            response[FIELD_ERROR_CODE] = ERROR_CODE_CONFLICTING
+            response[FIELD_MESSAGE] = MSG_CONFLICTING
 
-    if not ignoreConflicting and rec[BIN_CONFLICTING] then
-        recordErrorCode = ERROR_CODE_CONFLICTING
-        recordErrorMessage = MSG_CONFLICTING
-    elseif not ignoreLocked and rec[BIN_LOCKED] then
-        recordErrorCode = ERROR_CODE_LOCKED
-        recordErrorMessage = MSG_LOCKED
-    else
-        local coinbaseSpendingHeight = rec[BIN_SPENDING_HEIGHT]
-        if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight > currentBlockHeight then
-            recordErrorCode = ERROR_CODE_COINBASE_IMMATURE
-            recordErrorMessage = MSG_COINBASE_IMMATURE .. ", spendable in block " .. coinbaseSpendingHeight .. " or greater. Current block height is " .. currentBlockHeight
+            return response
         end
     end
 
+    if not ignoreLocked then
+        if rec[BIN_LOCKED] then
+            response[FIELD_STATUS] = STATUS_ERROR
+            response[FIELD_ERROR_CODE] = ERROR_CODE_LOCKED
+            response[FIELD_MESSAGE] = MSG_LOCKED
+
+            return response
+        end
+    end
+
+    local coinbaseSpendingHeight = rec[BIN_SPENDING_HEIGHT]
+    if coinbaseSpendingHeight and coinbaseSpendingHeight > 0 and coinbaseSpendingHeight > currentBlockHeight then
+        response[FIELD_STATUS] = STATUS_ERROR
+        response[FIELD_ERROR_CODE] = ERROR_CODE_COINBASE_IMMATURE
+        response[FIELD_MESSAGE] = MSG_COINBASE_IMMATURE .. ", spendable in block " .. coinbaseSpendingHeight .. " or greater. Current block height is " .. currentBlockHeight
+
+        return response
+    end
+
     local utxos = rec[BIN_UTXOS]
-    if recordErrorCode == nil and utxos == nil then
-        recordErrorCode = ERROR_CODE_UTXOS_NOT_FOUND
-        recordErrorMessage = ERR_UTXOS_NOT_FOUND
+    if utxos == nil then
+        response[FIELD_STATUS] = STATUS_ERROR
+        response[FIELD_ERROR_CODE] = ERROR_CODE_UTXOS_NOT_FOUND
+        response[FIELD_MESSAGE] = ERR_UTXOS_NOT_FOUND
+
+        return response
     end
 
     local blockIDs = rec[BIN_BLOCK_IDS]
@@ -387,7 +375,6 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
     local spendableIn = rec[BIN_UTXO_SPENDABLE_IN]
     local spendCount = #spends
     local spentUtxos = rec[BIN_SPENT_UTXOS] or 0
-    local markerHit = false
 
     -- Use direct array indexing instead of iterator for better performance
     for i = 1, spendCount do
@@ -396,55 +383,6 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         local utxoHash = spend['utxoHash']
         local spendingData = spend['spendingData']
         local idx = spend['idx']
-
-        -- Reject a replay of a transaction the pruner already removed.
-        --
-        -- A verified marker (DELETED_CHILD_VERIFIED) is keyed on the INCOMING
-        -- spender, not on what this utxo currently records, and checked before
-        -- every other answer: the record-level ones above, the utxo lookup and
-        -- hash check, frozen, and the already-spent handling. Nesting it under
-        -- bytes_equal(existingSpendingData, spendingData) let unspend disarm it:
-        -- unspend resets the utxo to its bare hash and deliberately leaves
-        -- BIN_DELETED_CHILDREN alone, so the marker survived but matched
-        -- nothing. Matching the spender means the rejection survives any
-        -- rollback of the spend it protects.
-        --
-        -- A legacy marker (true) is NOT checked here. The old pruner wrote one
-        -- for conflicting losers too, so keying it on the spender would refuse
-        -- a loser's later, valid spend of an output it never held. It is
-        -- checked in the already-spent branch below instead.
-        if deletedChildren ~= nil and spendingData ~= nil then
-            local childTxID = spendingDataBytesToTxHex(spendingData)
-            if deletedChildren[childTxID] == DELETED_CHILD_VERIFIED then
-                local error = map()
-
-                error[FIELD_ERROR_CODE] = ERROR_CODE_INVALID_SPEND
-                error[FIELD_MESSAGE] = MSG_INVALID_SPEND
-
-                if utxos ~= nil then
-                    local _, markedSpendingData, markedErrorInfo = getUTXOAndSpendingData(utxos, offset, utxoHash)
-                    if not markedErrorInfo and markedSpendingData then
-                        error[FIELD_SPENDING_DATA] = spendingDataBytesToHex(markedSpendingData)
-                    end
-                end
-
-                errors[idx] = error
-                markerHit = true
-
-                goto continue
-            end
-        end
-
-        if recordErrorCode ~= nil then
-            local error = map()
-
-            error[FIELD_ERROR_CODE] = recordErrorCode
-            error[FIELD_MESSAGE] = recordErrorMessage
-
-            errors[idx] = error
-
-            goto continue
-        end
 
         -- Get and validate specific UTXO
         local utxo, existingSpendingData, errorInfo = getUTXOAndSpendingData(utxos, offset, utxoHash)
@@ -477,9 +415,8 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         if existingSpendingData then
 
             if bytes_equal(existingSpendingData, spendingData) then
-                -- Already spent with same data. A legacy marker for this spender
-                -- is a replay here, because the output names it: the old Lua's
-                -- rule, kept so pre-upgrade markers protect what they did.
+                -- Already spent with same data. A marker for this spender is a
+                -- replay of a transaction the pruner removed.
                 if deletedChildren ~= nil and deletedChildren[spendingDataBytesToTxHex(existingSpendingData)] then
                     local error = map()
 
@@ -524,22 +461,6 @@ function spendMulti(rec, spends, ignoreConflicting, ignoreLocked, currentBlockHe
         spentUtxos = spentUtxos + 1
 
         ::continue::
-    end
-
-    -- A record-level answer means nothing was written. Without a marker hit the
-    -- response is the whole-record error it always was; with one, every spend
-    -- already carries its own error (the marker, or the record-level answer).
-    if recordErrorCode ~= nil then
-        response[FIELD_STATUS] = STATUS_ERROR
-
-        if markerHit then
-            response[FIELD_ERRORS] = errors
-        else
-            response[FIELD_ERROR_CODE] = recordErrorCode
-            response[FIELD_MESSAGE] = recordErrorMessage
-        end
-
-        return response
     end
 
     -- Update the record with the new values
@@ -1367,8 +1288,6 @@ function addDeletedChildren(rec, childHashes)
         deletedChildren = map()
     end
 
-    -- Unverified: nothing here checks that this record's outputs name the
-    -- child, so it writes the legacy value (see DELETED_CHILD_VERIFIED).
     for childHash in list.iterator(childHashes) do
         deletedChildren[childHash] = true
     end

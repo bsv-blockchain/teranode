@@ -23,9 +23,8 @@ import (
 // TestPrunerReplayProtection exercises real pruning and the same-spender replay path.
 func TestPrunerReplayProtection(t *testing.T) {
 	for _, tc := range []struct {
-		name                                                                            string
-		paginated, markerFailure, ttl, unspend, expressions, defensive, replace, freeze bool
-		conflict, lock                                                                  bool
+		name                                                  string
+		paginated, markerFailure, ttl, expressions, defensive bool
 	}{
 		{name: "normal"},
 		{name: "ttl", ttl: true},
@@ -33,47 +32,23 @@ func TestPrunerReplayProtection(t *testing.T) {
 		{name: "paginated_parent", paginated: true},
 		{name: "marker_failure", markerFailure: true},
 		{name: "paginated_marker_failure", paginated: true, markerFailure: true},
-		// Unspend resets the utxo to its bare hash and leaves the marker alone,
-		// so a check nested under "still spent by exactly this child" would stop
-		// firing at the moment a compensating rollback depends on it.
-		{name: "unspent_parent", unspend: true},
-		{name: "paginated_unspent_parent", paginated: true, unspend: true},
-		// After the rollback a replacement transaction takes the output. The
-		// marker must still win over the conflicting-spender answer, or the block
-		// paths cannot identify the replay and its recreated record survives.
-		{name: "replaced_parent", unspend: true, replace: true},
-		// After the rollback the output is frozen. The marker must still win
-		// over the frozen answer, for the same reason.
-		{name: "frozen_parent", unspend: true, freeze: true},
 		// The expression spend path (utxoBatchSize == 1) writes without Lua when
-		// its filter passes. After an unspend the element IS the bare hash, so
-		// the first-seen clause passes; the filter has to consult the marker
-		// too, or the replay goes straight through.
+		// its filter passes. A re-spend of an output that names the child fails
+		// the filter and goes to Lua, which answers the marker.
 		{name: "expressions", expressions: true},
-		{name: "expressions_unspent_parent", expressions: true, unspend: true},
-		{name: "expressions_paginated_unspent_parent", expressions: true, paginated: true, unspend: true},
-		{name: "expressions_replaced_parent", expressions: true, unspend: true, replace: true},
 		// Defensive mode reads the marker off the scanned record and verifies
 		// each spending child before deleting; the marker set must be the same
 		// page-only set in both modes.
 		{name: "defensive", defensive: true},
 		{name: "defensive_paginated_parent", defensive: true, paginated: true},
-		// A record-level answer about the parent (flagged conflicting after a
-		// reorg, or locked) must not hide the marker either: the Lua used to
-		// return those for the whole record before reaching it, answering
-		// CONFLICTING, which the legacy block path swallows, where SQL answers
-		// the replay.
-		{name: "conflicting_parent", conflict: true},
-		{name: "locked_parent", lock: true},
-		{name: "expressions_conflicting_parent", expressions: true, conflict: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testPrunerReplayProtection(t, tc.paginated, tc.markerFailure, tc.ttl, tc.unspend, tc.expressions, tc.defensive, tc.replace, tc.freeze, tc.conflict, tc.lock)
+			testPrunerReplayProtection(t, tc.paginated, tc.markerFailure, tc.ttl, tc.expressions, tc.defensive)
 		})
 	}
 }
 
-func testPrunerReplayProtection(t *testing.T, paginated, markerFailure, ttl, unspendParent, expressions, defensive, replaceParent, freezeParent, conflictParent, lockParent bool) {
+func testPrunerReplayProtection(t *testing.T, paginated, markerFailure, ttl, expressions, defensive bool) {
 	t.Helper()
 	logger := ulogger.New("pruner-replay-test")
 	s := test.CreateBaseTestSettings(t)
@@ -171,8 +146,7 @@ func testPrunerReplayProtection(t *testing.T, paginated, markerFailure, ttl, uns
 
 		pageMarkers, ok := pageRecord.Bins[fields.DeletedChildren.String()].(map[interface{}]interface{})
 		require.True(t, ok)
-		require.Equal(t, fields.DeletedChildVerified, pageMarkers[child.TxID()],
-			"the pruner writes the verified value, the only one the spend checks against the incoming spender")
+		require.Equal(t, true, pageMarkers[child.TxID()], "the pruner writes the marker value the spend checks")
 
 		if paginated {
 			masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parent.TxIDChainHash().CloneBytes())
@@ -186,45 +160,9 @@ func testPrunerReplayProtection(t *testing.T, paginated, markerFailure, ttl, uns
 			}
 		}
 	}
-	if unspendParent {
-		utxoHash, hashErr := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[outputIndex], outputIndex)
-		require.NoError(t, hashErr)
-		require.NoError(t, store.Unspend(ctx, []*utxo.Spend{{
-			TxID:         parent.TxIDChainHash(),
-			Vout:         outputIndex,
-			UTXOHash:     utxoHash,
-			SpendingData: spendpkg.NewSpendingData(child.TxIDChainHash(), 0),
-		}}))
-
-		record, getErr := client.Get(nil, parentKeyForOutput(t, store, parent.TxIDChainHash(), outputIndex, s.UtxoStore.UtxoBatchSize))
-		require.NoError(t, getErr)
-		require.Contains(t, record.Bins[fields.DeletedChildren.String()], child.TxID(), "unspend must leave the replay marker in place")
-	}
-	if freezeParent {
-		utxoHash, hashErr := util.UTXOHashFromOutput(parent.TxIDChainHash(), parent.Outputs[outputIndex], outputIndex)
-		require.NoError(t, hashErr)
-		require.NoError(t, store.FreezeUTXOs(ctx, []*utxo.Spend{{TxID: parent.TxIDChainHash(), Vout: outputIndex, UTXOHash: utxoHash}}, s))
-	}
-	if conflictParent {
-		require.NoError(t, client.Put(nil, parentKeyForOutput(t, store, parent.TxIDChainHash(), outputIndex, s.UtxoStore.UtxoBatchSize),
-			aerospike.BinMap{fields.Conflicting.String(): true}), "fixture: the parent is flagged conflicting")
-	}
-	if lockParent {
-		require.NoError(t, client.Put(nil, parentKeyForOutput(t, store, parent.TxIDChainHash(), outputIndex, s.UtxoStore.UtxoBatchSize),
-			aerospike.BinMap{fields.Locked.String(): true}), "fixture: the parent is locked")
-	}
-	if replaceParent {
-		replacement := bt.NewTx()
-		require.NoError(t, replacement.From(parent.TxID(), outputIndex, parent.Outputs[outputIndex].LockingScript.String(), parent.Outputs[outputIndex].Satoshis))
-		require.NoError(t, replacement.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 2999))
-		_, _, err = store.SpendAndCreate(ctx, replacement, 1200)
-		require.NoError(t, err, "fixture: the replacement takes the output")
-	}
 
 	_, _, err = store.SpendAndCreate(ctx, child, 1200)
 	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "pruned confirmed child must not be recreated")
-	require.NotErrorIs(t, err, errors.ErrSpent, "the marker must win over the conflicting-spender answer")
-	require.NotErrorIs(t, err, errors.ErrFrozen, "the marker must win over the frozen answer")
 	require.Contains(t, err.Error(), "spending transaction was pruned")
 	exists, err := client.Exists(nil, childKey)
 	require.NoError(t, err)
@@ -432,7 +370,7 @@ func TestPrunedReplayRollbackKeepsSiblingHistoricalSpend(t *testing.T) {
 
 	// P carries C's marker, Q does not, and C is still present.
 	require.NoError(t, client.Put(nil, pKey, aerospike.BinMap{
-		fields.DeletedChildren.String(): map[interface{}]interface{}{c.TxID(): fields.DeletedChildVerified},
+		fields.DeletedChildren.String(): map[interface{}]interface{}{c.TxID(): true},
 	}))
 
 	pRecord, err := client.Get(nil, pKey)

@@ -545,5 +545,5 @@ func TestMixedExternalAndNormalTransactions(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, parentRecord)
 	deletedChildren := parentRecord.Bins[fields.DeletedChildren.String()].(map[interface{}]interface{})
-	assert.Equal(t, fields.DeletedChildVerified, deletedChildren[txIDNormal.String()], "Normal tx with inputs should update parent with a verified marker")
+	assert.Equal(t, true, deletedChildren[txIDNormal.String()], "Normal tx with inputs should update parent with a marker")
 }

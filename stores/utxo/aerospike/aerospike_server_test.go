@@ -2273,18 +2273,13 @@ func TestRespendExpiredChild(t *testing.T) {
 	assert.Contains(t, spend[0].Err.Error(), "spending transaction was pruned")
 }
 
-// TestReplayMarkerVersions pins how the Lua spend reads the two values a
-// deletedChildren marker can hold.
-//
-// The pruner before replay markers were verified wrote true for every deleted
-// child, conflicting losers included, and the old Lua honoured it only when the
-// output still named that child. The current pruner writes
-// fields.DeletedChildVerified, under a filter that held while the output named
-// the child, and that value is checked against the incoming spender. A legacy
-// marker for a loser L must therefore never refuse L's spend of an output L
-// does not hold: doing so turns a block the rest of the network accepts into an
-// invalid one on a node that kept pre-upgrade data.
-func TestReplayMarkerVersions(t *testing.T) {
+// TestReplayMarkerRule pins how the Lua spend reads a deletedChildren marker:
+// it refuses the marked child only while the output still names that child as
+// its spender. An older pruner wrote a marker for every deleted child,
+// conflicting losers included, so a marker for a loser L must never refuse L's
+// spend of an output L does not hold: doing so turns a block the rest of the
+// network accepts into an invalid one.
+func TestReplayMarkerRule(t *testing.T) {
 	type outputState int
 
 	const (
@@ -2302,12 +2297,9 @@ func TestReplayMarkerVersions(t *testing.T) {
 		wantPruned bool
 		wantSpent  bool
 	}{
-		{name: "legacy_marker_loser_output_held_by_other", marker: true, output: outputSpentByOther, wantSpent: true},
-		{name: "legacy_marker_loser_output_unspent", marker: true, output: outputUnspent},
-		{name: "legacy_marker_output_names_spender", marker: true, output: outputSpentBySpender, wantPruned: true},
-		{name: "verified_marker_output_unspent", marker: fields.DeletedChildVerified, output: outputUnspent, wantPruned: true},
-		{name: "verified_marker_output_held_by_other", marker: fields.DeletedChildVerified, output: outputSpentByOther, wantPruned: true},
-		{name: "verified_marker_output_names_spender", marker: fields.DeletedChildVerified, output: outputSpentBySpender, wantPruned: true},
+		{name: "marker_loser_output_held_by_other", marker: true, output: outputSpentByOther, wantSpent: true},
+		{name: "marker_loser_output_unspent", marker: true, output: outputUnspent},
+		{name: "marker_output_names_spender", marker: true, output: outputSpentBySpender, wantPruned: true},
 	}
 
 	for _, mode := range []struct {
@@ -2362,10 +2354,10 @@ func TestReplayMarkerVersions(t *testing.T) {
 						require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned)
 					case tc.wantSpent:
 						require.Error(t, err)
-						require.NotErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "a legacy marker for a spender the output never named must not answer as a replay")
+						require.NotErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "a marker for a spender the output never named must not answer as a replay")
 						require.ErrorIs(t, err, errors.ErrSpent)
 					default:
-						require.NoError(t, err, "a legacy marker for a spender the output never named must not refuse its spend")
+						require.NoError(t, err, "a marker for a spender the output never named must not refuse its spend")
 					}
 				})
 			}
@@ -2409,13 +2401,19 @@ func TestBatchedSpendKeepsReplayPastTheErrorCap(t *testing.T) {
 	require.NoError(t, replay.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 30000))
 	require.NoError(t, other.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 20000))
 
-	_, err := store.Spend(ctx, other, 1)
+	// C's original spend of every output, then the first 10 released and taken
+	// by another transaction, so only the eleventh output still names C.
+	replaySpends, err := store.Spend(ctx, replay, 1)
+	require.NoError(t, err, "fixture: C's original spend")
+	require.NoError(t, store.Unspend(ctx, replaySpends[:inputs-1]))
+
+	_, err = store.Spend(ctx, other, 1)
 	require.NoError(t, err, "fixture: the first 10 outputs are spent by another transaction")
 
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), parents[inputs-1].TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
 	require.NoError(t, client.PutBins(nil, key, aerospike.NewBin(fields.DeletedChildren.String(),
-		map[interface{}]interface{}{replay.TxIDChainHash().String(): fields.DeletedChildVerified})))
+		map[interface{}]interface{}{replay.TxIDChainHash().String(): true})))
 
 	spends, err := store.Spend(ctx, replay, 1)
 	require.Error(t, err)
