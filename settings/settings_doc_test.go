@@ -909,7 +909,7 @@ var checkedRowsPerDoc = map[string]int{
 	"propagation_settings.md":       13,
 	"pruner_settings.md":            25,
 	"rpc_settings.md":               11,
-	"subtreevalidation_settings.md": 26,
+	"subtreevalidation_settings.md": 27,
 	"utxopersister_settings.md":     2,
 	"validator_settings.md":         20,
 	"aerospike_settings.md":         13,
