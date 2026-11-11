@@ -121,9 +121,6 @@ func TestQuickValidateBlock(t *testing.T) {
 		block.Header.HashMerkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, 0)
 		require.NoError(t, err, "Should create merkle root hash without error")
 
-		// Setup Get expectation for checking existing transactions (used for BlockID reuse on retry)
-		suite.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
-
 		// Setup UTXO store expectations for creating all transactions (including coinbase)
 		// Use mock.Anything for the transaction since the order may vary
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).Return(&meta.Data{}, nil, nil).Maybe()
@@ -290,12 +287,16 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).
 			Return((*meta.Data)(nil), []*utxo.Spend{}, errors.ErrTxExists).Maybe()
 
-		// Mock SetMinedMulti - should be called with both transaction hashes
-		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.MatchedBy(func(hashes []*chainhash.Hash) bool {
-			return len(hashes) == 2
-		}), mock.MatchedBy(func(info utxo.MinedBlockInfo) bool {
-			return info.BlockID == 50 && info.BlockHeight == 100
-		})).Return(map[chainhash.Hash][]uint32{}, nil).Once()
+		// SetMinedMulti is called once per subtree, each with that subtree's index
+		for subtreeIdx, tx := range regularTxs {
+			txHash := tx.TxIDChainHash()
+
+			suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.MatchedBy(func(hashes []*chainhash.Hash) bool {
+				return len(hashes) == 1 && hashes[0].IsEqual(txHash)
+			}), mock.MatchedBy(func(info utxo.MinedBlockInfo) bool {
+				return info.BlockID == 50 && info.BlockHeight == 100 && info.SubtreeIdx == subtreeIdx
+			})).Return(map[chainhash.Hash][]uint32{}, nil).Once()
+		}
 
 		// Mock the spend phase
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
@@ -782,7 +783,8 @@ func setupQuickValidateMocks(s *CatchupTestSuite) {
 	s.MockBlockchain.On("AssignBlockID", mock.Anything, mock.Anything).Return(uint64(1), nil).Maybe()
 	s.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
-	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
+	// Quick validation no longer reads a transaction's block ids, so Get may not be called.
+	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found")).Maybe()
 	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCreateOnly()).Return(&meta.Data{}, nil, nil).Maybe()
 	// A list the store refuses as malformed is applied one combined call per transaction.
 	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCombined()).Return(&meta.Data{}, []*utxo.Spend{}, nil).Maybe()

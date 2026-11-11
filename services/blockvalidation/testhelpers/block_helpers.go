@@ -49,9 +49,10 @@ func CreateTestBlocksWithPrev(t *testing.T, count int, prevHash *chainhash.Hash)
 		MineHeader(header)
 
 		blocks[i] = &model.Block{
-			Header:     header,
-			CoinbaseTx: coinbaseTx,
-			Height:     uint32(i), // goling:nolint
+			Header:           header,
+			CoinbaseTx:       coinbaseTx,
+			TransactionCount: 1,
+			Height:           uint32(i), // goling:nolint
 			// Add minimal valid block data - can be expanded as needed
 		}
 

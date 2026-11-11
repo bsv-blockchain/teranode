@@ -128,31 +128,34 @@ func dahParityCases() []dahParityCase {
 			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
 		{name: "conflicting, no DAH -> set even if unspent", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: true, conflicting: true,
 			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
-		{name: "conflicting, existing lower DAH -> unchanged (no bump)", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, conflicting: true, dah: dahParityFixed(5),
-			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
+		{name: "conflicting, existing DAH below the mined floor -> raised to the floor", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, conflicting: true, dah: dahParityFixed(5),
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
 		{name: "conflicting, existing higher DAH -> unchanged", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, conflicting: true, dah: dahParityFixed(dahParityHighDAH),
 			wantDAH: dahParityFixed(dahParityHighDAH), wantChildDAH: dahParityFixed(dahParityHighDAH)},
 		{name: "conflicting, not on longest chain, no DAH -> set", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: false, unminedSince: dahParityInt(900), conflicting: true,
 			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
 		// conflicting + would-clear: a conflicting record is never cleared, even when not eligible.
-		{name: "conflicting, not all spent, existing DAH -> never cleared", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, conflicting: true, dah: dahParityFixed(5),
-			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
-		{name: "conflicting, off longest chain, existing DAH -> never cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, unminedSince: dahParityInt(900), conflicting: true, dah: dahParityFixed(5),
-			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
+		{name: "conflicting, not all spent, existing DAH below the mined floor -> raised, never cleared", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, conflicting: true, dah: dahParityFixed(5),
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
+		{name: "conflicting, not all spent, existing DAH at the mined floor -> unchanged, never cleared", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, conflicting: true, dah: dahParityFresh,
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
+		{name: "conflicting, off longest chain, existing DAH below the mined floor -> raised, never cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: false, unminedSince: dahParityInt(900), conflicting: true, dah: dahParityFixed(5),
+			wantDAH: dahParityFresh, wantChildDAH: dahParityFresh},
 		// Non-external master: Lua sets/clears the master DAH but emits no signal, so the child is untouched.
 		{name: "non-external, all spent, no DAH -> master set, child untouched", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, notExternal: true,
 			wantDAH: dahParityFresh, wantChildDAH: dahParityAbsent},
 		{name: "non-external, not all spent, stale DAH -> master cleared, child untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, notExternal: true, dah: dahParityFixed(5),
 			wantDAH: dahParityAbsent, wantChildDAH: dahParityFixed(5)},
 		// A master without totalExtraRecs is handled by Lua as a pagination record: DAH never changes
-		// (conflicting is evaluated first, so it still sets there). The all-spent variant is not
+		// (a pagination record never stamps itself, conflicting or not, so a conflicting one stays
+		// absent too: its deleteAtHeight only comes from its master). The all-spent variant is not
 		// tested: Lua then signals ALLSPENT and the client's follow-up fails on the missing bin.
 		{name: "no totalExtraRecs, not all spent, no DAH -> stays absent", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true,
 			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
 		{name: "no totalExtraRecs, not all spent, stale DAH -> untouched", spentUtxos: 1, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, dah: dahParityFixed(5),
 			wantDAH: dahParityFixed(5), wantChildDAH: dahParityFixed(5)},
-		{name: "no totalExtraRecs, conflicting, no DAH -> set", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, conflicting: true,
-			wantDAH: dahParityFresh, wantChildDAH: dahParityAbsent},
+		{name: "no totalExtraRecs, conflicting, no DAH -> stays absent", spentUtxos: 0, spentExtraRecs: 0, onLongestChain: true, noTotalExtraRecs: true, conflicting: true,
+			wantDAH: dahParityAbsent, wantChildDAH: dahParityAbsent},
 		// Missing counter bins: Lua compares nil values (nil == nil is true, nil == 4 is false); an
 		// unguarded expression read of a missing bin is a silent no-op, so it must be guarded.
 		{name: "spentUtxos bin missing, recordUtxos present, stale DAH -> cleared", spentUtxos: 4, spentExtraRecs: 1, onLongestChain: true, noSpentUtxos: true, dah: dahParityFixed(5),

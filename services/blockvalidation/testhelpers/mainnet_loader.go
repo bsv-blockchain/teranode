@@ -127,8 +127,9 @@ func loadMainnetBlocks() ([]*model.Block, []*model.BlockHeader, error) {
 			}
 
 			blocks[i] = &model.Block{
-				Header: header,
-				Height: height,
+				Header:           header,
+				TransactionCount: 1,
+				Height:           height,
 			}
 		}
 
