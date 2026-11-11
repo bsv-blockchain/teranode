@@ -34,6 +34,7 @@ func TestAerospikePolicyLongdescsNameOnlyParsedKeys(t *testing.T) {
 		"COMMIT_ALL vs COMMIT_MASTER",
 		"MaxConcurrentThreads",
 		"SendSetName",
+		"including UTXO creation",
 		"MaxConcurrentNodes",
 		"RecordQueueSize",
 		"IncludeBinData",

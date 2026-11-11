@@ -82,7 +82,8 @@ For the consistency mode of the UTXO namespace, see [UTXO Store](../../../topics
 **Write Policy** (for single record writes):
 
 - `settings.conf`: 1s total, 1s socket
-- Used for UTXO creation and updates
+- Used for unspend, the creation lock record, record deletes and the conflict write-ahead log
+- UTXO creation does not use it: creation is batched and uses the Batch Policy
 
 **Query Policy** (for query operations):
 
