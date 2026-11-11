@@ -1661,20 +1661,16 @@ func (sc *SyncCoordinator) considerReputationRecovery() {
 }
 
 // sendSyncTriggerToKafka sends a sync trigger message to Kafka.
-// syncPeer is the canonical libp2p ID string. It returns true only when the
+// syncPeer is the canonical libp2p ID string and dataHubURL is the URL the
+// caller read from the same registry lookup as bestHash, so hash and URL always
+// come from one read. It returns true only when the
 // trigger was dropped because the producer is backlogged, the one outcome a
 // later retry can fix. Every caller holds decisionMu, so the send is
 // non-blocking: a blocking Publish against a dead broker would park the lock
 // and with it every other sync decision.
-func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer string, bestHash string) (backlogged bool) {
+func (sc *SyncCoordinator) sendSyncTriggerToKafka(syncPeer, bestHash, dataHubURL string) (backlogged bool) {
 	if sc.blocksKafkaProducerClient == nil || bestHash == "" {
 		return false
-	}
-
-	// Get the peer's DataHub URL if available
-	dataHubURL := ""
-	if peerInfo, exists, err := sc.registryGetPeer(syncPeer); err == nil && exists {
-		dataHubURL = peerInfo.DataHubURL
 	}
 
 	// Enforce the operator blacklist on the URL read from the registry: it may
@@ -1742,7 +1738,7 @@ func (sc *SyncCoordinator) sendSyncMessage(peerID string) (deferred bool, err er
 
 	if bestHash != "" {
 		sc.logger.Infof("[sendSyncMessage] Sending sync trigger to Kafka for peer %s with hash %s", peerID, bestHash)
-		if sc.sendSyncTriggerToKafka(peerID, bestHash) {
+		if sc.sendSyncTriggerToKafka(peerID, bestHash, peerInfo.DataHubURL) {
 			if sc.deferredTriggerPeer != peerID {
 				sc.logger.Warnf("[sendSyncMessage] Kafka blocks producer backlogged, deferring sync trigger for peer %s; retrying each FSM tick", peerID)
 			}
@@ -1759,7 +1755,11 @@ func (sc *SyncCoordinator) sendSyncMessage(peerID string) (deferred bool, err er
 // retryDeferredSyncTrigger re-sends a sync trigger that a backlogged producer
 // dropped, while the peer it was built for still holds the slot. The message is
 // rebuilt from the registry, so the blacklist check runs again and the hash is
-// the peer's current one. It requires decisionMu to be held.
+// the peer's current one. A failed registry lookup keeps the trigger deferred:
+// nothing else re-sends it while the peer holds the slot, so clearing it on a
+// transient error would leave that peer claimed with no trigger ever sent. Only
+// the slot moving on, a send, or a permanent drop ends the deferral. It
+// requires decisionMu to be held.
 func (sc *SyncCoordinator) retryDeferredSyncTrigger() {
 	peerID := sc.deferredTriggerPeer
 	if peerID == "" {
@@ -1771,7 +1771,6 @@ func (sc *SyncCoordinator) retryDeferredSyncTrigger() {
 	}
 	deferred, err := sc.sendSyncMessage(peerID)
 	if err != nil {
-		sc.deferredTriggerPeer = ""
 		return
 	}
 	if !deferred {

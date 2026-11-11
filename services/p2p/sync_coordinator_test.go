@@ -14,8 +14,10 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/bsv-blockchain/teranode/util/kafka"
+	kafkamessage "github.com/bsv-blockchain/teranode/util/kafka/kafka_message"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func newTestSyncCoordinator(t *testing.T) (*SyncCoordinator, *blockchain.CentralizedPeerRegistry) {
@@ -1121,12 +1123,12 @@ func TestSyncCoordinator_MaxUnvalidatedAdvertisedHeightLead_AllowsProbeAtTenThou
 
 func TestSyncCoordinator_SendSyncTriggerToKafka_NilProducerNoOp(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
-	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "abc") })
+	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "abc", "http://p") })
 }
 
 func TestSyncCoordinator_SendSyncTriggerToKafka_EmptyHashNoOp(t *testing.T) {
 	sc, _ := newTestSyncCoordinator(t)
-	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "") })
+	require.NotPanics(t, func() { sc.sendSyncTriggerToKafka("p", "", "http://p") })
 }
 
 func TestSyncCoordinator_StartStop_ExitsCleanly(t *testing.T) {
@@ -1300,6 +1302,63 @@ func TestSyncCoordinator_DeferredTriggerDroppedWhenSlotMoves(t *testing.T) {
 	sc.decisionMu.Unlock()
 
 	require.Empty(t, producer.PublishChannel(), "a trigger for a peer that lost the slot must not be re-sent")
+	require.Empty(t, sc.deferredTriggerPeer)
+}
+
+// failingGetPeerRegistry wraps a real registry client and fails GetPeer while
+// fail is set, standing in for a transient registry outage.
+type failingGetPeerRegistry struct {
+	blockchain.PeerRegistryClientI
+	fail bool
+}
+
+func (f *failingGetPeerRegistry) GetPeer(ctx context.Context, peerID string) (*blockchain.PeerInfo, bool, error) {
+	if f.fail {
+		return nil, false, errors.NewServiceError("registry unavailable")
+	}
+	return f.PeerRegistryClientI.GetPeer(ctx, peerID)
+}
+
+// A transient registry error during a retry must not end the deferral: the peer
+// still holds the slot and nothing else re-sends its trigger, so once the
+// registry and the producer recover the next retry has to deliver it, carrying
+// the DataHub URL read with the hash rather than an empty one.
+func TestSyncCoordinator_DeferredTriggerSurvivesRegistryError(t *testing.T) {
+	sc, reg := newTestSyncCoordinator(t)
+	flaky := &failingGetPeerRegistry{PeerRegistryClientI: sc.registry}
+	sc.registry = flaky
+	producer := kafka.NewKafkaAsyncProducerMockWithBuffer(1)
+	sc.blocksKafkaProducerClient = producer
+	producer.PublishChannel() <- &kafka.Message{Key: []byte("backlog")}
+
+	reg.Register(&blockchain.PeerInfo{ID: "first", DataHubURL: "http://first", Height: 100,
+		BlockHash: syncCoordinatorTestHash(t)})
+
+	sc.decisionMu.Lock()
+	defer sc.decisionMu.Unlock()
+	sc.mu.Lock()
+	sc.currentSyncPeer = "first"
+	sc.mu.Unlock()
+	deferred, err := sc.sendSyncMessage("first")
+	require.NoError(t, err)
+	require.True(t, deferred)
+
+	// The producer drains, but the registry is down for this tick.
+	<-producer.PublishChannel()
+	flaky.fail = true
+	sc.retryDeferredSyncTrigger()
+	require.Empty(t, producer.PublishChannel())
+	require.Equal(t, "first", sc.deferredTriggerPeer, "a registry error must keep the trigger deferred")
+
+	// The registry recovers; the next tick delivers the trigger with its URL.
+	flaky.fail = false
+	sc.retryDeferredSyncTrigger()
+	require.Len(t, producer.PublishChannel(), 1)
+	sent := <-producer.PublishChannel()
+	var msg kafkamessage.KafkaBlockTopicMessage
+	require.NoError(t, proto.Unmarshal(sent.Value, &msg))
+	require.Equal(t, syncCoordinatorTestHash(t).String(), msg.Hash)
+	require.Equal(t, "http://first", msg.URL)
 	require.Empty(t, sc.deferredTriggerPeer)
 }
 
@@ -1592,7 +1651,7 @@ func TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL(t *testing
 	})
 
 	// Control: without a blacklist entry the trigger is published.
-	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String(), "http://evil.example")
 	select {
 	case <-producer.PublishChannel():
 	default:
@@ -1602,7 +1661,7 @@ func TestSyncCoordinator_SendSyncTriggerToKafka_RefusesBlacklistedURL(t *testing
 	// Operator blacklists the host after the URL was stored.
 	sc.settings.SubtreeValidation.BlacklistedBaseURLs = map[string]struct{}{"http://evil.example": {}}
 
-	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String())
+	sc.sendSyncTriggerToKafka("peer", syncCoordinatorTestHash(t).String(), "http://evil.example")
 	select {
 	case published := <-producer.PublishChannel():
 		t.Fatalf("sync trigger with blacklisted DataHubURL must not be published: %+v", published)
