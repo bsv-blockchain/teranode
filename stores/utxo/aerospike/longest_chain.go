@@ -206,7 +206,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				batchRecords := slots.records[:n]
 				batchHashes := slots.hashes[:n]
 
-				if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+				if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
 					// A one-record batch goes out as a single operate, so a node that does not serve
 					// sub-op 14 fails the whole call rather than the record: resend it the same way.
 					if native && hasResultCode(err, types.PARAMETER_ERROR) {

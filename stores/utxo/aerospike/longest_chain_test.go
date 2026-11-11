@@ -1,11 +1,14 @@
 package aerospike_test
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -842,4 +845,155 @@ func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
 
 		checkControls()
 	})
+}
+
+// TestMarkTransactionsOnLongestChain_NativeResultsAndFallback drives the native sub-op 14 path against a
+// stock server by answering its records through SetBatchOperateFn, and checks that records a node
+// rejects with PARAMETER_ERROR, per record or for the whole batch, are written down the expression path
+// before the call returns, leaving the other native ops on.
+func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
+	logger := ulogger.NewErrorTestLogger(t)
+	tSettings := test.CreateBaseTestSettings(t)
+	tSettings.UtxoStore.MaxMinedBatchSize = 4
+	tSettings.UtxoStore.MaxMinedRoutines = 2
+
+	client, store, ctx, deferFn := initAerospike(t, tSettings, logger)
+	t.Cleanup(deferFn)
+	t.Cleanup(func() { store.SetBatchOperateFn(nil) })
+
+	const height = 1000
+
+	require.NoError(t, store.SetBlockHeight(height))
+
+	retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
+	require.NotZero(t, retention)
+
+	// isNative: a native record carries one TeranodeModifyOp; the restamping expression write carries ten.
+	isNative := func(r aerospike.BatchRecordIfc) bool {
+		bw, ok := r.(*aerospike.BatchWrite)
+		return ok && len(bw.Ops) == 1
+	}
+
+	seed := func(t *testing.T, prefix string, n int) []chainhash.Hash {
+		t.Helper()
+
+		out := make([]chainhash.Hash, n)
+		for i := range out {
+			out[i] = chainhash.HashH([]byte(fmt.Sprintf("native-fallback-%s-%d", prefix, i)))
+
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), out[i][:])
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, key, aerospike.BinMap{
+				fields.TxID.String():           out[i].CloneBytes(),
+				fields.TotalExtraRecs.String(): 0,
+				fields.SpentUtxos.String():     1,
+				fields.RecordUtxos.String():    1,
+				fields.BlockIDs.String():       []interface{}{1},
+				fields.BlockHeights.String():   []interface{}{900},
+				fields.UnminedSince.String():   50,
+			}))
+		}
+
+		return out
+	}
+
+	// requireMarked checks the expression path's on-chain result: unminedSince cleared, DAH stamped.
+	requireMarked := func(t *testing.T, hashes []chainhash.Hash) {
+		t.Helper()
+
+		for i, h := range hashes {
+			key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), h[:])
+			require.NoError(t, err)
+
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Nil(t, rec.Bins[fields.UnminedSince.String()], "tx %d", i)
+			require.Equal(t, height+1+retention, rec.Bins[fields.DeleteAtHeight.String()], "tx %d", i)
+		}
+	}
+
+	t.Run("records rejected one by one are resent down the expression path", func(t *testing.T) {
+		hashes := seed(t, "per-record", 10)
+		store.SetNativeMarkForTest(true)
+
+		var nativeCalls atomic.Int64
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) > 0 && isNative(records[0]) {
+				nativeCalls.Add(1)
+
+				for _, r := range records {
+					r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+				}
+
+				return nil
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true))
+		require.Positive(t, nativeCalls.Load())
+		require.False(t, store.UsesNativeMark(), "a sub-op 14 rejection turns the native mark off")
+		requireMarked(t, hashes)
+	})
+
+	t.Run("a batch rejected as a whole is resent down the expression path", func(t *testing.T) {
+		hashes := seed(t, "whole-batch", 5)
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) > 0 && isNative(records[0]) {
+				return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+			}
+
+			return client.BatchOperate(policy, records)
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true))
+		require.False(t, store.UsesNativeMark())
+		requireMarked(t, hashes)
+	})
+
+	t.Run("native results: OK, missing and a failure", func(t *testing.T) {
+		hashes := seed(t, "results", 3)
+		store.SetNativeMarkForTest(true)
+
+		ok := map[interface{}]interface{}{"status": "OK"}
+
+		store.SetBatchOperateFn(func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			for i, r := range records {
+				br := r.BatchRec()
+
+				switch i {
+				case 0:
+					br.Record = &aerospike.Record{Bins: aerospike.BinMap{"SUCCESS": ok}}
+				case 1:
+					br.Err = &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
+				default:
+					br.Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+				}
+			}
+
+			return nil
+		})
+
+		err := store.MarkTransactionsOnLongestChain(ctx, hashes, true)
+		require.Error(t, err, "the failed record is returned")
+		require.True(t, store.UsesNativeMark(), "missing records and failures leave the native mark on")
+	})
+}
+
+// TestMarkTransactionsOnLongestChain_NativeProbe runs the sub-op 14 probe against the server the tests
+// start: a stock server rejects the native op, a mod-teranode fork with sub-op 14 serves it.
+func TestMarkTransactionsOnLongestChain_NativeProbe(t *testing.T) {
+	_, store, ctx, deferFn := initAerospike(t, test.CreateBaseTestSettings(t), ulogger.NewErrorTestLogger(t))
+	t.Cleanup(deferFn)
+
+	want := os.Getenv("TERANODE_TEST_AEROSPIKE_NATIVE_OPS") == "true"
+	require.Equal(t, want, store.DetectNativeMarkForTest(ctx))
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	require.False(t, store.DetectNativeMarkForTest(cancelled), "a cancelled context aborts the probe")
 }
