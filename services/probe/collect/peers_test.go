@@ -65,12 +65,12 @@ func collectPeers(t *testing.T, p *Peers) (snapshot.Snapshot, error) {
 	return s, nil
 }
 
-func TestPeersReportsMaxPeerHeight(t *testing.T) {
+func TestPeersReportsMaxCappedPeerHeight(t *testing.T) {
 	p := NewPeers(&fakePeers{peers: []*p2p.PeerInfo{
 		{Height: 10, AdvertisedHeight: 50},
 		{Height: 70},
 		nil,
-		{Height: 20, AdvertisedHeight: 30},
+		{Height: 20, AdvertisedHeight: 500_000_000},
 	}})
 
 	s, err := collectPeers(t, p)
@@ -79,6 +79,19 @@ func TestPeersReportsMaxPeerHeight(t *testing.T) {
 	require.Equal(t, "p2p", p.Name())
 	require.Equal(t, uint32(70), s.PeerTip)
 	require.Equal(t, snapshot.Reading{Value: 70, Status: snapshot.StatusOK}, s.Chain.PeerHeight)
+}
+
+func TestPeersIgnoresBannedPeers(t *testing.T) {
+	p := NewPeers(&fakePeers{peers: []*p2p.PeerInfo{
+		{Height: 40},
+		{Height: 900, IsBanned: true},
+	}})
+
+	s, err := collectPeers(t, p)
+	require.NoError(t, err)
+
+	require.Equal(t, uint32(40), s.PeerTip)
+	require.Equal(t, snapshot.Reading{Value: 40, Status: snapshot.StatusOK}, s.Chain.PeerHeight)
 }
 
 func TestPeersWithNoPeersIsLiveZero(t *testing.T) {

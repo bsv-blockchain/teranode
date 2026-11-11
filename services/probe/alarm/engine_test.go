@@ -18,7 +18,6 @@ const (
 	warmup = 10 * time.Minute
 
 	keyLatency    = "validator.latencyP99Sec"
-	keyQueueFill  = "validator.queueFill"
 	keyHitRate    = "cache.hitRate"
 	keyFill       = "cache.fill"
 	keyPrevGen    = "cache.previousGenFrac"
@@ -390,10 +389,10 @@ func TestStartOfChainIsFirstBadStageInCauseOrder(t *testing.T) {
 	})
 
 	t.Run("catchup", func(t *testing.T) {
-		floors := map[string]float64{keyPersister: 10, keySubtreeAge: 60, keyQueueFill: 0.8}
+		floors := map[string]float64{keyPersister: 10, keyLatency: 2}
 		r := newRig(t, floors)
 
-		bad := map[string]float64{keySubtreeAge: 120, keyQueueFill: 0.9}
+		bad := map[string]float64{keyLatency: 3}
 		s := r.evalFSM(e0, "CATCHINGBLOCKS", bad)
 		require.Equal(t, []string{CatchupInProgressID}, startOf(s))
 
@@ -403,9 +402,9 @@ func TestStartOfChainIsFirstBadStageInCauseOrder(t *testing.T) {
 			s = r.evalFSM(at, "CATCHINGBLOCKS", bad)
 		}
 
-		require.NotNil(t, find(s, "validator-queue-fill"))
+		require.NotNil(t, find(s, "validator-latency-p99"))
 		require.True(t, find(s, CatchupInProgressID).Snoozed)
-		require.Equal(t, []string{"subtree-queue-age"}, startOf(s))
+		require.Equal(t, []string{"validator-latency-p99"}, startOf(s))
 
 		worse := merge(bad, map[string]float64{keyPersister: 50})
 		for at := e0.Add(sec(32)); !at.After(e0.Add(sec(62))); at = at.Add(tick) {
@@ -416,13 +415,40 @@ func TestStartOfChainIsFirstBadStageInCauseOrder(t *testing.T) {
 	})
 }
 
+func TestIdleFSMHoldsThePreviousCatchupDecision(t *testing.T) {
+	floors := map[string]float64{keyLatency: 2}
+	r := newRig(t, floors)
+
+	bad := map[string]float64{keyLatency: 3}
+
+	s := r.evalFSM(e0, "CATCHINGBLOCKS", bad)
+	require.NotNil(t, find(s, CatchupInProgressID))
+	require.True(t, r.e.CatchingUp())
+
+	s = r.evalFSM(e0.Add(tick), "IDLE", bad)
+	require.NotNil(t, find(s, CatchupInProgressID))
+	require.True(t, r.e.CatchingUp())
+
+	s = r.evalFSM(e0.Add(2*tick), "RUNNING", bad)
+	require.Nil(t, find(s, CatchupInProgressID))
+	require.False(t, r.e.CatchingUp())
+}
+
+func TestIdleFSMDoesNotStartACatchup(t *testing.T) {
+	r := newRig(t, nil)
+
+	s := r.evalFSM(e0, "IDLE", nil)
+	require.Nil(t, find(s, CatchupInProgressID))
+	require.False(t, r.e.CatchingUp())
+}
+
 func TestCatchupChainUsedWhenFSMCatchingBlocks(t *testing.T) {
-	floors := map[string]float64{keyHitRate: 0.9, keyQueueFill: 0.8}
+	floors := map[string]float64{keyHitRate: 0.9, keyLatency: 2}
 	r := newRig(t, floors)
 
 	warmCache(r, e0, nil)
 
-	bad := map[string]float64{keyHitRate: 0.5, keyFill: 0.9, keyQueueFill: 0.9}
+	bad := map[string]float64{keyHitRate: 0.5, keyFill: 0.9, keyLatency: 3}
 	s := r.run(e0, e0.Add(sec(30)), bad)
 	require.Nil(t, find(s, CatchupInProgressID))
 	require.Equal(t, []string{"cache-hit-rate"}, startOf(s))
@@ -443,7 +469,7 @@ func TestCatchupChainUsedWhenFSMCatchingBlocks(t *testing.T) {
 	s = r.evalFSM(at.Add(tick), "CATCHINGBLOCKS", bad)
 	require.True(t, find(s, CatchupInProgressID).Snoozed)
 	require.NotNil(t, find(s, "cache-hit-rate"))
-	require.Equal(t, []string{"validator-queue-fill"}, startOf(s))
+	require.Equal(t, []string{"validator-latency-p99"}, startOf(s))
 
 	s = r.eval(at.Add(2*tick), bad)
 	require.Nil(t, find(s, CatchupInProgressID))
@@ -451,16 +477,24 @@ func TestCatchupChainUsedWhenFSMCatchingBlocks(t *testing.T) {
 }
 
 func TestCatchupNumberingForValidatorRules(t *testing.T) {
+	var validator Rule
+
+	for _, rule := range DefaultRules {
+		if rule.ID == "validator-latency-p99" {
+			validator = rule
+		}
+	}
+
 	rules := []Rule{
-		DefaultRules[3],
+		validator,
 		{
 			ID: "zz-subtree", Stage: "ingress", Reading: keySubtreeAge,
-			Chain: ChainCatchup, ChainOrder: 3, FloorKey: keySubtreeAge, TextID: "subtree-queue-age",
+			Chain: ChainCatchup, ChainOrder: 3, FloorKey: keySubtreeAge, TextID: "persister-behind",
 		},
 	}
-	require.Equal(t, "validator-queue-fill", rules[0].ID)
+	require.Equal(t, "validator-latency-p99", rules[0].ID)
 
-	floors := map[string]float64{keyQueueFill: 0.8, keySubtreeAge: 60}
+	floors := map[string]float64{keyLatency: 2, keySubtreeAge: 60}
 	r := newRigRules(t, rules, floors)
 
 	require.NoError(t, r.e.Snooze(CatchupInProgressID, 24*time.Hour))
@@ -468,20 +502,20 @@ func TestCatchupNumberingForValidatorRules(t *testing.T) {
 	var s *snapshot.Snapshot
 
 	for at := e0; !at.After(e0.Add(sec(30))); at = at.Add(tick) {
-		s = r.evalFSM(at, "CATCHINGBLOCKS", map[string]float64{keyQueueFill: 0.9, keySubtreeAge: 1})
+		s = r.evalFSM(at, "CATCHINGBLOCKS", map[string]float64{keyLatency: 3, keySubtreeAge: 1})
 	}
 
-	require.Equal(t, []string{"validator-queue-fill"}, startOf(s))
+	require.Equal(t, []string{"validator-latency-p99"}, startOf(s))
 
 	for at := e0.Add(sec(32)); !at.After(e0.Add(sec(62))); at = at.Add(tick) {
-		s = r.evalFSM(at, "CATCHINGBLOCKS", map[string]float64{keyQueueFill: 0.9, keySubtreeAge: 120})
+		s = r.evalFSM(at, "CATCHINGBLOCKS", map[string]float64{keyLatency: 3, keySubtreeAge: 120})
 	}
 
 	require.NotNil(t, find(s, "zz-subtree"))
 	require.Equal(t, []string{"zz-subtree"}, startOf(s))
 
-	s = r.eval(e0.Add(sec(64)), map[string]float64{keyQueueFill: 0.9, keySubtreeAge: 120})
-	require.Equal(t, []string{"validator-queue-fill"}, startOf(s))
+	s = r.eval(e0.Add(sec(64)), map[string]float64{keyLatency: 3, keySubtreeAge: 120})
+	require.Equal(t, []string{"validator-latency-p99"}, startOf(s))
 }
 
 func TestSnoozeSuppressesAndPersists(t *testing.T) {
@@ -1217,8 +1251,6 @@ func TestMinToleranceAppliesToRedThreshold(t *testing.T) {
 		"assembly-tip-lag":        1,
 		"persister-behind":        2,
 		"assembly-queue-head-age": 5,
-		"validator-queue-fill":    0.05,
-		"subtree-queue-age":       5,
 	}
 
 	for _, rule := range DefaultRules {

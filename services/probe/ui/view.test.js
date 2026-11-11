@@ -113,7 +113,7 @@ test('start of chain tag shown only on flagged alarm', () => {
     assert.equal(has, item.attrs['data-alarm-id'] === 'cache-hit-rate', item.attrs['data-alarm-id']);
   }
 
-  const snoozed = items.find((i) => i.attrs['data-alarm-id'] === 'subtree-queue-age');
+  const snoozed = items.find((i) => i.attrs['data-alarm-id'] === 'persister-behind');
   assert.match(snoozed.attrs.class, /snoozed/);
   assert.ok(texts(snoozed).includes('Snoozed'));
   assert.equal(byAttr(snoozed, 'data-action', 'unsnooze').length, 1);
@@ -429,7 +429,7 @@ test('top bar chips follow the snapshot', () => {
   s.peerTip = 0;
   s.sources = s.sources.map((x) => ({ ...x, ok: true }));
   s.fsm = 'RUNNING';
-  s.alarms = s.alarms.map((a) => ({ ...a, severity: a.id === 'subtree-queue-age' ? 'crit' : 'warn' }));
+  s.alarms = s.alarms.map((a) => ({ ...a, severity: a.id === 'persister-behind' ? 'crit' : 'warn' }));
   const b2 = renderTopBar(s);
   assert.ok(texts(b2).includes('Tip 912,437'));
   assert.equal(one(b2, 'data-chip', 'node').attrs['data-st'], 'g');
@@ -682,7 +682,7 @@ test('popover shows the highest severity alarm that is not snoozed', () => {
   one(home, 'data-popover', 'cache-hit-rate');
 
   s.alarms = s.alarms.map((a) => ({ ...a, snoozed: a.severity === 'crit' }));
-  one(renderHome(s, NOW), 'data-popover', 'subtree-queue-age');
+  one(renderHome(s, NOW), 'data-popover', 'persister-behind');
 
   s.alarms = s.alarms.map((a) => ({ ...a, snoozed: true }));
   assert.equal(walk(renderHome(s, NOW)).filter((n) => n.attrs && n.attrs['data-popover']).length, 0);
@@ -799,8 +799,8 @@ test('renderStage shows alarms of the stage only', () => {
   assert.deepEqual(items.map((n) => n.attrs['data-alarm-id']), ['cache-hit-rate']);
   assert.ok(walk(cache).some((n) => n.attrs && n.attrs['data-action'] === 'snooze' && n.attrs['data-id'] === 'cache-hit-rate'));
 
-  const ingress = renderStage(snap(), 'ingress', null, NOW);
-  assert.ok(walk(ingress).some((n) => n.attrs && n.attrs['data-action'] === 'unsnooze'));
+  const chain = renderStage(snap(), 'chain', null, NOW);
+  assert.ok(walk(chain).some((n) => n.attrs && n.attrs['data-action'] === 'unsnooze'));
 
   const assembly = renderStage(snap(), 'assembly', null, NOW);
   assert.ok(texts(assembly).includes('No alarms for this stage.'));

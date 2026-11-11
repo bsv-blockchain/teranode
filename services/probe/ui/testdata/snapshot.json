@@ -122,11 +122,11 @@
   ],
   "alarms": [
     {
-      "id": "validator-queue-fill",
+      "id": "validator-latency-p99",
       "stage": "validator",
-      "title": "Validator queue is filling",
-      "body": "The Validator cannot process transactions as fast as they arrive. Its internal queue grows. Look at the tx meta cache hit rate and Aerospike read latency. During catch-up, the Validator also checks the transactions of each queued block.",
-      "textId": "validator-queue-fill",
+      "title": "Validator latency is high",
+      "body": "The Validator takes longer than normal to validate a transaction. Look at the tx meta cache hit rate and Aerospike read latency first. A slow Validator starves Block Assembly.",
+      "textId": "validator-latency-p99",
       "severity": "crit",
       "raisedAt": "2026-10-28T11:24:02Z",
       "startOfChain": false,
@@ -149,16 +149,16 @@
       ]
     },
     {
-      "id": "subtree-queue-age",
-      "stage": "ingress",
-      "title": "Subtrees wait too long",
-      "body": "The oldest queued subtree waits longer than normal. Subtree validation does not keep up with the subtrees that peers announce. Look at the Validator queue and the tx meta cache hit rate.",
-      "textId": "subtree-queue-age",
+      "id": "persister-behind",
+      "stage": "chain",
+      "title": "Block persister is behind",
+      "body": "The block persister has not written all blocks up to the tip. During catch-up, this backlog grows first. Look at the block store and the Blockchain panel.",
+      "textId": "persister-behind",
       "severity": "warn",
       "raisedAt": "2026-10-28T11:28:40Z",
       "startOfChain": false,
       "snoozed": true,
-      "drilldowns": [{"label": "Open ingress details", "path": "#/stage/ingress"}]
+      "drilldowns": [{"label": "Open Blockchain details", "path": "#/stage/chain"}]
     }
   ],
   "calibration": {"ready": false, "until": "2026-10-28T11:38:00Z", "fraction": 0.6},

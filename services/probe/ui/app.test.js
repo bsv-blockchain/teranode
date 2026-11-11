@@ -135,10 +135,10 @@ test('snooze posts id and minutes with the bearer header', async () => {
   assert.deepEqual(JSON.parse(init.body), { id: 'cache-hit-rate', minutes: 15 });
   assert.equal(init.credentials, 'omit');
 
-  assert.equal(await h.client.unsnooze('subtree-queue-age'), true);
+  assert.equal(await h.client.unsnooze('persister-behind'), true);
   assert.equal(h.calls[1].url, '/api/unsnooze');
   assert.equal(h.calls[1].init.headers.Authorization, 'Bearer tok');
-  assert.deepEqual(JSON.parse(h.calls[1].init.body), { id: 'subtree-queue-age' });
+  assert.deepEqual(JSON.parse(h.calls[1].init.body), { id: 'persister-behind' });
 
   const failing = harness({ fetchStatus: 400 });
   failing.client.login('tok');

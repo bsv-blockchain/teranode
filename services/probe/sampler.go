@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -390,7 +391,7 @@ func (s *Sampler) runGroup(ctx context.Context, entries []*entry, timeout time.D
 				panicked = true
 			}
 		case <-timer.C:
-			s.markStale(launched)
+			s.markTimedOut(launched, timeout)
 
 			return panicked
 		case <-ctx.Done():
@@ -409,6 +410,29 @@ func (s *Sampler) markStale(pending map[*entry]bool) {
 
 	for e := range pending {
 		e.stale = true
+	}
+}
+
+func (s *Sampler) markTimedOut(pending map[*entry]bool, timeout time.Duration) {
+	var first []string
+
+	s.mu.Lock()
+
+	for e := range pending {
+		e.stale = true
+
+		if !e.failing {
+			e.failing = true
+			first = append(first, e.name)
+		}
+	}
+
+	s.mu.Unlock()
+
+	sort.Strings(first)
+
+	for _, name := range first {
+		s.logger.Warnf("[Probe] source %s has no data: timed out after %s", name, timeout)
 	}
 }
 
