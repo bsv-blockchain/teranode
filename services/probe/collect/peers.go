@@ -33,11 +33,11 @@ func (p *Peers) Collect(ctx context.Context) (snapshot.Patch, error) {
 	var tip uint32
 
 	for _, peer := range peers {
-		if peer == nil {
+		if peer == nil || peer.IsBanned {
 			continue
 		}
 
-		tip = max(tip, peer.DisplayHeight(), peer.Height)
+		tip = max(tip, peer.Height)
 	}
 
 	height := snapshot.Reading{Value: float64(tip), Status: snapshot.StatusOK}

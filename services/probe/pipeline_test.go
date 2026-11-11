@@ -647,21 +647,21 @@ func TestDrainEstimatesShrinkingBlockBacklogAboveTwenty(t *testing.T) {
 func TestBlockBacklog(t *testing.T) {
 	s := snapshot.NewSnapshot("n")
 	s.Chain.BlocksWaiting = []uint32{1, 2, 3}
-	require.Equal(t, 3.0, blockBacklog(&s))
+	require.Equal(t, 3.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
 
 	s.Chain.BlocksWaitingCount = snapshot.Reading{Value: 120, Status: snapshot.StatusOK}
-	require.Equal(t, 120.0, blockBacklog(&s))
+	require.Equal(t, 120.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
 
 	s.Tip = 1000
 	s.Chain.PeerHeight = snapshot.Reading{Value: 1500, Status: snapshot.StatusOK}
-	require.Equal(t, 120.0, blockBacklog(&s))
+	require.Equal(t, 120.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
 
 	s.FSM = "CATCHINGBLOCKS"
-	require.Equal(t, 500.0, blockBacklog(&s))
+	require.Equal(t, 500.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
 
 	s.Chain.PeerHeight.Status = snapshot.StatusNoData
-	require.Equal(t, 120.0, blockBacklog(&s))
+	require.Equal(t, 120.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
 
 	s.Chain.BlocksWaitingCount.Status = snapshot.StatusNoData
-	require.Equal(t, 3.0, blockBacklog(&s))
+	require.Equal(t, 3.0, blockBacklog(&s, s.FSM == fsmCatchingBlocks))
 }

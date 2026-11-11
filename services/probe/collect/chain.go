@@ -54,10 +54,7 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 		return nil, err
 	}
 
-	waiting, count, behind, err := c.backlog(ctx)
-	if err != nil {
-		return nil, err
-	}
+	waiting, count, behind := c.backlog(ctx)
 
 	return func(s *snapshot.Snapshot) {
 		s.FSM = fsm
@@ -68,25 +65,38 @@ func (c *Chain) Collect(ctx context.Context) (snapshot.Patch, error) {
 	}, nil
 }
 
-func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, snapshot.Reading, error) {
+func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, snapshot.Reading) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	now := c.now()
 	if c.haveLast && now.Sub(c.lastAt) < chainBacklogEvery {
-		return append([]uint32{}, c.lastWait...), c.lastCount, c.lastBehind, nil
+		return append([]uint32{}, c.lastWait...), c.lastCount, c.lastBehind
 	}
+
+	c.haveLast = true
+	c.lastAt = now
 
 	notPersisted, err := c.notPersisted(ctx)
-	if err != nil {
-		return nil, snapshot.Reading{}, snapshot.Reading{}, err
+	if err == nil {
+		var minedNotSet []*model.Block
+
+		minedNotSet, err = c.minedNotSet(ctx)
+		if err == nil {
+			c.setBacklog(notPersisted, minedNotSet)
+
+			return append([]uint32{}, c.lastWait...), c.lastCount, c.lastBehind
+		}
 	}
 
-	minedNotSet, err := c.minedNotSet(ctx)
-	if err != nil {
-		return nil, snapshot.Reading{}, snapshot.Reading{}, err
-	}
+	c.lastWait = []uint32{}
+	c.lastCount = snapshot.Reading{Status: snapshot.StatusNoData, Note: "no data"}
+	c.lastBehind = snapshot.Reading{Status: snapshot.StatusNoData, Note: "no data"}
 
+	return []uint32{}, c.lastCount, c.lastBehind
+}
+
+func (c *Chain) setBacklog(notPersisted, minedNotSet []*model.Block) {
 	behind := snapshot.Reading{Value: float64(len(notPersisted)), Status: snapshot.StatusOK}
 	if len(notPersisted) >= chainPersisterLimit {
 		behind.Value = chainPersisterLimit
@@ -98,13 +108,9 @@ func (c *Chain) backlog(ctx context.Context) ([]uint32, snapshot.Reading, snapsh
 		count.Note = behind.Note
 	}
 
-	c.haveLast = true
-	c.lastAt = now
 	c.lastWait = waitingHeights(notPersisted, minedNotSet)
 	c.lastCount = count
 	c.lastBehind = behind
-
-	return append([]uint32{}, c.lastWait...), count, behind, nil
 }
 
 func (c *Chain) Events(ctx context.Context, rec guard.Recorder) <-chan struct{} {

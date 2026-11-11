@@ -393,7 +393,7 @@ func (p *pipeline) handle(snap snapshot.Snapshot) (clean bool) {
 	now := snap.Time
 	p.engine.Evaluate(now, &snap)
 
-	backlog := blockBacklog(&snap)
+	backlog := blockBacklog(&snap, p.engine.CatchingUp())
 	if q := snap.Ingress.SubtreeQueue; q.Status != snapshot.StatusNoData && q.Status != "" {
 		backlog += q.Value
 	}
@@ -423,13 +423,13 @@ func (p *pipeline) handle(snap snapshot.Snapshot) (clean bool) {
 	return true
 }
 
-func blockBacklog(s *snapshot.Snapshot) float64 {
+func blockBacklog(s *snapshot.Snapshot, catching bool) float64 {
 	blocks := float64(len(s.Chain.BlocksWaiting))
 	if c := s.Chain.BlocksWaitingCount; c.Status != snapshot.StatusNoData && c.Status != "" {
 		blocks = c.Value
 	}
 
-	if p := s.Chain.PeerHeight; s.FSM == fsmCatchingBlocks && p.Status == snapshot.StatusOK && p.Value > float64(s.Tip) {
+	if p := s.Chain.PeerHeight; catching && p.Status == snapshot.StatusOK && p.Value > float64(s.Tip) {
 		blocks = max(blocks, p.Value-float64(s.Tip))
 	}
 

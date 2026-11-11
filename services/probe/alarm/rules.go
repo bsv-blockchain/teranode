@@ -61,11 +61,6 @@ var DefaultRules = append([]Rule{
 		Drilldowns: []snapshot.Link{linkValidator, linkCache, linkStores},
 	},
 	{
-		ID: "validator-queue-fill", Stage: "validator", Reading: "validator.queueFill",
-		Chain: ChainThroughput, ChainOrder: 3, CatchupOrder: 4, MinTolerance: 0.05, FloorKey: "validator.queueFill", TextID: "validator-queue-fill",
-		Drilldowns: []snapshot.Link{linkValidator, linkCache},
-	},
-	{
 		ID: "assembly-queue-head-age", Stage: "assembly", Reading: "assembly.queueHeadAgeSec",
 		Chain: ChainThroughput, ChainOrder: 4, MinTolerance: 5, FloorKey: "assembly.queueHeadAgeSec", TextID: "assembly-queue-head-age",
 		Drilldowns: []snapshot.Link{linkAssembly, linkValidator},
@@ -74,11 +69,6 @@ var DefaultRules = append([]Rule{
 		ID: "assembly-tip-lag", Stage: "assembly", Reading: "assembly.tipLagBlocks",
 		Chain: ChainThroughput, ChainOrder: 4, MinTolerance: 1, FloorKey: "assembly.tipLagBlocks", TextID: "assembly-tip-lag",
 		Drilldowns: []snapshot.Link{linkAssembly, linkChain},
-	},
-	{
-		ID: "subtree-queue-age", Stage: "ingress", Reading: "ingress.subtreeQueueOldestSec",
-		Chain: ChainCatchup, ChainOrder: 3, MinTolerance: 5, FloorKey: "ingress.subtreeQueueOldestSec", TextID: "subtree-queue-age",
-		Drilldowns: []snapshot.Link{linkIngress, linkValidator},
 	},
 	{
 		ID: "persister-behind", Stage: "chain", Reading: "chain.persisterBehind",

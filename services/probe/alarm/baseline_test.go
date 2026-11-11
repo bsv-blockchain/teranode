@@ -340,11 +340,15 @@ func TestCheckFloorKeys(t *testing.T) {
 		}
 	}
 
-	require.Len(t, known, 8)
+	require.Len(t, known, 6)
 	require.NoError(t, CheckFloorKeys(known))
 	require.NoError(t, CheckFloorKeys(nil))
 
-	err := CheckFloorKeys(map[string]float64{"cache.hitRate": 0.9, "zeta": 1, "alpha": 2})
+	err := CheckFloorKeys(map[string]float64{"validator.queueFill": 0.8, "ingress.subtreeQueueOldestSec": 60})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ingress.subtreeQueueOldestSec, validator.queueFill")
+
+	err = CheckFloorKeys(map[string]float64{"cache.hitRate": 0.9, "zeta": 1, "alpha": 2})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "alpha, zeta")
 }
