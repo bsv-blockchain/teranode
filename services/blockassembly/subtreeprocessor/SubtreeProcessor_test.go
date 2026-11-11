@@ -4918,3 +4918,55 @@ func TestMoveForwardBlockRecreatesChildrenOfAnEmptyBlockMovedBackEarlier(t *test
 	require.NoError(t, err, "moving the block forward must recreate the child")
 	require.NotNil(t, f.otherParentSpend(t).SpendingData, "the recreated child spends the surviving parent again")
 }
+
+// concurrencyCountingRegenerator records the most RegenerateMeta calls it saw at once.
+type concurrencyCountingRegenerator struct {
+	mu      sync.Mutex
+	running int
+	most    int
+}
+
+func (r *concurrencyCountingRegenerator) RegenerateMeta(_ context.Context, _ *chainhash.Hash, subtree *subtreepkg.Subtree, _ bool) (*subtreepkg.Meta, error) {
+	r.mu.Lock()
+	r.running++
+	r.most = max(r.most, r.running)
+	r.mu.Unlock()
+
+	time.Sleep(5 * time.Millisecond)
+
+	r.mu.Lock()
+	r.running--
+	r.mu.Unlock()
+
+	return subtreepkg.NewSubtreeMeta(subtree), nil
+}
+
+// TestSerialMetaRegenerator_RebuildsOneAtATime pins the move-back's rebuild limit: a
+// rebuild holds a whole .subtreeData in memory, so the move-back's parallel subtree
+// reads must not rebuild several at once.
+func TestSerialMetaRegenerator_RebuildsOneAtATime(t *testing.T) {
+	inner := &concurrencyCountingRegenerator{}
+	regenerator := &serialMetaRegenerator{inner: inner}
+
+	subtree, err := subtreepkg.NewTreeByLeafCount(2)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+
+	for range 8 {
+		wg.Go(func() {
+			_, err := regenerator.RegenerateMeta(t.Context(), &chainhash.Hash{}, subtree, false)
+			require.NoError(t, err)
+		})
+	}
+
+	wg.Wait()
+
+	require.Equal(t, 1, inner.most, "rebuilds must not overlap")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err = regenerator.RegenerateMeta(ctx, &chainhash.Hash{}, subtree, false)
+	require.ErrorIs(t, err, errors.ErrContextCanceled, "a cancelled reorg must not rebuild")
+}

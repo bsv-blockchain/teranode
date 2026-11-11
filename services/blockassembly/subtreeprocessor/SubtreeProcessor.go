@@ -6333,13 +6333,37 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 // the same retention block assembly gives the meta files it writes itself. It returns
 // nil, so a failed read stays an error, when there is no store to rebuild from or no
 // UTXO store to date the rewritten file from.
+//
+// Rebuilds run one at a time. A rebuild holds the subtree's whole .subtreeData in
+// memory, and the move-back reads up to blockassembly_moveBackBlockConcurrency (375)
+// subtrees at once: a node that ran with blockassembly_storeTxInpointsForSubtreeMeta
+// off and then turned it on would otherwise rebuild every subtree of a block
+// together and hold all of the block's transactions at the same time.
 func (stp *SubtreeProcessor) moveBackMetaRegenerator() model.SubtreeMetaRegeneratorI {
 	if stp.subtreeStore == nil || stp.utxoStore == nil {
 		return nil
 	}
 
-	return model.NewSubtreeMetaRegenerator(stp.logger, stp.subtreeStore, nil,
-		stp.utxoStore.GetBlockHeight, stp.settings.GlobalBlockHeightRetention, 0)
+	return &serialMetaRegenerator{inner: model.NewSubtreeMetaRegenerator(stp.logger, stp.subtreeStore, nil,
+		stp.utxoStore.GetBlockHeight, stp.settings.GlobalBlockHeightRetention, 0)}
+}
+
+// serialMetaRegenerator lets one RegenerateMeta call run at a time.
+type serialMetaRegenerator struct {
+	mu    sync.Mutex
+	inner model.SubtreeMetaRegeneratorI
+}
+
+func (r *serialMetaRegenerator) RegenerateMeta(ctx context.Context, subtreeHash *chainhash.Hash, subtree *subtreepkg.Subtree, isFirstSubtree bool) (*subtreepkg.Meta, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// A reorg cancelled while this call waited for its turn has nothing to rebuild for.
+	if err := ctx.Err(); err != nil {
+		return nil, errors.NewContextCanceledError("[moveBackBlock:GetSubtrees][%s] cancelled while waiting to rebuild subtree meta", subtreeHash.String(), err)
+	}
+
+	return r.inner.RegenerateMeta(ctx, subtreeHash, subtree, isFirstSubtree)
 }
 
 // processBlockSubtrees creates a reverse lookup map of block subtrees and filters out chained subtrees
