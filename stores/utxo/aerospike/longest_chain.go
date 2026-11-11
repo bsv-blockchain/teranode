@@ -73,8 +73,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	allErrors := make([]error, 0, 10)
 	firstMissing := make([]chainhash.Hash, 0, 10)
 	var errorCount, missingCount, childDAHFailed int64
-	var droppedErrors int       // child errors beyond the allErrors cap, guarded by mu
-	var resend []chainhash.Hash // records a node rejected sub-op 14 for, guarded by mu
+	var droppedErrors int // child errors beyond the allErrors cap, guarded by mu
 	var mu sync.Mutex
 
 	currentBlockHeight := s.GetBlockHeight()
@@ -95,29 +94,11 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	// The backdated unminedSince stamped off the longest chain (see the doc comment).
 	unminedSince := utxo.BackdatedUnminedSince(currentBlockHeight, s.settings.UtxoStore.UnminedTxRetention)
 
-	var ops []*aerospike.Operation
+	// The expression path's operations. They are built even when the call starts native, because a
+	// worker whose records a node rejects sub-op 14 for switches to them.
+	var exprOps []*aerospike.Operation
 
-	// With native sub-op 14 each record is one TeranodeModifyOp the server's C module runs, in place
-	// of the expression operations below. Its arguments do not depend on the transaction, so the
-	// call shares one payload, as the expression path shares its ops.
-	native := s.useNativeMark()
-	if native {
-		// +1: the store height trails the block being validated, the allowance the spend path makes
-		payload, encErr := encodeMarkLongestChainPayload(onLongestChain, currentBlockHeight+1, retention, unminedSince)
-		if encErr != nil {
-			s.logger.Warnf("[MarkTransactionsOnLongestChain] markLongestChain payload encode failed: %v; using the expression path", encErr)
-
-			native = false
-		} else {
-			ops = []*aerospike.Operation{aerospike.TeranodeModifyOp(nativeOpResultBin, payload)}
-			batchWritePolicy = s.nativeOpBatchWritePolicy
-		}
-	}
-
-	switch {
-	case native:
-		// ops and policy set above
-	case onLongestChain:
+	if onLongestChain {
 		unminedOp := aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil))
 
 		if restampDAH {
@@ -127,7 +108,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			// not only the BlockAssembler repair path.
 			//
 			// The old and new DAH are read around the write so pagination records can follow the master.
-			ops = append(ops,
+			exprOps = append(exprOps,
 				aerospike.GetBinOp(fields.DeleteAtHeight.String()),
 				aerospike.GetBinOp(fields.External.String()),
 				aerospike.GetBinOp(fields.TotalExtraRecs.String()),
@@ -135,15 +116,15 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				unminedOp,
 			)
 			// +1: the store height trails the block being validated, the allowance the spend path makes
-			ops = append(ops, s.buildDeleteAtHeightOps(currentBlockHeight+1, retention, true)...)
-			ops = append(ops, aerospike.GetBinOp(fields.DeleteAtHeight.String()))
+			exprOps = append(exprOps, s.buildDeleteAtHeightOps(currentBlockHeight+1, retention, true)...)
+			exprOps = append(exprOps, aerospike.GetBinOp(fields.DeleteAtHeight.String()))
 		} else {
-			ops = []*aerospike.Operation{unminedOp}
+			exprOps = []*aerospike.Operation{unminedOp}
 		}
-	default:
+	} else {
 		// Only stamp unminedSince when the bin is absent. ExpUnknown with EvalNoFail makes the
 		// existing-value branch a no-op, so an earlier unminedSince is never overwritten.
-		ops = []*aerospike.Operation{aerospike.ExpWriteOp(
+		exprOps = []*aerospike.Operation{aerospike.ExpWriteOp(
 			fields.UnminedSince.String(),
 			aerospike.ExpCond(
 				aerospike.ExpBinExists(fields.UnminedSince.String()), aerospike.ExpUnknown(),
@@ -151,6 +132,33 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			),
 			aerospike.ExpWriteFlagEvalNoFail,
 		)}
+	}
+
+	// With native sub-op 14 each record is one TeranodeModifyOp the server's C module runs, in place
+	// of the expression operations above. Its arguments do not depend on the transaction, so the
+	// call shares one payload, as the expression path shares its ops.
+	var nativeOps []*aerospike.Operation
+
+	native := s.useNativeMark()
+	if native {
+		// +1: the store height trails the block being validated, the allowance the spend path makes
+		payload, encErr := encodeMarkLongestChainPayload(onLongestChain, currentBlockHeight+1, retention, unminedSince)
+		if encErr != nil {
+			s.logger.Warnf("[MarkTransactionsOnLongestChain] markLongestChain payload encode failed: %v; using the expression path", encErr)
+
+			native = false
+		} else {
+			nativeOps = []*aerospike.Operation{aerospike.TeranodeModifyOp(nativeOpResultBin, payload)}
+		}
+	}
+
+	// A node that rejects sub-op 14 turns the store's native mark off (never the other native ops),
+	// and the worker that saw it resends the rejected records down the expression path straight away.
+	// Every worker checks the flag before each batch, so the running call stops sending native too.
+	disableNativeMark := func() {
+		if s.useNativeMarkLongestChain.CompareAndSwap(true, false) {
+			s.logger.Warnf("[MarkTransactionsOnLongestChain] server rejected sub-op 14 (markLongestChain); the mark uses its expression path from now on and resends the rejected records that way")
+		}
 	}
 
 	// Divide work evenly across workers (fewer goroutines, sequential batches within each)
@@ -164,9 +172,18 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		workerHashes := txHashes[workerStart:workerEnd]
 
 		g.Go(func() error {
-			// One set of batch slots per worker, reused by each of its sequential batches, so a
+			// One set of batch slots per worker and path, reused by each of its sequential batches, so a
 			// transaction costs no key, batch-write or hash allocation of its own (see longestChainSlots).
-			slots := newLongestChainSlots(min(batchSize, len(workerHashes)), batchWritePolicy, ops)
+			// A native worker makes its expression slots only if a node rejects sub-op 14.
+			slotCount := min(batchSize, len(workerHashes))
+
+			var nativeSlots, exprSlots *longestChainSlots
+
+			if native {
+				nativeSlots = newLongestChainSlots(slotCount, s.nativeOpBatchWritePolicy, nativeOps)
+			} else {
+				exprSlots = newLongestChainSlots(slotCount, batchWritePolicy, exprOps)
+			}
 
 			// states is only read for the records followUps queued, within the same batch.
 			states := make(map[chainhash.Hash]masterState)
@@ -174,13 +191,17 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			// One sub-op 14 response per worker, reset for each record.
 			var res LuaMapResponse
 
-			for i := 0; i < len(workerHashes); i += batchSize {
-				if gCtx.Err() != nil {
-					return gCtx.Err()
-				}
+			// markBatch writes one batch down one path and returns the records a node rejected sub-op 14
+			// for, appended to rejected. Only the native path rejects.
+			markBatch := func(useNative bool, chunk []chainhash.Hash, rejected []chainhash.Hash) []chainhash.Hash {
+				slots := nativeSlots
+				if !useNative {
+					if exprSlots == nil {
+						exprSlots = newLongestChainSlots(slotCount, batchWritePolicy, exprOps)
+					}
 
-				batchEnd := min(i+batchSize, len(workerHashes))
-				chunk := workerHashes[i:batchEnd]
+					slots = exprSlots
+				}
 
 				// batchHashes[j] is the hash of batchRecords[j] (a key that failed to build is left out)
 				n := 0
@@ -200,7 +221,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				}
 
 				if n == 0 {
-					continue
+					return rejected
 				}
 
 				batchRecords := slots.records[:n]
@@ -209,15 +230,10 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
 					// A one-record batch goes out as a single operate, so a node that does not serve
 					// sub-op 14 fails the whole call rather than the record: resend it the same way.
-					if native && hasResultCode(err, types.PARAMETER_ERROR) {
-						if s.useNativeMarkLongestChain.CompareAndSwap(true, false) {
-							s.logger.Warnf("[MarkTransactionsOnLongestChain] server rejected sub-op 14 (markLongestChain); the longest-chain mark uses its expression path for the rest of this process")
-						}
-						mu.Lock()
-						resend = append(resend, batchHashes...)
-						mu.Unlock()
+					if useNative && hasResultCode(err, types.PARAMETER_ERROR) {
+						disableNativeMark()
 
-						continue
+						return append(rejected, batchHashes...)
 					}
 
 					count := int64(len(batchRecords))
@@ -227,7 +243,8 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 						allErrors = append(allErrors, errors.NewProcessingError("could not batch operate longest chain flag", err))
 					}
 					mu.Unlock()
-					continue // Don't fail fast — continue processing other batches
+
+					return rejected // Don't fail fast — continue processing other batches
 				}
 
 				// Pagination records of external txs whose master DAH changed. Applied per batch, in
@@ -236,14 +253,14 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				// are deleted by computed key together with their master when the master is pruned.
 				//
 				// followUps points into batchHashes, which the next batch overwrites, so it and states
-				// must not outlive this iteration: applyLongestChainChildDAH below consumes both.
+				// must not outlive this call: applyLongestChainChildDAH below consumes both.
 				var followUps childDAHFollowUps
 
 				clear(states)
 
 				// Check individual record results
 				for j, batchRecord := range batchRecords {
-					if native {
+					if useNative {
 						switch outcome, recErr := s.nativeMarkResult(batchRecord.BatchRec(), &res); outcome {
 						case nativeMarkOK:
 							if restampDAH {
@@ -258,13 +275,10 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 							mu.Unlock()
 						case nativeMarkUnsupported:
 							// This node rejected sub-op 14 (a server older than the probe's node):
-							// the record is re-sent down the expression path before the call returns.
-							if s.useNativeMarkLongestChain.CompareAndSwap(true, false) {
-								s.logger.Warnf("[MarkTransactionsOnLongestChain] server rejected sub-op 14 (markLongestChain); the longest-chain mark uses its expression path for the rest of this process")
-							}
-							mu.Lock()
-							resend = append(resend, batchHashes[j])
-							mu.Unlock()
+							// the record is resent down the expression path once this batch is done.
+							disableNativeMark()
+
+							rejected = append(rejected, batchHashes[j])
 						default:
 							atomic.AddInt64(&errorCount, 1)
 							mu.Lock()
@@ -324,6 +338,36 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 					}
 					mu.Unlock()
 				}
+
+				return rejected
+			}
+
+			// rejected holds the records of one batch a node rejected sub-op 14 for, at most batchSize.
+			var rejected []chainhash.Hash
+
+			useNative := native
+
+			for i := 0; i < len(workerHashes); i += batchSize {
+				if gCtx.Err() != nil {
+					return gCtx.Err()
+				}
+
+				// another worker saw a node reject sub-op 14
+				if useNative && !s.useNativeMark() {
+					useNative = false
+				}
+
+				batchEnd := min(i+batchSize, len(workerHashes))
+
+				rejected = markBatch(useNative, workerHashes[i:batchEnd], rejected[:0])
+
+				// Records a node rejected sub-op 14 for are written now through the expression path, so
+				// every write still lands before this call returns.
+				if len(rejected) > 0 {
+					useNative = false
+
+					markBatch(false, rejected, nil)
+				}
 			}
 
 			return nil
@@ -334,15 +378,7 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		return err
 	}
 
-	// Records a node rejected sub-op 14 for are written now through the expression path (the flag
-	// is already off), so every write still lands before this call returns. The resend logs its
-	// own completion line.
-	var resendErr error
-	if len(resend) > 0 {
-		resendErr = s.MarkTransactionsOnLongestChain(ctx, resend, onLongestChain)
-	}
-
-	attempted := len(txHashes) - len(resend)
+	attempted := len(txHashes)
 	finalErrorCount := int(atomic.LoadInt64(&errorCount))
 	finalMissingCount := int(atomic.LoadInt64(&missingCount))
 	succeeded := attempted - finalErrorCount - finalMissingCount
@@ -372,14 +408,10 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			s.logger.Errorf("[MarkTransactionsOnLongestChain] %d further pagination-record DAH errors were not returned", dropped)
 		}
 
-		if resendErr != nil {
-			allErrors = append(allErrors, resendErr)
-		}
-
 		return errors.Join(allErrors...)
 	}
 
-	return resendErr
+	return nil
 }
 
 // applyLongestChainChildDAH applies the pagination-record follow-ups of one batch through the shared

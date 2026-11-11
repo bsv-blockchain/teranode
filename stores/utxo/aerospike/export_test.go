@@ -32,6 +32,12 @@ func (s *Store) UsesNativeMark() bool {
 	return s.useNativeMark()
 }
 
+// UsesNativeTeranodeOps reports whether the store sends native ops at all, so a test can prove a
+// sub-op 14 rejection leaves the other native ops on.
+func (s *Store) UsesNativeTeranodeOps() bool {
+	return s.useNativeTeranodeOps.Load()
+}
+
 // SetNativeMarkForTest turns the native sub-op 14 path on or off, so a test against a stock server can
 // drive the mark's native result handling through SetBatchOperateFn.
 func (s *Store) SetNativeMarkForTest(on bool) {

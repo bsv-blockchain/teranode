@@ -854,7 +854,8 @@ func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
 // TestMarkTransactionsOnLongestChain_NativeResultsAndFallback drives the native sub-op 14 path against a
 // stock server by answering its records through SetBatchOperateFn, and checks that records a node
 // rejects with PARAMETER_ERROR, per record or for the whole batch, are written down the expression path
-// before the call returns, leaving the other native ops on.
+// before the call returns, leaving the other native ops on. It also checks the native result handling:
+// missing records, failures, and a DAHSET signal that moves the pagination records.
 func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
 	logger := ulogger.NewErrorTestLogger(t)
 	tSettings := test.CreateBaseTestSettings(t)
@@ -938,7 +939,10 @@ func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
 
 		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true))
 		require.Positive(t, nativeCalls.Load())
+		// 10 records, batches of 4, 2 workers: each worker sends one native batch, then switches
+		require.LessOrEqual(t, nativeCalls.Load(), int64(tSettings.UtxoStore.MaxMinedRoutines), "the running call stops sending native after a rejection")
 		require.False(t, store.UsesNativeMark(), "a sub-op 14 rejection turns the native mark off")
+		require.True(t, store.UsesNativeTeranodeOps(), "a sub-op 14 rejection leaves the other native ops on")
 		requireMarked(t, hashes)
 	})
 
@@ -956,35 +960,116 @@ func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
 
 		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true))
 		require.False(t, store.UsesNativeMark())
+		require.True(t, store.UsesNativeTeranodeOps(), "a sub-op 14 rejection leaves the other native ops on")
 		requireMarked(t, hashes)
 	})
 
-	t.Run("native results: OK, missing and a failure", func(t *testing.T) {
-		hashes := seed(t, "results", 3)
+	t.Run("a resent batch that fails is returned", func(t *testing.T) {
+		hashes := seed(t, "resend-fails", 3)
 		store.SetNativeMarkForTest(true)
 
-		ok := map[interface{}]interface{}{"status": "OK"}
+		store.SetBatchOperateFn(func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			code := types.TIMEOUT
+			if len(records) > 0 && isNative(records[0]) {
+				code = types.PARAMETER_ERROR
+			}
+
+			for _, r := range records {
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: code}
+			}
+
+			return nil
+		})
+
+		require.Error(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true), "a failed resend must not be swallowed")
+	})
+
+	ok := map[interface{}]interface{}{"status": "OK"}
+
+	t.Run("native results: OK and missing succeed", func(t *testing.T) {
+		hashes := seed(t, "results-ok", 2)
+		store.SetNativeMarkForTest(true)
 
 		store.SetBatchOperateFn(func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
 			for i, r := range records {
 				br := r.BatchRec()
 
-				switch i {
-				case 0:
+				if i == 0 {
 					br.Record = &aerospike.Record{Bins: aerospike.BinMap{"SUCCESS": ok}}
-				case 1:
+				} else {
 					br.Err = &aerospike.AerospikeError{ResultCode: types.KEY_NOT_FOUND_ERROR}
-				default:
-					br.Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
 				}
 			}
 
 			return nil
 		})
 
-		err := store.MarkTransactionsOnLongestChain(ctx, hashes, true)
-		require.Error(t, err, "the failed record is returned")
-		require.True(t, store.UsesNativeMark(), "missing records and failures leave the native mark on")
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true), "a missing record on the longest chain is skipped, not failed")
+		require.True(t, store.UsesNativeMark(), "missing records leave the native mark on")
+	})
+
+	t.Run("native results: a failure is returned", func(t *testing.T) {
+		hashes := seed(t, "results-failed", 1)
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(_ *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			for _, r := range records {
+				r.BatchRec().Err = &aerospike.AerospikeError{ResultCode: types.TIMEOUT}
+			}
+
+			return nil
+		})
+
+		require.Error(t, store.MarkTransactionsOnLongestChain(ctx, hashes, true), "the failed record is returned")
+		require.True(t, store.UsesNativeMark(), "a failure leaves the native mark on")
+	})
+
+	t.Run("a DAHSET response moves the pages to the new deleteAtHeight", func(t *testing.T) {
+		const newDAH = 2000
+
+		txID := chainhash.HashH([]byte("native-fallback-dahset-master"))
+		masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+		require.NoError(t, err)
+		require.NoError(t, client.Put(nil, masterKey, aerospike.BinMap{
+			fields.TxID.String():           txID.CloneBytes(),
+			fields.External.String():       true,
+			fields.TotalExtraRecs.String(): 2,
+			fields.UnminedSince.String():   50,
+		}))
+
+		pageKeys := make([]*aerospike.Key, 2)
+		for i := range pageKeys {
+			pageKeys[i], err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(&txID, uint32(i+1))) // nolint: gosec
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, pageKeys[i], aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}))
+		}
+
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) == 1 && records[0].BatchRec().Key.Equals(masterKey) {
+				records[0].BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{"SUCCESS": map[interface{}]interface{}{
+					"status":         "OK",
+					"signal":         "DAHSET",
+					"childCount":     2,
+					"deleteAtHeight": newDAH,
+					"dahVer":         1,
+				}}}
+
+				return nil
+			}
+
+			return client.BatchOperate(policy, records) // the page writes
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID}, true))
+
+		for i, key := range pageKeys {
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Equal(t, newDAH, rec.Bins[fields.DeleteAtHeight.String()], "page %d", i+1)
+			require.Equal(t, 1, rec.Bins[fields.DAHVersion.String()], "page %d", i+1)
+		}
 	})
 }
 
