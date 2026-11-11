@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
+	"github.com/bsv-blockchain/aerospike-client-go/v8/types"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -72,7 +73,8 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	allErrors := make([]error, 0, 10)
 	firstMissing := make([]chainhash.Hash, 0, 10)
 	var errorCount, missingCount, childDAHFailed int64
-	var droppedErrors int // child errors beyond the allErrors cap, guarded by mu
+	var droppedErrors int       // child errors beyond the allErrors cap, guarded by mu
+	var resend []chainhash.Hash // records a node rejected sub-op 14 for, guarded by mu
 	var mu sync.Mutex
 
 	currentBlockHeight := s.GetBlockHeight()
@@ -90,9 +92,32 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 	retention := s.settings.GetUtxoStoreBlockHeightRetention()
 	restampDAH := onLongestChain && retention > 0
 
+	// The backdated unminedSince stamped off the longest chain (see the doc comment).
+	unminedSince := utxo.BackdatedUnminedSince(currentBlockHeight, s.settings.UtxoStore.UnminedTxRetention)
+
 	var ops []*aerospike.Operation
 
-	if onLongestChain {
+	// With native sub-op 14 each record is one TeranodeModifyOp the server's C module runs, in place
+	// of the expression operations below. Its arguments do not depend on the transaction, so the
+	// call shares one payload, as the expression path shares its ops.
+	native := s.useNativeMark()
+	if native {
+		// +1: the store height trails the block being validated, the allowance the spend path makes
+		payload, encErr := encodeMarkLongestChainPayload(onLongestChain, currentBlockHeight+1, retention, unminedSince)
+		if encErr != nil {
+			s.logger.Warnf("[MarkTransactionsOnLongestChain] markLongestChain payload encode failed: %v; using the expression path", encErr)
+
+			native = false
+		} else {
+			ops = []*aerospike.Operation{aerospike.TeranodeModifyOp(nativeOpResultBin, payload)}
+			batchWritePolicy = s.nativeOpBatchWritePolicy
+		}
+	}
+
+	switch {
+	case native:
+		// ops and policy set above
+	case onLongestChain:
 		unminedOp := aerospike.PutOp(aerospike.NewBin(fields.UnminedSince.String(), nil))
 
 		if restampDAH {
@@ -115,11 +140,9 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		} else {
 			ops = []*aerospike.Operation{unminedOp}
 		}
-	} else {
+	default:
 		// Only stamp unminedSince when the bin is absent. ExpUnknown with EvalNoFail makes the
 		// existing-value branch a no-op, so an earlier unminedSince is never overwritten.
-		unminedSince := utxo.BackdatedUnminedSince(currentBlockHeight, s.settings.UtxoStore.UnminedTxRetention)
-
 		ops = []*aerospike.Operation{aerospike.ExpWriteOp(
 			fields.UnminedSince.String(),
 			aerospike.ExpCond(
@@ -147,6 +170,9 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 			// states is only read for the records followUps queued, within the same batch.
 			states := make(map[chainhash.Hash]masterState)
+
+			// One sub-op 14 response per worker, reset for each record.
+			var res LuaMapResponse
 
 			for i := 0; i < len(workerHashes); i += batchSize {
 				if gCtx.Err() != nil {
@@ -181,6 +207,19 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				batchHashes := slots.hashes[:n]
 
 				if err := s.client.BatchOperate(batchPolicy, batchRecords); err != nil {
+					// A one-record batch goes out as a single operate, so a node that does not serve
+					// sub-op 14 fails the whole call rather than the record: resend it the same way.
+					if native && hasResultCode(err, types.PARAMETER_ERROR) {
+						if s.useNativeMarkLongestChain.CompareAndSwap(true, false) {
+							s.logger.Warnf("[MarkTransactionsOnLongestChain] server rejected sub-op 14 (markLongestChain); the longest-chain mark uses its expression path for the rest of this process")
+						}
+						mu.Lock()
+						resend = append(resend, batchHashes...)
+						mu.Unlock()
+
+						continue
+					}
+
 					count := int64(len(batchRecords))
 					atomic.AddInt64(&errorCount, count)
 					mu.Lock()
@@ -204,6 +243,42 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 				// Check individual record results
 				for j, batchRecord := range batchRecords {
+					if native {
+						switch outcome, recErr := s.nativeMarkResult(batchRecord.BatchRec(), &res); outcome {
+						case nativeMarkOK:
+							if restampDAH {
+								collectNativeMarkFollowUp(&followUps, states, &batchHashes[j], &res)
+							}
+						case nativeMarkMissing:
+							atomic.AddInt64(&missingCount, 1)
+							mu.Lock()
+							if len(firstMissing) < 10 {
+								firstMissing = append(firstMissing, batchHashes[j])
+							}
+							mu.Unlock()
+						case nativeMarkUnsupported:
+							// This node rejected sub-op 14 (a server older than the probe's node):
+							// the record is re-sent down the expression path before the call returns.
+							if s.useNativeMarkLongestChain.CompareAndSwap(true, false) {
+								s.logger.Warnf("[MarkTransactionsOnLongestChain] server rejected sub-op 14 (markLongestChain); the longest-chain mark uses its expression path for the rest of this process")
+							}
+							mu.Lock()
+							resend = append(resend, batchHashes[j])
+							mu.Unlock()
+						default:
+							atomic.AddInt64(&errorCount, 1)
+							mu.Lock()
+							if len(allErrors) < 10 {
+								s.logger.Errorf("[MarkTransactionsOnLongestChain] error %d: transaction %s: %v",
+									atomic.LoadInt64(&errorCount), batchHashes[j], recErr)
+								allErrors = append(allErrors, recErr)
+							}
+							mu.Unlock()
+						}
+
+						continue
+					}
+
 					recErr := batchRecord.BatchRec().Err
 					if recErr == nil {
 						// collect queues nothing for a record that is not external, and states is read only
@@ -259,13 +334,21 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 		return err
 	}
 
-	attempted := len(txHashes)
+	// Records a node rejected sub-op 14 for are written now through the expression path (the flag
+	// is already off), so every write still lands before this call returns. The resend logs its
+	// own completion line.
+	var resendErr error
+	if len(resend) > 0 {
+		resendErr = s.MarkTransactionsOnLongestChain(ctx, resend, onLongestChain)
+	}
+
+	attempted := len(txHashes) - len(resend)
 	finalErrorCount := int(atomic.LoadInt64(&errorCount))
 	finalMissingCount := int(atomic.LoadInt64(&missingCount))
 	succeeded := attempted - finalErrorCount - finalMissingCount
 
-	s.logger.Infof("[MarkTransactionsOnLongestChain] completed: attempted=%d, succeeded=%d, failed=%d, missing=%d, childDAHFailed=%d, onLongestChain=%t",
-		attempted, succeeded, finalErrorCount, finalMissingCount, atomic.LoadInt64(&childDAHFailed), onLongestChain)
+	s.logger.Infof("[MarkTransactionsOnLongestChain] completed: attempted=%d, succeeded=%d, failed=%d, missing=%d, childDAHFailed=%d, onLongestChain=%t, native=%t",
+		attempted, succeeded, finalErrorCount, finalMissingCount, atomic.LoadInt64(&childDAHFailed), onLongestChain, native)
 
 	if finalMissingCount > 0 {
 		if !onLongestChain {
@@ -289,10 +372,10 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			s.logger.Errorf("[MarkTransactionsOnLongestChain] %d further pagination-record DAH errors were not returned", dropped)
 		}
 
-		return errors.Join(allErrors...)
+		return errors.Join(append(allErrors, resendErr)...)
 	}
 
-	return nil
+	return resendErr
 }
 
 // applyLongestChainChildDAH applies the pagination-record follow-ups of one batch through the shared
@@ -470,4 +553,89 @@ func binsSayExternal(bins aerospike.BinMap) bool {
 	external, ok := bins[fields.External.String()].(bool)
 
 	return ok && external
+}
+
+// nativeMarkOutcome classifies one sub-op 14 batch record.
+type nativeMarkOutcome int
+
+const (
+	nativeMarkOK nativeMarkOutcome = iota
+	nativeMarkMissing
+	nativeMarkUnsupported
+	nativeMarkFailed
+)
+
+// nativeMarkResult reads one sub-op 14 result into res. A missing record comes back as
+// KEY_NOT_FOUND (the native write is UPDATE_ONLY) or as a TX_NOT_FOUND status; a PARAMETER_ERROR
+// means the node does not serve sub-op 14. It never demotes the other native ops: an older server
+// rejects only this sub-op.
+func (s *Store) nativeMarkResult(br *aerospike.BatchRecord, res *LuaMapResponse) (nativeMarkOutcome, error) {
+	if br.Err != nil {
+		switch {
+		case isKeyNotFound(br.Err):
+			return nativeMarkMissing, nil
+		case hasResultCode(br.Err, types.PARAMETER_ERROR):
+			return nativeMarkUnsupported, br.Err
+		default:
+			return nativeMarkFailed, br.Err
+		}
+	}
+
+	if br.Record == nil {
+		return nativeMarkFailed, errors.NewStorageError("[MarkTransactionsOnLongestChain] markLongestChain returned no record")
+	}
+
+	res.Reset()
+
+	if err := s.parseLuaMapResponseInto(br.Record.Bins[nativeOpResultBin], res); err != nil {
+		return nativeMarkFailed, errors.NewStorageError("[MarkTransactionsOnLongestChain] unparsable markLongestChain response", err)
+	}
+
+	if res.Status != LuaStatusOK {
+		if res.ErrorCode == LuaErrorCodeTxNotFound {
+			return nativeMarkMissing, nil
+		}
+
+		return nativeMarkFailed, errors.NewStorageError("[MarkTransactionsOnLongestChain] markLongestChain failed: %s: %s", res.ErrorCode, res.Message)
+	}
+
+	return nativeMarkOK, nil
+}
+
+// collectNativeMarkFollowUp queues the pagination-record follow-up of an external master from its
+// sub-op 14 response, as childDAHFollowUps.collect does from the expression path's bins: a DAHSET
+// copies the new deleteAtHeight to the pages, a DAHUNSET clears them. The server signals only for an
+// external master whose deleteAtHeight changed. states gets the values the restore needs if a page
+// write fails. hash must stay valid until the batch's follow-ups are applied.
+func collectNativeMarkFollowUp(f *childDAHFollowUps, states map[chainhash.Hash]masterState, hash *chainhash.Hash, res *LuaMapResponse) {
+	var newDAH *uint32
+
+	switch res.Signal {
+	case LuaSignalDAHSet:
+		if !res.HasDeleteAtHeight {
+			return
+		}
+
+		dah := uint32(res.DeleteAtHeight)
+		newDAH = &dah
+		f.addSet(hash, res.ChildCount, dah, reportedDAHVersion(res))
+	case LuaSignalDAHUnset:
+		f.addUnset(hash, res.ChildCount, reportedDAHVersion(res))
+	default:
+		return
+	}
+
+	state := masterState{newDAH: newDAH}
+
+	if res.HasOldDeleteAtHeight {
+		old := uint32(res.OldDeleteAtHeight)
+		state.oldDAH = &old
+	}
+
+	if res.HasOldUnminedSince {
+		old := res.OldUnminedSince
+		state.oldUnminedSince = &old
+	}
+
+	states[*hash] = state
 }
