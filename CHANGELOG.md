@@ -149,8 +149,7 @@ read every section between yours and the target.
   `ParentOutputsForValidation`.** `utxo.DefaultSpendAndCreateMulti` provides the first. (#1875)
 - **A replay of a pruned transaction is refused** with `ERR_UTXO_SPENDING_TX_PRUNED` (code 78; HTTP
   409, gRPC `FailedPrecondition`) where it was accepted before, and a block above the checkpoint
-  that carries one is marked invalid. Upgrade the validator with subtree validation: an older
-  validator drops the new `ignore_locked` field and answers `TX_LOCKED`. (#1702)
+  that carries one is marked invalid. (#1702)
 - **Block assembly can fail to start while a skipped-fork mark is unfinished.** A restart finishes
   it before loading the pool, and fails if the subtree or UTXO store doesn't answer or
   `BlockAssemblerSkippedForkMark` is malformed: restart once they answer, or clear that key. (#2065)

@@ -708,10 +708,6 @@ func optionsFromValidateRequest(req *validator_api.ValidateTransactionRequest) (
 		opts.OutpointOnlySpend = *req.OutpointOnlySpend
 	}
 
-	if req.IgnoreLocked != nil {
-		opts.IgnoreLocked = *req.IgnoreLocked
-	}
-
 	return opts, nil
 }
 
