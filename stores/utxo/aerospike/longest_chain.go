@@ -437,8 +437,8 @@ func newLongestChainSlots(size int, policy *aerospike.BatchWritePolicy, ops []*a
 	}
 }
 
-// set points slot k at hash. On an error the slot keeps no usable key, and the caller leaves the
-// transaction out of the batch and reuses slot k for the next one.
+// set points slot k at hash. On an error the caller leaves the transaction out of the batch and
+// gives slot k to the next transaction, whose set resets the slot's key again.
 func (ls *longestChainSlots) set(k int, hash *chainhash.Hash, namespace, setName string) error {
 	ls.hashes[k] = *hash
 
