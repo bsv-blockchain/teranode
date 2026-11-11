@@ -24,3 +24,8 @@ func (s *Store) StopConflictingIndexSelfTest() {
 func SetChildDAHBeforeWrite(f func()) {
 	childDAHBeforeWrite = f
 }
+
+// UsesNativeMark reports whether MarkTransactionsOnLongestChain sends native sub-op 14.
+func (s *Store) UsesNativeMark() bool {
+	return s.useNativeMark()
+}

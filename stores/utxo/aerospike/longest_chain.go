@@ -372,7 +372,11 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 			s.logger.Errorf("[MarkTransactionsOnLongestChain] %d further pagination-record DAH errors were not returned", dropped)
 		}
 
-		return errors.Join(append(allErrors, resendErr)...)
+		if resendErr != nil {
+			allErrors = append(allErrors, resendErr)
+		}
+
+		return errors.Join(allErrors...)
 	}
 
 	return resendErr

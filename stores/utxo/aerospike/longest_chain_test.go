@@ -2,6 +2,7 @@ package aerospike_test
 
 import (
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/bsv-blockchain/aerospike-client-go/v8"
@@ -588,6 +589,12 @@ func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
 	)
 
 	require.NoError(t, store.SetBlockHeight(height))
+
+	// The same expectations hold on both write paths; with native ops requested (a mod-teranode fork
+	// image, see container_helper_test.go) this run must actually take native sub-op 14.
+	if os.Getenv("TERANODE_TEST_AEROSPIKE_NATIVE_OPS") == "true" {
+		require.True(t, store.UsesNativeMark(), "native ops requested but the mark is not on sub-op 14")
+	}
 
 	retention := int(tSettings.GetUtxoStoreBlockHeightRetention())
 	require.NotZero(t, retention)
