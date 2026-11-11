@@ -3,14 +3,17 @@ package metered
 import (
 	"context"
 	"io"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/stores/blob"
+	blobfile "github.com/bsv-blockchain/teranode/stores/blob/file"
 	"github.com/bsv-blockchain/teranode/stores/blob/memory"
 	"github.com/bsv-blockchain/teranode/stores/blob/options"
+	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
@@ -148,4 +151,91 @@ func TestMeteredPassesThroughHealthAndBlockHeight(t *testing.T) {
 
 	store.SetCurrentBlockHeight(10)
 	require.NoError(t, store.Close(ctx))
+}
+
+// legacyPendingFileStore is the assertion legacy sync's subtree writer makes on its store.
+type legacyPendingFileStore interface {
+	NewPendingFile(ctx context.Context, fileType fileformat.FileType, opts ...options.FileOption) (*blobfile.PendingFile, error)
+}
+
+func newFileStore(t *testing.T) *blobfile.File {
+	t.Helper()
+
+	u, err := url.Parse("file://" + t.TempDir())
+	require.NoError(t, err)
+
+	f, err := blobfile.New(ulogger.TestLogger{}, u)
+	require.NoError(t, err)
+
+	return f
+}
+
+func TestMeteredKeepsPendingFilesOfAFileStore(t *testing.T) {
+	store := New("test_pending_file_store", newFileStore(t))
+
+	_, ok := store.(legacyPendingFileStore)
+	require.True(t, ok)
+}
+
+func TestMeteredDoesNotAddPendingFilesToAStoreWithout(t *testing.T) {
+	store := New("test_pending_memory_store", memory.New())
+
+	_, ok := store.(legacyPendingFileStore)
+	require.False(t, ok)
+}
+
+func TestMeteredCountsACommittedPendingFileAsOneWrite(t *testing.T) {
+	ctx := context.Background()
+	store := New("test_pending_commit", newFileStore(t))
+
+	pending, ok := store.(legacyPendingFileStore)
+	require.True(t, ok)
+
+	file, err := pending.NewPendingFile(ctx, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	_, err = file.Write([]byte("streamed"))
+	require.NoError(t, err)
+
+	before := snapshotOf(t, "test_pending_commit")
+	require.Equal(t, 0.0, before.writes)
+
+	require.NoError(t, file.Commit(ctx, []byte("0123456789abcdef0123456789abcdef")))
+
+	after := snapshotOf(t, "test_pending_commit")
+	require.Equal(t, 1.0, after.writes)
+	require.Equal(t, uint64(1), after.writeSamples)
+	require.Equal(t, 0.0, after.failures)
+
+	got, err := store.Get(ctx, []byte("0123456789abcdef0123456789abcdef"), fileformat.FileTypeTesting)
+	require.NoError(t, err)
+	require.Equal(t, []byte("streamed"), got)
+}
+
+func TestMeteredCountsAFailedPendingCommitAsAFailure(t *testing.T) {
+	ctx := context.Background()
+	store := New("test_pending_commit_failure", newFileStore(t))
+
+	pending, ok := store.(legacyPendingFileStore)
+	require.True(t, ok)
+
+	file, err := pending.NewPendingFile(ctx, fileformat.FileTypeTesting)
+	require.NoError(t, err)
+
+	require.Error(t, file.Commit(ctx, []byte("0123456789abcdef0123456789abcdef")))
+
+	after := snapshotOf(t, "test_pending_commit_failure")
+	require.Equal(t, 1.0, after.writes)
+	require.Equal(t, 1.0, after.failures)
+}
+
+func TestMeteredBlobAlreadyExistsIsNotAFailure(t *testing.T) {
+	ctx := context.Background()
+	exists := New("test_exists", &failingStore{Store: memory.New(), err: errors.NewBlobAlreadyExistsError("key")})
+
+	require.Error(t, exists.Set(ctx, []byte("k"), fileformat.FileTypeTesting, []byte("v")))
+
+	got := snapshotOf(t, "test_exists")
+	require.Equal(t, 1.0, got.writes)
+	require.Equal(t, 0.0, got.failures)
 }
