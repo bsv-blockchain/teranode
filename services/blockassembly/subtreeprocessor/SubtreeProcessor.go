@@ -6329,10 +6329,17 @@ func (stp *SubtreeProcessor) inAssemblyDescendantsOf(removed, missing []chainhas
 	return descendants
 }
 
-// txInpointsFromUtxoStore reads the parent links of nodes from the utxo store, in one batch, for a
-// moved-back block whose subtree meta was not written (blockassembly_storeTxInpointsForSubtreeMeta
-// off). A node whose record is gone, and the coinbase placeholder, get empty links; any other read
-// failure is returned, so the move-back fails rather than return txs to block assembly blind.
+// moveBackStoreReadBatchSize caps how many records one txInpointsFromUtxoStore store call asks for.
+// A subtree can hold 2,097,152 nodes, and one Aerospike batch request for all of them is about
+// 216 MiB, over the client's 120 MiB buffer cap. 16,384 keys is about 1.7 MiB per request. It is a
+// var so a test can shrink it.
+var moveBackStoreReadBatchSize = 16_384
+
+// txInpointsFromUtxoStore reads the parent links of nodes from the utxo store, in batches of
+// moveBackStoreReadBatchSize, for a moved-back block whose subtree meta was not written
+// (blockassembly_storeTxInpointsForSubtreeMeta off). A node whose record is gone, and the coinbase
+// placeholder, get empty links; any other read failure is returned, so the move-back fails rather
+// than return txs to block assembly blind.
 func (stp *SubtreeProcessor) txInpointsFromUtxoStore(ctx context.Context, nodes []subtreepkg.Node) ([]subtreepkg.TxInpoints, error) {
 	txInpoints := make([]subtreepkg.TxInpoints, len(nodes))
 	unresolved := make([]*utxostore.UnresolvedMetaData, 0, len(nodes))
@@ -6349,8 +6356,12 @@ func (stp *SubtreeProcessor) txInpointsFromUtxoStore(ctx context.Context, nodes 
 		return txInpoints, nil
 	}
 
-	if err := stp.utxoStore.BatchDecorate(ctx, unresolved, fields.TxInpoints); err != nil {
-		return nil, err
+	for start := 0; start < len(unresolved); start += moveBackStoreReadBatchSize {
+		end := min(start+moveBackStoreReadBatchSize, len(unresolved))
+
+		if err := stp.utxoStore.BatchDecorate(ctx, unresolved[start:end], fields.TxInpoints); err != nil {
+			return nil, err
+		}
 	}
 
 	for _, item := range unresolved {
