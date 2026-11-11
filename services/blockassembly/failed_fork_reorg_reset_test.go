@@ -122,9 +122,15 @@ func storeSubtreeWithMeta(t *testing.T, blob *blob_memory.Memory, txs ...*bt.Tx)
 	key := st.RootHash()
 	require.NoError(t, blob.Set(t.Context(), key[:], fileformat.FileTypeSubtree, stBytes))
 
+	// Node 0 is the coinbase placeholder, which has no parents. Every tx after it
+	// takes its parents from its inputs: the meta reader rejects a zero parent
+	// count on an ordinary transaction, and the move-back of A would then fail
+	// before the fork reorg reaches the forward step these tests break.
 	meta := subtreepkg.NewSubtreeMeta(st)
-	for i := range st.Nodes {
-		require.NoError(t, meta.SetTxInpoints(i, subtreepkg.NewTxInpoints()))
+	require.NoError(t, meta.SetTxInpoints(0, subtreepkg.NewTxInpoints()))
+
+	for _, tx := range txs {
+		require.NoError(t, meta.SetTxInpointsFromTx(tx))
 	}
 
 	metaBytes, err := meta.Serialize()
