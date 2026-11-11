@@ -24,6 +24,8 @@
 | HTTPBodyLimit | string | 100MB | validator_httpBodyLimit | Maximum HTTP request body size (prevents OOM on oversized requests) |
 | TxMetaKafkaBatchSize | int | 1024 | validator_txmeta_kafka_batchSize | Transaction metadata Kafka batch size |
 | TxMetaKafkaBatchTimeoutMs | int | 5 | validator_txmeta_kafka_batchTimeoutMs | Transaction metadata Kafka batch timeout (ms) |
+| KafkaBackpressure.PauseQueueFillPercent | int | 90 | validator_kafkaBackpressurePauseFillPercent | Pause the Kafka consumer when the block assembly ingest queue, or the held count against `blockassembly_maxTransactionsInMemory`, reaches this percentage of its reported limit. 0 disables both predicates |
+| KafkaBackpressure.ResumeHeldPercent | int | 80 | validator_kafkaBackpressureResumeHeldPercent | Resume a held-count pause once the held count falls to this percentage of the reported in-memory limit. The threshold is kept at least 1 and at least one below the pause threshold, so a small block does not toggle the consumer |
 
 ## Configuration Dependencies
 

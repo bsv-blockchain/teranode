@@ -127,9 +127,6 @@ func TestQuickValidateBlock(t *testing.T) {
 		block.Header.HashMerkleRoot, err = subtree.RootHashWithReplaceRootNode(coinbaseTx.TxIDChainHash(), 0, 0)
 		require.NoError(t, err, "Should create merkle root hash without error")
 
-		// Setup Get expectation for checking existing transactions (used for BlockID reuse on retry)
-		suite.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
-
 		// Setup UTXO store expectations for creating all transactions (including coinbase)
 		// Use mock.Anything for the transaction since the order may vary
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCreateOnly()).Return(&meta.Data{}, nil, nil).Maybe()
@@ -296,12 +293,16 @@ func TestCreateAndSpendUTXOsForBatch_UpdatesExistingTransactions(t *testing.T) {
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, uint32(100), matchCombined()).
 			Return((*meta.Data)(nil), []*utxo.Spend{}, errors.ErrTxExists).Maybe()
 
-		// Mock SetMinedMulti - should be called with both transaction hashes
-		suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.MatchedBy(func(hashes []*chainhash.Hash) bool {
-			return len(hashes) == 2
-		}), mock.MatchedBy(func(info utxo.MinedBlockInfo) bool {
-			return info.BlockID == 50 && info.BlockHeight == 100
-		})).Return(map[chainhash.Hash][]uint32{}, nil).Once()
+		// SetMinedMulti is called once per subtree, each with that subtree's index
+		for subtreeIdx, tx := range regularTxs {
+			txHash := tx.TxIDChainHash()
+
+			suite.MockUTXOStore.On("SetMinedMulti", mock.Anything, mock.MatchedBy(func(hashes []*chainhash.Hash) bool {
+				return len(hashes) == 1 && hashes[0].IsEqual(txHash)
+			}), mock.MatchedBy(func(info utxo.MinedBlockInfo) bool {
+				return info.BlockID == 50 && info.BlockHeight == 100 && info.SubtreeIdx == subtreeIdx
+			})).Return(map[chainhash.Hash][]uint32{}, nil).Once()
+		}
 
 		// Mock the spend phase
 		suite.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchSpendOnly()).
@@ -788,7 +789,8 @@ func setupQuickValidateMocks(s *CatchupTestSuite) {
 	s.MockBlockchain.On("AssignBlockID", mock.Anything, mock.Anything).Return(uint64(1), nil).Maybe()
 	s.MockBlockchain.On("AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	s.MockBlockchain.On("SetBlockSubtreesSet", mock.Anything, mock.Anything).Return(nil).Maybe()
-	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found"))
+	// Quick validation no longer reads a transaction's block ids, so Get may not be called.
+	s.MockUTXOStore.On("Get", mock.Anything, mock.Anything, mock.Anything).Return((*meta.Data)(nil), errors.NewNotFoundError("not found")).Maybe()
 	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCreateOnly()).Return(&meta.Data{}, nil, nil).Maybe()
 	// A list the store refuses as malformed is applied one combined call per transaction.
 	s.MockUTXOStore.On("SpendAndCreate", mock.Anything, mock.Anything, mock.Anything, matchCombined()).Return(&meta.Data{}, []*utxo.Spend{}, nil).Maybe()
@@ -2024,7 +2026,7 @@ func TestQuickValidateOneByOneRemovesPrunedReplayLeftover(t *testing.T) {
 	txids := []chainhash.Hash{*f.child.TxIDChainHash()}
 	replays := newListReplays()
 
-	err = bv.applyOneByOne(ctx, block, txs, txids, []int{0}, true, false, func(*bt.Tx) {}, replays)
+	err = bv.applyOneByOne(ctx, block, txs, txids, []int{0}, true, false, func(*bt.Tx, int) {}, replays)
 	require.Error(t, err)
 	require.ErrorIs(t, err, errors.ErrUtxoSpendingTxPruned, "the replay is rejected at its spend")
 
@@ -2041,8 +2043,7 @@ func TestQuickValidateOneByOneRemovesPrunedReplayLeftover(t *testing.T) {
 // transaction. The record looked like Y's own leftover (locked and carrying
 // "this block's" id), so Y's compensation deleted a record X wrote. A committed
 // block other than Y holds N, so the record is X's and stays, and Y's attempt
-// fails before it writes anything more under N: AddBlock would refuse N anyway,
-// and the retry checks the id before adopting it (recordedBlockID).
+// fails before it writes anything more under N: AddBlock would refuse N anyway.
 func TestQuickValidateSiblingBlockIDIsNotAdoptedAsLeftover(t *testing.T) {
 	bv, store, cleanup := newBlockValidationWithRealStore(t)
 	defer cleanup()
@@ -2076,127 +2077,6 @@ func TestQuickValidateSiblingBlockIDIsNotAdoptedAsLeftover(t *testing.T) {
 
 	_, err = store.Get(ctx, f.child.TxIDChainHash())
 	require.NoError(t, err, "the record X wrote must not be deleted by Y's compensation")
-}
-
-// TestQuickValidateDeclinesARecordedIDACommittedBlockHolds: on a retry the
-// quick path reuses the id recorded on the block's first non-coinbase
-// transaction. When that transaction is shared with block X, already
-// committed, the id is X's. Adopting it made every retry of Y fail at AddBlock,
-// because each retry read the same id back, and treated X's locked records as
-// Y's leftovers. The id is declined and Y reserves its own. X itself, retried,
-// still reuses its id.
-func TestQuickValidateDeclinesARecordedIDACommittedBlockHolds(t *testing.T) {
-	bv, store, cleanup := newBlockValidationWithRealStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	f := newPrunedChainFixture(t, store)
-
-	tip, _, err := bv.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-
-	x := testhelpers.CreateTestBlocksWithPrev(t, 1, tip.Hash())[0]
-	require.NoError(t, bv.blockchainClient.AddBlock(ctx, x, "test-peer"))
-
-	_, xMeta, err := bv.blockchainClient.GetBlockHeader(ctx, x.Hash())
-	require.NoError(t, err)
-
-	_, _, err = store.SpendAndCreate(ctx, f.child, 1400, utxo.WithCreateOnly(),
-		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: xMeta.ID, BlockHeight: 1400}))
-	require.NoError(t, err)
-
-	y, _ := replayBatch(f.child, f.sibling)
-
-	_, reuse, err := bv.recordedBlockID(ctx, y, f.child.TxIDChainHash())
-	require.NoError(t, err)
-	require.False(t, reuse, "Y must not adopt the id committed block X holds")
-
-	id, reuse, err := bv.recordedBlockID(ctx, x, f.child.TxIDChainHash())
-	require.NoError(t, err)
-	require.True(t, reuse, "control: X retried keeps its own id")
-	require.Equal(t, xMeta.ID, id)
-}
-
-// TestQuickValidateRecordedIDPastACommittedHolder: Y's first transaction is
-// mined in committed block X too, and Y's earlier attempt stamped its own id
-// after X's, so the transaction's ids read [X, Y]. The retry must find Y's id
-// past X's and reuse it; reserving a fresh one would leave the records locked
-// under Y's id unrecognised as Y's leftovers.
-func TestQuickValidateRecordedIDPastACommittedHolder(t *testing.T) {
-	bv, store, cleanup := newBlockValidationWithRealStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	f := newPrunedChainFixture(t, store)
-
-	tip, _, err := bv.blockchainClient.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-
-	x := testhelpers.CreateTestBlocksWithPrev(t, 1, tip.Hash())[0]
-	require.NoError(t, bv.blockchainClient.AddBlock(ctx, x, "test-peer"))
-
-	_, xMeta, err := bv.blockchainClient.GetBlockHeader(ctx, x.Hash())
-	require.NoError(t, err)
-
-	_, _, err = store.SpendAndCreate(ctx, f.child, 1400, utxo.WithCreateOnly(),
-		utxo.WithMinedBlockInfo(utxo.MinedBlockInfo{BlockID: xMeta.ID, BlockHeight: 1400}))
-	require.NoError(t, err)
-
-	y, _ := assignedReplayBatch(t, bv, f.child, f.sibling)
-
-	_, err = store.SetMinedMulti(ctx, []*chainhash.Hash{f.child.TxIDChainHash()}, utxo.MinedBlockInfo{BlockID: y.ID, BlockHeight: 1400})
-	require.NoError(t, err)
-
-	id, reuse, err := bv.recordedBlockID(ctx, y, f.child.TxIDChainHash())
-	require.NoError(t, err)
-	require.True(t, reuse, "Y must find its own id past the one committed block X holds")
-	require.Equal(t, y.ID, id)
-
-	// Block W shares the transaction too and holds its own reservation. Y's id
-	// past X's belongs to Y, not to W, so W must not adopt it.
-	w := &model.Block{Height: 1400, Header: &model.BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{0x57}, Nonce: 0x57}}
-	wID, err := bv.blockchainClient.AssignBlockID(ctx, w.Hash())
-	require.NoError(t, err)
-	w.ID = uint32(wID)
-	require.NotEqual(t, y.ID, w.ID, "fixture: W holds a reservation of its own")
-
-	_, reuse, err = bv.recordedBlockID(ctx, w, f.child.TxIDChainHash())
-	require.NoError(t, err)
-	require.False(t, reuse, "another block's uncommitted id past the first must not be adopted")
-}
-
-// failingUtxoGetStore fails Get with a storage error. Everything else goes to the
-// real store.
-type failingUtxoGetStore struct {
-	utxo.Store
-}
-
-func (s *failingUtxoGetStore) Get(_ context.Context, hash *chainhash.Hash, _ ...fields.FieldName) (*meta.Data, error) {
-	return nil, errors.NewStorageError("[failingUtxoGetStore] read of %s failed", hash.String())
-}
-
-// TestRecordedBlockIDFailsOnAFailedRead: a transaction the store does not hold
-// is the expected first-attempt answer, and the block reserves an id of its
-// own. Any other read failure fails the attempt. Treated as "nothing recorded",
-// it reserved a fresh id, so an earlier attempt's records under the old id were
-// not recognised as this block's leftovers and never compensated.
-func TestRecordedBlockIDFailsOnAFailedRead(t *testing.T) {
-	bv, store, cleanup := newBlockValidationWithRealStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	f := newPrunedChainFixture(t, store)
-	y, _ := replayBatch(f.child, f.sibling)
-
-	_, reuse, err := bv.recordedBlockID(ctx, y, f.child.TxIDChainHash())
-	require.NoError(t, err, "a transaction the store does not hold is not a failure")
-	require.False(t, reuse)
-
-	bv.utxoStore = &failingUtxoGetStore{Store: store}
-
-	_, reuse, err = bv.recordedBlockID(ctx, y, f.child.TxIDChainHash())
-	require.ErrorIs(t, err, errors.ErrStorageError, "a failed read must fail the attempt")
-	require.False(t, reuse)
 }
 
 // failingDeleteStore fails DeleteComplete while failing is set. Everything else

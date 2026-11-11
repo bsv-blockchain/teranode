@@ -31,6 +31,14 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **Upgrade every validator and subtree-validation pod before you set
+  `blockassembly_maxTransactionsInMemory`, and keep the default 0 until then.** An old validator
+  never sends `inBlock`, so a new block assembly with the limit set refuses its block transactions
+  and the old validator unlocks them without a template entry. With the limit set,
+  `teranode_validator_invalid_transactions` no longer counts a transaction refused at the limit;
+  `teranode_validator_held_limit_shed_transactions` does. A new validator setting,
+  `validator_kafkaBackpressureResumeHeldPercent` (default 80), sets where a held-count pause
+  resumes. (#1593)
 - **`grpc_admin_api_key` is required.** Blockchain refuses to start if it is empty, a placeholder
   or under 16 characters, and every RPC but `HealthGRPC` needs it. Give every client service the
   same key and upgrade Blockchain last, or restart them together. (#1755)
@@ -43,6 +51,13 @@ read every section between yours and the target.
 - **The alert service picks its network by `network` and validates `alert_genesis_keys`.** On
   testnet and stn, clear `alert_genesis_keys`, `alert_protocol_id` and `alert_topic_name` if they
   hold mainnet values. An explicit key list needs 3–10 compressed public keys or startup fails. (#1955)
+- **Block Validation `BlockFound` with `wait_to_complete` returns the block's outcome.** It no
+  longer answers success at enqueue. A rejected block returns its validation error, whose code
+  varies; one already stored invalid returns `ERR_BLOCK_INVALID`; a failed fetch returns at once with
+  a retryable error; a block sent to catchup or dropped returns a retryable `ERR_SERVICE_ERROR`; a
+  caller whose context ends gets `ERR_CONTEXT_CANCELED`. Under opt-in optimistic peer-block mining,
+  success means the block was added, not fully validated. gRPC callers that wait must handle these.
+  (#2132)
 - **`utxostore_updateTxMinedStatus` is removed.** Nodes that set it to `false` now always run
   mined-tagging and its duplicate-transaction check, with no way to turn them off. Delete the
   key; the loader ignores it. (#2019)
