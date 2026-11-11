@@ -295,7 +295,7 @@ type SubtreeProcessor struct {
 	newSubtreeChan chan NewSubtreeRequest
 
 	// chainedSubtrees stores the ordered list of completed subtrees
-	// chainedSubtreesMu protects chainedSubtrees from races between Stop() and closeChainedSubtrees()
+	// chainedSubtreesMu protects chainedSubtrees from races between Stop() and retireChainedSubtrees()
 	chainedSubtrees   []*subtreepkg.Subtree
 	chainedSubtreesMu sync.Mutex
 
@@ -1729,8 +1729,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	// Clear current tx map before touching chainedSubtrees/currentSubtree
-	// below: closeChainedSubtrees and replacing currentSubtree are themselves
-	// irreversible (mmap-backed subtrees are closed/unmapped), so checking
+	// below: retiring and replacing them is itself irreversible (the
+	// mmap-backed ones are closed/unmapped once retired), so checking
 	// here first means a failed rotation leaves STP fully intact - still on
 	// the old header, subtrees and map - rather than committed to an empty
 	// template with a stale, still-populated map. markNotOnLongestChain above
@@ -1791,19 +1791,23 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// reorg left behind can reach a later reorg or move-forward.
 	stp.failedForkReorgNeedsReset.Store(false)
 
-	stp.closeChainedSubtrees()
-	stp.closeRetiredSubtrees()
+	// Retired, not closed: a failed block movement may have put these subtrees
+	// back while they were still retired, so a direct close here would leave a
+	// closed subtree on the list for the next closeRetiredSubtrees to close again.
+	stp.retireChainedSubtrees()
+	stp.retireSubtrees(stp.currentSubtree.Load())
 
 	// reset never reaches finalizeBlockProcessing, which ends a resized block otherwise
 	stp.blockMaxSizeResizedInBlock = false
 
 	itemsPerFile := int(stp.currentItemsPerFile.Load())
 
-	if cs := stp.currentSubtree.Load(); cs != nil {
-		cs.Close()
-	}
 	newSubtree, _ := stp.newSubtree(itemsPerFile)
 	stp.currentSubtree.Store(newSubtree)
+
+	// The precomputed mining data may still point at the old subtrees; those stay
+	// mapped until the refresh below or the next block's finalizeBlockProcessing.
+	stp.closeRetiredSubtrees()
 	if err := stp.currentSubtree.Load().AddCoinbaseNode(); err != nil {
 		return errors.NewProcessingError("[SubtreeProcessor][Reset] error adding coinbase placeholder to new current subtree", err)
 	}
@@ -2091,9 +2095,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	} else if len(moveForwardBlocks) == 0 && len(moveBackBlocks) == 0 {
 		// no-op reset: block assembly is already at the target block, but chainedSubtrees
 		// and currentSubtree were just cleared above. Refresh precomputedMiningData so it
-		// no longer references the old (now-closed) subtrees.
+		// no longer references the old subtrees, then close the ones it was holding.
 		stp.currentBlockHeader.Store(blockHeader)
 		stp.updatePrecomputedMiningData()
+		stp.closeRetiredSubtrees()
 	}
 
 	if postProcess != nil {
@@ -4390,12 +4395,30 @@ func (stp *SubtreeProcessor) enforceBlockMaxSize(ctx context.Context) error {
 // retireSubtrees defers closing replaced subtrees to closeRetiredSubtrees. Only mmap-backed
 // subtrees are kept: closing unmaps their nodes, which storage workers may still be reading.
 // Heap subtrees need no close, so they are left to the GC instead of being held until the
-// next block.
+// next block. A subtree already retired is not listed again: a failed block movement puts
+// its input subtrees back while they are retired, and the next block retires them a
+// second time, so without this closeRetiredSubtrees would close the same subtree twice.
 func (stp *SubtreeProcessor) retireSubtrees(subtrees ...*subtreepkg.Subtree) {
+	var listed map[*subtreepkg.Subtree]struct{}
+
 	for _, st := range subtrees {
-		if st != nil && st.IsMmapBacked() {
-			stp.retiredSubtrees = append(stp.retiredSubtrees, st)
+		if st == nil || !st.IsMmapBacked() {
+			continue
 		}
+
+		if listed == nil {
+			listed = make(map[*subtreepkg.Subtree]struct{}, len(stp.retiredSubtrees)+len(subtrees))
+			for _, retired := range stp.retiredSubtrees {
+				listed[retired] = struct{}{}
+			}
+		}
+
+		if _, ok := listed[st]; ok {
+			continue
+		}
+
+		listed[st] = struct{}{}
+		stp.retiredSubtrees = append(stp.retiredSubtrees, st)
 	}
 }
 
@@ -4435,9 +4458,8 @@ func (stp *SubtreeProcessor) closeRetiredSubtrees() {
 	stp.retiredSubtrees = kept
 }
 
-// retireChainedSubtrees empties chainedSubtrees like closeChainedSubtrees, but
-// retires the mmap-backed subtrees instead of closing them, so a failed block
-// movement can put them back.
+// retireChainedSubtrees empties chainedSubtrees and retires its mmap-backed
+// subtrees instead of closing them, so a failed block movement can put them back.
 func (stp *SubtreeProcessor) retireChainedSubtrees() {
 	stp.chainedSubtreesMu.Lock()
 	toRetire := stp.chainedSubtrees
@@ -9171,7 +9193,7 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 		if h != nil && h.f != nil {
 			h.f()
 			// Wait for the main goroutine to exit before cleaning up chainedSubtrees
-			// to avoid data race with closeChainedSubtrees()
+			// to avoid data race with retireChainedSubtrees()
 			timeout := stp.stopWaitTimeout
 			if timeout <= 0 {
 				timeout = defaultStopWaitTimeout
@@ -9191,23 +9213,29 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
-		// Clean up mmap-backed subtrees (hold mutex to avoid race with closeChainedSubtrees)
+		// Clean up mmap-backed subtrees (hold mutex to avoid race with retireChainedSubtrees).
+		// Every retired subtree goes too, including any the mining snapshot still points
+		// at: nothing reads them after Stop, and only Close removes their mmap files. A
+		// subtree a failed block movement put back is both installed and retired, so each
+		// one is closed once.
 		stp.chainedSubtreesMu.Lock()
 		toClose := stp.chainedSubtrees
 		stp.chainedSubtrees = nil
 		stp.chainedSubtreesMu.Unlock()
-		for _, st := range toClose {
-			st.Close()
-		}
-		if cs := stp.currentSubtree.Load(); cs != nil {
-			cs.Close()
-		}
-		// every retired subtree, including any the mining snapshot still points at:
-		// nothing reads them after Stop, and only Close removes their mmap files
-		for _, st := range stp.retiredSubtrees {
-			st.Close()
-		}
+
+		toClose = append(toClose, stp.currentSubtree.Load())
+		toClose = append(toClose, stp.retiredSubtrees...)
 		stp.retiredSubtrees = nil
+
+		closed := make(map[*subtreepkg.Subtree]struct{}, len(toClose))
+		for _, st := range toClose {
+			if _, ok := closed[st]; ok || st == nil {
+				continue
+			}
+
+			closed[st] = struct{}{}
+			st.Close()
+		}
 		// Clean up DiskTxMap. Both halves of the double buffer own log
 		// directories, as does anything still retired from an interrupted reorg,
 		// and only Close() removes them — see closeRetiredDiskTxMaps.
@@ -9244,19 +9272,6 @@ func (stp *SubtreeProcessor) newSubtree(leafCount int) (*subtreepkg.Subtree, err
 		return st, nil
 	}
 	return subtreepkg.NewTreeByLeafCount(leafCount)
-}
-
-// closeChainedSubtrees closes all mmap-backed chained subtrees and resets the slice.
-func (stp *SubtreeProcessor) closeChainedSubtrees() {
-	stp.chainedSubtreesMu.Lock()
-	toClose := stp.chainedSubtrees
-	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
-	stp.chainedSubtreeCount.Store(0)
-	stp.chainedSubtreesTotalSize.Store(0)
-	stp.chainedSubtreesMu.Unlock()
-	for _, st := range toClose {
-		st.Close()
-	}
 }
 
 // MarkRecoveredConflicts finishes durable subtree updates during startup,

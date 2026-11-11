@@ -10,9 +10,11 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"testing"
 
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/stretchr/testify/require"
@@ -121,4 +123,68 @@ func lastLines(s string, n int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// installedMmapSubtrees returns the chained and current subtrees the processor
+// holds. Called between movements, while the processor goroutine is idle.
+func installedMmapSubtrees(stp *SubtreeProcessor) []*subtreepkg.Subtree {
+	installed := slices.Clone(stp.chainedSubtrees)
+	return append(installed, stp.currentSubtree.Load())
+}
+
+func requireRetiredOnce(t *testing.T, stp *SubtreeProcessor) {
+	t.Helper()
+
+	seen := make(map[*subtreepkg.Subtree]struct{}, len(stp.retiredSubtrees))
+	for _, st := range stp.retiredSubtrees {
+		_, dup := seen[st]
+		require.False(t, dup, "a retired subtree is listed twice, so closeRetiredSubtrees would close it twice")
+		seen[st] = struct{}{}
+	}
+}
+
+// A failed block movement puts back subtrees that are still retired. The next
+// movement retires them again, and the list must still hold each one once, or
+// the commit that follows closes the same subtree twice. Failing the same block
+// twice stops before any commit closes the list, so the list can be read.
+func TestFailedBlockMovement_RetiresAPutBackSubtreeOnce(t *testing.T) {
+	f := newStepRestoreFixture(t, stepRestoreOptions{opts: []Options{WithMmapDir(t.TempDir())}})
+	require.True(t, f.stp.currentSubtree.Load().IsMmapBacked(), "the fixture must use mmap subtrees")
+
+	// m1 is the only transaction in the remainder, so its missing map entry fails
+	// the remainder pass after the block's subtree reset, every time.
+	require.True(t, f.stp.GetCurrentTxMap().Delete(f.m1))
+
+	require.Error(t, f.stp.MoveForwardBlock(f.blockA2))
+
+	putBack := installedMmapSubtrees(f.stp)
+	require.True(t, slices.Contains(f.stp.retiredSubtrees, putBack[len(putBack)-1]), "precondition: the put-back current subtree is still retired")
+
+	require.Error(t, f.stp.MoveForwardBlock(f.blockA2))
+	requireRetiredOnce(t, f.stp)
+}
+
+// The reset that must follow a failed fork reorg replaces subtrees the failed
+// step put back while they were still retired. It must close them through the
+// retired list, not directly, so no closed subtree is left on the list for a
+// later closeRetiredSubtrees to close again.
+func TestFailedForkReorg_ResetLeavesNoReplacedSubtreeRetired(t *testing.T) {
+	f := newStepRestoreFixture(t, stepRestoreOptions{opts: []Options{WithMmapDir(t.TempDir())}})
+	require.True(t, f.stp.currentSubtree.Load().IsMmapBacked(), "the fixture must use mmap subtrees")
+
+	f.atStep(f.parent, func(stp *SubtreeProcessor) { failSequentialRemainderOn(t, stp, f.a1) })
+	require.Error(t, f.stp.Reorg([]*model.Block{f.blockA}, []*model.Block{f.blockF, f.blockF2}))
+
+	putBack := installedMmapSubtrees(f.stp)
+	require.True(t, slices.Contains(f.stp.retiredSubtrees, putBack[len(putBack)-1]), "precondition: the put-back current subtree is still retired")
+
+	f.sweepAfterFailure(t)
+
+	requireRetiredOnce(t, f.stp)
+
+	for _, st := range putBack {
+		// compared by pointer: require.NotContains compares contents, and reading a
+		// closed subtree's nodes faults
+		require.False(t, slices.Contains(f.stp.retiredSubtrees, st), "the reset closed this subtree, so it must not stay retired")
+	}
 }
