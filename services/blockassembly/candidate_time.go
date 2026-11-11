@@ -138,6 +138,56 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 	return timeNow, nil
 }
 
+func (b *BlockAssembler) candidateTimeAndBits(ctx context.Context, parentHeader *model.BlockHeader) (int64, *model.NBit, error) {
+	timeNow, err := b.candidateTime(ctx, parentHeader)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	timeNow = b.emergencyDifficultyHold(ctx, parentHeader, timeNow)
+
+	nBits, err := b.getNextNbits(parentHeader, timeNow)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	return timeNow, nBits, nil
+}
+
+func (b *BlockAssembler) emergencyDifficultyHold(ctx context.Context, parentHeader *model.BlockHeader, timeNow int64) int64 {
+	if b.settings == nil || b.settings.ChainCfgParams == nil || parentHeader == nil {
+		return timeNow
+	}
+
+	params := b.settings.ChainCfgParams
+	delay := int64(b.settings.BlockAssembly.EmergencyDifficultyDelay / time.Second)
+
+	if delay <= 0 || !params.ReduceMinDifficulty || params.NoDifficultyAdjustment {
+		return timeNow
+	}
+
+	threshold := int64(parentHeader.Timestamp) + 2*int64(params.TargetTimePerBlock/time.Second)
+	if timeNow <= threshold || timeNow > threshold+delay {
+		return timeNow
+	}
+
+	parentHash := parentHeader.Hash()
+
+	if !params.GenerateSupported {
+		entry := b.mtpFloor(ctx, parentHeader, parentHash)
+		if entry == nil || entry.minTime > threshold {
+			return timeNow
+		}
+	}
+
+	if last := b.emergencyHoldLoggedTip.Load(); last == nil || !last.IsEqual(parentHash) {
+		b.emergencyHoldLoggedTip.Store(parentHash)
+		b.logger.Infof("[candidateTime] holding candidate time at %d for parent %s: the minimum-difficulty rule is delayed by %d seconds on this node, until %d", threshold, parentHash.String(), delay, threshold+delay)
+	}
+
+	return threshold
+}
+
 // MinCandidateTime returns the median-time-past floor candidateTime computed for
 // parentHash, and whether it is known. It is a pure memo read: the entry is warm
 // whenever a candidate was just built on that parent, so the submit path can

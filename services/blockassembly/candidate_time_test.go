@@ -13,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/go-chaincfg"
 	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/model"
+	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
@@ -840,6 +841,10 @@ func (l *warnCountingLogger) Warnf(format string, args ...interface{}) {
 	l.record(format)
 }
 
+func (l *warnCountingLogger) Infof(format string, args ...interface{}) {
+	l.record(format)
+}
+
 func (l *warnCountingLogger) Errorf(format string, args ...interface{}) {
 	l.errs.Add(1)
 	l.record(format)
@@ -952,4 +957,267 @@ func TestEmptyBlockCandidateTimeFlooredAtMedianTimePast(t *testing.T) {
 
 	medianTimePast := baseTime + 5
 	require.Equal(t, medianTimePast+1, candidate.Time)
+}
+
+const emergencyTestChainLength = 160
+
+func emergencyTestParams() *chaincfg.Params {
+	params := chaincfg.TeraScalingTestNetParams
+
+	return &params
+}
+
+func buildSpacedChain(t *testing.T, ctx context.Context, blockchainClient blockchain.ClientI, tipTime uint32) *model.BlockHeader {
+	t.Helper()
+
+	prevHeader, _, err := blockchainClient.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	nbits, err := model.NewNBitFromString("1d00ffff")
+	require.NoError(t, err)
+
+	const spacing = 60
+
+	for i := uint32(1); i <= emergencyTestChainLength; i++ {
+		header := &model.BlockHeader{
+			Version:        0x20000000,
+			HashPrevBlock:  prevHeader.Hash(),
+			HashMerkleRoot: &chainhash.Hash{},
+			Timestamp:      tipTime - (emergencyTestChainLength-i)*spacing,
+			Bits:           *nbits,
+			Nonce:          i,
+		}
+
+		require.NoError(t, blockchainClient.AddBlock(ctx, &model.Block{
+			Header:           header,
+			CoinbaseTx:       coinbaseEncoding(t, i, 5_000_000_000),
+			TransactionCount: 1,
+			Subtrees:         []*chainhash.Hash{},
+		}, ""))
+
+		prevHeader = header
+	}
+
+	return prevHeader
+}
+
+func TestEmergencyDifficultyHold(t *testing.T) {
+	const (
+		parentTime = int64(1_700_000_000)
+		threshold  = parentTime + 1200
+	)
+
+	parent := &model.BlockHeader{
+		Version:        0x20000000,
+		HashPrevBlock:  &chainhash.Hash{1},
+		HashMerkleRoot: &chainhash.Hash{},
+		Timestamp:      uint32(parentTime),
+	}
+
+	generateParams := emergencyTestParams()
+	generateParams.GenerateSupported = true
+
+	regtestParams := chaincfg.RegressionNetParams
+	mainnetParams := chaincfg.MainNetParams
+	stnParams := chaincfg.StnParams
+	testnetParams := chaincfg.TestNetParams
+	teratestnetParams := chaincfg.TeraTestNetParams
+
+	knownFloor := func(minTime int64) *int64 { return &minTime }
+
+	tests := []struct {
+		name    string
+		params  *chaincfg.Params
+		delay   time.Duration
+		floor   *int64
+		timeNow int64
+		want    int64
+	}{
+		{"no delay keeps the wall clock past 20 minutes", emergencyTestParams(), 0, knownFloor(parentTime), threshold + 1, threshold + 1},
+		{"negative delay is no delay", emergencyTestParams(), -time.Minute, knownFloor(parentTime), threshold + 1, threshold + 1},
+		{"a fraction of a second is no delay", emergencyTestParams(), 500 * time.Millisecond, knownFloor(parentTime), threshold + 1, threshold + 1},
+		{"before 20 minutes the wall clock is kept", emergencyTestParams(), 2 * time.Minute, knownFloor(parentTime), parentTime + 10, parentTime + 10},
+		{"at exactly 20 minutes the wall clock is kept", emergencyTestParams(), 2 * time.Minute, knownFloor(parentTime), threshold, threshold},
+		{"one second past 20 minutes is held", emergencyTestParams(), 2 * time.Minute, knownFloor(parentTime), threshold + 1, threshold},
+		{"the last second of the delay is held", emergencyTestParams(), 2 * time.Minute, knownFloor(parentTime), threshold + 120, threshold},
+		{"one second past the delay is released", emergencyTestParams(), 2 * time.Minute, knownFloor(parentTime), threshold + 121, threshold + 121},
+		{"testnet is held", &testnetParams, 2 * time.Minute, knownFloor(parentTime), threshold + 1, threshold},
+		{"teratestnet is held", &teratestnetParams, 2 * time.Minute, knownFloor(parentTime), threshold + 1, threshold},
+		{"mainnet ignores the delay", &mainnetParams, 2 * time.Minute, knownFloor(parentTime), threshold + 1, threshold + 1},
+		{"stn ignores the delay", &stnParams, 2 * time.Minute, knownFloor(parentTime), threshold + 1, threshold + 1},
+		{"regtest ignores the delay", &regtestParams, 2 * time.Minute, knownFloor(parentTime), threshold + 1, threshold + 1},
+		{"a median-time-past floor at the held time still holds", emergencyTestParams(), 2 * time.Minute, knownFloor(threshold), threshold + 1, threshold},
+		{"a median-time-past floor above the held time releases", emergencyTestParams(), 2 * time.Minute, knownFloor(threshold + 1), threshold + 1, threshold + 1},
+		{"an unknown median-time-past floor releases", emergencyTestParams(), 2 * time.Minute, nil, threshold + 1, threshold + 1},
+		{"a chain with an advisory median rule holds without a floor", generateParams, 2 * time.Minute, nil, threshold + 1, threshold},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := &blockchain.Mock{}
+			mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, context.DeadlineExceeded)
+			mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, context.DeadlineExceeded)
+
+			tSettings := &settings.Settings{ChainCfgParams: tt.params}
+			tSettings.BlockAssembly.EmergencyDifficultyDelay = tt.delay
+
+			assembler := &BlockAssembler{
+				logger:           ulogger.TestLogger{},
+				blockchainClient: mockClient,
+				settings:         tSettings,
+			}
+
+			if tt.floor != nil {
+				assembler.placeMtpFloor(&mtpFloorEntry{parent: *parent.Hash(), minTime: *tt.floor})
+			}
+
+			require.Equal(t, tt.want, assembler.emergencyDifficultyHold(t.Context(), parent, tt.timeNow))
+		})
+	}
+
+	t.Run("nil settings and nil parent keep the wall clock", func(t *testing.T) {
+		require.Equal(t, threshold+1, (&BlockAssembler{logger: ulogger.TestLogger{}}).emergencyDifficultyHold(t.Context(), parent, threshold+1))
+
+		tSettings := &settings.Settings{ChainCfgParams: emergencyTestParams()}
+		tSettings.BlockAssembly.EmergencyDifficultyDelay = 2 * time.Minute
+
+		require.Equal(t, threshold+1, (&BlockAssembler{logger: ulogger.TestLogger{}, settings: tSettings}).emergencyDifficultyHold(t.Context(), nil, threshold+1))
+	})
+
+	t.Run("the hold is logged once per parent", func(t *testing.T) {
+		logger := &warnCountingLogger{}
+
+		tSettings := &settings.Settings{ChainCfgParams: generateParams}
+		tSettings.BlockAssembly.EmergencyDifficultyDelay = 2 * time.Minute
+
+		assembler := &BlockAssembler{logger: logger, settings: tSettings}
+
+		for i := int64(1); i <= 5; i++ {
+			require.Equal(t, threshold, assembler.emergencyDifficultyHold(t.Context(), parent, threshold+i))
+		}
+
+		require.Equal(t, 1, logger.countMatching("holding candidate time"))
+	})
+}
+
+func TestEmergencyDifficultyDelayCandidate(t *testing.T) {
+	powLimit, err := model.NewNBitFromString("1d00ffff")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name        string
+		delay       time.Duration
+		tipAge      time.Duration
+		wantHeld    bool
+		wantMinimum bool
+	}{
+		{"no delay gives the minimum difficulty as soon as 20 minutes pass", 0, 21 * time.Minute, false, true},
+		{"inside the delay the candidate keeps the usual difficulty at the held time", 5 * time.Minute, 21 * time.Minute, true, false},
+		{"after the delay the candidate has the minimum difficulty", 5 * time.Minute, 30 * time.Minute, false, true},
+		{"before 20 minutes the delay changes nothing", 5 * time.Minute, 5 * time.Minute, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, _ := setupServerWithSettings(t, func(tSettings *settings.Settings) {
+				tSettings.ChainCfgParams = emergencyTestParams()
+				tSettings.BlockAssembly.EmergencyDifficultyDelay = tt.delay
+			})
+
+			require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+			tipTime := uint32(time.Now().Add(-tt.tipAge).Unix())
+			tip := buildSpacedChain(t, t.Context(), server.blockchainClient, tipTime)
+			server.blockAssembler.setBestBlockHeader(tip, emergencyTestChainLength)
+
+			usual, err := server.blockchainClient.GetNextWorkRequired(t.Context(), tip.Hash(), int64(tipTime)+1)
+			require.NoError(t, err)
+			require.NotEqual(t, *powLimit, *usual, "the chain must have a difficulty above the minimum or the test proves nothing")
+
+			before := time.Now().Unix()
+			candidate, _, err := server.blockAssembler.GetMiningCandidate(t.Context())
+			after := time.Now().Unix()
+
+			require.NoError(t, err)
+			require.Equal(t, tip.Hash().CloneBytes(), candidate.PreviousHash)
+			require.Equal(t, uint32(emergencyTestChainLength+1), candidate.Height)
+
+			if tt.wantHeld {
+				require.Equal(t, tipTime+1200, candidate.Time)
+			} else {
+				require.GreaterOrEqual(t, int64(candidate.Time), before)
+				require.LessOrEqual(t, int64(candidate.Time), after)
+			}
+
+			if tt.wantMinimum {
+				require.Equal(t, powLimit.CloneBytes(), candidate.NBits)
+			} else {
+				require.Equal(t, usual.CloneBytes(), candidate.NBits)
+			}
+
+			required, err := server.blockchainClient.GetNextWorkRequired(t.Context(), tip.Hash(), int64(candidate.Time))
+			require.NoError(t, err)
+			require.Equal(t, required.CloneBytes(), candidate.NBits, "block validation requires exactly this difficulty for the candidate timestamp")
+
+			difficulty, err := server.GetCurrentDifficulty(t.Context(), &blockassembly_api.EmptyMessage{})
+			require.NoError(t, err)
+
+			if tt.wantMinimum {
+				require.InDelta(t, 1.0, difficulty.Difficulty, 1e-9)
+			} else {
+				require.Greater(t, difficulty.Difficulty, 1.0)
+			}
+		})
+	}
+}
+
+func TestEmergencyDifficultyDelayMainPathCandidate(t *testing.T) {
+	initPrometheusMetrics()
+
+	testItems := setupBlockAssemblyTest(t, func(tSettings *settings.Settings) {
+		tSettings.ChainCfgParams = emergencyTestParams()
+		tSettings.BlockAssembly.EmergencyDifficultyDelay = 5 * time.Minute
+	})
+	ba := testItems.blockAssembler
+	_, _, _ = setupBlockchainClient(t, testItems)
+
+	ctx := t.Context()
+
+	tipTime := uint32(time.Now().Add(-21 * time.Minute).Unix())
+	tip := buildSpacedChain(t, ctx, ba.blockchainClient, tipTime)
+
+	ba.setBestBlockHeader(tip, emergencyTestChainLength)
+	ba.subtreeProcessor.InitCurrentBlockHeader(tip)
+
+	for i := 0; i < 5; i++ {
+		txHash := chainhash.HashH([]byte{byte(i), 0xCC})
+		require.Equal(t, subtreeprocessor.Admitted, ba.AddTxBatchBounded(
+			[]subtreepkg.Node{{Hash: txHash, Fee: uint64(100), SizeInBytes: 250}},
+			[]*subtreepkg.TxInpoints{{}},
+			false,
+		))
+	}
+
+	var candidate *model.MiningCandidate
+
+	require.Eventually(t, func() bool {
+		var err error
+		candidate, _, err = ba.GetMiningCandidate(ctx)
+
+		return err == nil && candidate != nil && candidate.NumTxs > 0
+	}, 5*time.Second, 50*time.Millisecond)
+
+	powLimit, err := model.NewNBitFromString("1d00ffff")
+	require.NoError(t, err)
+
+	usual, err := ba.blockchainClient.GetNextWorkRequired(ctx, tip.Hash(), int64(tipTime)+1)
+	require.NoError(t, err)
+	require.NotEqual(t, *powLimit, *usual)
+
+	require.Equal(t, tipTime+1200, candidate.Time)
+	require.Equal(t, usual.CloneBytes(), candidate.NBits)
+
+	required, err := ba.blockchainClient.GetNextWorkRequired(ctx, tip.Hash(), int64(candidate.Time))
+	require.NoError(t, err)
+	require.Equal(t, required.CloneBytes(), candidate.NBits)
 }

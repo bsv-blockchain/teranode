@@ -178,6 +178,8 @@ type BlockAssembler struct {
 	// occupies a slot exactly once (see mtpFloor)
 	mtpFloorFlight singleflight.Group
 
+	emergencyHoldLoggedTip atomic.Pointer[chainhash.Hash]
+
 	// stateChangeCh notifies listeners of state changes
 	// Protected by stateChangeMu to prevent race conditions
 	stateChangeMu sync.RWMutex
@@ -2948,7 +2950,7 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	// floored at the parent chain's median-time-past+1, so the block we hand
 	// to miners cannot violate the median-time rule that block validation
 	// enforces (see candidateTime).
-	timeNow, err := b.candidateTime(ctx, data.PreviousHeader)
+	timeNow, nBits, err := b.candidateTimeAndBits(ctx, data.PreviousHeader)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2956,11 +2958,6 @@ func (b *BlockAssembler) GetMiningCandidate(ctx context.Context) (*model.MiningC
 	timeNowUint32, err := safeconversion.Int64ToUint32(timeNow)
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("error converting time now", err)
-	}
-
-	nBits, err := b.getNextNbits(data.PreviousHeader, timeNow)
-	if err != nil {
-		return nil, nil, err
 	}
 
 	if b.settings.ChainCfgParams == nil {
@@ -3030,7 +3027,7 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 	nextBlockHeight := bestBlockHeight + 1
 
 	// Same median-time-past floor as the main candidate path (see candidateTime).
-	timeNow, err := b.candidateTime(ctx, bestBlockHeader)
+	timeNow, nBits, err := b.candidateTimeAndBits(ctx, bestBlockHeader)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -3040,11 +3037,6 @@ func (b *BlockAssembler) generateEmptyBlockCandidate(ctx context.Context, bestBl
 	timeNowUint32, err := safeconversion.Int64ToUint32(timeNow)
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("error converting time", err)
-	}
-
-	nBits, err := b.getNextNbits(bestBlockHeader, timeNow)
-	if err != nil {
-		return nil, nil, err
 	}
 
 	blockSubsidy := util.GetBlockSubsidyForHeight(nextBlockHeight, b.settings.ChainCfgParams)
