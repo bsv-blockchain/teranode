@@ -323,7 +323,6 @@ func NewSettings(alternativeContext ...string) *Settings {
 			GRPCMaxRetries:                       getInt("blockassembly_grpcMaxRetries", 3, alternativeContext...),
 			GRPCRetryBackoff:                     getDuration("blockassembly_grpcRetryBackoff", 2*time.Second, alternativeContext...),
 			LocalDAHCache:                        getString("blockassembly_localDAHCache", "", alternativeContext...),
-			MaxBlockReorgCatchup:                 getInt("blockassembly_maxBlockReorgCatchup", 100, alternativeContext...),
 			MaxBlockReorgRollback:                getInt("blockassembly_maxBlockReorgRollback", 100, alternativeContext...),
 			MoveBackBlockConcurrency:             getInt("blockassembly_moveBackBlockConcurrency", 375, alternativeContext...),
 			ProcessRemainderTxHashesConcurrency:  getInt("blockassembly_processRemainderTxHashesConcurrency", 375, alternativeContext...),
