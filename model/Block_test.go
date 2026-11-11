@@ -167,10 +167,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		assert.Contains(t, err.Error(), "parent transaction")
 	})
 
-	t.Run("getSubtreeMetaSlice basic", func(t *testing.T) {
-		// Test with empty inputs
-		block := &Block{}
-
+	t.Run("ReadSubtreeMeta basic", func(t *testing.T) {
 		txHash, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 
 		// Create empty subtree
@@ -181,7 +178,7 @@ func TestZeroCoverageFunctions(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
-		_, _ = block.getSubtreeMetaSlice(ctx, NewLocalSubtreeStore(), *txHash, subtree)
+		_, _ = ReadSubtreeMeta(ctx, NewLocalSubtreeStore(), *txHash, subtree)
 	})
 
 	t.Run("validateSubtree minimal", func(t *testing.T) {
@@ -2939,10 +2936,7 @@ func TestValidationFunctions(t *testing.T) {
 	hash1, _ := chainhash.NewHashFromStr("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
 	hash2, _ := chainhash.NewHashFromStr("000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd")
 
-	t.Run("getSubtreeMetaSlice error", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{hash1}, 1, 123, 0, 0)
-		require.NoError(t, err)
-
+	t.Run("ReadSubtreeMeta error", func(t *testing.T) {
 		ctx := context.Background()
 		mockSubtreeStore := &mockSubtreeStore{shouldError: true}
 
@@ -2953,7 +2947,7 @@ func TestValidationFunctions(t *testing.T) {
 		require.NoError(t, err)
 
 		// This should error because the subtree meta doesn't exist
-		_, err = block.getSubtreeMetaSlice(ctx, mockSubtreeStore, *hash1, subtree)
+		_, err = ReadSubtreeMeta(ctx, mockSubtreeStore, *hash1, subtree)
 		require.Error(t, err)
 		// With mock store, we get "mock should error" instead of "file not found"
 		assert.True(t, err != nil)
@@ -3317,10 +3311,7 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 	coinbase, err := bt.NewTxFromString(CoinbaseHex)
 	require.NoError(t, err)
 
-	t.Run("getSubtreeMetaSlice with mock store", func(t *testing.T) {
-		block, err := NewBlock(blockHeader, coinbase, []*chainhash.Hash{}, 1, 123, 0, 0)
-		require.NoError(t, err)
-
+	t.Run("ReadSubtreeMeta with mock store", func(t *testing.T) {
 		// Create test subtree
 		subtree, err := subtreepkg.NewTreeByLeafCount(4)
 		require.NoError(t, err)
@@ -3328,11 +3319,11 @@ func TestAdditionalCoverageFunctions(t *testing.T) {
 		// Create mock subtree store instead of nil
 		mockStore := &mockSubtreeStore{shouldError: true}
 
-		// Test getSubtreeMetaSlice - this should exercise the function
+		// Test ReadSubtreeMeta - this should exercise the function
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
-		_, err = block.getSubtreeMetaSlice(ctx, mockStore, chainhash.Hash{}, subtree)
+		_, err = ReadSubtreeMeta(ctx, mockStore, chainhash.Hash{}, subtree)
 		// May error due to missing data but exercises the code path
 		_ = err
 	})

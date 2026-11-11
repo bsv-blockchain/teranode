@@ -18,6 +18,7 @@ import (
 	"container/ring"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"runtime"
@@ -6230,6 +6231,11 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 	conflictingHashes := make([]chainhash.Hash, 0, 1024) // preallocate some space
 	conflictingHashesMu := sync.Mutex{}
 
+	var metaRegenerator model.SubtreeMetaRegeneratorI
+	if stp.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
+		metaRegenerator = stp.moveBackMetaRegenerator()
+	}
+
 	for idx, subtreeHash := range block.Subtrees {
 		idx := idx
 		subtreeHash := subtreeHash
@@ -6276,23 +6282,21 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 			}
 
 			if stp.settings.BlockAssembly.StoreTxInpointsForSubtreeMeta {
-				subtreeMetaReader, err := stp.subtreeStore.GetIoReader(gCtx, subtreeHash[:], fileformat.FileTypeSubtreeMeta)
+				// The same read-or-rebuild route block validation takes. The read
+				// validates the meta header against the subtree before deserializing
+				// (issue 1425), because an over-long torn file panics inside the raw
+				// deserializer and this runs in an errgroup goroutine where a panic
+				// kills the process. A missing or rejected file is rebuilt from the
+				// local .subtreeData; without this, the reorg fails and block assembly
+				// falls back to a full reset, again on every reorg touching the
+				// subtree until the meta expires. If the local .subtreeData is missing
+				// too, the error stands and the reset happens as before.
+				subtreeMeta, err := model.LoadSubtreeMeta(gCtx, stp.logger, stp.subtreeStore, metaRegenerator, subtreeHash, subtree, idx == 0,
+					func() string {
+						return fmt.Sprintf("[moveBackBlock:GetSubtrees][%s][%s:%d]", block.Hash().String(), subtreeHash.String(), idx)
+					})
 				if err != nil {
-					return errors.NewServiceError("[moveBackBlock:GetSubtrees][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
-				}
-
-				defer func() {
-					_ = subtreeMetaReader.Close()
-				}()
-
-				// Validate the meta header against the subtree before deserializing
-				// (issue 1425): an over-long torn file panics inside the raw
-				// deserializer, and this call runs in an errgroup goroutine where a
-				// panic kills the process — recurring on every restart, since the
-				// file is on disk.
-				subtreeMeta, err := model.NewSubtreeMetaFromValidatedReader(*subtreeHash, subtree, subtreeMetaReader)
-				if err != nil {
-					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error deserializing subtree meta", block.String(), err)
+					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error getting subtree meta %s", block.String(), subtreeHash.String(), err)
 				}
 
 				subtreeMetaTxInpoints[idx] = subtreeMeta.TxInpoints
@@ -6320,6 +6324,22 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 	}
 
 	return subtreesNodes, subtreeMetaTxInpoints, conflictingHashes, nil
+}
+
+// moveBackMetaRegenerator returns the regenerator the reorg move-back uses to rebuild a
+// missing or rejected subtree meta. It is given no peer URLs: a reorg has no announcing
+// peer to ask, and the peer fetch's timeout (10 minutes as shipped) has no place inside a
+// reorg. It rebuilds from the local .subtreeData only, and writes the rebuilt meta with
+// the same retention block assembly gives the meta files it writes itself. It returns
+// nil, so a failed read stays an error, when there is no store to rebuild from or no
+// UTXO store to date the rewritten file from.
+func (stp *SubtreeProcessor) moveBackMetaRegenerator() model.SubtreeMetaRegeneratorI {
+	if stp.subtreeStore == nil || stp.utxoStore == nil {
+		return nil
+	}
+
+	return model.NewSubtreeMetaRegenerator(stp.logger, stp.subtreeStore, nil,
+		stp.utxoStore.GetBlockHeight, stp.settings.GlobalBlockHeightRetention, 0)
 }
 
 // processBlockSubtrees creates a reverse lookup map of block subtrees and filters out chained subtrees
