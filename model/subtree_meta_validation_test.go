@@ -68,11 +68,11 @@ func TestGetSubtreeMetaSliceValidation(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("valid meta passes and carries the inpoints", func(t *testing.T) {
-		subtree, metaBytes, _ := buildMetaFixture(t)
+		subtree, metaBytes, block := buildMetaFixture(t)
 
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
 
-		got, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		got, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.NoError(t, err)
 
 		parents, err := got.GetParentTxHashes(3)
@@ -86,7 +86,7 @@ func TestGetSubtreeMetaSliceValidation(t *testing.T) {
 		// nil-parents guard then rejected the whole (valid) block as invalid —
 		// a persisted wrong verdict caused by a torn local cache file, with no
 		// regeneration. Failing the read here routes into regeneration instead.
-		subtree, metaBytes, _ := buildMetaFixture(t)
+		subtree, metaBytes, block := buildMetaFixture(t)
 
 		torn := make([]byte, len(metaBytes))
 		copy(torn, metaBytes)
@@ -94,7 +94,7 @@ func TestGetSubtreeMetaSliceValidation(t *testing.T) {
 
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], torn)
 
-		_, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "entry count mismatch")
 	})
@@ -102,7 +102,7 @@ func TestGetSubtreeMetaSliceValidation(t *testing.T) {
 	t.Run("over-long claimed count with no extra body is rejected", func(t *testing.T) {
 		// With no extra body bytes the old code failed on EOF rather than
 		// panicking; either way the count must now be rejected up front.
-		subtree, metaBytes, _ := buildMetaFixture(t)
+		subtree, metaBytes, block := buildMetaFixture(t)
 
 		torn := make([]byte, len(metaBytes))
 		copy(torn, metaBytes)
@@ -111,7 +111,7 @@ func TestGetSubtreeMetaSliceValidation(t *testing.T) {
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], torn)
 
 		require.NotPanics(t, func() {
-			_, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+			_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "entry count mismatch")
 		})
@@ -123,7 +123,7 @@ func TestGetSubtreeMetaSliceValidation(t *testing.T) {
 		// the file-claimed number of entries, so a well-formed fifth entry
 		// hit index 4 of a length-4 slice — recurring on every restart,
 		// since the file is on disk.
-		subtree, metaBytes, _ := buildMetaFixture(t)
+		subtree, metaBytes, block := buildMetaFixture(t)
 
 		extraInpoints := subtreepkg.NewTxInpointsFromPacked([]chainhash.Hash{chainhash.HashH([]byte{0xcc})}, []uint32{1, 0})
 		extra, err := extraInpoints.Serialize()
@@ -137,14 +137,14 @@ func TestGetSubtreeMetaSliceValidation(t *testing.T) {
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], torn)
 
 		require.NotPanics(t, func() {
-			_, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+			_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "entry count mismatch")
 		})
 	})
 
 	t.Run("foreign meta with another subtree's root hash is rejected", func(t *testing.T) {
-		subtree, metaBytes, _ := buildMetaFixture(t)
+		subtree, metaBytes, block := buildMetaFixture(t)
 
 		foreign := make([]byte, len(metaBytes))
 		copy(foreign, metaBytes)
@@ -153,17 +153,17 @@ func TestGetSubtreeMetaSliceValidation(t *testing.T) {
 
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], foreign)
 
-		_, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "root hash mismatch")
 	})
 
 	t.Run("truncated file fails the header read", func(t *testing.T) {
-		subtree, metaBytes, _ := buildMetaFixture(t)
+		subtree, metaBytes, block := buildMetaFixture(t)
 
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes[:20])
 
-		_, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "header")
 	})
@@ -258,10 +258,10 @@ func TestMetaCountCheckedAgainstLength(t *testing.T) {
 	// The serializer wrote Length(), so the header must be accepted as written.
 	require.Equal(t, uint32(subtree.Length()), binary.LittleEndian.Uint32(metaBytes[32:36]))
 
-	_ = &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+	block := &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
 	store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
 
-	got, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+	got, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 	require.NoError(t, err, "a short subtree with spare capacity must not be rejected")
 
 	parents, err := got.GetParentTxHashes(subtree.Length() - 1)
@@ -453,22 +453,22 @@ func TestZeroParentCountRejected(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("a zero parent count on an ordinary node fails the read", func(t *testing.T) {
-		subtree, _, _ := buildMetaFixture(t)
+		subtree, _, block := buildMetaFixture(t)
 		metaBytes := metaBytesWithEntries(subtree, []metaEntry{oneParent(0), oneParent(1), nil, oneParent(3)})
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
 
-		_, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no parents")
 		require.Contains(t, err.Error(), subtree.Nodes[2].Hash.String())
 	})
 
 	t.Run("a zero parent count on node 0 that is not the coinbase placeholder fails the read", func(t *testing.T) {
-		subtree, _, _ := buildMetaFixture(t)
+		subtree, _, block := buildMetaFixture(t)
 		metaBytes := metaBytesWithEntries(subtree, []metaEntry{nil, oneParent(1), oneParent(2), oneParent(3)})
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
 
-		_, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		_, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no parents")
 	})
@@ -482,11 +482,11 @@ func TestZeroParentCountRejected(t *testing.T) {
 			require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{i, 0xaa}), 1, 0))
 		}
 
-		_ = &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+		block := &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
 		metaBytes := metaBytesWithEntries(subtree, []metaEntry{nil, oneParent(1), oneParent(2), oneParent(3)})
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
 
-		got, err := ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		got, err := block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.NoError(t, err)
 		require.Nil(t, got.TxInpoints[0].ParentTxHashes)
 	})
@@ -504,11 +504,11 @@ func TestZeroParentCountRejected(t *testing.T) {
 
 		subtree.Nodes[2].Hash = subtreepkg.CoinbasePlaceholderHashValue
 
-		_ = &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+		block := &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
 		metaBytes := metaBytesWithEntries(subtree, []metaEntry{oneParent(0), oneParent(1), nil, oneParent(3)})
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
 
-		_, err = ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		_, err = block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no parents")
 	})
@@ -525,11 +525,11 @@ func TestZeroParentCountRejected(t *testing.T) {
 			require.NoError(t, subtree.AddNode(chainhash.HashH([]byte{i, 0xaa}), 1, 0))
 		}
 
-		_ = &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
+		block := &Block{Header: &BlockHeader{HashPrevBlock: &chainhash.Hash{}, HashMerkleRoot: &chainhash.Hash{}}}
 		metaBytes := metaBytesWithEntries(subtree, []metaEntry{nil, oneParent(1), nil, oneParent(3)})
 		store := newMemSubtreeStore(t, subtree.RootHash()[:], metaBytes)
 
-		_, err = ReadSubtreeMeta(ctx, store, *subtree.RootHash(), subtree)
+		_, err = block.getSubtreeMetaSlice(ctx, store, *subtree.RootHash(), subtree)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "no parents")
 		require.Contains(t, err.Error(), subtree.Nodes[2].Hash.String())

@@ -7,8 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bsv-blockchain/go-bt/v2"
-	"github.com/bsv-blockchain/go-bt/v2/bscript"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
 	safeconversion "github.com/bsv-blockchain/go-safe-conversion"
 	"github.com/bsv-blockchain/go-subtree"
@@ -1435,65 +1433,11 @@ func storeReorgSubtreeWithTornMeta(t *testing.T, ctx context.Context, blobStore 
 	return key
 }
 
-// storeReorgSubtreeWithTornMetaAndData stores the torn meta of
-// storeReorgSubtreeWithTornMeta, over two real transactions so that it can be
-// rebuilt, and the subtree's .subtreeData beside it. The given nodes are ignored:
-// a rebuild checks every transaction against its node hash, so the nodes have to
-// come from real transactions. Returns the committed key and the two transactions.
-func storeReorgSubtreeWithTornMetaAndData(t *testing.T, ctx context.Context, blobStore *blob_memory.Memory, _ []subtree.Node) *chainhash.Hash {
-	t.Helper()
-
-	txs := []*bt.Tx{reorgTestTx(t, 0x01), reorgTestTx(t, 0x02)}
-	nodes := make([]subtree.Node, len(txs))
-
-	for i, tx := range txs {
-		nodes[i] = subtree.Node{Hash: *tx.TxIDChainHash(), Fee: 100, SizeInBytes: uint64(tx.Size())} //nolint:gosec // test tx size
-	}
-
-	key := storeReorgSubtreeWithTornMeta(t, ctx, blobStore, nodes)
-
-	stBytes, err := blobStore.Get(ctx, key[:], fileformat.FileTypeSubtree)
-	require.NoError(t, err)
-
-	st, err := subtree.NewSubtreeFromBytes(stBytes)
-	require.NoError(t, err)
-
-	// Node 0 is the coinbase placeholder and has no transaction in the data file.
-	data := subtree.NewSubtreeData(st)
-	for i, tx := range txs {
-		require.NoError(t, data.AddTx(tx, i+1))
-	}
-
-	dataBytes, err := data.Serialize()
-	require.NoError(t, err)
-	require.NoError(t, blobStore.Set(ctx, key[:], fileformat.FileTypeSubtreeData, dataBytes))
-
-	return key
-}
-
-// reorgTestTx returns a transaction spending output 0 of a parent named by seed.
-func reorgTestTx(t *testing.T, seed byte) *bt.Tx {
-	t.Helper()
-
-	tx := bt.NewTx()
-	tx.Inputs = []*bt.Input{{UnlockingScript: &bscript.Script{}, PreviousTxOutIndex: 0}}
-	require.NoError(t, tx.Inputs[0].PreviousTxIDAdd(reorgTestParent(seed)))
-	require.NoError(t, tx.PayToAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", 1000))
-
-	return tx
-}
-
-// reorgTestParent is the parent txid reorgTestTx spends for seed.
-func reorgTestParent(seed byte) *chainhash.Hash {
-	parent := chainhash.HashH([]byte{seed, 0xdd})
-	return &parent
-}
-
 // storeReorgSubtreeWithZeroParentMeta stores a real subtree and a meta whose
 // header is correct but whose entry for node 1, an ordinary transaction, has an
 // empty parent list. Meta.Serialize writes that as a zero parent count, which
-// the meta reader rejects (issue 1638). The move-back rebuilds a rejected meta
-// from the local .subtreeData, but none is stored here, so the move-back fails.
+// the meta reader rejects (issue 1638). Block validation regenerates the meta
+// after that rejection; this path has no regenerator, so the move-back fails.
 func storeReorgSubtreeWithZeroParentMeta(t *testing.T, ctx context.Context, blobStore *blob_memory.Memory, txs []subtree.Node) *chainhash.Hash {
 	t.Helper()
 
@@ -1740,10 +1684,9 @@ func TestSubtreeProcessor_ReorgThroughRealSubtrees(t *testing.T) {
 	// failing an assertion. The zero-parent row pins issue 1638: its header is
 	// correct, and the corrupt entry used to decode cleanly into nil parents.
 	//
-	// The move-back rebuilds a rejected or missing meta from the local
-	// .subtreeData, as block validation does. These rows store none, so the
-	// rebuild fails too and a failed reorg is the intended outcome. The row with
-	// an empty wantErr stores the .subtreeData and pins the repair.
+	// Note what they do NOT assert: unlike block validation this path has no meta
+	// regenerator behind it, so a bad file is not repaired. A failed reorg is the
+	// intended outcome, not self-healing.
 	rejections := []struct {
 		name string
 		// store writes the block's subtree and meta, and returns the committed key.
@@ -1758,15 +1701,7 @@ func TestSubtreeProcessor_ReorgThroughRealSubtrees(t *testing.T) {
 			name:            "torn subtree meta fails the reorg instead of killing the process",
 			store:           storeReorgSubtreeWithTornMeta,
 			storeTxInpoints: true,
-			wantErr:         "failed to deserialize subtree meta",
-		},
-		{
-			// The same torn file, with the subtree's .subtreeData stored locally.
-			// The move-back rebuilds the meta from it and the reorg goes through,
-			// where before it failed and block assembly fell back to a full reset.
-			name:            "torn subtree meta is rebuilt from local subtree data and the reorg succeeds",
-			store:           storeReorgSubtreeWithTornMetaAndData,
-			storeTxInpoints: true,
+			wantErr:         "error deserializing subtree meta",
 		},
 		{
 			// The header matches, so only the zero-parent check (issue 1638) can
@@ -1887,32 +1822,6 @@ func TestSubtreeProcessor_ReorgThroughRealSubtrees(t *testing.T) {
 			}()
 
 			err = stp.Reorg([]*model.Block{blockToMoveBack}, []*model.Block{blockToMoveForward})
-
-			if tc.wantErr == "" {
-				require.NoError(t, err, "a meta the move-back can rebuild from local subtree data must not fail the reorg")
-
-				// The rebuilt meta replaced the torn file on disk, so the next read
-				// needs no rebuild, and it carries each transaction's real parent.
-				stBytes, getErr := blobStore.Get(ctx, moveBackSubtreeHash[:], fileformat.FileTypeSubtree)
-				require.NoError(t, getErr)
-
-				st, stErr := subtree.NewSubtreeFromBytes(stBytes)
-				require.NoError(t, stErr)
-
-				rebuilt, readErr := model.ReadSubtreeMeta(ctx, blobStore, *moveBackSubtreeHash, st)
-				require.NoError(t, readErr, "the torn meta must have been overwritten with a valid one")
-
-				for i, seed := range []byte{0x01, 0x02} {
-					inpoints, inErr := rebuilt.GetTxInpoints(i + 1)
-					require.NoError(t, inErr)
-					require.Len(t, inpoints, 1)
-					require.Equal(t, *reorgTestParent(seed), inpoints[0].Hash)
-					require.True(t, stp.GetCurrentTxMap().Exists(st.Nodes[i+1].Hash), "the moved-back transaction must return to block assembly")
-				}
-
-				return
-			}
-
 			require.Error(t, err, "an unusable subtree or meta must fail the reorg, not be trusted and not panic")
 			require.Contains(t, err.Error(), tc.wantErr)
 
