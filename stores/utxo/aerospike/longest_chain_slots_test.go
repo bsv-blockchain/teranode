@@ -33,10 +33,13 @@ func TestLongestChainSlots_ReuseAllocatesNothing(t *testing.T) {
 	})
 	require.Zero(t, allocs)
 
+	// Each slot's key was built for hashes[k], so check it against hashes[size+k]: a key whose digest
+	// was not recomputed on reuse still carries the digest of hashes[k] and fails here.
 	for k := 0; k < size; k++ {
-		require.NoError(t, slots.set(k, &hashes[k], namespace, setName))
+		reused := &hashes[size+k]
+		require.NoError(t, slots.set(k, reused, namespace, setName))
 
-		want, err := aerospike.NewKey(namespace, setName, hashes[k][:])
+		want, err := aerospike.NewKey(namespace, setName, reused[:])
 		require.NoError(t, err)
 		require.Equal(t, want.Digest(), slots.keys[k].Digest())
 		require.Same(t, slots.keys[k], slots.records[k].BatchRec().Key)
