@@ -2,8 +2,10 @@ package subtreeprocessor
 
 import (
 	"context"
+	"io"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,7 +17,9 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
+	"github.com/bsv-blockchain/teranode/stores/blob"
 	blob_memory "github.com/bsv-blockchain/teranode/stores/blob/memory"
+	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	blockchain_store "github.com/bsv-blockchain/teranode/stores/blockchain"
 	blockchainoptions "github.com/bsv-blockchain/teranode/stores/blockchain/options"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
@@ -95,6 +99,15 @@ func (s *scopeMarkRecorder) markedFalse(hash chainhash.Hash) bool {
 	defer s.mu.Unlock()
 
 	_, ok := s.markFalse[hash]
+
+	return ok
+}
+
+func (s *scopeMarkRecorder) markedTrue(hash chainhash.Hash) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, ok := s.markTrue[hash]
 
 	return ok
 }
@@ -290,8 +303,9 @@ func TestReorgBlocks_MarkFalseScope(t *testing.T) {
 	require.True(t, finalTxMap.Exists(m1))
 	require.True(t, finalTxMap.Exists(m2))
 	// B mined shared, so the forward move took it out of block assembly: the tx map alone keeps
-	// it out of the mark-false set, and the winning-set check in movedBackStillInAssembly is a
-	// second guard behind it.
+	// it out of the mark-false set, and the flag movedBackBlockTxMap holds for it is a second
+	// guard behind that. TestReorgBlocks_RequeuedForwardTxIsNotMarkedFalse covers the case where
+	// only the flag decides.
 	require.False(t, finalTxMap.Exists(shared), "a tx the moveForward block mined is not in block assembly")
 
 	// The mark-false set is exactly what the reorg moved off the chain.
@@ -418,11 +432,280 @@ func TestMovedBackStillInAssembly(t *testing.T) {
 	won := chainhash.HashH([]byte("won"))
 	evicted := chainhash.HashH([]byte("evicted"))
 
-	movedBack := map[chainhash.Hash]struct{}{kept: {}, won: {}, evicted: {}}
-	winning := map[chainhash.Hash]struct{}{won: {}}
+	movedBack := map[chainhash.Hash]bool{kept: false, won: true, evicted: false}
 	probes := 0
 	inAssembly := existsSet{hashes: map[chainhash.Hash]struct{}{kept: {}, won: {}}, probes: &probes}
 
-	require.Equal(t, []chainhash.Hash{kept}, movedBackStillInAssembly(movedBack, winning, inAssembly))
+	require.Equal(t, []chainhash.Hash{kept}, movedBackStillInAssembly(movedBack, inAssembly))
 	require.Equal(t, 2, probes, "one probe per moved-back transaction no moveForward block mines")
+}
+
+// newReorgMarkFixture returns a processor that records its mark calls, at genesis, with two
+// forward blocks ready in chain.moveForward.
+func newReorgMarkFixture(t *testing.T) (*SubtreeProcessor, *scopeMarkRecorder, *blob_memory.Memory, *walTestChain) {
+	t.Helper()
+
+	stp, base, subtreeStore, chain := newResetWALTestProcessor(t, false)
+	store := newScopeMarkRecorder(base)
+	stp.utxoStore = store
+
+	return stp, store, subtreeStore, chain
+}
+
+// moveToBlockAbove adds a block on genesis, rival to chain.moveForward, and makes it the processor's
+// tip, so a reorg can move it back.
+func moveToBlockAbove(t *testing.T, stp *SubtreeProcessor, chain *walTestChain, subtrees ...*chainhash.Hash) *model.Block {
+	t.Helper()
+
+	if subtrees == nil {
+		subtrees = []*chainhash.Hash{}
+	}
+
+	block := &model.Block{Height: 1, CoinbaseTx: coinbaseTx2, TransactionCount: 1, Subtrees: subtrees, Header: childHeader(chain.genesis, 901)}
+	require.NoError(t, stp.blockchainClient.AddBlock(t.Context(), block, "", blockchainoptions.WithMinedSet(true)))
+	stp.InitCurrentBlockHeader(block.Header)
+
+	return block
+}
+
+// beforeForwardBlockOn runs fn once, as a reorg is about to move forward the block whose parent is
+// the given header. The returned flag says whether it ran, so a test cannot pass without it.
+func beforeForwardBlockOn(stp *SubtreeProcessor, parent *model.BlockHeader, fn func()) *bool {
+	fired := false
+
+	stp.SetProgressHook(func() {
+		if !fired && stp.currentBlockHeader.Load().Hash().IsEqual(parent.Hash()) {
+			fired = true
+
+			fn()
+		}
+	})
+
+	return &fired
+}
+
+// A moved-back tx that a forward block mined can come back into block assembly through the queue
+// before the last forward block, whose map does not hold it. It is then both in block assembly and
+// mined, and only movedBackBlockTxMap's flag keeps it from being marked not on the longest chain.
+func TestReorgBlocks_RequeuedForwardTxIsNotMarkedFalse(t *testing.T) {
+	stp, store, subtreeStore, chain := newReorgMarkFixture(t)
+
+	sharedTx, _ := createResetWALConflict(t, store, 11)
+	goneTx, _ := createResetWALConflict(t, store, 12)
+	otherTx, _ := createResetWALConflict(t, store, 13)
+	shared, gone := *sharedTx.TxIDChainHash(), *goneTx.TxIDChainHash()
+
+	back := moveToBlockAbove(t, stp, chain, storeTestSubtree(t, subtreeStore, false, sharedTx, goneTx))
+	chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, sharedTx)}
+	chain.moveForward[1].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, otherTx)}
+
+	// A drain only takes batches stamped before it starts, so stamp the batch a millisecond earlier
+	// than any drain can start. Then the last forward block's drain always takes it.
+	enqueueAt := time.Now()
+	stp.queue.clock = fixedClock{t: enqueueAt}
+	stp.clock = fixedClock{t: enqueueAt.Add(time.Millisecond)}
+
+	fired := beforeForwardBlockOn(stp, chain.moveForward[0].Header, func() {
+		inpoints := subtreepkg.NewTxInpoints()
+		stp.AddBatch([]subtreepkg.Node{{Hash: shared, Fee: 1, SizeInBytes: 1}}, []*subtreepkg.TxInpoints{&inpoints})
+	})
+
+	require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
+	require.True(t, *fired, "the batch must be queued before the last forward block")
+
+	require.True(t, stp.currentTxMap.Exists(shared), "the mined tx must be back in block assembly, or nothing but the tx map keeps it unmarked")
+	require.False(t, store.markedFalse(shared), "a forward block mined this tx, so it stays on the longest chain")
+	require.True(t, store.markedFalse(gone), "no forward block mined this moved-back tx")
+}
+
+// A forward block's subtree that this node holds as a chained subtree is left out of the block's
+// transaction map, so a loser in it counts as mined by no forward block, and stays a loser.
+func TestReorgBlocks_LoserInChainedSubtreeStaysLoser(t *testing.T) {
+	stp, store, subtreeStore, chain := newReorgMarkFixture(t)
+
+	loserTx, winnerTx := createResetWALConflict(t, store, 7)
+	loser := *loserTx.TxIDChainHash()
+
+	back := moveToBlockAbove(t, stp, chain)
+
+	chainedRoot := storeTestSubtree(t, subtreeStore, false, loserTx)
+	chained, err := subtreepkg.NewTreeByLeafCount(4)
+	require.NoError(t, err)
+	require.NoError(t, chained.AddCoinbaseNode())
+	require.NoError(t, chained.AddNode(loser, 1, 1))
+	require.Equal(t, chainedRoot, chained.RootHash(), "the block's subtree must be the one this node holds")
+
+	chain.moveForward[0].Subtrees = []*chainhash.Hash{chainedRoot}
+	chain.moveForward[1].Subtrees = []*chainhash.Hash{storeConflictSubtree(t, subtreeStore, winnerTx)}
+
+	fired := beforeForwardBlockOn(stp, chain.genesis, func() {
+		stp.chainedSubtrees = []*subtreepkg.Subtree{chained}
+		inpoints := subtreepkg.NewTxInpoints()
+		stp.currentTxMap.Set(loser, &inpoints)
+	})
+
+	require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
+	require.True(t, *fired, "the subtree must be chained before its block moves forward")
+
+	require.True(t, store.markedFalse(loser), "a loser only in a chained subtree must be marked not on the longest chain")
+}
+
+// Only a loser that no forward block mined is marked not on the longest chain, wherever the other
+// forward block's conflicting winner sits.
+func TestReorgBlocks_LoserMinedByForwardBlockIsNotMarkedFalse(t *testing.T) {
+	type subtrees struct{ first, second []*chainhash.Hash }
+
+	tests := []struct {
+		name        string
+		place       func(loser, winner *chainhash.Hash) subtrees
+		markedFalse bool
+	}{
+		{
+			name: "mined in an earlier forward block",
+			place: func(loser, winner *chainhash.Hash) subtrees {
+				return subtrees{[]*chainhash.Hash{loser}, []*chainhash.Hash{winner}}
+			},
+		},
+		{
+			name: "mined in the same forward block",
+			place: func(loser, winner *chainhash.Hash) subtrees {
+				return subtrees{[]*chainhash.Hash{loser, winner}, []*chainhash.Hash{}}
+			},
+		},
+		{
+			name: "mined in a later forward block",
+			place: func(loser, winner *chainhash.Hash) subtrees {
+				return subtrees{[]*chainhash.Hash{winner}, []*chainhash.Hash{loser}}
+			},
+		},
+		{
+			name: "mined in no forward block",
+			place: func(_, winner *chainhash.Hash) subtrees {
+				return subtrees{[]*chainhash.Hash{winner}, []*chainhash.Hash{}}
+			},
+			markedFalse: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stp, store, subtreeStore, chain := newReorgMarkFixture(t)
+
+			loserTx, winnerTx := createResetWALConflict(t, store, 21)
+			back := moveToBlockAbove(t, stp, chain)
+
+			placed := tt.place(storeTestSubtree(t, subtreeStore, false, loserTx), storeConflictSubtree(t, subtreeStore, winnerTx))
+			chain.moveForward[0].Subtrees = placed.first
+			chain.moveForward[1].Subtrees = placed.second
+
+			require.NoError(t, stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward))
+
+			require.Equal(t, tt.markedFalse, store.markedFalse(*loserTx.TxIDChainHash()))
+			require.Equal(t, !tt.markedFalse, store.markedTrue(*loserTx.TxIDChainHash()))
+			require.True(t, store.markedTrue(*winnerTx.TxIDChainHash()), "the conflicting winner is mined")
+			require.Nil(t, stp.reorgForwardTxMapSubtrees, "the reorg must stop recording when it ends")
+		})
+	}
+}
+
+// If the losing filter cannot read a forward block's subtree it cannot tell whether a loser was
+// mined, so the reorg fails and rolls back before it writes any mark.
+func TestReorgBlocks_LoserFilterSubtreeFailureFailsReorg(t *testing.T) {
+	tests := []struct {
+		name  string
+		spoil func(t *testing.T, subtreeStore *blob_memory.Memory, subtreeHash *chainhash.Hash)
+	}{
+		{
+			name: "subtree file is gone",
+			spoil: func(t *testing.T, subtreeStore *blob_memory.Memory, subtreeHash *chainhash.Hash) {
+				require.NoError(t, subtreeStore.Del(t.Context(), subtreeHash[:], fileformat.FileTypeSubtree))
+			},
+		},
+		{
+			name: "subtree file cannot be deserialized",
+			spoil: func(t *testing.T, subtreeStore *blob_memory.Memory, subtreeHash *chainhash.Hash) {
+				require.NoError(t, subtreeStore.Del(t.Context(), subtreeHash[:], fileformat.FileTypeSubtree))
+				require.NoError(t, subtreeStore.Set(t.Context(), subtreeHash[:], fileformat.FileTypeSubtree, []byte{1, 2, 3}))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stp, store, subtreeStore, chain := newReorgMarkFixture(t)
+
+			loserTx, winnerTx := createResetWALConflict(t, store, 31)
+			otherTx, _ := createResetWALConflict(t, store, 32)
+			back := moveToBlockAbove(t, stp, chain)
+
+			firstSubtree := storeTestSubtree(t, subtreeStore, false, otherTx)
+			chain.moveForward[0].Subtrees = []*chainhash.Hash{firstSubtree}
+			chain.moveForward[1].Subtrees = []*chainhash.Hash{storeConflictSubtree(t, subtreeStore, winnerTx)}
+
+			// The first forward block has been moved by now, so only the losing filter reads
+			// this subtree again.
+			fired := beforeForwardBlockOn(stp, chain.moveForward[0].Header, func() {
+				tt.spoil(t, subtreeStore, firstSubtree)
+			})
+
+			err := stp.reorgBlocks(t.Context(), []*model.Block{back}, chain.moveForward)
+			require.True(t, *fired)
+			require.ErrorContains(t, err, "[losersMinedInForwardBlocks]")
+
+			require.Equal(t, back.Header.Hash(), stp.currentBlockHeader.Load().Hash(), "a failed reorg rolls back")
+			require.Zero(t, store.markFalseCount(), "the reorg must fail before it writes any mark")
+			require.False(t, store.markedTrue(*loserTx.TxIDChainHash()))
+			require.False(t, store.markedTrue(*winnerTx.TxIDChainHash()))
+			require.Nil(t, stp.reorgForwardTxMapSubtrees, "a failed reorg must stop recording")
+		})
+	}
+}
+
+// readCountingStore counts the subtree reads that reach the blob store.
+type readCountingStore struct {
+	blob.Store
+	reads atomic.Int64
+}
+
+func (s *readCountingStore) GetIoReader(ctx context.Context, key []byte, fileType fileformat.FileType, opts ...bloboptions.FileOption) (io.ReadCloser, error) {
+	s.reads.Add(1)
+
+	return s.Store.GetIoReader(ctx, key, fileType, opts...)
+}
+
+// Most reorgs have no conflicting transactions. Those must not pay for any subtree read.
+func TestLosersMinedInForwardBlocks_ReadsSubtreesOnlyForLosers(t *testing.T) {
+	stp, store, subtreeStore, _ := newReorgMarkFixture(t)
+
+	minedTx, _ := createResetWALConflict(t, store, 41)
+	mined := *minedTx.TxIDChainHash()
+	unmined := chainhash.HashH([]byte("unmined"))
+
+	counting := &readCountingStore{Store: subtreeStore}
+	stp.subtreeStore = counting
+	stp.reorgForwardTxMapSubtrees = []chainhash.Hash{*storeTestSubtree(t, subtreeStore, false, minedTx)}
+
+	found, err := stp.losersMinedInForwardBlocks(t.Context(), nil)
+	require.NoError(t, err)
+	require.Empty(t, found)
+	require.Zero(t, counting.reads.Load(), "no losers, so no subtree reads")
+
+	found, err = stp.losersMinedInForwardBlocks(t.Context(), []chainhash.Hash{mined, unmined})
+	require.NoError(t, err)
+	require.Equal(t, map[chainhash.Hash]struct{}{mined: {}}, found)
+	require.Equal(t, int64(1), counting.reads.Load(), "one read per recorded subtree")
+}
+
+// Normal block processing runs for the life of the node, so recording there would grow forever.
+func TestMoveForwardBlock_OutsideReorgRecordsNoSubtrees(t *testing.T) {
+	stp, store, subtreeStore, chain := newReorgMarkFixture(t)
+
+	minedTx, _ := createResetWALConflict(t, store, 51)
+	chain.moveForward[0].Subtrees = []*chainhash.Hash{storeTestSubtree(t, subtreeStore, false, minedTx)}
+
+	transactionMap, _, err := stp.moveForwardBlock(t.Context(), chain.moveForward[0], true, map[chainhash.Hash]struct{}{}, true, true)
+	require.NoError(t, err)
+	require.True(t, transactionMap.Exists(*minedTx.TxIDChainHash()), "the block's subtree must have gone through the transaction map")
+
+	require.Nil(t, stp.reorgForwardTxMapSubtrees)
 }

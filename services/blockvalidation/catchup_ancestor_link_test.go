@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -95,6 +96,25 @@ func (r *minedSetClearRecorder) ClearBlockMinedSet(ctx context.Context, blockHas
 	return r.ClientI.ClearBlockMinedSet(ctx, blockHash)
 }
 
+// storeSideBlock writes a coinbase-only block for header into the real store without mined_set, as
+// a block this node validated but never adopted. opts are passed to StoreBlock, so
+// options.WithInvalid(true) stores a side block this node rejected.
+func storeSideBlock(ctx context.Context, t *testing.T, store blockchain_store.Store, header *model.BlockHeader, height uint32, opts ...options.StoreBlockOption) {
+	t.Helper()
+
+	coinbaseTx := testhelpers.CreateSimpleCoinbaseTx(height)
+	block := &model.Block{
+		Header:           header,
+		CoinbaseTx:       coinbaseTx,
+		TransactionCount: 1,
+		SizeInBytes:      uint64(80 + coinbaseTx.Size()), //nolint:gosec // small positive size
+		Height:           height,
+	}
+
+	_, _, err := store.StoreBlock(ctx, block, "test", opts...)
+	require.NoError(t, err)
+}
+
 // ancestorLinkRun is what one catchup() run left behind: the error, how many header and /blocks/
 // requests reached the peer, how many local blocks step 9.6 un-stamped, and the real client plus
 // the two header chains, so the caller can read the end state from the store.
@@ -134,6 +154,33 @@ const (
 	// offerWrongBits: h1..h5 linked on b5, where h1 is mined against bits other than its parent's.
 	// Regtest never adjusts difficulty, so the bits every block must carry are its parent's.
 	offerWrongBits
+	// offerThroughStoredSideBranch: s6..s9 built on b5 and already stored, a side branch this node
+	// validated but never adopted, then h10, h11 on s9. Every header up to s9 is stored, but only
+	// b5 is on our current chain.
+	offerThroughStoredSideBranch
+	// offerThroughInvalidSideBranch: as offerThroughStoredSideBranch, but s6..s9 are stored marked
+	// invalid, a side branch this node rejected.
+	offerThroughInvalidSideBranch
+	// offerThroughInvalidAboveTip: s6..s10 built on b5 and stored valid, s11 on s10 stored marked
+	// invalid, then h12, h13 on s11. s11 is the only stored header above our tip at b10, so the
+	// ancestor walk stops at its height ceiling before it reads s11's invalid flag.
+	offerThroughInvalidAboveTip
+	// offerThroughValidThenInvalidAboveTip: s6..s11 built on b5 and stored valid, s12 on s11 stored
+	// marked invalid, then h13, h14 on s12. b10 is mined at a harder difficulty, so our tip stays
+	// at b10 although s11 is higher, and the invalid block is not the first one above our tip.
+	offerThroughValidThenInvalidAboveTip
+	// offerAllStoredSideBranch: s6..s10 built on b5 and stored valid, and the peer serves nothing
+	// past them although it announced a child of s10. Every served header is one we hold, at or
+	// below our tip, and s10 has the same work as b10, so the less-work gate would not stop it.
+	offerAllStoredSideBranch
+	// offerSideBranchOnly: the peer serves s6..s9, h10, h11 without b5 in front. s6..s9 are stored
+	// but none is on our current chain, and our tip does not move, so the reply cannot have come
+	// from our locator.
+	offerSideBranchOnly
+	// offerSideBranchOnlyAfterReorg: as offerSideBranchOnly, but while the peer answers the header
+	// request our own chain reorgs to c8..c11 on b7, away from b10, the block the locator was
+	// built from.
+	offerSideBranchOnlyAfterReorg
 )
 
 // runAncestorLinkCatchup runs catchup() against a real sqlitememory blockchain store holding the
@@ -172,6 +219,15 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 	require.NoError(t, err)
 
 	mainChain := forkHeadersFrom(t, genesis, 10, 1, 0)
+
+	if shape == offerThroughValidThenInvalidAboveTip {
+		// Each regtest block adds work 2, and these bits add 8. Above genesis our chain to b10 weighs
+		// 26, the stored side branch to s11 weighs 22, and the offer to h14 weighs 28. So b10 stays
+		// our tip, and the offer still passes the less-work gate that ends a lighter one as a no-op.
+		mainChain[9].Bits = nBitsFrom(t, "201fffff")
+		testhelpers.MineHeader(mainChain[9])
+	}
+
 	for i, h := range mainChain {
 		storeMinedBlock(ctx, t, store, h, uint32(i+1)) //nolint:gosec // i < 10
 	}
@@ -179,10 +235,6 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 	otherBlockB := forkHeadersFrom(t, genesis, 1, 1, 500)[0]
 	require.NotEqual(t, mainChain[0].Hash().String(), otherBlockB.Hash().String())
 	storeMinedBlock(ctx, t, store, otherBlockB, 1)
-
-	_, bestMeta, err := store.GetBestBlockHeader(ctx)
-	require.NoError(t, err)
-	require.Equal(t, uint32(10), bestMeta.Height, "b10 must be the local tip")
 
 	ancestor := mainChain[4] // b5
 
@@ -202,6 +254,43 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		offered = append([]*model.BlockHeader{h1}, forkHeadersFrom(t, h1, 4, 7, 1000)...)
 	case offerBreakAtSecond:
 		offered = append(forkHeadersFrom(t, ancestor, 1, 6, 1000), forkHeadersFrom(t, otherBlockB, 4, 7, 2000)...)
+	case offerThroughStoredSideBranch, offerThroughInvalidSideBranch, offerSideBranchOnly, offerSideBranchOnlyAfterReorg:
+		var opts []options.StoreBlockOption
+		if shape == offerThroughInvalidSideBranch {
+			opts = append(opts, options.WithInvalid(true))
+		}
+
+		sideBranch := forkHeadersFrom(t, ancestor, 4, 6, 700)
+		for i, h := range sideBranch {
+			storeSideBlock(ctx, t, store, h, uint32(6+i), opts...) //nolint:gosec // i < 4
+		}
+
+		offered = append(sideBranch, forkHeadersFrom(t, sideBranch[len(sideBranch)-1], 2, 10, 700)...)
+	case offerThroughInvalidAboveTip:
+		sideBranch := forkHeadersFrom(t, ancestor, 6, 6, 700)
+		for i, h := range sideBranch[:5] {
+			storeSideBlock(ctx, t, store, h, uint32(6+i)) //nolint:gosec // i < 5
+		}
+
+		storeSideBlock(ctx, t, store, sideBranch[5], 11, options.WithInvalid(true))
+
+		offered = append(sideBranch, forkHeadersFrom(t, sideBranch[5], 2, 12, 700)...)
+	case offerThroughValidThenInvalidAboveTip:
+		sideBranch := forkHeadersFrom(t, ancestor, 7, 6, 700)
+		for i, h := range sideBranch[:6] {
+			storeSideBlock(ctx, t, store, h, uint32(6+i)) //nolint:gosec // i < 6
+		}
+
+		storeSideBlock(ctx, t, store, sideBranch[6], 12, options.WithInvalid(true))
+
+		offered = append(sideBranch, forkHeadersFrom(t, sideBranch[6], 2, 13, 700)...)
+	case offerAllStoredSideBranch:
+		offered = forkHeadersFrom(t, ancestor, 5, 6, 700)
+		for i, h := range offered {
+			storeSideBlock(ctx, t, store, h, uint32(6+i)) //nolint:gosec // i < 5
+		}
+
+		unservedTarget = forkHeadersFrom(t, offered[4], 1, 11, 700)[0]
 	case offerBreakBetweenBatches, offerReplayBetweenBatches:
 		// With b5 in front this is a full batch, so the fetch asks again from h9999.
 		offered = forkHeadersFrom(t, ancestor, maxBlockHeadersPerRequest-1, 6, 1000)
@@ -210,6 +299,9 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 	if shape != offerNothingNew {
 		served = offered
 	}
+
+	// The side-branch-only shapes leave b5 out, so no served header is on our current chain.
+	sideBranchOnly := shape == offerSideBranchOnly || shape == offerSideBranchOnlyAfterReorg
 
 	switch shape {
 	case offerBreakBetweenBatches:
@@ -220,11 +312,21 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		unservedTarget = fresh[1]
 	}
 
+	bestHeader, _, err := store.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+	require.Equal(t, mainChain[9].Hash().String(), bestHeader.Hash().String(), "b10 must be the local tip")
+
 	utxoStoreURL, err := url.Parse("sqlitememory:///test")
 	require.NoError(t, err)
 
 	utxoStore, err := utxosql.New(ctx, logger, tSettings, utxoStoreURL)
 	require.NoError(t, err)
+
+	if sideBranchOnly {
+		// Without this the UTXO store reports height 0 and the header fetch caps the locator at
+		// genesis, which no reorg can take off our current chain. At 10 the locator starts at b10.
+		require.NoError(t, utxoStore.SetBlockHeight(10))
+	}
 
 	subtreeStore := memory.New()
 
@@ -246,7 +348,11 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 	httpmock.ActivateNonDefault(util.HTTPClient())
 	t.Cleanup(httpmock.DeactivateAndReset)
 
-	responseHeaders := append([]byte{}, ancestor.Bytes()...)
+	responseHeaders := make([]byte, 0, (len(served)+1)*model.BlockHeaderSize)
+	if !sideBranchOnly {
+		responseHeaders = append(responseHeaders, ancestor.Bytes()...)
+	}
+
 	for _, h := range served {
 		responseHeaders = append(responseHeaders, h.Bytes()...)
 	}
@@ -258,8 +364,50 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 
 	var headersRequests atomic.Int64
 
+	// For offerSideBranchOnlyAfterReorg, c8..c11 on b7 are stored mined while the peer answers the
+	// first header request, after the locator was built from b10. With more work than b10 they
+	// become our current chain. The responder runs outside the test's own assertions, so a store
+	// error is kept and checked after catchup returns.
+	var (
+		reorgOnFirstRequest func()
+		reorgErr            error
+	)
+
+	if shape == offerSideBranchOnlyAfterReorg {
+		reorgChain := forkHeadersFrom(t, mainChain[6], 4, 8, 900)
+		reorgBlocks := make([]*model.Block, len(reorgChain))
+
+		for i, h := range reorgChain {
+			coinbaseTx := testhelpers.CreateSimpleCoinbaseTx(uint32(8 + i)) //nolint:gosec // i < 4
+			reorgBlocks[i] = &model.Block{
+				Header:           h,
+				CoinbaseTx:       coinbaseTx,
+				TransactionCount: 1,
+				SizeInBytes:      uint64(80 + coinbaseTx.Size()), //nolint:gosec // small positive size
+				Height:           uint32(8 + i),                  //nolint:gosec // i < 4
+			}
+		}
+
+		var reorgOnce sync.Once
+
+		reorgOnFirstRequest = func() {
+			reorgOnce.Do(func() {
+				for _, b := range reorgBlocks {
+					if _, _, err := store.StoreBlock(ctx, b, "test", options.WithMinedSet(true)); err != nil {
+						reorgErr = err
+						return
+					}
+				}
+			})
+		}
+	}
+
 	httpmock.RegisterResponder("GET", `=~^http://peer/headers_from_common_ancestor/.*`,
 		func(*http.Request) (*http.Response, error) {
+			if reorgOnFirstRequest != nil {
+				reorgOnFirstRequest()
+			}
+
 			if headersRequests.Add(1) > 1 && later != nil {
 				return httpmock.NewBytesResponse(200, laterHeaders), nil
 			}
@@ -282,6 +430,8 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 		offered = append(append([]*model.BlockHeader{}, offered...), later...)
 	case offerReplayBetweenBatches:
 		offered = append(append([]*model.BlockHeader{}, later...), unservedTarget)
+	case offerAllStoredSideBranch:
+		offered = append(append([]*model.BlockHeader{}, offered...), unservedTarget)
 	}
 
 	targetBlock := &model.Block{
@@ -290,6 +440,7 @@ func runAncestorLinkCatchup(t *testing.T, shape offerShape) ancestorLinkRun {
 	}
 
 	err = server.catchup(ctx, targetBlock, "peer-ancestor-link", "http://peer")
+	require.NoError(t, reorgErr, "the reorg the peer's reply races must be stored")
 
 	blocksRequests := 0
 	for k, v := range httpmock.GetCallCountInfo() {
@@ -421,6 +572,254 @@ func TestCatchup_FirstHeaderMustLinkToCommonAncestor(t *testing.T) {
 	})
 }
 
+// TestCatchup_AncestorMustBeOnCurrentChain covers a peer whose offer runs through a side branch we
+// already store, against a real sqlitememory blockchain store. The local chain is b1..b10, and
+// s6..s9 on b5 are stored but never adopted. The peer offers [b5, s6..s9, h10, h11]. Every header
+// up to s9 is stored, so an ancestor walk that keeps the last stored header picks s9, measures a
+// fork depth of 1 and un-stamps only b10, leaving b6..b9 mined while they are reorged out. The
+// common ancestor must be b5, the last offered header on our current chain, so the fork depth is
+// 5 and the clear un-stamps b6..b10.
+//
+// Mutation proof: dropping the lastOnCurrentChain call in findCommonAncestor fails the clear
+// count with 1 instead of 5.
+func TestCatchup_AncestorMustBeOnCurrentChain(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerThroughStoredSideBranch)
+
+	require.Positive(t, run.blocksRequests, "the offer must reach the block fetch, else the clear count is not what the fork depth decided")
+	require.Equal(t, int64(5), run.minedClears, "a fork from b5 must un-stamp b6..b10, not only the blocks above the stored side branch")
+}
+
+// requireSideBranchOfferUntouched asserts that catchup refused an offer through the stored side
+// branch s6..s9 before it touched the node: no block body fetched, no local block un-stamped,
+// b6..b10 still mined, and h10, h11, the offered headers past the side branch, not stored. s6..s9
+// are stored by construction, so requireRejectedWithoutSideEffects does not fit.
+func requireSideBranchOfferUntouched(t *testing.T, run ancestorLinkRun) {
+	t.Helper()
+
+	require.Zero(t, run.blocksRequests, "no block may be fetched for a rejected offer")
+	require.Zero(t, run.minedClears, "a rejected offer must not un-stamp any local block (step 9.6)")
+	require.Equal(t, []bool{true, true, true, true, true}, minedAboveAncestor(t, run),
+		"a rejected offer must leave the local blocks above the ancestor mined")
+
+	for _, h := range run.offered[4:] {
+		exists, err := run.client.GetBlockExists(context.Background(), h.Hash())
+		require.NoError(t, err)
+		require.False(t, exists, "no offered block past the stored side branch may be stored")
+	}
+}
+
+// TestCatchup_InvalidStoredSideBlockAfterAncestorIsRejected covers an offer through a side branch
+// this node stores marked invalid, against a real sqlitememory blockchain store. The local chain is
+// b1..b10, s6..s9 on b5 are stored invalid, and the peer offers [b5, s6..s9, h10, h11]. When the
+// ancestor walk kept the last stored header, s9 was the ancestor and its invalid flag aborted the
+// catchup. Narrowed to our current chain the ancestor is b5, which is valid, so catchup must still
+// find s6..s9 invalid and abort before it un-stamps b6..b10 or fetches any block body.
+//
+// Mutation proof: removing the invalid scan over the stored headers after the ancestor in
+// findCommonAncestor lets the offer through, un-stamping b6..b10 and reaching the block fetch.
+func TestCatchup_InvalidStoredSideBlockAfterAncestorIsRejected(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerThroughInvalidSideBranch)
+
+	_, s6Meta, err := run.client.GetBlockHeader(context.Background(), run.offered[0].Hash())
+	require.NoError(t, err)
+	require.True(t, s6Meta.Invalid, "s6 must be stored invalid, else the setup is vacuous")
+
+	require.Error(t, run.err)
+	require.True(t, errors.Is(run.err, errors.ErrBlockInvalid), "an offer through a stored invalid block must be rejected as invalid: %v", run.err)
+	require.Contains(t, run.err.Error(), run.offered[0].Hash().String(), "the error must name s6, the first invalid offered block")
+	requireSideBranchOfferUntouched(t, run)
+}
+
+// TestCatchup_InvalidStoredBlockAboveTipIsRejected covers a stored invalid block the ancestor walk
+// never records, because it sits above our tip, against a real sqlitememory blockchain store. The
+// local chain is b1..b10, s6..s10 on b5 are stored valid, s11 is stored invalid, and the peer
+// offers [b5, s6..s11, h12, h13]. Narrowed to our current chain the ancestor is b5, so catchup must
+// find s11 invalid and abort before it un-stamps b6..b10 or fetches any block body.
+//
+// Mutation proof: removing the rejectInvalidStoredHeader call from findCommonAncestor lets the
+// offer through, un-stamping b6..b10 and reaching the block fetch.
+func TestCatchup_InvalidStoredBlockAboveTipIsRejected(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerThroughInvalidAboveTip)
+
+	s11 := run.offered[5]
+	_, s11Meta, err := run.client.GetBlockHeader(context.Background(), s11.Hash())
+	require.NoError(t, err)
+	require.True(t, s11Meta.Invalid, "s11 must be stored invalid, else the setup is vacuous")
+	require.Equal(t, uint32(11), s11Meta.Height, "s11 must sit above the tip at b10, else the setup is vacuous")
+
+	require.Error(t, run.err)
+	require.True(t, errors.Is(run.err, errors.ErrBlockInvalid), "an offer through a stored invalid block must be rejected as invalid: %v", run.err)
+	require.Contains(t, run.err.Error(), s11.Hash().String(), "the error must name s11, the first invalid offered block")
+	require.Zero(t, run.blocksRequests, "no block may be fetched for a rejected offer")
+	require.Zero(t, run.minedClears, "a rejected offer must not un-stamp any local block (step 9.6)")
+	require.Equal(t, []bool{true, true, true, true, true}, minedAboveAncestor(t, run),
+		"a rejected offer must leave the local blocks above the ancestor mined")
+}
+
+// TestCatchup_ValidThenInvalidStoredBlocksAboveTipAreRejected covers an invalid block that is not
+// the first stored header above our tip. The local chain is b1..b10 with b10 at a harder difficulty,
+// s6..s11 on b5 are stored valid, s12 is stored invalid, and the peer offers [b5, s6..s12, h13, h14].
+// The walk stops at s11, so catchup must read past that valid block to find s12.
+//
+// Mutation proof: returning from rejectInvalidStoredHeader after the first header it reads lets the
+// offer through, un-stamping b6..b10 and reaching the block fetch.
+func TestCatchup_ValidThenInvalidStoredBlocksAboveTipAreRejected(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerThroughValidThenInvalidAboveTip)
+
+	s11 := run.offered[5]
+	_, s11Meta, err := run.client.GetBlockHeader(context.Background(), s11.Hash())
+	require.NoError(t, err)
+	require.False(t, s11Meta.Invalid, "s11 must be stored valid, else the setup is vacuous")
+	require.Equal(t, uint32(11), s11Meta.Height, "s11 must sit above the tip at b10, else the setup is vacuous")
+
+	s12 := run.offered[6]
+	_, s12Meta, err := run.client.GetBlockHeader(context.Background(), s12.Hash())
+	require.NoError(t, err)
+	require.True(t, s12Meta.Invalid, "s12 must be stored invalid, else the setup is vacuous")
+
+	require.Error(t, run.err)
+	require.True(t, errors.Is(run.err, errors.ErrBlockInvalid), "an offer through a stored invalid block must be rejected as invalid: %v", run.err)
+	require.Contains(t, run.err.Error(), s12.Hash().String(), "the error must name s12, the first invalid offered block")
+	require.Zero(t, run.blocksRequests, "no block may be fetched for a rejected offer")
+	require.Zero(t, run.minedClears, "a rejected offer must not un-stamp any local block (step 9.6)")
+	require.Equal(t, []bool{true, true, true, true, true}, minedAboveAncestor(t, run),
+		"a rejected offer must leave the local blocks above the ancestor mined")
+}
+
+// TestCatchup_AllStoredSideBranchChangesNothing covers an offer the ancestor narrowing and the
+// exhausted-walk rule both apply to. The local chain is b1..b10, s6..s10 on b5 are stored valid, and
+// the peer announces a child of s10 but serves only [b5, s6..s10]. Narrowing puts the ancestor at
+// b5, but nothing served is new, so there is no reorg to prepare for. Catchup must charge the peer
+// for the block it did not serve and leave b6..b10 stamped.
+//
+// Mutation proof: clearing walkExhausted when the ancestor was narrowed measures a fork depth of 5,
+// and the offer's equal work passes the less-work gate, so step 9.6 un-stamps b6..b10.
+func TestCatchup_AllStoredSideBranchChangesNothing(t *testing.T) {
+	run := runAncestorLinkCatchup(t, offerAllStoredSideBranch)
+
+	s10 := run.offered[4]
+	_, s10Meta, err := run.client.GetBlockHeader(context.Background(), s10.Hash())
+	require.NoError(t, err)
+	require.False(t, s10Meta.Invalid, "s10 must be stored valid, else the setup is vacuous")
+	require.Equal(t, uint32(10), s10Meta.Height, "s10 must sit at our tip's height, else the setup is vacuous")
+
+	require.Error(t, run.err, "the peer did not serve the block it announced")
+	require.True(t, errors.Is(run.err, errors.ErrNetworkInvalidResponse), "got %v", run.err)
+	require.Contains(t, run.err.Error(), "peer returned no new headers")
+	require.Zero(t, run.blocksRequests, "no block may be fetched when nothing offered is new")
+	require.Zero(t, run.minedClears, "no local block may be un-stamped when nothing offered is new")
+	require.Equal(t, []bool{true, true, true, true, true}, minedAboveAncestor(t, run),
+		"the local blocks above the ancestor must stay mined")
+}
+
+// failingHeaderLookupClient fails GetBlockHeader for one hash and defers to the real client otherwise.
+type failingHeaderLookupClient struct {
+	blockchain.ClientI
+	failOn *chainhash.Hash
+}
+
+func (c *failingHeaderLookupClient) GetBlockHeader(ctx context.Context, blockHash *chainhash.Hash) (*model.BlockHeader, *model.BlockHeaderMeta, error) {
+	if blockHash.IsEqual(c.failOn) {
+		return nil, nil, errors.NewStorageError("injected header lookup failure")
+	}
+
+	return c.ClientI.GetBlockHeader(ctx, blockHash)
+}
+
+// TestRejectInvalidStoredHeader covers the outcomes the end-to-end test does not reach, against a
+// real sqlitememory blockchain store holding s1 valid and s2 invalid on genesis, with u1 never stored.
+//
+// Mutation proofs: dropping the ErrBlockNotFound return fails stops_at_first_unstored, and reporting
+// a failed lookup as a peer fault fails lookup_failure_is_not_charged_to_the_peer.
+func TestRejectInvalidStoredHeader(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	store, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+
+	client, err := blockchain.NewLocalClient(logger, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	genesis, _, err := store.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	side := forkHeadersFrom(t, genesis, 3, 1, 700)
+	s1, s2, unstored := side[0], side[1], side[2]
+	storeSideBlock(ctx, t, store, s1, 1)
+	storeSideBlock(ctx, t, store, s2, 2, options.WithInvalid(true))
+
+	catchupCtx := &CatchupContext{blockUpTo: &model.Block{Header: s2}}
+	ancestorHash := genesis.Hash()
+
+	reject := func(c blockchain.ClientI, headers ...*model.BlockHeader) error {
+		server := &Server{logger: logger, blockchainClient: c}
+		return server.rejectInvalidStoredHeader(ctx, catchupCtx, headers, ancestorHash)
+	}
+
+	t.Run("names_the_first_invalid", func(t *testing.T) {
+		err := reject(client, s1, s2)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrBlockInvalid), "got %v", err)
+		require.Contains(t, err.Error(), s2.Hash().String())
+	})
+
+	t.Run("all_stored_valid", func(t *testing.T) {
+		require.NoError(t, reject(client, s1))
+	})
+
+	t.Run("stops_at_first_unstored", func(t *testing.T) {
+		require.NoError(t, reject(client, s1, unstored, s2), "a header past the first unstored one is not read")
+	})
+
+	t.Run("lookup_failure_is_not_charged_to_the_peer", func(t *testing.T) {
+		err := reject(&failingHeaderLookupClient{ClientI: client, failOn: s1.Hash()}, s1, s2)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, errors.ErrServiceError), "got %v", err)
+		require.False(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "got %v", err)
+		require.False(t, errors.Is(err, errors.ErrBlockInvalid), "got %v", err)
+	})
+}
+
+// TestCatchup_NoAncestorOnCurrentChain covers an offer whose stored headers are all on a side
+// branch, against a real sqlitememory blockchain store. The peer serves s6..s9, h10, h11 without
+// b5 in front, so the ancestor walk finds s6..s9 stored but none on our current chain. The locator
+// was built from b10, so whose fault that is depends on whether b10 is still on our current chain.
+//
+// tip_unmoved: it is, so the reply cannot have come from our locator, and catchup rejects it as a
+// peer fault. tip_reorged_during_fetch: our chain reorged to c8..c11 on b7 while the peer
+// answered, so the reply may be honest and catchup reports a ServiceError, which is not charged
+// to the peer.
+//
+// Mutation proofs: deleting the -1 branch after lastOnCurrentChain panics on storedMetas[-1] in
+// both subtests. Returning the peer-fault error unconditionally there fails tip_reorged_during_fetch.
+func TestCatchup_NoAncestorOnCurrentChain(t *testing.T) {
+	t.Run("tip_unmoved", func(t *testing.T) {
+		run := runAncestorLinkCatchup(t, offerSideBranchOnly)
+
+		require.Error(t, run.err)
+		require.True(t, errors.Is(run.err, errors.ErrNetworkInvalidResponse), "a reply with nothing on our current chain is a peer fault: %v", run.err)
+		require.Contains(t, run.err.Error(), "no common ancestor on our current chain")
+		require.Equal(t, "network_error", run.errorType, "releaseCatchupLock must classify the rejection as a peer network error")
+		requireSideBranchOfferUntouched(t, run)
+	})
+
+	t.Run("tip_reorged_during_fetch", func(t *testing.T) {
+		run := runAncestorLinkCatchup(t, offerSideBranchOnlyAfterReorg)
+
+		bestHeader, _, err := run.client.GetBestBlockHeader(context.Background())
+		require.NoError(t, err)
+		require.NotEqual(t, run.mainChain[9].Hash().String(), bestHeader.Hash().String(), "our chain must have reorged away from b10, else the setup is vacuous")
+
+		require.Error(t, run.err)
+		require.True(t, errors.Is(run.err, errors.ErrServiceError), "our own reorg is a local fault: %v", run.err)
+		require.False(t, errors.Is(run.err, errors.ErrNetworkInvalidResponse), "the peer must not be charged for our own reorg: %v", run.err)
+		require.Zero(t, run.blocksRequests, "no block may be fetched for a rejected offer")
+		require.Zero(t, run.minedClears, "a rejected offer must not un-stamp any local block (step 9.6)")
+	})
+}
+
 // TestCatchup_HeaderBatchMustLinkToPreviousBatch covers a peer whose second header batch does not
 // build on the last header of the first, against a real sqlitememory blockchain store. Every
 // request names one fixed peer tip and the peer serves the path back from it, so an honest peer's
@@ -520,4 +919,156 @@ func TestCatchup_HeaderWithWrongDifficultyIsRejectedBeforeAnyBodyFetch(t *testin
 	require.Contains(t, run.err.Error(), "incorrect difficulty bits")
 	require.Zero(t, run.otherRequests, "nothing but headers may be requested for a rejected offer")
 	requireRejectedWithoutSideEffects(t, run)
+}
+
+// TestLastOnCurrentChain covers the search findCommonAncestor uses to narrow the last stored
+// offered header to the last one on our current chain, against a real sqlitememory blockchain
+// store holding b1..b10 on the current chain and s6..s9, a stored side branch on b5. Each case is a
+// stored prefix as the ancestor walk leaves it, and the want is the index of the header the search
+// must return.
+func TestLastOnCurrentChain(t *testing.T) {
+	ctx := context.Background()
+	logger := ulogger.TestLogger{}
+	tSettings := test.CreateBaseTestSettings(t)
+
+	store, err := blockchain_store.NewStore(logger, &url.URL{Scheme: "sqlitememory"}, tSettings)
+	require.NoError(t, err)
+
+	client, err := blockchain.NewLocalClient(logger, tSettings, store, nil, nil)
+	require.NoError(t, err)
+
+	genesis, _, err := store.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	mainChain := forkHeadersFrom(t, genesis, 10, 1, 0)
+	for i, h := range mainChain {
+		storeMinedBlock(ctx, t, store, h, uint32(i+1)) //nolint:gosec // i < 10
+	}
+
+	sideBranch := forkHeadersFrom(t, mainChain[4], 4, 6, 700)
+	for i, h := range sideBranch {
+		storeSideBlock(ctx, t, store, h, uint32(6+i)) //nolint:gosec // i < 4
+	}
+
+	_, bestMeta, err := client.GetBestBlockHeader(ctx)
+	require.NoError(t, err)
+
+	server := &Server{logger: logger, settings: tSettings, blockchainClient: client}
+	catchupCtx := &CatchupContext{blockUpTo: &model.Block{Header: mainChain[9]}}
+
+	concat := func(parts ...[]*model.BlockHeader) []*model.BlockHeader {
+		var out []*model.BlockHeader
+		for _, p := range parts {
+			out = append(out, p...)
+		}
+
+		return out
+	}
+
+	tests := []struct {
+		name    string
+		headers []*model.BlockHeader
+		want    int
+	}{
+		{name: "all_on_chain_up_to_tip", headers: mainChain, want: 9},
+		{name: "all_on_chain_below_tip", headers: mainChain[2:7], want: 4},
+		{name: "one_on_chain_then_side_branch", headers: concat(mainChain[4:5], sideBranch), want: 0},
+		{name: "five_on_chain_then_side_branch", headers: concat(mainChain[:5], sideBranch), want: 4},
+		{name: "three_on_chain_then_one_side_block", headers: concat(mainChain[2:5], sideBranch[:1]), want: 2},
+		{name: "side_branch_only", headers: sideBranch, want: -1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			metas := make([]*model.BlockHeaderMeta, len(tc.headers))
+			for i, h := range tc.headers {
+				_, meta, err := client.GetBlockHeader(ctx, h.Hash())
+				require.NoError(t, err)
+
+				metas[i] = meta
+			}
+
+			got, err := server.lastOnCurrentChain(ctx, catchupCtx, tc.headers, metas, bestMeta)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	// A failed chain check is our own RPC failing, so it must come back as a ServiceError, which
+	// the caller retries without charging the peer. The prefix b1..b5, s6..s9 is probed in the
+	// order s9 (the last), b1 (the first), then b5, s7, s6 in the search, so failing s9, b1 and
+	// s7 covers all three call sites. The tip short-circuits without an RPC, so no failing block is
+	// the tip. The injected error is a StorageError, not a ServiceError, so a wrapper that charged
+	// the peer instead would fail here.
+	prefix := concat(mainChain[:5], sideBranch)
+
+	prefixMetas := make([]*model.BlockHeaderMeta, len(prefix))
+	for i, h := range prefix {
+		_, meta, err := client.GetBlockHeader(ctx, h.Hash())
+		require.NoError(t, err)
+
+		prefixMetas[i] = meta
+	}
+
+	failures := []struct {
+		name   string
+		failAt *model.BlockHeaderMeta
+	}{
+		{name: "check_fails_on_first_probe", failAt: prefixMetas[8]},    // s9
+		{name: "check_fails_on_second_probe", failAt: prefixMetas[0]},   // b1
+		{name: "check_fails_inside_the_search", failAt: prefixMetas[6]}, // s7
+	}
+
+	for _, tc := range failures {
+		t.Run(tc.name, func(t *testing.T) {
+			failing := &failingChainCheckClient{ClientI: client, failID: tc.failAt.ID}
+			failingServer := &Server{logger: logger, settings: tSettings, blockchainClient: failing}
+
+			got, err := failingServer.lastOnCurrentChain(ctx, catchupCtx, prefix, prefixMetas, bestMeta)
+			require.Error(t, err)
+			require.Equal(t, -1, got)
+			require.Positive(t, failing.failed.Load(), "the failing block must have been probed, else the case is vacuous")
+			require.True(t, errors.Is(err, errors.ErrServiceError), "a failed chain check is a local fault: %v", err)
+			require.False(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a failed chain check must not be charged to the peer: %v", err)
+		})
+	}
+
+	// findCommonAncestor, driven directly: a stored prefix with nothing on our current chain is the
+	// peer's fault, and a failed chain check is ours and comes back unchanged. The fetch result
+	// carries no locator start here, so the no-ancestor case cannot be excused as our own reorg
+	// (TestCatchup_NoAncestorOnCurrentChain covers that).
+	runFind := func(client blockchain.ClientI, headers []*model.BlockHeader) error {
+		s := &Server{logger: logger, settings: tSettings, blockchainClient: client}
+
+		return s.findCommonAncestor(ctx, &CatchupContext{
+			blockUpTo:          &model.Block{Header: mainChain[9]},
+			headersFetchResult: &catchup.Result{Headers: headers},
+		})
+	}
+
+	err = runFind(client, sideBranch)
+	require.True(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "an offer with no header on our current chain is a peer fault: %v", err)
+
+	err = runFind(&failingChainCheckClient{ClientI: client, failID: prefixMetas[8].ID}, prefix)
+	require.True(t, errors.Is(err, errors.ErrServiceError), "a failed chain check is a local fault: %v", err)
+	require.False(t, errors.Is(err, errors.ErrNetworkInvalidResponse), "a failed chain check must not be charged to the peer: %v", err)
+}
+
+// failingChainCheckClient wraps the real sqlitememory-backed client and fails
+// CheckBlockIsInCurrentChain for one block ID, delegating every other call.
+type failingChainCheckClient struct {
+	blockchain.ClientI
+
+	failID uint32
+	failed atomic.Int64
+}
+
+func (c *failingChainCheckClient) CheckBlockIsInCurrentChain(ctx context.Context, blockIDs []uint32) (bool, error) {
+	if len(blockIDs) == 1 && blockIDs[0] == c.failID {
+		c.failed.Add(1)
+
+		return false, errors.NewStorageError("chain check failed for block %d", c.failID)
+	}
+
+	return c.ClientI.CheckBlockIsInCurrentChain(ctx, blockIDs)
 }

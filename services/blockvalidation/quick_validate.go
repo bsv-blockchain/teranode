@@ -288,9 +288,11 @@ func (u *BlockValidation) quickValidateBlock(ctx context.Context, block *model.B
 		return errors.NewBlockInvalidError("[quickValidateBlock][%s] outdated block version", block.Hash().String(), err)
 	}
 
-	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
-	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
-		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	// Reject blocks without a coinbase (e.g. from seeded peers that don't have full block data).
+	// A coinbase with no inputs that the header commits to is not missing: the post-binding
+	// IsConsensusCoinbase check below condemns it (see coinbaseNotDelivered).
+	if coinbaseNotDelivered(block) {
+		return errors.NewBlockIncompleteError("[quickValidateBlock][%s] coinbase tx is missing, peer may not have full block data", block.Hash().String())
 	}
 
 	// Bind a no-subtrees body to the header before anything else touches it
@@ -439,9 +441,11 @@ func (u *BlockValidation) quickValidateBlockAsync(ctx context.Context, block *mo
 		return emptyWG, nil, errors.NewBlockInvalidError("[quickValidateBlockAsync][%s] outdated block version", block.Hash().String(), err)
 	}
 
-	// Reject blocks without a valid coinbase (e.g. from seeded peers that don't have full block data)
-	if block.CoinbaseTx == nil || len(block.CoinbaseTx.Inputs) == 0 {
-		return emptyWG, nil, errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is nil or has no inputs, peer may not have full block data", block.Hash().String())
+	// Reject blocks without a coinbase (e.g. from seeded peers that don't have full block data).
+	// A coinbase with no inputs that the header commits to is not missing: the post-binding
+	// IsConsensusCoinbase check below condemns it (see coinbaseNotDelivered).
+	if coinbaseNotDelivered(block) {
+		return emptyWG, nil, errors.NewBlockIncompleteError("[quickValidateBlockAsync][%s] coinbase tx is missing, peer may not have full block data", block.Hash().String())
 	}
 
 	// Bind a no-subtrees body to the header before anything else touches it
@@ -616,7 +620,8 @@ func (u *BlockValidation) checkQuickValidationCoinbase(block *model.Block, calle
 		return errors.NewBlockInvalidError("[%s][%s] coinbase is not final: %s", caller, block.Hash().String(), reason)
 	}
 
-	return nil
+	// Last, so a claimed count cannot spare a body one of the rules above condemns.
+	return block.CheckCoinbaseOnlyBodyCount()
 }
 
 // commitBlock performs the shared final commit for the quick-validation path:

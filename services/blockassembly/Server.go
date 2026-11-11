@@ -1279,6 +1279,7 @@ func (ba *BlockAssembly) AddTx(ctx context.Context, req *blockassembly_api.AddTx
 		if err = ba.addTxBatchWithBackpressure(ctx,
 			[]subtreepkg.Node{{Hash: chainhash.Hash(req.Txid), Fee: req.Fee, SizeInBytes: req.Size}},
 			[]*subtreepkg.TxInpoints{&txInpoints},
+			req.GetInBlock(),
 		); err != nil {
 			return nil, err
 		}
@@ -1347,7 +1348,7 @@ func (ba *BlockAssembly) RemoveTx(ctx context.Context, req *blockassembly_api.Re
 const queueFullPollInterval = 5 * time.Millisecond
 
 // addTxBatchWithBackpressure enqueues a batch into block assembly under the
-// configured capacity bound. It is the shared body of all three ingest
+// configured capacity bounds. It is the shared body of all three ingest
 // handlers, called only inside the enabled branch.
 //
 // On the fast path there is room and it returns immediately — this is also the
@@ -1358,18 +1359,37 @@ const queueFullPollInterval = 5 * time.Millisecond
 // mapped error; the validator then unwinds its UTXO-store work for the shed
 // transactions (see unwindShed) so a resubmit is an ordinary first submission.
 //
+// When the batch breaks the in-memory transaction limit on top of what is already placed in
+// subtrees, there is no wait. That bound clears when a block connects, not when the dispatcher
+// drains a pass, so polling for it for QueueFullWaitTimeout only adds latency to every refusal.
+// The shed carries a marker the validator uses to skip its own retry for the same reason; see
+// shedHeld. A refusal whose excess comes from queued transactions waits for the queue like a
+// queue refusal, and is classified again on each poll.
+//
+// A batch larger than a whole bound can be admitted only onto an empty queue, so it takes the
+// polling wait for the queue to empty, not the immediate held shed, unless the node is already
+// at the in-memory limit.
+//
+// inBlock marks a batch whose transactions arrived inside a block. The in-memory limit does
+// not refuse it, so a block transaction is never left outside the template by that limit.
+//
 // Caller cancellation (ctx.Done) is NOT a shed: it returns a context-cancelled
 // error without incrementing the shed counter and without the resource-exhausted
 // class, whose shed recovery semantics do not apply to a cancelled call.
 //
 // The wait is strictly bounded so it can never wedge the validator, whose
 // block-assembly client honours the caller's context (group.Wait(ctx, 0)).
-func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints) error {
-	if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes []subtreepkg.Node, txInpoints []*subtreepkg.TxInpoints, inBlock bool) error {
+	verdict := ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock)
+	if verdict == subtreeprocessor.Admitted {
 		return nil
 	}
 
 	start := time.Now()
+
+	if verdict == subtreeprocessor.RefusedHeld {
+		return ba.shedHeld()
+	}
 
 	if ba.settings.BlockAssembly.QueueFullWaitTimeout > 0 {
 		ticker := time.NewTicker(queueFullPollInterval)
@@ -1385,9 +1405,16 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 			case <-timeout:
 				return ba.shed(start)
 			case <-ticker.C:
-				if ba.blockAssembler.AddTxBatchIfRoom(nodes, txInpoints) {
+				switch ba.blockAssembler.AddTxBatchBounded(nodes, txInpoints, inBlock) {
+				case subtreeprocessor.Admitted:
 					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
 					return nil
+				case subtreeprocessor.RefusedHeld:
+					// The node reached the in-memory limit while this batch waited for the
+					// queue. That clears only on a block, so stop waiting.
+					prometheusBlockAssemblyQueueWait.Observe(time.Since(start).Seconds())
+
+					return ba.shedHeld()
 				}
 			}
 		}
@@ -1402,6 +1429,70 @@ func (ba *BlockAssembly) addTxBatchWithBackpressure(ctx context.Context, nodes [
 	return ba.shed(start)
 }
 
+// heldShedMarker is the data key that marks a shed as the in-memory transaction limit. The
+// marker travels in the error data, so it survives the gRPC hop, and it is not an error class,
+// so a retry layer that retries by class does not take the shed for a transient fault.
+const heldShedMarker = "heldLimit"
+
+// IsHeldLimitShed reports whether err is the shed for the in-memory transaction limit. That
+// shed clears when a block connects, not within milliseconds, so a caller must not retry it in
+// place. It is false for the queue-full shed, which clears as the dispatcher drains.
+func IsHeldLimitShed(err error) bool {
+	for current := err; current != nil; {
+		var tErr *errors.Error
+		if !errors.As(current, &tErr) {
+			return false
+		}
+
+		if marked, ok := tErr.GetData(heldShedMarker).(bool); ok && marked {
+			return true
+		}
+
+		current = tErr.Unwrap()
+	}
+
+	return false
+}
+
+// shedHeld records and returns the shed for a batch the in-memory transaction limit refused. It
+// is the same resource-exhausted class as shed, so every existing consumer handles it, with one
+// extra marker in its data, read by IsHeldLimitShed. The validator reads that marker to skip the
+// in-place retry that only suits a queue that clears in milliseconds, since this bound holds
+// until a block connects. The error deliberately does not wrap ErrServiceUnavailable, which
+// IsRetryableError and the HTTP client retry as a transient fault.
+//
+// It observes no queue wait. The entry check never waits, and the poll loop records its own wait
+// before it calls this.
+func (ba *BlockAssembly) shedHeld() error {
+	prometheusBlockAssemblyQueueShed.Inc()
+	prometheusBlockAssemblyHeldShed.Inc()
+
+	var shedErr *errors.Error
+
+	if ba.blockAssembler.HeldByUnminedLoad() {
+		shedErr = errors.NewThresholdExceededError(
+			"block assembly is loading its unmined transactions and refuses ingest until that completes, in-memory limit %d",
+			ba.blockAssembler.MaxTransactionsInMemory())
+	} else {
+		shedErr = NewHeldLimitShedError(ba.blockAssembler.HeldCount(), ba.blockAssembler.MaxTransactionsInMemory())
+	}
+
+	shedErr.SetData(heldShedMarker, true)
+
+	return errors.WrapGRPC(shedErr)
+}
+
+// NewHeldLimitShedError builds the shed for the in-memory transaction limit with the marker that
+// IsHeldLimitShed reads. The validator returns it when its view of block assembly's held count is
+// at the limit, so a transaction shed before the UTXO store is classified exactly like one that
+// block assembly refused.
+func NewHeldLimitShedError(held, limit int64) *errors.Error {
+	shedErr := errors.NewThresholdExceededError("block assembly holds %d transactions in memory, limit %d", held, limit)
+	shedErr.SetData(heldShedMarker, true)
+
+	return shedErr
+}
+
 // shed records and returns the queue-full shed outcome: a ResourceExhausted-
 // mapped error the retry interceptor does not retry. The reported limit is the
 // enforced (normalized) cap, which can be clamped up from the raw configured
@@ -1411,8 +1502,8 @@ func (ba *BlockAssembly) shed(start time.Time) error {
 	prometheusBlockAssemblyQueueShed.Inc()
 
 	return errors.WrapGRPC(errors.NewThresholdExceededError(
-		"block assembly queue full: %d items queued, limit %d",
-		ba.blockAssembler.QueueLength(), ba.blockAssembler.QueueMaxItems()))
+		"block assembly queue full: %d items queued, limit %d; in-memory transaction limit %d",
+		ba.blockAssembler.QueueLength(), ba.blockAssembler.QueueMaxItems(), ba.blockAssembler.MaxTransactionsInMemory()))
 }
 
 // contextCancelledDuringIngest maps a cancelled/deadline-exceeded ingest wait to
@@ -1486,7 +1577,7 @@ func (ba *BlockAssembly) AddTxBatch(ctx context.Context, batch *blockassembly_ap
 
 	// Add entire batch in one call
 	if !ba.settings.BlockAssembly.Disabled {
-		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+		if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, batch.GetInBlock()); err != nil {
 			return nil, err
 		}
 
@@ -1668,7 +1759,7 @@ func (ba *BlockAssembly) AddTxBatchColumnar(ctx context.Context, req *blockassem
 		txInpointsList[i] = &txInpointsArr[i]
 	}
 
-	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList); err != nil {
+	if err := ba.addTxBatchWithBackpressure(ctx, nodes, txInpointsList, req.GetInBlock()); err != nil {
 		return nil, err
 	}
 
@@ -1747,9 +1838,10 @@ func (ba *BlockAssembly) GetMiningCandidate(ctx context.Context, req *blockassem
 // which it is cleaned up automatically. The coinbase is the one a solution without its own is mined
 // with, as bitcoin-sv keeps the candidate block's coinbase, so it must not change under a miner who
 // has been handed it. Candidate ids repeat: the main path hashes the subtree root, parent and time,
-// so polls in the same second share one, and the empty-block path derives its id from the parent
-// alone. A poll for an id whose job is still held therefore reuses that job's coinbase rather than
-// building a new one, provided it pays the same value at the same height.
+// and the empty-block path the parent and time, so polls at one tip with the same candidate time
+// (and, on the main path, the same subtrees) share one. A poll for an id whose job is still held
+// therefore reuses that job's coinbase rather than building a new one, provided it pays the same
+// value at the same height.
 //
 // Building the coinbase needs miner_wallet_private_keys, which a pool that submits its own coinbase
 // and generatetoaddress, which pays an explicit address, have never needed. So a coinbase that
@@ -2262,11 +2354,12 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 			ba.logger.Warnf("[BlockAssembly][%s][%s] rejected mining solution, block breaks a consensus rule: %v", jobID, block.Hash().String(), err)
 
 			// Keep the job. Its coinbase is the one every miner on this candidate id was handed, and
-			// the id outlives a single coinbase-less poll (the empty-block id is derived from the
-			// parent alone), so deleting it would make the next poll build a coinbase with a new
-			// extranonce and fail every other miner still hashing the old one, which would delete it
-			// again. As in bitcoin-sv, where an invalid submitminingsolution leaves the candidate
-			// alone, the job goes when its TTL lapses or a block is mined.
+			// the id outlives a single coinbase-less poll (every poll at that tip with the same
+			// candidate time and, on the main path, the same subtrees shares it), so deleting it
+			// would make the next poll build a coinbase with a new extranonce and fail every other
+			// miner still hashing the old one, which would delete it again. As in bitcoin-sv, where
+			// an invalid submitminingsolution leaves the candidate alone, the job goes when its TTL
+			// lapses or a block is mined.
 			return nil, errors.NewProcessingError("[BlockAssembly][%s][%s] invalid block", jobID, block.Hash().String(), err)
 		}
 
@@ -2757,7 +2850,7 @@ func (ba *BlockAssembly) GetBlockAssemblyState(ctx context.Context, _ *blockasse
 //   - _: Empty message request (unused)
 //
 // Returns:
-//   - *blockassembly_api.QueueStatsMessage: Queue depth, head-batch age, the applied double-spend window and the enforced item cap
+//   - *blockassembly_api.QueueStatsMessage: Queue depth, head-batch age, the applied double-spend window, the enforced item cap, and the held count with its limit
 //   - error: Always nil; both queue values are atomic loads that cannot fail
 func (ba *BlockAssembly) GetBlockAssemblyQueueStats(_ context.Context, _ *blockassembly_api.EmptyMessage) (*blockassembly_api.QueueStatsMessage, error) {
 	return &blockassembly_api.QueueStatsMessage{
@@ -2765,6 +2858,8 @@ func (ba *BlockAssembly) GetBlockAssemblyQueueStats(_ context.Context, _ *blocka
 		QueueHeadAgeMillis:      ba.blockAssembler.QueueHeadAge().Milliseconds(),
 		DoubleSpendWindowMillis: ba.settings.BlockAssembly.DoubleSpendWindow.Milliseconds(),
 		QueueMaxItems:           ba.blockAssembler.QueueMaxItems(),
+		HeldCount:               ba.blockAssembler.HeldCount(),
+		MaxHeld:                 ba.blockAssembler.MaxTransactionsInMemory(),
 	}, nil
 }
 
@@ -2976,8 +3071,10 @@ func (ba *BlockAssembly) GetBlockAssemblyBlockCandidate(ctx context.Context, _ *
 			Bits:           nbits,
 			Nonce:          0,
 		},
-		CoinbaseTx:       coinbaseTx,
-		TransactionCount: uint64(candidate.NumTxs),
+		CoinbaseTx: coinbaseTx,
+		// NumTxs leaves the coinbase out, and the block's count includes it. An empty candidate
+		// carries 0, which block validation rejects on a body with no subtrees.
+		TransactionCount: uint64(candidate.NumTxs) + 1,
 		SizeInBytes:      candidate.GetSizeWithoutCoinbase() + coinbaseSizeUint64,
 		Subtrees:         subtreeHashes,
 		Height:           candidate.Height,

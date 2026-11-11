@@ -179,7 +179,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block.Header)
 
 		assert.Equal(t, uint32(1), block.Height)
-		assert.Equal(t, uint64(0), block.TransactionCount)
+		require.Equal(t, uint64(1), block.TransactionCount, "the coinbase alone")
 		assert.Equal(t, uint64(5000000000), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 
@@ -232,7 +232,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block)
 		require.NotNil(t, block.Header)
 		assert.Equal(t, uint32(251), block.Height)
-		assert.Equal(t, uint64(0), block.TransactionCount)
+		require.Equal(t, uint64(1), block.TransactionCount, "the coinbase alone")
 		assert.Equal(t, uint64(2500000000), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 
@@ -245,11 +245,11 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		genesisHash := chainhash.HashH([]byte("genesis"))
 		for i := uint64(0); i < 10; i++ {
 			// Different output index for each tx
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        chainhash.HashH([]byte(fmt.Sprintf("%d", i))),
 				Fee:         i,
 				SizeInBytes: i,
-			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))}))
+			}}, []*subtreepkg.TxInpoints{singleParentInpointsPtr(genesisHash, uint32(i))}, false))
 		}
 
 		require.Eventually(t, func() bool {
@@ -282,7 +282,7 @@ func TestGetBlockAssemblyBlockCandidate(t *testing.T) {
 		require.NotNil(t, block.Header)
 
 		assert.Equal(t, uint32(1), block.Height)
-		assert.Equal(t, uint64(10), block.TransactionCount)
+		require.Equal(t, uint64(11), block.TransactionCount, "ten transactions plus the coinbase")
 		assert.Equal(t, uint64(5000000045), block.CoinbaseTx.Outputs[0].Satoshis)
 	})
 }
@@ -555,11 +555,11 @@ func TestTxCount(t *testing.T) {
 		// to avoid TxInpoints serialization issues
 		for i := 0; i < 3; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx-%d", i)))
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, false))
 		}
 
 		// Wait for processing - expect initial count + 3 added transactions
@@ -578,11 +578,11 @@ func TestSubmitMiningSolution_InvalidBlock_HandlesReset(t *testing.T) {
 		// Add some transactions to create a mining candidate
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("tx%d", i)))
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, false))
 		}
 
 		// Wait for transactions to be processed
@@ -1401,11 +1401,11 @@ func TestRemoveTxIntensive(t *testing.T) {
 
 		// First add a transaction
 		txHash := chainhash.HashH([]byte("test-tx-to-remove"))
-		require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+		require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}}))
+		}}, []*subtreepkg.TxInpoints{{}}, false))
 
 		// Wait for it to be added
 		time.Sleep(10 * time.Millisecond)
@@ -1549,11 +1549,11 @@ func TestGetMiningCandidateIntensive(t *testing.T) {
 		// Add some transactions to create subtrees
 		for i := 0; i < 5; i++ {
 			txHash := chainhash.HashH([]byte(fmt.Sprintf("mining-tx-%d", i)))
-			require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+			require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 				Hash:        txHash,
 				Fee:         uint64(100),
 				SizeInBytes: uint64(250),
-			}}, []*subtreepkg.TxInpoints{{}}))
+			}}, []*subtreepkg.TxInpoints{{}}, false))
 		}
 
 		time.Sleep(50 * time.Millisecond) // Allow processing
@@ -2105,11 +2105,11 @@ func TestRemoveTxEdgeCases(t *testing.T) {
 
 		// Add a transaction first
 		txHash := chainhash.HashH([]byte("test-tx-remove"))
-		require.True(t, server.blockAssembler.AddTxBatchIfRoom([]subtreepkg.Node{{
+		require.Equal(t, subtreeprocessor.Admitted, server.blockAssembler.AddTxBatchBounded([]subtreepkg.Node{{
 			Hash:        txHash,
 			Fee:         100,
 			SizeInBytes: 250,
-		}}, []*subtreepkg.TxInpoints{{}}))
+		}}, []*subtreepkg.TxInpoints{{}}, false))
 
 		// Now remove it to cover the success path
 		req := &blockassembly_api.RemoveTxRequest{
