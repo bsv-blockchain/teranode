@@ -18,6 +18,7 @@ import (
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/ulogger"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -841,6 +842,10 @@ func (l *warnCountingLogger) Warnf(format string, args ...interface{}) {
 	l.record(format)
 }
 
+func (l *warnCountingLogger) Infof(format string, args ...interface{}) {
+	l.record(format)
+}
+
 func (l *warnCountingLogger) Errorf(format string, args ...interface{}) {
 	l.errs.Add(1)
 	l.record(format)
@@ -1032,6 +1037,7 @@ func TestDelayEmergencyDifficulty(t *testing.T) {
 		{"mainnet ignores the delay", &mainnetParams, 2 * time.Minute, parentTime, threshold + 1, threshold + 1},
 		{"stn ignores the delay", &stnParams, 2 * time.Minute, parentTime, threshold + 1, threshold + 1},
 		{"regtest ignores the delay", &regtestParams, 2 * time.Minute, parentTime, threshold + 1, threshold + 1},
+		{"an unknown median-time-past floor is held", emergencyTestParams(), 2 * time.Minute, 0, threshold + 1, threshold},
 		{"a median-time-past floor at the held time still holds", emergencyTestParams(), 2 * time.Minute, threshold, threshold + 1, threshold},
 		{"a median-time-past floor above the held time releases", emergencyTestParams(), 2 * time.Minute, threshold + 1, threshold + 1, threshold + 1},
 	}
@@ -1120,4 +1126,77 @@ func TestEmergencyDifficultyDelayCandidate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEmergencyDifficultyDelayCandidateTime(t *testing.T) {
+	newSettings := func() *settings.Settings {
+		tSettings := &settings.Settings{ChainCfgParams: emergencyTestParams()}
+		tSettings.BlockAssembly.EmergencyDifficultyDelay = 5 * time.Minute
+
+		return tSettings
+	}
+
+	tipTime := uint32(time.Now().Add(-21 * time.Minute).Unix())
+	headers := linkedHeaders(t, 11, tipTime-10)
+	tip := headers[0]
+	require.Equal(t, tipTime, tip.Timestamp)
+
+	t.Run("the hold is logged once per parent", func(t *testing.T) {
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeaders", mock.Anything, tip.Hash(), mock.Anything).Return(headers, []*model.BlockHeaderMeta{}, nil)
+
+		logger := &warnCountingLogger{}
+		assembler := &BlockAssembler{logger: logger, blockchainClient: mockClient, settings: newSettings()}
+
+		for i := 0; i < 5; i++ {
+			got, err := assembler.candidateTime(t.Context(), tip)
+			require.NoError(t, err)
+			require.Equal(t, int64(tipTime)+1200, got)
+		}
+
+		require.Equal(t, 1, logger.countMatching("holding candidate time"))
+	})
+
+	t.Run("the hold still applies when the median-time-past lookup fails", func(t *testing.T) {
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, context.DeadlineExceeded)
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, context.DeadlineExceeded)
+
+		assembler := &BlockAssembler{logger: ulogger.TestLogger{}, blockchainClient: mockClient, settings: newSettings()}
+
+		got, err := assembler.candidateTime(t.Context(), tip)
+		require.NoError(t, err)
+		require.Equal(t, int64(tipTime)+1200, got)
+		require.Nil(t, assembler.memoizedMtpFloor(tip.Hash()), "the lookup must have failed or this test proves nothing")
+	})
+}
+
+func TestGetCurrentDifficultyWhenNoCandidateTimeExists(t *testing.T) {
+	initPrometheusMetrics()
+
+	server, _ := setupServerWithSettings(t, func(tSettings *settings.Settings) {
+		tSettings.ChainCfgParams = emergencyTestParams()
+		tSettings.BlockAssembly.EmergencyDifficultyDelay = 5 * time.Minute
+	})
+
+	require.NoError(t, server.blockAssembler.Start(t.Context()))
+
+	tipTime := uint32(time.Now().Add(3 * time.Hour).Unix())
+	tip := buildSpacedChain(t, t.Context(), server.blockchainClient, tipTime)
+	server.blockAssembler.setBestBlockHeader(tip, emergencyTestChainLength)
+
+	_, err := server.blockAssembler.candidateTime(t.Context(), tip)
+	require.ErrorContains(t, err, "two-hour future bound", "the chain must be in the state where no candidate time exists")
+
+	before := promtestutil.ToFloat64(prometheusBlockAssemblerCandidateTimeClockSkew)
+
+	usual, err := server.blockchainClient.GetNextWorkRequired(t.Context(), tip.Hash(), time.Now().Unix())
+	require.NoError(t, err)
+
+	difficulty, err := server.GetCurrentDifficulty(t.Context(), &blockassembly_api.EmptyMessage{})
+	require.NoError(t, err)
+
+	wantDifficulty, _ := usual.CalculateDifficulty().Float64()
+	require.InDelta(t, wantDifficulty, difficulty.Difficulty, 1e-9)
+	require.Equal(t, before, promtestutil.ToFloat64(prometheusBlockAssemblerCandidateTimeClockSkew), "a difficulty query must not count as a refused mining candidate")
 }

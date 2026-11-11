@@ -2896,15 +2896,10 @@ func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassemb
 // Returns:
 //   - *blockassembly_api.GetCurrentDifficultyResponse: Response containing the current difficulty
 //   - error: Any error encountered during retrieval
-func (ba *BlockAssembly) GetCurrentDifficulty(ctx context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
+func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
 	blockHeader, _ := ba.blockAssembler.CurrentBlock()
 
-	candidateTime, err := ba.blockAssembler.candidateTime(ctx, blockHeader)
-	if err != nil {
-		return nil, errors.WrapGRPC(errors.NewProcessingError("error getting candidate time", err))
-	}
-
-	nBits, err := ba.blockAssembler.getNextNbits(blockHeader, candidateTime)
+	nBits, err := ba.blockAssembler.getNextNbits(blockHeader, ba.blockAssembler.currentDifficultyTime(blockHeader))
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("error getting next nbits", err))
 	}
