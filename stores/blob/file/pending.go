@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
@@ -36,6 +37,13 @@ type PendingFile struct {
 	hasher   hash.Hash
 	written  int64
 	done     bool
+	onCommit func(elapsed time.Duration, err error)
+}
+
+// OnCommit registers f to run after every Commit call with the call's duration and result.
+// A wrapper uses it to observe the publish, which happens after the wrapper has returned the file.
+func (p *PendingFile) OnCommit(f func(elapsed time.Duration, err error)) {
+	p.onCommit = f
 }
 
 // NewPendingFile starts a blob of fileType whose key will be given to Commit. opts are those a
@@ -109,6 +117,17 @@ func (p *PendingFile) Write(b []byte) (int, error) {
 // already present under key is reported as ErrBlobAlreadyExists unless opts allow overwriting,
 // and the pending file is discarded either way.
 func (p *PendingFile) Commit(ctx context.Context, key []byte, opts ...options.FileOption) error {
+	start := time.Now()
+	err := p.commit(ctx, key, opts...)
+
+	if p.onCommit != nil {
+		p.onCommit(time.Since(start), err)
+	}
+
+	return err
+}
+
+func (p *PendingFile) commit(ctx context.Context, key []byte, opts ...options.FileOption) error {
 	if p.done {
 		return errors.NewStorageError("[File][PendingFile] commit after commit or abort")
 	}
