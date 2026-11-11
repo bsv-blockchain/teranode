@@ -2226,15 +2226,14 @@ func (p *markingPlan) block(childHash chainhash.Hash) {
 // returned plan lists the children that must be held back rather than deleted
 // unmarked.
 //
-// The spend path consults a marker for the transaction ASKING to spend and
-// ahead of every other answer, and nothing in the spend path ever clears a
-// marker. A marker for a child that never held the output is therefore not
-// inert: a conflicting loser names the winner's outpoint in its inputs, is a
-// pruning candidate like any other tombstoned record, and once the winner's
-// spend is released (a reorg, ReverseProcessConflicting) the loser's genuinely
-// fresh spend would be refused forever. The SQL pruner applies the same rule in
-// its marker INSERT, which joins to the parent output and requires its spending
-// data to name the child.
+// The Aerospike spend path honours a marker only while the output names the
+// child, but nothing in it ever clears one, and the SQL spend path checks the
+// transaction ASKING to spend. Marking only the named child keeps a conflicting
+// loser, which names the winner's outpoint in its inputs and is a pruning
+// candidate like any other tombstoned record, free to spend that output once
+// the winner's spend is released (a reorg, ReverseProcessConflicting). The SQL
+// pruner applies the same rule in its marker INSERT, which joins to the parent
+// output and requires its spending data to name the child.
 //
 // Only a well-formed element naming a different spender drops a child without
 // a marker. Everything else that fails to name the child holds it back: an
@@ -2895,10 +2894,9 @@ func (s *Service) dropPagesOfPresentMasters(deletions []*pendingDeletion) ([]*pe
 // way to say so. Both are rare: a healthy cycle sends one batch here.
 //
 // Markers are all-or-nothing per child. A marker on a child that then stays in
-// place is not inert: the spend path answers it ahead of every other check, so
-// a later re-validation of the block holding that live child would be refused
-// as a pruned replay, and the block paths would not compensate because the
-// record was not created by that attempt. So a child held back by a refused
+// place is not inert: the output still names that child, so a later
+// re-validation of the block holding the live child would be refused as a
+// pruned replay. So a child held back by a refused
 // record, or whose write failed on one parent, has its markers withdrawn from
 // the others (withdrawMarkers).
 func (s *Service) markParents(ctx context.Context, parentUpdates map[string]*parentUpdateInfo) (*markingPlan, error) {

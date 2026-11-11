@@ -456,12 +456,10 @@ func TestSpendDoesNotBlessWithRequireParentOutputs(t *testing.T) {
 // TestPrunerMarksOnlyTheChildThatHeldTheSpend is the Aerospike twin of the SQL
 // test of the same name. A conflicting loser names the winner's outpoint in its
 // inputs and never held it, and it is a pruning candidate like any tombstoned
-// record. Marking (parent, loser) used to be inert because the spend path
-// compared the marker against the output's stored spender; it now checks the
-// transaction asking to spend, ahead of every other answer, and nothing clears a
-// marker. So once the winner's spend is released the loser's genuinely fresh
-// spend of that output would be refused forever. Only the child the output
-// records as its spender may be marked. Reproduced by review.
+// record. Only the child the output records as its spender may be marked: the
+// SQL spend path checks the transaction asking to spend, so a marker for the
+// loser there would refuse its genuinely fresh spend of the output once the
+// winner's spend is released, and nothing clears a marker.
 func TestPrunerMarksOnlyTheChildThatHeldTheSpend(t *testing.T) {
 	logger := ulogger.New("pruner-marker-holder-test")
 	s := test.CreateBaseTestSettings(t)

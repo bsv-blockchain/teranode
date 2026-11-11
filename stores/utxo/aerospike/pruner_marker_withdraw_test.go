@@ -19,10 +19,8 @@ import (
 // TestPrunerWithdrawsMarkerFromHeldBackChild: C spends P:0 and Q:0 and is
 // buried. Q's marker write fails, so C is held back and stays in the store. The
 // marker that landed on P in the same cycle must be withdrawn. Left in place it
-// poisons a live transaction: the spend path answers the marker ahead of every
-// other check, so re-validating C's block (catch-up re-run, reorg) is refused
-// as a pruned replay, and nothing compensates because C's record was not
-// created by that attempt. This runs the store's real marking path (Lua or the
+// poisons a live transaction: P:0 still names C, so re-validating C's block
+// (catch-up re-run, reorg) is refused as a pruned replay. This runs the store's real marking path (Lua or the
 // native builder), not the pruner package's plain map write.
 func TestPrunerWithdrawsMarkerFromHeldBackChild(t *testing.T) {
 	s := test.CreateBaseTestSettings(t)

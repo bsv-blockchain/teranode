@@ -1316,9 +1316,8 @@ func (s *Store) validateSpendItem(bItem *batchSpend) error {
 		return errors.NewProcessingError("[SPEND_BATCH_LUA][%s] spending data is nil", bItem.spend.TxID.String())
 	}
 
-	// The replay-marker check is keyed on the spender's txid. The expression
-	// path adds that clause only when it has one, so a spend without it would
-	// write through with no marker check at all; refuse it on both paths.
+	// A spend must name the transaction asking to spend: the Lua replay check
+	// reads it, and a spend without it is malformed on both paths.
 	if bItem.spend.SpendingData.TxID == nil {
 		return errors.NewProcessingError("[SPEND_BATCH_LUA][%s] spending data has no spending txid", bItem.spend.TxID.String())
 	}
@@ -1659,13 +1658,11 @@ func (s *Store) createSpendError(errMsg LuaErrorInfo, batchItem *batchSpend, txI
 		// never exist.
 		return errors.NewUtxoSpendingTxPrunedError("[SPEND_BATCH_LUA][%s] invalid spend for vout %d: spending transaction was pruned: %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 
-	// The three record-level answers arrive here too. When one spend in a Lua
-	// call hits a replay marker, spendMulti answers every other spend of that
-	// record per index rather than for the whole record (teranode.lua, the
-	// recordErrorCode block), so they must keep the typed errors
-	// createGeneralError gives them: the validator matches ErrTxConflicting, the
-	// legacy block path swallows it, and ErrTxLocked is what the validator
-	// retries on. A bare StorageError hard-failed a block that used to validate.
+	// The three record-level answers. teranode.lua returns them for the whole
+	// record, but a native dispatcher may answer them per index, so they keep
+	// the typed errors createGeneralError gives them: the validator matches
+	// ErrTxConflicting, the legacy block path swallows it, and ErrTxLocked is
+	// what the validator retries on.
 	case LuaErrorCodeConflicting:
 		return errors.NewTxConflictingError("[SPEND_BATCH_LUA][%s] transaction is conflicting, vout %d - %s", txID.String(), batchItem.spend.Vout, errMsg.Message)
 

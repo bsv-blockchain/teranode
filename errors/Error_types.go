@@ -536,7 +536,7 @@ func NewUtxoWalkLimitExceededError(message string, params ...interface{}) *Error
 // tell it apart from the generic utxo error: it is one of the rejections that
 // must roll back the sibling spends of the same transaction (see
 // utxo.IsSpendRollbackError / utxo.NeedsSpendRollback in
-// stores/utxo/compensate_created.go).
+// stores/utxo/rollback_set.go).
 func NewUtxoSpendingTxPrunedError(message string, params ...interface{}) *Error {
 	return New(ERR_UTXO_SPENDING_TX_PRUNED, message, params...)
 }

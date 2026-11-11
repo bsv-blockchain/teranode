@@ -84,8 +84,8 @@ func newFlushTestService(t *testing.T) (*Service, *uaerospike.Client) {
 // The rules: a child is deleted only when every present parent that it claims
 // either carries its marker or names a different, well-formed spender (a
 // conflicting loser). Anything else holds the child back, and a held-back child
-// carries no marker anywhere, because the spend path answers a marker ahead of
-// everything else and would refuse the live child's own re-spend.
+// carries no marker anywhere, because a marker on an output that names the
+// live child would refuse that child's own re-spend.
 func TestFlushCleanupBatches_MarkersAreAllOrNothingPerChild(t *testing.T) {
 	s, client := newFlushTestService(t)
 

@@ -2255,8 +2255,8 @@ func TestRespendExpiredChild(t *testing.T) {
 	key, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), tx.TxIDChainHash().CloneBytes())
 	require.NoError(t, err)
 
-	// mark the child as deleted, with the legacy value an older pruner wrote:
-	// the output names this spender, so even a legacy marker is a replay here.
+	// mark the child as deleted: the output names this spender, so a spend by
+	// it is a replay.
 	bin := aerospike.NewBin(fields.DeletedChildren.String(), map[string]bool{
 		spendingTx1.TxIDChainHash().String(): true,
 	})
