@@ -156,6 +156,9 @@ read every section between yours and the target.
 - **Asset block-list endpoints honour `fromHeight` with `includeOrphans`.** They now page down
   instead of returning the chain's top; clients passing both get the blocks at or below
   `fromHeight`. (#2065)
+- **`blockassembly_maxBlockReorgCatchup` is removed.** It never capped a reorg; it only sized two
+  unused maps. A config that still sets it starts as before and the value is ignored, so no
+  action is needed beyond deleting the line. (#2163)
 
 ## [0.16.0] - 2026-10-05
 
