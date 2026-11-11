@@ -745,11 +745,15 @@ func TestMarkTransactionsOnLongestChain_ReusedBatchSlots(t *testing.T) {
 	})
 
 	t.Run("on the longest chain without a DAH restamp clears unmined_since and skips a missing record", func(t *testing.T) {
+		previousGlobal := tSettings.GlobalBlockHeightRetention
+		previousAdjustment := tSettings.UtxoStore.BlockHeightRetentionAdjustment
+
 		tSettings.GlobalBlockHeightRetention = 0
 		tSettings.UtxoStore.BlockHeightRetentionAdjustment = 0
 
 		t.Cleanup(func() {
-			tSettings.GlobalBlockHeightRetention = uint32(retention)
+			tSettings.GlobalBlockHeightRetention = previousGlobal
+			tSettings.UtxoStore.BlockHeightRetentionAdjustment = previousAdjustment
 		})
 
 		require.Zero(t, tSettings.GetUtxoStoreBlockHeightRetention())
