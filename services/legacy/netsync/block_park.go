@@ -196,6 +196,11 @@ type parkedBlock struct {
 	// should hold is not going to grow it within a turn either, and without
 	// the stamp the restored block is re-dispatched every consumer turn off
 	// the still-queued drain request for its parent.
+	//
+	// And stamped for a retry-later failure whose parent the chain positively
+	// does not hold (parentAbsentFromChain): block validation refuses such a
+	// legacy block with a plain ServiceError, which carries no parent-missing
+	// code of its own.
 	parentMissingAt time.Time
 	// awaitingProofAt is when a commit of this block last failed because it is
 	// on the unified below-checkpoint route and the header cache could not
@@ -817,19 +822,27 @@ func (p *blockPark) Delete(ctx context.Context, entry parkedBlock) {
 		return
 	}
 
-	p.mu.Lock()
+	// Unlocked by defer: this runs on a peer's read loop (pipelineBlockDelete), where a
+	// panic is recovered, and a lock left held would stop every caller of the park.
+	out, mine := func() (bool, bool) {
+		p.mu.Lock()
+		defer p.mu.Unlock()
 
-	claim, out := p.out[entry.hash]
-	if out && claim != entry.claim {
-		p.mu.Unlock()
+		claim, out := p.out[entry.hash]
+		if out && claim != entry.claim {
+			return out, false
+		}
+
+		p.releaseLocked(entry.hash)
+		p.setGauges()
+
+		return out, true
+	}()
+	if !mine {
 		p.logger.Warnf("[blockPark][%s] not deleting the converted record: the block is handed out and this copy is not the taker's", entry.hash)
 
 		return
 	}
-
-	p.releaseLocked(entry.hash)
-	p.setGauges()
-	p.mu.Unlock()
 
 	delCtx, cancel := p.storeCtx(ctx)
 	defer cancel()

@@ -20,9 +20,11 @@ name: SonarQube Analysis for PRs
 # workflow, so the run-name (and everything derived from it) is untrusted input.
 # Every parsed field is cross-checked against trusted sources before use:
 # - the live PR via the API (head repo/branch/SHA and base ref must match)
-# - the claimed base must be an ancestor of the PR's current target branch
+# - the tested base must be an ancestor of the PR's current target branch
 # - the claimed merge must be a GitHub-signed synthetic merge whose parents are
-#   exactly (claimed base, workflow_run.head_sha)
+#   exactly (tested base, workflow_run.head_sha); the tested base is the
+#   merge's first parent, because the run-name base is pull_request.base.sha,
+#   which goes stale when the target branch advances
 # Scanner settings are read from the trusted base commit and the Sonar host,
 # project key, and organization are pinned as scanner args, so a malicious PR
 # cannot redirect the scanner at another host to exfiltrate SONAR_TOKEN.
@@ -78,7 +80,7 @@ jobs:
               return;
             }
 
-            const [, numberText, mergeSha, baseSha, baseRef] = match;
+            const [, numberText, mergeSha, claimedBaseSha, baseRef] = match;
             const prNumber = Number(numberText);
             const runHeadRepo = run.head_repository?.full_name || '';
 
@@ -125,13 +127,66 @@ jobs:
               core.setOutput('active', 'false');
               return;
             }
-            const currentBaseSha = pr.base.sha;
+            // pr.base.sha does not follow the target branch as it advances (on
+            // PR 2010 it stayed on the tip from when the PR was opened), so read
+            // the live branch for the current target.
+            let currentBaseSha;
+            try {
+              const { data: targetBranch } = await github.rest.repos.getBranch({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch: baseRef,
+              });
+              currentBaseSha = targetBranch?.commit?.sha;
+            } catch (error) {
+              core.setFailed(`Could not load target branch ${baseRef}: ${error.message}`);
+              return;
+            }
             if (typeof currentBaseSha !== 'string' || !/^[0-9a-f]{40}$/.test(currentBaseSha)) {
               core.setFailed(`PR ${prNumber} has invalid current base SHA.`);
               return;
             }
 
-            // The claimed base must sit on the current target branch's history,
+            let mergeCommit;
+            try {
+              ({ data: mergeCommit } = await github.rest.repos.getCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: mergeSha,
+              }));
+            } catch (error) {
+              core.setFailed(`Could not load tested merge ${mergeSha}: ${error.message}`);
+              return;
+            }
+
+            // The tested base is the merge's first parent, not the run-name base.
+            // The run-name carries pull_request.base.sha, which GitHub does not
+            // move when the target branch advances, while the synthetic merge is
+            // built on the target's tip at test time. Requiring the two to agree
+            // refused every PR whose target had moved since the PR was opened.
+            const parents = mergeCommit?.parents || [];
+            if (parents.length !== 2 || parents[1].sha !== run.head_sha) {
+              core.setFailed(`Tested merge ${mergeSha} is not a two-parent merge of head ${run.head_sha}.`);
+              return;
+            }
+            const baseSha = parents[0].sha;
+            if (baseSha !== claimedBaseSha) {
+              core.info(`Run-name base ${claimedBaseSha} is stale; tested merge is on ${baseSha}.`);
+            }
+
+            const verification = mergeCommit?.commit?.verification;
+            const signedCommitter = mergeCommit?.commit?.committer;
+            if (verification?.verified !== true ||
+                verification.reason !== 'valid' ||
+                mergeCommit?.committer?.login !== 'web-flow' ||
+                signedCommitter?.name !== 'GitHub' ||
+                signedCommitter?.email !== 'noreply@github.com' ||
+                mergeCommit?.commit?.message !== `Merge ${run.head_sha} into ${baseSha}`) {
+              core.setFailed(`Tested merge ${mergeSha} is not a verified GitHub synthetic merge.`);
+              return;
+            }
+
+            // The tested base must sit on the current target branch's history,
             // otherwise the "trusted" sonar-project.properties below could be
             // read from an attacker-supplied commit.
             let baseComparison;
@@ -150,36 +205,6 @@ jobs:
             if (mergeBaseSha !== baseSha ||
                 (baseComparison?.status !== 'identical' && baseComparison?.status !== 'ahead')) {
               core.setFailed(`Tested base ${baseSha} is not an ancestor of the current PR target.`);
-              return;
-            }
-
-            let mergeCommit;
-            try {
-              ({ data: mergeCommit } = await github.rest.repos.getCommit({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: mergeSha,
-              }));
-            } catch (error) {
-              core.setFailed(`Could not load tested merge ${mergeSha}: ${error.message}`);
-              return;
-            }
-
-            const verification = mergeCommit?.commit?.verification;
-            const signedCommitter = mergeCommit?.commit?.committer;
-            if (verification?.verified !== true ||
-                verification.reason !== 'valid' ||
-                mergeCommit?.committer?.login !== 'web-flow' ||
-                signedCommitter?.name !== 'GitHub' ||
-                signedCommitter?.email !== 'noreply@github.com' ||
-                mergeCommit?.commit?.message !== `Merge ${run.head_sha} into ${baseSha}`) {
-              core.setFailed(`Tested merge ${mergeSha} is not a verified GitHub synthetic merge.`);
-              return;
-            }
-
-            const parents = mergeCommit?.parents || [];
-            if (parents.length !== 2 || parents[0].sha !== baseSha || parents[1].sha !== run.head_sha) {
-              core.setFailed(`Tested merge ${mergeSha} does not match base ${baseSha} and head ${run.head_sha}.`);
               return;
             }
 

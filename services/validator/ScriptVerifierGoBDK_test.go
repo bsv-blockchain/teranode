@@ -20,11 +20,14 @@ Usage:
 package validator
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	bdkscript "github.com/bitcoin-sv/bdk/module/gobdk/script"
 	"github.com/bsv-blockchain/go-bt/v2"
@@ -78,7 +81,7 @@ var testTxs = []TestTx{
 //
 //	go clean -testcache &&go test -v -run Test_ScriptVerificationGoBDK ./services/validator/...
 func Test_ScriptVerificationGoBDK(t *testing.T) {
-	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams, 1)
 
 	for _, test := range testTxs {
 		tx, errTx := bt.NewTxFromString(test.ExtendedTx)
@@ -142,6 +145,14 @@ type fakeBDKTxValidator struct {
 	consensus   bool
 	utxoHeights []int32
 	err         error
+
+	// The consensus re-run of a policy-class script error.
+	rerunCalls       int
+	rerunBlockHeight int32
+	rerunConsensus   bool
+	rerunUtxoHeights []int32
+	rerunDeadline    bool
+	rerunErr         error
 }
 
 func (f *fakeBDKTxValidator) ValidateTransaction(_ []byte, utxoHeights []int32, blockHeight int32, consensus bool) error {
@@ -150,6 +161,146 @@ func (f *fakeBDKTxValidator) ValidateTransaction(_ []byte, utxoHeights []int32, 
 	f.blockHeight = blockHeight
 	f.consensus = consensus
 	return f.err
+}
+
+func (f *fakeBDKTxValidator) VerifyScriptContext(ctx context.Context, _ []byte, utxoHeights []int32, blockHeight int32, consensus bool) error {
+	f.rerunCalls++
+	f.rerunUtxoHeights = append([]int32(nil), utxoHeights...)
+	f.rerunBlockHeight = blockHeight
+	f.rerunConsensus = consensus
+	_, f.rerunDeadline = ctx.Deadline()
+	return f.rerunErr
+}
+
+// TestScriptVerifierGoBDKReRunsPolicyScriptErrorsInConsensusMode covers the
+// consensus re-run that decides whether a policy-mode script error is TxPolicy
+// (consensus-valid, published to KAFKA_TX_POLICY_REJECTED) or TxInvalid.
+func TestScriptVerifierGoBDKReRunsPolicyScriptErrorsInConsensusMode(t *testing.T) {
+	newVerifier := func(policyErr, rerunErr error) (*scriptVerifierGoBDK, *fakeBDKTxValidator) {
+		fake := &fakeBDKTxValidator{err: policyErr, rerunErr: rerunErr}
+
+		policy := settings.NewPolicySettings()
+		policy.MaxNonStdTxValidationDuration = 1000
+
+		return &scriptVerifierGoBDK{
+			logger:         ulogger.TestLogger{},
+			policy:         policy,
+			params:         &chaincfg.TestNetParams,
+			se:             fake,
+			consensusRerun: fake,
+			rerunSlots:     make(chan struct{}, 1),
+		}, fake
+	}
+
+	policyScriptErr := bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW)
+
+	t.Run("passes in consensus mode: TxPolicy", func(t *testing.T) {
+		verifier, fake := newVerifier(policyScriptErr, nil)
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, unconfirmedParentHeight})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+
+		require.Equal(t, 1, fake.rerunCalls)
+		require.True(t, fake.rerunConsensus)
+		require.True(t, fake.rerunDeadline, "the re-run must be bounded by maxnonstdtxvalidationduration")
+		// The candidate height, as block validation would see it, not the tip height
+		// policy mode hands BDK.
+		require.Equal(t, int32(100), fake.rerunBlockHeight)
+		// Unconfirmed parents stay at the candidate height: as mempoolHeight a
+		// consensus run would reject them as unconfirmed-input-in-block.
+		require.Equal(t, []int32{1, 100}, fake.rerunUtxoHeights)
+	})
+
+	t.Run("fails in consensus mode: TxInvalid", func(t *testing.T) {
+		verifier, fake := newVerifier(policyScriptErr, bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW))
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "a consensus failure must not be published as consensus-valid: %v", err)
+		require.Equal(t, 1, fake.rerunCalls)
+	})
+
+	t.Run("times out: TxPolicy", func(t *testing.T) {
+		// sv-node rejects a timed-out re-check without a ban score. Subtree validation
+		// still validates every tx it takes from the policy-rejected cache.
+		verifier, _ := newVerifier(policyScriptErr, &bdkscript.CancelledError{})
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+		require.False(t, errors.Is(err, errors.ErrProcessing))
+	})
+
+	t.Run("no free re-run slot: TxPolicy without a re-run", func(t *testing.T) {
+		verifier, fake := newVerifier(policyScriptErr, nil)
+		verifier.rerunSlots <- struct{}{}
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+		require.Zero(t, fake.rerunCalls)
+	})
+
+	t.Run("stack size in the re-run", func(t *testing.T) {
+		genesis := chaincfg.TestNetParams.GenesisActivationHeight
+		stackErr := bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE)
+
+		// Post-Genesis, STACK_SIZE in the re-run is the policy stack memory cap.
+		verifier, _ := newVerifier(policyScriptErr, stackErr)
+		err := verifier.ValidateTransaction(aTx, genesis+100, false, []uint32{genesis + 1, genesis + 2})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+
+		// On a pre-Genesis UTXO it can be the 1000-element consensus limit.
+		verifier, _ = newVerifier(policyScriptErr, stackErr)
+		err = verifier.ValidateTransaction(aTx, genesis+100, false, []uint32{genesis + 1, genesis - 1})
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "%v", err)
+	})
+
+	t.Run("pre-Genesis stack size with no free slot: TxInvalid", func(t *testing.T) {
+		genesis := chaincfg.TestNetParams.GenesisActivationHeight
+		verifier, fake := newVerifier(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE), nil)
+		verifier.rerunSlots <- struct{}{}
+
+		err := verifier.ValidateTransaction(aTx, genesis+100, false, []uint32{genesis - 1})
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "%v", err)
+		require.Zero(t, fake.rerunCalls)
+	})
+
+	t.Run("post-Genesis stack size: TxPolicy without a re-run", func(t *testing.T) {
+		// The re-run has the same stack memory cap, so it could only report policy again.
+		genesis := chaincfg.TestNetParams.GenesisActivationHeight
+		verifier, fake := newVerifier(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE), nil)
+
+		err := verifier.ValidateTransaction(aTx, genesis+100, false, []uint32{genesis + 1})
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+		require.Zero(t, fake.rerunCalls)
+	})
+
+	t.Run("engine fault in the re-run: Processing", func(t *testing.T) {
+		verifier, _ := newVerifier(policyScriptErr, bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_CGO_EXCEPTION))
+
+		err := verifier.ValidateTransaction(aTx, 100, false, []uint32{1, 2})
+		require.ErrorIs(t, err, errors.ErrProcessing)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy))
+	})
+
+	t.Run("not re-run", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			err       error
+			consensus bool
+		}{
+			"consensus mode":        {err: policyScriptErr, consensus: true},
+			"non-policy script err": {err: bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE)},
+			"policy DoS err":        {err: bdkscript.NewDoSError(bdkscript.DOS_ERR_INSUFFICIENT_FEE)},
+		} {
+			t.Run(name, func(t *testing.T) {
+				verifier, fake := newVerifier(tc.err, nil)
+
+				require.Error(t, verifier.ValidateTransaction(aTx, 100, tc.consensus, []uint32{1, 2}))
+				require.Zero(t, fake.rerunCalls)
+			})
+		}
+	})
 }
 
 func TestScriptVerifierGoBDKValidateTransactionCallsBDKValidateTransaction(t *testing.T) {
@@ -406,6 +557,7 @@ func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
 		bdkscript.SCRIPT_ERR_SCRIPT_SIZE,
 		bdkscript.SCRIPT_ERR_PUBKEY_COUNT,
 		bdkscript.SCRIPT_ERR_STACK_SIZE,
+		bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW,
 	}
 
 	for _, code := range policyCodes {
@@ -425,13 +577,6 @@ func TestScriptVerifierGoBDKMapScriptErrors(t *testing.T) {
 	for _, consensus := range []bool{false, true} {
 		t.Run(fmt.Sprintf("non_policy_script_error_consensus_%t", consensus), func(t *testing.T) {
 			got := verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE), consensus)
-			assert.ErrorIs(t, got, errors.ErrTxInvalid)
-			assert.False(t, errors.Is(got, errors.ErrTxPolicy))
-		})
-
-		// Also the consensus error for an int64 overflow since bitcoin-sv 1.2.3
-		t.Run(fmt.Sprintf("scriptnum_overflow_consensus_%t", consensus), func(t *testing.T) {
-			got := verifier.mapBDKValidationError(bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW), consensus)
 			assert.ErrorIs(t, got, errors.ErrTxInvalid)
 			assert.False(t, errors.Is(got, errors.ErrTxPolicy))
 		})
@@ -545,7 +690,7 @@ func TestScriptVerifierGoBDKClassifiesUnknownDomainErrorAsNodeFault(t *testing.T
 }
 
 func Test_ScriptVerificationGoBDK_invalid(t *testing.T) {
-	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams)
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, settings.NewPolicySettings(), &chaincfg.MainNetParams, 1)
 
 	for _, test := range testTxs {
 		tx, errTx := bt.NewTxFromString(test.ExtendedTx)
@@ -571,6 +716,14 @@ func newPostChronicleSpendTx(t *testing.T, lockingScript, unlockingScript []byte
 
 	chronicle := chaincfg.MainNetParams.ChronicleActivationHeight
 
+	return newSpendTx(t, lockingScript, unlockingScript), chronicle + 10, []uint32{chronicle + 1}
+}
+
+// newSpendTx builds a transaction that spends one output with the given locking
+// script.
+func newSpendTx(t *testing.T, lockingScript, unlockingScript []byte) *bt.Tx {
+	t.Helper()
+
 	tx := bt.NewTx()
 	in := &bt.Input{
 		PreviousTxOutIndex: 0,
@@ -587,7 +740,7 @@ func newPostChronicleSpendTx(t *testing.T, lockingScript, unlockingScript []byte
 		LockingScript: bscript.NewFromBytes([]byte{0x76, 0xa9, 0x88, 0xac}),
 	})
 
-	return tx, chronicle + 10, []uint32{chronicle + 1}
+	return tx
 }
 
 // TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow pins a consensus rule from
@@ -598,7 +751,7 @@ func newPostChronicleSpendTx(t *testing.T, lockingScript, unlockingScript []byte
 // mode must report it as TxInvalid too, or the transaction would be published as
 // consensus-valid on KAFKA_TX_POLICY_REJECTED.
 func TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow(t *testing.T) {
-	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams)
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams, 1)
 
 	// Each unlocking script pushes "abc" and an OP_LEFT length; the locking script
 	// is OP_LEFT OP_DROP OP_1.
@@ -626,6 +779,128 @@ func TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow(t *testing.T) {
 	}
 }
 
+// TestScriptVerifierGoBDKClassifiesScriptNumOverPolicyLengthAsPolicy covers a
+// script number longer than maxscriptnumlengthpolicy but within int64. It is
+// consensus-valid, so policy mode must report TxPolicy, which publishes it to
+// KAFKA_TX_POLICY_REJECTED.
+func TestScriptVerifierGoBDKClassifiesScriptNumOverPolicyLengthAsPolicy(t *testing.T) {
+	policy := test.CreateBaseTestSettings(t).Policy
+	policy.MaxScriptNumLengthPolicy = 5
+
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, policy, &chaincfg.MainNetParams, 1)
+
+	// The unlocking script pushes a 6-byte number; the locking script is
+	// OP_1ADD OP_DROP OP_1.
+	tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, []byte{0x8b, 0x75, 0x51},
+		[]byte{0x06, 0x01, 0, 0, 0, 0, 0x01})
+
+	require.NoError(t, verifier.ValidateTransaction(tx, blockHeight, true, utxoHeights))
+
+	err := verifier.ValidateTransaction(tx, blockHeight, false, utxoHeights)
+	require.ErrorIs(t, err, errors.ErrTxPolicy)
+	require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_SCRIPTNUM_OVERFLOW).Error())
+}
+
+// TestScriptVerifierGoBDKClassifiesPreGenesisOpCountAsInvalid covers an error
+// code that is policy-class post-Genesis but a consensus failure on a pre-Genesis
+// UTXO: more than 500 ops in a script. Policy mode must not report it as TxPolicy.
+func TestScriptVerifierGoBDKClassifiesPreGenesisOpCountAsInvalid(t *testing.T) {
+	// Testnet does not require standard inputs, so BDK reaches script execution.
+	params := &chaincfg.TestNetParams
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, params, 1)
+
+	lockingScript := bytes.Repeat([]byte{0x61}, 501) // 501 x OP_NOP
+	tx := newSpendTx(t, lockingScript, []byte{0x51})
+	blockHeight := params.GenesisActivationHeight + 100
+	utxoHeights := []uint32{params.GenesisActivationHeight - 100}
+
+	for _, consensus := range []bool{true, false} {
+		t.Run(fmt.Sprintf("consensus_%t", consensus), func(t *testing.T) {
+			err := verifier.ValidateTransaction(tx, blockHeight, consensus, utxoHeights)
+			require.ErrorIs(t, err, errors.ErrTxInvalid)
+			require.False(t, errors.Is(err, errors.ErrTxPolicy), "a pre-Genesis op-count failure is a consensus failure: %v", err)
+			require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_OP_COUNT).Error())
+		})
+	}
+}
+
+// TestScriptVerifierGoBDKBoundsTheConsensusReRun checks that
+// maxnonstdtxvalidationduration cancels the consensus re-run in BDK. The script
+// fails policy at its eleventh op, then runs 200,000 hashes under consensus limits
+// before it fails there too.
+func TestScriptVerifierGoBDKBoundsTheConsensusReRun(t *testing.T) {
+	// 200,000 x OP_SHA256, then OP_DROP OP_0
+	lockingScript := append(bytes.Repeat([]byte{0xa8}, 200_000), 0x75, 0x00)
+	tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, []byte{0x51})
+
+	newVerifier := func(durationMillis int) bdkValidator {
+		policy := test.CreateBaseTestSettings(t).Policy
+		policy.MaxOpsPerScriptPolicy = 10
+		policy.MaxNonStdTxValidationDuration = durationMillis
+
+		return newScriptVerifierGoBDK(ulogger.TestLogger{}, policy, &chaincfg.MainNetParams, 1)
+	}
+
+	t.Run("unbounded re-run finds the consensus failure", func(t *testing.T) {
+		err := newVerifier(0).ValidateTransaction(tx, blockHeight, false, utxoHeights)
+		require.ErrorIs(t, err, errors.ErrTxInvalid)
+		require.False(t, errors.Is(err, errors.ErrTxPolicy), "%v", err)
+		require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE).Error())
+	})
+
+	t.Run("bounded re-run is cancelled and reports policy", func(t *testing.T) {
+		start := time.Now()
+		err := newVerifier(1).ValidateTransaction(tx, blockHeight, false, utxoHeights)
+		require.ErrorIs(t, err, errors.ErrTxPolicy)
+		require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_OP_COUNT).Error())
+		require.Less(t, time.Since(start), time.Second)
+	})
+}
+
+// TestScriptVerifierGoBDKCapsTheConsensusReRunStackMemory checks that the re-run
+// is held to maxstackmemoryusagepolicy rather than the consensus limit, which is
+// unlimited by default. Otherwise a transaction failing policy at its first op
+// could make the re-run allocate without bound. The script fails policy at
+// OP_1ADD, then copies a 20 KB number 100 times before it fails consensus too.
+func TestScriptVerifierGoBDKCapsTheConsensusReRunStackMemory(t *testing.T) {
+	num := bytes.Repeat([]byte{0x01}, 20_000)
+	unlockingScript := append([]byte{0x4d, byte(len(num)), byte(len(num) >> 8)}, num...) // OP_PUSHDATA2
+	// OP_1ADD, 100 x OP_DUP, OP_0
+	lockingScript := append(append([]byte{0x8b}, bytes.Repeat([]byte{0x76}, 100)...), 0x00)
+	tx, blockHeight, utxoHeights := newPostChronicleSpendTx(t, lockingScript, unlockingScript)
+
+	policy := test.CreateBaseTestSettings(t).Policy
+	policy.MaxStackMemoryUsageConsensus = 0 // unlimited
+	policy.MaxStackMemoryUsagePolicy = 1_000_000
+
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, policy, &chaincfg.MainNetParams, 1)
+
+	// Unlimited in consensus mode: the script runs to its end.
+	err := verifier.ValidateTransaction(tx, blockHeight, true, utxoHeights)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_EVAL_FALSE).Error())
+
+	// The re-run stops at the policy stack limit and reports policy.
+	err = verifier.ValidateTransaction(tx, blockHeight, false, utxoHeights)
+	require.ErrorIs(t, err, errors.ErrTxPolicy)
+	require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE).Error())
+}
+
+// TestScriptVerifierGoBDKClassifiesPreGenesisStackSizeAsInvalid covers the
+// pre-Genesis 1000-element stack limit, a consensus failure that BDK reports with
+// the same code as the stack memory cap.
+func TestScriptVerifierGoBDKClassifiesPreGenesisStackSizeAsInvalid(t *testing.T) {
+	params := &chaincfg.TestNetParams
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, params, 1)
+
+	tx := newSpendTx(t, []byte{0x51}, bytes.Repeat([]byte{0x51}, 1001)) // 1002 x OP_1
+
+	err := verifier.ValidateTransaction(tx, params.GenesisActivationHeight+100, false, []uint32{params.GenesisActivationHeight - 100})
+	require.ErrorIs(t, err, errors.ErrTxInvalid)
+	require.False(t, errors.Is(err, errors.ErrTxPolicy), "a pre-Genesis stack size failure is a consensus failure: %v", err)
+	require.Contains(t, err.Error(), bdkscript.NewScriptError(bdkscript.SCRIPT_ERR_STACK_SIZE).Error())
+}
+
 // TestScriptVerifierGoBDKRejectsSplitPastInt32Max covers OP_SPLIT with a position
 // above INT32_MAX. bitcoin-sv 1.2.3 bounds the position by INT32_MAX as well as by
 // the element size, which only changes the outcome for elements longer than
@@ -633,7 +908,7 @@ func TestScriptVerifierGoBDKRejectsInt64ScriptNumOverflow(t *testing.T) {
 // element. On an ordinary element both bounds reject the position, so this test
 // passes against earlier GoBDK pins too.
 func TestScriptVerifierGoBDKRejectsSplitPastInt32Max(t *testing.T) {
-	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams)
+	verifier := newScriptVerifierGoBDK(ulogger.TestLogger{}, test.CreateBaseTestSettings(t).Policy, &chaincfg.MainNetParams, 1)
 
 	// Each unlocking script pushes "abc" and a split position; the locking script
 	// is OP_SPLIT OP_2DROP OP_1.

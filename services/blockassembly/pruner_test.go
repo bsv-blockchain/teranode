@@ -34,6 +34,7 @@ func TestCleanupDuringStartup(t *testing.T) {
 
 		// Then iterator should be called
 		mockIterator := new(utxo.MockUnminedTxIterator)
+		mockIterator.On("Close").Return(nil).Maybe()
 		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Run(func(args mock.Arguments) {
@@ -103,6 +104,7 @@ func TestLoadUnminedTransactionsExcludesConflicting(t *testing.T) {
 
 		// Setup iterator expectations - iterator should only return non-conflicting transactions
 		mockIterator := new(utxo.MockUnminedTxIterator)
+		mockIterator.On("Close").Return(nil).Maybe()
 		mockStore.On("GetUnminedTxIterator").
 			Return(mockIterator, nil).
 			Once()

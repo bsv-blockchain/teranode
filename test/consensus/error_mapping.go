@@ -57,7 +57,7 @@ func MapValidatorError(err error) ScriptError {
 		return SCRIPT_ERR_INVALID_NUMBER_RANGE
 	case strings.Contains(errStr, "invalid split range"):
 		return SCRIPT_ERR_INVALID_SPLIT_RANGE
-	case strings.Contains(errStr, "script number overflow"):
+	case strings.Contains(errStr, "Script number overflow"), strings.Contains(errStr, "script number overflow"):
 		return SCRIPT_ERR_SCRIPTNUM_OVERFLOW
 	case strings.Contains(errStr, "not minimally encoded"):
 		return SCRIPT_ERR_SCRIPTNUM_MINENCODE

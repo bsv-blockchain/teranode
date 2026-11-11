@@ -5,6 +5,7 @@ package utxo
 
 import (
 	"context"
+	"sync"
 
 	"github.com/bsv-blockchain/go-bt/v2"
 	"github.com/bsv-blockchain/go-bt/v2/chainhash"
@@ -12,6 +13,7 @@ import (
 	"github.com/bsv-blockchain/teranode/settings"
 	"github.com/bsv-blockchain/teranode/stores/utxo/fields"
 	"github.com/bsv-blockchain/teranode/stores/utxo/meta"
+	"github.com/bsv-blockchain/teranode/stores/utxo/pruner"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -34,6 +36,16 @@ type MockUtxostore struct {
 	// SupportsOutpointOnlySpendResult is what SupportsOutpointOnlySpend returns.
 	// Defaults to false; set true in tests that exercise the below-checkpoint fast path.
 	SupportsOutpointOnlySpendResult bool
+
+	// wal keeps the conflict WAL in memory, so ProcessConflicting sees the checklist that
+	// BeginConflictIntent records, as it does on a real store.
+	walMu sync.Mutex
+	wal   map[chainhash.Hash]*mockConflictIntent
+}
+
+type mockConflictIntent struct {
+	intent   ConflictIntent
+	recovery []byte
 }
 
 // Health mocks the health check functionality of the UTXO store.
@@ -241,6 +253,15 @@ func (m *MockUtxostore) GetConflictingTxIterator() (UnminedTxIterator, error) {
 	return args.Get(0).(UnminedTxIterator), args.Error(1)
 }
 
+// ConflictingTxHashes mocks the index-backed lookup of conflicting transactions.
+func (m *MockUtxostore) ConflictingTxHashes(ctx context.Context) ([]chainhash.Hash, bool, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Bool(1), args.Error(2)
+	}
+	return args.Get(0).([]chainhash.Hash), args.Bool(1), args.Error(2)
+}
+
 // RemoveFromConflictingChildren mocks batched removal of conflicting-child entries.
 func (m *MockUtxostore) RemoveFromConflictingChildren(ctx context.Context, removals []ConflictingChildRemoval) error {
 	args := m.Called(ctx, removals)
@@ -350,22 +371,58 @@ func (m *MockUtxostore) SetLocked(ctx context.Context, txHashes []chainhash.Hash
 	return args.Error(0)
 }
 
-// BeginConflictIntent is a safe no-op on the mock: the conflict-resolution WAL
-// is exercised against a real store in dedicated tests, so the many mock-based
+// BeginConflictIntent records the intent in memory: the conflict-resolution WAL is
+// exercised against a real store in dedicated tests, so the many mock-based
 // ProcessConflicting/ReverseProcessConflicting tests need not set expectations
-// for it. (Does not call m.Called, so unset expectations do not panic.)
+// for it. Like a real store it keeps an existing record as it is. (Does not call
+// m.Called, so unset expectations do not panic.)
 func (m *MockUtxostore) BeginConflictIntent(ctx context.Context, intent ConflictIntent) error {
+	var recovery []byte
+
+	if intent.Recovery != nil {
+		var err error
+		if recovery, err = EncodeConflictRecovery(intent.Recovery); err != nil {
+			return err
+		}
+	}
+
+	m.walMu.Lock()
+	defer m.walMu.Unlock()
+
+	if m.wal == nil {
+		m.wal = make(map[chainhash.Hash]*mockConflictIntent)
+	}
+
+	id := intent.IntentID()
+	if _, ok := m.wal[id]; !ok {
+		intent.Recovery = nil
+		m.wal[id] = &mockConflictIntent{intent: intent, recovery: recovery}
+	}
+
 	return nil
 }
 
-// CompleteConflictIntent is a safe no-op on the mock (see BeginConflictIntent).
+// CompleteConflictIntent removes the in-memory record (see BeginConflictIntent).
 func (m *MockUtxostore) CompleteConflictIntent(ctx context.Context, intentID chainhash.Hash) error {
+	m.walMu.Lock()
+	defer m.walMu.Unlock()
+
+	delete(m.wal, intentID)
+
 	return nil
 }
 
-// PendingConflictIntents is a safe no-op on the mock (see BeginConflictIntent).
+// PendingConflictIntents lists the in-memory records (see BeginConflictIntent).
 func (m *MockUtxostore) PendingConflictIntents(ctx context.Context) ([]ConflictIntent, error) {
-	return nil, nil
+	m.walMu.Lock()
+	defer m.walMu.Unlock()
+
+	intents := make([]ConflictIntent, 0, len(m.wal))
+	for _, entry := range m.wal {
+		intents = append(intents, entry.intent)
+	}
+
+	return intents, nil
 }
 
 // MarkTransactionsOnLongestChain mocks the marking of transactions as being on the longest chain.
@@ -415,6 +472,13 @@ func (m *MockUtxostore) SetBlockState(height, medianTime uint32) error {
 func (m *MockUtxostore) GetBlockState() BlockState {
 	args := m.Called()
 	return args.Get(0).(BlockState)
+}
+
+// Stamper returns pruner.NoStamp without consulting the mock's expectations: the mock stands in
+// for a store with nothing to stamp, and every test that holds one would otherwise have to set up
+// a call it never cares about.
+func (m *MockUtxostore) Stamper() pruner.Stamper {
+	return pruner.NoStamp
 }
 
 // QueryOldUnminedTransactions mocks the querying of old unmined transactions before a cutoff height.
@@ -489,6 +553,16 @@ func (m *MockConsistencyScanIterator) Close() error {
 	return args.Error(0)
 }
 
+// SpendsMadeBy mocks the lookup of the coins a transaction consumed.
+func (m *MockUtxostore) SpendsMadeBy(ctx context.Context, txHash chainhash.Hash) ([]*Spend, error) {
+	args := m.Called(ctx, txHash)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+
+	return args.Get(0).([]*Spend), args.Error(1)
+}
+
 // expects reports whether the test set an expectation for method.
 func (m *MockUtxostore) expects(method string) bool {
 	for _, c := range m.ExpectedCalls {
@@ -498,4 +572,45 @@ func (m *MockUtxostore) expects(method string) bool {
 	}
 
 	return false
+}
+
+// SaveConflictRecovery stores the checklist of a begun intent (see BeginConflictIntent).
+func (m *MockUtxostore) SaveConflictRecovery(ctx context.Context, id chainhash.Hash, r *ConflictRecovery) error {
+	data, err := EncodeConflictRecovery(r)
+	if err != nil {
+		return err
+	}
+
+	m.walMu.Lock()
+	defer m.walMu.Unlock()
+
+	if entry, ok := m.wal[id]; ok {
+		entry.recovery = data
+	}
+
+	return nil
+}
+
+// LoadConflictRecovery returns a copy of the stored checklist (see BeginConflictIntent).
+func (m *MockUtxostore) LoadConflictRecovery(ctx context.Context, id chainhash.Hash) (*ConflictRecovery, error) {
+	m.walMu.Lock()
+	entry, ok := m.wal[id]
+	var data []byte
+	if ok {
+		data = entry.recovery
+	}
+	m.walMu.Unlock()
+
+	return DecodeConflictRecovery(data)
+}
+func (m *MockUtxostore) RestoreConflictSpends(ctx context.Context, spends []*Spend, height uint32) error {
+	return nil
+}
+
+func (m *MockUtxostore) SetConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash, locked bool) error {
+	return nil
+}
+
+func (m *MockUtxostore) ReleaseConflictLocks(ctx context.Context, id chainhash.Hash, parents []chainhash.Hash) error {
+	return nil
 }

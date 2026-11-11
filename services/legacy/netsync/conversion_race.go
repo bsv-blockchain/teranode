@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -318,7 +319,13 @@ func (sm *SyncManager) raceDuplicateCopy(hash chainhash.Hash, header *wire.Block
 	// recorder tells a read fault from a body the peer got wrong.
 	side := sm.readSideCopy(f)
 
-	root, mutated, err := streamedMerkleRoot(bufio.NewReaderSize(side, 1<<20), n)
+	root, mutated, recovered, err := sm.sideCopyMerkleRoot(hash, bufio.NewReaderSize(side, 1<<20), n)
+	if recovered {
+		sm.noteDrainedDuplicate(hash)
+
+		return false, nil
+	}
+
 	if err != nil {
 		if side.err == nil {
 			return false, err
@@ -401,6 +408,25 @@ func (e *errRecordingReader) Read(p []byte) (int, error) {
 	}
 
 	return n, err
+}
+
+// sideCopyMerkleRoot is streamedMerkleRoot with a panic in it recovered and reported as
+// recovered. The copy is already off the wire and the copy converting now may yet complete the
+// block, so a panic here drops this copy as a duplicate, as every other failure of the check of
+// this node's does: it is neither a re-ask of a block that is converting nor a panic counted
+// against it (recoveredSinkPanic).
+func (sm *SyncManager) sideCopyMerkleRoot(hash chainhash.Hash, r io.Reader, n int64) (root *chainhash.Hash, mutated, recovered bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			sm.logger.Errorf("[blockOnDisk][%s] recovered panic checking a second copy's merkle root, dropping the copy: %q stack=%q", hash, fmt.Sprint(p), debug.Stack())
+
+			root, mutated, recovered, err = nil, false, true, nil
+		}
+	}()
+
+	root, mutated, err = streamedMerkleRoot(r, n)
+
+	return root, mutated, false, err
 }
 
 // streamedMerkleRoot reads a block body, from the transaction count on, whose wire payload is n

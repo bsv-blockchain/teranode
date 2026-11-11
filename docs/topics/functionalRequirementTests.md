@@ -411,14 +411,14 @@ The naming convention for files in this folder is as follows:
 
 ```bash
 cd /teranode/test/tnd
-go test -v -tags test_tnd
+go test -v
 ```
 
 #### Running Specific TND Tests
 
 ```bash
 cd /teranode/test/tnd
-go test -v -run "^TestTND1TestSuite$/TestTND1_1$" -tags test_tnd
+go test -v -run "^TestTND1_1TestSuite$"
 ```
 
 ## TNE
@@ -485,14 +485,14 @@ These smoke tests provide additional verification of the chain reorganization fu
 
 ```bash
 cd /teranode/test/tnf
-go test -v -tags test_tnf
+go test -v
 ```
 
 #### Running Specific TNF Tests
 
 ```bash
 cd /teranode/test/tnf
-go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$" -tags test_tnf
+go test -v -run "^TestTNFTestSuite$/TestInvalidateBlock$"
 ```
 
 ## TNJ

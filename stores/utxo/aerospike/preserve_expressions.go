@@ -34,6 +34,8 @@ func (s *Store) PreserveTransactionsWithExpressions(ctx context.Context, txIDs [
 	ops := []*aerospike.Operation{
 		aerospike.PutOp(aerospike.NewBin(fields.PreserveUntil.String(), int(preserveUntilHeight))),
 		aerospike.PutOp(aerospike.NewBin(fields.DeleteAtHeight.String(), nil)),
+		aerospike.AddOp(aerospike.NewBin(fields.DAHVersion.String(), 1)),
+		aerospike.GetBinOp(fields.DAHVersion.String()),
 		// read back, so an external master's pagination records can be followed up (below)
 		aerospike.GetBinOp(fields.External.String()),
 		aerospike.GetBinOp(fields.TotalExtraRecs.String()),
@@ -106,7 +108,7 @@ func (s *Store) PreserveTransactionsWithExpressions(ctx context.Context, txIDs [
 
 	// A failed page write is returned: the pruner skips its deletion phase when preservation
 	// fails and selects pages by their own DAH, so a page left with its DAH would otherwise be
-	// deleted in the same cycle. The follow-up is unconditional, so the next run heals it.
+	// deleted in the same cycle. The follow-up is versioned and each preserve bumps the master's version, so the next run still heals it.
 	applied := s.applyChildDAHFollowUps(ctx, &childDAH)
 	pagesErr = errors.JoinCapped(10, pagesErr, applied.unsetErr)
 

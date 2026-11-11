@@ -10,7 +10,7 @@
   import BlockAssemblyModal from '$internal/components/block-assembly-modal/index.svelte'
   import i18n from '$internal/i18n'
   import { tableVariant } from '$internal/stores/nav'
-  import { getColDefs, renderCells, getRenderProps } from './data'
+  import { getColDefs, getRenderCells, buildHashBadges, getRenderProps } from './data'
 
   const pageKey = 'page.network.nodes'
 
@@ -40,6 +40,7 @@
   const i18nLocal = $derived({ t, baseKey: 'comp.pager' })
 
   const colDefs = $derived(getColDefs(t) || [])
+  const renderCells = $derived(getRenderCells(buildHashBadges(allData?.length ? allData : data)))
 
   function onPage(e) {
     // Forward pagination changes to parent component

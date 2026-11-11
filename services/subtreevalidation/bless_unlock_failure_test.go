@@ -2,6 +2,7 @@ package subtreevalidation
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"sync/atomic"
 	"testing"
@@ -160,6 +161,20 @@ func TestBlessMissingTransaction_UnlockFailureStillRejectsRealFailures(t *testin
 	require.False(t, errors.Is(err, errors.ErrTxUnlockFailed))
 }
 
+// TestBlessMissingTransaction_NilMetaWithoutErrorRendersCleanly pins that a validator
+// answering (nil, nil) gives a plain "tx meta is nil" error, without a stray nil argument
+// rendered into the message.
+func TestBlessMissingTransaction_NilMetaWithoutErrorRendersCleanly(t *testing.T) {
+	server, _, txs, _ := newUnlockFailureServer(t, true, alwaysFail)
+
+	server.validatorClient = &failingValidator{Interface: server.validatorClient}
+
+	_, err := server.blessMissingTransaction(context.Background(), chainhash.Hash{}, chainhash.Hash{}, txs[1], 2, map[uint32]bool{}, validator.ProcessOptions())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "tx meta is nil")
+	require.NotContains(t, err.Error(), "%!")
+}
+
 type failingValidator struct {
 	validator.Interface
 	err error
@@ -183,7 +198,7 @@ func TestBlessMissingTransactions_ChildOfUnlockFailedParentIsBlessed(t *testing.
 	missing := []missingTx{{tx: parent, idx: 0}, {tx: child, idx: 1}}
 	txMetaSlice := make([]metaSliceItem, len(missing))
 
-	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{})
+	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, true)
 	require.NoError(t, err, "a child of an accepted parent must not fail because the parent's unlock timed out")
 
 	for i, tx := range []*bt.Tx{parent, child} {
@@ -208,7 +223,7 @@ func TestBlessMissingTransactions_LevelUnlockFailureLeavesParentLocked(t *testin
 	missing := []missingTx{{tx: parent, idx: 0}, {tx: child, idx: 1}}
 	txMetaSlice := make([]metaSliceItem, len(missing))
 
-	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{})
+	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, true)
 	require.Error(t, err)
 	require.True(t, txMetaSlice[0].isSet, "the parent was accepted")
 	require.False(t, txMetaSlice[1].isSet, "the child could not spend a locked parent")
@@ -422,7 +437,7 @@ func TestBlessMissingTransactions_InvalidSiblingDoesNotSkipUnlock(t *testing.T) 
 	missing := []missingTx{{tx: accepted, idx: 0}, {tx: sibling, idx: 1}}
 	txMetaSlice := make([]metaSliceItem, len(missing))
 
-	err = server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 100, map[uint32]bool{})
+	err = server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 100, map[uint32]bool{}, true)
 	require.Error(t, err, "the invalid sibling still fails the subtree")
 
 	store.AssertCalled(t, "SetLocked", mock.Anything, []chainhash.Hash{*accepted.TxIDChainHash()}, false)
@@ -446,11 +461,80 @@ func TestBlessMissingTransactions_QueuesAcceptedParentDespiteBlessError(t *testi
 	missing := []missingTx{{tx: parent, idx: 0}}
 	txMetaSlice := make([]metaSliceItem, 1)
 
-	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{})
+	err := server.blessMissingTransactions(ctx, chainhash.Hash{}, missing, "", "", txMetaSlice, 2, map[uint32]bool{}, true)
 	require.Error(t, err, "the bless still fails: the accepted metadata could not be read")
 	require.False(t, txMetaSlice[0].isSet, "no metadata is recorded for a read that failed")
 
 	stored := &meta.Data{}
 	require.NoError(t, store.GetMeta(ctx, parent.TxIDChainHash(), stored))
 	require.False(t, stored.Locked, "the accepted parent must still be spendable for the next level")
+}
+
+// spendRuleCauses are the store and validator codes a rejected spend can carry, and whether a
+// block-context bless re-codes them as TxInvalid. A frozen UTXO depends on this node's
+// alert-system state, and a UTXO hash mismatch on this node's own store, so neither is.
+var spendRuleCauses = map[string]struct {
+	cause     error
+	txInvalid bool
+}{
+	"coinbase immature":  {errors.NewTxCoinbaseImmatureError("coinbase is not spendable yet"), true},
+	"non final":          {errors.NewUtxoNonFinalError("transaction is not final"), true},
+	"utxo hash mismatch": {errors.NewUtxoHashMismatchError("utxo hash mismatch"), false},
+	"frozen utxo":        {errors.NewUtxoFrozenError("utxo is frozen"), false},
+}
+
+// TestBlessMissing_BlockSpendRuleViolationIsTxInvalid pins the re-code and its gate. With
+// SkipPolicyChecks set, which only the block paths do, coinbase maturity and finality are measured
+// against the block's own height and parent, so a spend the store rejects for one of them is a
+// verdict on the block. Without it they are measured against this node's tip, so a peer one block
+// ahead is not at fault and the error stays a ProcessingError.
+func TestBlessMissing_BlockSpendRuleViolationIsTxInvalid(t *testing.T) {
+	for name, tc := range spendRuleCauses {
+		for _, blockContext := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/block context %t", name, blockContext), func(t *testing.T) {
+				server, cleanup := setupTestServer(t)
+				defer cleanup()
+
+				tx, err := createTestTransaction("tx1")
+				require.NoError(t, err)
+
+				server.validatorClient = &failingValidator{
+					Interface: server.validatorClient,
+					err:       errors.NewProcessingError("[Validate] error spending utxos", tc.cause),
+				}
+
+				opts := validator.ProcessOptions(validator.WithSkipPolicyChecks(blockContext))
+
+				_, _, err = server.blessMissing(context.Background(), chainhash.Hash{}, chainhash.Hash{}, tx, 100, map[uint32]bool{}, opts)
+				require.Error(t, err)
+				require.True(t, errors.Is(err, tc.cause), "the store's code must survive the re-code")
+				require.Equal(t, tc.txInvalid && blockContext, errors.Is(err, errors.ErrTxInvalid))
+			})
+		}
+	}
+}
+
+// TestProcessTransactionsInLevels_BlockSpendRuleViolationFailsTheLevel pins the block path end to
+// end: the level loop's own options set SkipPolicyChecks, so the re-coded TxInvalid fails the
+// level instead of being kept as a processing error.
+func TestProcessTransactionsInLevels_BlockSpendRuleViolationFailsTheLevel(t *testing.T) {
+	for name, tc := range spendRuleCauses {
+		t.Run(name, func(t *testing.T) {
+			server, cleanup := setupTestServer(t)
+			defer cleanup()
+
+			tx, err := createTestTransaction("tx1")
+			require.NoError(t, err)
+
+			server.validatorClient = &failingValidator{
+				Interface: server.validatorClient,
+				err:       errors.NewProcessingError("[Validate] error spending utxos", tc.cause),
+			}
+
+			err = server.processTransactionsInLevels(context.Background(), []*bt.Tx{tx}, chainhash.Hash{}, chainhash.Hash{}, 100, 0, 0, map[uint32]bool{}, true)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, tc.cause), "the store's code must survive the re-code")
+			require.Equal(t, tc.txInvalid, errors.Is(err, errors.ErrTxInvalid))
+		})
+	}
 }

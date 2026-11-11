@@ -17,6 +17,7 @@ import (
 	"github.com/bsv-blockchain/teranode/pkg/fileformat"
 	"github.com/bsv-blockchain/teranode/services/blockchain"
 	"github.com/bsv-blockchain/teranode/services/blockchain/blockchain_api"
+	"github.com/bsv-blockchain/teranode/services/subtreevalidation"
 	"github.com/bsv-blockchain/teranode/settings"
 	bloboptions "github.com/bsv-blockchain/teranode/stores/blob/options"
 	"github.com/bsv-blockchain/teranode/stores/utxo"
@@ -308,7 +309,26 @@ func setupMockBlockchain(parentBlock *model.Block) *blockchain.Mock {
 // "corrupt is re-downloaded, not poisoned" thesis on the path production runs by default
 // (bitcoin-sv/teranode#4692): the body is never AddBlock'd, so it is neither persisted invalid nor
 // invalidated, and ValidateBlock returns a corrupt error for the caller to re-download.
+//
+// Subtree validation is stubbed to pass, so the corrupt verdict comes from block.Valid. The real
+// service would bind the cached body to its header first and reject it there instead; that path is
+// TestBlockValidation_CorruptCachedBody_RejectedBySubtreeValidation_NonOptimistic.
 func TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic(t *testing.T) {
+	testCorruptBodyNotInvalidatedNonOptimistic(t, false)
+}
+
+// TestBlockValidation_CorruptCachedBody_RejectedBySubtreeValidation_NonOptimistic is the same
+// corrupt body through the real subtree validation service. Its subtree is cached, so the service
+// binds the body to the header before probing the store and returns corrupt from there, before
+// block.Valid and before any AddBlock. The outcome must be the same: corrupt, never invalidated,
+// never published.
+func TestBlockValidation_CorruptCachedBody_RejectedBySubtreeValidation_NonOptimistic(t *testing.T) {
+	testCorruptBodyNotInvalidatedNonOptimistic(t, true)
+}
+
+func testCorruptBodyNotInvalidatedNonOptimistic(t *testing.T, realSubtreeValidation bool) {
+	t.Helper()
+
 	initPrometheusMetrics()
 
 	tSettings := test.CreateBaseTestSettings(t)
@@ -383,8 +403,16 @@ func TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic(t *testing.T) 
 	// Mock GetBlockIsMined for parent block mining status check
 	mockBlockchain.On("GetBlockIsMined", mock.Anything, mock.Anything).Return(true, nil)
 
-	utxoStore, subtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
+	utxoStore, realSubtreeValidationClient, _, txStore, subtreeStore, deferFunc := setup(t)
 	defer deferFunc()
+
+	var subtreeValidationClient subtreevalidation.Interface = realSubtreeValidationClient
+
+	if !realSubtreeValidation {
+		stub := &subtreevalidation.MockSubtreeValidation{}
+		stub.On("CheckBlockSubtrees", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		subtreeValidationClient = stub
+	}
 
 	mockHandler := new(MockInvalidBlockHandler)
 	mockHandler.On("ReportInvalidBlock", mock.Anything, blockHeader.Hash().String(), mock.Anything, mock.Anything).Return(nil).Once()
@@ -436,6 +464,7 @@ func TestBlockValidation_CorruptBody_NotInvalidated_NonOptimistic(t *testing.T) 
 	// there is nothing to roll back). ValidateBlock is synchronous here — it has already returned —
 	// so assert deterministically that InvalidateBlock was never called, with no timer/sleep race.
 	mockBlockchain.AssertNotCalled(t, "InvalidateBlock", mock.Anything, block.Header.Hash())
+	mockBlockchain.AssertNotCalled(t, "AddBlock", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	require.False(t, mockKafka.IsPublishCalled(), "corrupt block body must not be published as invalid")
 }

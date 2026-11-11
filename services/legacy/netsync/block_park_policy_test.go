@@ -467,6 +467,27 @@ func TestParkCommitFailure_TheFullRoutesInvalidTransactionVerdictIsAJudgement(t 
 		"the p2p route's corrupt-coded shape is the RecordCorrupt row; the producer must not raise it on the legacy route")
 }
 
+// TestParkCommitFailure_ALocalDecodeFaultInTheConflictCheckIsRetried pins the
+// shape the full route returns when this node reads but cannot decode its own
+// UTXO record during the conflict check: subtree validation wraps the store's
+// TX_INVALID in a storage error, so the chain carries ErrTxInvalid AND
+// ErrStorageError with no corrupt or invalid code. It lands on RetryLater, not
+// BlockInvalid: the fault is this node's own, so the hash is not written off and
+// the peer that delivered the block is kept.
+func TestParkCommitFailure_ALocalDecodeFaultInTheConflictCheckIsRetried(t *testing.T) {
+	decodeFault := parkCommitChain(errors.NewStorageError("[checkCounterConflictingOnCurrentChainBatch][hash] failed to get the inpoints of the transaction",
+		errors.NewTxInvalidError("could not process tx inpoints")))
+	require.True(t, errors.Is(decodeFault, errors.ErrTxInvalid), "fixture: the store's code is still in the chain")
+	require.False(t, errors.IsBlockCorrupt(decodeFault), "fixture: no corrupt code")
+	require.False(t, errors.Is(decodeFault, errors.ErrBlockInvalid), "fixture: no invalid verdict")
+
+	d := parkCommitFailure(decodeFault)
+	require.Equal(t, parkDispositionRetryLater, d)
+	require.False(t, d.markFailed, "a local store fault does not write the hash off")
+	require.False(t, d.blamePeer, "and the peer that delivered the block is not blamed for it")
+	require.False(t, d.dropPeer)
+}
+
 // TestSyncManager_ARejectedParkedBlockDropsItsPeerInEveryState pins the drain's
 // half of peer punishment. Block validation judges a parked block invalid, in
 // so many words, at the drain's real commit attempt over the real chain. End
@@ -564,4 +585,22 @@ func TestSyncManager_ARejectedParkedBlockDropsItsPeerInEveryState(t *testing.T) 
 		require.True(t, unclassified.blamePeer, "the default arm still sends the reject, as it always did")
 		require.False(t, unclassified.dropPeer, "an error nobody has classified must not rotate the sync peer")
 	})
+}
+
+// TestParkCommitFailure_AMissingParentRefusalKeepsTheBlock pins how the park reads block
+// validation's refusal of a legacy block whose parent is not stored (processBlockFound,
+// bitcoin-sv/teranode#4973). It used to come back nil and be recorded as accepted; it now
+// comes back as a ServiceError, and after the gRPC hop and netsync ProcessBlock's own wrap
+// that must still read as a local fault: the blob is kept, the hash is not written off and
+// the peer is not blamed.
+func TestParkCommitFailure_AMissingParentRefusalKeepsTheBlock(t *testing.T) {
+	server := errors.NewServiceError("[processBlockFound][hash] legacy block has no stored parent parent-hash")
+	err := errors.NewProcessingError("failed to process block", errors.UnwrapGRPC(errors.WrapGRPC(server)))
+
+	d := parkCommitFailure(err)
+
+	require.Equal(t, parkDispositionRetryLater, d)
+	require.Equal(t, parkBlobKeep, d.blob, "the block is committed again once its parent lands")
+	require.False(t, d.markFailed, "a missing parent says nothing about the block")
+	require.False(t, d.blamePeer, "a missing parent is this node's fault, not the peer's")
 }

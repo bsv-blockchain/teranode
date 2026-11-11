@@ -61,6 +61,7 @@ var (
 	ErrThresholdExceeded          = New(ERR_THRESHOLD_EXCEEDED, "threshold exceeded")
 	ErrTxCoinbaseImmature         = New(ERR_TX_COINBASE_IMMATURE, "coinbase is not spendable yet")
 	ErrTxConflicting              = New(ERR_TX_CONFLICTING, "tx conflicting")
+	ErrTxRejectedConflicting      = New(ERR_TX_REJECTED_CONFLICTING, "tx rejected as conflicting")
 	ErrTxError                    = New(ERR_TX_ERROR, "tx error")
 	ErrTxExists                   = New(ERR_TX_EXISTS, "tx already exists")
 	ErrTxInvalid                  = New(ERR_TX_INVALID, "tx invalid")
@@ -387,6 +388,12 @@ func NewTxLockTimeError(message string, params ...interface{}) *Error {
 // NewTxConflictingError creates a new error with the transaction conflicting error code.
 func NewTxConflictingError(message string, params ...interface{}) *Error {
 	return New(ERR_TX_CONFLICTING, message, params...)
+}
+
+// NewTxRejectedConflictingError creates a new error with the transaction rejected as
+// conflicting error code: every input that failed to spend conflicts with an accepted tx.
+func NewTxRejectedConflictingError(message string, params ...interface{}) *Error {
+	return New(ERR_TX_REJECTED_CONFLICTING, message, params...)
 }
 
 // NewTxLockedError creates a new error with the transaction locked error code.

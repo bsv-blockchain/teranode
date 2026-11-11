@@ -9,6 +9,7 @@ import (
 	"github.com/bsv-blockchain/teranode/model"
 	"github.com/bsv-blockchain/teranode/services/blockvalidation"
 	"github.com/bsv-blockchain/teranode/services/legacy/peer"
+	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	"github.com/bsv-blockchain/teranode/util/blockassemblyutil"
 	"github.com/bsv-blockchain/teranode/util/retry"
 	"github.com/bsv-blockchain/teranode/util/tracing"
@@ -22,15 +23,14 @@ import (
 // block came from. Of the processBlockFound log lines that print a peerID, two
 // cannot fire for a legacy value: the one gated by isPeerMalicious, which is
 // false for every LegacyPeerIDPrefix value, and the one gated by
-// corruptAttemptsExhausted, which is never recorded for baseURL "legacy". Two
+// corruptAttemptsExhausted, which is never recorded for baseURL "legacy". The
+// catch-up channel-full warning cannot fire either: a legacy block with no
+// stored parent is refused with a ServiceError before the catch-up divert. One
 // can: the policy-decline cap line, because recordPolicyDeclineAttempt has no
 // legacy skip and a parked record can reach commit above an operator limit
 // that was lowered after its body was streamed (the streaming gate refuses a
 // declared payload above Policy.ExcessiveBlockSize before reading it, so at a
-// steady limit no such record exists); and the catch-up channel-full warning,
-// reachable when
-// legacyUnifiedEligible is false and the parent is missing at
-// processBlockFound's GetBlockExists. Both print this value as a label only.
+// steady limit no such record exists). It prints this value as a label only.
 //
 // It carries the LegacyPeerIDPrefix namespace so nothing downstream of
 // blockvalidation can mistake this value for a libp2p peer ID: isLegacyPeerID
@@ -451,10 +451,14 @@ func (sm *SyncManager) legacyOutpointOnly(origin blockRequestOrigin, height uint
 // eligible block the cache cannot prove is refused before the RPC, and a parked
 // block-assembly gate is a local condition for every eligible block whether or
 // not it is proven, so the ServiceError wrap there must not depend on the proof.
+//
+// A store that nets below the checkpoint (utxoset) is always on this route, whatever the two
+// route settings say, because it takes those blocks only through quick validation.
 func (sm *SyncManager) unifiedRoute(height uint32) bool {
 	return sm.settings != nil &&
-		sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
-		sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint &&
+		((sm.settings.BlockValidation.LegacyUnifiedBelowCheckpoint &&
+			sm.settings.BlockValidation.OutpointOnlyBelowCheckpoint) ||
+			utxostore.NetsBelowCheckpoint(sm.utxoStore)) &&
 		sm.utxoStore != nil && sm.utxoStore.SupportsOutpointOnlySpend() &&
 		sm.chainParams != nil &&
 		model.BelowCheckpoint(sm.chainParams.Checkpoints, height)

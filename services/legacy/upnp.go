@@ -58,6 +58,12 @@ type NAT interface {
 	DeletePortMapping(protocol string, externalPort, internalPort int) (err error)
 }
 
+// upnpHTTPClient is used for every UPnP HTTP call: the gateway's description
+// fetch and its SOAP requests. A gateway that accepts the connection and never
+// answers would otherwise park the caller for good, and upnpUpdateThread holds
+// the server's wait group, so shutdown would hang with it.
+var upnpHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 type upnpNAT struct {
 	serviceURL string
 	ourIP      string
@@ -258,9 +264,7 @@ func getServiceURL(rootURL string) (url string, err error) {
 		return "", err
 	}
 
-	client := &http.Client{}
-
-	r, err := client.Do(req)
+	r, err := upnpHTTPClient.Do(req)
 	if err != nil {
 		return
 	}
@@ -353,7 +357,7 @@ func soapRequest(url, function, message string) (replyXML []byte, err error) {
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
 
-	r, err := http.DefaultClient.Do(req)
+	r, err := upnpHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

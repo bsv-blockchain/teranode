@@ -38,11 +38,15 @@ Note the trust boundary. The export tooling checks its own output against the so
 
 Choose the synchronization method that best fits your situation:
 
-| Method | Use Case | Advantages | Disadvantages | Time Required |
+| Method | Use Case | Advantages | Disadvantages | Estimated Time |
 | -------- | ---------- | ------------ | --------------- | --------------- |
 | **Default Network Sync** | Fresh install, no existing data | • Simple setup<br>• No additional requirements<br>• Complete validation | • Slowest method<br>• High bandwidth usage | 5-8 days |
-| **Legacy SV Node Seeding** | Have existing BSV node | • Faster than P2P<br>• Proven data source<br>• Reduced bandwidth | • Requires SV Node setup<br>• Additional export steps | 6.5-12.5 hours<br>(assumes SV node<br>already in sync) |
-| **Teranode Data Seeding** | Have existing Teranode | • Fastest method<br>• Direct data transfer<br>• Minimal processing | • Requires access to existing data<br>• Version compatibility needed | 3.25-7.25 hours |
+| **Legacy SV Node Seeding** | Have existing BSV node | • Faster than P2P<br>• Proven data source<br>• Reduced bandwidth | • Requires SV Node setup<br>• Additional export steps | 6.5-12.5 hours<br>(assumes SV node<br>already in sync)<br>+ tail sync |
+| **Teranode Data Seeding** | Have existing Teranode | • Fastest method<br>• Direct data transfer<br>• Minimal processing | • Requires access to existing data<br>• Version compatibility needed | 3.25-7.25 hours<br>+ tail sync |
+
+All durations in this guide are estimates. None is a measured result on the [reference hardware](../systemRequirements.md). Actual times depend on hardware, bandwidth, peers and the size of recent mainnet blocks.
+
+The seeding times stop when the node starts after the import. The node must then do a tail sync: it downloads and validates the blocks mined after the snapshot height. The tail-sync time depends on how many blocks the snapshot is behind the tip. See [Recovery Options](#recovery-options) for estimates by number of blocks behind.
 
 ![seedingOptions.svg](../img/mermaid/seedingOptions.svg)
 
@@ -61,7 +65,7 @@ This is the standard synchronization method where Teranode downloads the complet
 - ✅ Sufficient storage space (minimum 4TB with default prune settings of 288 blocks)
 - ✅ Stable internet connection with adequate bandwidth
 
-> **⚠️ Important:** This method can take around 14 days depending on your network connection and hardware specifications.
+> **⚠️ Important:** This method takes days. The estimate is 5-8 days (see [Expected Timeline](#expected-timeline)), depending on your network connection and hardware specifications.
 
 ### Process Overview
 
@@ -115,7 +119,7 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 
 ### Expected Timeline
 
-| Phase | Duration | Description |
+| Phase | Estimated Duration | Description |
 | ------- | ---------- | ------------- |
 | **Initial Setup** | 5-10 minutes | Peer discovery and connection establishment |
 | **Early Blocks** | 1-2 days | Genesis to block ~500,000 (smaller blocks, faster processing) |
@@ -409,12 +413,13 @@ the operator configmap before the first start.
 
 ### Expected Timeline
 
-| Phase | Duration | Description |
+| Phase | Estimated Duration | Description |
 | ------- | ---------- | ------------- |
 | **Export** | 2-4 hours | Extracting UTXO set from SV Node |
 | **Seeding** | 4-8 hours | Importing data into Teranode |
 | **Verification** | 30 minutes | Starting services and verifying sync |
-| **Total** | 6.5-12.5 hours | Complete process |
+| **Tail Sync** | See [Recovery Options](#recovery-options) | Blocks mined after the snapshot height, up to the current tip |
+| **Total** | 6.5-12.5 hours + tail sync | Complete process |
 
 > **💾 Storage Note:** The seeder writes directly to Aerospike, PostgreSQL, and the filesystem. Ensure your environment variables and volume mounts are correctly configured.
 
@@ -519,12 +524,13 @@ kubectl run teranode-seeder \
 
 ### Expected Timeline
 
-| Phase | Duration | Description |
+| Phase | Estimated Duration | Description |
 | ------- | ---------- | ------------- |
 | **Data Transfer** | 1-3 hours | Copying files between systems |
 | **Seeding** | 2-4 hours | Importing data into target Teranode |
 | **Verification** | 15 minutes | Starting services and verification |
-| **Total** | 3.25-7.25 hours | Complete process |
+| **Tail Sync** | See [Recovery Options](#recovery-options) | Blocks mined after the snapshot height, up to the current tip |
+| **Total** | 3.25-7.25 hours + tail sync | Complete process |
 
 > **⚡ Speed Advantage:** This method is typically 2-3x faster than Method 2 since the data is already in Teranode's optimized format.
 
@@ -598,7 +604,7 @@ kubectl port-forward -n teranode-operator service/asset 8090:8090
 
 #### Recovery Options
 
-| Blocks Behind | Recommended Action | Expected Time |
+| Blocks Behind | Recommended Action | Estimated Time |
 | --------------- | ------------------- | --------------- |
 | **< 1,000** | Normal catch-up | 1-4 hours |
 | **1,000 - 10,000** | Monitor catch-up progress | 4-24 hours |

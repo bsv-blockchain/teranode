@@ -40,11 +40,15 @@
 | ExternalizeAllTransactions | bool | false | utxostore_externalizeAllTransactions | Transaction externalization control |
 | ExternalStoreConcurrency | int | 16 | utxostore_externalStoreConcurrency | Maximum concurrent external storage operations |
 | VerboseDebug | bool | false | utxostore_verbose_debug | Verbose debug logging |
-| UpdateTxMinedStatus | bool | true | utxostore_updateTxMinedStatus | Transaction mined status updates |
 | MaxMinedRoutines | int | 128 | utxostore_maxMinedRoutines | Max mined transaction routines |
 | MaxMinedBatchSize | int | 1024 | utxostore_maxMinedBatchSize | Max mined transaction batch size |
 | BlockHeightRetentionAdjustment | int32 | 0 | utxostore_blockHeightRetentionAdjustment | **CRITICAL** - Retention adjustment |
 | DisableDAHCleaner | bool | false | utxostore_disableDAHCleaner | **CRITICAL** - DAH cleaner process control |
+| SkipTxBodyBelowCheckpoint | bool | false | utxostore_skipTxBodyBelowCheckpoint | utxoset only - skip the tx_body write at or below the hardcoded checkpoint |
+| SpendJournalRetentionBlocks | uint32 | 288 | utxostore_spendJournalRetentionBlocks | utxoset only - blocks of spends the undo journal keeps for reorgs and the replay of an interrupted block; 0 is the default, values are held to 100 through 1440 |
+| RetainWindowsIndefinitely | bool | false | utxostore_retainWindowsIndefinitely | utxoset only - keep every tx_mined and undo partition instead of dropping them past retention; the stamp still runs, and the disk grows without bound |
+| NettedBelowWorkers | int | 16 | utxostore_nettedBelowWorkers | utxoset only - chunks of a list that the below-checkpoint netted write runs at once, each one database transaction; at most half of the pool's connections are used, whatever the value |
+| ConflictingChildrenMaxNodes | int | 100000 | utxostore_conflictingChildrenMaxNodes | Fail-closed node budget per root of a conflicting-descendant walk (<=0 = unlimited). Subtree validation walks a block's conflicting transactions as one batch from N roots (the transactions and their counter-spenders) and allows N × this budget: the old aggregate bound of N separate walks. Worst case, the visited set reaches N × this budget entries, and a single runaway cone fails after N × this budget reads rather than this budget. A walk that stops on the budget still rejects the block with `TX_INVALID` if it already reached a counter-conflicting transaction (a conflicting transaction, a counter-spender or a counter-spender's descendant) mined on the candidate chain; the conflicting transactions' own descendants are only checked for frozen outputs. Otherwise the block fails with `UTXO_WALK_LIMIT_EXCEEDED` and is retried |
 
 ### PostgreSQL Connection Pool (PostgresPool)
 

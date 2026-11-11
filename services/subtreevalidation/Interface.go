@@ -94,10 +94,12 @@ type Interface interface {
 	//   - blockHeight: The height of the block containing the subtrees
 	//   - peerID: P2P peer identifier used for peer reputation tracking
 	//   - baseURL: URL to fetch missing transactions from if needed
+	//   - keepBlockAssemblyHandoff: hand the block's unseen transactions to block assembly even
+	//     while the FSM is in CATCHINGBLOCKS; set for a short catch-up that started from RUNNING
 	//
 	// Returns:
 	//   - error: Any error encountered during validation, nil if successful
-	CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error
+	CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string, keepBlockAssemblyHandoff bool) error
 }
 
 var _ Interface = &MockSubtreeValidation{}
@@ -124,7 +126,7 @@ func (mv *MockSubtreeValidation) CheckSubtreeFromBlock(ctx context.Context, hash
 	return args.Error(0)
 }
 
-func (mv *MockSubtreeValidation) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string) error {
+func (mv *MockSubtreeValidation) CheckBlockSubtrees(ctx context.Context, block *model.Block, peerID, baseURL string, _ bool) error {
 	args := mv.Called(ctx, block, peerID, baseURL)
 	return args.Error(0)
 }
