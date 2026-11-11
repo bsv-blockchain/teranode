@@ -135,27 +135,11 @@ func (b *BlockAssembler) candidateTime(ctx context.Context, parentHeader *model.
 		timeNow = entry.minTime
 	}
 
-	return timeNow, nil
+	return b.delayEmergencyDifficulty(parentHeader, timeNow, entry.minTime), nil
 }
 
-func (b *BlockAssembler) candidateTimeAndBits(ctx context.Context, parentHeader *model.BlockHeader) (int64, *model.NBit, error) {
-	timeNow, err := b.candidateTime(ctx, parentHeader)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	timeNow = b.emergencyDifficultyHold(ctx, parentHeader, timeNow)
-
-	nBits, err := b.getNextNbits(parentHeader, timeNow)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	return timeNow, nBits, nil
-}
-
-func (b *BlockAssembler) emergencyDifficultyHold(ctx context.Context, parentHeader *model.BlockHeader, timeNow int64) int64 {
-	if b.settings == nil || b.settings.ChainCfgParams == nil || parentHeader == nil {
+func (b *BlockAssembler) delayEmergencyDifficulty(parentHeader *model.BlockHeader, timeNow, minTime int64) int64 {
+	if b.settings == nil || b.settings.ChainCfgParams == nil {
 		return timeNow
 	}
 
@@ -167,22 +151,8 @@ func (b *BlockAssembler) emergencyDifficultyHold(ctx context.Context, parentHead
 	}
 
 	threshold := int64(parentHeader.Timestamp) + 2*int64(params.TargetTimePerBlock/time.Second)
-	if timeNow <= threshold || timeNow > threshold+delay {
+	if timeNow <= threshold || timeNow > threshold+delay || minTime > threshold {
 		return timeNow
-	}
-
-	parentHash := parentHeader.Hash()
-
-	if !params.GenerateSupported {
-		entry := b.mtpFloor(ctx, parentHeader, parentHash)
-		if entry == nil || entry.minTime > threshold {
-			return timeNow
-		}
-	}
-
-	if last := b.emergencyHoldLoggedTip.Load(); last == nil || !last.IsEqual(parentHash) {
-		b.emergencyHoldLoggedTip.Store(parentHash)
-		b.logger.Infof("[candidateTime] holding candidate time at %d for parent %s: the minimum-difficulty rule is delayed by %d seconds on this node, until %d", threshold, parentHash.String(), delay, threshold+delay)
 	}
 
 	return threshold
