@@ -31,6 +31,10 @@ read every section between yours and the target.
 
 ### Breaking
 
+- **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
+  Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
+  restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx
+  from the blob store), and memory per unmined tx rises; nothing to change. (#2128)
 - **Upgrade every validator and subtree-validation pod before you set
   `blockassembly_maxTransactionsInMemory`, and keep the default 0 until then.** An old validator
   never sends `inBlock`, so a new block assembly with the limit set refuses its block transactions

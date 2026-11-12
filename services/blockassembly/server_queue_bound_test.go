@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	subtreepkg "github.com/bsv-blockchain/go-subtree"
 	"github.com/bsv-blockchain/teranode/errors"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/blockassembly_api"
 	"github.com/bsv-blockchain/teranode/services/blockassembly/subtreeprocessor"
@@ -22,12 +23,18 @@ import (
 
 // batchReq builds a valid row-format AddTxBatchRequest with n distinct txids.
 func batchReq(n int) *blockassembly_api.AddTxBatchRequest {
+	// every tx carries serialized inpoints, as the validator sends them: the handler always reads them
+	noParents, err := (&subtreepkg.TxInpoints{}).Serialize()
+	if err != nil {
+		panic(err)
+	}
+
 	reqs := make([]*blockassembly_api.AddTxRequest, n)
 	for i := range reqs {
 		txid := make([]byte, 32)
 		txid[0] = byte(i)
 		txid[1] = byte(i >> 8)
-		reqs[i] = &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100}
+		reqs[i] = &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100, TxInpoints: noParents}
 	}
 
 	return &blockassembly_api.AddTxBatchRequest{TxRequests: reqs}
@@ -80,7 +87,6 @@ func TestAddTxBatch_ShedsWhenQueueFull(t *testing.T) {
 	ba := baWithProcessor(t, func(s *settings.Settings) {
 		s.BlockAssembly.MaxQueueItems = 100
 		s.BlockAssembly.QueueFullWaitTimeout = 0
-		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
 	}, stp)
 
 	_, err := ba.AddTxBatch(context.Background(), batchReq(1))
@@ -102,7 +108,6 @@ func TestAddTxBatch_DisabledShortCircuits(t *testing.T) {
 		s.BlockAssembly.Disabled = true
 		s.BlockAssembly.MaxQueueItems = 1
 		s.BlockAssembly.QueueFullWaitTimeout = 0
-		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
 	}, stp)
 
 	shedBefore := promtestutil.ToFloat64(prometheusBlockAssemblyQueueShed)
@@ -131,7 +136,6 @@ func TestAddTxBatch_WaitThenSucceeds(t *testing.T) {
 	ba := baWithProcessor(t, func(s *settings.Settings) {
 		s.BlockAssembly.MaxQueueItems = 100
 		s.BlockAssembly.QueueFullWaitTimeout = 500 * time.Millisecond
-		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
 	}, stp)
 
 	resp, err := ba.AddTxBatch(context.Background(), batchReq(1))
@@ -151,7 +155,6 @@ func TestAddTxBatch_ReturnsOnContextDone(t *testing.T) {
 	ba := baWithProcessor(t, func(s *settings.Settings) {
 		s.BlockAssembly.MaxQueueItems = 100
 		s.BlockAssembly.QueueFullWaitTimeout = 10 * time.Second
-		s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
 	}, stp)
 
 	shedBefore := promtestutil.ToFloat64(prometheusBlockAssemblyQueueShed)
@@ -198,7 +201,6 @@ func newBoundedRealServer(t *testing.T, maxItems int64, wait time.Duration, send
 	common := testutil.NewCommonTestSetup(t)
 	common.Settings.BlockAssembly.MaxQueueItems = maxItems
 	common.Settings.BlockAssembly.QueueFullWaitTimeout = wait
-	common.Settings.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
 
 	// The queue clamps a cap below one full drain pass (maxBatchesPerIteration x
 	// sendBatchSize) upward, so a test wanting a small enforced cap has to shrink the
@@ -273,7 +275,10 @@ func TestIngest_ShedIsNotCountedAsAdded(t *testing.T) {
 			txid := make([]byte, 32)
 			txid[0] = 0xAA
 
-			_, err := s.AddTx(context.Background(), &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100})
+			noParents, err := (&subtreepkg.TxInpoints{}).Serialize()
+			require.NoError(t, err)
+
+			_, err = s.AddTx(context.Background(), &blockassembly_api.AddTxRequest{Txid: txid, Fee: 1, Size: 100, TxInpoints: noParents})
 
 			return err
 		})

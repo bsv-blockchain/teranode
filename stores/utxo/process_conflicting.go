@@ -72,6 +72,19 @@ var (
 		},
 	)
 
+	// prometheusUtxoLockWalkMissingDescendants counts the descendants GetAndLockChildrenSkippingMissing
+	// skipped because the spending data of a parent names a record that is not in the store. These
+	// free functions have no logger, so the counter is how an operator sees it here; the caller logs
+	// the hashes.
+	prometheusUtxoLockWalkMissingDescendants = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "utxo",
+			Name:      "lock_walk_missing_descendants_total",
+			Help:      "Descendants skipped by GetAndLockChildrenSkippingMissing because their record is not in the store",
+		},
+	)
+
 	// prometheusUtxoReverseSkippedNoCounterBody counts the demotions ReverseProcessConflicting
 	// did not make because a counter it would promote has no stored body. These free functions
 	// have no logger, so the counter is how an operator sees it.
@@ -1488,36 +1501,99 @@ func MarkConflictingRecursively(ctx context.Context, s Store, hashes []chainhash
 	return allAffectedSpends, markedOrder, nil
 }
 
+// GetAndLockChildren locks the transaction and every spending descendant of it, and returns the
+// descendants (not the root). It is strict: any record it cannot find, the root or a descendant,
+// fails the walk with ErrTxNotFound. See GetAndLockChildrenSkippingMissing for the variant that
+// survives a descendant whose record is gone.
+//
+// It has no production caller: the reorg move-back uses GetAndLockChildrenSkippingMissing. It stays
+// because tests use it as a fail-closed oracle, where a walk that silently left out a descendant
+// would hide the very state they check.
 func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]chainhash.Hash, error) {
 	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetAndLockChildren")
 
 	defer deferFn()
 
+	children, _, err := getAndLockChildren(ctx, s, hash, false)
+
+	return children, err
+}
+
+// GetAndLockChildrenSkippingMissing locks the transaction and every spending descendant of it, like
+// GetAndLockChildren, but a descendant whose record is absent from the store does not fail the walk.
+//
+// A parent's spending data can keep naming a child whose record was deleted since (pruned, or removed
+// by another path), so the record a spending data points at is not guaranteed to exist. There is
+// nothing to lock, save or delete for such a record, and the walk cannot continue through it, so it
+// is left out of the returned children and its hash is returned in missing instead, for the caller to
+// report.
+//
+// A spending data can also name a child whose create has not committed yet: a store that runs
+// SpendAndCreate as a spend followed by a create (Aerospike does) records the spender on the parent
+// first. So a descendant is not settled as missing on its first not-found. Once the walk has locked
+// every record it reached, it reads each missing hash once more; one that exists by then is locked
+// and walked like any other child. This narrows the window to a create that is still in flight after
+// the whole walk, it does not close it. The locks stop a spend made without IgnoreLocked from adding
+// a spender to a record the walk has read, but block and subtree validation spend with IgnoreLocked,
+// so they can still add a spender, and with it a descendant, that this walk does not see. Only hashes
+// still absent on that second read are returned in missing, and each one increments
+// teranode_utxo_lock_walk_missing_descendants_total.
+//
+// The walk reaches a missing record's descendants only through another parent that exists. A
+// descendant reachable only through a missing record cannot be found from the store, so it is not
+// locked or returned, and the caller cannot clean it up through this walk.
+//
+// The root is different: if the root itself is absent the walk fails with ErrTxNotFound, as there is
+// nothing to walk from. Any other error fails the walk.
+func GetAndLockChildrenSkippingMissing(ctx context.Context, s Store, hash chainhash.Hash) (children, missing []chainhash.Hash, err error) {
+	ctx, _, deferFn := tracing.Tracer("utxo").Start(ctx, "GetAndLockChildrenSkippingMissing")
+
+	defer deferFn()
+
+	return getAndLockChildren(ctx, s, hash, true)
+}
+
+func getAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash, skipMissing bool) ([]chainhash.Hash, []chainhash.Hash, error) {
 	if hash.Equal(subtree.CoinbasePlaceholderHashValue) {
 		// skip the coinbase placeholder hash
-		return nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", hash.String())
+		return nil, nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", hash.String())
 	}
 
 	visited := make(map[chainhash.Hash]struct{})
 	visited[hash] = struct{}{}
 	currentLevel := []chainhash.Hash{hash}
 
+	// missingSet holds the hashes not found on their latest read, missingOrder the order they were
+	// first found missing in, and rechecked the ones already given their second read
+	missingSet := make(map[chainhash.Hash]struct{})
+	rechecked := make(map[chainhash.Hash]struct{})
+
+	var missingOrder []chainhash.Hash
+
+	isRootLevel := true
+
 	for len(currentLevel) > 0 {
 		results := make([]*meta.Data, len(currentLevel))
+		notFound := make([]bool, len(currentLevel))
 		g, gCtx := errgroup.WithContext(ctx)
 		// Same per-level ceiling as GetConflictingChildren, same rationale — see
 		// conflictingWalkFanOut.
 		g.SetLimit(conflictingWalkFanOut)
 
+		// only descendants may be skipped, never the root
+		tolerateMissing := skipMissing && !isRootLevel
+
 		for i, current := range currentLevel {
 			i := i
 			current := current
 			g.Go(func() error {
-				if err := s.SetLocked(gCtx, []chainhash.Hash{current}, true); err != nil {
-					return err
-				}
-				txMeta, err := s.Get(gCtx, &current, fields.Utxos)
+				txMeta, err := lockAndGetUtxos(gCtx, s, current)
 				if err != nil {
+					if tolerateMissing && errors.Is(err, errors.ErrTxNotFound) {
+						notFound[i] = true
+						return nil
+					}
+
 					return err
 				}
 				results[i] = txMeta
@@ -1526,7 +1602,19 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 		}
 
 		if err := g.Wait(); err != nil {
-			return nil, err
+			return nil, nil, err
+		}
+
+		isRootLevel = false
+
+		for i, gone := range notFound {
+			if gone {
+				if _, seen := rechecked[currentLevel[i]]; !seen {
+					missingOrder = append(missingOrder, currentLevel[i])
+				}
+
+				missingSet[currentLevel[i]] = struct{}{}
+			}
 		}
 
 		var nextLevel []chainhash.Hash
@@ -1545,7 +1633,7 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 						}
 
 						if child.Equal(subtree.CoinbasePlaceholderHashValue) {
-							return nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", child.String())
+							return nil, nil, errors.NewProcessingError("[GetAndLockChildren][%s] tx is frozen", child.String())
 						}
 
 						visited[child] = struct{}{}
@@ -1554,18 +1642,63 @@ func GetAndLockChildren(ctx context.Context, s Store, hash chainhash.Hash) ([]ch
 				}
 			}
 		}
+
+		if len(nextLevel) == 0 {
+			// every reachable record is locked, so a spend made without IgnoreLocked cannot land on
+			// one (block and subtree validation spend with IgnoreLocked and can still add a spender
+			// this walk will not see): give each missing hash its one second read, in case its create
+			// was still in flight on the first
+			for _, missingHash := range missingOrder {
+				if _, gone := missingSet[missingHash]; !gone {
+					continue
+				}
+
+				if _, done := rechecked[missingHash]; done {
+					continue
+				}
+
+				rechecked[missingHash] = struct{}{}
+
+				delete(missingSet, missingHash)
+
+				nextLevel = append(nextLevel, missingHash)
+			}
+		}
+
 		currentLevel = nextLevel
 	}
 
-	// exclude the root hash from the result
+	// exclude the root hash and every record that was not found from the result
 	delete(visited, hash)
 
 	children := make([]chainhash.Hash, 0, len(visited))
 	for child := range visited {
+		if _, gone := missingSet[child]; gone {
+			continue
+		}
+
 		children = append(children, child)
 	}
 
-	return children, nil
+	var missing []chainhash.Hash
+
+	for _, missingHash := range missingOrder {
+		if _, gone := missingSet[missingHash]; gone {
+			missing = append(missing, missingHash)
+			prometheusUtxoLockWalkMissingDescendants.Inc()
+		}
+	}
+
+	return children, missing, nil
+}
+
+// lockAndGetUtxos locks one record and reads its outputs and their spenders.
+func lockAndGetUtxos(ctx context.Context, s Store, hash chainhash.Hash) (*meta.Data, error) {
+	if err := s.SetLocked(ctx, []chainhash.Hash{hash}, true); err != nil {
+		return nil, err
+	}
+
+	return s.Get(ctx, &hash, fields.Utxos)
 }
 
 // GetConflictingChildren walks the descendant graph of the given transaction —

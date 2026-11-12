@@ -233,10 +233,18 @@ type SubtreeProcessor struct {
 	// tx alone exceeds blockmaxsize, to avoid logging on every loop iteration.
 	blockMaxSizeStuckLogged bool
 
-	// retiredSubtrees are subtrees replaced by a blockmaxsize resize. Storage workers or
-	// retries may still read them, so they are closed when the next block commits, on
-	// reset or on Stop instead of immediately. Owned by the processor goroutine.
+	// retiredSubtrees are mmap-backed subtrees replaced by a blockmaxsize resize, a
+	// removal, a block's subtree reset or a reorg's move-back. Storage workers or
+	// retries may still read them, and a failed block movement puts its input subtrees
+	// back, so they are closed when the block or move-back step commits, on reset or on
+	// Stop instead of immediately. Owned by the processor goroutine.
 	retiredSubtrees []*subtreepkg.Subtree
+
+	// catchUpRollbackSubtrees are the chained and current subtrees from before a
+	// catch-up, which its rollback puts back if any block fails. closeRetiredSubtrees
+	// keeps them mapped until the catch-up ends, while it closes each block's
+	// replaced subtrees at that block's commit. Owned by the processor goroutine.
+	catchUpRollbackSubtrees []*subtreepkg.Subtree
 
 	// blockIntervals tracks recent intervals per subtree in previous blocks
 	blockIntervals []time.Duration
@@ -293,7 +301,7 @@ type SubtreeProcessor struct {
 	newSubtreeChan chan NewSubtreeRequest
 
 	// chainedSubtrees stores the ordered list of completed subtrees
-	// chainedSubtreesMu protects chainedSubtrees from races between Stop() and closeChainedSubtrees()
+	// chainedSubtreesMu protects chainedSubtrees from races between Stop() and retireChainedSubtrees()
 	chainedSubtrees   []*subtreepkg.Subtree
 	chainedSubtreesMu sync.Mutex
 
@@ -461,16 +469,25 @@ type SubtreeProcessor struct {
 	// "error getting node txInpoints from currentTxMap".
 	diskTxMapShadow *DiskTxMap
 
-	// diskTxMapAnchor is the disk map reorgBlocks captured before its
-	// moveForward loop and restores on rollback. It is pinned for the duration
-	// of the reorg — the fresh-allocation path must not retire it along with the
-	// per-iteration maps, because rollback still needs to read it after the last
-	// iteration has been discarded.
+	// diskTxMapAnchor is the disk map a reorg step displaced at its
+	// resetSubtreeState and still reads its remainder from. Keeping it here,
+	// rather than in diskTxMapRetired, keeps it in the flush and error checks
+	// before the step's commit. On a fork reorg it is released at that commit,
+	// so each step's source map is closed once the step has moved its entries
+	// out. A catch-up pins it for the whole catch-up (catchUpRollbackPinned),
+	// because its rollback puts that map back after any later block fails.
 	diskTxMapAnchor *DiskTxMap
+
+	// catchUpRollbackPinned is set while reorgBlocks' forward-only catch-up
+	// branch runs. Its rollback puts back the tx map and subtrees from before
+	// the catch-up, so until it ends the anchor map is kept past each block's
+	// commit, and catchUpRollbackSubtrees keeps those subtrees mapped. Only
+	// mutated by the single Start() goroutine.
+	catchUpRollbackPinned bool
 
 	// diskTxMapRetired holds disk maps displaced by the fresh-allocation path
 	// (multi-block reorgs, where disableCurrentTxMapPool forbids the swap because
-	// rollback must keep the pre-reorg pointer valid across the whole loop).
+	// a captured map must stay unchanged for a failed step or catch-up to put back).
 	// Unlike in-memory maps these own log directories, so they cannot simply
 	// be dropped for the GC — reorgBlocks closes them once the reorg commits or
 	// rolls back and the surviving map is known.
@@ -496,13 +513,15 @@ type SubtreeProcessor struct {
 	// other than the forward-only catch-up) fails or panics, and cleared only
 	// by a reset that gets past its tx map rotation. While it is set, Reorg and
 	// MoveForwardBlock are refused with a ResetRequiredError. A failed fork
-	// reorg leaves subtrees and tx map
-	// that disagree: the rollback puts back the pre-reorg subtrees, but the
-	// map is the object the move-back already wrote its transactions into.
-	// A reorg or move-forward run on that state drops the moved-back
-	// transactions from block assembly without marking them unmined, so only
-	// a reset may run on it. The forward-only catch-up branch never sets it:
-	// its rollback is complete and block assembly does not reset after it.
+	// reorg leaves the subtrees and tx map of its last completed step, which
+	// already hold the moved-back transactions. On a failure, though not on a
+	// panic, the header is put back to the losing tip. A reorg or move-forward run on a failed reorg's
+	// state is unsafe (on the old whole-reorg rollback it dropped the moved-back
+	// transactions from block assembly without marking them unmined), so only
+	// a reset may run on it, and no mining data is served
+	// from it (a candidate on the losing tip would mine its transactions
+	// twice). The forward-only catch-up branch never sets it: its rollback is
+	// complete and block assembly does not reset after it.
 	failedForkReorgNeedsReset atomic.Bool
 
 	// currentTxMapShadow is the inactive half of a double-buffered currentTxMap
@@ -514,15 +533,16 @@ type SubtreeProcessor struct {
 	// splitMapBuckets is the bucket count used for the in-memory
 	// SplitTxInpointsMap, plumbed from BlockAssembly.SplitMapBuckets at
 	// constructor time. Retained so the fresh-allocation fallback path
-	// (used during multi-block reorgs where rollback must restore the
-	// captured pre-loop pointer) can build new maps of the same shape.
+	// (used during multi-block reorgs, see disableCurrentTxMapPool) can
+	// build new maps of the same shape.
 	splitMapBuckets uint16
 
 	// disableCurrentTxMapPool disables the double-buffer swap pattern for
 	// currentTxMap, falling back to per-call fresh allocation. Used by
-	// reorgBlocks for the duration of a multi-block reorg so that
-	// captured originalCurrentTxMap pointers continue to reference the
-	// pre-reorg data unchanged. Only mutated by the single Start()
+	// reorgBlocks for the duration of a multi-block reorg, so that a map a
+	// step captured stays unchanged after the next step's reset: a failed
+	// step puts back the map it read from, and a failed catch-up the map from
+	// before the catch-up. Only mutated by the single Start()
 	// goroutine; no synchronisation required.
 	disableCurrentTxMapPool bool
 
@@ -1360,6 +1380,12 @@ func (stp *SubtreeProcessor) resetAnnouncementTicker() {
 // nothing to snapshot, and cancelled when ctx ended while the store waited.
 // It runs on the processing goroutine.
 func (stp *SubtreeProcessor) incompleteSubtreeMiningData(ctx context.Context) (data *PrecomputedMiningData, cancelled bool) {
+	// A request sent before a fork reorg failed reaches here only after the
+	// failure, on this goroutine, so this check sees the flag the reorg set.
+	if stp.failedForkReorgNeedsReset.Load() {
+		return nil, false
+	}
+
 	data = stp.incompleteSubtreeSnapshot()
 	if data == nil {
 		return nil, false
@@ -1715,8 +1741,8 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	}
 
 	// Clear current tx map before touching chainedSubtrees/currentSubtree
-	// below: closeChainedSubtrees and replacing currentSubtree are themselves
-	// irreversible (mmap-backed subtrees are closed/unmapped), so checking
+	// below: retiring and replacing them is itself irreversible (the
+	// mmap-backed ones are closed/unmapped once retired), so checking
 	// here first means a failed rotation leaves STP fully intact - still on
 	// the old header, subtrees and map - rather than committed to an empty
 	// template with a stale, still-populated map. markNotOnLongestChain above
@@ -1777,19 +1803,23 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	// reorg left behind can reach a later reorg or move-forward.
 	stp.failedForkReorgNeedsReset.Store(false)
 
-	stp.closeChainedSubtrees()
-	stp.closeRetiredSubtrees()
+	// Retired, not closed: a failed block movement may have put these subtrees
+	// back while they were still retired, so a direct close here would leave a
+	// closed subtree on the list for the next closeRetiredSubtrees to close again.
+	stp.retireChainedSubtrees()
+	stp.retireSubtrees(stp.currentSubtree.Load())
 
 	// reset never reaches finalizeBlockProcessing, which ends a resized block otherwise
 	stp.blockMaxSizeResizedInBlock = false
 
 	itemsPerFile := int(stp.currentItemsPerFile.Load())
 
-	if cs := stp.currentSubtree.Load(); cs != nil {
-		cs.Close()
-	}
 	newSubtree, _ := stp.newSubtree(itemsPerFile)
 	stp.currentSubtree.Store(newSubtree)
+
+	// The precomputed mining data may still point at the old subtrees; those stay
+	// mapped until the refresh below or the next block's finalizeBlockProcessing.
+	stp.closeRetiredSubtrees()
 	if err := stp.currentSubtree.Load().AddCoinbaseNode(); err != nil {
 		return errors.NewProcessingError("[SubtreeProcessor][Reset] error adding coinbase placeholder to new current subtree", err)
 	}
@@ -2077,9 +2107,10 @@ func (stp *SubtreeProcessor) reset(blockHeader *model.BlockHeader, moveBackBlock
 	} else if len(moveForwardBlocks) == 0 && len(moveBackBlocks) == 0 {
 		// no-op reset: block assembly is already at the target block, but chainedSubtrees
 		// and currentSubtree were just cleared above. Refresh precomputedMiningData so it
-		// no longer references the old (now-closed) subtrees.
+		// no longer references the old subtrees, then close the ones it was holding.
 		stp.currentBlockHeader.Store(blockHeader)
 		stp.updatePrecomputedMiningData()
+		stp.closeRetiredSubtrees()
 	}
 
 	if postProcess != nil {
@@ -3484,14 +3515,12 @@ func (stp *SubtreeProcessor) flushDiskTxMapWriters() {
 // it uses takeDiskTxMapErrs.
 //
 // Also checks diskTxMapAnchor: during a multi-block reorg (disableCurrentTxMapPool),
-// resetSubtreeState pins the map reorgBlocks captured for rollback there
-// instead of swapping it into diskTxMapShadow, and processRemainderTxHashes
-// keeps reading from it across every iteration until the reorg's outcome is
-// known. Without checking it here, a read error against the anchor would stay
-// invisible to every iteration's own pre-commit check for the rest of the
-// reorg, surfacing only once finishReorgDiskTxMaps retires and closes it at
-// the very end - well past the point where failing (and rolling back) would
-// still have been correct.
+// resetSubtreeState keeps the map it displaced there instead of swapping it into
+// diskTxMapShadow, and processRemainderTxHashes reads the step's remainder from
+// it. Without checking it here, a read error against the anchor, or a failed
+// flush of the move-back's writes into it, would stay invisible to the step's
+// own pre-commit check, surfacing only once the map is closed - past the point
+// where failing (and rolling back) would still have been correct.
 func (stp *SubtreeProcessor) diskTxMapErr() error {
 	err := stp.takeDiskTxMapErrs()
 	if err != nil {
@@ -4378,22 +4407,103 @@ func (stp *SubtreeProcessor) enforceBlockMaxSize(ctx context.Context) error {
 // retireSubtrees defers closing replaced subtrees to closeRetiredSubtrees. Only mmap-backed
 // subtrees are kept: closing unmaps their nodes, which storage workers may still be reading.
 // Heap subtrees need no close, so they are left to the GC instead of being held until the
-// next block.
+// next block. A subtree already retired is not listed again: a failed block movement puts
+// its input subtrees back while they are retired, and the next block retires them a
+// second time, so without this closeRetiredSubtrees would close the same subtree twice.
 func (stp *SubtreeProcessor) retireSubtrees(subtrees ...*subtreepkg.Subtree) {
+	var listed map[*subtreepkg.Subtree]struct{}
+
 	for _, st := range subtrees {
-		if st != nil && st.IsMmapBacked() {
-			stp.retiredSubtrees = append(stp.retiredSubtrees, st)
+		if st == nil || !st.IsMmapBacked() {
+			continue
 		}
+
+		if listed == nil {
+			listed = make(map[*subtreepkg.Subtree]struct{}, len(stp.retiredSubtrees)+len(subtrees))
+			for _, retired := range stp.retiredSubtrees {
+				listed[retired] = struct{}{}
+			}
+		}
+
+		if _, ok := listed[st]; ok {
+			continue
+		}
+
+		listed[st] = struct{}{}
+		stp.retiredSubtrees = append(stp.retiredSubtrees, st)
 	}
 }
 
-// closeRetiredSubtrees closes the subtrees replaced by blockmaxsize resizes.
+// closeRetiredSubtrees closes the retired subtrees nothing in the processor still
+// holds. A failed block movement puts its input subtrees back while they sit in
+// retiredSubtrees, a catch-up's rollback puts back the subtrees from before it, and
+// the precomputed mining data may still point at a retired one, so those are kept
+// for a later close rather than unmapped under a reader.
 func (stp *SubtreeProcessor) closeRetiredSubtrees() {
+	if len(stp.retiredSubtrees) == 0 {
+		return
+	}
+
+	held := make(map[*subtreepkg.Subtree]struct{}, len(stp.chainedSubtrees)+1)
+	for _, st := range stp.chainedSubtrees {
+		held[st] = struct{}{}
+	}
+
+	held[stp.currentSubtree.Load()] = struct{}{}
+
+	for _, st := range stp.catchUpRollbackSubtrees {
+		held[st] = struct{}{}
+	}
+
+	if data := stp.precomputedMiningData.Load(); data != nil {
+		for _, st := range data.Subtrees {
+			held[st] = struct{}{}
+		}
+	}
+
+	var kept []*subtreepkg.Subtree
+
 	for _, st := range stp.retiredSubtrees {
+		if _, ok := held[st]; ok {
+			kept = append(kept, st)
+			continue
+		}
+
 		st.Close()
 	}
 
-	stp.retiredSubtrees = nil
+	stp.retiredSubtrees = kept
+}
+
+// retireChainedSubtrees empties chainedSubtrees and retires its mmap-backed
+// subtrees instead of closing them, so a failed block movement can put them back.
+func (stp *SubtreeProcessor) retireChainedSubtrees() {
+	stp.chainedSubtreesMu.Lock()
+	toRetire := stp.chainedSubtrees
+	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
+	stp.chainedSubtreeCount.Store(0)
+	stp.chainedSubtreesTotalSize.Store(0)
+	stp.chainedSubtreesMu.Unlock()
+
+	stp.retireSubtrees(toRetire...)
+}
+
+// restoreSubtrees puts back the chained and current subtrees a failed block
+// movement started from, retiring the ones it built. Both sets stay mapped until
+// closeRetiredSubtrees, which skips the restored ones while they are installed.
+func (stp *SubtreeProcessor) restoreSubtrees(chainedSubtrees []*subtreepkg.Subtree, currentSubtree *subtreepkg.Subtree) {
+	stp.chainedSubtreesMu.Lock()
+	discarded := stp.chainedSubtrees
+	stp.chainedSubtrees = chainedSubtrees
+	stp.chainedSubtreesMu.Unlock()
+
+	// A subtree in both sets is retired too and stays installed: the close skips it.
+	stp.retireSubtrees(discarded...)
+	stp.retireSubtrees(stp.currentSubtree.Load())
+
+	stp.currentSubtree.Store(currentSubtree)
+	stp.updateChainedSubtreeCounts()
+	stp.setTxCountFromSubtrees()
 }
 
 // CheckSubtreeProcessor checks the integrity of the subtree processor.
@@ -4507,7 +4617,15 @@ func (stp *SubtreeProcessor) GetCompletedSubtreesForMiningCandidate() []*subtree
 // GetPrecomputedMiningData returns the pre-computed mining data for lock-free reads.
 // This can be called from any goroutine without synchronization.
 // Updated when a subtree completes or a block is processed.
+//
+// It returns nil while a failed fork reorg waits for a reset: the header may
+// be back on the losing tip while the subtrees already hold the moved-back
+// transactions, so a candidate built from them would mine those twice.
 func (stp *SubtreeProcessor) GetPrecomputedMiningData() *PrecomputedMiningData {
+	if stp.failedForkReorgNeedsReset.Load() {
+		return nil
+	}
+
 	return stp.precomputedMiningData.Load()
 }
 
@@ -4524,6 +4642,11 @@ func (stp *SubtreeProcessor) DrainingAfterBlock() bool {
 // processing goroutine is busy (e.g., during a reorg). The caller's context
 // is also respected for earlier cancellation.
 func (stp *SubtreeProcessor) GetIncompleteSubtreeMiningData(ctx context.Context) *PrecomputedMiningData {
+	// See GetPrecomputedMiningData: nothing is served from a failed fork reorg's state.
+	if stp.failedForkReorgNeedsReset.Load() {
+		return nil
+	}
+
 	const timeout = 5 * time.Second
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -4541,7 +4664,7 @@ func (stp *SubtreeProcessor) GetIncompleteSubtreeMiningData(ctx context.Context)
 			return nil
 		}
 
-		return snapshot.data
+		return stp.unlessFailedForkReorg(snapshot.data)
 	}
 
 	responseCh := make(chan *PrecomputedMiningData, 1)
@@ -4552,10 +4675,20 @@ func (stp *SubtreeProcessor) GetIncompleteSubtreeMiningData(ctx context.Context)
 	}
 	select {
 	case data := <-responseCh:
-		return data
+		return stp.unlessFailedForkReorg(data)
 	case <-ctx.Done():
 		return nil
 	}
+}
+
+// unlessFailedForkReorg returns data, or nil if a fork reorg failed while the
+// caller waited for it.
+func (stp *SubtreeProcessor) unlessFailedForkReorg(data *PrecomputedMiningData) *PrecomputedMiningData {
+	if stp.failedForkReorgNeedsReset.Load() {
+		return nil
+	}
+
+	return data
 }
 
 // updatePrecomputedMiningData snapshots chainedSubtrees and stores them for mining candidate generation.
@@ -4952,12 +5085,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		return err
 	}
 
-	// reorgBlocks captures originalCurrentTxMap once and expects the pointer
-	// to remain valid (pointing at unchanged pre-reorg data) for the entire
-	// loop so that rollback can restore it. The double-buffer swap pattern
-	// breaks that contract across multiple moveForward iterations, so disable
-	// pooling for the duration of this call. Single-goroutine — no
-	// synchronisation needed.
+	// A failed step puts back the map it captured, and a failed catch-up the
+	// map from before it, so a captured map must stay unchanged after the next
+	// step's reset. The double-buffer swap pattern breaks that across multiple
+	// moveForward iterations, so disable pooling for the duration of this
+	// call. Single-goroutine — no synchronisation needed.
 	stp.disableCurrentTxMapPool = true
 	defer func() { stp.disableCurrentTxMapPool = false }()
 
@@ -5026,6 +5158,22 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		originalCurrentSubtree := stp.currentSubtree.Load()
 		originalCurrentTxMap := stp.currentTxMap
 		currentBlockHeader := stp.currentBlockHeader.Load()
+
+		// rollback below puts that state back after any block fails, so the map
+		// stays pinned as the anchor and the subtrees stay mapped until the
+		// catch-up ends. Registered before the panic defer, so it runs after it.
+		stp.catchUpRollbackPinned = true
+		stp.catchUpRollbackSubtrees = append(slices.Clone(originalChainedSubtrees), originalCurrentSubtree)
+
+		defer func() {
+			stp.catchUpRollbackPinned = false
+			stp.catchUpRollbackSubtrees = nil
+
+			// whichever state survived, the snapshot points at it before the
+			// subtrees nothing holds any more are unmapped
+			stp.updatePrecomputedMiningData()
+			stp.closeRetiredSubtrees()
+		}()
 
 		rollback := func() {
 			stp.chainedSubtrees = originalChainedSubtrees
@@ -5100,18 +5248,21 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		return errors.NewProcessingError("[reorgBlocks] error dequeueing transactions during block movement", err)
 	}
 
-	// store current state for restore in case of error
-	originalChainedSubtrees := stp.chainedSubtrees
-	originalCurrentSubtree := stp.currentSubtree.Load()
-	originalCurrentTxMap := stp.currentTxMap
+	// A failed fork reorg keeps the subtrees and tx map of its last completed
+	// step, and each step puts back its own input if it fails part way
+	// (moveForwardBlock, moveBackBlockBulkBuild). Holding the pre-reorg map and
+	// subtrees for the whole reorg instead cost the largest share of block
+	// assembly's heap on a long reorg, and nothing reads them: only a reset may
+	// run after a failed fork reorg (failedForkReorgNeedsReset), and its sweep
+	// finds every unmined transaction from before the reorg in any step's output.
+	//
+	// The header still goes back to the losing tip, so block assembly, which
+	// realigns to it when the reset fails early, stays behind the chain tip and
+	// tries again.
 	currentBlockHeader := stp.currentBlockHeader.Load()
 
 	defer func() {
 		if err != nil {
-			// restore the original state
-			stp.chainedSubtrees = originalChainedSubtrees
-			stp.currentSubtree.Store(originalCurrentSubtree)
-			stp.currentTxMap = originalCurrentTxMap
 			stp.currentBlockHeader.Store(currentBlockHeader)
 
 			// recalculate the tx count
@@ -5175,6 +5326,11 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		if err != nil {
 			return err
 		}
+
+		// A later failure puts back this step's output, not its input, so the
+		// subtrees it replaced can be unmapped now. The mining snapshot still
+		// holds the pre-reorg ones, so those stay until the refresh below.
+		stp.closeRetiredSubtrees()
 
 		if len(conflictingHashes) > 0 {
 			// The block being moved back carried a non-empty
@@ -5338,6 +5494,13 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		}
 
 		stp.currentBlockHeader.Store(parentHeader)
+
+		// Point the mining snapshot at the moved-back subtrees, on the parent
+		// they are valid on, so it stops holding the pre-reorg subtrees until the
+		// first forward step completes one. Then unmap the pre-reorg subtrees the
+		// move-back retired: from here a failure goes back to this output.
+		stp.updatePrecomputedMiningData()
+		stp.closeRetiredSubtrees()
 	}
 
 	var (
@@ -5386,6 +5549,12 @@ func (stp *SubtreeProcessor) reorgBlocks(ctx context.Context, moveBackBlocks []*
 		// benign post-commit residual be misattributed as a pre-commit
 		// failure by the next iteration's moveForwardBlock call.
 		stp.drainAndLogDiskTxMapErr("reorgBlocks_moveforward_commit")
+
+		// The step's input is no longer a rollback target: refresh the mining
+		// snapshot and unmap the subtrees it replaced, as finalizeBlockProcessing
+		// does for a block outside a reorg.
+		stp.updatePrecomputedMiningData()
+		stp.closeRetiredSubtrees()
 	}
 
 	// Last chance to fail the whole reorg before the external, irreversible
@@ -6037,20 +6206,28 @@ func (stp *SubtreeProcessor) moveBackBlockBulkBuild(ctx context.Context, block *
 	}
 
 	// Step 6: Reset subtree state with coinbase in first subtree
-	if cs := stp.currentSubtree.Load(); cs != nil {
-		cs.Close()
-	}
 	newSubtree, err := stp.newSubtree(subtreeSize)
 	if err != nil {
 		return nil, nil, errors.NewProcessingError("[moveBackBlock:BulkBuild][%s] error creating new subtree", block.String(), err)
 	}
 	_ = newSubtree.AddCoinbaseNode()
+
+	// The previous subtrees are retired, not closed, so a failed build can put
+	// them back: a failed fork reorg's reset sweeps whatever subtrees are
+	// installed, and the half-built ones would miss the unmined transactions
+	// that were in the previous subtrees. They
+	// are closed once this move-back returns.
+	stp.retireSubtrees(stp.currentSubtree.Load())
 	stp.currentSubtree.Store(newSubtree)
 
-	stp.closeChainedSubtrees()
+	stp.retireChainedSubtrees()
 
 	// Step 7: Bulk build subtrees from all collected nodes
 	if err := stp.bulkBuildSubtrees(ctx, allNodes, subtreeSize); err != nil {
+		// The block's transactions stay in currentTxMap: the reset that follows a
+		// failed fork reorg clears it.
+		stp.restoreSubtrees(previousChainedSubtrees, previousCurrentSubtree)
+
 		return nil, nil, errors.NewProcessingError("[moveBackBlock:BulkBuild][%s] error bulk building subtrees", block.String(), err)
 	}
 
@@ -6154,14 +6331,27 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 
 	// get all child spends of the coinbase, this will lock them in the utxo store
 	// so they cannot be spent while we are processing the reorg
-	childSpendHashes, err := utxostore.GetAndLockChildren(ctx, stp.utxoStore, *block.CoinbaseTx.TxIDChainHash())
+	childSpendHashes, missingHashes, err := utxostore.GetAndLockChildrenSkippingMissing(ctx, stp.utxoStore, *block.CoinbaseTx.TxIDChainHash())
 	if err != nil {
+		// the walk reports ErrTxNotFound only for the coinbase itself: a descendant whose record is
+		// gone is skipped and returned in missingHashes, so it cannot cancel the cleanup
 		if errors.Is(err, errors.ErrTxNotFound) {
 			// coinbase tx not found, nothing to do
 			return nil
 		}
 
 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error getting child spends for coinbase tx %s", block.String(), block.CoinbaseTx.String(), err)
+	}
+
+	// a parent's spending data still names these, but their records are gone, so there is nothing
+	// to save or delete for them in the utxo store. This move-back saves and deletes every descendant
+	// the walk returns that is still in the store when it is saved; one that vanishes after the lock
+	// is counted in teranode_subtreeprocessor_reorg_deleted_txs_vanished_total and only removed from
+	// block assembly. A descendant reachable only through a missing record is not reached by the
+	// walk, so its utxo record is not saved or deleted; if block assembly holds it, the cascade below
+	// still takes it out of the assembly.
+	for i := range missingHashes {
+		stp.logger.Errorf("[removeCoinbaseUtxos][%s] skipping tx %s, a descendant of coinbase tx %s named by its parent's spending data but not in the utxo store", block.String(), missingHashes[i].String(), block.CoinbaseTx.TxIDChainHash().String())
 	}
 
 	// save the txs first: if a reorg returns to this block, they are recreated from this copy. The
@@ -6203,8 +6393,60 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 		}
 	}
 
+	// a tx the walk locked whose record vanished before the save is in neither savedHashes nor
+	// missingHashes. Like a missing tx it has no record left to delete, but block assembly can still
+	// hold a copy of either: mark them for removal and take them out of the subtrees with the saved txs
+	goneHashes := append(make([]chainhash.Hash, 0, len(missingHashes)), missingHashes...)
+
+	savedSet := make(map[chainhash.Hash]struct{}, len(savedHashes))
+	for _, savedHash := range savedHashes {
+		savedSet[savedHash] = struct{}{}
+	}
+
+	for _, childSpendHash := range childSpendHashes {
+		if _, saved := savedSet[childSpendHash]; !saved {
+			goneHashes = append(goneHashes, childSpendHash)
+		}
+	}
+
+	for _, goneHash := range goneHashes {
+		if !stp.removeMap.Exists(goneHash) {
+			if err = stp.removeMap.Put(goneHash, 1); err != nil {
+				return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error adding missing child spend to remove map for tx %s", block.String(), goneHash.String(), err)
+			}
+		}
+	}
+
+	// the walk cannot reach a descendant whose only path from the coinbase runs through a missing
+	// record, but block assembly can hold one, and it must not stay there with its parent gone. Find
+	// such descendants, and any of a vanished tx, from the assembly's own parent links. The saved txs
+	// are roots too: the walk named their spenders, but a spend made with IgnoreLocked can land behind
+	// it, and a tx must not stay in the assembly with its parent deleted. The pass reads the whole
+	// assembly, so a move-back with nothing missing or vanished skips it and leaves such a late spender
+	// to the parent chain check of the next unmined reload.
+	var assemblyDescendants []chainhash.Hash
+
+	if len(goneHashes) > 0 {
+		assemblyDescendants = stp.inAssemblyDescendantsOf(savedHashes, goneHashes)
+
+		for _, descendantHash := range assemblyDescendants {
+			stp.logger.Errorf("[removeCoinbaseUtxos][%s] removing tx %s from block assembly, it descends from a tx this move-back removed or found missing, its utxo record is left in place", block.String(), descendantHash.String())
+
+			if !stp.removeMap.Exists(descendantHash) {
+				if err = stp.removeMap.Put(descendantHash, 1); err != nil {
+					return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error adding descendant of a missing tx to remove map for tx %s", block.String(), descendantHash.String(), err)
+				}
+			}
+		}
+	}
+
+	removeFromSubtrees := make([]chainhash.Hash, 0, len(savedHashes)+len(goneHashes)+len(assemblyDescendants))
+	removeFromSubtrees = append(removeFromSubtrees, savedHashes...)
+	removeFromSubtrees = append(removeFromSubtrees, goneHashes...)
+	removeFromSubtrees = append(removeFromSubtrees, assemblyDescendants...)
+
 	// remove from the subtree processor as well
-	if err = stp.removeTxsFromSubtrees(ctx, savedHashes); err != nil {
+	if err = stp.removeTxsFromSubtrees(ctx, removeFromSubtrees); err != nil {
 		return errors.NewProcessingError("[removeCoinbaseUtxos][%s] error removing child spends from subtrees", block.String(), err)
 	}
 
@@ -6213,6 +6455,104 @@ func (stp *SubtreeProcessor) removeCoinbaseUtxos(ctx context.Context, block *mod
 	}
 
 	return nil
+}
+
+// inAssemblyDescendantsOf returns, in subtree order, every tx block assembly holds that spends a
+// tx in removed or missing, directly or through other txs it holds. The hashes in removed and
+// missing are not returned. Subtree order puts parents before children, so one pass with
+// rejectConflicting, which adds each match to the set, finds the whole cascade. It reads the
+// subtrees and the tx map, so it must run on the processor goroutine, before removeTxsFromSubtrees
+// takes the removed txs out of the map.
+func (stp *SubtreeProcessor) inAssemblyDescendantsOf(removed, missing []chainhash.Hash) []chainhash.Hash {
+	gone := make(map[chainhash.Hash]struct{}, len(removed)+len(missing))
+
+	for _, hash := range removed {
+		gone[hash] = struct{}{}
+	}
+
+	for _, hash := range missing {
+		gone[hash] = struct{}{}
+	}
+
+	var descendants []chainhash.Hash
+
+	visit := func(nodes []subtreepkg.Node) {
+		for _, node := range nodes {
+			if node.Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+				continue
+			}
+
+			if _, ok := gone[node.Hash]; ok {
+				continue
+			}
+
+			// a node with no tx map entry has no known parents, so it cannot be matched by parent
+			txInpoints, _ := stp.currentTxMap.Get(node.Hash)
+
+			if rejectConflicting(node.Hash, txInpoints, gone) {
+				descendants = append(descendants, node.Hash)
+			}
+		}
+	}
+
+	for _, chainedSubtree := range stp.chainedSubtrees {
+		visit(chainedSubtree.Nodes)
+	}
+
+	if currentSubtree := stp.currentSubtree.Load(); currentSubtree != nil {
+		visit(currentSubtree.Nodes)
+	}
+
+	return descendants
+}
+
+// moveBackStoreReadBatchSize caps how many records one txInpointsFromUtxoStore store call asks for.
+// A subtree can hold 2,097,152 nodes, and one Aerospike batch request for all of them is about
+// 216 MiB, over the client's 120 MiB buffer cap. 16,384 keys is about 1.7 MiB per request. It is a
+// var so a test can shrink it.
+var moveBackStoreReadBatchSize = 16_384
+
+// txInpointsFromUtxoStore reads the parent links of nodes from the utxo store, in batches of
+// moveBackStoreReadBatchSize, for a moved-back block whose subtree meta was not written
+// (blockassembly_storeTxInpointsForSubtreeMeta off). A node whose record is gone, and the coinbase
+// placeholder, get empty links; any other read failure is returned, so the move-back fails rather
+// than return txs to block assembly blind.
+func (stp *SubtreeProcessor) txInpointsFromUtxoStore(ctx context.Context, nodes []subtreepkg.Node) ([]subtreepkg.TxInpoints, error) {
+	txInpoints := make([]subtreepkg.TxInpoints, len(nodes))
+	unresolved := make([]*utxostore.UnresolvedMetaData, 0, len(nodes))
+
+	for i := range nodes {
+		if nodes[i].Hash.Equal(subtreepkg.CoinbasePlaceholderHashValue) {
+			continue
+		}
+
+		unresolved = append(unresolved, &utxostore.UnresolvedMetaData{Hash: nodes[i].Hash, Idx: i})
+	}
+
+	if len(unresolved) == 0 {
+		return txInpoints, nil
+	}
+
+	for start := 0; start < len(unresolved); start += moveBackStoreReadBatchSize {
+		end := min(start+moveBackStoreReadBatchSize, len(unresolved))
+
+		if err := stp.utxoStore.BatchDecorate(ctx, unresolved[start:end], fields.TxInpoints); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, item := range unresolved {
+		switch {
+		case item.Err != nil && errors.Is(item.Err, errors.ErrTxNotFound):
+			continue
+		case item.Err != nil:
+			return nil, errors.NewProcessingError("error reading the parent links of tx %s", item.Hash.String(), item.Err)
+		case item.Data != nil:
+			txInpoints[item.Idx] = item.Data.TxInpoints
+		}
+	}
+
+	return txInpoints, nil
 }
 
 func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block *model.Block) ([][]subtreepkg.Node, [][]subtreepkg.TxInpoints, []chainhash.Hash, error) {
@@ -6297,10 +6637,12 @@ func (stp *SubtreeProcessor) moveBackBlockGetSubtrees(ctx context.Context, block
 
 				subtreeMetaTxInpoints[idx] = subtreeMeta.TxInpoints
 			} else {
-				subtreeMetaTxInpoints[idx] = make([]subtreepkg.TxInpoints, len(subtree.Nodes))
-
-				for i := range subtreeMetaTxInpoints[idx] {
-					subtreeMetaTxInpoints[idx][i] = subtreepkg.TxInpoints{}
+				// no subtree meta was written for this block, so read the parent links from the utxo
+				// store: the descendant cascades need them for the txs this move-back returns to
+				// block assembly
+				subtreeMetaTxInpoints[idx], err = stp.txInpointsFromUtxoStore(gCtx, subtree.Nodes)
+				if err != nil {
+					return errors.NewProcessingError("[moveBackBlock:GetSubtrees][%s] error reading the parent links of subtree %s", block.String(), subtreeHash.String(), err)
 				}
 			}
 
@@ -6584,9 +6926,10 @@ func (stp *SubtreeProcessor) finishReorgDiskTxMaps() {
 		return
 	}
 
-	// Both the last iteration's map and the pinned anchor are candidates, and
-	// exactly one of them is what currentTxMap now points at: the anchor if the
-	// reorg rolled back, the last map if it committed. Retire both and let the
+	// Both the last iteration's map and the anchor are candidates, and exactly
+	// one of them is what currentTxMap now points at: the anchor if a catch-up
+	// rolled back or a fork reorg's step put its input back, the last map
+	// otherwise. Retire both and let the
 	// survivor filter in closeRetiredDiskTxMaps keep the right one — otherwise
 	// the loser is in neither list and is closed by nobody, leaving its log
 	// files and directories on disk.
@@ -6679,21 +7022,22 @@ func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool)
 
 		if stp.disableCurrentTxMapPool {
 			// Multi-block reorg: the same reasoning as the in-memory branch
-			// below. reorgBlocks captures originalCurrentTxMap once and needs it
-			// to keep pointing at unchanged pre-reorg data for the whole loop,
-			// which a two-buffer swap cannot promise across more than one
-			// iteration. Allocate a fresh map and retire the displaced one for
-			// reorgBlocks to close once it knows which map survives.
+			// below. A failed step puts back the map it read from, and a failed
+			// catch-up the map from before the catch-up, which a two-buffer swap
+			// cannot keep unchanged across more than one iteration. Allocate a
+			// fresh map and keep the displaced one until it is known unused.
 			freshMap, freshErr := stp.newDiskTxMap("ba-txmap-reorg")
 			if freshErr != nil {
 				return errors.NewProcessingError("[resetSubtreeState] error creating disk tx map for reorg", freshErr)
 			}
 
 			if stp.diskTxMapAnchor == nil {
-				// First reset of this reorg: the map being displaced is the one
-				// reorgBlocks captured for rollback, so it has to outlive every
-				// iteration. Pin it rather than retiring it — finishReorgDiskTxMaps
-				// decides its fate once the reorg's outcome is known.
+				// The displaced map is the one this step reads its remainder
+				// from, and it may hold the move-back's unflushed writes, so it
+				// stays in the flush and error checks as the anchor. A fork
+				// reorg releases it at this step's commit (clearCurrentTxMapShadow);
+				// a catch-up keeps it to the end, and finishReorgDiskTxMaps
+				// decides its fate once the outcome is known.
 				stp.diskTxMapAnchor = stp.diskTxMap
 			} else {
 				stp.diskTxMapRetired = append(stp.diskTxMapRetired, stp.diskTxMap)
@@ -6727,9 +7071,8 @@ func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool)
 
 		clearDiskMapStats()
 	} else if stp.disableCurrentTxMapPool {
-		// Multi-block reorg in progress: fall back to fresh allocation so the
-		// pre-loop captured pointer in reorgBlocks continues to reference the
-		// unchanged original data, preserving the existing rollback contract.
+		// Multi-block reorg in progress: fall back to fresh allocation so a
+		// map a step or a catch-up captured keeps its data for a rollback.
 		stp.currentTxMap = NewSplitTxInpointsMap(stp.splitMapBuckets)
 	} else {
 		stp.currentTxMap, stp.currentTxMapShadow = stp.currentTxMapShadow, stp.currentTxMap.(*SplitTxInpointsMap)
@@ -6744,16 +7087,17 @@ func (stp *SubtreeProcessor) resetSubtreeState(createProperlySizedSubtrees bool)
 		subtreeSize = 1024 * 1024
 	}
 
-	if cs := stp.currentSubtree.Load(); cs != nil {
-		cs.Close()
-	}
 	newSubtree, err := stp.newSubtree(subtreeSize)
 	if err != nil {
 		return err
 	}
+
+	// Retired rather than closed: the caller still reads them, and puts them back
+	// if the block fails. They are closed at the block's commit.
+	stp.retireSubtrees(stp.currentSubtree.Load())
 	stp.currentSubtree.Store(newSubtree)
 
-	stp.closeChainedSubtrees()
+	stp.retireChainedSubtrees()
 
 	// Add first coinbase placeholder transaction
 	_ = stp.currentSubtree.Load().AddCoinbaseNode()
@@ -6973,7 +7317,9 @@ func (stp *SubtreeProcessor) finalizeBlockProcessing(ctx context.Context, block 
 	stp.updatePrecomputedMiningData()
 
 	// the block is committed and the snapshot above no longer references the subtrees that
-	// resizes, rechains and removals replaced, so they can be unmapped
+	// resizes, rechains, removals and the block's reset replaced, so they can be unmapped.
+	// In a catch-up, closeRetiredSubtrees keeps the subtrees from before it, which its
+	// rollback puts back.
 	stp.closeRetiredSubtrees()
 }
 
@@ -7059,8 +7405,27 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 		return nil, nil, nil, err
 	}
 
+	originalChainedSubtrees := stp.chainedSubtrees
 	originalCurrentSubtree := stp.currentSubtree.Load()
 	originalCurrentTxMap := stp.currentTxMap
+
+	// In a multi-block reorg the swap-back below does nothing, and nothing else
+	// holds this block's input: a failure, or a panic, puts it back here. The
+	// input is live for the whole step anyway, so this costs no memory, and it
+	// is what a failed fork reorg's reset sweeps. Registered before
+	// resetSubtreeState, which can fail (at newSubtree) after it has already
+	// replaced the map. The in-place writes a move-back made to the map are not
+	// undone: only a reset may run on a failed fork reorg, and it clears the map.
+	stepCommitted := false
+
+	if stp.disableCurrentTxMapPool {
+		defer func() {
+			if !stepCommitted {
+				stp.currentTxMap = originalCurrentTxMap
+				stp.restoreSubtrees(originalChainedSubtrees, originalCurrentSubtree)
+			}
+		}()
+	}
 
 	// Reset subtree state. After this, stp.currentTxMap is the freshly-empty
 	// shadow and the previous content is in stp.currentTxMapShadow (== the
@@ -7130,6 +7495,8 @@ func (stp *SubtreeProcessor) moveForwardBlockDeferringDrain(ctx context.Context,
 	// the shadow in place so the next resetSubtreeState swap exposes a
 	// clean slate - or, when deferring, hand that and the queue drain to the
 	// caller, which runs them after it has answered (see deferredBlockDrain).
+	stepCommitted = true
+
 	if deferDrain {
 		drain = &deferredBlockDrain{
 			drainQueue:         transactionMap != nil && transactionMap.Length() > 0,
@@ -7250,8 +7617,16 @@ func (stp *SubtreeProcessor) clearCurrentTxMapShadow() {
 		// path that map is a retired one holding a full RAM index and a set of
 		// log files per disk. Release it now rather
 		// than letting one accumulate per moved-forward block until reorgBlocks
-		// returns; the anchor is pinned separately and survives.
+		// returns. On a fork reorg that includes the anchor, the map this block
+		// read from: the step is committed, so a later failure goes back to this
+		// block's output, not to its input. A catch-up keeps the anchor, which its
+		// rollback restores.
 		if stp.diskTxMap != nil {
+			if stp.diskTxMapAnchor != nil && !stp.catchUpRollbackPinned {
+				stp.diskTxMapRetired = append(stp.diskTxMapRetired, stp.diskTxMapAnchor)
+				stp.diskTxMapAnchor = nil
+			}
+
 			stp.closeRetiredDiskTxMaps()
 		}
 
@@ -9016,7 +9391,7 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 		if h != nil && h.f != nil {
 			h.f()
 			// Wait for the main goroutine to exit before cleaning up chainedSubtrees
-			// to avoid data race with closeChainedSubtrees()
+			// to avoid data race with retireChainedSubtrees()
 			timeout := stp.stopWaitTimeout
 			if timeout <= 0 {
 				timeout = defaultStopWaitTimeout
@@ -9036,18 +9411,29 @@ func (stp *SubtreeProcessor) Stop(ctx context.Context) {
 				time.Sleep(10 * time.Millisecond)
 			}
 		}
-		// Clean up mmap-backed subtrees (hold mutex to avoid race with closeChainedSubtrees)
+		// Clean up mmap-backed subtrees (hold mutex to avoid race with retireChainedSubtrees).
+		// Every retired subtree goes too, including any the mining snapshot still points
+		// at: nothing reads them after Stop, and only Close removes their mmap files. A
+		// subtree a failed block movement put back is both installed and retired, so each
+		// one is closed once.
 		stp.chainedSubtreesMu.Lock()
 		toClose := stp.chainedSubtrees
 		stp.chainedSubtrees = nil
 		stp.chainedSubtreesMu.Unlock()
+
+		toClose = append(toClose, stp.currentSubtree.Load())
+		toClose = append(toClose, stp.retiredSubtrees...)
+		stp.retiredSubtrees = nil
+
+		closed := make(map[*subtreepkg.Subtree]struct{}, len(toClose))
 		for _, st := range toClose {
+			if _, ok := closed[st]; ok || st == nil {
+				continue
+			}
+
+			closed[st] = struct{}{}
 			st.Close()
 		}
-		if cs := stp.currentSubtree.Load(); cs != nil {
-			cs.Close()
-		}
-		stp.closeRetiredSubtrees()
 		// Clean up DiskTxMap. Both halves of the double buffer own log
 		// directories, as does anything still retired from an interrupted reorg,
 		// and only Close() removes them — see closeRetiredDiskTxMaps.
@@ -9084,19 +9470,6 @@ func (stp *SubtreeProcessor) newSubtree(leafCount int) (*subtreepkg.Subtree, err
 		return st, nil
 	}
 	return subtreepkg.NewTreeByLeafCount(leafCount)
-}
-
-// closeChainedSubtrees closes all mmap-backed chained subtrees and resets the slice.
-func (stp *SubtreeProcessor) closeChainedSubtrees() {
-	stp.chainedSubtreesMu.Lock()
-	toClose := stp.chainedSubtrees
-	stp.chainedSubtrees = make([]*subtreepkg.Subtree, 0, ExpectedNumberOfSubtrees)
-	stp.chainedSubtreeCount.Store(0)
-	stp.chainedSubtreesTotalSize.Store(0)
-	stp.chainedSubtreesMu.Unlock()
-	for _, st := range toClose {
-		st.Close()
-	}
 }
 
 // MarkRecoveredConflicts finishes durable subtree updates during startup,

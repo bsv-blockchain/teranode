@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"fmt"
 	"math/big"
 	"net/url"
 	"sync"
@@ -3299,4 +3300,37 @@ func TestStart_TriggersReconcileOnStartup(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return getBestCalls.Load() > 0
 	}, 2*time.Second, 20*time.Millisecond, "expected GetBestBlockHeader to be called via reconcile path after Start")
+}
+
+// With blockassembly_storeTxInpointsForSubtreeMeta off, the unmined reload still gives each tx its
+// parent links, on both the in-memory and the disk-sorted path, so the descendant cascades and the
+// parent chain check can see a removed or missing parent.
+func TestLoadUnminedTransactionsKeepsParentLinksWithSubtreeMetaOff(t *testing.T) {
+	for _, diskSort := range []bool{false, true} {
+		t.Run(fmt.Sprintf("diskSort=%t", diskSort), func(t *testing.T) {
+			initPrometheusMetrics()
+
+			ctx := t.Context()
+			items := setupBlockAssemblyTest(t, func(s *settings.Settings) {
+				s.BlockAssembly.StoreTxInpointsForSubtreeMeta = false
+				// the parent is not in the store, and this test reads the links rather than the filter
+				s.BlockAssembly.OnRestartValidateParentChain = false
+				s.BlockAssembly.UnminedTxDiskSortEnabled = diskSort
+				s.BlockAssembly.UnminedTxDiskSortPaths = []string{t.TempDir()}
+			})
+
+			parentHash := chainhash.Hash{0x07}
+			tx := newTx(42)
+			require.NoError(t, tx.Inputs[0].PreviousTxIDAdd(&parentHash))
+
+			_, _, err := items.utxoStore.SpendAndCreate(ctx, tx, 0, utxoStore.WithCreateOnly())
+			require.NoError(t, err)
+
+			require.NoError(t, items.blockAssembler.loadUnminedTransactions(ctx, false))
+
+			inpoints, ok := items.blockAssembler.subtreeProcessor.GetCurrentTxMap().Get(*tx.TxIDChainHash())
+			require.True(t, ok, "the reload must put the tx in block assembly")
+			require.Equal(t, []chainhash.Hash{parentHash}, inpoints.ParentTxHashes, "the reload must keep the tx's parent links")
+		})
+	}
 }
