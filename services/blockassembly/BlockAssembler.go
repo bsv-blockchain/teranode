@@ -178,9 +178,9 @@ type BlockAssembler struct {
 	// occupies a slot exactly once (see mtpFloor)
 	mtpFloorFlight singleflight.Group
 
-	// heldParent is the parent whose emergency-difficulty hold was last logged, so the hold is
-	// logged once per parent whether or not the median-time-past floor was readable
-	heldParent atomic.Pointer[chainhash.Hash]
+	// heldParents remembers the last parents whose emergency-difficulty hold was logged, so the hold
+	// is logged once per parent whether or not the median-time-past floor was readable
+	heldParents heldParentLatch
 
 	// stateChangeCh notifies listeners of state changes
 	// Protected by stateChangeMu to prevent race conditions

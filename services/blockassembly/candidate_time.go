@@ -2,6 +2,8 @@ package blockassembly
 
 import (
 	"context"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -147,11 +149,35 @@ func (b *BlockAssembler) holdCandidateTime(parentHeader *model.BlockHeader, time
 
 	parentHash := parentHeader.Hash()
 
-	if last := b.heldParent.Load(); (last == nil || !last.IsEqual(parentHash)) && b.heldParent.CompareAndSwap(last, parentHash) {
+	if b.heldParents.firstSight(*parentHash) {
 		b.logger.Infof("[candidateTime] holding candidate time at %d for parent %s to delay the minimum-difficulty rule by %s (blockassembly_emergencyDifficultyDelay)", held, parentHash.String(), b.settings.BlockAssembly.EmergencyDifficultyDelay)
 	}
 
 	return held
+}
+
+const heldParentsRemembered = 16
+
+type heldParentLatch struct {
+	mu   sync.Mutex
+	seen []chainhash.Hash
+}
+
+func (l *heldParentLatch) firstSight(parent chainhash.Hash) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if slices.Contains(l.seen, parent) {
+		return false
+	}
+
+	if len(l.seen) == heldParentsRemembered {
+		l.seen = l.seen[1:]
+	}
+
+	l.seen = append(l.seen, parent)
+
+	return true
 }
 
 func minDifficultyRule(params *chaincfg.Params) bool {

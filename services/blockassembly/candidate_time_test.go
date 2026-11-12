@@ -1185,6 +1185,47 @@ func TestEmergencyDifficultyDelayCandidateTime(t *testing.T) {
 		require.Nil(t, assembler.memoizedMtpFloor(tip.Hash()), "the lookup must have failed or this test proves nothing")
 		require.Equal(t, 1, logger.countMatching("holding candidate time"), "the hold is logged once per parent on this path too")
 	})
+
+	t.Run("alternating parents are each logged once, also under concurrent polls", func(t *testing.T) {
+		mockClient := &blockchain.Mock{}
+		mockClient.On("GetBlockHeaders", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil, context.DeadlineExceeded)
+		mockClient.On("GetBlockHeader", mock.Anything, mock.Anything).Return(nil, nil, context.DeadlineExceeded)
+
+		other := *tip
+		other.Nonce++
+		require.NotEqual(t, *tip.Hash(), *other.Hash())
+
+		logger := &warnCountingLogger{}
+		assembler := &BlockAssembler{logger: logger, blockchainClient: mockClient, settings: newSettings()}
+
+		var wg sync.WaitGroup
+
+		for i := 0; i < 20; i++ {
+			parent := tip
+			if i%2 == 1 {
+				parent = &other
+			}
+
+			wg.Add(1)
+
+			go func() {
+				defer wg.Done()
+
+				got, err := assembler.candidateTime(t.Context(), parent)
+				require.NoError(t, err)
+				require.Equal(t, int64(tipTime)+1200, got)
+			}()
+		}
+
+		wg.Wait()
+
+		for _, parent := range []*model.BlockHeader{tip, &other, tip, &other} {
+			_, err := assembler.candidateTime(t.Context(), parent)
+			require.NoError(t, err)
+		}
+
+		require.Equal(t, 2, logger.countMatching("holding candidate time"), "each parent is logged once, however the polls alternate")
+	})
 }
 
 func TestGetCurrentDifficultyWhenNoCandidateTimeExists(t *testing.T) {
