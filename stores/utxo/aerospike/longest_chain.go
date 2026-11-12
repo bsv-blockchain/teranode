@@ -227,15 +227,23 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 				batchRecords := slots.records[:n]
 				batchHashes := slots.hashes[:n]
 
-				if err := s.batchOperate(batchPolicy, batchRecords); err != nil {
-					// A one-record batch goes out as a single operate, so a node that does not serve
-					// sub-op 14 fails the whole call rather than the record: resend it the same way.
-					if useNative && hasResultCode(err, types.PARAMETER_ERROR) {
-						disableNativeMark()
+				// nodeRejected: a node that does not serve sub-op 14 failed its whole share of the batch,
+				// while other nodes may already have applied theirs.
+				nodeRejected := false
 
+				if err := s.batchOperate(batchPolicy, batchRecords); err != nil && useNative && hasResultCode(err, types.PARAMETER_ERROR) {
+					disableNativeMark()
+
+					// A one-record batch goes out as a single operate, so the error is the record's.
+					if n == 1 {
 						return append(rejected, batchHashes...)
 					}
 
+					// The client resets each record's result before sending, so the rejecting node's
+					// records come back with neither a record nor an error, and are resent below. The
+					// other nodes' records keep their native results and their page follow-ups.
+					nodeRejected = true
+				} else if err != nil {
 					count := int64(len(batchRecords))
 					atomic.AddInt64(&errorCount, count)
 					mu.Lock()
@@ -260,6 +268,12 @@ func (s *Store) MarkTransactionsOnLongestChain(ctx context.Context, txHashes []c
 
 				// Check individual record results
 				for j, batchRecord := range batchRecords {
+					if nodeRejected && batchRecord.BatchRec().Err == nil && batchRecord.BatchRec().Record == nil {
+						rejected = append(rejected, batchHashes[j])
+
+						continue
+					}
+
 					if useNative {
 						switch outcome, recErr := s.nativeMarkResult(batchRecord.BatchRec(), &res); outcome {
 						case nativeMarkOK:

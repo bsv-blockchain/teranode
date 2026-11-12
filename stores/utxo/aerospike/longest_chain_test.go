@@ -1071,6 +1071,65 @@ func TestMarkTransactionsOnLongestChain_NativeResultsAndFallback(t *testing.T) {
 			require.Equal(t, 1, rec.Bins[fields.DAHVersion.String()], "page %d", i+1)
 		}
 	})
+
+	// One node of a mixed-version cluster fails its share of a multi-record batch, so BatchOperate
+	// returns PARAMETER_ERROR while another node has already applied sub-op 14 to its records.
+	t.Run("a batch one node rejects keeps the native results of the other nodes", func(t *testing.T) {
+		const newDAH = 2000
+
+		txID := chainhash.HashH([]byte("native-fallback-mixed-master"))
+		masterKey, err := aerospike.NewKey(store.GetNamespace(), store.GetName(), txID[:])
+		require.NoError(t, err)
+		require.NoError(t, client.Put(nil, masterKey, aerospike.BinMap{
+			fields.TxID.String():           txID.CloneBytes(),
+			fields.External.String():       true,
+			fields.TotalExtraRecs.String(): 2,
+			fields.UnminedSince.String():   50,
+		}))
+
+		pageKeys := make([]*aerospike.Key, 2)
+		for i := range pageKeys {
+			pageKeys[i], err = aerospike.NewKey(store.GetNamespace(), store.GetName(), uaerospike.CalculateKeySourceInternal(&txID, uint32(i+1))) // nolint: gosec
+			require.NoError(t, err)
+			require.NoError(t, client.Put(nil, pageKeys[i], aerospike.BinMap{fields.TxID.String(): txID.CloneBytes()}))
+		}
+
+		onOldNode := seed(t, "mixed-old-node", 1)
+
+		store.SetNativeMarkForTest(true)
+
+		store.SetBatchOperateFn(func(policy *aerospike.BatchPolicy, records []aerospike.BatchRecordIfc) aerospike.Error {
+			if len(records) == 0 || !isNative(records[0]) {
+				return client.BatchOperate(policy, records) // the resend and the page writes
+			}
+
+			// The upgraded node answers the master; the old node fails its share, leaving no result.
+			for _, r := range records {
+				if r.BatchRec().Key.Equals(masterKey) {
+					r.BatchRec().Record = &aerospike.Record{Bins: aerospike.BinMap{"SUCCESS": map[interface{}]interface{}{
+						"status":         "OK",
+						"signal":         "DAHSET",
+						"childCount":     2,
+						"deleteAtHeight": newDAH,
+						"dahVer":         1,
+					}}}
+				}
+			}
+
+			return &aerospike.AerospikeError{ResultCode: types.PARAMETER_ERROR}
+		})
+
+		require.NoError(t, store.MarkTransactionsOnLongestChain(ctx, []chainhash.Hash{txID, onOldNode[0]}, true))
+		require.False(t, store.UsesNativeMark())
+
+		for i, key := range pageKeys {
+			rec, err := client.Get(nil, key)
+			require.NoError(t, err)
+			require.Equal(t, newDAH, rec.Bins[fields.DeleteAtHeight.String()], "page %d follows the native DAHSET", i+1)
+		}
+
+		requireMarked(t, onOldNode) // the old node's record is resent down the expression path
+	})
 }
 
 // TestMarkTransactionsOnLongestChain_NativeProbe runs the sub-op 14 probe against the server the tests
