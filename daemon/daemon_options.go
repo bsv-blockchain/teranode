@@ -30,6 +30,11 @@ func WithContext(ctx context.Context) Option {
 // them. Tests use it to put fault-injecting or recording decorators in front of
 // the real stores. A nil field leaves that store unwrapped. A wrapper that embeds
 // the store interface hides any method the concrete store has beyond it.
+//
+// A UtxoStore wrapper should implement utxo.Unwrapper. Code that looks for an
+// optional method with utxo.As, such as the pruner service, block assembly's
+// index waiter and the TestDaemon's pruner observer, cannot see past a wrapper
+// that does not.
 type StoreWrappers struct {
 	UtxoStore       func(utxostore.Store) utxostore.Store
 	BlockchainStore func(blockchainstore.Store) blockchainstore.Store

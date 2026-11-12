@@ -137,9 +137,11 @@ type TestOptions struct {
 	// By default tests only wait for liveness because some narrow daemon configurations
 	// intentionally start without every readiness dependency.
 	WaitForHealthReadiness bool
-	// StoreWrappers wraps the UTXO, blockchain and blob stores the daemon builds,
-	// so every service and the TestDaemon's own store fields see the wrapped
-	// store. Use it to inject faults in front of the real stores.
+	// StoreWrappers wraps the UTXO, blockchain, subtree, tx and block stores the
+	// daemon builds, before any service receives them. Other blob stores, such as
+	// the temp and block-persister stores, are not wrapped, and services that open
+	// blob stores of their own get unwrapped ones. Use it to inject faults in
+	// front of the real stores.
 	StoreWrappers StoreWrappers
 }
 
@@ -846,7 +848,13 @@ func (td *TestDaemon) Crash(t *testing.T) {
 	// error test logger would fail the test on them.
 	td.shutdownLogger()
 
-	td.d.crash(td.Logger)
+	// The daemon's logger is shut down, so the crash's own warnings, such as a
+	// UTXO store it could not close, go to the test log through a logger of
+	// their own.
+	crashLogger := ulogger.NewUnifiedTestLogger(t, t.Name(), "crash")
+	td.d.crash(crashLogger)
+	crashLogger.Shutdown()
+
 	td.ctxCancel()
 
 	select {

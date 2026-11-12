@@ -229,9 +229,12 @@ func (d *Daemon) Stop(skipTracerShutdown ...bool) error {
 		return nil
 	}
 
-	// stopCh closes only after closeStores, so the wait covers the services'
-	// Stop() calls plus closeStores' own budget. Waiting less would return a
-	// timeout, and let the test daemon reset the stores, mid-drain.
+	// stopCh closes only after closeStores, so the wait allows for the
+	// services' Stop() calls plus closeStores' own budget. It is not a
+	// guarantee: the service manager stops the services one after another,
+	// each with its own StopTimeout, so several slow services can still use
+	// it up. Stop then returns a timeout error, which TestDaemon.Stop reports
+	// as a test failure.
 	shutdownTimeout := serviceStopTimeout + closeStoresTimeout
 
 	// Set up a timeout channel

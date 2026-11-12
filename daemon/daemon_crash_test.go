@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"net/url"
 	"testing"
+	"time"
 
+	"github.com/bsv-blockchain/teranode/services/p2p"
 	"github.com/bsv-blockchain/teranode/settings"
 	utxostore "github.com/bsv-blockchain/teranode/stores/utxo"
 	storelogger "github.com/bsv-blockchain/teranode/stores/utxo/logger"
 	utxosql "github.com/bsv-blockchain/teranode/stores/utxo/sql"
+	"github.com/bsv-blockchain/teranode/test"
 	"github.com/bsv-blockchain/teranode/ulogger"
 	"github.com/stretchr/testify/require"
 )
@@ -82,4 +85,99 @@ func TestCrashCloseUtxoStore_WarnsWhenNothingToClose(t *testing.T) {
 	logger.warnings = nil
 	crashCloseUtxoStore(logger, nil)
 	require.Empty(t, logger.warnings)
+}
+
+// TestCrash_ClosesBlockchainDatabaseAndP2PHost crashes a running daemon and
+// checks the parts of a crash the UTXO-only e2e test does not: the blockchain
+// database is closed, the libp2p client is closed, and doneCh is closed.
+func TestCrash_ClosesBlockchainDatabaseAndP2PHost(t *testing.T) {
+	td := NewTestDaemon(t, TestOptions{
+		EnableP2P:            true,
+		SettingsOverrideFunc: test.ComposeSettings(test.SystemTestSettings()),
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Crash's cleanup resets the store fields, so take the handles first.
+	rawBlockchain, ok := td.d.daemonStores.rawBlockchainStore.(blockchainRawDB)
+	require.True(t, ok, "the test daemon's blockchain store must be a SQL store")
+
+	blockchainDB := rawBlockchain.GetDB()
+	require.NoError(t, blockchainDB.PingContext(ctx))
+
+	service, err := td.d.ServiceManager.GetService(serviceNameP2PFormal)
+	require.NoError(t, err)
+
+	p2pServer, ok := service.(*p2p.Server)
+	require.True(t, ok)
+	require.NotNil(t, p2pServer.P2PClient)
+
+	p2pClient := p2pServer.P2PClient
+
+	td.Crash(t)
+
+	require.True(t, td.d.crashed.Load())
+	require.Error(t, blockchainDB.PingContext(ctx), "the blockchain database must be closed")
+
+	// A closed client hands out an already-closed channel.
+	select {
+	case _, open := <-p2pClient.Subscribe("crash-test"):
+		require.False(t, open, "the p2p client must be closed")
+	case <-ctx.Done():
+		t.Fatal("subscribing on the crashed p2p client blocked")
+	}
+
+	select {
+	case <-td.d.doneCh:
+	default:
+		t.Fatal("crash must close doneCh")
+	}
+}
+
+// recordingClient is a daemon-constructed client that counts its closes.
+type recordingClient struct{ closes int }
+
+func (c *recordingClient) Close() error {
+	c.closes++
+	return nil
+}
+
+// recordingCloseStore is a UTXO store that counts its closes.
+type recordingCloseStore struct {
+	utxostore.Store
+	closes int
+}
+
+func (s *recordingCloseStore) Close(context.Context) error {
+	s.closes++
+	return nil
+}
+
+// TestCrash_SkipsGracefulClientAndStoreClose checks that after a crash the
+// daemon's own shutdown closes no client and no store, as a killed process
+// would not, and that the crashed flag is what skips them.
+func TestCrash_SkipsGracefulClientAndStoreClose(t *testing.T) {
+	logger := ulogger.TestLogger{}
+
+	client := &recordingClient{}
+	store := &recordingCloseStore{}
+
+	d := New()
+	d.daemonStores.constructedClients = []clientCloser{client}
+	d.daemonStores.mainUtxoStore = store
+
+	d.crashed.Store(true)
+	d.closeClients(logger)
+	d.closeStores(logger)
+
+	require.Zero(t, client.closes, "closeClients must skip a crashed daemon")
+	require.Zero(t, store.closes, "closeStores must skip a crashed daemon")
+
+	d.crashed.Store(false)
+	d.closeClients(logger)
+	d.closeStores(logger)
+
+	require.Equal(t, 1, client.closes)
+	require.Equal(t, 1, store.closes)
 }
