@@ -15,6 +15,7 @@
 package blockassembly
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -2144,6 +2145,10 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 		return nil, errors.NewProcessingError("[BlockAssembly][%s] submitted nTime %d is below the parent chain's median-time-past floor %d, so every peer would reject the block", jobID, nTime, minTime)
 	}
 
+	if err = ba.checkSubmittedTimeDifficulty(ctx, jobID, job.MiningCandidate, hashPrevBlock, nTime); err != nil {
+		return nil, err
+	}
+
 	var coinbaseTx *bt.Tx
 
 	if req.CoinbaseTx != nil {
@@ -2424,6 +2429,23 @@ func (ba *BlockAssembly) submitMiningSolution(ctx context.Context, req *BlockSub
 	return &blockassembly_api.OKResponse{
 		Ok: true,
 	}, nil
+}
+
+func (ba *BlockAssembly) checkSubmittedTimeDifficulty(ctx context.Context, jobID string, candidate *model.MiningCandidate, parent *chainhash.Hash, nTime uint32) error {
+	if !minDifficultyRule(ba.blockAssembler.settings.ChainCfgParams) || nTime == candidate.Time {
+		return nil
+	}
+
+	requiredBits, err := ba.blockchainClient.GetNextWorkRequired(ctx, parent, int64(nTime))
+	if err != nil {
+		return errors.NewProcessingError("[BlockAssembly][%s] cannot check the difficulty required at submitted nTime %d", jobID, nTime, err)
+	}
+
+	if !bytes.Equal(requiredBits.CloneBytes(), candidate.NBits) {
+		return errors.NewProcessingError("[BlockAssembly][%s] the candidate nBits %x are not the nBits %x required at submitted nTime %d, so every peer would reject the block; submit with the candidate time", jobID, candidate.NBits, requiredBits.CloneBytes(), nTime)
+	}
+
+	return nil
 }
 
 func (ba *BlockAssembly) createMerkleTreeFromSubtrees(jobID string, subtreesInJob []*subtreepkg.Subtree, subtreeHashes []chainhash.Hash, coinbaseTxIDHash *chainhash.Hash) (*chainhash.Hash, error) {
@@ -2899,7 +2921,7 @@ func (ba *BlockAssembly) GetBlockAssemblyTxs(ctx context.Context, _ *blockassemb
 func (ba *BlockAssembly) GetCurrentDifficulty(_ context.Context, _ *blockassembly_api.EmptyMessage) (resp *blockassembly_api.GetCurrentDifficultyResponse, err error) {
 	blockHeader, _ := ba.blockAssembler.CurrentBlock()
 
-	nBits, err := ba.blockAssembler.getNextNbits(blockHeader, time.Now().Unix())
+	nBits, err := ba.blockAssembler.getNextNbits(blockHeader, ba.blockAssembler.currentDifficultyTime(blockHeader))
 	if err != nil {
 		return nil, errors.WrapGRPC(errors.NewProcessingError("error getting next nbits", err))
 	}
