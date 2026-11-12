@@ -2308,16 +2308,19 @@ func (s *Store) readExternalTransaction(ctx context.Context, previousTxHash chai
 // here. The blob is local, its length comes from the store, and the scripts in
 // it can never add up to more than that length, so the arena never grows on a
 // sound blob. Every path that decodes peer-supplied bytes keeps the
-// incremental read, and so does a blob whose length is unknown or above go-bt's
-// MaxArenaAlloc (1GiB), which no valid transaction reaches.
+// incremental read, and so does a blob whose length is unknown or reported above
+// go-bt's MaxArenaAlloc (1GiB). That cap bounds the up-front allocation; it is
+// not a transaction size limit. The stored form is the extended serialization,
+// which adds each input's previous script, so a valid transaction near the
+// 1GB consensus limit could exceed it and would then just keep the old cost.
 //
 // What a corrupt blob costs. The arena itself is the blob's length B, at most
-// 1GiB. A corrupt script length that overruns the remaining bytes makes the
+// 1GiB. A corrupt script length L that overruns the remaining bytes makes the
 // arena grow once, to max(2B, B + L) with L at most 1GiB (go-bt refuses longer
 // lengths before allocating), while the first slab is still referenced; the
 // short read then fails as a storage fault. So the transient worst case is
-// B + max(2B, B + 1GiB): about B + 1GiB for blobs up to 1GiB, and 3GiB at the
-// 1GiB cap. The incremental read would hold only the bytes that arrive.
+// B + max(2B, B + 1GiB), which for B <= 1GiB is 2B + 1GiB: 3GiB at the cap. The
+// incremental read would hold only the bytes that arrive.
 //
 // The scripts left in the arena share its slab, so any one of them keeps the
 // whole blob alive. A child extends its input by pointing at the parent's
