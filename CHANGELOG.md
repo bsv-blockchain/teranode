@@ -36,7 +36,7 @@ read every section between yours and the target.
   `GetBlockHeadersFromOldest` now gets `Unimplemented`. Dashboards lose
   `teranode_blockvalidation_fork_resolved_total`, `_fork_resolution_depth_blocks`,
   `_fork_orphaned_total`, `teranode_blockchain_get_latest_block_header_from_block_locator` and
-  `_get_block_headers_from_oldest`, which no code path updated; drop any panel or alert on them.
+  `_get_block_headers_from_oldest`, which no code path updated; drop any panel or alert on them. (#2185)
 - **`blockassembly_storeTxInpointsForSubtreeMeta=false` now only skips the subtree meta files.**
   Block assembly keeps every unmined tx's parent links in memory in both modes. With it off, the
   restart reload and a block move-back now read each tx's inputs from the UTXO store (an external tx
