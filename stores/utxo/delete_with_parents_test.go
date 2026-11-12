@@ -234,6 +234,26 @@ func TestClearParentRefs(t *testing.T) {
 		s.AssertExpectations(t)
 	})
 
+	t.Run("hash-mismatched input is skipped and the other input is unspent", func(t *testing.T) {
+		mismatched, alive := dwpHash(0x01), dwpHash(0x02)
+		tx := dwpTx(t, mismatched, alive)
+
+		s := &MockUtxostore{}
+		s.On("Get", mock.Anything, txHash, getFields).Return(&meta.Data{Tx: tx}, nil)
+		s.On("PreviousOutputsDecorate", mock.Anything, tx).Return(nil)
+
+		s.On("Unspend", mock.Anything, mock.MatchedBy(func(sp []*Spend) bool { return len(sp) == 2 }), mock.Anything).
+			Return(errors.NewUtxoHashMismatchError("mismatch")).Once()
+		s.On("Unspend", mock.Anything, mock.MatchedBy(func(sp []*Spend) bool { return len(sp) == 1 && *sp[0].TxID == *mismatched }), mock.Anything).
+			Return(errors.NewUtxoHashMismatchError("mismatch")).Once()
+		s.On("Unspend", mock.Anything, mock.MatchedBy(func(sp []*Spend) bool { return len(sp) == 1 && *sp[0].TxID == *alive }), mock.Anything).
+			Return(nil).Once()
+
+		require.NoError(t, ClearParentRefs(ctx, s, txHash))
+		s.AssertNumberOfCalls(t, "Unspend", 3)
+		s.AssertExpectations(t)
+	})
+
 	t.Run("per-spend retry stops on a non-not-found error", func(t *testing.T) {
 		p1, p2 := dwpHash(0x01), dwpHash(0x02)
 		tx := dwpTx(t, p1, p2)
@@ -288,6 +308,34 @@ func TestClearParentRefs(t *testing.T) {
 		err := ClearParentRefs(ctx, s, txHash)
 		require.Error(t, err)
 		require.True(t, errors.Is(err, errors.ErrStorageError))
+	})
+}
+
+func TestUnspendTolerantOfMissingParents(t *testing.T) {
+	ctx := context.Background()
+	mismatched, alive := dwpHash(0x01), dwpHash(0x02)
+	spends := []*Spend{{TxID: mismatched, Vout: 0}, {TxID: alive, Vout: 1}}
+
+	t.Run("hash mismatch skips that spend and unspends the other", func(t *testing.T) {
+		s := &MockUtxostore{}
+		s.On("Unspend", mock.Anything, mock.MatchedBy(func(sp []*Spend) bool { return len(sp) == 2 }), mock.Anything).
+			Return(errors.NewUtxoHashMismatchError("mismatch")).Once()
+		s.On("Unspend", mock.Anything, mock.MatchedBy(func(sp []*Spend) bool { return len(sp) == 1 && *sp[0].TxID == *mismatched }), mock.Anything).
+			Return(errors.NewUtxoHashMismatchError("mismatch")).Once()
+		s.On("Unspend", mock.Anything, mock.MatchedBy(func(sp []*Spend) bool { return len(sp) == 1 && *sp[0].TxID == *alive }), mock.Anything).
+			Return(nil).Once()
+
+		require.NoError(t, UnspendTolerantOfMissingParents(ctx, s, spends))
+		s.AssertNumberOfCalls(t, "Unspend", 3)
+		s.AssertExpectations(t)
+	})
+
+	t.Run("other errors still fail", func(t *testing.T) {
+		s := &MockUtxostore{}
+		s.On("Unspend", mock.Anything, mock.Anything, mock.Anything).Return(errors.NewStorageError("boom")).Once()
+
+		require.ErrorIs(t, UnspendTolerantOfMissingParents(ctx, s, spends), errors.ErrStorageError)
+		s.AssertNumberOfCalls(t, "Unspend", 1)
 	})
 }
 

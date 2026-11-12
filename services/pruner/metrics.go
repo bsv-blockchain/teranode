@@ -21,6 +21,10 @@ var (
 	// deletes nothing while it is above zero, so alert when it stays up
 	prunerPreserveParentsFailing prometheus.Gauge
 
+	// Create-first sweep metrics
+	prunerCreatingBacklog       prometheus.Gauge
+	prunerCreatingSweepFailures prometheus.Counter
+
 	// Blob deletion metrics
 	blobDeletionScheduledTotal  *prometheus.CounterVec
 	blobDeletionCancelledTotal  *prometheus.CounterVec
@@ -133,6 +137,24 @@ func _initPrometheusMetrics() {
 			Subsystem: "pruner",
 			Name:      "preserve_parents_consecutive_failures",
 			Help:      "Consecutive pruner cycles whose parent preservation (phase 1) failed; nothing is deleted while above zero",
+		},
+	)
+
+	prunerCreatingBacklog = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "teranode",
+			Subsystem: "pruner",
+			Name:      "creating_backlog",
+			Help:      "Number of stale create-first 'creating' transactions found by the most recent sweep pass (an approximation of the outstanding-creating backlog; capped at the per-pass limit)",
+		},
+	)
+
+	prunerCreatingSweepFailures = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "teranode",
+			Subsystem: "pruner",
+			Name:      "creating_sweep_failures_total",
+			Help:      "Total create-first records the sweep could not roll forward (left creating for a later pass); a sustained non-zero rate means records are stuck (e.g. a permanently locked or missing parent)",
 		},
 	)
 

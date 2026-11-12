@@ -44,6 +44,20 @@ const (
 	Locked FieldName = "locked"
 	// Creating indicates the transaction is in the process of being created (multi-record 2-phase commit)
 	Creating FieldName = "creating"
+	// RollingBack marks a creating record whose create-first transition is being undone; nothing may finalize it
+	RollingBack FieldName = "rollingBack"
+	// Attempt is the random token of one create-first attempt; it is written with Creating on the master and
+	// every pagination child, and every write that ends the attempt is filtered on it
+	Attempt FieldName = "attempt"
+	// Hold marks the master of a rolled-back create-first attempt that is kept as a placeholder for its txid
+	Hold FieldName = "hold"
+	// HoldUntil is the unix time in seconds until which a hold refuses a new create of its txid
+	HoldUntil FieldName = "holdUntil"
+	// Busy marks a hold whose holder is reversing the spends of its inputs
+	Busy FieldName = "busy"
+	// Reversed marks a rolling back record whose spends have all been reversed, so the rollback needs
+	// no transaction data to finish
+	Reversed FieldName = "reversed"
 	// UtxoSpendableIn indicates the number of blocks after which the UTXO becomes spendable
 	UtxoSpendableIn FieldName = "utxoSpendableIn"
 	// SpendingHeight is the block height at which the UTXO was spent

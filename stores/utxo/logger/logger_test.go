@@ -80,6 +80,13 @@ func (m *MockStore) Close(ctx context.Context) error {
 }
 
 func (m *MockStore) SupportsOutpointOnlySpend() bool { return m.SupportsOutpointOnlySpendResult }
+func (m *MockStore) SupportsCreateFirst() bool       { return false }
+func (m *MockStore) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+	return nil
+}
+func (m *MockStore) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return nil, nil
+}
 
 // TestSupportsOutpointOnlySpend_Delegates verifies the logger decorator forwards the
 // wrapped store's fast-path capability in both directions (so a SQL store wrapped by the
@@ -159,6 +166,31 @@ func (m *MockStore) Delete(ctx context.Context, hash *chainhash.Hash) error {
 func (m *MockStore) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error {
 	args := m.Called(ctx, hash)
 	return args.Error(0)
+}
+
+func (m *MockStore) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	args := m.Called(ctx, hash, attempt)
+	return args.Error(0)
+}
+
+func (m *MockStore) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	args := m.Called(ctx, hash, attempt)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockStore) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	args := m.Called(ctx, hash, attempt)
+	return args.Error(0)
+}
+
+func (m *MockStore) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
+	args := m.Called(ctx, hash, adopt)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockStore) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	args := m.Called(ctx, hash, attempt)
+	return args.Bool(0), args.Error(1)
 }
 
 func (m *MockStore) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {
@@ -513,6 +545,23 @@ func TestSpendAndCreate(t *testing.T) {
 
 	assert.Equal(t, expectedData, data)
 	assert.Equal(t, expectedSpends, spends)
+	assert.Equal(t, expectedErr, err)
+	mockStore.AssertExpectations(t)
+}
+
+func TestBeginCreateFirstRollback_Delegates(t *testing.T) {
+	mockStore := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, mockStore).(*Store)
+
+	ctx := context.Background()
+	hash := createTestTx(1).TxIDChainHash()
+	expectedErr := errors.NewError("begin error")
+
+	mockStore.On("BeginCreateFirstRollback", ctx, hash, []byte{1}).Return(true, expectedErr)
+
+	began, err := store.BeginCreateFirstRollback(ctx, hash, []byte{1})
+
+	assert.True(t, began)
 	assert.Equal(t, expectedErr, err)
 	mockStore.AssertExpectations(t)
 }
@@ -1370,4 +1419,46 @@ func TestLoggerStore_ForwardsConflictRecovery(t *testing.T) {
 	require.NoError(t, store.SetConflictLocks(ctx, id, nil, true))
 	require.NoError(t, store.ReleaseConflictLocks(ctx, id, nil))
 	require.Equal(t, []string{"save", "load", "restore", "lock", "release"}, inner.calls)
+}
+
+func TestLoggerStore_CreateFirstDelegates(t *testing.T) {
+	inner := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, inner).(*Store)
+	ctx := context.Background()
+
+	require.False(t, store.SupportsCreateFirst())
+	require.NoError(t, store.FinalizeTransaction(ctx, &bt.Tx{}, nil))
+
+	hashes, err := store.QueryStaleCreatingTxs(ctx, 100, 0)
+	require.NoError(t, err)
+	require.Nil(t, hashes)
+}
+
+func TestHoldMethods_Delegate(t *testing.T) {
+	mockStore := &MockStore{}
+	store := New(context.Background(), ulogger.TestLogger{}, mockStore).(*Store)
+
+	ctx := context.Background()
+	hash := createTestTx(1).TxIDChainHash()
+	attempt := []byte{1, 2}
+	expectedErr := errors.NewError("hold error")
+
+	mockStore.On("EndCreateFirstRollback", ctx, hash, attempt).Return(expectedErr)
+	mockStore.On("TakeRollbackHold", ctx, hash, attempt).Return(true, expectedErr)
+	mockStore.On("ReleaseRollbackHold", ctx, hash, attempt).Return(expectedErr)
+	mockStore.On("ClearCreateFirstHold", ctx, hash, true).Return(true, expectedErr)
+
+	require.Equal(t, expectedErr, store.EndCreateFirstRollback(ctx, hash, attempt))
+
+	took, err := store.TakeRollbackHold(ctx, hash, attempt)
+	require.True(t, took)
+	require.Equal(t, expectedErr, err)
+
+	require.Equal(t, expectedErr, store.ReleaseRollbackHold(ctx, hash, attempt))
+
+	cleared, err := store.ClearCreateFirstHold(ctx, hash, true)
+	require.True(t, cleared)
+	require.Equal(t, expectedErr, err)
+
+	mockStore.AssertExpectations(t)
 }

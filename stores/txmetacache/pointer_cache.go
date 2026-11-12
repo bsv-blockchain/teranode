@@ -188,7 +188,13 @@ func metadataOnly(data *meta.Data) (*meta.Data, error) {
 		Frozen:      data.Frozen,
 		Conflicting: data.Conflicting,
 		Locked:      data.Locked,
-		TxInpoints:  inpoints,
+		// Creating MUST be carried: a create-first tx still mid-flight is Creating=true, and
+		// processTxMetaUsingCache treats a Creating entry as a miss so it falls back to the
+		// store. Dropping it here (pointer-cache mode) would cache a mid-flight tx as
+		// Creating=false and let subtree validation count it as validated — diverging from the
+		// byte backend, which preserves the flag (meta bit 5).
+		Creating:   data.Creating,
+		TxInpoints: inpoints,
 	}, nil
 }
 

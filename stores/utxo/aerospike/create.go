@@ -55,6 +55,7 @@
 package aerospike
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"os"
@@ -132,6 +133,17 @@ type BatchStoreItem struct {
 	// Locked indicates if this transaction is locked for spending
 	locked bool
 
+	// creating indicates this transaction is stored in the tentative create-first
+	// state: the creating bin is written and NOT cleared by the create phase-2 (the
+	// validator's FinalizeTransaction clears it), so its outputs stay unspendable
+	// until the inputs have been spent and the tx finalized.
+	creating bool
+
+	// attempt is the token of this create-first attempt. It is written next to the creating bin
+	// on every record the attempt creates, and every write that ends the attempt is filtered on
+	// it. Nil unless creating.
+	attempt []byte
+
 	// group signals completion of the whole batch; the producer waits on it
 	// once instead of one channel receive per item.
 	group *completion.Group
@@ -201,6 +213,19 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 
 	txMeta.Locked = createOptions.Locked
 
+	txMeta.Creating = createOptions.Creating
+
+	var attempt []byte
+
+	if createOptions.Creating {
+		attempt = make([]byte, attemptTokenLength)
+		if _, err = rand.Read(attempt); err != nil {
+			return nil, errors.NewProcessingError("failed to generate the create-first attempt token", err)
+		}
+
+		txMeta.Attempt = attempt
+	}
+
 	// when creating conflicting transactions, we must set the conflictingChildren in all the parents
 	// we should do this before we store the transaction, so we are sure the parents have been updated properly
 	if txMeta.Conflicting {
@@ -252,6 +277,8 @@ func (s *Store) Create(ctx context.Context, tx *bt.Tx, blockHeight uint32, opts 
 		subtreeIdxs:  subtreeIdxs,
 		conflicting:  createOptions.Conflicting,
 		locked:       createOptions.Locked,
+		creating:     createOptions.Creating,
+		attempt:      attempt,
 		group:        group,
 	}
 
@@ -420,7 +447,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			external = true
 		}
 
-		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, arena) // false is to say this is a normal record, not external.
+		binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.creating, arena) // false is to say this is a normal record, not external.
 		if err != nil {
 			bItem.complete(errors.NewProcessingError("could not get bins to store", err))
 			resultHandledElsewhere[idx] = true
@@ -438,7 +465,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			// that outlives sendStoreBatch (and the per-batch arena). Rebuild its
 			// bins with heap-owned backing (nil arena) so the deferred arena reset
 			// cannot corrupt the bytes the goroutine still references.
-			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, nil)
+			binsToStore, err = s.GetBinsToStore(bItem.tx, bItem.blockHeight, bItem.blockIDs, bItem.blockHeights, bItem.subtreeIdxs, external, bItem.txHash, bItem.isCoinbase, bItem.conflicting, bItem.locked, bItem.creating, nil)
 			if err != nil {
 				bItem.complete(errors.NewProcessingError("could not rebuild bins for external store", err))
 				resultHandledElsewhere[idx] = true
@@ -542,6 +569,10 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 			}
 		}
 
+		if bItem.attempt != nil {
+			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), bItem.attempt)))
+		}
+
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
 
 	}
@@ -607,7 +638,7 @@ func (s *Store) sendStoreBatch(batch []*BatchStoreItem) {
 				}
 
 				if aErr.ResultCode == types.RECORD_TOO_BIG {
-					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, nil) // true is to say this is a big record
+					binsToStore, err = s.GetBinsToStore(batch[idx].tx, batch[idx].blockHeight, batch[idx].blockIDs, batch[idx].blockHeights, batch[idx].subtreeIdxs, true, batch[idx].txHash, batch[idx].isCoinbase, batch[idx].conflicting, batch[idx].locked, batch[idx].creating, nil) // true is to say this is a big record
 					if err != nil {
 						batch[idx].complete(errors.NewProcessingError("could not get bins to store", err))
 						continue
@@ -817,7 +848,7 @@ func extendedTxSize(tx *bt.Tx) int {
 //   - Whether the transaction has UTXOs
 //   - Any error that occurred
 func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHeights []uint32, subtreeIdxs []int, external bool,
-	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool, arena *bt.Arena) ([][]*aerospike.Bin, error) {
+	txHash *chainhash.Hash, isCoinbase bool, isConflicting bool, isLocked bool, isCreating bool, arena *bt.Arena) ([][]*aerospike.Bin, error) {
 	var (
 		fee          uint64
 		utxoHashes   []*chainhash.Hash
@@ -906,6 +937,13 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	// add the locked bin to all the records
 	commonBins = append(commonBins, aerospike.NewBin(fields.Locked.String(), isLocked))
 
+	// add the creating bin ONLY when set (bin absence == not creating; the flag is
+	// cleared by writing nil, never by writing false). The multi-record/external path
+	// forces this on via ensureCreatingBin regardless; this covers the single-record path.
+	if isCreating {
+		commonBins = append(commonBins, aerospike.NewBin(fields.Creating.String(), true))
+	}
+
 	// Split utxos into batches
 	batches := s.splitIntoBatches(utxos, commonBins)
 
@@ -918,10 +956,16 @@ func (s *Store) GetBinsToStore(tx *bt.Tx, blockHeight uint32, blockIDs, blockHei
 	batches[0] = append(batches[0], aerospike.NewBin(fields.SubtreeIdxs.String(), subtreeIdxs))
 	batches[0] = append(batches[0], aerospike.NewBin(fields.TotalUtxos.String(), len(utxos)))
 
-	// Set UnminedSince for unmined transactions (when no blockIDs/blockHeights)
-	if len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0 {
+	isUnmined := len(blockIDs) == 0 && len(blockHeights) == 0 && len(subtreeIdxs) == 0
+
+	// Set UnminedSince for unmined transactions (when no blockIDs/blockHeights). A creating
+	// record gets it too, even with block IDs: it is the selector the stale-creating sweep
+	// queries by, and finalize removes it again for a record that has block IDs.
+	if isUnmined || isCreating {
 		batches[0] = append(batches[0], aerospike.NewBin(fields.UnminedSince.String(), aerospike.NewIntegerValue(int(blockHeight))))
-	} else if !isConflicting {
+	}
+
+	if !isUnmined && !isConflicting {
 		// A transaction with no spendable outputs (e.g. one that only carries
 		// OP_RETURN / data outputs) can never be spent, so it never transitions
 		// to "all spent" via the spend path. When it is created already-mined
@@ -1043,6 +1087,73 @@ func isFilteredOut(err error) bool {
 	return errors.As(err, &aErr) && aErr.Matches(types.FILTERED_OUT)
 }
 
+// attemptTokenLength is the length in bytes of a create-first attempt token.
+const attemptTokenLength = 16
+
+// adoptSurvivingChildren gives the pagination children that survived an earlier attempt the
+// token of the attempt that has just created the master. The records are still creating, and a
+// finalize filtered on the token of this attempt would otherwise leave them creating for good.
+// The write is filtered on the creating bin. A child that is no longer creating is already final:
+// its write is filtered out and that is not a failure. Any other per-record error, or an error of
+// the batch, is a failure, and the caller must not let the create succeed: a child that keeps the
+// token of the earlier attempt is never cleared by this attempt's finalize and its outputs would
+// stay unspendable for good.
+func (s *Store) adoptSurvivingChildren(bItem *BatchStoreItem, recordKeys []*aerospike.Key, present []int) error {
+	records := make([]aerospike.BatchRecordIfc, 0, len(present))
+
+	for _, idx := range present {
+		if idx == 0 {
+			continue
+		}
+
+		writePolicy := util.GetAerospikeBatchWritePolicy(s.settings)
+		writePolicy.RecordExistsAction = aerospike.UPDATE_ONLY
+		writePolicy.FilterExpression = aerospike.ExpBinExists(fields.Creating.String())
+
+		records = append(records, aerospike.NewBatchWrite(writePolicy, recordKeys[idx], aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), bItem.attempt))))
+	}
+
+	if len(records) == 0 {
+		return nil
+	}
+
+	if err := s.batchOperate(util.GetAerospikeBatchPolicy(s.settings), records); err != nil {
+		return errors.NewProcessingError("failed to give the surviving child records of %s the attempt token", bItem.txHash, err)
+	}
+
+	for _, record := range records {
+		if recErr := record.BatchRec().Err; recErr != nil && !isFilteredOut(recErr) {
+			return errors.NewProcessingError("failed to give a surviving child record of %s the attempt token", bItem.txHash, recErr)
+		}
+	}
+
+	return nil
+}
+
+// deleteOwnMaster removes the master record that the attempt carrying the token has just written,
+// so that the store returns to the state before the attempt. The delete is filtered on the creating
+// bin and the token, so a master that another actor has since taken over is left alone. It reports
+// an error only when the delete itself failed: the master then stays creating under the token and
+// the pruner sweep rolls it back.
+func (s *Store) deleteOwnMaster(txHash *chainhash.Hash, attempt []byte) error {
+	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if err != nil {
+		return errors.NewProcessingError("error in aerospike NewKey", err)
+	}
+
+	writePolicy := util.GetAerospikeWritePolicy(s.settings, 0)
+	writePolicy.FilterExpression = aerospike.ExpAnd(
+		aerospike.ExpBinExists(fields.Creating.String()),
+		attemptFilter(attempt),
+	)
+
+	if _, delErr := s.client.Delete(writePolicy, key); delErr != nil && !errors.Is(delErr, aerospike.ErrKeyNotFound) && !isFilteredOut(delErr) {
+		return delErr
+	}
+
+	return nil
+}
+
 // classifyCreateBatchResults decides, from one CREATE_ONLY batch's per-record results,
 // whether THIS writer created the transaction.
 //
@@ -1112,9 +1223,10 @@ func classifyCreateBatchResults(batchRecords []aerospike.BatchRecordIfc) (master
 // 5. BLOCK ASSEMBLY: Notification is about existence, not spendability
 //
 // RECOVERY SCENARIOS:
-// - Retry attempts complete Phase 2 via the "master already exists" recovery path below
-// - Auto-recovery triggers when transaction is re-encountered (processTxMetaUsingStore.go:112-122)
-// - Mining operation clears flags via setMined
+//   - Retry attempts complete Phase 2 via the "master already exists" recovery path below
+//   - Auto-recovery triggers when transaction is re-encountered (processTxMetaUsingStore.go:112-122)
+//   - The setMined pre-flight and the pruner sweep roll a creating record forward (re-spend, then finalize); the sweep rolls back
+//     a record whose spends cannot be completed (utxo.RollBackCreating: mark rolling back, unspend, end the rollback with a hold)
 func (s *Store) storeExternallyWithLock(
 	ctx context.Context,
 	bItem *BatchStoreItem,
@@ -1152,6 +1264,11 @@ func (s *Store) storeExternallyWithLock(
 		return
 	}
 
+	if s.masterRollingBack(bItem.txHash) {
+		bItem.complete(errors.NewTxExistsError("transaction already exists: %s", bItem.txHash))
+		return
+	}
+
 	// Write to external blob storage (now protected by lock - no duplicate work)
 	// NOTE: Pass WithDeleteAt(0) to prevent DAH file creation. The pruner service will manage
 	// deletion of external files directly when pruning Aerospike records.
@@ -1183,6 +1300,10 @@ func (s *Store) storeExternallyWithLock(
 			}
 		}
 
+		if bItem.attempt != nil {
+			putOps = append(putOps, aerospike.PutOp(aerospike.NewBin(fields.Attempt.String(), bItem.attempt)))
+		}
+
 		batchRecords[idx] = aerospike.NewBatchWrite(batchWritePolicy, key, putOps...)
 	}
 
@@ -1198,6 +1319,22 @@ func (s *Store) storeExternallyWithLock(
 
 	for _, idx := range alreadyPresent {
 		s.logger.Debugf("[%s] Record %d already exists for tx %s (completing previous attempt)", funcName, idx, bItem.txHash)
+	}
+
+	if masterCreated && bItem.attempt != nil && len(alreadyPresent) > 0 {
+		if adoptErr := s.adoptSurvivingChildren(bItem, recordKeys, alreadyPresent); adoptErr != nil {
+			s.logger.Errorf("[%s] %v", funcName, adoptErr)
+
+			if delErr := s.deleteOwnMaster(bItem.txHash, bItem.attempt); delErr != nil {
+				bItem.complete(errors.NewStorageError("[%s] the surviving child records of %s could not be adopted and the master record could not be removed; it is left creating for the pruner sweep", funcName, bItem.txHash, errors.Join(adoptErr, delErr)))
+
+				return
+			}
+
+			bItem.complete(errors.NewProcessingError("[%s] the surviving child records of %s could not be adopted; the create is undone and may be retried", funcName, bItem.txHash, adoptErr))
+
+			return
+		}
 	}
 
 	if len(failed) > 0 {
@@ -1227,15 +1364,29 @@ func (s *Store) storeExternallyWithLock(
 		//
 		// Without this cleanup attempt, creating flags would remain set indefinitely, requiring
 		// manual intervention. This ensures eventual consistency through automatic recovery.
-		clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
-		if clearErr != nil {
-			s.logger.Warnf("[%s] Transaction %s exists but creating flag cleanup failed: %v", funcName, bItem.txHash, clearErr)
+		// Create-first: leave the creating flag set whoever the duplicate is. This request's
+		// own option says nothing about another attempt's tentative record, so only
+		// FinalizeTransaction and the roll-forward healers clear it, once the inputs are spent.
+		if !s.settings.UtxoStore.UseCreateFirstOrder {
+			clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore), s.masterAttempt(bItem.txHash))
+			if clearErr != nil {
+				s.logger.Warnf("[%s] Transaction %s exists but creating flag cleanup failed: %v", funcName, bItem.txHash, clearErr)
+			}
 		}
 		bItem.complete(errors.NewTxExistsError("transaction already exists: %s", bItem.txHash))
 		return
 	}
 
-	clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore))
+	// Create-first: skip phase-2 flag clearing. A WithCreating(true) tx must keep the
+	// creating flag until the validator finalizes it (after spending the inputs);
+	// otherwise the multi-record path would make its outputs spendable before the
+	// spend step, exactly the ordering create-first exists to prevent.
+	if bItem.creating {
+		bItem.complete(nil)
+		return
+	}
+
+	clearErr := s.clearCreatingFlag(bItem.txHash, len(binsToStore), bItem.attempt)
 	if clearErr != nil {
 		// PARTIAL SUCCESS: Transaction records created successfully, but creating flag cleanup failed
 		//
@@ -1251,7 +1402,9 @@ func (s *Store) storeExternallyWithLock(
 		// 3. AUTO-RECOVERY IS SELF-HEALING: The system automatically recovers via multiple paths:
 		//    a) When transaction is re-encountered (propagation/subtree), subtreevalidation checks
 		//       the Creating flag (processTxMetaUsingStore.go:112-122) and triggers re-processing
-		//    b) When setMined is called, it clears creating flags as part of mining
+		//    b) When setMined is called, its pre-flight rolls a creating record forward (re-spend,
+		//       then finalize), and the pruner sweep does the same, or rolls back a record whose
+		//       spends cannot be completed; both run regardless of UseCreateFirstOrder
 		//    c) Retry attempts from other sources will complete Phase 2 via "All exist" path (line 890)
 		//
 		// 4. RETURNING ERROR CREATES WORSE PROBLEMS:
@@ -1267,7 +1420,7 @@ func (s *Store) storeExternallyWithLock(
 		// RECOVERY GUARANTEES:
 		// - Next transaction encounter triggers auto-recovery and cleanup
 		// - Manual retry completes Phase 2 via "All exist" path
-		// - Mining operation clears flags via setMined
+		// - The setMined pre-flight and the pruner sweep roll the record forward and finalize it
 		// - No manual intervention required
 		s.logger.Errorf("[%s] Transaction %s created but creating flag not cleared: %v", funcName, bItem.txHash, clearErr)
 		s.logger.Errorf("[%s] Records remain with creating=true, preventing UTXO spending until auto-recovery completes", funcName)
@@ -1416,12 +1569,32 @@ func (s *Store) ensureCreatingBin(bins []*aerospike.Bin, creating bool) []*aeros
 
 // clearCreatingFlag removes the creating flag from all records for a transaction
 // This is called after all records have been successfully created to allow UTXO spending
-// Uses expression filtering to only clear the bin on records that have it set
-func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error {
+// Uses expression filtering to only clear the bin on records that have it set, carry the token
+// of the attempt and are not rolling back.
+//
+// The master is read first: a rolling-back master, or one that another attempt owns, returns
+// ErrTxNotFound without touching the children, so a refused finalize leaves them as they were.
+// The child writes carry the token filter, so a finalize left over from an earlier attempt cannot
+// clear the creating bin of a later attempt's children even when it passes that read. The master
+// write then carries the same filter, and a filtered-out master write is read back
+// (finalizeFilteredOutResult). A marker set between the child pass and the master write is a
+// window this function does not close: the children are then cleared while the master stays
+// creating and rolling back, and the rollback owner removes the children and blobs and leaves a
+// hold.
+//
+// A child write that is filtered out is read back (childFilteredOutResult). The child counts as
+// cleared only when it is no longer creating. One that is still creating, under another attempt's
+// token or this one, fails the call before the master is written, so the master stays creating
+// while any child is.
+func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int, attempt []byte) error {
 	batchPolicy := util.GetAerospikeBatchPolicy(s.settings)
 
-	// Expression filter: only update records where creating bin exists
-	filterExp := aerospike.ExpBinExists(fields.Creating.String())
+	// Expression filter: only update records where creating bin exists, the token matches and the record is not rolling back
+	filterExp := finalizeFilter(attempt)
+
+	if err := s.refuseForeignMaster(txHash, attempt); err != nil {
+		return err
+	}
 
 	// Separate master record (index 0) from children (indices 1+)
 	// Children will be cleared first, then master last
@@ -1442,8 +1615,12 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 
 		// Delete the creating bin entirely by setting to nil
 		// This saves storage space and makes absence of bin = not creating
-		op := aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))
-		writeOp := aerospike.NewBatchWrite(writePolicy, key, op)
+		ops := []*aerospike.Operation{aerospike.PutOp(aerospike.NewBin(fields.Creating.String(), nil))}
+		if i == 0 {
+			ops = append(ops, removeUnminedSinceIfMinedOp())
+		}
+
+		writeOp := aerospike.NewBatchWrite(writePolicy, key, ops...)
 
 		if i == 0 {
 			masterWrite = writeOp
@@ -1459,13 +1636,19 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 			return errors.NewProcessingError("failed to unlock child records", err)
 		}
 
-		// Check results - FILTERED_OUT means bin didn't exist (success case)
+		// Check results. FILTERED_OUT means the child was not cleared by this write: it is
+		// success only when the child is no longer creating, which is read back.
 		failedCount := 0
 		for idx, record := range childWrites {
 			if record.BatchRec().Err != nil {
 				aErr, ok := record.BatchRec().Err.(*aerospike.AerospikeError)
-				// FILTERED_OUT is success - bin didn't exist, nothing to clear
 				if ok && aErr.ResultCode == types.FILTERED_OUT {
+					if filteredErr := s.childFilteredOutResult(txHash, idx+1, attempt); filteredErr != nil {
+						failedCount++
+
+						s.logger.Errorf("[clearCreatingFlag] child record %d of tx %s was not cleared: %v", idx+1, txHash, filteredErr)
+					}
+
 					continue
 				}
 				failedCount++
@@ -1488,13 +1671,100 @@ func (s *Store) clearCreatingFlag(txHash *chainhash.Hash, numRecords int) error 
 
 		if masterWrite.BatchRec().Err != nil {
 			aErr, ok := masterWrite.BatchRec().Err.(*aerospike.AerospikeError)
-			// FILTERED_OUT is success - bin didn't exist, nothing to clear
+			// FILTERED_OUT is success when the bin didn't exist, nothing to clear; a rolling
+			// back master is refused
 			if ok && aErr.ResultCode == types.FILTERED_OUT {
-				return nil
+				return s.finalizeFilteredOutResult(txHash, attempt)
 			}
 			s.logger.Errorf("[clearCreatingFlag] Failed to clear creating flag for master record for tx %s: %v", txHash, masterWrite.BatchRec().Err)
 			return errors.NewProcessingError("failed to unlock master record for tx %s", txHash)
 		}
+	}
+
+	return nil
+}
+
+// childFilteredOutResult reads a pagination child after its creating bin was not cleared because
+// the write was filtered out, and returns nil only when the child is no longer creating. A child
+// that is still creating, under another attempt's token or under this one, or that has vanished,
+// is an error: its outputs would stay unspendable, so the master must not be cleared.
+func (s *Store) childFilteredOutResult(txHash *chainhash.Hash, index int, attempt []byte) error {
+	keySource := uaerospike.CalculateKeySourceInternal(txHash, uint32(index))
+
+	key, err := aerospike.NewKey(s.namespace, s.setName, keySource)
+	if err != nil {
+		return err
+	}
+
+	state, getErr := s.readCreatingState(key)
+	if getErr != nil {
+		return errors.NewStorageError("error reading child record %d of tx %s after its creating flag was filtered out", index, txHash.String(), getErr)
+	}
+
+	switch {
+	case state.absent:
+		return errors.NewProcessingError("child record %d of tx %s is absent", index, txHash.String())
+	case !state.creating:
+		return nil
+	case !bytes.Equal(state.attempt, attempt):
+		return errors.NewProcessingError("child %d of tx %s is creating under another attempt", index, txHash.String())
+	}
+
+	return errors.NewProcessingError("child %d of tx %s is still creating under this attempt although its clear was filtered out", index, txHash.String())
+}
+
+// masterRollingBack reports whether the master record of txHash is rolling back, which a hold
+// is too. An absent or unreadable master is not. A multi-record create refuses such a master before
+// it writes any record, because a create that wrote the pagination children around it would leave
+// children behind that the rollback has already passed.
+func (s *Store) masterRollingBack(txHash *chainhash.Hash) bool {
+	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if err != nil {
+		return false
+	}
+
+	state, getErr := s.readCreatingState(key)
+
+	return getErr == nil && state.rollingBack
+}
+
+// masterAttempt returns the token of the attempt that wrote the master record of txHash, nil
+// when the record is absent, unreadable or carries none. The recovery of a duplicate create
+// completes whatever attempt wrote the records it finds, so it clears under that token.
+func (s *Store) masterAttempt(txHash *chainhash.Hash) []byte {
+	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if err != nil {
+		return nil
+	}
+
+	state, getErr := s.readCreatingState(key)
+	if getErr != nil {
+		return nil
+	}
+
+	return state.attempt
+}
+
+// refuseForeignMaster returns ErrTxNotFound when the master record of txHash is rolling back or
+// is creating under another attempt than the token names, before any child is touched. Any other
+// state, including an unreadable master, passes: the writes that follow carry their own filter.
+func (s *Store) refuseForeignMaster(txHash *chainhash.Hash, attempt []byte) error {
+	key, err := aerospike.NewKey(s.namespace, s.setName, txHash[:])
+	if err != nil {
+		return err
+	}
+
+	state, getErr := s.readCreatingState(key)
+	if getErr != nil {
+		return nil
+	}
+
+	if state.rollingBack {
+		return errors.NewTxNotFoundError("[clearCreatingFlag] tx %s is rolling back", txHash.String())
+	}
+
+	if state.creating && !bytes.Equal(state.attempt, attempt) {
+		return errors.NewTxNotFoundError("[clearCreatingFlag] tx %s is creating under another attempt", txHash.String())
 	}
 
 	return nil

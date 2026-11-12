@@ -372,3 +372,163 @@ if res.Status == LuaStatusOK {
 ## Migration Notes
 
 This is a breaking change from the previous string-based response format. However, since Lua and Go changes are released together, no backward compatibility is maintained. All functions now consistently return map objects, making the interface more robust and easier to extend.
+
+## Create-First Two-Phase Commit (the `creating` flag)
+
+`SpendAndCreate`'s default (combined) path normally spends the inputs then creates the
+record — so a crash in that window leaves parent outputs marked spent by a record that
+never landed (a dangling spender reference). When `utxostore_useCreateFirstOrder` is
+enabled and the store reports `SupportsCreateFirst() == true` (Aerospike only), the
+shared `SequentialSpendAndCreate` instead runs **create-first**:
+
+1. **Create tentative** — the record is written with the `creating` bin set (via
+   `WithCreating(true)`); every spend of its outputs is rejected with `ErrTxCreating`
+   (Lua spend gate + expression filter) until the flag is cleared. Written only when
+   true; absence == not creating. The same write puts a random 16-byte `attempt` token on the
+   master and on every pagination child; see "Attempt token and hold" below.
+2. **Spend inputs** — the transaction's parent outputs are spent.
+3. **Finalize** — `FinalizeTransaction(tx, attempt)` clears the `creating` bin (children first,
+   master last), making the outputs spendable. The clear is filtered on the token.
+
+Because the record exists before its spends are written, a crash between steps 2 and 3
+leaves an inspectable, recoverable record instead of a dangling reference. There is **no
+native Aerospike TTL** on creating records — the record is the recovery WAL and must
+survive until finalize. `WithCreateOnly` / `WithSpendOnly` callers (coinbase, seeding,
+reorg/conflict helpers) are single-phase and bypass the create-first ordering.
+
+### Recovery paths (roll-forward everywhere)
+
+- **Retry** — a re-encounter hits `ErrTxExists` on a still-`creating` record; the
+  create-first `SpendAndCreate` rolls it forward in the same call (re-spend under the
+  caller's ignore flags, then finalize) and returns an `ErrTxExists` for which
+  `utxo.IsRolledForward` is true, so the validator hands the transaction to block assembly.
+  A record that is rolling back, or a hold a finished rollback left, is refused with a
+  transient error until the hold expires. A create in block context clears a hold at once.
+- **Pruner sweeper** — `QueryStaleCreatingTxs` (secondary index on `unminedSince` +
+  `creating` filter) finds abandoned creating records older than
+  `pruner_creatingTxSweepMinAgeBlocks`; the sweeper re-spends (`SpendAndCreate(WithSpendOnly)`,
+  without ignoring locks) and finalizes them, rolls back a loser whose input belongs to
+  another transaction, finishes a rollback a crashed owner left marked, and deletes a hold that
+  has expired. Every step names the token it read from the record.
+- **setMined** — a pre-flight in `SetMinedMulti` rolls a still-creating record forward
+  (re-spend, then finalize) before the mined write. The write paths no longer clear the
+  `creating` bin. The pre-flight runs on every call, whatever `utxostore_useCreateFirstOrder`
+  says, so turning the flag off cannot strand creating records. Correctness rests on the
+  pre-flight, which fails closed, because the native sub-op write path's handling of the bin
+  is not verifiable from this repository.
+
+The healers (setMined pre-flight and pruner sweep) are not gated on the flag.
+
+### Rollback of a failed create-first spend
+
+A spend that fails after the tentative create is rolled back by `utxo.RollBackCreating`:
+`BeginCreateFirstRollback(hash, attempt)` sets the `rollingBack` bin on the master with a filter
+on the `creating` bin and the token. The same write sets `busy` and `holdUntil`, so the owner
+holds the hold for its whole unspend and releases it with `ReleaseRollbackHold` before it ends
+the rollback. Every input of the tx is unspent (not only the spends that
+succeeded in the failing pass, because an earlier attempt may have spent an input that now fails
+for another reason; the Lua ownership check makes an input the tx does not own a no-op, and an
+input whose UTXO hash does not match or whose vout does not exist is skipped, because the tx can
+never have spent it), then `EndCreateFirstRollback(hash, attempt)` removes the pagination
+children (filtered on the token) and the external blobs and turns the master into a hold. Its
+first write sets the `reversed` bin, which says that every spend is undone, so that a recovery
+that finds the record after the blob is gone ends the rollback without reading the transaction.
+While
+the marker is set, `FinalizeTransaction` (single and multi-record) refuses the record with
+`ErrTxNotFound`, so a concurrent roll-forward cannot complete it. A roll-forward whose finalize
+is refused reverses the spends it made only if it can take the hold (see below). The Lua spend
+gate still reads `creating`, so a rolling-back record's outputs stay unspendable. A spend whose
+batch may still be in flight (a context error, or the `utxostore_spendWaitTimeout`
+ServiceUnavailable) is not rolled back: the record stays creating for the sweep. The fresh
+create-first spend sets `RequireParentOutputs`, because the record the blessed-probe would find
+is its own.
+
+### Attempt token and hold
+
+A parent's spend record is the spending txid and the input index, so a reversal of spends cannot
+tell two attempts at the same txid apart. Two mechanisms keep an actor left over from one attempt
+from touching the next.
+
+- **`attempt` token.** `Create(..., WithCreating(true))` draws 16 random bytes and writes them
+  as the `attempt` bin next to `creating`, on the master and on every pagination child. It
+  returns them in `meta.Data.Attempt`. `FinalizeTransaction`, `BeginCreateFirstRollback`, the
+  rollback end and the child delete are all filtered on the token, and a mismatch is a
+  `FILTERED_OUT` that reads back as "not mine" (`ErrTxNotFound` for a finalize). Every actor takes
+  its token from the record it read: the fresh create from its own create, the `ErrTxExists`
+  roll-forward, the sweep and the setMined pre-flight from their `Get`. A multi-record create
+  that finds children left by an earlier attempt gives them its own token. If a child cannot be
+  given the token, the create deletes the master it wrote and returns a transient error. A
+  finalize that finds a child filtered out reads it back: only a child that is no longer
+  creating counts as cleared, and the master stays creating otherwise.
+- **Hold.** The rollback end does not delete the master. It deletes the children and the
+  external blobs while the master is still there, so a same-txid create is refused and writes
+  nothing, and then rewrites the master in one `REPLACE_ONLY` write, filtered on the token, the
+  `rollingBack` bin and no `busy` bin. The hold keeps `txID`, `creating`, `rollingBack`,
+  the token and `unminedSince` (so the sweep query finds it), and adds `hold` and `holdUntil`,
+  now plus `utxostore_spendRollbackTimeout`. It has no outputs, so every gate that keys on
+  `creating` refuses it, `GetMeta` reports `Creating`, `RollingBack` and `Hold`, and a create of
+  the txid gets `ErrTxExists` and then a transient error.
+- **Take the hold before unspending.** An actor that unspends the inputs of a transaction after
+  the mark calls `TakeRollbackHold(hash, attempt)`: one write filtered on `rollingBack`, the
+  token and no `busy` bin, which sets `busy` and renews `holdUntil`. It unspends under a context
+  bounded by `utxostore_spendRollbackTimeout`, then calls `ReleaseRollbackHold`. A failed take
+  (record absent, another token, busy) means a replacement owns the inputs, or another actor is
+  reversing them, and nothing is reversed. The sweep's `finishRollback` and the roll-forward's
+  compensation work this way, and so does the direct owner, which takes the hold when it marks
+  the record. The rollback end fails while a live `busy` is set, because the rewrite would drop
+  the marker that protects the holder, and the sweep ends the rollback on a later pass. A record
+  that carries `reversed` needs no take: the sweep calls the rollback end for it directly.
+- **Expiry.** `ClearCreateFirstHold(hash, adopt)` deletes a hold, filtered on `hold` and on the
+  `holdUntil` that was read, so a take in between makes the delete fail. Without `adopt` it goes
+  once `holdUntil` has passed and no holder is busy, or has passed by a further timeout (a
+  holder that crashed). The next create that finds the hold and the sweep both call it.
+- **Block context.** A create that ignores locks, or carries mined block info, passes `adopt`:
+  the hold goes at once unless a holder is busy, so a block that contains a transaction that lost
+  a double-spend locally does not wait out the hold. The create then runs again and writes a
+  tentative record under a fresh token, and every actor left over from the earlier attempt fails
+  its take.
+
+`RollForwardCreating` runs its spend and finalize under a context bounded by
+`utxostore_spendRollbackTimeout`. What this does not close: a fresh-path spend still in flight
+after the sweep rolled the record back and the hold expired, and a second rollback and expiry
+before that spend lands. Closing it needs the attempt in the spend record (issue 1291).
+
+### Sweep visibility of mined creating records
+
+The sweep selects by the `unminedSince` index. A creating record created with mined block
+info (the block-validation path) also gets `unminedSince = blockHeight`, so the sweep can
+find it. `FinalizeTransaction` removes `unminedSince` from the master record when the record
+has block IDs, on both the single-record and multi-record paths; a record without block IDs
+keeps it. While such a record is creating, the unmined iterator skips it, and
+`setDeleteAtHeight` sets no `deleteAtHeight` because the record does not count as on the
+longest chain; both are correct for a record that must not be pruned or re-added yet.
+
+### Duplicate create of a multi-record transaction
+
+When every record of a multi-record transaction already exists, the duplicate `Create`
+returns `ErrTxExists`. With `utxostore_useCreateFirstOrder` on, it leaves the `creating` flag
+untouched, because the duplicate's own options say nothing about another attempt's tentative
+record: only `FinalizeTransaction` and the roll-forward healers clear it. With the flag off,
+the legacy cleanup still clears it.
+
+### Lua package version and re-registration
+
+The Lua package name carries a version (`teranode_v66`). A UDF registered under the same
+filename is no longer trusted: at startup the registered body is read back (`udf-get`) and
+compared byte for byte with the embedded script. On a mismatch the store logs a warning with
+both SHA-1 digests and the listed hash, and registers the embedded script again
+(`RegisterUDF` overwrites). The `udf-list` `hash` field is a 40-character lowercase hex
+string, but it is not a plain SHA-1 of the file bytes, so it is only logged, never compared.
+
+### Spend of a creating record whose parent is missing
+
+If a parent is missing (`ErrTxNotFound`) and the spender record exists, creating or not, the
+input counts as already blessed. A parent is pruned only once every output is spent, so the
+input has been taken, by this tx or by a rival. A rival's take is the same exposure
+spend-first has, and the conflict path bounds it. This lets a roll-forward of a creating
+record whose parent was pruned converge.
+
+Creating records are excluded from the block-assembly unmined-restore iterator (default
+mode) and rejected as parents during parent-chain validation; the PRUNER-mode iterator
+still sees them so permanently-failed ones are eventually evicted. On a finalize failure
+after successful spends the seam logs-and-continues (`teranode_utxo_create_first_finalize_failed_total`).

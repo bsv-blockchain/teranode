@@ -150,6 +150,21 @@ func (s *Store) NetsBelowCheckpoint() bool {
 	return utxo.NetsBelowCheckpoint(s.store)
 }
 
+// SupportsCreateFirst delegates to the wrapped store.
+func (s *Store) SupportsCreateFirst() bool {
+	return s.store.SupportsCreateFirst()
+}
+
+// FinalizeTransaction delegates to the wrapped store.
+func (s *Store) FinalizeTransaction(ctx context.Context, tx *bt.Tx, attempt []byte) error {
+	return s.store.FinalizeTransaction(ctx, tx, attempt)
+}
+
+// QueryStaleCreatingTxs delegates to the wrapped store.
+func (s *Store) QueryStaleCreatingTxs(ctx context.Context, unminedSinceBefore uint32, limit int) ([]chainhash.Hash, error) {
+	return s.store.QueryStaleCreatingTxs(ctx, unminedSinceBefore, limit)
+}
+
 func (s *Store) Health(ctx context.Context, checkLiveness bool) (int, string, error) {
 	s.logger.Debugf("[UTXOStore][logger][Health] : %s", caller())
 	return s.store.Health(ctx, checkLiveness)
@@ -252,6 +267,41 @@ func (s *Store) DeleteComplete(ctx context.Context, hash *chainhash.Hash) error 
 	s.logger.Debugf("[UTXOStore][logger][DeleteComplete] hash %s err %v : %s", hash.String(), err, caller())
 
 	return err
+}
+
+func (s *Store) EndCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	err := s.store.EndCreateFirstRollback(ctx, hash, attempt)
+	s.logger.Debugf("[UTXOStore][logger][EndCreateFirstRollback] hash %s err %v : %s", hash.String(), err, caller())
+
+	return err
+}
+
+func (s *Store) TakeRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	took, err := s.store.TakeRollbackHold(ctx, hash, attempt)
+	s.logger.Debugf("[UTXOStore][logger][TakeRollbackHold] hash %s took %v err %v : %s", hash.String(), took, err, caller())
+
+	return took, err
+}
+
+func (s *Store) ReleaseRollbackHold(ctx context.Context, hash *chainhash.Hash, attempt []byte) error {
+	err := s.store.ReleaseRollbackHold(ctx, hash, attempt)
+	s.logger.Debugf("[UTXOStore][logger][ReleaseRollbackHold] hash %s err %v : %s", hash.String(), err, caller())
+
+	return err
+}
+
+func (s *Store) ClearCreateFirstHold(ctx context.Context, hash *chainhash.Hash, adopt bool) (bool, error) {
+	cleared, err := s.store.ClearCreateFirstHold(ctx, hash, adopt)
+	s.logger.Debugf("[UTXOStore][logger][ClearCreateFirstHold] hash %s adopt %v cleared %v err %v : %s", hash.String(), adopt, cleared, err, caller())
+
+	return cleared, err
+}
+
+func (s *Store) BeginCreateFirstRollback(ctx context.Context, hash *chainhash.Hash, attempt []byte) (bool, error) {
+	began, err := s.store.BeginCreateFirstRollback(ctx, hash, attempt)
+	s.logger.Debugf("[UTXOStore][logger][BeginCreateFirstRollback] hash %s began %v err %v : %s", hash.String(), began, err, caller())
+
+	return began, err
 }
 
 func (s *Store) SetMinedMulti(ctx context.Context, hashes []*chainhash.Hash, minedBlockInfo utxo.MinedBlockInfo) (map[chainhash.Hash][]uint32, error) {

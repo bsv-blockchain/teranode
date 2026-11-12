@@ -400,14 +400,17 @@ func probeIndices(ctx context.Context, cache *txmetacache.TxMetaCache, sc *probe
 		// would later fail subtree-meta serialization and wedge the block. Treat
 		// it as a miss so the store fallback — which can reconstruct inpoints from
 		// the tx inputs — resolves it and self-heals the cache.
-		if found[j] && (txMeta.IsCoinbase || len(txMeta.TxInpoints.ParentTxHashes) > 0) {
+		// A Creating=true entry is a create-first tx still mid-flight; the !txMeta.Creating
+		// guard turns it into a miss so the store fallback re-checks it (and
+		// re-processing can trigger roll-forward), matching the store path
+		// (processTxMetaUsingStore). Only finalized entries reach the copy below.
+		if found[j] && !txMeta.Creating && (txMeta.IsCoinbase || len(txMeta.TxInpoints.ParentTxHashes) > 0) {
 			txMetaSlice[i] = metaSliceItem{
 				fee:         txMeta.Fee,
 				sizeInBytes: txMeta.SizeInBytes,
 				coinbase:    txMeta.IsCoinbase,
 				conflicting: txMeta.Conflicting,
-				// The cached encoding has no Creating flag; a cached entry was
-				// always reported as not creating.
+				// Creating entries are rejected above, so a copied entry is never creating.
 				creating:   false,
 				isSet:      true,
 				txInpoints: txMeta.TxInpoints,
