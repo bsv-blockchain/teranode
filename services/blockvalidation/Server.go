@@ -1750,9 +1750,9 @@ func (u *Server) ProcessBlock(ctx context.Context, request *blockvalidation_api.
 
 	block.Height = height
 
-	// If a block ID was pre-assigned by the caller (e.g. legacy netsync during catch-up),
-	// apply it so the validation path can use AddBlock(WithID, WithMinedSet(true)) and allow
-	// the setMinedChan worker to skip setTxMinedStatus via the existing MinedSet guard.
+	// A caller-supplied block ID is applied so the block is stored under it. It does not
+	// mark the block mined: full validation still has the setMinedChan worker tag the
+	// transactions (buildAddBlockOpts). Legacy netsync sends 0 on every route.
 	if request.BlockId != 0 {
 		block.ID = request.BlockId
 	}
